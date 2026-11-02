@@ -73,7 +73,7 @@ type SubscriptionManager struct {
 type CredentialSockets interface {
 	CloseAPIToken(tenantID, tokenID string) int
 	CloseUserSessions(tenantID, userID string, revokedAt time.Time) int
-	CloseUserAPITokens(tenantID, userID string) int
+	CloseDeactivatedUser(tenantID, userID string, revokedAt time.Time) int
 }
 
 type credentialSocketsHolder struct{ sockets CredentialSockets }
@@ -477,9 +477,10 @@ func (sm *SubscriptionManager) applyCredentialRevocation(key signalmanclient.Str
 			tenantID = event.GetTenantId()
 		}
 		if revocation, ok := revokedUserSessions(tenantID, event); ok {
-			holder.sockets.CloseUserSessions(tenantID, revocation.GetUserId(), revocation.GetRevokedAt().AsTime())
 			if revocation.GetReason() == internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_OPERATOR_DEACTIVATION {
-				holder.sockets.CloseUserAPITokens(tenantID, revocation.GetUserId())
+				holder.sockets.CloseDeactivatedUser(tenantID, revocation.GetUserId(), revocation.GetRevokedAt().AsTime())
+			} else {
+				holder.sockets.CloseUserSessions(tenantID, revocation.GetUserId(), revocation.GetRevokedAt().AsTime())
 			}
 		}
 	}

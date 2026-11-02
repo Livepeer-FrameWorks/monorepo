@@ -369,7 +369,7 @@ func nextTenantEventType(t *testing.T, conn *websocket.Conn, within time.Duratio
 	}
 }
 
-func (r *recordingSockets) CloseUserAPITokens(tenantID, userID string) int {
+func (r *recordingSockets) CloseDeactivatedUser(tenantID, userID string, _ time.Time) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tokens = append(r.tokens, tenantID+"/user:"+userID)

@@ -480,17 +480,31 @@ func TestAPIWebsocketTracksItsOwnerForDeactivation(t *testing.T) {
 	}
 }
 
+// The close reason tells the webapp the account is deactivated, so it shows
+// that and stops instead of refreshing and reconnecting in a loop.
 func TestAccountDeactivationClosesOnlyItsOwnersAPISockets(t *testing.T) {
 	clients, _ := switchableClients(t)
 	sessions := NewWebsocketSessions(nil)
 	connection, _ := openSubscription(t, clients, "Bearer fw_api_token_value", sessions, 0)
-	if count := sessions.CloseUserAPITokens("tenant-1", "another-user"); count != 0 {
+	if count := sessions.CloseDeactivatedUser("tenant-1", "another-user", time.Now()); count != 0 {
 		t.Fatalf("another user closed %d sockets", count)
 	}
-	if count := sessions.CloseUserAPITokens("tenant-1", "user-1"); count != 1 {
+	if count := sessions.CloseDeactivatedUser("tenant-1", "user-1", time.Now()); count != 1 {
 		t.Fatalf("deactivation closed %d sockets, want 1", count)
 	}
-	if code := awaitClose(t, connection, 2*time.Second); code != WebsocketCloseForbidden {
-		t.Fatalf("deactivated API socket close code=%d", code)
+	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for {
+		_, _, err := connection.ReadMessage()
+		if err == nil {
+			continue
+		}
+		var closeErr *websocket.CloseError
+		if !errors.As(err, &closeErr) {
+			t.Fatalf("read: %v", err)
+		}
+		if closeErr.Code != WebsocketCloseForbidden || closeErr.Text != "account deactivated" {
+			t.Fatalf("deactivated API socket closed with %d %q, want %d \"account deactivated\"", closeErr.Code, closeErr.Text, WebsocketCloseForbidden)
+		}
+		return
 	}
 }

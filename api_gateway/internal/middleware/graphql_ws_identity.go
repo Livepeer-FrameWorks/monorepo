@@ -9,6 +9,9 @@ import (
 
 	"frameworks/api_gateway/internal/clients"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // DefaultWebsocketRevalidateInterval bounds how long a GraphQL WebSocket keeps
@@ -28,6 +31,10 @@ var (
 	// its session reaches its expiry. graphql-ws clients reconnect after
 	// 4403, so the webapp reconnects with its refreshed cookie.
 	ErrWebsocketCredentialExpired = &WebsocketInitError{Code: WebsocketCloseForbidden, Reason: "credential expired"}
+	// ErrWebsocketAccountDeactivated closes every connection of a user an
+	// operator deactivated. The reason tells the webapp not to refresh and
+	// reconnect: the refresh is refused too.
+	ErrWebsocketAccountDeactivated = &WebsocketInitError{Code: WebsocketCloseForbidden, Reason: "account deactivated"}
 )
 
 // websocketIdentity is the credential a GraphQL WebSocket connection
@@ -383,6 +390,37 @@ func (s *WebsocketSessions) CloseAPIToken(tenantID, tokenID string) int {
 // session tokens over HTTP and at connection_init. Each closed connection
 // stops delivering events before this returns.
 func (s *WebsocketSessions) CloseUserSessions(tenantID, userID string, revokedAt time.Time) int {
+	return s.closeUserSessions(tenantID, userID, revokedAt, ErrWebsocketCredentialRevoked)
+}
+
+// CloseDeactivatedUser closes, with 4403 and reason "account deactivated",
+// the user's session connections covered by revokedAt and every connection
+// opened with one of the user's API tokens, without revoking the tokens.
+func (s *WebsocketSessions) CloseDeactivatedUser(tenantID, userID string, revokedAt time.Time) int {
+	if s == nil || tenantID == "" || userID == "" {
+		return 0
+	}
+	closed := s.closeUserSessions(tenantID, userID, revokedAt, ErrWebsocketAccountDeactivated)
+	s.mu.Lock()
+	var tokenSessions []*websocketSession
+	for key, connections := range s.byToken {
+		if key.tenantID != tenantID {
+			continue
+		}
+		for connection := range connections {
+			if connection.id.userID == userID {
+				tokenSessions = append(tokenSessions, connection)
+			}
+		}
+	}
+	s.mu.Unlock()
+	for _, connection := range tokenSessions {
+		connection.close(ErrWebsocketAccountDeactivated)
+	}
+	return closed + len(tokenSessions)
+}
+
+func (s *WebsocketSessions) closeUserSessions(tenantID, userID string, revokedAt time.Time, reason *WebsocketInitError) int {
 	if s == nil || tenantID == "" || userID == "" {
 		return 0
 	}
@@ -397,7 +435,7 @@ func (s *WebsocketSessions) CloseUserSessions(tenantID, userID string, revokedAt
 	}
 	s.mu.Unlock()
 	for _, session := range sessions {
-		session.close(ErrWebsocketCredentialRevoked)
+		session.close(reason)
 	}
 	return len(sessions)
 }
@@ -441,6 +479,13 @@ func authenticateWebsocketBearer(ctx context.Context, token string, serviceClien
 	return result, nil
 }
 
+// isAccountDeactivated reports Commodore's refusal of a deactivated user's
+// credential, which it answers as Unauthenticated "account deactivated".
+func isAccountDeactivated(err error) bool {
+	st, ok := status.FromError(err)
+	return ok && st.Code() == codes.Unauthenticated && st.Message() == "account deactivated"
+}
+
 // watch closes the connection through closeConn when its session expires or
 // a re-check finds the credential no longer authenticates, and returns when
 // ctx, the connection's context, ends. A re-check that cannot reach the
@@ -479,34 +524,13 @@ func (w websocketIdentityWatch) watch(ctx context.Context, id websocketIdentity,
 				if w.logger != nil {
 					w.logger.WithError(err).Warn("WebSocket credential re-check could not reach the authentication backend")
 				}
+			case isAccountDeactivated(err):
+				closeConn(ErrWebsocketAccountDeactivated)
+				return
 			default:
 				closeConn(ErrWebsocketCredentialRevoked)
 				return
 			}
 		}
 	}
-}
-
-// CloseUserAPITokens closes existing API sockets on account deactivation without revoking the tokens themselves.
-func (s *WebsocketSessions) CloseUserAPITokens(tenantID, userID string) int {
-	if s == nil {
-		return 0
-	}
-	s.mu.Lock()
-	var sessions []*websocketSession
-	for key, connections := range s.byToken {
-		if key.tenantID != tenantID {
-			continue
-		}
-		for connection := range connections {
-			if connection.id.userID == userID {
-				sessions = append(sessions, connection)
-			}
-		}
-	}
-	s.mu.Unlock()
-	for _, connection := range sessions {
-		connection.close(ErrWebsocketCredentialRevoked)
-	}
-	return len(sessions)
 }
