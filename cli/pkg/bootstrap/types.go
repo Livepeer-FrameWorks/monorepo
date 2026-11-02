@@ -510,6 +510,9 @@ type AccountUserCommon struct {
 	// PlatformOperator grants platform staff access (RFC 9068 platform_operator
 	// role). Secret-free, so it lives in the common (committed) layer.
 	PlatformOperator bool `yaml:"platform_operator,omitempty"`
+	// Wallet is an Ethereum address (0x + 40 hex) that Commodore links to the
+	// user for wallet sign-in. A public address, so it lives in this layer.
+	Wallet string `yaml:"wallet,omitempty"`
 }
 
 // AccountUserDerived is a user entry as it appears in Derived/Overlay layers, with the

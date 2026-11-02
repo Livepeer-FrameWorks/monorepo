@@ -113,6 +113,8 @@ type AccountUser struct {
 	// PlatformOperator grants platform staff access (the RFC 9068
 	// platform_operator role). Reconciled idempotently like the profile fields.
 	PlatformOperator bool `yaml:"platform_operator,omitempty"`
+	// Wallet is an Ethereum address linked to the user for wallet sign-in.
+	Wallet string `yaml:"wallet,omitempty"`
 }
 
 // AccountBilling carries the customer-billing declaration. For system_operator

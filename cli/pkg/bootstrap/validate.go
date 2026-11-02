@@ -289,6 +289,7 @@ func (r *Rendered) validatePurser(errs *ValidationErrors) {
 }
 
 func (r *Rendered) validateAccounts(errs *ValidationErrors) {
+	walletOwners := map[string]string{}
 	for i, a := range r.Accounts {
 		path := fmt.Sprintf("accounts[%d]", i)
 		switch a.Kind {
@@ -334,6 +335,15 @@ func (r *Rendered) validateAccounts(errs *ValidationErrors) {
 			// either way it boots the operator/customer with no usable credential.
 			if u.Password == "" {
 				*errs = append(*errs, &ValidationError{Path: upath + ".password", Msg: "required (resolved from password_ref); rendered files must carry plaintext for the bootstrap reconciler"})
+			}
+			if u.Wallet != "" {
+				if !walletAddressRE.MatchString(u.Wallet) {
+					*errs = append(*errs, &ValidationError{Path: upath + ".wallet", Msg: "must be an Ethereum address (0x followed by 40 hex characters)"})
+				} else if owner, dup := walletOwners[strings.ToLower(u.Wallet)]; dup {
+					*errs = append(*errs, &ValidationError{Path: upath + ".wallet", Msg: fmt.Sprintf("wallet already declared for %s", owner)})
+				} else {
+					walletOwners[strings.ToLower(u.Wallet)] = upath
+				}
 			}
 		}
 	}
@@ -381,6 +391,9 @@ func (r *Rendered) validateCrossReferences(errs *ValidationErrors) {
 		}
 	}
 }
+
+// walletAddressRE matches an Ethereum address in any letter case.
+var walletAddressRE = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
 
 // validAliasRE is the strict alias contract: lowercase letters, digits, and hyphens;
 // must start with a letter; 1-MaxAliasLen long. This is the persisted identity key

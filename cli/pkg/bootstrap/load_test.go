@@ -63,6 +63,40 @@ quartermaster:
 	}
 }
 
+// An account user's wallet loads from the overlay and reaches the rendered
+// file Commodore reconciles.
+func TestLoadOverlayCarriesAccountWallet(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "bootstrap.yaml", `
+quartermaster:
+  tenants:
+    - alias: northwind
+      name: Northwind Traders
+accounts:
+  - kind: customer
+    tenant:
+      ref: quartermaster.tenants[northwind]
+    users:
+      - email: qa@northwind.example
+        role: owner
+        wallet: "0x52908400098527886E0F7030069857D2E4169EE7"
+        password_ref:
+          env: NORTHWIND_QA_PASSWORD
+`)
+	o, err := LoadOverlay(path)
+	if err != nil {
+		t.Fatalf("LoadOverlay: %v", err)
+	}
+	t.Setenv("NORTHWIND_QA_PASSWORD", "pw")
+	rendered, err := accountToRendered(o.Accounts[0], &DefaultResolver{})
+	if err != nil {
+		t.Fatalf("accountToRendered: %v", err)
+	}
+	if got := rendered.Users[0].Wallet; got != "0x52908400098527886E0F7030069857D2E4169EE7" {
+		t.Fatalf("rendered wallet = %q", got)
+	}
+}
+
 func TestRenderFromManifestUsesBootstrapOverlay(t *testing.T) {
 	dir := t.TempDir()
 	overlayPath := "bootstrap.yaml"

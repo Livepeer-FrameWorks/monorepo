@@ -133,3 +133,100 @@ func TestAliasFromRefUnit(t *testing.T) {
 		}
 	}
 }
+
+const bootstrapWallet = "0x52908400098527886E0F7030069857D2E4169EE7"
+
+func existingOpsUser(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery(regexp.QuoteMeta("FROM commodore.users")).
+		WithArgs("uuid-system", "ops@example.com").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "first_name", "last_name", "role", "permissions", "platform_operator"}).
+			AddRow("uuid-user", "Ops", "Person", "owner", `{read,write,admin}`, false))
+}
+
+func walletAccount() Account {
+	acc := sysAccount()
+	acc.Users[0].Wallet = "0x52908400098527886e0f7030069857d2e4169ee7"
+	return acc
+}
+
+func TestReconcileAccountsLinksDeclaredWallet(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	existingOpsUser(mock)
+	mock.ExpectQuery(regexp.QuoteMeta("FROM commodore.wallet_identities")).
+		WithArgs("ethereum", bootstrapWallet).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO commodore.wallet_identities")).
+		WithArgs("uuid-system", "uuid-user", bootstrapWallet).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow("uuid-wallet", nil))
+
+	res, warnings, err := ReconcileAccounts(context.Background(), db, []Account{walletAccount()}, staticResolver("uuid-system"), false)
+	if err != nil {
+		t.Fatalf("ReconcileAccounts: %v", err)
+	}
+	if len(res.Updated) != 1 || len(res.Noop) != 0 || len(warnings) != 0 {
+		t.Fatalf("linking a wallet to an unchanged user = %+v warnings=%v, want one updated", res, warnings)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet: %v", err)
+	}
+}
+
+func TestReconcileAccountsKeepsLinkedWallet(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	existingOpsUser(mock)
+	mock.ExpectQuery(regexp.QuoteMeta("FROM commodore.wallet_identities")).
+		WithArgs("ethereum", bootstrapWallet).
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "user_id"}).AddRow("uuid-system", "uuid-user"))
+
+	res, _, err := ReconcileAccounts(context.Background(), db, []Account{walletAccount()}, staticResolver("uuid-system"), false)
+	if err != nil {
+		t.Fatalf("ReconcileAccounts: %v", err)
+	}
+	if len(res.Noop) != 1 || len(res.Updated) != 0 {
+		t.Fatalf("an already linked wallet = %+v, want one noop", res)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet: %v", err)
+	}
+}
+
+func TestReconcileAccountsDefersWalletOfAnotherUser(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	existingOpsUser(mock)
+	mock.ExpectQuery(regexp.QuoteMeta("FROM commodore.wallet_identities")).
+		WithArgs("ethereum", bootstrapWallet).
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "user_id"}).AddRow("uuid-other-tenant", "uuid-other-user"))
+
+	res, warnings, err := ReconcileAccounts(context.Background(), db, []Account{walletAccount()}, staticResolver("uuid-system"), false)
+	if err != nil {
+		t.Fatalf("ReconcileAccounts: %v", err)
+	}
+	if len(res.Deferred) != 1 || len(warnings) != 1 {
+		t.Fatalf("a wallet linked elsewhere = %+v warnings=%v, want it deferred with a warning", res, warnings)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet: %v (the other user's link must not be touched)", err)
+	}
+}
+
+func TestReconcileAccountsRejectsMalformedWallet(t *testing.T) {
+	db, _, _ := sqlmock.New()
+	defer db.Close()
+	acc := sysAccount()
+	acc.Users[0].Wallet = "0x1234"
+	if _, _, err := ReconcileAccounts(context.Background(), db, []Account{acc}, staticResolver("uuid-system"), false); err == nil {
+		t.Fatal("expected error on a malformed wallet")
+	}
+}

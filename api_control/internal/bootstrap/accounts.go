@@ -27,6 +27,10 @@ import (
 //   - User present and password reset is NOT permitted/asked ⇒ leave the
 //     existing password_hash untouched. This is the "never reset existing
 //     passwords by accident" guarantee.
+//   - Wallet declared and not linked ⇒ link it to the user (reported as
+//     updated when the user itself was a noop). Linked to the user ⇒ noop.
+//     Linked to another user ⇒ deferred with a warning; the link is never
+//     moved. Removing the field leaves an existing link in place.
 //
 // allowResetCredentials reflects the operator-supplied flag at the cobra layer
 // (commodore bootstrap --reset-credentials). Without it, ResetCredentials=true
@@ -69,7 +73,7 @@ func ReconcileAccounts(
 			if err := validateUser(u); err != nil {
 				return Result{}, warnings, fmt.Errorf("account %s: %w", acc.Tenant.Ref, err)
 			}
-			action, warn, err := reconcileUser(ctx, exec, tenantID, u, allowResetCredentials)
+			userID, action, warn, err := reconcileUser(ctx, exec, tenantID, u, allowResetCredentials)
 			if err != nil {
 				return Result{}, warnings, fmt.Errorf("account %s user %s: %w", acc.Tenant.Ref, u.Email, err)
 			}
@@ -77,6 +81,21 @@ func ReconcileAccounts(
 				warnings = append(warnings, warn)
 			}
 			key := acc.Tenant.Ref + "/" + u.Email
+			if u.Wallet != "" && action != "deferred" {
+				walletAction, walletErr := reconcileWallet(ctx, exec, tenantID, userID, u.Wallet)
+				if walletErr != nil {
+					return Result{}, warnings, fmt.Errorf("account %s user %s: %w", acc.Tenant.Ref, u.Email, walletErr)
+				}
+				switch walletAction {
+				case "linked":
+					if action == "noop" {
+						action = "updated"
+					}
+				case "conflict":
+					warnings = append(warnings, fmt.Sprintf("account %s user %s: wallet %s is linked to another user; it was not linked to this user", acc.Tenant.Ref, u.Email, u.Wallet))
+					res.Deferred = append(res.Deferred, key+"/wallet")
+				}
+			}
 			switch action {
 			case "created":
 				res.Created = append(res.Created, key)
@@ -126,23 +145,58 @@ func validateUser(u AccountUser) error {
 	if u.Password == "" {
 		return fmt.Errorf("user %q: password required (rendered file should carry resolved plaintext)", u.Email)
 	}
+	if u.Wallet != "" {
+		if _, err := auth.NormalizeEthAddress(u.Wallet); err != nil {
+			return fmt.Errorf("user %q: wallet: %w", u.Email, err)
+		}
+	}
 	return nil
 }
 
-func reconcileUser(ctx context.Context, exec DBTX, tenantID string, u AccountUser, allowReset bool) (string, string, error) {
+// reconcileWallet links an Ethereum wallet to a bootstrap user. It returns
+// "linked", "noop" (already linked to this user) or "conflict" (linked to
+// another user, left untouched).
+func reconcileWallet(ctx context.Context, exec DBTX, tenantID, userID, wallet string) (string, error) {
+	address, err := auth.NormalizeEthAddress(wallet)
+	if err != nil {
+		return "", fmt.Errorf("wallet: %w", err)
+	}
+	queries := commodoredb.New(exec)
+	existing, err := queries.GetWalletIdentityByAddress(ctx, commodoredb.GetWalletIdentityByAddressParams{
+		ChainType: string(auth.ChainEthereum), WalletAddress: address,
+	})
+	switch {
+	case err == nil:
+		if existing.UserID == userID {
+			return "noop", nil
+		}
+		return "conflict", nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return "", fmt.Errorf("probe wallet: %w", err)
+	}
+	if _, err := queries.InsertLinkedWallet(ctx, commodoredb.InsertLinkedWalletParams{
+		TenantID: tenantID, UserID: userID, WalletAddress: address,
+	}); err != nil {
+		return "", fmt.Errorf("link wallet: %w", err)
+	}
+	return "linked", nil
+}
+
+// reconcileUser returns the user's ID, the action taken and an optional warning.
+func reconcileUser(ctx context.Context, exec DBTX, tenantID string, u AccountUser, allowReset bool) (string, string, string, error) {
 	queries := commodoredb.New(exec)
 	current, err := queries.GetBootstrapUser(ctx, commodoredb.GetBootstrapUserParams{TenantID: tenantID, Email: u.Email})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		hash, hashErr := auth.HashPassword(u.Password)
 		if hashErr != nil {
-			return "", "", fmt.Errorf("hash password: %w", hashErr)
+			return "", "", "", fmt.Errorf("hash password: %w", hashErr)
 		}
 		userID := uuid.New().String()
 		_, inTransaction := exec.(*sql.Tx)
 		if inTransaction {
 			if saveErr := queries.BeginBootstrapAccountUser(ctx); saveErr != nil {
-				return "", "", saveErr
+				return "", "", "", saveErr
 			}
 		}
 		if insertErr := queries.CreateBootstrapUser(ctx, commodoredb.CreateBootstrapUserParams{
@@ -153,24 +207,24 @@ func reconcileUser(ctx context.Context, exec DBTX, tenantID string, u AccountUse
 			if closedTenantAccountError(insertErr) {
 				if inTransaction {
 					if rollbackErr := queries.RollbackBootstrapAccountUser(ctx); rollbackErr != nil {
-						return "", "", rollbackErr
+						return "", "", "", rollbackErr
 					}
 					if releaseErr := queries.ReleaseBootstrapAccountUser(ctx); releaseErr != nil {
-						return "", "", releaseErr
+						return "", "", "", releaseErr
 					}
 				}
-				return "deferred", fmt.Sprintf("account tenant %s user %s is permanently closed; remove this user declaration", tenantID, u.Email), nil
+				return "", "deferred", fmt.Sprintf("account tenant %s user %s is permanently closed; remove this user declaration", tenantID, u.Email), nil
 			}
-			return "", "", fmt.Errorf("insert user: %w", insertErr)
+			return "", "", "", fmt.Errorf("insert user: %w", insertErr)
 		}
 		if inTransaction {
 			if releaseErr := queries.ReleaseBootstrapAccountUser(ctx); releaseErr != nil {
-				return "", "", releaseErr
+				return "", "", "", releaseErr
 			}
 		}
-		return "created", "", nil
+		return userID, "created", "", nil
 	case err != nil:
-		return "", "", fmt.Errorf("probe user: %w", err)
+		return "", "", "", fmt.Errorf("probe user: %w", err)
 	}
 
 	desiredPerms := defaultPermissions(u.Role)
@@ -185,34 +239,34 @@ func reconcileUser(ctx context.Context, exec DBTX, tenantID string, u AccountUse
 			}
 			warn := fmt.Sprintf("user %q has reset_credentials=true but --reset-credentials was not passed; password left untouched%s", u.Email, profileNote)
 			if profileEq {
-				return "noop", warn, nil
+				return current.ID, "noop", warn, nil
 			}
 			if err := updateUserProfile(ctx, queries, current.ID, tenantID, u, desiredPerms); err != nil {
-				return "", warn, err
+				return "", "", warn, err
 			}
-			return "updated", warn, nil
+			return current.ID, "updated", warn, nil
 		}
 		hash, hashErr := auth.HashPassword(u.Password)
 		if hashErr != nil {
-			return "", "", fmt.Errorf("hash password: %w", hashErr)
+			return "", "", "", fmt.Errorf("hash password: %w", hashErr)
 		}
 		if updateErr := queries.UpdateBootstrapUserWithCredentials(ctx, commodoredb.UpdateBootstrapUserWithCredentialsParams{
 			FirstName: u.FirstName, LastName: u.LastName, Role: u.Role,
 			Permissions: desiredPerms, PasswordHash: hash, PlatformOperator: u.PlatformOperator,
 			ID: current.ID, TenantID: tenantID,
 		}); updateErr != nil {
-			return "", "", fmt.Errorf("update user (with credentials): %w", updateErr)
+			return "", "", "", fmt.Errorf("update user (with credentials): %w", updateErr)
 		}
-		return "updated", "", nil
+		return current.ID, "updated", "", nil
 	}
 
 	if profileEq {
-		return "noop", "", nil
+		return current.ID, "noop", "", nil
 	}
 	if err := updateUserProfile(ctx, queries, current.ID, tenantID, u, desiredPerms); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	return "updated", "", nil
+	return current.ID, "updated", "", nil
 }
 
 func updateUserProfile(ctx context.Context, queries *commodoredb.Queries, id, tenantID string, u AccountUser, perms []string) error {

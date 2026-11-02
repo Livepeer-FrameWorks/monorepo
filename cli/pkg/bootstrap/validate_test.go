@@ -91,6 +91,32 @@ func TestValidateAcceptsCustomerAccountWithoutBilling(t *testing.T) {
 	}
 }
 
+func TestValidateAccountWallets(t *testing.T) {
+	const wallet = "0x52908400098527886E0F7030069857D2E4169EE7"
+	withWallets := func(first, second string) *Rendered {
+		r := validRendered()
+		r.Quartermaster.Tenants = append(r.Quartermaster.Tenants, Tenant{Alias: "northwind", Name: "Northwind Traders"})
+		r.Accounts = append(r.Accounts, AccountRendered{
+			Kind:   AccountCustomer,
+			Tenant: TenantRef{Ref: "quartermaster.tenants[northwind]"},
+			Users: []AccountUserRendered{
+				{AccountUserCommon: AccountUserCommon{Email: "a@northwind.example", Role: "owner", Wallet: first}, Password: "pw"},
+				{AccountUserCommon: AccountUserCommon{Email: "b@northwind.example", Role: "member", Wallet: second}, Password: "pw"},
+			},
+		})
+		return r
+	}
+	if err := withWallets(wallet, "").Validate(); err != nil {
+		t.Fatalf("declared wallet rejected: %v", err)
+	}
+	if err := withWallets("0x1234", "").Validate(); err == nil || !strings.Contains(err.Error(), "users[0].wallet") {
+		t.Fatalf("malformed wallet accepted or misreported: %v", err)
+	}
+	if err := withWallets(wallet, strings.ToLower(wallet)).Validate(); err == nil || !strings.Contains(err.Error(), "wallet already declared") {
+		t.Fatalf("wallet declared for two users accepted: %v", err)
+	}
+}
+
 func TestValidateRejectsAccountBilling(t *testing.T) {
 	r := validRendered()
 	r.Quartermaster.Tenants = append(r.Quartermaster.Tenants, Tenant{Alias: "northwind", Name: "Northwind Traders"})
