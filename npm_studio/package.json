@@ -24,7 +24,6 @@
     "clean": "rm -rf packages/*/dist packages/*/.svelte-kit"
   },
   "devDependencies": {
-    "concurrently": "^9.0.1",
     "eslint": "^10.2.0",
     "eslint-plugin-svelte": "^3.17.0",
     "globals": "^17.3.0",

@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { readFileSync, realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -21,4 +22,18 @@ describe("SDK workspace dev scripts", () => {
       expect(scripts.dev).toBe("pnpm run playground:dev");
     });
   }
+
+  it("resolves the playground filter to the playground workspace package", () => {
+    const run = spawnSync("pnpm", ["--filter", playgroundName, "list", "--depth", "-1", "--json"], {
+      cwd: resolve(repo, "npm_player"),
+      encoding: "utf8",
+    });
+    expect(run.status, run.stderr).toBe(0);
+    const matched = JSON.parse(run.stdout.slice(run.stdout.indexOf("["))) as Array<{
+      path: string;
+    }>;
+    expect(matched.map((pkg) => realpathSync(pkg.path))).toEqual([
+      realpathSync(resolve(repo, "npm_player/playground")),
+    ]);
+  }, 30_000);
 });
