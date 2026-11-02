@@ -21,6 +21,15 @@ describe("StreamCrafter React component parity", () => {
     expect(source).not.toContain("hasCamera");
   });
 
+  it("masks the stream key in Copy Stream Info and keeps theme colours in tokens", () => {
+    const menu = fs.readFileSync(path.resolve(__dirname, "../src/ui/context-menu.tsx"), "utf8");
+    expect(source).toContain("formatStreamInfo(");
+    expect(source).not.toMatch(/WHIP: \$\{/);
+    for (const file of [source, menu]) {
+      expect(file).not.toMatch(/#(1a1b26|565f89|7aa2f7|a9b1d6|c0caf5|9ece6a|f7768e|33395e)/i);
+    }
+  });
+
   it("invokes shared callback props from component state flow", () => {
     expect(source).toContain(`${STREAMCRAFTER_COMPONENT_PARITY_CALLBACK_MARKERS.onStateChange}?.(`);
     expect(source).toContain(`${STREAMCRAFTER_COMPONENT_PARITY_CALLBACK_MARKERS.onError}?.(`);

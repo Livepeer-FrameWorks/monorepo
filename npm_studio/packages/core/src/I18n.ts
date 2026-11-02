@@ -323,7 +323,7 @@ export const DEFAULT_STUDIO_TRANSLATIONS: StudioTranslationStrings = {
   expandMixer: "Expand Mixer",
 
   // Context menu
-  copyWhipUrl: "Copy WHIP URL",
+  copyWhipUrl: "Copy WHIP URL (contains the stream key)",
   copyStreamInfo: "Copy Stream Info",
   hideAdvanced: "Hide Advanced",
   advanced: "Advanced",

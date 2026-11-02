@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getContext } from "svelte";
+  import type { Snippet } from "svelte";
   import type { Readable } from "svelte/store";
   import { readable } from "svelte/store";
   import {
@@ -13,16 +14,27 @@
     qualityProfile?: QualityProfile;
     onProfileChange?: (profile: QualityProfile) => void;
     autoClose?: boolean;
+    /** Open the popup on mount */
+    defaultOpen?: boolean;
+    /** Extra sections below the quality profiles */
+    children?: Snippet;
   }
 
-  let { qualityProfile: propProfile, onProfileChange, autoClose = true }: Props = $props();
+  let {
+    qualityProfile: propProfile,
+    onProfileChange,
+    autoClose = true,
+    defaultOpen = false,
+    children,
+  }: Props = $props();
 
   let pc: any = getContext("fw-sc-controller");
   const fallbackT = createStudioTranslator({ locale: "en" });
   const translatorCtx =
     getContext<Readable<StudioTranslateFn> | undefined>("fw-sc-translator") ?? readable(fallbackT);
   let t = $derived($translatorCtx);
-  let isOpen = $state(false);
+  // svelte-ignore state_referenced_locally
+  let isOpen = $state(defaultOpen);
   let dropdownEl = $state<HTMLDivElement>(undefined!);
   let buttonEl = $state<HTMLButtonElement>(undefined!);
 
@@ -76,59 +88,31 @@
     class="fw-sc-action-secondary {isOpen ? 'fw-sc-action-secondary--active' : ''}"
     onclick={() => (isOpen = !isOpen)}
     title={t("settings")}
-    style="display: flex; align-items: center; justify-content: center;"
+    aria-expanded={isOpen}
   >
     <SettingsIcon size={16} />
   </button>
   {#if isOpen}
-    <div
-      bind:this={dropdownEl}
-      style="
-        position: absolute;
-        bottom: 100%;
-        left: 0;
-        margin-bottom: 8px;
-        width: 192px;
-        background: #1a1b26;
-        border: 1px solid rgba(90, 96, 127, 0.3);
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-        border-radius: 4px;
-        overflow: hidden;
-        z-index: 50;
-      "
-    >
-      <div style="padding: 8px;">
-        <div
-          style="font-size: 10px; color: #565f89; text-transform: uppercase; font-weight: 600; margin-bottom: 4px; padding-left: 4px;"
-        >
-          {t("quality")}
-        </div>
-        <div style="display: flex; flex-direction: column; gap: 2px;">
-          {#each QUALITY_PROFILES as p}
+    <div bind:this={dropdownEl} class="fw-sc-settings-popup">
+      <div class="fw-sc-dropdown-section">
+        <div class="fw-sc-dropdown-label">{t("quality")}</div>
+        <div class="fw-sc-dropdown-options">
+          {#each QUALITY_PROFILES as p (p.id)}
             <button
               type="button"
+              class="fw-sc-dropdown-option {profile === p.id
+                ? 'fw-sc-dropdown-option--active'
+                : ''}"
               onclick={() => handleSelect(p.id)}
               disabled={pc?.isStreaming}
-              style="
-                width: 100%;
-                padding: 6px 8px;
-                text-align: left;
-                font-size: 12px;
-                border-radius: 4px;
-                transition: all 0.15s;
-                border: none;
-                cursor: {pc?.isStreaming ? 'not-allowed' : 'pointer'};
-                opacity: {pc?.isStreaming ? 0.5 : 1};
-                background: {profile === p.id ? 'rgba(122, 162, 247, 0.2)' : 'transparent'};
-                color: {profile === p.id ? '#7aa2f7' : '#a9b1d6'};
-              "
             >
-              <div style="font-weight: 500;">{p.label}</div>
-              <div style="font-size: 10px; color: #565f89;">{p.description}</div>
+              <span class="fw-sc-dropdown-option-label">{p.label}</span>
+              <span class="fw-sc-dropdown-option-desc">{p.description}</span>
             </button>
           {/each}
         </div>
       </div>
+      {@render children?.()}
     </div>
   {/if}
 </div>

@@ -31,6 +31,7 @@ import {
   IngestClient,
   type CompositorConfig,
   detectStudioSupport,
+  formatStreamInfo,
   getAudioConstraints,
   isSourceVisibleInScene,
   type EncoderOverrides,
@@ -48,6 +49,7 @@ import {
   clearStudioTheme,
   createStudioTranslator,
   type StudioTranslateFn,
+  type StudioTranslationStrings,
   type StudioLocale,
 } from "@livepeer-frameworks/streamcrafter-core";
 
@@ -64,6 +66,16 @@ function getStatusBadgeClass(state: IngestState, isReconnecting: boolean): strin
   if (state === "capturing") return "fw-sc-badge fw-sc-badge--ready";
   return "fw-sc-badge fw-sc-badge--idle";
 }
+
+const QUALITY_PROFILES = [
+  { id: "professional", labelKey: "professional", descKey: "professionalDesc" },
+  { id: "broadcast", labelKey: "broadcast", descKey: "broadcastDesc" },
+  { id: "conference", labelKey: "conference", descKey: "conferenceDesc" },
+] as const satisfies readonly {
+  id: QualityProfile;
+  labelKey: keyof StudioTranslationStrings;
+  descKey: keyof StudioTranslationStrings;
+}[];
 
 function getInitialAudioProcessing(profile: QualityProfile): AudioProcessingSettings {
   const defaults = getAudioConstraints(profile);
@@ -518,15 +530,15 @@ export class FwStreamCrafter extends LitElement {
 
   private _copyStreamInfo() {
     const s = this.pc.s;
-    const profileLabel = this._t(s.qualityProfile as any);
-    const info = [
-      `Status: ${s.state}`,
-      `Quality: ${profileLabel}`,
-      `Sources: ${s.sources.length}`,
-      this._resolvedWhipUrl ? `WHIP: ${this._resolvedWhipUrl}` : null,
-    ]
-      .filter(Boolean)
-      .join("\n");
+    const profile = QUALITY_PROFILES.find((p) => p.id === s.qualityProfile);
+    const info = formatStreamInfo({
+      state: s.state,
+      quality: profile
+        ? `${this._t(profile.labelKey)} (${this._t(profile.descKey)})`
+        : s.qualityProfile,
+      sourceCount: s.sources.length,
+      whipUrl: this._resolvedWhipUrl,
+    });
     navigator.clipboard.writeText(info).catch(console.error);
     this._contextMenu = null;
   }
@@ -875,8 +887,7 @@ export class FwStreamCrafter extends LitElement {
           ? html`
               <div
                 class="fw-sc-context-menu"
-                style="position:fixed;top:${this._contextMenu.y}px;left:${this._contextMenu
-                  .x}px;z-index:1000;background:#1a1b26;border:1px solid rgba(90,96,127,0.3);border-radius:6px;padding:4px;box-shadow:0 4px 12px rgba(0,0,0,0.5);min-width:160px"
+                style="top:${this._contextMenu.y}px;left:${this._contextMenu.x}px"
               >
                 ${this._resolvedWhipUrl
                   ? html`
@@ -1141,37 +1152,18 @@ export class FwStreamCrafter extends LitElement {
   private _renderSettingsPopup() {
     const s = this.pc.s;
     return html`
-      <div
-        class="fw-sc-settings-popup"
-        style="position:absolute;bottom:100%;left:0;margin-bottom:8px;width:192px;background:#1a1b26;border:1px solid rgba(90,96,127,0.3);box-shadow:0 4px 12px rgba(0,0,0,0.4);border-radius:4px;overflow:hidden;z-index:50"
-      >
-        <div style="padding:8px;border-bottom:1px solid rgba(90,96,127,0.3)">
-          <div
-            style="font-size:10px;color:#565f89;text-transform:uppercase;font-weight:600;margin-bottom:4px;padding-left:4px"
-          >
-            ${this._t("quality")}
-          </div>
-          <div style="display:flex;flex-direction:column;gap:2px">
-            ${[
-              {
-                id: "professional" as QualityProfile,
-                labelKey: "professional" as const,
-                descKey: "professionalDesc" as const,
-              },
-              {
-                id: "broadcast" as QualityProfile,
-                labelKey: "broadcast" as const,
-                descKey: "broadcastDesc" as const,
-              },
-              {
-                id: "conference" as QualityProfile,
-                labelKey: "conference" as const,
-                descKey: "conferenceDesc" as const,
-              },
-            ].map(
+      <div class="fw-sc-settings-popup">
+        <div class="fw-sc-dropdown-section">
+          <div class="fw-sc-dropdown-label">${this._t("quality")}</div>
+          <div class="fw-sc-dropdown-options">
+            ${QUALITY_PROFILES.map(
               (profile) => html`
                 <button
                   type="button"
+                  class=${classMap({
+                    "fw-sc-dropdown-option": true,
+                    "fw-sc-dropdown-option--active": s.qualityProfile === profile.id,
+                  })}
                   @click=${() => {
                     if (!s.isStreaming) {
                       this.pc.setQualityProfile(profile.id).catch(console.error);
@@ -1179,18 +1171,9 @@ export class FwStreamCrafter extends LitElement {
                     }
                   }}
                   ?disabled=${s.isStreaming}
-                  style="width:100%;padding:6px 8px;text-align:left;font-size:12px;border-radius:4px;border:none;cursor:${s.isStreaming
-                    ? "not-allowed"
-                    : "pointer"};opacity:${s.isStreaming
-                    ? "0.5"
-                    : "1"};background:${s.qualityProfile === profile.id
-                    ? "rgba(122,162,247,0.2)"
-                    : "transparent"};color:${s.qualityProfile === profile.id
-                    ? "#7aa2f7"
-                    : "#a9b1d6"}"
                 >
-                  <div style="font-weight:500">${this._t(profile.labelKey)}</div>
-                  <div style="font-size:10px;color:#565f89">${this._t(profile.descKey)}</div>
+                  <span class="fw-sc-dropdown-option-label">${this._t(profile.labelKey)}</span>
+                  <span class="fw-sc-dropdown-option-desc">${this._t(profile.descKey)}</span>
                 </button>
               `
             )}
@@ -1198,30 +1181,32 @@ export class FwStreamCrafter extends LitElement {
         </div>
         ${this.devMode
           ? html`
-              <div style="padding:8px">
-                <div
-                  style="font-size:10px;color:#565f89;text-transform:uppercase;font-weight:600;margin-bottom:4px;padding-left:4px"
-                >
-                  ${this._t("debug")}
-                </div>
-                <div
-                  style="display:flex;flex-direction:column;gap:4px;padding-left:4px;font-size:12px;font-family:ui-monospace,monospace"
-                >
-                  <div style="display:flex;justify-content:space-between">
-                    <span style="color:#565f89">${this._t("state")}</span
-                    ><span style="color:#c0caf5">${s.state}</span>
+              <div class="fw-sc-dropdown-section">
+                <div class="fw-sc-dropdown-label">${this._t("debug")}</div>
+                <div class="fw-sc-dropdown-info">
+                  <div class="fw-sc-dropdown-info-row">
+                    <span>${this._t("state")}</span>
+                    <span class="fw-sc-dropdown-info-value">${s.state}</span>
                   </div>
-                  <div style="display:flex;justify-content:space-between">
-                    <span style="color:#565f89">${this._t("audio")}</span>
-                    <span style="color:${s.isCapturing ? "#9ece6a" : "#565f89"}">
+                  <div class="fw-sc-dropdown-info-row">
+                    <span>${this._t("audio")}</span>
+                    <span
+                      class="fw-sc-dropdown-info-value ${s.isCapturing
+                        ? "fw-sc-dropdown-info-value--ok"
+                        : "fw-sc-dropdown-info-value--off"}"
+                    >
                       ${s.isCapturing ? this._t("active") : this._t("inactive")}
                     </span>
                   </div>
-                  <div style="display:flex;justify-content:space-between">
-                    <span style="color:#565f89">${this._t("whip")}</span
-                    ><span style="color:${this._resolvedWhipUrl ? "#9ece6a" : "#f7768e"}"
-                      >${this._resolvedWhipUrl ? this._t("ok") : this._t("notSet")}</span
+                  <div class="fw-sc-dropdown-info-row">
+                    <span>${this._t("whip")}</span>
+                    <span
+                      class="fw-sc-dropdown-info-value ${this._resolvedWhipUrl
+                        ? "fw-sc-dropdown-info-value--ok"
+                        : "fw-sc-dropdown-info-value--bad"}"
                     >
+                      ${this._resolvedWhipUrl ? this._t("ok") : this._t("notSet")}
+                    </span>
                   </div>
                 </div>
               </div>

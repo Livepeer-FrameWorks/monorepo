@@ -14,3 +14,23 @@ export function maskWhipUrl(url: string | null | undefined): string {
     return MASK;
   }
 }
+
+/**
+ * The text "Copy Stream Info" puts on the clipboard. It is meant for pasting
+ * into a support chat or an issue, so the WHIP URL in it is masked.
+ */
+export function formatStreamInfo(info: {
+  state: string;
+  quality: string;
+  sourceCount: number;
+  whipUrl?: string | null;
+}): string {
+  return [
+    `Status: ${info.state}`,
+    `Quality: ${info.quality}`,
+    `Sources: ${info.sourceCount}`,
+    info.whipUrl ? `WHIP: ${maskWhipUrl(info.whipUrl)}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}

@@ -20,6 +20,7 @@ import AdvancedPanel from "./AdvancedPanel";
 import { CompositorControls } from "./CompositorControls";
 import { CameraPicker } from "./CameraPicker";
 import { MediaFileButton } from "./MediaFileButton";
+import { StudioSettings } from "./StudioSettings";
 import { StudioProducerPanel } from "./StudioProducerPanel";
 import { VolumeSlider } from "./VolumeSlider";
 import type { AudioProcessingSettings } from "./AdvancedPanel";
@@ -37,6 +38,7 @@ import {
   getAudioConstraints,
   isMediaDevicesSupported,
   isSourceVisibleInScene,
+  formatStreamInfo,
   resolveStudioTheme,
   studioThemeOverridesToStyle,
   createStudioTranslator,
@@ -484,9 +486,6 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
   const support = useStudioSupport();
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  const settingsDropdownRef = useRef<HTMLDivElement>(null);
-  const settingsButtonRef = useRef<HTMLButtonElement>(null);
-  const [showSettings, setShowSettings] = useState(initialShowSettings);
   const [showSources, setShowSources] = useState(true);
   const [isAdvancedPanelOpen, setIsAdvancedPanelOpen] = useState(false);
   const [masterVolume, setMasterVolumeState] = useState(1);
@@ -520,34 +519,6 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
   // Track if we're waiting for gateway resolution
   const isResolvingEndpoint = !whipUrl && gatewayUrl && streamKey && endpointStatus === "loading";
 
-  // Click outside handler for settings dropdown
-  useEffect(() => {
-    if (!showSettings) return;
-
-    const handleClickOutside = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (
-        settingsDropdownRef.current &&
-        !settingsDropdownRef.current.contains(target) &&
-        settingsButtonRef.current &&
-        !settingsButtonRef.current.contains(target)
-      ) {
-        setShowSettings(false);
-      }
-    };
-
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setShowSettings(false);
-    };
-
-    document.addEventListener("mousedown", handleClickOutside);
-    document.addEventListener("keydown", handleEscape);
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-      document.removeEventListener("keydown", handleEscape);
-    };
-  }, [showSettings]);
-
   // Initialize StreamCrafter hook — capture the full return for context + destructure for local use
   const hookReturn = useStreamCrafterV2({
     whipUrl: resolvedWhipUrl || "",
@@ -566,7 +537,6 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
     mediaStream,
     sources,
     qualityProfile,
-    setQualityProfile,
     reconnectionState,
     startCamera,
     startScreenShare,
@@ -737,14 +707,12 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
 
   const copyStreamInfo = useCallback(() => {
     const profile = qualityProfiles.find((p) => p.id === qualityProfile);
-    const info = [
-      `Status: ${state}`,
-      `Quality: ${profile?.label ?? qualityProfile} (${profile?.description ?? ""})`,
-      `Sources: ${sources.length}`,
-      resolvedWhipUrl ? `WHIP: ${resolvedWhipUrl}` : null,
-    ]
-      .filter(Boolean)
-      .join("\n");
+    const info = formatStreamInfo({
+      state,
+      quality: `${profile?.label ?? qualityProfile} (${profile?.description ?? ""})`,
+      sourceCount: sources.length,
+      whipUrl: resolvedWhipUrl,
+    });
     navigator.clipboard.writeText(info).catch(console.error);
   }, [state, qualityProfile, qualityProfiles, sources.length, resolvedWhipUrl]);
 
@@ -991,152 +959,45 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
                     <MonitorIcon size={18} />
                   </button>
                   <MediaFileButton onAdd={hookReturn.addMediaFile} disabled={!canAddSource} />
-                  {/* Settings button in action bar */}
-                  <div style={{ position: "relative" }}>
-                    <button
-                      ref={settingsButtonRef}
-                      type="button"
-                      className={cn(
-                        "fw-sc-action-secondary",
-                        showSettings && "fw-sc-action-secondary--active"
-                      )}
-                      onClick={() => setShowSettings(!showSettings)}
-                      title={t("settings")}
-                      style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
-                    >
-                      <span
-                        style={{
-                          display: "inline-flex",
-                          transition: "transform 0.2s",
-                        }}
-                        className="settings-icon-wrapper"
-                      >
-                        <SettingsIcon size={16} />
-                      </span>
-                    </button>
-                    {/* Settings Popup - positioned above button */}
-                    {showSettings && (
-                      <div
-                        ref={settingsDropdownRef}
-                        style={{
-                          position: "absolute",
-                          bottom: "100%",
-                          left: 0,
-                          marginBottom: "8px",
-                          width: "192px",
-                          background: "#1a1b26",
-                          border: "1px solid rgba(90, 96, 127, 0.3)",
-                          boxShadow: "0 4px 12px rgba(0, 0, 0, 0.4)",
-                          borderRadius: "4px",
-                          overflow: "hidden",
-                          zIndex: 50,
-                        }}
-                      >
-                        {/* Quality Section */}
-                        <div
-                          style={{
-                            padding: "8px",
-                            borderBottom: "1px solid rgba(90, 96, 127, 0.3)",
-                          }}
-                        >
-                          <div
-                            style={{
-                              fontSize: "10px",
-                              color: "#565f89",
-                              textTransform: "uppercase",
-                              fontWeight: 600,
-                              marginBottom: "4px",
-                              paddingLeft: "4px",
-                            }}
-                          >
-                            {t("quality")}
+                  <StudioSettings autoClose={!devMode} defaultOpen={initialShowSettings}>
+                    {devMode && (
+                      <div className="fw-sc-dropdown-section">
+                        <div className="fw-sc-dropdown-label">{t("debug")}</div>
+                        <div className="fw-sc-dropdown-info">
+                          <div className="fw-sc-dropdown-info-row">
+                            <span>{t("state")}</span>
+                            <span className="fw-sc-dropdown-info-value">{state}</span>
                           </div>
-                          <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                            {qualityProfiles.map((p) => (
-                              <button
-                                key={p.id}
-                                type="button"
-                                onClick={() => {
-                                  if (!isStreaming) {
-                                    setQualityProfile(p.id);
-                                    if (!devMode) setShowSettings(false);
-                                  }
-                                }}
-                                disabled={isStreaming}
-                                style={{
-                                  width: "100%",
-                                  padding: "6px 8px",
-                                  textAlign: "left",
-                                  fontSize: "12px",
-                                  borderRadius: "4px",
-                                  transition: "all 0.15s",
-                                  border: "none",
-                                  cursor: isStreaming ? "not-allowed" : "pointer",
-                                  opacity: isStreaming ? 0.5 : 1,
-                                  background:
-                                    qualityProfile === p.id
-                                      ? "rgba(122, 162, 247, 0.2)"
-                                      : "transparent",
-                                  color: qualityProfile === p.id ? "#7aa2f7" : "#a9b1d6",
-                                }}
-                              >
-                                <div style={{ fontWeight: 500 }}>{p.label}</div>
-                                <div style={{ fontSize: "10px", color: "#565f89" }}>
-                                  {p.description}
-                                </div>
-                              </button>
-                            ))}
+                          <div className="fw-sc-dropdown-info-row">
+                            <span>{t("audio")}</span>
+                            <span
+                              className={cn(
+                                "fw-sc-dropdown-info-value",
+                                isMonitoring
+                                  ? "fw-sc-dropdown-info-value--ok"
+                                  : "fw-sc-dropdown-info-value--off"
+                              )}
+                            >
+                              {isMonitoring ? t("active") : t("inactive")}
+                            </span>
+                          </div>
+                          <div className="fw-sc-dropdown-info-row">
+                            <span>{t("whip")}</span>
+                            <span
+                              className={cn(
+                                "fw-sc-dropdown-info-value",
+                                resolvedWhipUrl
+                                  ? "fw-sc-dropdown-info-value--ok"
+                                  : "fw-sc-dropdown-info-value--bad"
+                              )}
+                            >
+                              {resolvedWhipUrl ? t("ok") : t("notSet")}
+                            </span>
                           </div>
                         </div>
-
-                        {/* Dev Info Section */}
-                        {devMode && (
-                          <div style={{ padding: "8px" }}>
-                            <div
-                              style={{
-                                fontSize: "10px",
-                                color: "#565f89",
-                                textTransform: "uppercase",
-                                fontWeight: 600,
-                                marginBottom: "4px",
-                                paddingLeft: "4px",
-                              }}
-                            >
-                              {t("debug")}
-                            </div>
-                            <div
-                              style={{
-                                display: "flex",
-                                flexDirection: "column",
-                                gap: "4px",
-                                paddingLeft: "4px",
-                                fontSize: "12px",
-                                fontFamily:
-                                  "ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace",
-                              }}
-                            >
-                              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                                <span style={{ color: "#565f89" }}>{t("state")}</span>
-                                <span style={{ color: "#c0caf5" }}>{state}</span>
-                              </div>
-                              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                                <span style={{ color: "#565f89" }}>{t("audio")}</span>
-                                <span style={{ color: isMonitoring ? "#9ece6a" : "#565f89" }}>
-                                  {isMonitoring ? t("active") : t("inactive")}
-                                </span>
-                              </div>
-                              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                                <span style={{ color: "#565f89" }}>{t("whip")}</span>
-                                <span style={{ color: resolvedWhipUrl ? "#9ece6a" : "#f7768e" }}>
-                                  {resolvedWhipUrl ? t("ok") : t("notSet")}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        )}
                       </div>
                     )}
-                  </div>
+                  </StudioSettings>
                   {/* Primary action: Go Live / Stop */}
                   {!isStreaming && !isReconnecting ? (
                     <button
@@ -1195,22 +1056,22 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
           </ContextMenuTrigger>
 
           {/* Right-Click Context Menu */}
-          <ContextMenuContent>
+          <ContextMenuContent
+            data-theme={typeof theme === "string" && theme !== "default" ? theme : undefined}
+            style={themeStyle}
+          >
             {resolvedWhipUrl && (
-              <ContextMenuItem onClick={copyWhipUrl} className="gap-2">
+              <ContextMenuItem onClick={copyWhipUrl}>
                 <span>{t("copyWhipUrl")}</span>
               </ContextMenuItem>
             )}
-            <ContextMenuItem onClick={copyStreamInfo} className="gap-2">
+            <ContextMenuItem onClick={copyStreamInfo}>
               <span>{t("copyStreamInfo")}</span>
             </ContextMenuItem>
             {devMode && (
               <>
                 <ContextMenuSeparator />
-                <ContextMenuItem
-                  onClick={() => setIsAdvancedPanelOpen(!isAdvancedPanelOpen)}
-                  className="gap-2"
-                >
+                <ContextMenuItem onClick={() => setIsAdvancedPanelOpen(!isAdvancedPanelOpen)}>
                   <SettingsIcon size={14} />
                   <span>{isAdvancedPanelOpen ? t("hideAdvanced") : t("advanced")}</span>
                 </ContextMenuItem>

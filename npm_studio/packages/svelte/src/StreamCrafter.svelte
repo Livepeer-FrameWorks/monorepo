@@ -21,6 +21,7 @@
   import { createIngestEndpointsStore, type IngestEndpointsState } from "./stores/ingestEndpoints";
   import CameraPicker from "./components/CameraPicker.svelte";
   import MediaFileButton from "./components/MediaFileButton.svelte";
+  import StudioSettings from "./components/StudioSettings.svelte";
   import CompositorControls from "./components/CompositorControls.svelte";
   import StudioProducerPanel from "./components/StudioProducerPanel.svelte";
   import AdvancedPanel, { type AudioProcessingSettings } from "./components/AdvancedPanel.svelte";
@@ -54,6 +55,7 @@
     detectCapabilities,
     detectStudioSupport,
     FULL_STUDIO_SUPPORT,
+    formatStreamInfo,
     isMediaDevicesSupported,
     isSourceVisibleInScene,
     resolveStudioTheme,
@@ -162,10 +164,7 @@
 
   // State
   let videoEl = $state<HTMLVideoElement>(undefined!);
-  let settingsDropdownEl = $state<HTMLDivElement>(undefined!);
-  let settingsButtonEl = $state<HTMLButtonElement>(undefined!);
   let contextMenuEl = $state<HTMLDivElement>(undefined!);
-  let showSettings = $state(false);
   let showSources = $state(true);
   let contextMenu = $state<{ x: number; y: number } | null>(null);
   let isAdvancedPanelOpen = $state(false);
@@ -217,10 +216,6 @@
   const isWebCodecsAvailable = isWebCodecsEncodingPathSupported();
   let support = $state(FULL_STUDIO_SUPPORT);
 
-  // Sync initial prop values into state
-  $effect(() => {
-    showSettings = initialShowSettings;
-  });
   $effect(() => {
     crafterState.qualityProfile = initialProfile;
   });
@@ -409,35 +404,6 @@
     handleStartCamera();
   });
 
-  // Click-outside handler for settings dropdown
-  $effect(() => {
-    if (!showSettings) return;
-
-    function handleClickOutside(e: MouseEvent) {
-      const target = e.target as Node;
-      if (
-        settingsDropdownEl &&
-        !settingsDropdownEl.contains(target) &&
-        settingsButtonEl &&
-        !settingsButtonEl.contains(target)
-      ) {
-        showSettings = false;
-      }
-    }
-
-    function handleEscape(e: KeyboardEvent) {
-      if (e.key === "Escape") showSettings = false;
-    }
-
-    document.addEventListener("mousedown", handleClickOutside);
-    document.addEventListener("keydown", handleEscape);
-
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-      document.removeEventListener("keydown", handleEscape);
-    };
-  });
-
   // Click-outside handler for context menu
   $effect(() => {
     if (!contextMenu) return;
@@ -547,13 +513,6 @@
     await crafter.stopStreaming();
   }
 
-  async function selectQualityProfile(profileId: QualityProfile) {
-    await crafter.setQualityProfile(profileId);
-    if (!devMode) {
-      showSettings = false;
-    }
-  }
-
   function toggleSourceMute(sourceId: string, currentMuted: boolean) {
     crafter.setSourceMuted(sourceId, !currentMuted);
   }
@@ -633,14 +592,12 @@
 
   function copyStreamInfo() {
     const profile = QUALITY_PROFILES.find((p) => p.id === crafterState.qualityProfile);
-    const info = [
-      `Status: ${crafterState.state}`,
-      `Quality: ${profile?.label ?? crafterState.qualityProfile} (${profile?.description ?? ""})`,
-      `Sources: ${crafterState.sources.length}`,
-      resolvedWhipUrl ? `WHIP: ${resolvedWhipUrl}` : null,
-    ]
-      .filter(Boolean)
-      .join("\n");
+    const info = formatStreamInfo({
+      state: crafterState.state,
+      quality: `${profile?.label ?? crafterState.qualityProfile} (${profile?.description ?? ""})`,
+      sourceCount: crafterState.sources.length,
+      whipUrl: resolvedWhipUrl,
+    });
     navigator.clipboard.writeText(info).catch(console.error);
     contextMenu = null;
   }
@@ -943,111 +900,39 @@
           <MonitorIcon size={18} />
         </button>
         <MediaFileButton onAdd={(file) => crafter.addMediaFile(file)} disabled={!canAddSource} />
-        <!-- Settings button in action bar -->
-        <div style="position: relative">
-          <button
-            bind:this={settingsButtonEl}
-            type="button"
-            class="fw-sc-action-secondary {showSettings ? 'fw-sc-action-secondary--active' : ''}"
-            onclick={() => (showSettings = !showSettings)}
-            title={t("settings")}
-            style="display: flex; align-items: center; justify-content: center;"
-          >
-            <span class="settings-icon-wrapper">
-              <SettingsIcon size={16} />
-            </span>
-          </button>
-          <!-- Settings Popup - positioned above button -->
-          {#if showSettings}
-            <div
-              bind:this={settingsDropdownEl}
-              style="
-            position: absolute;
-            bottom: 100%;
-            left: 0;
-            margin-bottom: 8px;
-            width: 192px;
-            background: #1a1b26;
-            border: 1px solid rgba(90, 96, 127, 0.3);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-            border-radius: 4px;
-            overflow: hidden;
-            z-index: 50;
-          "
-            >
-              <!-- Quality Section -->
-              <div style="padding: 8px; border-bottom: 1px solid rgba(90, 96, 127, 0.3);">
-                <div
-                  style="font-size: 10px; color: #565f89; text-transform: uppercase; font-weight: 600; margin-bottom: 4px; padding-left: 4px;"
-                >
-                  {t("quality")}
+        <StudioSettings autoClose={!devMode} defaultOpen={initialShowSettings}>
+          {#if devMode}
+            <div class="fw-sc-dropdown-section">
+              <div class="fw-sc-dropdown-label">{t("debug")}</div>
+              <div class="fw-sc-dropdown-info">
+                <div class="fw-sc-dropdown-info-row">
+                  <span>{t("state")}</span>
+                  <span class="fw-sc-dropdown-info-value">{crafterState.state}</span>
                 </div>
-                <div style="display: flex; flex-direction: column; gap: 2px;">
-                  {#each QUALITY_PROFILES as profile}
-                    <button
-                      type="button"
-                      onclick={() => {
-                        if (!crafterState.isStreaming) {
-                          selectQualityProfile(profile.id);
-                        }
-                      }}
-                      disabled={crafterState.isStreaming}
-                      style="
-                    width: 100%;
-                    padding: 6px 8px;
-                    text-align: left;
-                    font-size: 12px;
-                    border-radius: 4px;
-                    transition: all 0.15s;
-                    border: none;
-                    cursor: {crafterState.isStreaming ? 'not-allowed' : 'pointer'};
-                    opacity: {crafterState.isStreaming ? 0.5 : 1};
-                    background: {crafterState.qualityProfile === profile.id
-                        ? 'rgba(122, 162, 247, 0.2)'
-                        : 'transparent'};
-                    color: {crafterState.qualityProfile === profile.id ? '#7aa2f7' : '#a9b1d6'};
-                  "
-                    >
-                      <div style="font-weight: 500;">{profile.label}</div>
-                      <div style="font-size: 10px; color: #565f89;">{profile.description}</div>
-                    </button>
-                  {/each}
+                <div class="fw-sc-dropdown-info-row">
+                  <span>{t("audio")}</span>
+                  <span
+                    class="fw-sc-dropdown-info-value {audioLevels.isMonitoring
+                      ? 'fw-sc-dropdown-info-value--ok'
+                      : 'fw-sc-dropdown-info-value--off'}"
+                  >
+                    {audioLevels.isMonitoring ? t("active") : t("inactive")}
+                  </span>
+                </div>
+                <div class="fw-sc-dropdown-info-row">
+                  <span>{t("whip")}</span>
+                  <span
+                    class="fw-sc-dropdown-info-value {resolvedWhipUrl
+                      ? 'fw-sc-dropdown-info-value--ok'
+                      : 'fw-sc-dropdown-info-value--bad'}"
+                  >
+                    {resolvedWhipUrl ? t("ok") : t("notSet")}
+                  </span>
                 </div>
               </div>
-
-              <!-- Dev Info Section -->
-              {#if devMode}
-                <div style="padding: 8px;">
-                  <div
-                    style="font-size: 10px; color: #565f89; text-transform: uppercase; font-weight: 600; margin-bottom: 4px; padding-left: 4px;"
-                  >
-                    {t("debug")}
-                  </div>
-                  <div
-                    style="display: flex; flex-direction: column; gap: 4px; padding-left: 4px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;"
-                  >
-                    <div style="display: flex; justify-content: space-between;">
-                      <span style="color: #565f89;">{t("state")}</span>
-                      <span style="color: #c0caf5;">{crafterState.state}</span>
-                    </div>
-                    <div style="display: flex; justify-content: space-between;">
-                      <span style="color: #565f89;">{t("audio")}</span>
-                      <span style="color: {audioLevels.isMonitoring ? '#9ece6a' : '#565f89'};">
-                        {audioLevels.isMonitoring ? t("active") : t("inactive")}
-                      </span>
-                    </div>
-                    <div style="display: flex; justify-content: space-between;">
-                      <span style="color: #565f89;">{t("whip")}</span>
-                      <span style="color: {resolvedWhipUrl ? '#9ece6a' : '#f7768e'};">
-                        {resolvedWhipUrl ? t("ok") : t("notSet")}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              {/if}
             </div>
           {/if}
-        </div>
+        </StudioSettings>
         <!-- Primary action: Go Live / Stop -->
         {#if !crafterState.isStreaming && !crafterState.isReconnecting}
           <button
@@ -1074,63 +959,18 @@
         <div
           bind:this={contextMenuEl}
           class="fw-sc-context-menu"
-          style="
-          position: fixed;
-          top: {contextMenu.y}px;
-          left: {contextMenu.x}px;
-          z-index: 1000;
-          background: #1a1b26;
-          border: 1px solid rgba(90, 96, 127, 0.3);
-          border-radius: 6px;
-          padding: 4px;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-          min-width: 160px;
-        "
+          style="top: {contextMenu.y}px; left: {contextMenu.x}px;"
         >
           {#if resolvedWhipUrl}
-            <button
-              type="button"
-              class="fw-sc-context-menu-item"
-              onclick={copyWhipUrl}
-              style="
-              width: 100%;
-              text-align: left;
-              padding: 6px 8px;
-              color: #c0caf5;
-              font-size: 13px;
-              border-radius: 4px;
-              border: none;
-              background: transparent;
-              cursor: pointer;
-            "
-              onmouseenter={(e) => (e.currentTarget.style.background = "rgba(122, 162, 247, 0.1)")}
-              onmouseleave={(e) => (e.currentTarget.style.background = "transparent")}
-            >
+            <button type="button" class="fw-sc-context-menu-item" onclick={copyWhipUrl}>
               {t("copyWhipUrl")}
             </button>
           {/if}
-          <button
-            type="button"
-            class="fw-sc-context-menu-item"
-            onclick={copyStreamInfo}
-            style="
-            width: 100%;
-            text-align: left;
-            padding: 6px 8px;
-            color: #c0caf5;
-            font-size: 13px;
-            border-radius: 4px;
-            border: none;
-            background: transparent;
-            cursor: pointer;
-          "
-            onmouseenter={(e) => (e.currentTarget.style.background = "rgba(122, 162, 247, 0.1)")}
-            onmouseleave={(e) => (e.currentTarget.style.background = "transparent")}
-          >
+          <button type="button" class="fw-sc-context-menu-item" onclick={copyStreamInfo}>
             {t("copyStreamInfo")}
           </button>
           {#if devMode}
-            <div style="height: 1px; background: rgba(90, 96, 127, 0.3); margin: 4px 0;"></div>
+            <div class="fw-sc-context-menu-separator"></div>
             <button
               type="button"
               class="fw-sc-context-menu-item"
@@ -1138,22 +978,6 @@
                 isAdvancedPanelOpen = !isAdvancedPanelOpen;
                 contextMenu = null;
               }}
-              style="
-              width: 100%;
-              text-align: left;
-              padding: 6px 8px;
-              color: #c0caf5;
-              font-size: 13px;
-              border-radius: 4px;
-              border: none;
-              background: transparent;
-              cursor: pointer;
-              display: flex;
-              gap: 8px;
-              align-items: center;
-            "
-              onmouseenter={(e) => (e.currentTarget.style.background = "rgba(122, 162, 247, 0.1)")}
-              onmouseleave={(e) => (e.currentTarget.style.background = "transparent")}
             >
               <SettingsIcon size={14} />
               <span>{isAdvancedPanelOpen ? t("hideAdvanced") : t("advanced")}</span>

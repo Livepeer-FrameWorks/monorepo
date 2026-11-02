@@ -70,6 +70,12 @@ describe("FwStreamCrafter", () => {
     expect(handlers.size).toBe(0);
   });
 
+  it("masks the stream key in Copy Stream Info and keeps theme colours in tokens", () => {
+    expect(source).toContain("formatStreamInfo(");
+    expect(source).not.toMatch(/WHIP: \$\{/);
+    expect(source).not.toMatch(/#(1a1b26|565f89|7aa2f7|a9b1d6|c0caf5|9ece6a|f7768e)/i);
+  });
+
   it("references shared context-menu i18n keys", () => {
     for (const key of STREAMCRAFTER_COMPONENT_PARITY_CONTEXT_MENU_I18N_KEYS) {
       expect(source).toContain(`"${key}"`);

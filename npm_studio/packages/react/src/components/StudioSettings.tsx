@@ -39,16 +39,22 @@ export interface StudioSettingsProps {
   onProfileChange?: (profile: QualityProfile) => void;
   /** Auto-close dropdown on selection */
   autoClose?: boolean;
+  /** Open the popup on mount */
+  defaultOpen?: boolean;
+  /** Extra sections below the quality profiles */
+  children?: React.ReactNode;
 }
 
 export const StudioSettings: React.FC<StudioSettingsProps> = ({
   qualityProfile: propProfile,
   onProfileChange,
   autoClose = true,
+  defaultOpen = false,
+  children,
 }) => {
   const ctx = useStreamCrafterContext();
   const t = useStudioTranslate();
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(defaultOpen);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
@@ -93,67 +99,30 @@ export const StudioSettings: React.FC<StudioSettingsProps> = ({
         className={`fw-sc-action-secondary${isOpen ? " fw-sc-action-secondary--active" : ""}`}
         onClick={() => setIsOpen(!isOpen)}
         title={t("settings")}
-        style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
+        aria-expanded={isOpen}
       >
         <SettingsIcon size={16} />
       </button>
       {isOpen && (
-        <div
-          ref={dropdownRef}
-          style={{
-            position: "absolute",
-            bottom: "100%",
-            left: 0,
-            marginBottom: "8px",
-            width: "192px",
-            background: "#1a1b26",
-            border: "1px solid rgba(90, 96, 127, 0.3)",
-            boxShadow: "0 4px 12px rgba(0, 0, 0, 0.4)",
-            borderRadius: "4px",
-            overflow: "hidden",
-            zIndex: 50,
-          }}
-        >
-          <div style={{ padding: "8px" }}>
-            <div
-              style={{
-                fontSize: "10px",
-                color: "#565f89",
-                textTransform: "uppercase",
-                fontWeight: 600,
-                marginBottom: "4px",
-                paddingLeft: "4px",
-              }}
-            >
-              {t("quality")}
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+        <div ref={dropdownRef} className="fw-sc-settings-popup">
+          <div className="fw-sc-dropdown-section">
+            <div className="fw-sc-dropdown-label">{t("quality")}</div>
+            <div className="fw-sc-dropdown-options">
               {QUALITY_PROFILES.map((p) => (
                 <button
                   key={p.id}
                   type="button"
+                  className={`fw-sc-dropdown-option${profile === p.id ? " fw-sc-dropdown-option--active" : ""}`}
                   onClick={() => handleSelect(p.id)}
                   disabled={ctx.isStreaming}
-                  style={{
-                    width: "100%",
-                    padding: "6px 8px",
-                    textAlign: "left",
-                    fontSize: "12px",
-                    borderRadius: "4px",
-                    transition: "all 0.15s",
-                    border: "none",
-                    cursor: ctx.isStreaming ? "not-allowed" : "pointer",
-                    opacity: ctx.isStreaming ? 0.5 : 1,
-                    background: profile === p.id ? "rgba(122, 162, 247, 0.2)" : "transparent",
-                    color: profile === p.id ? "#7aa2f7" : "#a9b1d6",
-                  }}
                 >
-                  <div style={{ fontWeight: 500 }}>{t(p.labelKey)}</div>
-                  <div style={{ fontSize: "10px", color: "#565f89" }}>{t(p.descKey)}</div>
+                  <span className="fw-sc-dropdown-option-label">{t(p.labelKey)}</span>
+                  <span className="fw-sc-dropdown-option-desc">{t(p.descKey)}</span>
                 </button>
               ))}
             </div>
           </div>
+          {children}
         </div>
       )}
     </div>
