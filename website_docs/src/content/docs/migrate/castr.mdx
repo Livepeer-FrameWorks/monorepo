@@ -282,7 +282,7 @@ These are not on the roadmap.
 ## Beta and tricky bits
 
 - **Billing works differently.** Paid tiers meter delivered minutes, with transcoding included. See [Billing](/builders/billing) and compare using your own past usage. Rates may adjust as we scale, but you keep the allowances you signed up for.
-- **Prepaid accounts stop at zero.** At €0 new streams are blocked. Top up before an event.
+- **A spent prepaid balance refuses new sessions.** At €0 running streams and their viewers continue, but new streams, new viewers and reconnects are refused. Below -€10 running streams stop. Top up before an event.
 - **Stream keys and playback IDs don't transfer.** Every encoder and embed needs updating.
 - **Allowed origins block non-browser players.** Test VLC, set-top, and app viewers before you enable them.
 - **Keep the browser tab open.** With StreamCrafter, closing the tab ends the broadcast, and quality can't change while live. Chromium-based browsers are the safest choice.

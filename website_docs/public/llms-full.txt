@@ -201,6 +201,18 @@ Always read this first. Returns:
 does not make the account broken. `balance_cents` is the settled
 balance, `reserved_balance_cents` is already committed to active usage, and `available_balance_cents`
 is what remains spendable. Billable tool preflights use the available balance.
+At €0 or below, running streams and their viewers continue but new rated work,
+new streams and new viewers are refused; below -€10 the tenant is suspended and
+running sessions stop. A suspended or closed account reports the
+`ACCOUNT_SUSPENDED` blocker.
+
+`billing` also carries the plan lifecycle when one applies: `pending_tier`,
+`pending_reason`, `pending_effective_at` and `pending_tier_state` (`scheduled`,
+`final` or `applying`) for a staged plan change; `free_fallback` (`reason`
+`payment_failed` or `cancelled`, `at`, and `stage` `scheduled`, `applying` or
+`moved`) for a move to Free; `billing_arrangement` for a FrameWorks arrangement
+such as a trial; and `effective_base_price_eur`, the monthly base fee the
+account pays.
 
 `tool_access` says which MCP tools this account may call right now. `capabilities`
 says which platform gates are open for the tenant, read from the services that
@@ -939,7 +951,7 @@ Call `update_billing_details` with the listed fields, then request fresh payment
 ```json
 {
   "code": "INSUFFICIENT_BALANCE",
-  "message": "Available balance is 0 cents (0 settled, 0 reserved). Top up required to perform billable operations.",
+  "message": "Available balance is 0 cents (0 settled, 0 reserved). At €0 or below, running streams and their viewers continue but new streams, new viewers and reconnects are refused; below -€10 running sessions stop. Top up to run billable operations.",
   "resolution": "Call topup_balance tool to add credits, OR pay via x402 (USDC on Base/Arbitrum)",
   "tool": "topup_balance",
   "x402_accepts": [
@@ -981,8 +993,13 @@ Prepaid usage deductions can move an account toward zero or negative balance. Mo
 | `estimated_hours_left`      | Time until the available balance is depleted |
 | `live_metrics`              | Current operational usage context            |
 
-At zero or below available balance, prepaid accounts are blocked from new rated work until the balance is topped up. The rest of the authenticated platform remains usable. If the settled balance drops below -€10, Purser suspends the tenant and asks
-Commodore/Foghorn to terminate active streams and sessions. Top up proactively.
+| Available balance | Effect                                                                                                                                                     |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Above €0          | Rated work runs normally                                                                                                                                   |
+| €0 or below       | Running streams and their viewers continue. New rated work, new streams and new viewers are refused, and a disconnected viewer or encoder cannot reconnect |
+| Below -€10        | The tenant is suspended and running streams and sessions stop                                                                                              |
+
+The rest of the authenticated platform remains usable at €0. Top up proactively before long-running work.
 
 
 ---
@@ -5675,6 +5692,18 @@ Input for billing address.
 - **postalCode**: `String!` — Postal or ZIP code.
 - **country**: `String!` — ISO 3166-1 alpha-2 country code.
 
+## BillingArrangement
+
+**object**
+
+A billing arrangement FrameWorks set up for an account. Only the terms the account is billed under are shown.
+
+- **basePrice**: `String` — Monthly base fee in EUR in place of the plan&#39;s, as a decimal string. Null keeps the plan&#39;s fee.
+- **waiveUsage**: `Boolean!` — Usage is metered and shown at zero cost.
+- **collection**: `String!` — How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer).
+- **expiresAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the arrangement ends. Null runs until FrameWorks ends it.
+- **fallbackTierName**: `String` — Plan the account returns to when the arrangement ends, when it is not the current plan.
+
 ## BillingDetails
 
 **object**
@@ -5718,6 +5747,10 @@ Contractual and enforced properties of a billing tier. Usage limits are entitlem
 - **currency**: `String!`
 - **liveUsage**: `LiveUsageSummary!` ([LiveUsageSummary](/builders/api-schema/billing-types/#liveusagesummary))
 - **invoicePreview**: `Invoice` ([Invoice](/builders/api-schema/billing-types/#invoice))
+- **operatorGrant**: `BillingArrangement` ([BillingArrangement](/builders/api-schema/billing-types/#billingarrangement)) — Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force.
+- **effectiveBasePrice**: `String!` — Monthly base fee in EUR this account pays after any arrangement, as a decimal string.
+- **freeFallback**: `FreeFallback` ([FreeFallback](/builders/api-schema/billing-types/#freefallback)) — Scheduled move to the Free plan after a failed renewal payment or a cancellation.
+- **pendingTierState**: `PendingTierState` ([PendingTierState](/builders/api-schema/billing-types/#pendingtierstate)) — Progress of subscription.pendingTier while subscription.pendingReason is downgrade.
 
 ## BillingTier
 
@@ -5917,6 +5950,36 @@ A key-value entitlement entry. Values are JSON-encoded for type flexibility.
 
 - **key**: `String!`
 - **value**: `String!`
+
+## FreeFallback
+
+**object**
+
+A scheduled move to the Free plan.
+
+- **reason**: `FreeFallbackReason!` ([FreeFallbackReason](/builders/api-schema/billing-types/#freefallbackreason))
+- **at**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When the move happens, or happened once stage is MOVED.
+- **stage**: `FreeFallbackStage!` ([FreeFallbackStage](/builders/api-schema/billing-types/#freefallbackstage))
+- **providerCancelled**: `Boolean!` — The Stripe or Mollie subscription is cancelled, so no renewal follows.
+
+## FreeFallbackReason
+
+**enum**
+
+Why an account moves to the Free plan.
+
+- `PAYMENT_FAILED` — A renewal payment failed. The plan stays active through the 14-day grace period.
+- `CANCELLED` — The subscription was cancelled. The plan runs to the end of its paid period.
+
+## FreeFallbackStage
+
+**enum**
+
+Where a scheduled move to the Free plan stands.
+
+- `SCHEDULED` — Before the move date. Paying the failed invoice or subscribing again keeps the plan.
+- `APPLYING` — The move date passed and the final invoice is being settled.
+- `MOVED` — The account is on Free.
 
 ## Invoice
 
@@ -6178,6 +6241,16 @@ Payment processing status.
 - `CONFIRMED` — Payment successfully processed.
 - `FAILED` — Payment failed or declined.
 
+## PendingTierState
+
+**enum**
+
+Progress of a scheduled downgrade.
+
+- `SCHEDULED` — Selecting the current plan with changeBillingTier cancels the downgrade.
+- `FINAL` — The payment provider subscription is cancelled. The move cannot be undone.
+- `APPLYING` — The effective time passed. The downgrade applies with the closing invoice.
+
 ## PrepaidBalance
 
 **object**
@@ -6293,7 +6366,7 @@ Stripe Checkout Session - redirect URL for hosted checkout.
 - **billingModel**: `String!`
 - **pendingTier**: `BillingTier` ([BillingTier](/builders/api-schema/billing-types/#billingtier))
 - **pendingEffectiveAt**: `Time` ([Time](/builders/api-schema/shared/#time))
-- **pendingReason**: `String`
+- **pendingReason**: `String` — Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see BillingStatus.pendingTierState), tier_upgrade (a paid upgrade being confirmed) or stripe_checkout (a checkout awaiting payment).
 - **presentmentCurrency**: `Currency!` ([Currency](/builders/api-schema/billing-types/#currency)) — Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing country. The prepaid ledger is always EUR.
 - **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
 - **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
@@ -6676,7 +6749,7 @@ usageRecordsConnection(
 
 ### Mutation.changeBillingTier
 
-Change the postpaid billing tier. Upgrades start a fresh month and offset the replacement fee with the unused retained paid old fee, capped at the replacement price, without cash refund or spendable balance. Provider or metering reconciliation can leave them pending. Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement. Downgrades take effect at the current billing period end.
+Change the postpaid billing tier. Upgrades start a fresh month and offset the replacement fee with the unused retained paid old fee, capped at the replacement price, without cash refund or spendable balance. Provider or metering reconciliation can leave them pending. Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement. Downgrades take effect at the current billing period end. A refusal returns ValidationError whose code is one of PENDING_CHECKOUT, PENDING_FREE_FALLBACK, PENDING_UPGRADE, OUTSTANDING_GRANT, ACCOUNT_CLOSED, DOWNGRADE_HELD, PAID_TERM_ENDING, PROVIDER_SUBSCRIPTION_LIVE, TIER_NOT_SELF_SERVICE, INVOICES_OUTSTANDING, COLLECTION_SETUP_REQUIRED or BILLING_PROFILE_REQUIRED, with a message to show the customer.
 
 ```graphql
 changeBillingTier(
@@ -6956,7 +7029,7 @@ updateBillingDetails(
 
 ## Types
 
-- [Billing and usage types](/builders/api-schema/billing-types/): [BalanceTransaction](/builders/api-schema/billing-types/#balancetransaction), [BalanceTransactionEdge](/builders/api-schema/billing-types/#balancetransactionedge), [BalanceTransactionsConnection](/builders/api-schema/billing-types/#balancetransactionsconnection), [BillingAddress](/builders/api-schema/billing-types/#billingaddress), [BillingAddressInput](/builders/api-schema/billing-types/#billingaddressinput), [BillingDetails](/builders/api-schema/billing-types/#billingdetails), [BillingFeatures](/builders/api-schema/billing-types/#billingfeatures), [BillingStatus](/builders/api-schema/billing-types/#billingstatus), [BillingTier](/builders/api-schema/billing-types/#billingtier), [CardPaymentProvider](/builders/api-schema/billing-types/#cardpaymentprovider), [CardTopupResult](/builders/api-schema/billing-types/#cardtopupresult), [ChangeBillingTierPayload](/builders/api-schema/billing-types/#changebillingtierpayload), [ChangeBillingTierResult](/builders/api-schema/billing-types/#changebillingtierresult), [CostEntry](/builders/api-schema/billing-types/#costentry), [CountryMetrics](/builders/api-schema/billing-types/#countrymetrics), [CreateCardTopupInput](/builders/api-schema/billing-types/#createcardtopupinput), [CreateCryptoTopupInput](/builders/api-schema/billing-types/#createcryptotopupinput), [CreatePaymentInput](/builders/api-schema/billing-types/#createpaymentinput), [CreatePaymentResult](/builders/api-schema/billing-types/#createpaymentresult), [CryptoAsset](/builders/api-schema/billing-types/#cryptoasset), [CryptoTopupResult](/builders/api-schema/billing-types/#cryptotopupresult), [CryptoTopupStatus](/builders/api-schema/billing-types/#cryptotopupstatus), [Currency](/builders/api-schema/billing-types/#currency), [CurrencyConversion](/builders/api-schema/billing-types/#currencyconversion), [EntitlementEntry](/builders/api-schema/billing-types/#entitlemententry), [Invoice](/builders/api-schema/billing-types/#invoice), [InvoiceEdge](/builders/api-schema/billing-types/#invoiceedge), [InvoicePayment](/builders/api-schema/billing-types/#invoicepayment), [InvoicePaymentEdge](/builders/api-schema/billing-types/#invoicepaymentedge), [InvoicePaymentsConnection](/builders/api-schema/billing-types/#invoicepaymentsconnection), [InvoiceStatus](/builders/api-schema/billing-types/#invoicestatus), [InvoicesConnection](/builders/api-schema/billing-types/#invoicesconnection), [LineItem](/builders/api-schema/billing-types/#lineitem), [LiveUsageSummary](/builders/api-schema/billing-types/#liveusagesummary), [MollieFirstPayment](/builders/api-schema/billing-types/#molliefirstpayment), [MollieFirstPaymentResult](/builders/api-schema/billing-types/#molliefirstpaymentresult), [MollieMandate](/builders/api-schema/billing-types/#molliemandate), [MollieSubscription](/builders/api-schema/billing-types/#molliesubscription), [MollieSubscriptionResult](/builders/api-schema/billing-types/#molliesubscriptionresult), [Money](/builders/api-schema/billing-types/#money), [Payment](/builders/api-schema/billing-types/#payment), [PaymentMethod](/builders/api-schema/billing-types/#paymentmethod), [PaymentStatus](/builders/api-schema/billing-types/#paymentstatus), [PrepaidBalance](/builders/api-schema/billing-types/#prepaidbalance), [PricingRule](/builders/api-schema/billing-types/#pricingrule), [PromoteToPaidPayload](/builders/api-schema/billing-types/#promotetopaidpayload), [PromoteToPaidResult](/builders/api-schema/billing-types/#promotetopaidresult), [StripeBillingPortalResult](/builders/api-schema/billing-types/#stripebillingportalresult), [StripeBillingPortalSession](/builders/api-schema/billing-types/#stripebillingportalsession), [StripeCheckoutResult](/builders/api-schema/billing-types/#stripecheckoutresult), [StripeCheckoutSession](/builders/api-schema/billing-types/#stripecheckoutsession), [SubmitX402PaymentResult](/builders/api-schema/billing-types/#submitx402paymentresult), [TenantSubscription](/builders/api-schema/billing-types/#tenantsubscription), [TenantUsage](/builders/api-schema/billing-types/#tenantusage), [UpdateBillingDetailsInput](/builders/api-schema/billing-types/#updatebillingdetailsinput), [UsageAggregate](/builders/api-schema/billing-types/#usageaggregate), [UsageEntry](/builders/api-schema/billing-types/#usageentry), [UsageRecord](/builders/api-schema/billing-types/#usagerecord), [UsageRecordEdge](/builders/api-schema/billing-types/#usagerecordedge), [UsageRecordsConnection](/builders/api-schema/billing-types/#usagerecordsconnection), [X402PaymentResult](/builders/api-schema/billing-types/#x402paymentresult)
+- [Billing and usage types](/builders/api-schema/billing-types/): [BalanceTransaction](/builders/api-schema/billing-types/#balancetransaction), [BalanceTransactionEdge](/builders/api-schema/billing-types/#balancetransactionedge), [BalanceTransactionsConnection](/builders/api-schema/billing-types/#balancetransactionsconnection), [BillingAddress](/builders/api-schema/billing-types/#billingaddress), [BillingAddressInput](/builders/api-schema/billing-types/#billingaddressinput), [BillingArrangement](/builders/api-schema/billing-types/#billingarrangement), [BillingDetails](/builders/api-schema/billing-types/#billingdetails), [BillingFeatures](/builders/api-schema/billing-types/#billingfeatures), [BillingStatus](/builders/api-schema/billing-types/#billingstatus), [BillingTier](/builders/api-schema/billing-types/#billingtier), [CardPaymentProvider](/builders/api-schema/billing-types/#cardpaymentprovider), [CardTopupResult](/builders/api-schema/billing-types/#cardtopupresult), [ChangeBillingTierPayload](/builders/api-schema/billing-types/#changebillingtierpayload), [ChangeBillingTierResult](/builders/api-schema/billing-types/#changebillingtierresult), [CostEntry](/builders/api-schema/billing-types/#costentry), [CountryMetrics](/builders/api-schema/billing-types/#countrymetrics), [CreateCardTopupInput](/builders/api-schema/billing-types/#createcardtopupinput), [CreateCryptoTopupInput](/builders/api-schema/billing-types/#createcryptotopupinput), [CreatePaymentInput](/builders/api-schema/billing-types/#createpaymentinput), [CreatePaymentResult](/builders/api-schema/billing-types/#createpaymentresult), [CryptoAsset](/builders/api-schema/billing-types/#cryptoasset), [CryptoTopupResult](/builders/api-schema/billing-types/#cryptotopupresult), [CryptoTopupStatus](/builders/api-schema/billing-types/#cryptotopupstatus), [Currency](/builders/api-schema/billing-types/#currency), [CurrencyConversion](/builders/api-schema/billing-types/#currencyconversion), [EntitlementEntry](/builders/api-schema/billing-types/#entitlemententry), [FreeFallback](/builders/api-schema/billing-types/#freefallback), [FreeFallbackReason](/builders/api-schema/billing-types/#freefallbackreason), [FreeFallbackStage](/builders/api-schema/billing-types/#freefallbackstage), [Invoice](/builders/api-schema/billing-types/#invoice), [InvoiceEdge](/builders/api-schema/billing-types/#invoiceedge), [InvoicePayment](/builders/api-schema/billing-types/#invoicepayment), [InvoicePaymentEdge](/builders/api-schema/billing-types/#invoicepaymentedge), [InvoicePaymentsConnection](/builders/api-schema/billing-types/#invoicepaymentsconnection), [InvoiceStatus](/builders/api-schema/billing-types/#invoicestatus), [InvoicesConnection](/builders/api-schema/billing-types/#invoicesconnection), [LineItem](/builders/api-schema/billing-types/#lineitem), [LiveUsageSummary](/builders/api-schema/billing-types/#liveusagesummary), [MollieFirstPayment](/builders/api-schema/billing-types/#molliefirstpayment), [MollieFirstPaymentResult](/builders/api-schema/billing-types/#molliefirstpaymentresult), [MollieMandate](/builders/api-schema/billing-types/#molliemandate), [MollieSubscription](/builders/api-schema/billing-types/#molliesubscription), [MollieSubscriptionResult](/builders/api-schema/billing-types/#molliesubscriptionresult), [Money](/builders/api-schema/billing-types/#money), [Payment](/builders/api-schema/billing-types/#payment), [PaymentMethod](/builders/api-schema/billing-types/#paymentmethod), [PaymentStatus](/builders/api-schema/billing-types/#paymentstatus), [PendingTierState](/builders/api-schema/billing-types/#pendingtierstate), [PrepaidBalance](/builders/api-schema/billing-types/#prepaidbalance), [PricingRule](/builders/api-schema/billing-types/#pricingrule), [PromoteToPaidPayload](/builders/api-schema/billing-types/#promotetopaidpayload), [PromoteToPaidResult](/builders/api-schema/billing-types/#promotetopaidresult), [StripeBillingPortalResult](/builders/api-schema/billing-types/#stripebillingportalresult), [StripeBillingPortalSession](/builders/api-schema/billing-types/#stripebillingportalsession), [StripeCheckoutResult](/builders/api-schema/billing-types/#stripecheckoutresult), [StripeCheckoutSession](/builders/api-schema/billing-types/#stripecheckoutsession), [SubmitX402PaymentResult](/builders/api-schema/billing-types/#submitx402paymentresult), [TenantSubscription](/builders/api-schema/billing-types/#tenantsubscription), [TenantUsage](/builders/api-schema/billing-types/#tenantusage), [UpdateBillingDetailsInput](/builders/api-schema/billing-types/#updatebillingdetailsinput), [UsageAggregate](/builders/api-schema/billing-types/#usageaggregate), [UsageEntry](/builders/api-schema/billing-types/#usageentry), [UsageRecord](/builders/api-schema/billing-types/#usagerecord), [UsageRecordEdge](/builders/api-schema/billing-types/#usagerecordedge), [UsageRecordsConnection](/builders/api-schema/billing-types/#usagerecordsconnection), [X402PaymentResult](/builders/api-schema/billing-types/#x402paymentresult)
 
 
 ---
@@ -8800,7 +8873,7 @@ Generated from the public schema [`pkg/graphql/public/schema.public.graphql`](ht
 | [Webhooks](/builders/api-schema/webhooks/) | 5 | 9 | 0 | 24 |
 | [Incidents](/builders/api-schema/incidents/) | 2 | 3 | 0 | 7 |
 | [Account and tenant](/builders/api-schema/account/) | 1 | 5 | 0 | 14 |
-| [Billing and usage](/builders/api-schema/billing/) | 13 | 12 | 0 | 61 |
+| [Billing and usage](/builders/api-schema/billing/) | 13 | 12 | 0 | 66 |
 | [Clusters and infrastructure](/builders/api-schema/clusters/) | 25 | 16 | 0 | 58 |
 | [Platform](/builders/api-schema/platform/) | 4 | 0 | 0 | 11 |
 | [Skipper](/builders/api-schema/skipper/) | 5 | 3 | 0 | 6 |
@@ -14486,12 +14559,10 @@ Free closes on the normal monthly accounting cadence and produces an itemized �
 - **Storage cap.** At the 10 GB durable limit, new recordings, VOD uploads, and clip exports are rejected. Existing artifacts remain available until their effective retention deadline; the Free tier caps retention at 30 days.
 - Load is computed per media cluster as `max(avg(CPU%), uplink utilization %)` across healthy edge nodes.
 
-**Seeded limitations:**
+**Not included:**
 
-- No AI workloads
-- Watermarked player
-- Community support only
-- No SLA
+- AI workloads
+- Support beyond the community channels
 
 ## Pay-As-You-Go (Current)
 
@@ -14519,8 +14590,9 @@ Paid tiers include monthly allocations with overage billing:
 | Enterprise | Custom | Custom            | Contract-defined   |
 
 Every tier includes recording, the analytics dashboard, and API access. Tiers differ in allowances,
-retention caps, support level, and SLA, and only Enterprise lets a tenant replace the tier's
-processing profiles with its own.
+retention caps and support level, and only Enterprise lets a tenant replace the tier's processing
+profiles with its own. Self-serve tiers carry no SLA; an SLA is a custom term of an Enterprise
+agreement.
 
 Paid self-serve tiers do not impose a plan-level retention cap. Content still follows its configured
 artifact policy; the service defaults are indefinite VOD retention and 30 days for DVR chapters and
@@ -14555,7 +14627,7 @@ V2V transformations, and server-side composition) is in the pipeline. These jobs
 meter-based billing path as delivered minutes and storage, with product-shaped meters added per job
 or marketplace offer.
 
-To talk about early access, [contact us](https://frameworks.network/contact). Standard live
+To talk about early access, [contact us](%MARKETING_URL%/contact). Standard live
 transcoding remains included in delivered-minute pricing.
 
 ## Billing Models
@@ -14586,6 +14658,25 @@ Monthly subscription with included delivered-minute allocations. Cold storage is
 | You cancelled                                       | You keep your plan until the paid period ends, then your account moves to Free and we confirm by email.                                                                                                                  |
 
 Streams keep running on Free within its limits. Unpaid invoices stay outstanding with reminders, and you need to settle them before choosing a paid tier again.
+
+The billing page shows the move date in place of the next billing date. During a payment-failure
+grace period it also offers the fix: **Update payment method** opens Stripe's portal while Stripe
+still retries the subscription, and **Set up payment** starts a new Stripe Checkout or Mollie
+mandate otherwise. The grace email links straight to it.
+
+## Trials and arrangements
+
+A trial, a custom base fee or invoice billing is an arrangement FrameWorks sets up on your account.
+[Contact us](%MARKETING_URL%/contact) to ask for one. An arrangement can:
+
+- replace the plan's monthly base fee, for example with €0 during a trial
+- waive usage charges, while usage is still metered and shown on each invoice at €0
+- move collection to invoices that FrameWorks sends for payment by bank transfer
+- end on a set date, when the account returns to a named plan at its standard price
+
+The billing page shows the arrangement's terms and end date, and the plan you return to. While it is
+in force, plan changes and checkouts are refused with the code `OUTSTANDING_GRANT`; ask us to change
+the arrangement instead.
 
 ## Currency
 
@@ -15691,11 +15782,6 @@ To play a video or audio file, use **Add media file** in the panel under the pre
 
 Each source appears in the mixer, where you can mute it, hide it from the picture, or remove it. You can add and remove sources during a broadcast.
 
-<Aside type="caution" title="Sharing your entire screen">
-  The studio's right-click menu can copy your private connection address. Avoid pasting it anywhere
-  a shared screen can show it.
-</Aside>
-
 ## 4. Choose a layout
 
 With two or more sources, the layout controls on the preview arrange them. You can show one source alone, place one inside another as picture-in-picture, or use a split, focus, or grid layout. The cycle control swaps which source goes in which position.
@@ -15936,15 +16022,14 @@ override.
 
 ## Audio Mixing
 
-With audio mixing enabled, StreamCrafter mixes the audio of all active sources through the Web
-Audio API. The React, Svelte, and Web Component drop-in components enable it. `createStreamCrafter()`
-and the `useStreamCrafterV2` / `createStreamCrafterContextV2` controllers leave it off unless you
-pass `audioMixing: true`:
+StreamCrafter mixes the audio of all active sources through the Web Audio API. Audio mixing is on by
+default in every binding and in `createStreamCrafter()`. Pass `audioMixing: false` to skip the
+mixer; master volume, levels, media file audio and the processing below then do nothing.
 
 ```ts
 const studio = createStreamCrafter({
   whipUrl: "...",
-  audioMixing: true,
+  audioMixing: false, // only to opt out
 });
 ```
 
@@ -15965,13 +16050,36 @@ studio.setSourceMuted("camera-1", true);
 studio.masterVolume = 0.5; // 0 to 2; applies to the mixed output
 ```
 
-Master volume requires `audioMixing: true`. Without it, setting `masterVolume` does nothing and
-reading it returns `1`.
+With `audioMixing: false`, setting `masterVolume` does nothing and reading it returns `1`.
 
 ### Audio Processing
 
 The mixed output passes through a fixed compressor (threshold -24 dB, ratio 4:1) followed by a
 limiter at -1 dB to prevent clipping. Levels are not normalized by the number of sources.
+
+A noise gate, three-band EQ and de-esser can sit before the compressor. The drop-in studios set
+them from their Audio section; in code, use `setAudioProcessing()` on the controller or the
+vanilla instance. Settings merge into those already made, are kept when made before capture
+starts, and apply once the mixer runs.
+
+```ts
+studio.setAudioProcessing({
+  noiseGate: { enabled: true, threshold: -45 }, // dB below which the gate closes
+  eq: { enabled: true, low: 2, mid: 0, high: -3 }, // dB per band
+  deEsser: { enabled: true },
+});
+```
+
+Ducking lowers every other source while the first camera's microphone picks up sound, for talking
+over music or a clip. It follows sources as they are added and removed, and leaves each source's
+volume setting alone:
+
+```ts
+studio.setAudioDucking(true);
+```
+
+The browser's echo cancellation, noise suppression and auto gain apply per microphone track, set
+with `track.applyConstraints()`. The drop-in Audio section sets them on every source.
 
 ## Reconnection
 
@@ -16196,6 +16304,12 @@ Default hotkeys:
 | Add camera       | `c`           |
 | Add screen share | `s`           |
 | Toggle settings  | `,`           |
+| Next scene       | `]`           |
+| Previous scene   | `[`           |
+
+The `keyMap` option and the hotkeys above apply to `createStreamCrafter()`. The React, Svelte and
+Web Component drop-ins bind the scene keys `]` and `[` only, while the studio has focus, and leave
+a key typed into a field alone.
 
 
 ---
@@ -16522,6 +16636,12 @@ The compositor overlay shows layout icons and scaling mode buttons. Click a layo
 # StreamCrafter — React
 https://logbook.frameworks.network/builders/ingest-react
 
+<Aside type="caution" title="Beta: the SDK will change a lot">
+  StreamCrafter is in beta, and its packages are on 0.x. Expect breaking changes in minor releases
+  while cloud production and guests are built. Pin an exact version and read the package changelog
+  before you upgrade.
+</Aside>
+
 ## Installation
 
 ```bash
@@ -16566,6 +16686,43 @@ Gateway resolution calls the public `resolveIngestEndpoint` GraphQL field from t
 browser, so routing reflects the publisher's location. For backend or encoder-side publishing, use
 the dashboard DNS ingest URL or Foghorn's `/ingest/{streamKey}` front door instead.
 
+### Props
+
+| Prop                | Type                                         | Default       | Description                                                                |
+| ------------------- | -------------------------------------------- | ------------- | -------------------------------------------------------------------------- |
+| `whipUrl`           | `string`                                     | —             | Direct WHIP endpoint; takes priority over `gatewayUrl`                     |
+| `gatewayUrl`        | `string`                                     | —             | Gateway GraphQL endpoint, used with `streamKey`                            |
+| `streamKey`         | `string`                                     | —             | Stream key for gateway resolution                                          |
+| `initialProfile`    | `QualityProfile`                             | `"broadcast"` | Starting quality preset                                                    |
+| `autoStartCamera`   | `boolean`                                    | `false`       | Start the camera once an endpoint is known                                 |
+| `enableCompositor`  | `boolean`                                    | `true`        | Run the compositor for layouts, scenes and overlays                        |
+| `compositorConfig`  | `{ renderer?, width?, height?, frameRate? }` | —             | Compositor renderer and output size                                        |
+| `showProducerPanel` | `boolean`                                    | `true`        | Scene, layer, overlay and media controls while the compositor runs         |
+| `showSettings`      | `boolean`                                    | `false`       | Open the quality popup on mount                                            |
+| `devMode`           | `boolean`                                    | `false`       | Debug rows in the quality popup and the Advanced panel in the context menu |
+| `debug`             | `boolean`                                    | `false`       | Debug logging                                                              |
+| `theme`             | `FwThemePreset \| StudioThemeOverrides`      | —             | Theme preset or token overrides                                            |
+| `locale`            | `StudioLocale`                               | `"en"`        | UI language                                                                |
+| `className`         | `string`                                     | —             | Extra class on the root                                                    |
+| `onStateChange`     | `(state, context?) => void`                  | —             | Lifecycle state changes                                                    |
+| `onError`           | `(error: string) => void`                    | —             | Errors                                                                     |
+| `children`          | `ReactNode`                                  | —             | Replaces the built-in UI with your own layout                              |
+
+## Producer Controls
+
+The producer panel is on by default and appears once the compositor runs: scenes with their
+transition, the layers of the active scene, logo and text overlays, and the media files in the mix.
+Add Media File sits in the action bar next to Add Camera. The Audio section and, while live, the
+connection health pill are always part of the drop-in UI.
+
+```tsx
+// Simple single-camera studio without the producer panel
+<StreamCrafter whipUrl="%INGEST_URL%/webrtc/stream-key" showProducerPanel={false} />
+```
+
+The context menu's **Copy WHIP URL** copies the full URL, which contains the stream key. **Copy
+Stream Info** masks the key.
+
 ## Composable Components
 
 Pass `children` to `<StreamCrafter>` to replace the default UI with your own layout using the provided sub-components:
@@ -16581,9 +16738,11 @@ import {
 } from "@livepeer-frameworks/streamcrafter-react";
 import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
 
+const whipUrl = "%INGEST_URL%/webrtc/my-key";
+
 function CustomStudio() {
   return (
-    <StreamCrafter whipUrl="%INGEST_URL%/webrtc/my-key">
+    <StreamCrafter whipUrl={whipUrl}>
       <div className="my-layout">
         <StudioStatusBadge />
         <StudioPreview />
@@ -16591,26 +16750,55 @@ function CustomStudio() {
           <StudioMixer />
           <StudioSettings />
         </div>
-        <StudioActionBar />
+        <StudioActionBar whipUrl={whipUrl} showSettingsButton={false} />
       </div>
     </StreamCrafter>
   );
 }
 ```
 
-When `children` are provided, the built-in UI is entirely replaced. Sub-components auto-connect to the parent `<StreamCrafter>` via React context.
+`StudioActionBar` enables Go Live only when it is given the `whipUrl`.
+
+When `children` are provided, the built-in UI is entirely replaced. Sub-components connect to the
+parent `<StreamCrafter>` through React context, including its compositor, so the producer controls
+need no props:
+
+```tsx
+<StreamCrafter whipUrl={whipUrl}>
+  <StudioPreview />
+  <StudioProducerPanel />
+  <StudioAudioControls />
+  <StudioActionBar whipUrl={whipUrl} />
+</StreamCrafter>
+```
+
+`useStreamCrafterContext()` returns the hook state and actions plus `compositor`, the parent's
+`useCompositor` result, or `null` when `enableCompositor` is `false`. A `StreamCrafterProvider`
+created with `config` has no compositor.
 
 ### Sub-Component Reference
 
-| Component           | Purpose                                                       |
-| ------------------- | ------------------------------------------------------------- |
-| `StudioPreview`     | Video preview with optional compositor overlay and live badge |
-| `StudioMixer`       | Source list with volume sliders, mute, and remove buttons     |
-| `StudioActionBar`   | Camera, Screen Share, Settings, and Go Live buttons           |
-| `StudioSettings`    | Quality profile selector popup                                |
-| `StudioStatusBadge` | State badge (Idle, Capturing, Live, Connecting, etc.)         |
+| Component                | Purpose                                                                        |
+| ------------------------ | ------------------------------------------------------------------------------ |
+| `StudioPreview`          | Video preview with optional compositor overlay and live badge                  |
+| `StudioMixer`            | Source list with volume sliders, mute, and remove buttons                      |
+| `StudioActionBar`        | Add Camera, Share Screen, Add Media File, Settings, and Go Live                |
+| `StudioSettings`         | Quality profile selector popup                                                 |
+| `StudioStatusBadge`      | State badge (Idle, Capturing, Live, Connecting, etc.)                          |
+| `StudioConnectionHealth` | Good, unstable or poor while live, with bitrate, loss and round trip           |
+| `StudioProducerPanel`    | Scenes, layers, overlays and media; renders nothing until the compositor runs  |
+| `SceneSwitcher`          | Scene tiles with transition type and duration                                  |
+| `LayerList`              | Layers of a scene: visibility, order, opacity and removal                      |
+| `StudioOverlayControls`  | Logo and text overlays of the active scene                                     |
+| `StudioMediaControls`    | Play, pause and loop for media files in the mix                                |
+| `StudioAudioControls`    | Browser processing, noise gate, de-esser, EQ and ducking                       |
+| `CameraPicker`           | Add Camera, with a list when there is more than one camera or one is live      |
+| `MediaFileButton`        | Add Media File; turned off with the reason where the browser cannot play files |
+| `CompositorControls`     | Layout and scaling selector over the preview                                   |
 
-All sub-components accept optional prop overrides for any value they normally read from context.
+Components that read from context accept optional props that override those values.
+`SceneSwitcher`, `LayerList`, `CameraPicker`, `MediaFileButton` and `CompositorControls` take
+their data and callbacks as props.
 
 ## Custom UI with Hooks
 
@@ -16671,24 +16859,33 @@ function FullyCustomBroadcaster() {
 
 ### Hook Return Reference
 
-| Property                     | Type                                         | Description               |
-| ---------------------------- | -------------------------------------------- | ------------------------- |
-| `state`                      | `IngestState`                                | Current lifecycle state   |
-| `isStreaming`                | `boolean`                                    | Whether currently live    |
-| `isCapturing`                | `boolean`                                    | Whether media is captured |
-| `isReconnecting`             | `boolean`                                    | Whether reconnecting      |
-| `sources`                    | `MediaSource[]`                              | Active media sources      |
-| `mediaStream`                | `MediaStream \| null`                        | Combined output stream    |
-| `qualityProfile`             | `QualityProfile`                             | Current quality settings  |
-| `startCamera(opts?)`         | `() => Promise<MediaSource>`                 | Add camera source         |
-| `startScreenShare(opts?)`    | `() => Promise<MediaSource \| null>`         | Add screen share source   |
-| `startStreaming()`           | `() => Promise<void>`                        | Go live                   |
-| `stopStreaming()`            | `() => Promise<void>`                        | Stop streaming            |
-| `removeSource(id)`           | `(id: string) => void`                       | Remove a source           |
-| `setSourceVolume(id, vol)`   | `(id, number) => void`                       | Set source volume (0-2)   |
-| `setSourceMuted(id, muted)`  | `(id, boolean) => void`                      | Mute/unmute source        |
-| `setQualityProfile(profile)` | `(profile: QualityProfile) => Promise<void>` | Change quality profile    |
-| `getController()`            | `() => IngestControllerV2 \| null`           | Direct controller access  |
+| Property                     | Type                                         | Description                       |
+| ---------------------------- | -------------------------------------------- | --------------------------------- |
+| `state`                      | `IngestState`                                | Current lifecycle state           |
+| `isStreaming`                | `boolean`                                    | Whether currently live            |
+| `isCapturing`                | `boolean`                                    | Whether media is captured         |
+| `isReconnecting`             | `boolean`                                    | Whether reconnecting              |
+| `sources`                    | `MediaSource[]`                              | Active media sources              |
+| `mediaStream`                | `MediaStream \| null`                        | Combined output stream            |
+| `qualityProfile`             | `QualityProfile`                             | Current quality settings          |
+| `startCamera(opts?)`         | `() => Promise<MediaSource>`                 | Add camera source                 |
+| `startScreenShare(opts?)`    | `() => Promise<MediaSource \| null>`         | Add screen share source           |
+| `startStreaming()`           | `() => Promise<void>`                        | Go live                           |
+| `stopStreaming()`            | `() => Promise<void>`                        | Stop streaming                    |
+| `removeSource(id)`           | `(id: string) => void`                       | Remove a source                   |
+| `setSourceVolume(id, vol)`   | `(id, number) => void`                       | Set source volume (0-2)           |
+| `setSourceMuted(id, muted)`  | `(id, boolean) => void`                      | Mute/unmute source                |
+| `setQualityProfile(profile)` | `(profile: QualityProfile) => Promise<void>` | Change quality profile            |
+| `getCameraChoices()`         | `() => Promise<CameraChoice[]>`              | Cameras, with those in use marked |
+| `addMediaFile(file, opts?)`  | `(File, { loop? }) => Promise<MediaSource>`  | Play a local file into the mix    |
+| `playMediaSource(id)`        | `(id: string) => void`                       | Play a media file                 |
+| `pauseMediaSource(id)`       | `(id: string) => void`                       | Pause a media file                |
+| `setMediaSourceLoop(id, on)` | `(id, boolean) => void`                      | Loop a media file                 |
+| `getController()`            | `() => IngestControllerV2 \| null`           | Direct controller access          |
+
+The controller from `getController()` sets the noise gate, EQ and de-esser with
+`setAudioProcessing()` and ducking with `setAudioDucking()`; see
+[Advanced Features](/builders/ingest-advanced/#audio-processing).
 
 ## State Callbacks
 
@@ -16706,6 +16903,12 @@ function FullyCustomBroadcaster() {
 ---
 # StreamCrafter — Svelte
 https://logbook.frameworks.network/builders/ingest-svelte
+
+<Aside type="caution" title="Beta: the SDK will change a lot">
+  StreamCrafter is in beta, and its packages are on 0.x. Expect breaking changes in minor releases
+  while cloud production and guests are built. Pin an exact version and read the package changelog
+  before you upgrade.
+</Aside>
 
 ## Installation
 
@@ -16746,6 +16949,44 @@ Gateway resolution calls the public `resolveIngestEndpoint` GraphQL field from t
 browser, so routing reflects the publisher's location. For backend or encoder-side publishing, use
 the dashboard DNS ingest URL or Foghorn's `/ingest/{streamKey}` front door instead.
 
+### Props
+
+| Prop                | Type                                       | Default       | Description                                                                |
+| ------------------- | ------------------------------------------ | ------------- | -------------------------------------------------------------------------- |
+| `whipUrl`           | `string`                                   | —             | Direct WHIP endpoint; takes priority over `gatewayUrl`                     |
+| `resolveWhipUrl`    | `(signal: AbortSignal) => Promise<string>` | —             | Refresh the destination right before each connection                       |
+| `gatewayUrl`        | `string`                                   | —             | Gateway GraphQL endpoint, used with `streamKey`                            |
+| `streamKey`         | `string`                                   | —             | Stream key for gateway resolution                                          |
+| `initialProfile`    | `QualityProfile`                           | `"broadcast"` | Starting quality preset                                                    |
+| `autoStartCamera`   | `boolean`                                  | `false`       | Start the camera once an endpoint is known                                 |
+| `enableCompositor`  | `boolean`                                  | `true`        | Run the compositor for layouts, scenes and overlays                        |
+| `compositorConfig`  | `Partial<CompositorConfig>`                | `{}`          | Compositor renderer and output size                                        |
+| `showProducerPanel` | `boolean`                                  | `true`        | Scene, layer, overlay and media controls while the compositor runs         |
+| `showSettings`      | `boolean`                                  | `false`       | Open the quality popup on mount                                            |
+| `devMode`           | `boolean`                                  | `false`       | Debug rows in the quality popup and the Advanced panel in the context menu |
+| `debug`             | `boolean`                                  | `false`       | Debug logging                                                              |
+| `theme`             | `FwThemePreset \| StudioThemeOverrides`    | —             | Theme preset or token overrides                                            |
+| `locale`            | `StudioLocale`                             | `"en"`        | UI language                                                                |
+| `class`             | `string`                                   | `""`          | Extra class on the root                                                    |
+| `onStateChange`     | `(state, context?) => void`                | —             | Lifecycle state changes                                                    |
+| `onError`           | `(error: string) => void`                  | —             | Errors                                                                     |
+| `children`          | `Snippet`                                  | —             | Replaces the built-in UI with your own layout                              |
+
+## Producer Controls
+
+The producer panel is on by default and appears once the compositor runs: scenes with their
+transition, the layers of the active scene, logo and text overlays, and the media files in the mix.
+Add Media File sits in the action bar next to Add Camera. The Audio section and, while live, the
+connection health pill are always part of the drop-in UI.
+
+```svelte
+<!-- Simple single-camera studio without the producer panel -->
+<StreamCrafter whipUrl="%INGEST_URL%/webrtc/stream-key" showProducerPanel={false} />
+```
+
+The context menu's **Copy WHIP URL** copies the full URL, which contains the stream key. **Copy
+Stream Info** masks the key.
+
 ## Composable Components
 
 Pass a `children` snippet to replace the default UI with sub-components:
@@ -16761,9 +17002,11 @@ Pass a `children` snippet to replace the default UI with sub-components:
     StudioStatusBadge,
   } from "@livepeer-frameworks/streamcrafter-svelte";
   import "@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css";
+
+  const whipUrl = "%INGEST_URL%/webrtc/my-key";
 </script>
 
-<StreamCrafter whipUrl="%INGEST_URL%/webrtc/my-key">
+<StreamCrafter {whipUrl}>
   {#snippet children()}
     <div class="my-layout">
       <StudioStatusBadge />
@@ -16772,23 +17015,36 @@ Pass a `children` snippet to replace the default UI with sub-components:
         <StudioMixer />
         <StudioSettings />
       </div>
-      <StudioActionBar />
+      <StudioActionBar {whipUrl} showSettingsButton={false} />
     </div>
   {/snippet}
 </StreamCrafter>
 ```
 
-Sub-components auto-connect to the parent `<StreamCrafter>` via Svelte 5 context.
+Sub-components connect to the parent `<StreamCrafter>` through Svelte context, including its
+compositor, so `<StudioProducerPanel />` and `<StudioAudioControls />` need no props.
+`StudioActionBar` enables Go Live only when it is given the `whipUrl`.
 
 ### Sub-Component Reference
 
-| Component           | Purpose                                                   |
-| ------------------- | --------------------------------------------------------- |
-| `StudioPreview`     | Video preview with live badge                             |
-| `StudioMixer`       | Source list with volume sliders, mute, and remove buttons |
-| `StudioActionBar`   | Camera, Screen Share, Settings, and Go Live buttons       |
-| `StudioSettings`    | Quality profile selector popup                            |
-| `StudioStatusBadge` | State badge (Idle, Capturing, Live, etc.)                 |
+| Component                | Purpose                                                                        |
+| ------------------------ | ------------------------------------------------------------------------------ |
+| `StudioPreview`          | Video preview with live badge                                                  |
+| `StudioMixer`            | Source list with volume sliders, mute, and remove buttons                      |
+| `StudioActionBar`        | Add Camera, Share Screen, Add Media File, Settings, and Go Live                |
+| `StudioSettings`         | Quality profile selector popup                                                 |
+| `StudioStatusBadge`      | State badge (Idle, Capturing, Live, etc.)                                      |
+| `StudioConnectionHealth` | Good, unstable or poor while live, with bitrate, loss and round trip           |
+| `StudioProducerPanel`    | Scenes, layers, overlays and media; renders nothing until the compositor runs  |
+| `SceneSwitcher`          | Scene tiles with transition type and duration                                  |
+| `LayerList`              | Layers of a scene: visibility, order, opacity and removal                      |
+| `StudioOverlayControls`  | Logo and text overlays of the active scene                                     |
+| `StudioMediaControls`    | Play, pause and loop for media files in the mix                                |
+| `StudioAudioControls`    | Browser processing, noise gate, de-esser, EQ and ducking                       |
+| `CameraPicker`           | Add Camera, with a list when there is more than one camera or one is live      |
+| `MediaFileButton`        | Add Media File; turned off with the reason where the browser cannot play files |
+| `CompositorControls`     | Layout and scaling selector over the preview                                   |
+| `AdvancedPanel`          | Dev-mode panel with stats, encoder overrides and compositor details            |
 
 ## Custom UI with Stores
 
@@ -16851,22 +17107,37 @@ subscribe manually in script:
 
 ### Store Methods
 
-| Method                      | Description              |
-| --------------------------- | ------------------------ |
-| `startCamera(opts?)`        | Add camera source        |
-| `startScreenShare(opts?)`   | Add screen share source  |
-| `startStreaming()`          | Go live                  |
-| `stopStreaming()`           | Stop streaming           |
-| `removeSource(id)`          | Remove a source          |
-| `setSourceVolume(id, vol)`  | Set source volume (0-2)  |
-| `setSourceMuted(id, muted)` | Mute/unmute source       |
-| `setQualityProfile(name)`   | Change quality profile   |
-| `getController()`           | Direct controller access |
+| Method                       | Description                       |
+| ---------------------------- | --------------------------------- |
+| `startCamera(opts?)`         | Add camera source                 |
+| `startScreenShare(opts?)`    | Add screen share source           |
+| `startStreaming()`           | Go live                           |
+| `stopStreaming()`            | Stop streaming                    |
+| `removeSource(id)`           | Remove a source                   |
+| `setSourceVolume(id, vol)`   | Set source volume (0-2)           |
+| `setSourceMuted(id, muted)`  | Mute/unmute source                |
+| `setQualityProfile(name)`    | Change quality profile            |
+| `getCameraChoices()`         | Cameras, with those in use marked |
+| `addMediaFile(file, opts?)`  | Play a local file into the mix    |
+| `playMediaSource(id)`        | Play a media file                 |
+| `pauseMediaSource(id)`       | Pause a media file                |
+| `setMediaSourceLoop(id, on)` | Loop a media file                 |
+| `getController()`            | Direct controller access          |
+
+The controller from `getController()` sets the noise gate, EQ and de-esser with
+`setAudioProcessing()` and ducking with `setAudioDucking()`; see
+[Advanced Features](/builders/ingest-advanced/#audio-processing).
 
 
 ---
 # StreamCrafter — Vanilla JS
 https://logbook.frameworks.network/builders/ingest-vanilla
+
+<Aside type="caution" title="Beta: the SDK will change a lot">
+  StreamCrafter is in beta, and its packages are on 0.x. Expect breaking changes in minor releases
+  while cloud production and guests are built. Pin an exact version and read the package changelog
+  before you upgrade.
+</Aside>
 
 ## Installation
 
@@ -16894,7 +17165,6 @@ const studio = createStreamCrafter({
   target: "#studio-container",
   whipUrl: "%INGEST_URL%/webrtc/stream-key",
   profile: "broadcast",
-  audioMixing: true,
   debug: true,
 });
 
@@ -16933,7 +17203,7 @@ const endpoints = await client.resolve();
 const whipUrl = endpoints.primary.whipUrl;
 if (!whipUrl) throw new Error("No WHIP endpoint resolved");
 
-const studio = createStreamCrafter({ whipUrl, audioMixing: true });
+const studio = createStreamCrafter({ whipUrl });
 ```
 
 Run the resolve in the publisher's browser so ingest routing uses the publisher's location. For
@@ -16973,12 +17243,14 @@ All queries are synchronous getters on the instance.
 | `masterVolume =`              | `set masterVolume(v)`                     | Set master volume         |
 | `theme =`                     | `set theme(t)`                            | Switch theme preset       |
 | `setEncoderOverrides(o)`      | `(overrides) => void`                     | Override encoder settings |
+| `setAudioProcessing(c)`       | `(config) => void`                        | Noise gate, EQ, de-esser  |
+| `setAudioDucking(on)`         | `(enabled: boolean) => void`              | Duck under the camera mic |
 | `enableCompositor(config?)`   | `(config?) => Promise<void>`              | Start the compositor      |
 | `disableCompositor()`         | `() => void`                              | Stop the compositor       |
 | `destroy()`                   | `() => void`                              | Cleanup and tear down     |
 
-`masterVolume` only takes effect when the instance was created with `audioMixing: true`. Without
-audio mixing, setting it does nothing and reading it returns `1`.
+`masterVolume`, `setAudioProcessing()` and `setAudioDucking()` work through the audio mixer, which
+is on by default. With `audioMixing: false` they do nothing and `masterVolume` reads `1`.
 
 ## Subscriptions — Events
 
@@ -17047,7 +17319,7 @@ const isLive = studio.reactiveState.get("streaming");
 | `resolveWhipUrl` | `(signal) => Promise<string>`           | —                                   | Resolve the destination before each connection; takes precedence over `whipUrl` |
 | `target`         | `string \| HTMLElement`                 | —                                   | Element that receives theme variables and keyboard shortcuts (renders no UI)    |
 | `profile`        | `QualityProfile`                        | `"broadcast"`                       | Quality preset name                                                             |
-| `audioMixing`    | `boolean`                               | `false`                             | Mix source audio through the Web Audio mixer (required for `masterVolume`)      |
+| `audioMixing`    | `boolean`                               | `true`                              | Mix source audio through the Web Audio mixer (needed for `masterVolume`)        |
 | `compositor`     | `Partial<CompositorConfig>`             | —                                   | Defaults applied when `enableCompositor()` is called                            |
 | `theme`          | `FwThemePreset \| StudioThemeOverrides` | `"default"`                         | Theme preset or token overrides                                                 |
 | `locale`         | `StudioLocale`                          | `"en"`                              | Language for `t()`                                                              |
@@ -17100,6 +17372,12 @@ const stats = await studio.stats;
 # StreamCrafter — Web Components
 https://logbook.frameworks.network/builders/ingest-wc
 
+<Aside type="caution" title="Beta: the SDK will change a lot">
+  StreamCrafter is in beta, and its packages are on 0.x. Expect breaking changes in minor releases
+  while cloud production and guests are built. Pin an exact version and read the package changelog
+  before you upgrade.
+</Aside>
+
 ## Installation
 
 **NPM:**
@@ -17146,7 +17424,24 @@ Gateway resolution calls the public `resolveIngestEndpoint` GraphQL field from t
 browser, so routing reflects the publisher's location. For backend or encoder-side publishing, use
 the dashboard DNS ingest URL or Foghorn's `/ingest/{streamKey}` front door instead.
 
-The element includes the same full UI as the React/Svelte versions: video preview, camera/screen controls, quality selection, and connection status.
+The element has the same UI as the React and Svelte drop-ins: video preview, Add Camera, Share
+Screen and Add Media File, quality selection, the source mixer, the producer panel, the Audio
+section, and a connection health pill while live.
+
+## Producer Controls
+
+The producer panel is on by default and appears once the compositor runs: scenes with their
+transition, the layers of the active scene, logo and text overlays, and the media files in the mix.
+`]` and `[` switch scenes while the studio has focus.
+
+```html
+<!-- Simple single-camera studio without the producer panel -->
+<fw-streamcrafter whip-url="..." show-producer-panel="false"></fw-streamcrafter>
+```
+
+`show-producer-panel` and `enable-compositor` are on unless the attribute says `"false"`. The
+context menu's **Copy WHIP URL** copies the full URL, which contains the stream key. **Copy Stream
+Info** masks the key.
 
 ## Headless Mode
 
@@ -17199,24 +17494,50 @@ studio.pc.on("stateChange", ({ state }) => console.log(state));
 ## Slot-based Composition
 
 With `controls="false"`, the element renders only its default slot, so slotted content replaces the
-built-in UI while the element still manages the connection. Slotted elements are not wired to the
-studio automatically; connect them through `.pc` as shown below.
+built-in UI while the element still manages the connection. The studio elements below bind to the
+`<fw-streamcrafter>` they sit in, or to the one whose id is in `for`:
 
 ```html
 <fw-streamcrafter id="studio" whip-url="..." controls="false">
-  <div class="my-controls">
-    <fw-sc-volume id="camera-volume"></fw-sc-volume>
-    <button id="go-live">Go Live</button>
+  <div class="my-layout">
+    <fw-sc-producer-panel></fw-sc-producer-panel>
+    <fw-sc-audio-controls></fw-sc-audio-controls>
+    <div class="my-actions">
+      <fw-sc-camera-picker></fw-sc-camera-picker>
+      <fw-sc-media-button></fw-sc-media-button>
+      <button id="go-live">Go Live</button>
+    </div>
   </div>
 </fw-streamcrafter>
+
+<!-- Outside the studio, bound by id -->
+<fw-sc-meter for="studio"></fw-sc-meter>
+<fw-sc-connection-health for="studio"></fw-sc-connection-health>
 ```
 
-## Standalone Sub-Components
+A bound element finds a studio that mounts after it and renders again whenever the studio does.
 
-The `fw-sc-*` sub-components are presentational. They do not find or bind to a
-`<fw-streamcrafter>` on their own: the `for` attribute is declared but not used, and nesting them
-inside the element does not connect them either. Feed them data through JS properties and act on
-their events or callback properties:
+| Element                     | Purpose                                                                        |
+| --------------------------- | ------------------------------------------------------------------------------ |
+| `<fw-sc-producer-panel>`    | Scenes, layers, overlays and media; renders nothing until the compositor runs  |
+| `<fw-sc-overlay-controls>`  | Logo and text overlays of the active scene                                     |
+| `<fw-sc-media-controls>`    | Play, pause and loop for media files in the mix                                |
+| `<fw-sc-camera-picker>`     | Add Camera, with a list when there is more than one camera or one is live      |
+| `<fw-sc-media-button>`      | Add Media File; turned off with the reason where the browser cannot play files |
+| `<fw-sc-audio-controls>`    | Noise gate, de-esser, EQ and ducking on the mixed audio                        |
+| `<fw-sc-meter>`             | Level meter of the mixed audio                                                 |
+| `<fw-sc-connection-health>` | Good, unstable or poor while live, with bitrate, loss and round trip           |
+
+Inside `<fw-streamcrafter>` the Audio section also sets the browser's echo cancellation, noise
+suppression and auto gain. A standalone `<fw-sc-audio-controls>` leaves those out.
+
+## Presentational Sub-Components
+
+`<fw-sc-volume>`, `<fw-sc-compositor>`, `<fw-sc-scene-switcher>`, `<fw-sc-layer-list>` and
+`<fw-sc-advanced>` are presentational. They do not bind to a studio: their `for` attribute is
+declared but not used. `<fw-sc-producer-panel>` wraps the scene switcher and layer list with the
+wiring done. To use them on their own, feed them data through JS properties and act on their events
+or callback properties:
 
 ```html
 <fw-streamcrafter id="studio" whip-url="..." controls="false"></fw-streamcrafter>
@@ -17266,31 +17587,40 @@ their events or callback properties:
 
 `<fw-sc-scene-switcher>` and `<fw-sc-layer-list>` follow the same pattern: set `scenes` /
 `activeSceneId` or `layers` / `sources`, and handle actions through callback properties such as
-`onSceneSelect`, `onTransitionTo`, `onVisibilityToggle`, and `onReorder`.
+`onSceneSelect`, `onTransitionTo`, `onVisibilityToggle`, `onReorder`, `onTransformEdit` and
+`onRemove`.
 
-### Sub-Component Reference
-
-| Element                  | Purpose                                                        |
-| ------------------------ | -------------------------------------------------------------- |
-| `<fw-sc-volume>`         | Volume slider with mute toggle                                 |
-| `<fw-sc-compositor>`     | Layout and scaling mode selector overlay                       |
-| `<fw-sc-scene-switcher>` | Scene list with transition controls                            |
-| `<fw-sc-layer-list>`     | Drag-to-reorder layer list with visibility toggles             |
-| `<fw-sc-advanced>`       | Advanced settings panel (WebCodecs, encoder, audio processing) |
+| Element                  | Purpose                                                           |
+| ------------------------ | ----------------------------------------------------------------- |
+| `<fw-sc-volume>`         | Volume slider with snap to 100%                                   |
+| `<fw-sc-compositor>`     | Layout and scaling mode selector overlay                          |
+| `<fw-sc-scene-switcher>` | Scene tiles with transition controls                              |
+| `<fw-sc-layer-list>`     | Layer list with visibility, order, opacity and removal            |
+| `<fw-sc-advanced>`       | Dev-mode panel (stats, WebCodecs, encoder, browser audio toggles) |
 
 ## Attributes Reference
 
-| Attribute           | Type      | Default       | Description                                                            |
-| ------------------- | --------- | ------------- | ---------------------------------------------------------------------- |
-| `whip-url`          | `string`  | —             | Direct WHIP ingest endpoint                                            |
-| `gateway-url`       | `string`  | —             | Gateway GraphQL endpoint for resolver-backed ingest environments       |
-| `stream-key`        | `string`  | —             | Stream key used with `gateway-url`                                     |
-| `initial-profile`   | `string`  | `"broadcast"` | Quality preset                                                         |
-| `controls`          | `string`  | `""`          | Set to `"false"` for headless mode                                     |
-| `theme`             | `string`  | `""`          | Theme preset name (empty uses the built-in default tokens)             |
-| `locale`            | `string`  | `"en"`        | UI language                                                            |
-| `enable-compositor` | `boolean` | `true`        | Enable compositor (set `el.enableCompositor = false` in JS to disable) |
-| `debug`             | `boolean` | `false`       | Enable debug logging                                                   |
+| Attribute                  | Type      | Default       | Description                                                      |
+| -------------------------- | --------- | ------------- | ---------------------------------------------------------------- |
+| `whip-url`                 | `string`  | —             | Direct WHIP ingest endpoint                                      |
+| `gateway-url`              | `string`  | —             | Gateway GraphQL endpoint for resolver-backed ingest environments |
+| `stream-key`               | `string`  | —             | Stream key used with `gateway-url`                               |
+| `initial-profile`          | `string`  | `"broadcast"` | Quality preset                                                   |
+| `auto-start-camera`        | `boolean` | `false`       | Start the camera once an endpoint is known                       |
+| `enable-compositor`        | `boolean` | `true`        | Run the compositor; `"false"` turns it off                       |
+| `show-producer-panel`      | `boolean` | `true`        | Producer panel while the compositor runs; `"false"` turns it off |
+| `show-settings`            | `boolean` | `false`       | Open the quality popup on mount                                  |
+| `dev-mode`                 | `boolean` | `false`       | Debug rows in the quality popup and the Advanced panel           |
+| `controls`                 | `string`  | `""`          | `"false"` renders only the default slot                          |
+| `theme`                    | `string`  | `""`          | Theme preset name (empty uses the built-in default tokens)       |
+| `locale`                   | `string`  | `"en"`        | UI language                                                      |
+| `class-name`               | `string`  | `""`          | Extra class on the root                                          |
+| `compositor-worker-url`    | `string`  | —             | Compositor worker script, when not next to the IIFE bundle       |
+| `encoder-worker-url`       | `string`  | —             | Encoder worker script, when not next to the IIFE bundle          |
+| `rtc-transform-worker-url` | `string`  | —             | RTC transform worker script, when not next to the IIFE bundle    |
+| `debug`                    | `boolean` | `false`       | Enable debug logging                                             |
+
+`compositorConfig`, `onStateChange` and `onError` are JS properties.
 
 ## Events
 
@@ -17342,12 +17672,18 @@ export class AppModule {}
 # StreamCrafter ingest overview
 https://logbook.frameworks.network/builders/ingest
 
-Browser-based broadcasting — camera, screen share, or both with audio mixing. No encoder software needed.
+Browser-based broadcasting: cameras, screen share, media files, scenes and overlays, mixed in the browser. No encoder software needed.
+
+<Aside type="caution" title="Beta: the SDK will change a lot">
+  StreamCrafter is in beta, and its packages are on 0.x. Expect breaking changes in minor releases
+  while cloud production and guests are built. Pin an exact version and read the package changelog
+  before you upgrade.
+</Aside>
 
 <Aside type="tip" title="When to use StreamCrafter vs OBS">
 
-Use StreamCrafter for browser-based streaming, screen shares, webcam broadcasts, and interactive apps.
-Use OBS or a hardware encoder for animated scene transitions, complex overlays, and fine control over encoding quality. StreamCrafter's drop-in UI has no scene switcher; scenes are available through the compositor API.
+Use StreamCrafter for browser-based streaming, screen shares, webcam broadcasts, and interactive apps. The drop-in studio switches scenes with cuts, fades and slides, puts logos and text over the picture, plays media files into the mix, and has a noise gate, de-esser, EQ and ducking for the audio.
+Use OBS or a hardware encoder for long or high-stakes broadcasts, for filters and effects StreamCrafter does not have, or on a computer that cannot spare the CPU for a mix in the browser.
 
 </Aside>
 
@@ -17407,7 +17743,27 @@ import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
   IP.
 </Aside>
 
-The drop-in component includes video preview, camera/screen share controls, quality selection, Go Live button, source management, and auto-reconnection.
+The drop-in component includes video preview, Add Camera, Share Screen and Add Media File, quality selection, the Go Live button, the source mixer, the producer controls, the audio section, a connection health indicator while live, and auto-reconnection.
+
+## Producer Controls
+
+While the compositor runs, the drop-in studio shows a producer panel under the preview. It is on by
+default in every binding; turn it off with `showProducerPanel={false}` on React and Svelte, or
+`show-producer-panel="false"` on the web component.
+
+| Section  | What it does                                                                     |
+| -------- | -------------------------------------------------------------------------------- |
+| Scenes   | Create, delete and switch scenes with a cut, fade or slide of a chosen duration  |
+| Layers   | Show, hide, reorder and remove the layers of the active scene, and set opacity   |
+| Overlays | Add a logo image or text to the active scene, and set its position, size, colour |
+| Media    | Play, pause and loop the media files added with Add Media File                   |
+
+`]` and `[` switch to the next and previous scene while the studio has focus.
+
+The Audio section appears while the studio captures. It sets the browser's echo cancellation,
+noise suppression and auto gain for the microphones, and a noise gate, de-esser, three-band EQ and
+ducking on the mixed audio. Ducking lowers every other source while the first camera's microphone
+picks up sound.
 
 ## Where to Find Your WHIP URL
 
@@ -17557,8 +17913,9 @@ See [Advanced Features](/builders/ingest-advanced/) for audio mixing details.
 The compositor is **enabled by default** — multi-source layout control with scenes and layers:
 
 - 17 layout presets (solo, PiP, split, grid, featured, and more)
-- Layer ordering through `reorderLayers()` or the `LayerList` component, which the drop-in UI renders when you set `showProducerPanel` (`show-producer-panel` on the web component)
-- Scenes through the compositor API, with cuts, fades, and slides between them
+- Layer ordering through `reorderLayers()` or the `LayerList` component in the producer panel
+- Scenes from the producer panel or the compositor API, with cuts, fades, and slides between them
+- Logo and text overlays, and media files as sources
 - GPU-accelerated rendering (WebGPU, WebGL, Canvas2D fallback)
 
 See [Compositor](/builders/ingest-compositor/) for full details.
@@ -26095,7 +26452,7 @@ These are not on the roadmap.
 ## Beta and tricky bits
 
 - **Billing works differently.** Paid tiers meter delivered minutes, with transcoding included. See [Billing](/builders/billing) and compare using your own past usage. Rates may adjust as we scale, but you keep the allowances you signed up for.
-- **Prepaid accounts stop at zero.** At €0 new streams are blocked. Top up before an event.
+- **A spent prepaid balance refuses new sessions.** At €0 running streams and their viewers continue, but new streams, new viewers and reconnects are refused. Below -€10 running streams stop. Top up before an event.
 - **Stream keys and playback IDs don't transfer.** Every encoder and embed needs updating.
 - **Allowed origins block non-browser players.** Test VLC, set-top, and app viewers before you enable them.
 - **Keep the browser tab open.** With StreamCrafter, closing the tab ends the broadcast, and quality can't change while live. Chromium-based browsers are the safest choice.
@@ -41582,7 +41939,8 @@ FrameWorks capabilities are available through the GraphQL API, MCP tools, dashbo
 ## Availability key
 
 - **Available** — ready to use today; availability can still depend on account tier, deployment, and configuration.
-- **Expanding** — the core capability is live; a specific surface or workflow is actively shipping.
+- **Expanding** — the core capability is live; a specific surface or workflow is actively shipping. The row says what is not there yet.
+- **(beta)** — usable today, with interfaces that will still change in breaking ways.
 - **Planned** — not yet usable; included so the matrix shows the full capability scope. Sequencing and detail live on the [Roadmap](/roadmap).
 - **Not available** — outside the supported product; listed so the scope boundary is explicit.
 
@@ -41598,11 +41956,11 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#streaming).
 | --- | --- | --- | --- |
 | **Live streams** | Available | API, Agents (MCP), Dashboard, Docs | Push streams with stream keys over RTMP/E-RTMP, SRT, and WHIP (WebRTC); pull streams from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources; and operator-managed local file, playlist, and process sources. |
 | ↳ Stream keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Per-stream ingest credentials with rotation. |
-| ↳ Pull streams | Expanding | API, Agents (MCP), Dashboard, Docs | Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit. |
-| ↳ Multistream push targets | Available | API, Agents (MCP), Dashboard, Docs | Forward live streams to RTMP/SRT destinations with per-target video choice and an optional per-stream live video ABR switch. |
-| ↳ SCTE-35 cue markers | Expanding | Docs | SCTE-35 splice cues in the media engine, with MistServer reading them from MPEG-TS input and inserting them into MPEG-TS outputs. Platform controls are expanding. |
-| **StreamCrafter (browser studio)** | Available | API, Dashboard, Docs | Browser-based broadcasting studio — WHIP/WebRTC ingest, compositing, and multi-source mixing. Ships as npm packages @livepeer-frameworks/streamcrafter-&#123;core,react,svelte,wc&#125; and powers the dashboard's Go Live page. |
-| **Device discovery and contribution inputs** | Planned | — | Edge-local discovery for cameras, PTZ devices, NDI sources, USB capture, HDMI inputs, and local contribution paths. |
+| ↳ Pull streams | [Expanding](/roadmap#pull-input-streams) | API, Agents (MCP), Dashboard, Docs | Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit. *Not shown yet are the upstream connection attempts, retries, and drops after a source resolves.* |
+| ↳ Multistream push targets | [Available](/roadmap#per-destination-multistream-stats) | API, Agents (MCP), Dashboard, Docs | Forward live streams to RTMP/SRT destinations with per-target video choice and an optional per-stream live video ABR switch. *Each destination shows its status and failure reason. Live bitrate and bytes sent per destination are not shown yet.* |
+| ↳ SCTE-35 cue markers | [Expanding](/roadmap#scte-35-platform-controls) | Docs | SCTE-35 splice cues in the media engine, with MistServer reading them from MPEG-TS input and inserting them into MPEG-TS outputs. Platform controls are expanding. *The media engine carries cues through MPEG-TS today. Inserting and inspecting cues through the API, agents, and dashboard is not there yet.* |
+| **StreamCrafter (browser studio)** | [Available (beta)](/roadmap#streamcrafter-browser-studio) | API, Dashboard, Docs | Browser-based live studio with WHIP/WebRTC ingest. It mixes several cameras, screen shares, and media files into scenes with stacked layers, logo and text overlays, picture-in-picture and split layouts, and cut, fade, or slide transitions. Ships as npm packages @livepeer-frameworks/streamcrafter-&#123;core,react,svelte,wc&#125; and powers the dashboard's Go Live page. *The SDK will change substantially as cloud production arrives, so expect breaking changes between releases.* |
+| **Device discovery and contribution inputs** | [Planned](/roadmap#device-discovery-and-contribution-inputs) | — | Edge-local discovery for cameras, PTZ devices, NDI sources, USB capture, HDMI inputs, and local contribution paths. |
 
 ### Playback
 
@@ -41615,8 +41973,8 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#playback).
 | ↳ Viewer protocol selection | Available | API, Docs | resolveViewerEndpoint accepts a required playback protocol and never substitutes another format. Players check serverInfo for this slug before sending the argument. |
 | ↳ Playback access control | Available | API, Agents (MCP), Dashboard, Docs | Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with allowed embedding origins, a per-policy webhook context object, a dry-run tester, and full agent management surface. |
 | ↳ Signing keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | ES256 keypairs for signing playback JWTs. Private material returned once on creation. |
-| ↳ Built-in password and geo rules | Planned | — | Password protection and country rules as per-stream switches on every plan, with no customer webhook endpoint. |
-| ↳ DRM | Planned | — | FairPlay, Widevine, and PlayReady protection for premium playback workflows. |
+| ↳ Built-in password and geo rules | [Planned](/roadmap#built-in-password-and-geo-rules) | — | Password protection and country rules as per-stream switches on every plan, with no customer webhook endpoint. |
+| ↳ DRM | [Planned](/roadmap#drm) | — | FairPlay, Widevine, and PlayReady protection for premium playback workflows. |
 
 ### Media Library
 
@@ -41625,14 +41983,14 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#media-library)
 | Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **DVR recordings** | Available | API, Agents (MCP), Dashboard, Docs | 24/7-capable DVR recording with bounded live seekback, continuous archive storage, chapter replay, and VOD-style playback. |
-| ↳ DVR chapters | Expanding | API, Agents (MCP), Dashboard, Docs | Chapter artifacts that segment a long-running DVR session into replayable windows, so a 24/7 recording can be replayed by window, civil-time range, or explicit range without restarting the live stream. |
-| ↳ Scheduled recordings | Planned | — | Calendar-driven DVR captures that start and stop on schedule, so streams record themselves on a fixed cadence. |
+| ↳ DVR chapters | Expanding | API, Agents (MCP), Dashboard, Docs | Chapter artifacts that segment a long-running DVR session into replayable windows, so a 24/7 recording can be replayed by window, civil-time range, or explicit range without restarting the live stream. *Chapter policy changes are not yet confirmed to appear in the audit log.* |
+| ↳ Scheduled recordings | [Planned](/roadmap#scheduled-programming) | — | Calendar-driven DVR captures that start and stop on schedule, so streams record themselves on a fixed cadence. |
 | **VOD assets** | Available | API, Agents (MCP), Dashboard, Docs | Multipart VOD upload, import from a public http(s) URL, and lifecycle. |
-| ↳ Scheduled VOD streams | Planned | — | Linear live channels assembled from existing VOD assets, with schedules that make archived media play as a rolling live stream. |
-| ↳ Upload validation and presign hardening | Expanding | — | Enforce declared size, content type, and container validity on presigned VOD uploads. |
+| ↳ Scheduled VOD streams | [Planned](/roadmap#scheduled-programming) | — | Linear live channels assembled from existing VOD assets, with schedules that make archived media play as a rolling live stream. |
+| ↳ Upload validation and presign hardening | Expanding | — | Enforce declared size, content type, and container validity on presigned VOD uploads. *Uploads are checked for a declared size and a playable file. Comparing the uploaded size with the declared size, and content-type limits on upload parts, are not there yet.* |
 | **Clips** | Available | API, Agents (MCP), Dashboard, Docs | Time-range clips from live streams, DVR windows, and finalized chapters — stored as their own playable assets via createClip, or cut on the fly as a single MP4/MKV/WebM/TS download by adding time-range parameters to a playback URL. |
 | **Media retention** | Available | API, Agents (MCP), Dashboard, Docs | Tenant-controlled storage policy for 24/7 DVR archives, clips, and VOD assets, with per-asset overrides and entitlement bounds. |
-| **Thumbnails and sprite previews** | Expanding | API, Agents (MCP), Dashboard, Docs | Auto-generated poster frames and sprite-tile preview strips for live streams, clips, VOD, and DVR playback. |
+| **Thumbnails and sprite previews** | Expanding | API, Agents (MCP), Dashboard, Docs | Auto-generated poster frames and sprite-tile preview strips for live streams, clips, VOD, and DVR playback. *Generation status and regenerating a thumbnail are not available yet.* |
 
 ### Processing & AI
 
@@ -41640,18 +41998,18 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#processing--ai
 
 | Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
-| **Processing** *(foundation)* | Expanding | API, Dashboard, Docs | Server-side media processing — live ABR transcoding, on-edge AI, and composition — placed on the right nodes across a cluster. |
-| ↳ Gateway-backed transcoding | Expanding | API, Dashboard, Docs | Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry. |
-| ↳ Live AI processing | Planned | — | ONNX models running directly on the in-memory stream buffer of media edge nodes — detection, transcription, moderation, audio tagging, and embeddings for semantic search. |
-| ↳ Composition and SSAI | Planned | — | Server side of StreamCrafter cloud production. Mixes live sources on processing nodes into one program stream, with a MistServer-native blitter for logos, watermarks, and lower-third overlays, and Composer for raw-pixel composition, picture-in-picture, live switching, backup inputs, server-side ad insertion (SSAI), and automated clipping. |
-| **Workload cost model (GPU-aware scheduling)** *(foundation)* | Planned | — | Predictive per-job resource cost — codec, resolution, framerate, model size, and realtime factor mapped to expected CPU, GPU/VRAM, and bandwidth — continuously corrected by measured costs of completed jobs, feeding processing placement and admission. |
+| **Processing** *(foundation)* | Expanding | API, Dashboard, Docs | Server-side media processing — live ABR transcoding, on-edge AI, and composition — placed on the right nodes across a cluster. *Live transcoding runs today. GPU-aware placement of large AI models and a processing control surface for tenants are not there yet.* |
+| ↳ Gateway-backed transcoding | [Expanding](/roadmap#gateway-backed-transcoding) | API, Dashboard, Docs | Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry. *Renditions follow your plan's processing policy, and a stream can turn its live ladder off. Choosing the ladder per stream is not there yet.* |
+| ↳ Live AI processing | [Planned](/roadmap#live-ai-processing) | — | ONNX models running directly on the in-memory stream buffer of media edge nodes — detection, transcription, moderation, audio tagging, and embeddings for semantic search. |
+| ↳ Composition and SSAI | [Planned](/roadmap#composition-and-ssai) | — | Server side of StreamCrafter cloud production. Mixes live sources on processing nodes into one program stream, with a MistServer-native blitter for logos, watermarks, and lower-third overlays, and Composer for raw-pixel composition, picture-in-picture, live switching, backup inputs, server-side ad insertion (SSAI), and automated clipping. |
+| **Workload cost model (GPU-aware scheduling)** *(foundation)* | [Planned](/roadmap#workload-cost-model) | — | Predictive per-job resource cost — codec, resolution, framerate, model size, and realtime factor mapped to expected CPU, GPU/VRAM, and bandwidth — continuously corrected by measured costs of completed jobs, feeding processing placement and admission. |
 
 ### Analytics & Observability
 
 | Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
-| **Analytics** | Expanding | API, Agents (MCP), Dashboard, Docs | Stream health, viewers, geographic, routing, quality tiers, federation, node metrics, and view-level player QoE (rebuffering, frame drops, startup, VOD retention) — with cross-player coverage still expanding. |
-| **Incidents and alerts** | Available | API, Agents (MCP), Dashboard, Docs | Incidents built from platform alert rules, scoped to platform operators or to the tenant that owns the alerting cluster, with acknowledge, assign, resolve, notes, operator email/Slack/Discord notifications, realtime tenant updates, and Skipper investigation of tenant incidents. |
+| **Analytics** | [Expanding](/roadmap#view-level-qoe-analytics) | API, Agents (MCP), Dashboard, Docs | Stream health, viewers, geographic, routing, quality tiers, federation, node metrics, and view-level player QoE (rebuffering, frame drops, startup, VOD retention) — with cross-player coverage still expanding. *Viewer QoE comes from the FrameWorks player. QoE from third-party players and per-view tracing are not there yet.* |
+| **Incidents and alerts** | [Expanding](/roadmap#incidents-and-alerts) | API, Agents (MCP), Dashboard, Docs | Incidents built from platform alert rules, scoped to platform operators or to the tenant that owns the alerting cluster, with acknowledge, assign, resolve, notes, operator email/Slack/Discord notifications, realtime tenant updates, and Skipper investigation of tenant incidents. *Alert coverage is still expanding, with edge reachability, certificate, DNS, capacity, and per-stream causes to come.* |
 
 ### Infrastructure & BYOC
 
@@ -41660,7 +42018,8 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#infrastructure
 | Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Geo-balanced viewer routing** *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Foghorn resolves each viewer to the optimal edge by geography, load, and node health across federated clusters. |
-| **Edge clusters** *(foundation)* | Available | API, Agents (MCP), CLI, Dashboard, Docs | Tenant-owned MistServer/Helmsman edge capacity with bootstrap and node enrollment; virtual private clusters are logical tenant-private slices on provider-operated Foghorn. |
+| **Public network explorer** | Available | API, Dashboard, Docs | A public, map-first view of the network on the website and in the dashboard. The FrameWorks tab shows infrastructure topology; the Livepeer tab compares orchestrators, gateway clusters, and probers by price and measured transcoding performance per region. The Livepeer data is also a public REST endpoint, GET /v1/network/livepeer. |
+| **Edge clusters** *(foundation)* | [Available](/roadmap#bring-your-own-edge) | API, Agents (MCP), CLI, Dashboard, Docs | Tenant-owned MistServer/Helmsman edge capacity with bootstrap and node enrollment; virtual private clusters are logical tenant-private slices on provider-operated Foghorn. |
 | ↳ Enrollment / bootstrap tokens *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | One-shot tokens used to enroll new edge nodes into a cluster. |
 | ↳ Nodes (edge / ingest / playback) *(foundation)* | Available | API, Agents (MCP), CLI, Dashboard, Docs | Per-node health, info, and discovery. |
 | ↳ Node mode (drain / maintenance) *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Operator controls to drain a node, put it in maintenance, or restore it to active service. |
@@ -41668,23 +42027,23 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#infrastructure
 | ↳ Cluster ingest protocol allowlist *(foundation)* | Planned | — | Per-cluster allowlist of ingest protocols (WHIP, RTMP, SRT) enforced at placement and publisher admission. |
 | ↳ Regional edge redundancy *(foundation)* | Planned | — | More than one edge node per region per cluster, so a single node failure does not take a region's media offline. |
 | ↳ Edge auto-update *(foundation)* | Available | CLI, Docs | Automatic edge component updates — Quartermaster owns the release catalog and per-cluster targets; Foghorn's release reconciler applies them to Helmsman, MistServer, and Caddy over the Helmsman control stream — native and single-image container nodes alike. |
-| ↳ Edge ISO and cloud images *(foundation)* | Planned | — | Bootable FrameWorks Edge ISO and prebuilt cloud/marketplace images for on-demand media-cluster scaling. |
-| **Cluster marketplace** | Expanding | API, Agents (MCP), Dashboard, Docs | Browse listed clusters and manage subscriptions. A vetted public marketplace program for third-party capacity is on the roadmap. |
+| ↳ Edge ISO and cloud images *(foundation)* | [Planned](/roadmap#edge-iso-and-cloud-images) | — | Bootable FrameWorks Edge ISO and prebuilt cloud/marketplace images for on-demand media-cluster scaling. |
+| **Cluster marketplace** | [Expanding](/roadmap#public-cluster-marketplace) | API, Agents (MCP), Dashboard, Docs | Browse listed clusters and manage subscriptions. A vetted public marketplace program for third-party capacity is on the roadmap. *Listing, invites, subscriptions, and pricing work today. A public program for third-party operators, with vetting and published terms, is not there yet.* |
 | ↳ Cluster invites *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Direct invites granting another tenant access to a cluster. |
 | ↳ Cluster subscription requests *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Tenant-requested subscription to a cluster, requiring operator approval. |
-| **BYOC ownership levels** | Expanding | CLI, Docs | The three supported ways to own a FrameWorks deployment — hosted, self-hosted edges attached to the FrameWorks platform, or the entire stack self-hosted — and the one unsupported combination between them. |
+| **BYOC ownership levels** | Expanding | CLI, Docs | The three supported ways to own a FrameWorks deployment — hosted, self-hosted edges attached to the FrameWorks platform, or the entire stack self-hosted — and the one unsupported combination between them. *Hosted, self-hosted edges, and full self-hosting all ship. Joining an independently run FrameWorks platform to this one as one network is not supported.* |
 | ↳ Federating a self-hosted platform with FrameWorks | Not available | — | Run your own Foghorn and control plane and federate them with the FrameWorks platform as one network, sharing routing, capacity, and tenants across both operators. |
-| ↳ Hosted private clusters (BYOC) | Planned | — | FrameWorks-provisioned dedicated, isolated clusters for a single tenant, with reserved capacity and fixed-rate pricing. |
+| ↳ Hosted private clusters (BYOC) | [Planned](/roadmap#dedicated-provider-capacity) | — | FrameWorks-provisioned dedicated, isolated clusters for a single tenant, with reserved capacity and fixed-rate pricing. |
 | ↳ Full self-host | Available | CLI, Docs | Run the entire public-domain stack — control plane, Foghorn, media edges, Livepeer, Chandler, databases, analytics, and interfaces — as an independent platform, provisioned, upgraded, and backed up with the frameworks CLI from a GitOps repository. |
-| **Adjacent infrastructure services** | Expanding | API, Docs | Infrastructure products adjacent to video delivery — managed DNS, generic proxying/CDN, and standalone storage. |
-| ↳ Managed DNS and cluster domains | Expanding | API, Docs | Platform-managed DNS, TLS certificates, media-cluster domains, and tenant streaming domain discovery. |
-| ↳ Generic proxying and CDN services | Planned | — | Customer-configured proxy/CDN front doors for non-video services and adjacent workloads. |
-| ↳ Standalone object and block storage | Planned | — | Customer-facing storage buckets, volumes, policies, and lifecycle controls outside the video-asset workflow. |
-| **NAT-aware routing and traversal** | Planned | — | NAT-type classification as a first-class routing and placement signal, platform-coordinated hole punching, and platform-managed measurement of inter-server network performance (latency, throughput) feeding routing and capacity decisions — so self-hosted nodes behind NAT participate fully in the federated network. |
-| **Federation state synchronization** | Planned | — | Decentral distribution of configuration and state changes across a dynamic federation — clusters and servers join, leave, or drop offline at will — with automatic conflict resolution between concurrent changes and reconvergence after network partitions, without a central coordination point. |
-| **Stream replication orchestration** | Planned | — | Pre-emptive stream distribution — spread a stream to a cell or region ahead of demand, explicit hop topology, and per-stream replication policy (max replicas, allowed regions). |
-| **Ingest and viewer placement policy** | Expanding | API, Agents (MCP), Dashboard, Docs | Ingest and viewer placement policy with cluster-owner permissions, authorized selectors, read-only previews, reviewed changes, and save recovery, enforced on live routing and at final admission. |
-| **Placement policy and storage tiering** | Planned | — | Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into the signed media authority evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger. |
+| **Adjacent infrastructure services** | Expanding | API, Docs | Infrastructure products adjacent to video delivery — managed DNS, generic proxying/CDN, and standalone storage. *FrameWorks runs DNS, proxying, and storage for its own media service. Offering them as separate products is not there yet.* |
+| ↳ Managed DNS and cluster domains | [Expanding](/roadmap#managed-dns-proxying-and-storage-services) | API, Docs | Platform-managed DNS, TLS certificates, media-cluster domains, and tenant streaming domain discovery. *Platform and cluster DNS and certificates are managed for you. Self-serve custom domain setup in the dashboard and through agents is not there yet.* |
+| ↳ Generic proxying and CDN services | [Planned](/roadmap#managed-dns-proxying-and-storage-services) | — | Customer-configured proxy/CDN front doors for non-video services and adjacent workloads. |
+| ↳ Standalone object and block storage | [Planned](/roadmap#managed-dns-proxying-and-storage-services) | — | Customer-facing storage buckets, volumes, policies, and lifecycle controls outside the video-asset workflow. |
+| **NAT-aware routing and traversal** | [Planned](/roadmap#nat-aware-routing-and-traversal) | — | NAT-type classification as a first-class routing and placement signal, platform-coordinated hole punching, and platform-managed measurement of inter-server network performance (latency, throughput) feeding routing and capacity decisions — so self-hosted nodes behind NAT participate fully in the federated network. |
+| **Federation state synchronization** | [Planned](/roadmap#federation-state-synchronization) | — | Decentral distribution of configuration and state changes across a dynamic federation — clusters and servers join, leave, or drop offline at will — with automatic conflict resolution between concurrent changes and reconvergence after network partitions, without a central coordination point. |
+| **Stream replication orchestration** | [Planned](/roadmap#stream-replication-orchestration) | — | Pre-emptive stream distribution — spread a stream to a cell or region ahead of demand, explicit hop topology, and per-stream replication policy (max replicas, allowed regions). |
+| **Ingest and viewer placement policy** | Expanding | API, Agents (MCP), Dashboard, Docs | Ingest and viewer placement policy with cluster-owner permissions, authorized selectors, read-only previews, reviewed changes, and save recovery, enforced on live routing and at final admission. *Ingest and viewer placement rules apply on every live route. Rules for where stored copies live and where processing runs are not there yet.* |
+| **Placement policy and storage tiering** | [Planned](/roadmap#placement-policy-and-storage-tiering) | — | Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into the signed media authority evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger. |
 
 ### Commerce & Billing
 
@@ -41692,24 +42051,29 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#commerce--bill
 
 | Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
-| **Billing & prepaid balance** | Available | API, Agents (MCP), Dashboard, Docs | Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance. |
-| ↳ Usage caps, alerts, retention cost preview | Expanding | — | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. |
-| **Wallet & on-chain identity** | Expanding | API, Agents (MCP), Dashboard, Docs | Wallet sign-in, linked-wallet account identity, and x402 micropayments. |
-| **Operator settlement and attribution** | Planned | — | Attribute served traffic to the operators whose clusters actually carried it — manipulation-resistant across independent operators — and settle the full loop, from credit accrual through operator-visible reporting to payout execution. |
-| **Stream-level balances** | Planned | — | Optional per-stream balances that fund usage before the tenant balance — paywalled and pay-per-view streams, tips, sponsor-funded streams — plus promo codes, referral rewards, and volume discounts. |
+| **Billing & prepaid balance** | Available | API, Agents (MCP), CLI, Dashboard, Docs | Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance. |
+| ↳ Usage caps, alerts, retention cost preview | Expanding | — | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. *Storage cost previews per asset ship. Caps and alerts you set per meter are not there yet.* |
+| ↳ Plan changes, payment grace, and Free fallback | Expanding | API, Dashboard, Docs | Self-serve upgrades start a fresh month and offset the unused part of the old fee; downgrades and cancellations keep the paid plan to the end of the period, then move the account to Free. A failed payment keeps the plan for 14 days with email notices, then moves the account to Free with a final invoice for usage up to the move. *Plan changes and the 14-day payment grace run today. The dashboard does not yet show the grace end date, a scheduled plan change, or the coming move to Free.* |
+| ↳ Operator trials and account closure | Expanding | CLI, Docs | Platform operators give a tenant a time-boxed billing arrangement — a different base fee, waived usage, or manual invoicing — for trials and custom deals, expiring back to the tenant's fallback plan, and close tenant accounts permanently. Every change is audited. *Trials and custom arrangements are set up by our team. Your dashboard does not yet show an active arrangement or when it ends.* |
+| **Wallet & on-chain identity** | Expanding | API, Agents (MCP), Dashboard, Docs | Wallet sign-in, linked-wallet account identity, and x402 micropayments. *Wallet sign-in, linked wallets, crypto top-ups, and x402 top-ups for agents are implemented. Each deployment enables them once its payment configuration passes the live readiness checks.* |
+| **Operator settlement and attribution** | [Planned](/roadmap#operator-settlement-and-attribution) | — | Attribute served traffic to the operators whose clusters actually carried it — manipulation-resistant across independent operators — and settle the full loop, from credit accrual through operator-visible reporting to payout execution. |
+| **Stream-level balances** | [Planned](/roadmap#stream-level-balances) | — | Optional per-stream balances that fund usage before the tenant balance — paywalled and pay-per-view streams, tips, sponsor-funded streams — plus promo codes, referral rewards, and volume discounts. |
 
 ### Developer Platform & Agents
 
+Planned items in this area are detailed on the [Roadmap](/roadmap#developer-platform--agents).
+
 | Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
-| **Developer API** | Expanding | API, Agents (MCP), Dashboard, Docs | The GraphQL API and the tooling around it — playground, API tokens, webhooks, and server-side SDKs. |
+| **Developer API** | Expanding | API, Agents (MCP), Dashboard, Docs | The GraphQL API and the tooling around it — playground, API tokens, webhooks, and server-side SDKs. *SDKs for languages other than TypeScript, Go, and Python are not there yet.* |
 | ↳ Developer API tokens *(foundation)* | Available | API, Dashboard, Docs | Long-lived API tokens for SDK / CI use. |
 | ↳ GraphQL playground | Available | Dashboard, Docs | Interactive GraphQL explorer wired to the live schema. |
 | ↳ Public tenant events | Available | API, Dashboard, Docs | One public event contract for streams, clips, recordings, uploads, multistream targets, API tokens, billing, account, and custom domains, written by each owning service in the same transaction as the change and delivered live through the tenantEvents subscription, filterable by type and stream. |
 | ↳ Outbound event webhooks | Available | API, Agents (MCP), Dashboard, Docs | Up to 10 tenant HTTPS endpoints receive the public tenant events (the tenantEvents payloads) as Standard Webhooks-signed requests, retried for about three days with auto-disable after sustained failure, with a 30-day delivery log, single and range replay, test deliveries, and secret rotation with a 24-hour overlap. Delivered by the Bosun service. |
-| ↳ Backend SDKs | Expanding | Dashboard, Docs | SDKs for TypeScript (Node 22+ and browsers), Go, and Python, generated from the public GraphQL schema and released under one version. Each has a generated typed method, with a default selection, for every non-deprecated public root query, mutation, and subscription (a namespace root such as analytics through the methods of its argument fields) and every non-deprecated argument-taking field in the public schema. Argument-free fields nested deeper than the default selection are typed only through the TypeScript select client; Go and Python reach them with custom documents (Go MakeRequest, Python execute). Around them are retries, pagination, typed errors, a server version check, a multipart VOD upload helper, playback JWT signing, and Standard Webhooks verification with typed event parsing. |
-| **Agents (MCP server)** | Available | API, Agents (MCP), Dashboard, Docs | Model Context Protocol server exposing FrameWorks operations to agents. |
-| ↳ Skipper (in-app consultant agent) | Expanding | API, Agents (MCP), Dashboard, Docs | Conversational platform agent for support and investigations. |
+| ↳ Backend SDKs | [Expanding](/roadmap#more-sdk-languages) | Dashboard, Docs | SDKs for TypeScript (Node 22+ and browsers), Go, and Python, generated from the public GraphQL schema and released under one version. Each has a generated typed method, with a default selection, for every non-deprecated public root query, mutation, and subscription (a namespace root such as analytics through the methods of its argument fields) and every non-deprecated argument-taking field in the public schema. Argument-free fields nested deeper than the default selection are typed only through the TypeScript select client; Go and Python reach them with custom documents (Go MakeRequest, Python execute). Around them are retries, pagination, typed errors, a server version check, a multipart VOD upload helper, playback JWT signing, and Standard Webhooks verification with typed event parsing. *The TypeScript, Go, and Python SDKs cover the whole public API and are still expanding. Typed custom selections exist only in TypeScript, and other languages have no SDK yet.* |
+| ↳ More SDK languages | [Planned](/roadmap#more-sdk-languages) | — | SDKs for PHP, Ruby, Elixir, Java, and C#, generated from the same operation set as the TypeScript, Go, and Python SDKs and checked against the same conformance fixtures. |
+| **Agents (MCP server)** | [Available](/roadmap#agent-and-automation-workflows) | API, Agents (MCP), Dashboard, Docs | Model Context Protocol server exposing FrameWorks operations to agents. |
+| ↳ Skipper (in-app consultant agent) | Expanding | API, Agents (MCP), Dashboard, Docs | Conversational platform agent for support and investigations. *Agents can ask Skipper questions over MCP. Managing Skipper conversations through agents is not there yet.* |
 
 ### Engagement & Interactivity
 
@@ -41717,9 +42081,9 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#engagement--in
 
 | Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
-| **Conferencing and remote contribution** | Planned | — | Multi-party WebRTC rooms and remote-guest contribution — commentators and callers mixed into a managed stream. |
-| **Rooms, chat, and interactivity (Parlor)** | Planned | — | Viewer chat and engagement primitives — channel points, hype trains, leaderboards, flair, and moderation views — synced to the stream. |
-| **Live commerce (shopping and auctions)** | Planned | — | Shopping and server-authoritative auctions attached to live streams — product showcases, carts and orders, and auction mechanics that stay fair for viewers at different latencies behind the live edge. |
+| **Conferencing and remote contribution** | [Planned](/roadmap#conferencing-and-chat) | — | Multi-party WebRTC rooms and remote-guest contribution — commentators and callers mixed into a managed stream. |
+| **Rooms, chat, and interactivity (Parlor)** | [Planned](/roadmap#rooms-and-interactivity-parlor) | — | Viewer chat and engagement primitives — channel points, hype trains, leaderboards, flair, and moderation views — synced to the stream. |
+| **Live commerce (shopping and auctions)** | [Planned](/roadmap#live-commerce-shopping-and-auctions) | — | Shopping and server-authoritative auctions attached to live streams — product showcases, carts and orders, and auction mechanics that stay fair for viewers at different latencies behind the live edge. |
 
 ### Account & Apps
 
@@ -41727,11 +42091,11 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#account--apps)
 
 | Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
-| **Tenant settings** | Expanding | API, Agents (MCP), Dashboard, Docs | Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle. |
-| ↳ Teams & RBAC | Planned | — | Multi-user tenants with role-based access control. |
-| **Companion apps** | Expanding | — | Desktop and mobile companions to the dashboard and CLI. |
-| ↳ Desktop companion (macOS tray) | Expanding | — | Menu-bar app bundled with the CLI in the macOS installer for local edge and stream control. |
-| ↳ Mobile apps and integrated help center | Planned | — | Native mobile operations and an in-product help center for support, incidents, and account workflows. |
+| **Tenant settings** | Expanding | API, Agents (MCP), Dashboard, Docs | Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle. *Teams, notification preferences, custom domains, and account security controls are not there yet.* |
+| ↳ Teams & RBAC | [Planned](/roadmap#team-accounts-and-permissions) | — | Multi-user tenants with role-based access control. |
+| **Companion apps** | Expanding | — | Desktop and mobile companions to the dashboard and CLI. *A macOS menu-bar app ships with the CLI installer and is still early. Mobile apps are not there yet.* |
+| ↳ Desktop companion (macOS tray) | Expanding | — | Menu-bar app bundled with the CLI in the macOS installer for local edge and stream control. *Ships in the macOS installer and is still early. There is no Windows or Linux version yet.* |
+| ↳ Mobile apps and integrated help center | [Planned](/roadmap#mobile-apps-and-help-center) | — | Native mobile operations and an in-product help center for support, incidents, and account workflows. |
 
 The [Roadmap](/roadmap) carries sequencing and detail for planned work; this matrix shows the full capability scope, shipped and planned alike.
 
@@ -41748,11 +42112,11 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | --- | --- | --- | --- |
 | **Live streams** | Available | API, Agents (MCP), Dashboard, Docs | Push streams with stream keys over RTMP/E-RTMP, SRT, and WHIP (WebRTC); pull streams from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources; and operator-managed local file, playlist, and process sources. |
 | ↳ Stream keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Per-stream ingest credentials with rotation. |
-| ↳ Pull streams | Expanding | API, Agents (MCP), Dashboard, Docs | Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit. |
-| ↳ Multistream push targets | Available | API, Agents (MCP), Dashboard, Docs | Forward live streams to RTMP/SRT destinations with per-target video choice and an optional per-stream live video ABR switch. |
-| ↳ SCTE-35 cue markers | Expanding | Docs | SCTE-35 splice cues in the media engine, with MistServer reading them from MPEG-TS input and inserting them into MPEG-TS outputs. Platform controls are expanding. |
-| **StreamCrafter (browser studio)** | Available | API, Dashboard, Docs | Browser-based broadcasting studio — WHIP/WebRTC ingest, compositing, and multi-source mixing. Ships as npm packages @livepeer-frameworks/streamcrafter-&#123;core,react,svelte,wc&#125; and powers the dashboard's Go Live page. |
-| **Device discovery and contribution inputs** | Planned | — | Edge-local discovery for cameras, PTZ devices, NDI sources, USB capture, HDMI inputs, and local contribution paths. |
+| ↳ Pull streams | [Expanding](/roadmap#pull-input-streams) | API, Agents (MCP), Dashboard, Docs | Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit. *Not shown yet are the upstream connection attempts, retries, and drops after a source resolves.* |
+| ↳ Multistream push targets | [Available](/roadmap#per-destination-multistream-stats) | API, Agents (MCP), Dashboard, Docs | Forward live streams to RTMP/SRT destinations with per-target video choice and an optional per-stream live video ABR switch. *Each destination shows its status and failure reason. Live bitrate and bytes sent per destination are not shown yet.* |
+| ↳ SCTE-35 cue markers | [Expanding](/roadmap#scte-35-platform-controls) | Docs | SCTE-35 splice cues in the media engine, with MistServer reading them from MPEG-TS input and inserting them into MPEG-TS outputs. Platform controls are expanding. *The media engine carries cues through MPEG-TS today. Inserting and inspecting cues through the API, agents, and dashboard is not there yet.* |
+| **StreamCrafter (browser studio)** | [Available (beta)](/roadmap#streamcrafter-browser-studio) | API, Dashboard, Docs | Browser-based live studio with WHIP/WebRTC ingest. It mixes several cameras, screen shares, and media files into scenes with stacked layers, logo and text overlays, picture-in-picture and split layouts, and cut, fade, or slide transitions. Ships as npm packages @livepeer-frameworks/streamcrafter-&#123;core,react,svelte,wc&#125; and powers the dashboard's Go Live page. *The SDK will change substantially as cloud production arrives, so expect breaking changes between releases.* |
+| **Device discovery and contribution inputs** | [Planned](/roadmap#device-discovery-and-contribution-inputs) | — | Edge-local discovery for cameras, PTZ devices, NDI sources, USB capture, HDMI inputs, and local contribution paths. |
 
 ### Playback
 
@@ -41763,47 +42127,48 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | ↳ Viewer protocol selection | Available | API, Docs | resolveViewerEndpoint accepts a required playback protocol and never substitutes another format. Players check serverInfo for this slug before sending the argument. |
 | ↳ Playback access control | Available | API, Agents (MCP), Dashboard, Docs | Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with allowed embedding origins, a per-policy webhook context object, a dry-run tester, and full agent management surface. |
 | ↳ Signing keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | ES256 keypairs for signing playback JWTs. Private material returned once on creation. |
-| ↳ Built-in password and geo rules | Planned | — | Password protection and country rules as per-stream switches on every plan, with no customer webhook endpoint. |
-| ↳ DRM | Planned | — | FairPlay, Widevine, and PlayReady protection for premium playback workflows. |
+| ↳ Built-in password and geo rules | [Planned](/roadmap#built-in-password-and-geo-rules) | — | Password protection and country rules as per-stream switches on every plan, with no customer webhook endpoint. |
+| ↳ DRM | [Planned](/roadmap#drm) | — | FairPlay, Widevine, and PlayReady protection for premium playback workflows. |
 
 ### Media Library
 
 | Capability | Availability | Surfaces | Description |
 | --- | --- | --- | --- |
 | **DVR recordings** | Available | API, Agents (MCP), Dashboard, Docs | 24/7-capable DVR recording with bounded live seekback, continuous archive storage, chapter replay, and VOD-style playback. |
-| ↳ DVR chapters | Expanding | API, Agents (MCP), Dashboard, Docs | Chapter artifacts that segment a long-running DVR session into replayable windows, so a 24/7 recording can be replayed by window, civil-time range, or explicit range without restarting the live stream. |
-| ↳ Scheduled recordings | Planned | — | Calendar-driven DVR captures that start and stop on schedule, so streams record themselves on a fixed cadence. |
+| ↳ DVR chapters | Expanding | API, Agents (MCP), Dashboard, Docs | Chapter artifacts that segment a long-running DVR session into replayable windows, so a 24/7 recording can be replayed by window, civil-time range, or explicit range without restarting the live stream. *Chapter policy changes are not yet confirmed to appear in the audit log.* |
+| ↳ Scheduled recordings | [Planned](/roadmap#scheduled-programming) | — | Calendar-driven DVR captures that start and stop on schedule, so streams record themselves on a fixed cadence. |
 | **VOD assets** | Available | API, Agents (MCP), Dashboard, Docs | Multipart VOD upload, import from a public http(s) URL, and lifecycle. |
-| ↳ Scheduled VOD streams | Planned | — | Linear live channels assembled from existing VOD assets, with schedules that make archived media play as a rolling live stream. |
-| ↳ Upload validation and presign hardening | Expanding | — | Enforce declared size, content type, and container validity on presigned VOD uploads. |
+| ↳ Scheduled VOD streams | [Planned](/roadmap#scheduled-programming) | — | Linear live channels assembled from existing VOD assets, with schedules that make archived media play as a rolling live stream. |
+| ↳ Upload validation and presign hardening | Expanding | — | Enforce declared size, content type, and container validity on presigned VOD uploads. *Uploads are checked for a declared size and a playable file. Comparing the uploaded size with the declared size, and content-type limits on upload parts, are not there yet.* |
 | **Clips** | Available | API, Agents (MCP), Dashboard, Docs | Time-range clips from live streams, DVR windows, and finalized chapters — stored as their own playable assets via createClip, or cut on the fly as a single MP4/MKV/WebM/TS download by adding time-range parameters to a playback URL. |
 | **Media retention** | Available | API, Agents (MCP), Dashboard, Docs | Tenant-controlled storage policy for 24/7 DVR archives, clips, and VOD assets, with per-asset overrides and entitlement bounds. |
-| **Thumbnails and sprite previews** | Expanding | API, Agents (MCP), Dashboard, Docs | Auto-generated poster frames and sprite-tile preview strips for live streams, clips, VOD, and DVR playback. |
+| **Thumbnails and sprite previews** | Expanding | API, Agents (MCP), Dashboard, Docs | Auto-generated poster frames and sprite-tile preview strips for live streams, clips, VOD, and DVR playback. *Generation status and regenerating a thumbnail are not available yet.* |
 
 ### Processing & AI
 
 | Capability | Availability | Surfaces | Description |
 | --- | --- | --- | --- |
-| **Processing** *(foundation)* | Expanding | API, Dashboard, Docs | Server-side media processing — live ABR transcoding, on-edge AI, and composition — placed on the right nodes across a cluster. |
-| ↳ Gateway-backed transcoding | Expanding | API, Dashboard, Docs | Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry. |
-| ↳ Live AI processing | Planned | — | ONNX models running directly on the in-memory stream buffer of media edge nodes — detection, transcription, moderation, audio tagging, and embeddings for semantic search. |
-| ↳ Composition and SSAI | Planned | — | Server side of StreamCrafter cloud production. Mixes live sources on processing nodes into one program stream, with a MistServer-native blitter for logos, watermarks, and lower-third overlays, and Composer for raw-pixel composition, picture-in-picture, live switching, backup inputs, server-side ad insertion (SSAI), and automated clipping. |
-| **Workload cost model (GPU-aware scheduling)** *(foundation)* | Planned | — | Predictive per-job resource cost — codec, resolution, framerate, model size, and realtime factor mapped to expected CPU, GPU/VRAM, and bandwidth — continuously corrected by measured costs of completed jobs, feeding processing placement and admission. |
+| **Processing** *(foundation)* | Expanding | API, Dashboard, Docs | Server-side media processing — live ABR transcoding, on-edge AI, and composition — placed on the right nodes across a cluster. *Live transcoding runs today. GPU-aware placement of large AI models and a processing control surface for tenants are not there yet.* |
+| ↳ Gateway-backed transcoding | [Expanding](/roadmap#gateway-backed-transcoding) | API, Dashboard, Docs | Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry. *Renditions follow your plan's processing policy, and a stream can turn its live ladder off. Choosing the ladder per stream is not there yet.* |
+| ↳ Live AI processing | [Planned](/roadmap#live-ai-processing) | — | ONNX models running directly on the in-memory stream buffer of media edge nodes — detection, transcription, moderation, audio tagging, and embeddings for semantic search. |
+| ↳ Composition and SSAI | [Planned](/roadmap#composition-and-ssai) | — | Server side of StreamCrafter cloud production. Mixes live sources on processing nodes into one program stream, with a MistServer-native blitter for logos, watermarks, and lower-third overlays, and Composer for raw-pixel composition, picture-in-picture, live switching, backup inputs, server-side ad insertion (SSAI), and automated clipping. |
+| **Workload cost model (GPU-aware scheduling)** *(foundation)* | [Planned](/roadmap#workload-cost-model) | — | Predictive per-job resource cost — codec, resolution, framerate, model size, and realtime factor mapped to expected CPU, GPU/VRAM, and bandwidth — continuously corrected by measured costs of completed jobs, feeding processing placement and admission. |
 
 ### Analytics & Observability
 
 | Capability | Availability | Surfaces | Description |
 | --- | --- | --- | --- |
-| **Analytics** | Expanding | API, Agents (MCP), Dashboard, Docs | Stream health, viewers, geographic, routing, quality tiers, federation, node metrics, and view-level player QoE (rebuffering, frame drops, startup, VOD retention) — with cross-player coverage still expanding. |
-| **Incidents and alerts** | Available | API, Agents (MCP), Dashboard, Docs | Incidents built from platform alert rules, scoped to platform operators or to the tenant that owns the alerting cluster, with acknowledge, assign, resolve, notes, operator email/Slack/Discord notifications, realtime tenant updates, and Skipper investigation of tenant incidents. |
+| **Analytics** | [Expanding](/roadmap#view-level-qoe-analytics) | API, Agents (MCP), Dashboard, Docs | Stream health, viewers, geographic, routing, quality tiers, federation, node metrics, and view-level player QoE (rebuffering, frame drops, startup, VOD retention) — with cross-player coverage still expanding. *Viewer QoE comes from the FrameWorks player. QoE from third-party players and per-view tracing are not there yet.* |
+| **Incidents and alerts** | [Expanding](/roadmap#incidents-and-alerts) | API, Agents (MCP), Dashboard, Docs | Incidents built from platform alert rules, scoped to platform operators or to the tenant that owns the alerting cluster, with acknowledge, assign, resolve, notes, operator email/Slack/Discord notifications, realtime tenant updates, and Skipper investigation of tenant incidents. *Alert coverage is still expanding, with edge reachability, certificate, DNS, capacity, and per-stream causes to come.* |
 
 ### Infrastructure & BYOC
 
 | Capability | Availability | Surfaces | Description |
 | --- | --- | --- | --- |
 | **Geo-balanced viewer routing** *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Foghorn resolves each viewer to the optimal edge by geography, load, and node health across federated clusters. |
+| **Public network explorer** | Available | API, Dashboard, Docs | A public, map-first view of the network on the website and in the dashboard. The FrameWorks tab shows infrastructure topology; the Livepeer tab compares orchestrators, gateway clusters, and probers by price and measured transcoding performance per region. The Livepeer data is also a public REST endpoint, GET /v1/network/livepeer. |
 | **Network egress economics and peering** *(foundation)* *(platform)* | Planned | — | Operator-side supply-cost attribution, destination-network traffic analysis, percentile demand forecasting, and evidence-gated transit or peering evaluation for media egress. |
-| **Edge clusters** *(foundation)* | Available | API, Agents (MCP), CLI, Dashboard, Docs | Tenant-owned MistServer/Helmsman edge capacity with bootstrap and node enrollment; virtual private clusters are logical tenant-private slices on provider-operated Foghorn. |
+| **Edge clusters** *(foundation)* | [Available](/roadmap#bring-your-own-edge) | API, Agents (MCP), CLI, Dashboard, Docs | Tenant-owned MistServer/Helmsman edge capacity with bootstrap and node enrollment; virtual private clusters are logical tenant-private slices on provider-operated Foghorn. |
 | ↳ Enrollment / bootstrap tokens *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | One-shot tokens used to enroll new edge nodes into a cluster. |
 | ↳ Nodes (edge / ingest / playback) *(foundation)* | Available | API, Agents (MCP), CLI, Dashboard, Docs | Per-node health, info, and discovery. |
 | ↳ Node mode (drain / maintenance) *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Operator controls to drain a node, put it in maintenance, or restore it to active service. |
@@ -41811,26 +42176,26 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | ↳ Cluster ingest protocol allowlist *(foundation)* | Planned | — | Per-cluster allowlist of ingest protocols (WHIP, RTMP, SRT) enforced at placement and publisher admission. |
 | ↳ Regional edge redundancy *(foundation)* | Planned | — | More than one edge node per region per cluster, so a single node failure does not take a region's media offline. |
 | ↳ Edge auto-update *(foundation)* | Available | CLI, Docs | Automatic edge component updates — Quartermaster owns the release catalog and per-cluster targets; Foghorn's release reconciler applies them to Helmsman, MistServer, and Caddy over the Helmsman control stream — native and single-image container nodes alike. |
-| ↳ Edge ISO and cloud images *(foundation)* | Planned | — | Bootable FrameWorks Edge ISO and prebuilt cloud/marketplace images for on-demand media-cluster scaling. |
-| **Cluster marketplace** | Expanding | API, Agents (MCP), Dashboard, Docs | Browse listed clusters and manage subscriptions. A vetted public marketplace program for third-party capacity is on the roadmap. |
+| ↳ Edge ISO and cloud images *(foundation)* | [Planned](/roadmap#edge-iso-and-cloud-images) | — | Bootable FrameWorks Edge ISO and prebuilt cloud/marketplace images for on-demand media-cluster scaling. |
+| **Cluster marketplace** | [Expanding](/roadmap#public-cluster-marketplace) | API, Agents (MCP), Dashboard, Docs | Browse listed clusters and manage subscriptions. A vetted public marketplace program for third-party capacity is on the roadmap. *Listing, invites, subscriptions, and pricing work today. A public program for third-party operators, with vetting and published terms, is not there yet.* |
 | ↳ Cluster invites *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Direct invites granting another tenant access to a cluster. |
 | ↳ Cluster subscription requests *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Tenant-requested subscription to a cluster, requiring operator approval. |
-| **BYOC ownership levels** | Expanding | CLI, Docs | The three supported ways to own a FrameWorks deployment — hosted, self-hosted edges attached to the FrameWorks platform, or the entire stack self-hosted — and the one unsupported combination between them. |
+| **BYOC ownership levels** | Expanding | CLI, Docs | The three supported ways to own a FrameWorks deployment — hosted, self-hosted edges attached to the FrameWorks platform, or the entire stack self-hosted — and the one unsupported combination between them. *Hosted, self-hosted edges, and full self-hosting all ship. Joining an independently run FrameWorks platform to this one as one network is not supported.* |
 | ↳ Federating a self-hosted platform with FrameWorks | Not available | — | Run your own Foghorn and control plane and federate them with the FrameWorks platform as one network, sharing routing, capacity, and tenants across both operators. |
-| ↳ Hosted private clusters (BYOC) | Planned | — | FrameWorks-provisioned dedicated, isolated clusters for a single tenant, with reserved capacity and fixed-rate pricing. |
+| ↳ Hosted private clusters (BYOC) | [Planned](/roadmap#dedicated-provider-capacity) | — | FrameWorks-provisioned dedicated, isolated clusters for a single tenant, with reserved capacity and fixed-rate pricing. |
 | ↳ Full self-host | Available | CLI, Docs | Run the entire public-domain stack — control plane, Foghorn, media edges, Livepeer, Chandler, databases, analytics, and interfaces — as an independent platform, provisioned, upgraded, and backed up with the frameworks CLI from a GitOps repository. |
-| **Adjacent infrastructure services** | Expanding | API, Docs | Infrastructure products adjacent to video delivery — managed DNS, generic proxying/CDN, and standalone storage. |
-| ↳ Managed DNS and cluster domains | Expanding | API, Docs | Platform-managed DNS, TLS certificates, media-cluster domains, and tenant streaming domain discovery. |
-| ↳ Generic proxying and CDN services | Planned | — | Customer-configured proxy/CDN front doors for non-video services and adjacent workloads. |
-| ↳ Standalone object and block storage | Planned | — | Customer-facing storage buckets, volumes, policies, and lifecycle controls outside the video-asset workflow. |
-| **NAT-aware routing and traversal** | Planned | — | NAT-type classification as a first-class routing and placement signal, platform-coordinated hole punching, and platform-managed measurement of inter-server network performance (latency, throughput) feeding routing and capacity decisions — so self-hosted nodes behind NAT participate fully in the federated network. |
-| **Federation state synchronization** | Planned | — | Decentral distribution of configuration and state changes across a dynamic federation — clusters and servers join, leave, or drop offline at will — with automatic conflict resolution between concurrent changes and reconvergence after network partitions, without a central coordination point. |
-| **Stream replication orchestration** | Planned | — | Pre-emptive stream distribution — spread a stream to a cell or region ahead of demand, explicit hop topology, and per-stream replication policy (max replicas, allowed regions). |
-| **Ingest and viewer placement policy** | Expanding | API, Agents (MCP), Dashboard, Docs | Ingest and viewer placement policy with cluster-owner permissions, authorized selectors, read-only previews, reviewed changes, and save recovery, enforced on live routing and at final admission. |
-| **Placement policy and storage tiering** | Planned | — | Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into the signed media authority evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger. |
-| **Drain-integrated OS updates** *(foundation)* *(platform)* | Planned | — | Operator-driven host OS updates that drain each role safely before restart — media sessions run out or hand over, database replicas gate on recovery state, brokers transfer leadership — while cluster capacity floors hold. |
+| **Adjacent infrastructure services** | Expanding | API, Docs | Infrastructure products adjacent to video delivery — managed DNS, generic proxying/CDN, and standalone storage. *FrameWorks runs DNS, proxying, and storage for its own media service. Offering them as separate products is not there yet.* |
+| ↳ Managed DNS and cluster domains | [Expanding](/roadmap#managed-dns-proxying-and-storage-services) | API, Docs | Platform-managed DNS, TLS certificates, media-cluster domains, and tenant streaming domain discovery. *Platform and cluster DNS and certificates are managed for you. Self-serve custom domain setup in the dashboard and through agents is not there yet.* |
+| ↳ Generic proxying and CDN services | [Planned](/roadmap#managed-dns-proxying-and-storage-services) | — | Customer-configured proxy/CDN front doors for non-video services and adjacent workloads. |
+| ↳ Standalone object and block storage | [Planned](/roadmap#managed-dns-proxying-and-storage-services) | — | Customer-facing storage buckets, volumes, policies, and lifecycle controls outside the video-asset workflow. |
+| **NAT-aware routing and traversal** | [Planned](/roadmap#nat-aware-routing-and-traversal) | — | NAT-type classification as a first-class routing and placement signal, platform-coordinated hole punching, and platform-managed measurement of inter-server network performance (latency, throughput) feeding routing and capacity decisions — so self-hosted nodes behind NAT participate fully in the federated network. |
+| **Federation state synchronization** | [Planned](/roadmap#federation-state-synchronization) | — | Decentral distribution of configuration and state changes across a dynamic federation — clusters and servers join, leave, or drop offline at will — with automatic conflict resolution between concurrent changes and reconvergence after network partitions, without a central coordination point. |
+| **Stream replication orchestration** | [Planned](/roadmap#stream-replication-orchestration) | — | Pre-emptive stream distribution — spread a stream to a cell or region ahead of demand, explicit hop topology, and per-stream replication policy (max replicas, allowed regions). |
+| **Ingest and viewer placement policy** | Expanding | API, Agents (MCP), Dashboard, Docs | Ingest and viewer placement policy with cluster-owner permissions, authorized selectors, read-only previews, reviewed changes, and save recovery, enforced on live routing and at final admission. *Ingest and viewer placement rules apply on every live route. Rules for where stored copies live and where processing runs are not there yet.* |
+| **Placement policy and storage tiering** | [Planned](/roadmap#placement-policy-and-storage-tiering) | — | Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into the signed media authority evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger. |
+| **Drain-integrated OS updates** *(foundation)* *(platform)* | [Planned](/roadmap#platform-trust-and-operations-hardening) | — | Operator-driven host OS updates that drain each role safely before restart — media sessions run out or hand over, database replicas gate on recovery state, brokers transfer leadership — while cluster capacity floors hold. |
 | **Dynamic mesh routing** *(foundation)* *(platform)* | Planned | — | Dynamic route propagation over the encrypted WireGuard mesh so the topology adapts to link failure and growth without quadratic static peer configuration. |
-| **Service identity and trust lifecycle** *(foundation)* *(platform)* | Planned | — | Live rotation of trust material without service interruption — dual-validity intermediate CA rotation, asymmetric token authority (the signing key never leaves the issuing service), and non-forgeable cluster-bound service identities. |
+| **Service identity and trust lifecycle** *(foundation)* *(platform)* | [Planned](/roadmap#platform-trust-and-operations-hardening) | — | Live rotation of trust material without service interruption — dual-validity intermediate CA rotation, asymmetric token authority (the signing key never leaves the issuing service), and non-forgeable cluster-bound service identities. |
 | **Foghorn high availability** *(foundation)* *(platform)* | Available | — | Regional balancer HA — Redis-externalized state, leader election, and changelog sync per cell so any Foghorn instance can serve routing decisions and node-mode changes propagate immediately. |
 | **Trigger durability WAL** *(foundation)* *(platform)* | Available | — | Edge-local write-ahead log for billing-critical media triggers — acknowledged only after durable append, deterministic event identity for idempotent replay, and an operator replay endpoint on the edge sidecar. |
 | **Internal CA and certificate sync** *(foundation)* *(platform)* | Available | — | Two-tier internal PKI — 72-hour service leaves issued by Navigator's internal CA via node- and cluster-bound cert_sync tokens, distributed by Privateer; public ACME (DNS-01) covers external listeners. |
@@ -41843,43 +42208,46 @@ This broader inventory includes the [product capability matrix](/platform/featur
 
 | Capability | Availability | Surfaces | Description |
 | --- | --- | --- | --- |
-| **Billing & prepaid balance** | Available | API, Agents (MCP), Dashboard, Docs | Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance. |
-| ↳ Usage caps, alerts, retention cost preview | Expanding | — | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. |
-| **Wallet & on-chain identity** | Expanding | API, Agents (MCP), Dashboard, Docs | Wallet sign-in, linked-wallet account identity, and x402 micropayments. |
-| **Operator settlement and attribution** | Planned | — | Attribute served traffic to the operators whose clusters actually carried it — manipulation-resistant across independent operators — and settle the full loop, from credit accrual through operator-visible reporting to payout execution. |
-| **Stream-level balances** | Planned | — | Optional per-stream balances that fund usage before the tenant balance — paywalled and pay-per-view streams, tips, sponsor-funded streams — plus promo codes, referral rewards, and volume discounts. |
+| **Billing & prepaid balance** | Available | API, Agents (MCP), CLI, Dashboard, Docs | Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance. |
+| ↳ Usage caps, alerts, retention cost preview | Expanding | — | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. *Storage cost previews per asset ship. Caps and alerts you set per meter are not there yet.* |
+| ↳ Plan changes, payment grace, and Free fallback | Expanding | API, Dashboard, Docs | Self-serve upgrades start a fresh month and offset the unused part of the old fee; downgrades and cancellations keep the paid plan to the end of the period, then move the account to Free. A failed payment keeps the plan for 14 days with email notices, then moves the account to Free with a final invoice for usage up to the move. *Plan changes and the 14-day payment grace run today. The dashboard does not yet show the grace end date, a scheduled plan change, or the coming move to Free.* |
+| ↳ Operator trials and account closure | Expanding | CLI, Docs | Platform operators give a tenant a time-boxed billing arrangement — a different base fee, waived usage, or manual invoicing — for trials and custom deals, expiring back to the tenant's fallback plan, and close tenant accounts permanently. Every change is audited. *Trials and custom arrangements are set up by our team. Your dashboard does not yet show an active arrangement or when it ends.* |
+| **Wallet & on-chain identity** | Expanding | API, Agents (MCP), Dashboard, Docs | Wallet sign-in, linked-wallet account identity, and x402 micropayments. *Wallet sign-in, linked wallets, crypto top-ups, and x402 top-ups for agents are implemented. Each deployment enables them once its payment configuration passes the live readiness checks.* |
+| **Operator settlement and attribution** | [Planned](/roadmap#operator-settlement-and-attribution) | — | Attribute served traffic to the operators whose clusters actually carried it — manipulation-resistant across independent operators — and settle the full loop, from credit accrual through operator-visible reporting to payout execution. |
+| **Stream-level balances** | [Planned](/roadmap#stream-level-balances) | — | Optional per-stream balances that fund usage before the tenant balance — paywalled and pay-per-view streams, tips, sponsor-funded streams — plus promo codes, referral rewards, and volume discounts. |
 | **Operator credit ledger** *(foundation)* *(platform)* | Expanding | — | Internal accrual ledger crediting cluster operators for served usage — platform-fee basis points, clawback and reversal support — populated from per-cluster usage attribution. |
 
 ### Developer Platform & Agents
 
 | Capability | Availability | Surfaces | Description |
 | --- | --- | --- | --- |
-| **Developer API** | Expanding | API, Agents (MCP), Dashboard, Docs | The GraphQL API and the tooling around it — playground, API tokens, webhooks, and server-side SDKs. |
+| **Developer API** | Expanding | API, Agents (MCP), Dashboard, Docs | The GraphQL API and the tooling around it — playground, API tokens, webhooks, and server-side SDKs. *SDKs for languages other than TypeScript, Go, and Python are not there yet.* |
 | ↳ Developer API tokens *(foundation)* | Available | API, Dashboard, Docs | Long-lived API tokens for SDK / CI use. |
 | ↳ GraphQL playground | Available | Dashboard, Docs | Interactive GraphQL explorer wired to the live schema. |
 | ↳ Public tenant events | Available | API, Dashboard, Docs | One public event contract for streams, clips, recordings, uploads, multistream targets, API tokens, billing, account, and custom domains, written by each owning service in the same transaction as the change and delivered live through the tenantEvents subscription, filterable by type and stream. |
 | ↳ Outbound event webhooks | Available | API, Agents (MCP), Dashboard, Docs | Up to 10 tenant HTTPS endpoints receive the public tenant events (the tenantEvents payloads) as Standard Webhooks-signed requests, retried for about three days with auto-disable after sustained failure, with a 30-day delivery log, single and range replay, test deliveries, and secret rotation with a 24-hour overlap. Delivered by the Bosun service. |
-| ↳ Backend SDKs | Expanding | Dashboard, Docs | SDKs for TypeScript (Node 22+ and browsers), Go, and Python, generated from the public GraphQL schema and released under one version. Each has a generated typed method, with a default selection, for every non-deprecated public root query, mutation, and subscription (a namespace root such as analytics through the methods of its argument fields) and every non-deprecated argument-taking field in the public schema. Argument-free fields nested deeper than the default selection are typed only through the TypeScript select client; Go and Python reach them with custom documents (Go MakeRequest, Python execute). Around them are retries, pagination, typed errors, a server version check, a multipart VOD upload helper, playback JWT signing, and Standard Webhooks verification with typed event parsing. |
-| **Agents (MCP server)** | Available | API, Agents (MCP), Dashboard, Docs | Model Context Protocol server exposing FrameWorks operations to agents. |
-| ↳ Skipper (in-app consultant agent) | Expanding | API, Agents (MCP), Dashboard, Docs | Conversational platform agent for support and investigations. |
+| ↳ Backend SDKs | [Expanding](/roadmap#more-sdk-languages) | Dashboard, Docs | SDKs for TypeScript (Node 22+ and browsers), Go, and Python, generated from the public GraphQL schema and released under one version. Each has a generated typed method, with a default selection, for every non-deprecated public root query, mutation, and subscription (a namespace root such as analytics through the methods of its argument fields) and every non-deprecated argument-taking field in the public schema. Argument-free fields nested deeper than the default selection are typed only through the TypeScript select client; Go and Python reach them with custom documents (Go MakeRequest, Python execute). Around them are retries, pagination, typed errors, a server version check, a multipart VOD upload helper, playback JWT signing, and Standard Webhooks verification with typed event parsing. *The TypeScript, Go, and Python SDKs cover the whole public API and are still expanding. Typed custom selections exist only in TypeScript, and other languages have no SDK yet.* |
+| ↳ More SDK languages | [Planned](/roadmap#more-sdk-languages) | — | SDKs for PHP, Ruby, Elixir, Java, and C#, generated from the same operation set as the TypeScript, Go, and Python SDKs and checked against the same conformance fixtures. |
+| **Agents (MCP server)** | [Available](/roadmap#agent-and-automation-workflows) | API, Agents (MCP), Dashboard, Docs | Model Context Protocol server exposing FrameWorks operations to agents. |
+| ↳ Skipper (in-app consultant agent) | Expanding | API, Agents (MCP), Dashboard, Docs | Conversational platform agent for support and investigations. *Agents can ask Skipper questions over MCP. Managing Skipper conversations through agents is not there yet.* |
 
 ### Engagement & Interactivity
 
 | Capability | Availability | Surfaces | Description |
 | --- | --- | --- | --- |
-| **Conferencing and remote contribution** | Planned | — | Multi-party WebRTC rooms and remote-guest contribution — commentators and callers mixed into a managed stream. |
-| **Rooms, chat, and interactivity (Parlor)** | Planned | — | Viewer chat and engagement primitives — channel points, hype trains, leaderboards, flair, and moderation views — synced to the stream. |
-| **Live commerce (shopping and auctions)** | Planned | — | Shopping and server-authoritative auctions attached to live streams — product showcases, carts and orders, and auction mechanics that stay fair for viewers at different latencies behind the live edge. |
+| **Conferencing and remote contribution** | [Planned](/roadmap#conferencing-and-chat) | — | Multi-party WebRTC rooms and remote-guest contribution — commentators and callers mixed into a managed stream. |
+| **Rooms, chat, and interactivity (Parlor)** | [Planned](/roadmap#rooms-and-interactivity-parlor) | — | Viewer chat and engagement primitives — channel points, hype trains, leaderboards, flair, and moderation views — synced to the stream. |
+| **Live commerce (shopping and auctions)** | [Planned](/roadmap#live-commerce-shopping-and-auctions) | — | Shopping and server-authoritative auctions attached to live streams — product showcases, carts and orders, and auction mechanics that stay fair for viewers at different latencies behind the live edge. |
 
 ### Account & Apps
 
 | Capability | Availability | Surfaces | Description |
 | --- | --- | --- | --- |
-| **Tenant settings** | Expanding | API, Agents (MCP), Dashboard, Docs | Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle. |
-| ↳ Teams & RBAC | Planned | — | Multi-user tenants with role-based access control. |
-| **Companion apps** | Expanding | — | Desktop and mobile companions to the dashboard and CLI. |
-| ↳ Desktop companion (macOS tray) | Expanding | — | Menu-bar app bundled with the CLI in the macOS installer for local edge and stream control. |
-| ↳ Mobile apps and integrated help center | Planned | — | Native mobile operations and an in-product help center for support, incidents, and account workflows. |
+| **Tenant settings** | Expanding | API, Agents (MCP), Dashboard, Docs | Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle. *Teams, notification preferences, custom domains, and account security controls are not there yet.* |
+| ↳ Teams & RBAC | [Planned](/roadmap#team-accounts-and-permissions) | — | Multi-user tenants with role-based access control. |
+| **Companion apps** | Expanding | — | Desktop and mobile companions to the dashboard and CLI. *A macOS menu-bar app ships with the CLI installer and is still early. Mobile apps are not there yet.* |
+| ↳ Desktop companion (macOS tray) | Expanding | — | Menu-bar app bundled with the CLI in the macOS installer for local edge and stream control. *Ships in the macOS installer and is still early. There is no Windows or Linux version yet.* |
+| ↳ Mobile apps and integrated help center | [Planned](/roadmap#mobile-apps-and-help-center) | — | Native mobile operations and an in-product help center for support, incidents, and account workflows. |
 | **Platform-operator god view** *(foundation)* *(platform)* | Available | — | Cross-tenant operational view for platform operators — audit-logged and read-oriented — used for support, incident response, and platform-wide analytics. |
 
 Product-facing sequencing lives on the [Roadmap](/roadmap); this inventory is regenerated from `docs/platform-features.yaml` by `make generate-feature-registry`.
@@ -41889,15 +42257,16 @@ Product-facing sequencing lives on the [Roadmap](/roadmap); this inventory is re
 # Roadmap
 https://logbook.frameworks.network/roadmap
 
-The [Platform capabilities](/platform/feature-matrix) page is the source of truth for what you can use today. This roadmap groups the work ahead by the same product areas, so each section here lines up with a section of the capability matrix.
+The [Platform capabilities](/platform/feature-matrix) page is the source of truth for what you can use today. This roadmap groups the work ahead by the same product areas, so each section here lines up with a section of the capability matrix. For a shorter tour of the product, see the [showcase](%MARKETING_URL%/showcase).
 
 <Aside type="note" title="How to read this page">
 
 - <Badge text="Now" variant="success" /> — shipped foundations with active product hardening or
-  surface-area expansion.
+  surface-area expansion. The showcase lists these as **Shipping today**.
 - <Badge text="Next" variant="tip" /> — designed work that is not yet a complete public workflow.
+  The showcase lists these as **Up next**.
 - <Badge text="Later" variant="note" /> — backlog themes we expect to revisit after higher-priority
-  platform work.
+  platform work. The showcase lists these as **Further out**.
 
 </Aside>
 
@@ -41914,6 +42283,20 @@ What ships today in this area: [Platform capabilities → Streaming](/platform/f
 ### Pull-Input Streams <Badge text="Now" variant="success" />
 
 Pull streams are available through the dashboard, API, and agents. The remaining work is deeper operational visibility for upstream connection attempts, retries, private-source edge cases, and self-hosted deployment diagnostics across RTSP cameras, SRT/RIST feeds, HLS origins, MPEG-TS sources, and Mist/DTSC sources.
+
+### StreamCrafter Browser Studio <Badge text="Now" variant="success" />
+
+StreamCrafter is the live studio in the dashboard's Go Live page, and ships as npm packages for React, Svelte, and Web Components. It mixes several cameras, screen shares, and media files in the browser into scenes with stacked layers, logo and text overlays, picture-in-picture and split layouts, and cut, fade, or slide transitions, then publishes over WHIP. Start with the [Go Live guide](/builders/go-live-browser).
+
+StreamCrafter is in beta. The SDK will change substantially as cloud production arrives, so expect breaking changes between releases. The server-side half, mixing sources on processing nodes, is [Composition and SSAI](#composition-and-ssai).
+
+### Per-Destination Multistream Stats <Badge text="Next" variant="tip" />
+
+[Multistreaming](/builders/multistreaming) shows each destination's status and the reason for a failure. Next is live bitrate and bytes sent per destination, so you can see which platform is falling behind while the stream runs.
+
+### SCTE-35 Platform Controls <Badge text="Next" variant="tip" />
+
+The media engine already reads SCTE-35 cues from MPEG-TS input and writes them into its TS and TS-over-SRT outputs. The platform work is inserting and inspecting cues through the API, agents, and dashboard. Server-side ad insertion builds on these cues; see [Composition and SSAI](#composition-and-ssai).
 
 ### Device Discovery and Contribution Inputs <Badge text="Next" variant="tip" />
 
@@ -41957,7 +42340,7 @@ Livepeer Gateway integration is active. We are expanding native controls, plan-a
 
 ### Live AI Processing <Badge text="Next" variant="tip" />
 
-An ONNX runtime in the media engine is in active development, running ultralight CPU models directly on the in-memory stream buffer of a media edge node. Object detection and segmentation (YOLO) and audio transcription (Parakeet) are already tested; candidate workloads include content moderation, audio event tagging and speaker identification, and frame/text embeddings for semantic search. Heavy models defer to dedicated compute via the Livepeer network, with client-side processing stats in the media engine and processing-aware cluster scheduling as the remaining orchestration work. Pilot access is available via contact.
+An ONNX runtime in the media engine is in active development, running ultralight CPU models directly on the in-memory stream buffer of a media edge node. Object detection and segmentation (YOLO) and audio transcription (Parakeet) are already tested; candidate workloads include content moderation, audio event tagging and speaker identification, and frame/text embeddings for semantic search. Heavy models defer to dedicated compute via the Livepeer network, with client-side processing stats in the media engine and processing-aware cluster scheduling as the remaining orchestration work.
 
 ### Workload Cost Model <Badge text="Next" variant="tip" />
 
@@ -41965,7 +42348,7 @@ Processing placement today routes by node class and current load; what a job wil
 
 ### Composition and SSAI <Badge text="Next" variant="tip" />
 
-This is the server side of StreamCrafter's cloud production. Composition mixes several live sources on processing nodes into one program stream, which then gets the same multistreaming, recording, and delivery as any other stream. It stays inside the media engine: a MistServer-native blitter for logos, watermarks, and lower-third overlays, and MistServer's Composer for raw-pixel composition, picture-in-picture, and server-side ad insertion (SSAI). Live switching between sources, backup inputs that take over when a primary source drops, and mixing remote guests into the program all build on this layer, with automated clipping layered on top. To compose in the browser today, use [StreamCrafter](/builders/ingest-compositor).
+This is the server side of StreamCrafter's cloud production. Composition mixes several live sources on processing nodes into one program stream, which then gets the same multistreaming, recording, and delivery as any other stream. It stays inside the media engine: a MistServer-native blitter for logos, watermarks, and lower-third overlays, and MistServer's Composer for raw-pixel composition, picture-in-picture, and server-side ad insertion (SSAI). Live switching between sources, backup inputs that take over when a primary source drops, and mixing remote guests into the program all build on this layer, with automated clipping layered on top. To compose in the browser today, use the [StreamCrafter browser studio](#streamcrafter-browser-studio).
 
 ## Analytics & Observability
 

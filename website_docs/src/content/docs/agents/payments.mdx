@@ -225,7 +225,7 @@ Call `update_billing_details` with the listed fields, then request fresh payment
 ```json
 {
   "code": "INSUFFICIENT_BALANCE",
-  "message": "Available balance is 0 cents (0 settled, 0 reserved). Top up required to perform billable operations.",
+  "message": "Available balance is 0 cents (0 settled, 0 reserved). At €0 or below, running streams and their viewers continue but new streams, new viewers and reconnects are refused; below -€10 running sessions stop. Top up to run billable operations.",
   "resolution": "Call topup_balance tool to add credits, OR pay via x402 (USDC on Base/Arbitrum)",
   "tool": "topup_balance",
   "x402_accepts": [
@@ -267,5 +267,10 @@ Prepaid usage deductions can move an account toward zero or negative balance. Mo
 | `estimated_hours_left`      | Time until the available balance is depleted |
 | `live_metrics`              | Current operational usage context            |
 
-At zero or below available balance, prepaid accounts are blocked from new rated work until the balance is topped up. The rest of the authenticated platform remains usable. If the settled balance drops below -€10, Purser suspends the tenant and asks
-Commodore/Foghorn to terminate active streams and sessions. Top up proactively.
+| Available balance | Effect                                                                                                                                                     |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Above €0          | Rated work runs normally                                                                                                                                   |
+| €0 or below       | Running streams and their viewers continue. New rated work, new streams and new viewers are refused, and a disconnected viewer or encoder cannot reconnect |
+| Below -€10        | The tenant is suspended and running streams and sessions stop                                                                                              |
+
+The rest of the authenticated platform remains usable at €0. Top up proactively before long-running work.

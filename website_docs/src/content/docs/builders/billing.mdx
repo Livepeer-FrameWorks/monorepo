@@ -61,12 +61,10 @@ Free closes on the normal monthly accounting cadence and produces an itemized �
 - **Storage cap.** At the 10 GB durable limit, new recordings, VOD uploads, and clip exports are rejected. Existing artifacts remain available until their effective retention deadline; the Free tier caps retention at 30 days.
 - Load is computed per media cluster as `max(avg(CPU%), uplink utilization %)` across healthy edge nodes.
 
-**Seeded limitations:**
+**Not included:**
 
-- No AI workloads
-- Watermarked player
-- Community support only
-- No SLA
+- AI workloads
+- Support beyond the community channels
 
 ## Pay-As-You-Go (Current)
 
@@ -94,8 +92,9 @@ Paid tiers include monthly allocations with overage billing:
 | Enterprise | Custom | Custom            | Contract-defined   |
 
 Every tier includes recording, the analytics dashboard, and API access. Tiers differ in allowances,
-retention caps, support level, and SLA, and only Enterprise lets a tenant replace the tier's
-processing profiles with its own.
+retention caps and support level, and only Enterprise lets a tenant replace the tier's processing
+profiles with its own. Self-serve tiers carry no SLA; an SLA is a custom term of an Enterprise
+agreement.
 
 Paid self-serve tiers do not impose a plan-level retention cap. Content still follows its configured
 artifact policy; the service defaults are indefinite VOD retention and 30 days for DVR chapters and
@@ -130,7 +129,7 @@ V2V transformations, and server-side composition) is in the pipeline. These jobs
 meter-based billing path as delivered minutes and storage, with product-shaped meters added per job
 or marketplace offer.
 
-To talk about early access, [contact us](https://frameworks.network/contact). Standard live
+To talk about early access, [contact us](%MARKETING_URL%/contact). Standard live
 transcoding remains included in delivered-minute pricing.
 
 ## Billing Models
@@ -161,6 +160,25 @@ Monthly subscription with included delivered-minute allocations. Cold storage is
 | You cancelled                                       | You keep your plan until the paid period ends, then your account moves to Free and we confirm by email.                                                                                                                  |
 
 Streams keep running on Free within its limits. Unpaid invoices stay outstanding with reminders, and you need to settle them before choosing a paid tier again.
+
+The billing page shows the move date in place of the next billing date. During a payment-failure
+grace period it also offers the fix: **Update payment method** opens Stripe's portal while Stripe
+still retries the subscription, and **Set up payment** starts a new Stripe Checkout or Mollie
+mandate otherwise. The grace email links straight to it.
+
+## Trials and arrangements
+
+A trial, a custom base fee or invoice billing is an arrangement FrameWorks sets up on your account.
+[Contact us](%MARKETING_URL%/contact) to ask for one. An arrangement can:
+
+- replace the plan's monthly base fee, for example with €0 during a trial
+- waive usage charges, while usage is still metered and shown on each invoice at €0
+- move collection to invoices that FrameWorks sends for payment by bank transfer
+- end on a set date, when the account returns to a named plan at its standard price
+
+The billing page shows the arrangement's terms and end date, and the plan you return to. While it is
+in force, plan changes and checkouts are refused with the code `OUTSTANDING_GRANT`; ask us to change
+the arrangement instead.
 
 ## Currency
 

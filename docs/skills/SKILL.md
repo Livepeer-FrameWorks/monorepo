@@ -171,13 +171,14 @@ x402: authenticate first, make the rated request, read the tenant-bound 402 requ
 
 - API and media usage is metered and itemized. While the billing-beta waiver is enabled, usage lines retain quantities and would-have-cost values but net to zero.
 - Prepaid available balance (settled minus reserved) must be positive to start rated work. Reads, configuration, cleanup, developer credentials, and payment recovery remain available at zero balance.
+- At €0 or below, running streams and their viewers continue, but new streams, new viewers and reconnects are refused. Below -€10 the tenant is suspended and running sessions stop.
 - Use MCP `billing://balance` or GraphQL `prepaidBalance` / `billingStatus` queries to monitor balance and drain rate. Use `billing://documents` for retained invoices, receipts, and credit notes.
 
 ## Streaming Best Practices
 
 - **Check balance before starting ingest or processing.** Stream configuration itself is available at zero balance; media admission is the rated boundary. Use `billing://balance` (MCP) or `prepaidBalance` / `billingStatus` queries (GraphQL).
 - **Monitor stream health.** Read `streams://{id}/health` periodically during live streams. Use QoE diagnostic tools if viewers report issues.
-- **Top up proactively.** Streams are terminated if balance drops below -€10. Use x402 auto-payment or `topup_balance` to maintain buffer.
+- **Top up proactively.** A spent balance refuses new streams and viewers, and running streams stop below -€10. Use x402 auto-payment or `topup_balance` to maintain buffer.
 - **Clean up after yourself.** Delete streams, clips, and VOD assets you no longer need. Storage costs are ongoing.
 
 ## Video Consultant (Skipper)
@@ -284,7 +285,8 @@ MCP applies the shared operation class before execution. Rated tools can return 
 | -------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `AUTHENTICATION_REQUIRED`  | No wallet headers or bearer token                                    | Send `X-Wallet-Address` + `X-Wallet-Signature` + `X-Wallet-Message`, or `Authorization: Bearer <jwt>`                    |
 | `BILLING_PROFILE_REQUIRED` | Payment is over €100 or carries a VAT claim and lacks a full profile | Call `update_billing_details` with the response's `required_fields`, then request fresh options                          |
-| `INSUFFICIENT_BALANCE`     | Prepaid available balance ≤ $0                                       | Pay via x402 (`submit_payment`) or `topup_balance`. Check `billing://balance` for settled, reserved, and available state |
+| `INSUFFICIENT_BALANCE`     | Prepaid available balance ≤ €0                                       | Pay via x402 (`submit_payment`) or `topup_balance`. Check `billing://balance` for settled, reserved, and available state |
+| `ACCOUNT_SUSPENDED`        | The account is suspended or closed                                   | Read `account://status`. An agent cannot reopen a closed account; contact FrameWorks support about a suspension          |
 
 Rate limiting is handled at the Gateway layer (HTTP 429) with standard `Retry-After` headers — not as a preflight error.
 Read, configuration, cleanup, billing, and payment-recovery operations skip the balance check. Authentication, permissions, and abuse limits still apply.
