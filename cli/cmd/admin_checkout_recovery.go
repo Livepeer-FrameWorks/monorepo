@@ -73,6 +73,7 @@ func runCheckoutRecoveryList(ctx context.Context, w io.Writer, p checkoutRecover
 				break
 			}
 		}
+		writeHeldDowngrades(w, res.GetHeldDowngrades())
 	}
 	if res.GetHasMore() {
 		fmt.Fprintf(w, "More results: repeat with --offset %d\n", r.GetOffset()+r.GetLimit())
@@ -137,7 +138,7 @@ func confirmCheckoutRecovery(cmd *cobra.Command, res *purserpb.AdminRecoverCheck
 func newAdminBillingRecoveryCmd() *cobra.Command {
 	parent := &cobra.Command{Use: "recovery", Short: "Inspect provider work and reconcile unresolved purchases"}
 	listReq := &purserpb.AdminListCheckoutRecoveryRequest{}
-	list := &cobra.Command{Use: "list", Short: "List provider work, errors and historical payment delivery reviews", RunE: func(cmd *cobra.Command, _ []string) error {
+	list := &cobra.Command{Use: "list", Short: "List provider work, errors, held downgrades and historical payment delivery reviews", RunE: func(cmd *cobra.Command, _ []string) error {
 		p, cfg, cleanup, err := purserGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
@@ -191,7 +192,7 @@ func newAdminBillingRecoveryCmd() *cobra.Command {
 	recoverCmd.Flags().StringVar(&req.TenantId, "tenant-id", "", "owning tenant UUID (required)")
 	recoverCmd.Flags().StringVar(&req.ReservationId, "reservation-id", "", "checkout reservation UUID (required)")
 	recoverCmd.Flags().StringVar(&req.Reason, "reason", "", "operator reason, retained with the recovery request (required)")
-	parent.AddCommand(list, recoverCmd, newAdminTierUpgradeRecoveryCmd(), newAdminFallbackNoticeRecoveryCmd())
+	parent.AddCommand(list, recoverCmd, newAdminTierUpgradeRecoveryCmd(), newAdminTierDowngradeRecoveryCmd(), newAdminFallbackNoticeRecoveryCmd())
 	return parent
 }
 
