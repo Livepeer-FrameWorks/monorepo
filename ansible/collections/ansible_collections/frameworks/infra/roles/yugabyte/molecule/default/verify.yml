@@ -76,6 +76,9 @@
       loop_control:
         label: "{{ item.item }}"
 
+    - name: Apply, rerun and refuse fixture migrations
+      ansible.builtin.include_tasks: tasks/migrate.yml
+
     - name: Confirm yb-master binary is present and executable
       ansible.builtin.stat:
         path: /opt/yugabyte/current/bin/yb-master

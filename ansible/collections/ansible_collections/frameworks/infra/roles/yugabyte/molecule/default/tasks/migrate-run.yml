@@ -1,0 +1,12 @@
+---
+# One `cluster migrate` run of the role over yugabyte_migrate_items. The role keeps its pending and
+# applied items in facts, which persist across includes in one play, so each run starts from empty ones.
+- name: Reset the role's migration facts
+  ansible.builtin.set_fact:
+    yugabyte_pending_migrate_items: []
+    yugabyte_applied_by_db: {}
+
+- name: Run the role's migrate tasks
+  ansible.builtin.include_role:
+    name: frameworks.infra.yugabyte
+    tasks_from: migrate
