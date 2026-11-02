@@ -21,9 +21,7 @@ describe("StreamCrafter Svelte component parity", () => {
     expect(source).not.toContain("hasCamera");
   });
 
-  it("masks the stream key in Copy Stream Info and keeps theme colours in tokens", () => {
-    expect(source).toContain("formatStreamInfo(");
-    expect(source).not.toMatch(/WHIP: \$\{/);
+  it("keeps theme colours in tokens", () => {
     expect(source).not.toMatch(/#(1a1b26|565f89|7aa2f7|a9b1d6|c0caf5|9ece6a|f7768e)/i);
   });
 

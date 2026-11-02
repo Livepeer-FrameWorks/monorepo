@@ -87,6 +87,23 @@ describe("StreamCrafter producer panel", () => {
     expect(screen.getByText("Default")).toBeTruthy();
   });
 
+  it("masks the stream key in the copied stream info", async () => {
+    const writeText = vi.fn(async (_text: string) => {});
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const { container } = render(StreamCrafter, {
+      whipUrl: "https://edge.example/webrtc/secret-key",
+    });
+    await screen.findByText("Scenes");
+
+    await fireEvent.contextMenu(container.querySelector(".fw-sc-root") as HTMLElement);
+    await fireEvent.click(await screen.findByText("Copy Stream Info"));
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const copied = writeText.mock.calls[0][0];
+    expect(copied).toContain("WHIP: https://edge.example/webrtc/•••");
+    expect(copied).not.toContain("secret-key");
+  });
+
   it("can be turned off", async () => {
     const { container } = render(StreamCrafter, {
       whipUrl: "https://ingest.example/whip",

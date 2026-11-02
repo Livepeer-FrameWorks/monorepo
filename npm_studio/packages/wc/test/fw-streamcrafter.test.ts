@@ -70,9 +70,32 @@ describe("FwStreamCrafter", () => {
     expect(handlers.size).toBe(0);
   });
 
-  it("masks the stream key in Copy Stream Info and keeps theme colours in tokens", () => {
-    expect(source).toContain("formatStreamInfo(");
-    expect(source).not.toMatch(/WHIP: \$\{/);
+  it("masks the stream key in the copied stream info", async () => {
+    const writeText = vi.fn(async (_text: string) => {});
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const el = document.createElement("fw-streamcrafter") as FwStreamCrafter;
+    el.setAttribute("whip-url", "https://edge.example/webrtc/secret-key");
+    el.setAttribute("enable-compositor", "false");
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    el.shadowRoot!.querySelector(".fw-sc-root")!.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, composed: true })
+    );
+    await el.updateComplete;
+    const copy = [
+      ...el.shadowRoot!.querySelectorAll<HTMLButtonElement>(".fw-sc-context-menu-item"),
+    ].find((button) => button.textContent?.trim() === "Copy Stream Info");
+    copy!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const copied = writeText.mock.calls[0][0];
+    expect(copied).toContain("WHIP: https://edge.example/webrtc/•••");
+    expect(copied).not.toContain("secret-key");
+    el.remove();
+  });
+
+  it("keeps theme colours in tokens", () => {
     expect(source).not.toMatch(/#(1a1b26|565f89|7aa2f7|a9b1d6|c0caf5|9ece6a|f7768e)/i);
   });
 
