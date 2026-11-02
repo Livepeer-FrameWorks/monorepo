@@ -220,8 +220,6 @@ const isLive = studio.reactiveState.get("streaming");
 | -------------- | --------------------------------------- | ------------------- | -------------------------------------------- |
 | `whipUrl`      | `string`                                | --                  | Direct WHIP endpoint URL                     |
 | `whipUrls`     | `string[]`                              | --                  | Multiple WHIP endpoints (failover)           |
-| `gatewayUrl`   | `string`                                | --                  | Gateway URL for endpoint resolution          |
-| `streamKey`    | `string`                                | --                  | Stream key for gateway mode                  |
 | `target`       | `string \| HTMLElement`                 | --                  | Mount target (optional, headless if omitted) |
 | `profile`      | `QualityProfile`                        | `"broadcast"`       | Initial quality profile                      |
 | `theme`        | `FwThemePreset \| StudioThemeOverrides` | `"default"`         | Theme preset or custom overrides             |
@@ -318,13 +316,17 @@ const studio = createStreamCrafter({
 
 ### Gateway Integration
 
-Automatic ingest endpoint resolution from FrameWorks Gateway.
+The drop-in components take `gatewayUrl` and `streamKey` and resolve the ingest endpoint themselves. With `createStreamCrafter()`, resolve it with `IngestClient` and pass the WHIP URL:
 
 ```ts
-const studio = createStreamCrafter({
+import { createStreamCrafter, IngestClient } from "@livepeer-frameworks/streamcrafter-core";
+
+const client = new IngestClient({
   gatewayUrl: "https://bridge.example.com/graphql",
   streamKey: "sk_live_...",
 });
+const { primary } = await client.resolve();
+const studio = createStreamCrafter({ whipUrl: primary.whipUrl! });
 ```
 
 ---
