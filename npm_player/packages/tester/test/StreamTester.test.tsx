@@ -5,6 +5,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 const mocks = vi.hoisted(() => ({
   playerProps: [] as Array<Record<string, unknown>>,
   studioProps: [] as Array<Record<string, unknown>>,
+  studioMounts: 0,
+  studioUnmounts: 0,
 }));
 
 function fakeController() {
@@ -45,8 +47,14 @@ vi.mock("@livepeer-frameworks/player-react", () => ({
 }));
 
 vi.mock("@livepeer-frameworks/streamcrafter-react", () => ({
-  StreamCrafter: (props: Record<string, unknown>) => {
+  StreamCrafter: function StreamCrafter(props: Record<string, unknown>) {
     mocks.studioProps.push(props);
+    React.useEffect(() => {
+      mocks.studioMounts += 1;
+      return () => {
+        mocks.studioUnmounts += 1;
+      };
+    }, []);
     return <div data-testid="studio" />;
   },
 }));
@@ -62,6 +70,8 @@ describe("StreamTester", () => {
   beforeEach(() => {
     mocks.playerProps.length = 0;
     mocks.studioProps.length = 0;
+    mocks.studioMounts = 0;
+    mocks.studioUnmounts = 0;
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 404 })));
     writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
@@ -140,5 +150,27 @@ describe("StreamTester", () => {
     expect(props.enableCompositor).toBe(true);
     expect(props).not.toHaveProperty("showProducerPanel");
     expect(window.location.search).toBe("");
+  });
+
+  it("keeps the studio broadcasting while the play tab is open", async () => {
+    setLocation("");
+    render(<StreamTester />);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Publish" }));
+    fireEvent.change(screen.getByLabelText("WHIP URL"), {
+      target: { value: "https://edge.example.com/webrtc/secret-key" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Open studio" }));
+    });
+    expect(mocks.studioMounts).toBe(1);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Play" }));
+    expect(mocks.studioUnmounts).toBe(0);
+    expect(screen.getByTestId("studio")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Publish" }));
+    expect(mocks.studioMounts).toBe(1);
+    expect(mocks.studioUnmounts).toBe(0);
   });
 });

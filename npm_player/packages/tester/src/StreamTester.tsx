@@ -54,6 +54,8 @@ export function StreamTester({
 }: StreamTesterProps) {
   const id = useId();
   const [tab, setTab] = useState<Tab>("play");
+  // The publish panel stays mounted once opened so a broadcast survives a switch to Play.
+  const [publishOpened, setPublishOpened] = useState(false);
   const [ownTheme, setOwnTheme] = useState<FwThemePreset>("default");
   const theme = themeProp ?? ownTheme;
   const [mist, setMist] = useState<{ baseUrl: string; streamName: string } | null>(null);
@@ -61,6 +63,11 @@ export function StreamTester({
   const changeTheme = (next: FwThemePreset) => {
     setOwnTheme(next);
     onThemeChange?.(next);
+  };
+
+  const selectTab = (t: Tab) => {
+    setTab(t);
+    if (t === "publish") setPublishOpened(true);
   };
 
   const tabId = (t: Tab) => `${id}-${t}-tab`;
@@ -79,7 +86,7 @@ export function StreamTester({
               aria-selected={tab === t}
               aria-controls={panelId(t)}
               className="fwt-tabs__tab"
-              onClick={() => setTab(t)}
+              onClick={() => selectTab(t)}
             >
               {t === "play" ? "Play" : "Publish"}
             </button>
@@ -127,7 +134,7 @@ export function StreamTester({
         aria-labelledby={tabId("publish")}
         hidden={tab !== "publish"}
       >
-        {tab === "publish" ? (
+        {publishOpened ? (
           <PublishPanel
             gatewayUrl={gatewayUrl}
             mist={mist}
