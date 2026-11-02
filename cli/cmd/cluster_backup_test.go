@@ -9,6 +9,7 @@ import (
 
 	"frameworks/cli/pkg/backup"
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/ssh"
 )
 
 func TestBackupSelectionFlags(t *testing.T) {
@@ -173,5 +174,55 @@ func TestRestoreServicesFollowDatabaseOwnership(t *testing.T) {
 	got = restoreServices(manifest, nil, true)
 	if strings.Join(got, ",") != "periscope-ingest" {
 		t.Fatalf("clickhouse: %v", got)
+	}
+}
+
+func TestBackupCreateAllSkipsDatabasesThePendingReleaseCreates(t *testing.T) {
+	m := &inventory.Manifest{
+		Profile: "dev",
+		Hosts:   map[string]inventory.Host{"db": {Name: "db", ExternalIP: "192.0.2.1"}},
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{Enabled: true, Engine: "yugabyte", Nodes: []inventory.PostgresNode{{Host: "db", ID: 1}},
+				Databases: []inventory.DatabaseConfig{{Name: "purser", Owner: "purser"}, {Name: "network_observer", Owner: "network_observer"}}},
+		},
+	}
+	oldHost, oldExisting := backupPostgresHostFn, existingPostgresDatabasesFn
+	t.Cleanup(func() { backupPostgresHostFn, existingPostgresDatabasesFn = oldHost, oldExisting })
+	backupPostgresHostFn = func(_ context.Context, manifest *inventory.Manifest, _ *inventory.PostgresConfig, _ *ssh.Pool) (inventory.Host, error) {
+		return manifest.Hosts["db"], nil
+	}
+	existingPostgresDatabasesFn = func(_ context.Context, _ *ssh.Pool, _ inventory.Host, _ *inventory.PostgresConfig) (map[string]struct{}, error) {
+		return map[string]struct{}{"purser": {}, "yugabyte": {}}, nil
+	}
+
+	plan, err := planBackupTargets(context.Background(), &resolvedCluster{Manifest: m}, nil, backupSelection{all: true, skipAbsent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.databases) != 1 || plan.databases[0].entry.Name != "purser" {
+		t.Fatalf("backup create --all covers %+v, want only purser", plan.databases)
+	}
+	if len(plan.skipped) != 1 || plan.skipped[0] != "postgres/network_observer" {
+		t.Fatalf("skipped = %v, want postgres/network_observer", plan.skipped)
+	}
+
+	explicit, err := planBackupTargets(context.Background(), &resolvedCluster{Manifest: m}, nil, backupSelection{databases: []string{"network_observer"}, skipAbsent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(explicit.databases) != 1 || len(explicit.skipped) != 0 {
+		t.Fatalf("an explicitly named database must stay selected so its dump reports the error: %+v", explicit)
+	}
+
+	existingPostgresDatabasesFn = func(context.Context, *ssh.Pool, inventory.Host, *inventory.PostgresConfig) (map[string]struct{}, error) {
+		t.Fatal("restore planning must not probe database existence")
+		return nil, nil
+	}
+	restore, err := planBackupTargets(context.Background(), &resolvedCluster{Manifest: m}, nil, backupSelection{all: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restore.databases) != 2 {
+		t.Fatalf("restore --all covers %d databases, want 2", len(restore.databases))
 	}
 }

@@ -70,6 +70,16 @@ func ReadServiceDatabaseStates(ctx context.Context, sshPool *ssh.Pool, host inve
 	return readServiceDatabaseStates(ctx, reader, databases)
 }
 
+// ExistingDatabaseNames lists the databases present on the PostgreSQL/YugabyteDB server through the same
+// administrative path as ReadServiceDatabaseStates. It only runs a SELECT.
+func ExistingDatabaseNames(ctx context.Context, sshPool *ssh.Pool, host inventory.Host, pg *inventory.PostgresConfig) (map[string]struct{}, error) {
+	reader, err := newServiceDatabaseProbe(sshPool, host, pg)
+	if err != nil {
+		return nil, err
+	}
+	return reader.databaseNames(ctx)
+}
+
 func readServiceDatabaseStates(ctx context.Context, reader serviceDatabaseProbe, databases []SchemaDatabase) (map[string]ServiceDatabaseState, error) {
 	existing, err := reader.databaseNames(ctx)
 	if err != nil {

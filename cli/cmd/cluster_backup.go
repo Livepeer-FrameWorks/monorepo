@@ -28,6 +28,8 @@ var (
 		return getStreamRunner(host, pool)
 	}
 	backupNowFn = time.Now
+	// existingPostgresDatabasesFn lists the databases present on the primary PostgreSQL/YugabyteDB server.
+	existingPostgresDatabasesFn = provisioner.ExistingDatabaseNames
 )
 
 // backupSelection is what a backup, restore, finish or rollback covers.
@@ -35,6 +37,9 @@ type backupSelection struct {
 	all        bool
 	databases  []string
 	clickhouse bool
+	// skipAbsent drops, under --all, manifest databases that do not exist on the server yet: a pending release
+	// creates them from its baseline, so they hold nothing to back up. Only `backup create` sets it.
+	skipAbsent bool
 }
 
 func (s backupSelection) validate() error {
@@ -108,6 +113,7 @@ func newClusterBackupCreateCmd() *cobra.Command {
 			if err := sel.validate(); err != nil {
 				return err
 			}
+			sel.skipAbsent = true
 			if strings.TrimSpace(to) == "" {
 				return errors.New("--to is required: a local directory or an s3://bucket/prefix URL")
 			}
@@ -173,6 +179,8 @@ type backupPlanClickHouse struct {
 type backupPlan struct {
 	databases  []backupPlanDatabase
 	clickhouse *backupPlanClickHouse
+	// skipped are the keys of databases --all left out because they do not exist yet.
+	skipped []string
 }
 
 // planBackupTargets resolves the selected stores against the manifest: the primary PostgreSQL/YugabyteDB with its
@@ -185,7 +193,7 @@ func planBackupTargets(ctx context.Context, rc *resolvedCluster, pool *ssh.Pool,
 		combined := &backupPlan{}
 		first := true
 		err := forEachDatabaseDeployment(rc.Manifest, func(view *inventory.Manifest) error {
-			selection := backupSelection{all: sel.all, clickhouse: first && sel.clickhouse}
+			selection := backupSelection{all: sel.all, clickhouse: first && sel.clickhouse, skipAbsent: sel.skipAbsent}
 			if !first {
 				view.Infrastructure.ClickHouse = nil
 			}
@@ -211,6 +219,7 @@ func planBackupTargets(ctx context.Context, rc *resolvedCluster, pool *ssh.Pool,
 				return err
 			}
 			combined.databases = append(combined.databases, part.databases...)
+			combined.skipped = append(combined.skipped, part.skipped...)
 			if part.clickhouse != nil {
 				combined.clickhouse = part.clickhouse
 			}
@@ -239,6 +248,21 @@ func planBackupTargets(ctx context.Context, rc *resolvedCluster, pool *ssh.Pool,
 			host, err := backupPostgresHost(ctx, manifest, pg, pool)
 			if err != nil {
 				return nil, err
+			}
+			if sel.all && sel.skipAbsent {
+				existing, listErr := existingPostgresDatabasesFn(ctx, pool, host, pg)
+				if listErr != nil {
+					return nil, fmt.Errorf("list databases on %s: %w", host.Name, listErr)
+				}
+				present := selected[:0:0]
+				for _, db := range selected {
+					if _, ok := existing[db.Name]; ok {
+						present = append(present, db)
+					} else {
+						plan.skipped = append(plan.skipped, backup.DatabaseKey("", db.Name))
+					}
+				}
+				selected = present
 			}
 			server := provisioner.DatabaseServer{Engine: engine, Port: pg.EffectivePort()}
 			for _, db := range selected {
@@ -341,6 +365,9 @@ func runBackupCreate(cmd *cobra.Command, rc *resolvedCluster, to string, sel bac
 	started := backupNowFn().UTC()
 	loc := parent.Child("frameworks-backup-" + started.Format("20060102T150405Z"))
 	ux.Heading(out, fmt.Sprintf("Backing up to %s", loc))
+	for _, key := range plan.skipped {
+		fmt.Fprintf(out, "  %s: skipped, it does not exist yet (the next release apply creates it)\n", key)
+	}
 	m := &backup.Manifest{FormatVersion: backup.FormatVersion, CreatedAt: started, CLIVersion: fwv.Version, Cluster: rc.Cluster}
 
 	for _, target := range plan.databases {
