@@ -63,6 +63,7 @@ vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
 
 import StreamCrafter from "../src/StreamCrafter.svelte";
 import ProducerPanelHost from "./fixtures/ProducerPanelHost.svelte";
+import PreviewHost from "./fixtures/PreviewHost.svelte";
 
 describe("StreamCrafter producer panel", () => {
   beforeEach(() => {
@@ -131,6 +132,12 @@ describe("StreamCrafter producer panel", () => {
     render(ProducerPanelHost);
 
     expect(await screen.findByText("Default")).toBeTruthy();
+  });
+
+  it("shows the layout toolbar on a composable preview once the compositor runs", async () => {
+    const { container } = render(PreviewHost);
+
+    await waitFor(() => expect(container.querySelector(".fw-sc-layout-overlay")).toBeTruthy());
   });
 
   it("moves the compositor onto the new controller when the endpoint changes", async () => {
