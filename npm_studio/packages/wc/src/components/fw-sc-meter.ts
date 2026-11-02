@@ -2,7 +2,7 @@
  * <fw-sc-meter> — Level meter of the mixed audio. It follows the mixer's level
  * updates by itself, so a studio does not render again at the meter's rate.
  */
-import { html, css } from "lit";
+import { html, css, type PropertyValues } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import type { AudioMixer } from "@livepeer-frameworks/streamcrafter-core";
 import { sharedStyles } from "../styles/shared-styles.js";
@@ -30,7 +30,8 @@ export class FwScMeter extends StudioBoundElement {
     super.disconnectedCallback();
   }
 
-  protected willUpdate() {
+  protected willUpdate(changed: PropertyValues) {
+    super.willUpdate(changed);
     this._follow(this.boundStudio?.pc.getController()?.getAudioMixer() ?? null);
   }
 

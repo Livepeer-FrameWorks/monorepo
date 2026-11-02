@@ -113,6 +113,25 @@ describe("sub-elements bound with for", () => {
     expect(media.shadowRoot?.querySelector(".fw-sc-producer-section")).toBeTruthy();
   });
 
+  it("follow `for` when it is pointed at another studio", async () => {
+    const first = document.createElement("fw-streamcrafter") as FwStreamCrafter;
+    first.id = "first";
+    const second = document.createElement("fw-streamcrafter") as FwStreamCrafter;
+    second.id = "second";
+    document.body.append(first, second);
+    const media = document.createElement("fw-sc-media-controls") as FwScMediaControls;
+    media.setAttribute("for", "first");
+    document.body.append(media);
+    await media.updateComplete;
+    const bound = () => (media as unknown as { boundStudio: FwStreamCrafter | null }).boundStudio;
+    expect(bound()).toBe(first);
+
+    media.setAttribute("for", "second");
+    await media.updateComplete;
+
+    expect(bound()).toBe(second);
+  });
+
   it("ignore a studio with another id", async () => {
     const panel = document.createElement("fw-sc-producer-panel") as FwScProducerPanel;
     panel.setAttribute("for", "mine");

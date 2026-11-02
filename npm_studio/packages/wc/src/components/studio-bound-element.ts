@@ -7,7 +7,7 @@
  * bubbles to the document, so a sub-element finds a studio that mounts after it
  * and renders again whenever the studio does.
  */
-import { LitElement } from "lit";
+import { LitElement, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import {
   createStudioTranslator,
@@ -47,6 +47,11 @@ export class StudioBoundElement extends LitElement {
     super.connectedCallback();
     document.addEventListener(STUDIO_UPDATE_EVENT, this._handleStudioUpdate);
     this._found = this._lookUp();
+  }
+
+  protected willUpdate(changed: PropertyValues) {
+    super.willUpdate(changed);
+    if (changed.has("for") || changed.has("studio")) this._found = this._lookUp();
   }
 
   disconnectedCallback() {
