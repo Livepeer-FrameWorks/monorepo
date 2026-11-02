@@ -31,6 +31,8 @@
 #
 #   features: models.BillingFeatures keys only: support_level, sla, and
 #     processing_customizable (Commodore allows tenant process overrides).
+#     Only Enterprise carries sla and sla_level: SLAs are custom contract
+#     terms, never a self-serve tier property.
 #
 #   processes_*: raw MistServer process JSON arrays per lifecycle. Livepeer
 #     entries carry no hardcoded_broadcasters — Foghorn fills the broadcaster
@@ -44,14 +46,13 @@
 tiers:
   - tier_name: payg
     display_name: Pay As You Go
-    description: Prepaid pay-as-you-go pricing with no included usage.
+    description: Prepaid account balance. Pay per delivered minute, no subscription.
     base_price: 0.00
     currency: EUR
     billing_period: monthly
     features:
       support_level: community
     support_level: community
-    sla_level: none
     metering_enabled: true
     entitlements:
       recording_retention_days: 0
@@ -83,14 +84,13 @@ tiers:
 
   - tier_name: free
     display_name: Free
-    description: Self-hosted with Livepeer transcoding. Watermarked player, no SLA.
+    description: Hosted plan with 10K delivered mins, 10 GB storage, 3 streams and 200 viewers. Livepeer transcoding.
     base_price: 0.00
     currency: EUR
     billing_period: monthly
     features:
       support_level: community
     support_level: community
-    sla_level: none
     metering_enabled: true
     entitlements:
       recording_retention_days: 30
@@ -137,14 +137,13 @@ tiers:
 
   - tier_name: supporter
     display_name: Supporter
-    description: 120K delivered mins, hosted LB, custom subdomain. ~100-300 viewers.
+    description: 120K delivered mins, hosted load balancer, custom subdomain. ~100-300 viewers.
     base_price: 79.00
     currency: EUR
     billing_period: monthly
     features:
       support_level: basic
     support_level: basic
-    sla_level: none
     metering_enabled: true
     entitlements:
       recording_retention_days: 0
@@ -176,14 +175,13 @@ tiers:
 
   - tier_name: developer
     display_name: Developer
-    description: 500K delivered mins, team features, advanced analytics. ~500-1K viewers.
+    description: 500K delivered mins, team features, advanced analytics, priority support. ~500-1K viewers.
     base_price: 249.00
     currency: EUR
     billing_period: monthly
     features:
       support_level: priority
     support_level: priority
-    sla_level: standard
     metering_enabled: true
     entitlements:
       recording_retention_days: 0
@@ -215,15 +213,13 @@ tiers:
 
   - tier_name: production
     display_name: Production
-    description: 2M delivered mins, dedicated capacity, 24/7 support + SLA. ~2-5K viewers.
+    description: 2M delivered mins, business-hours support, dedicated capacity options. ~2-5K viewers.
     base_price: 999.00
     currency: EUR
     billing_period: monthly
     features:
-      sla: true
-      support_level: enterprise
-    support_level: enterprise
-    sla_level: premium
+      support_level: business_hours
+    support_level: business_hours
     metering_enabled: true
     entitlements:
       recording_retention_days: 0
