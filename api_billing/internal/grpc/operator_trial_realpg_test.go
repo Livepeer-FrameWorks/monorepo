@@ -26,18 +26,9 @@ import (
 
 func TestOperatorTrialLifecycle_RealPG(t *testing.T) {
 	t.Run("actionable billing boundary", testGrantBoundaryDataCondition)
-	t.Run("downgrade provider step", TestChangeBillingTierQueuesProviderStep_RealPG)
 	t.Run("expired grant without an assignment", TestLegacyExpiredGrantKeepsAdmission_RealPG)
 	t.Run("metering hold needs an explicit waiver", TestMeteringHoldNeedsAnExplicitWaiver_RealPG)
 	t.Run("requested upgrade cannot waive metering", TestRecoveryOfARequestedUpgradeCannotWaiveMetering_RealPG)
-	t.Run("Free downgrade keeps the paid term", TestFreeDowngradeKeepsPaidTermThenMoves_RealPG)
-	t.Run("Free downgrade re-point", TestFreeDowngradeRepointKeepsSubscriptionLive_RealPG)
-	t.Run("Free downgrade provider failure", TestFreeDowngradeProviderFailureRetries_RealPG)
-	t.Run("Free downgrade leaves a payment failure fallback", TestFreeDowngradeLeavesAPaymentFailureFallback_RealPG)
-	t.Run("Free stop after a confirmed price change", TestFreeStopAfterAConfirmedPriceChange_RealPG)
-	t.Run("re-point keeps a payment failure fallback", TestRepointKeepsAPaymentFailureFallback_RealPG)
-	t.Run("confirmed downgrade past its effective time", TestConfirmedDowngradePastItsEffectiveTimeRefusesChanges_RealPG)
-	t.Run("move to Free writes off the carry", TestMoveToFreeWritesOffCollectionCarry_RealPG)
 	db := startOperatorGrantDatabase(t)
 	ctx := context.Background()
 	tenantID, paygID, enterpriseID := uuid.NewString(), uuid.NewString(), uuid.NewString()

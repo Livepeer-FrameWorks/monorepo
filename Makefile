@@ -1284,6 +1284,7 @@ PURSER_TIER_FEATURES_REALPG_TESTS := TestTierFeatureFlagRemovalConverges_RealPG
 PURSER_TIER_DOWNGRADE_PROVIDER_TESTS := TestTierDowngradeReachesStripeBeforeRenewal_RealPG|TestTierDowngradeReachesMollieBeforeRenewal_RealPG|TestTierDowngradeRepointConvergesOnLatestTier_RealPG|TestTierDowngradeProviderFailureHoldsAndRetries_RealPG|TestUnconfirmedDowngradeIsDiscoveredAndHeld_RealPG|TestTenantClosureWritesOffCollectionCarry_RealPG|TestFencedStripeEventReportsTheLocalTier_RealPG|TestCancelledStageKeepsAReplacedPrice_RealPG|TestCancelledDowngradeRestoresTheOriginalPrice_RealPG|TestCancelledMollieDowngradeRestoresTheOriginalAmount_RealPG|TestTierSyncRefusesANonMonthlyItem_RealPG|TestProviderDisagreementWithoutARestoreAlerts_RealPG
 PURSER_TIER_DOWNGRADE_APPLY_TESTS := TestTierMovedDuringTheProviderCallIsNotConfirmed_RealPG|TestStripeDeletedEventDuringTheStopKeepsTheSchedule_RealPG|TestSuspendedMollieSubscriptionTakesTheNewAmount_RealPG|TestUpgradeWaitsForAnUnfinishedProviderStep_RealPG|TestAppliedFreeDowngradeWritesOffTheCarry_RealPG|TestAppliedPaidDowngradeKeepsTheCarry_RealPG|TestRepeatDowngradeRestoresTheCurrentPrice_RealPG|TestRepeatMollieDowngradeRestoresTheCurrentAmount_RealPG|TestHeldConfirmedDowngradesAreCounted_RealPG|TestHeldConfirmedDowngradesAreListed_RealPG|TestHeldDowngradeRecoveryFinalizesTheHeldInvoice_RealPG|TestHeldDowngradeRecoveryReportsAPricingRefusal_RealPG|TestHeldDowngradeRecoveryKeepsAnUnresolvedManualReviewHold_RealPG|TestHeldDowngradeRecoveryUsesTheDailyJobGates_RealPG
 PURSER_TIER_DOWNGRADE_HANDLERS_REALPG_TESTS := $(PURSER_TIER_DOWNGRADE_PROVIDER_TESTS)|$(PURSER_TIER_DOWNGRADE_APPLY_TESTS)
+PURSER_TIER_DOWNGRADE_GRPC_REALPG_TESTS := TestChangeBillingTierQueuesProviderStep_RealPG|TestFreeDowngradeKeepsPaidTermThenMoves_RealPG|TestFreeDowngradeRepointKeepsSubscriptionLive_RealPG|TestFreeDowngradeProviderFailureRetries_RealPG|TestFreeDowngradeLeavesAPaymentFailureFallback_RealPG|TestFreeStopAfterAConfirmedPriceChange_RealPG|TestRepointKeepsAPaymentFailureFallback_RealPG|TestConfirmedDowngradePastItsEffectiveTimeRefusesChanges_RealPG|TestMoveToFreeWritesOffCollectionCarry_RealPG|TestTierDowngradeRecoveryRecordsAndReleasesTheHold_RealPG
 QUARTERMASTER_CAPABILITIES_REALPG_TESTS := TestTenantClusterCapabilities_RealPG
 QUARTERMASTER_CAPABILITIES_REALYB_TESTS := TestTenantClusterCapabilities_RealYugabyte
 QUARTERMASTER_HEALTH_WRITES_REALPG_TESTS := TestUnchangedHealthReportsLeaveRowsAndPeerCensusAlone_RealPG|TestUnchangedNodeLivenessLeavesNodeRowsAlone_RealPG|TestWatchMembership_DrainWakesAndExcludesNode_RealPG|TestWatchMembership_ReassignRemovesCluster_RealPG
@@ -1842,6 +1843,7 @@ verify-yugabyte-purser-contracts: verify-yugabyte-shared-fixture
 	@FRAMEWORKS_FREE_FALLBACK_TESTS='$(PURSER_FREE_FALLBACK_HANDLERS_REALPG_TESTS)' $(CONTRACT_GO_TEST) api_billing yugabyte/purser-free-fallback-provider -tags schema_verify -run '^TestFreeFallbackLifecycle_RealYugabyte$$' -count=1 -timeout 600s ./internal/handlers/
 	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-operator-grants -tags schema_verify -run '^(TestAdminAssignTier|TestTierUpgradeStartsFreshMonth|TestTierUpgradeClockAfterGrantBoundary|TestCheckoutRetryKeepsPayableReservation|TestClosedAccountRefusesMonthlyClusterPurchase|TestOperator(TrialLifecycle|GrantTierAtomic|GrantExpiryReplicas|GrantExpiryFailuresDoNotStarveLaterTenants|GrantMidPeriodPricing|GrantProtectsTierChanges|AssignmentGrantSnapshot|TierChangeCacheFailure))_RealYugabyte$$' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-tier-upgrade-providers -tags schema_verify -run '^TestTierUpgradeProviders_RealYugabyte$$' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-tier-downgrade-grpc -tags schema_verify -run '^TestTierDowngradeLifecycle_RealYugabyte$$/^($(subst _RealPG,,$(PURSER_TIER_DOWNGRADE_GRPC_REALPG_TESTS)))$$' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-bootstrap-grants -tags schema_verify -run '^TestBootstrapDeclaredGrantIsIdempotent_RealYugabyte$$' -count=1 -timeout 600s ./internal/bootstrap/
 	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealYugabyte|TestBillingEventOutboxPrunesDelivered_RealYugabyte' -count=1 -timeout 1200s ./internal/database/purserdb/
 	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-livepeer-funding -tags schema_verify -run '^TestLivepeerFundingSignerLostLock_RealYugabyte$$' -count=1 -timeout 600s ./internal/handlers/
@@ -2219,16 +2221,19 @@ verify-purser-free-fallback-test-selection:
 	@FRAMEWORKS_FREE_FALLBACK_TESTS='$(PURSER_FREE_FALLBACK_HANDLERS_REALPG_TESTS)' $(CONTRACT_GO_TEST) api_billing selection/purser-free-fallback-provider -tags schema_verify -run '^TestFreeFallbackLifecycle_RealYugabyte$$/^selection_parity$$' -count=1 ./internal/handlers/
 
 # Downgrade carried to the provider, its applier and held-downgrade recovery.
-# Every downgrade-family test in the package must be listed, and the list must
-# match the Yugabyte matrix in tierDowngradeProviderCases.
+# Every downgrade-family test in each package must be listed, and each list must
+# match its Yugabyte matrix (tierDowngradeProviderCases, grpcTierDowngradeCases).
 .PHONY: verify-purser-tier-downgrade-test-selection test-purser-tier-downgrade
 verify-purser-tier-downgrade-test-selection:
 	@./scripts/check-go-test-selection.sh api_billing ./internal/handlers '$(PURSER_TIER_DOWNGRADE_HANDLERS_REALPG_TESTS)' '^Test(TierDowngrade|TierSync|TierMovedDuring|UnconfirmedDowngrade|HeldConfirmedDowngrades|HeldDowngradeRecovery|CancelledStage|CancelledDowngrade|CancelledMollieDowngrade|AppliedFreeDowngrade|AppliedPaidDowngrade|RepeatDowngrade|RepeatMollieDowngrade|FencedStripeEvent|ProviderDisagreement|StripeDeletedEventDuringTheStop|SuspendedMollieSubscription|UpgradeWaitsForAnUnfinishedProviderStep|TenantClosureWritesOffCollectionCarry).*_RealPG$$'
 	@FRAMEWORKS_TIER_DOWNGRADE_TESTS='$(PURSER_TIER_DOWNGRADE_HANDLERS_REALPG_TESTS)' $(CONTRACT_GO_TEST) api_billing selection/purser-tier-downgrade -tags schema_verify -run '^TestTierDowngradeSelectionParity$$' -count=1 ./internal/handlers/
+	@./scripts/check-go-test-selection.sh api_billing ./internal/grpc '$(PURSER_TIER_DOWNGRADE_GRPC_REALPG_TESTS)' '^Test(ChangeBillingTierQueues|FreeDowngrade|FreeStop|Repoint|ConfirmedDowngrade|MoveToFreeWrites|TierDowngrade).*_RealPG$$'
+	@FRAMEWORKS_TIER_DOWNGRADE_TESTS='$(PURSER_TIER_DOWNGRADE_GRPC_REALPG_TESTS)' $(CONTRACT_GO_TEST) api_billing selection/purser-tier-downgrade-grpc -tags schema_verify -run '^TestTierDowngradeLifecycle_RealYugabyte$$/^selection_parity$$' -count=1 ./internal/grpc/
 
 test-purser-tier-downgrade:
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-tier-downgrade-provider -tags schema_verify -run '^($(PURSER_TIER_DOWNGRADE_PROVIDER_TESTS))$$' -count=1 -timeout 600s ./internal/handlers/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-tier-downgrade-apply -tags schema_verify -run '^($(PURSER_TIER_DOWNGRADE_APPLY_TESTS))$$' -count=1 -timeout 600s ./internal/handlers/
+	@$(CONTRACT_GO_TEST) api_billing postgres/purser-tier-downgrade-grpc -tags schema_verify -run '^($(PURSER_TIER_DOWNGRADE_GRPC_REALPG_TESTS))$$' -count=1 -timeout 600s ./internal/grpc/
 
 .PHONY: test-purser-free-fallback
 test-purser-free-fallback:
