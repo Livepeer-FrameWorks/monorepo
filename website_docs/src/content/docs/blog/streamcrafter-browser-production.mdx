@@ -1,0 +1,42 @@
+---
+title: "StreamCrafter Now Produces a Show, Not Just a Camera Feed"
+date: 2026-11-02
+authors:
+  - frameworks
+excerpt: "StreamCrafter's producer panel puts scenes, transitions, layers, logos, lower thirds, media files and an audio chain in the browser tab that publishes the stream, on by default in the dashboard and in every SDK binding."
+description: "StreamCrafter's producer panel puts scenes, transitions, layers, logos, lower thirds, media files and an audio chain in the browser tab that publishes the stream, on by default in the dashboard and in every SDK binding."
+tags:
+  - announcements
+---
+
+Until this release, going live from the FrameWorks dashboard meant one camera, an optional screen share and a layout picker. That works for a stand-up or a quick demo. It stops working when someone wants a title card before the show starts, a logo in the corner, a second camera, or a clip played in the middle. For those, people went back to OBS, and the browser studio was not the tool they produced the show in.
+
+StreamCrafter now has a producer panel. Scenes, transitions, layers, logos, lower thirds, media files and an audio chain run in the same browser tab that publishes the stream, and the panel is on whenever the studio's compositor runs.
+
+## A small show, start to finish
+
+Take a weekly community broadcast run by one person. Before going live, they build three scenes: a holding scene with the show's logo and a looping music bed, a main scene with their camera and a lower third with the guest's name, and a demo scene with a shared browser window and their camera in the corner.
+
+They rehearse in the preview, which nobody else sees. At the top of the hour they click Go Live on the holding scene, fade to the main scene, and switch to the demo scene and back with a slide or a cut. The `]` and `[` keys step through scenes, so the switch doesn't need the mouse. When the guest's segment ends, they edit the lower third's text, and the picture updates as they type.
+
+The audio section handles what usually needs a separate app: echo cancellation, noise suppression and automatic gain from the browser, then a noise gate, a de-esser, a three-band EQ and ducking, which lowers the music bed while the presenter's microphone has signal. While live, a pill next to the status badge grades the connection as good, unstable or poor from the packet loss and round-trip time the receiving server reports over the last stats interval, not from an average since the start.
+
+Once the stream reaches FrameWorks, it is an ordinary stream. Recording, clips, multistreaming to YouTube or Twitch, and playback work as they do for a stream from OBS or a hardware encoder.
+
+## Nothing to install, and little to download
+
+The whole studio loads as a page asset. We built the drop-in web component from this release's source: the component is 95 kB gzipped, and the three workers it starts for compositing, encoding and the WebRTC transform add 27 kB, for about 122 kB in total. Logos, images and media files stay in the browser; only the finished mix is sent.
+
+The same panel ships in the React, Svelte and web component packages, and it is on by default in each of them. An application that embeds StreamCrafter gets the producer tools without a flag, and turns the panel off only if it doesn't want them. Where the browser can't do something, such as playing a file into the stream or sharing a screen, the button is turned off and says why.
+
+The studio no longer records in the browser. FrameWorks records the stream on the server instead, so a recording no longer depends on the presenter's disk or on the tab staying open after the show.
+
+## What it doesn't do yet
+
+The mix runs on the presenter's computer. Every source adds load, and if the laptop or its upload fails, the show stops. For a long or high-stakes broadcast, a dedicated encoder is still the steadier choice, and the guide says so.
+
+StreamCrafter is in beta, and its SDK will change a lot. Cloud production, which mixes and switches live sources on our servers so the show no longer depends on one machine, is next on the roadmap, and remote guests build on it. If you embed the SDK in your own application now, expect breaking changes as that lands. If you use it from the dashboard, those changes are ours to absorb. This release already removed the browser recording methods and reversed the order of the layer reorder callback, so check the package changelogs before you upgrade.
+
+## Try it
+
+You can publish to any WHIP endpoint from [the stream test page](%MARKETING_URL%/stream-test) without an account, and play the result back on the same page. The [showcase page](%MARKETING_URL%/showcase) shows where StreamCrafter and cloud production stand, and the [Go Live guide](/builders/go-live-browser) walks through a first broadcast from the dashboard.
