@@ -726,12 +726,14 @@ Registered players participate in the scoring algorithm and are selected automat
 ## Playground
 
 ```bash
-cd npm_player/playground
+cd npm_player   # or npm_studio
 pnpm install
-pnpm dev
+pnpm dev        # same as: pnpm --filter @livepeer-frameworks/sdk-playground dev
 ```
 
-Runs at `http://localhost:5173` with live configuration editing, theme switching, and stream connection testing.
+Runs at `http://localhost:4173` and serves the player and StreamCrafter packages from source, so edits reload without a build.
+
+The playground is the same stream tester as [/stream-test](https://frameworks.network/stream-test). The Play tab plays a URL or a MistServer stream (base URL and stream name; it starts on `http://localhost:8080`, stream `live`) and shows the player's diagnostics beside the video. The Publish tab opens StreamCrafter against a WHIP URL and lists the RTMP, SRT and WHIP ingest URIs for the selected MistServer. Playback IDs and stream-key publishing need a FrameWorks gateway, so they appear on /stream-test and not in the local playground.
 
 ---
 
