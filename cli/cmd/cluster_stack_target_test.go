@@ -125,7 +125,9 @@ func TestStackTargetServiceMapNamesEveryReplicaUnit(t *testing.T) {
 	}
 }
 
-func TestStackTargetServiceMapNamesEveryKafkaController(t *testing.T) {
+// The controllers go to their own file: every service-map row is an application service whose journal the stack's
+// log checks read and whose replicas the scenarios count.
+func TestStackTargetListsEveryKafkaControllerOutsideTheServiceMap(t *testing.T) {
 	m, edges := stackTargetTestManifest()
 	m.Infrastructure.Kafka = &inventory.KafkaConfig{
 		Enabled:     true,
@@ -136,19 +138,18 @@ func TestStackTargetServiceMapNamesEveryKafkaController(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildStackTarget: %v", err)
 	}
-	var got []string
-	for _, row := range target.services {
-		if strings.HasPrefix(row, "kafka-controller|") {
-			got = append(got, row)
-		}
-	}
 	want := []string{
-		"kafka-controller|ops@10.0.0.17|frameworks-kafka-controller.service",
-		"kafka-controller|ops@10.0.0.18|frameworks-kafka-controller.service",
-		"kafka-controller|ops@10.0.0.20|frameworks-kafka-controller.service",
+		"ops@10.0.0.17|frameworks-kafka-controller.service",
+		"ops@10.0.0.18|frameworks-kafka-controller.service",
+		"ops@10.0.0.20|frameworks-kafka-controller.service",
 	}
-	if !slices.Equal(got, want) {
-		t.Fatalf("kafka controller rows = %v, want %v", got, want)
+	if !slices.Equal(target.kafkaControllers, want) {
+		t.Fatalf("kafka controller rows = %v, want %v", target.kafkaControllers, want)
+	}
+	for _, row := range target.services {
+		if strings.Contains(row, "frameworks-kafka-controller.service") {
+			t.Errorf("service map carries the controller row %q", row)
+		}
 	}
 }
 

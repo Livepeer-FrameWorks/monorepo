@@ -63,7 +63,7 @@ elif [ "$STACK_TARGET" = staging ]; then
         echo "BLOCKED  sweep[doctor]: cannot read the start time of $unit on $target"
         kafka_unreadable=1
       fi
-    done < <(staging_targets kafka-controller 2>/dev/null)
+    done < <(cat "${STACK_KAFKA_CONTROLLERS_FILE:-/dev/null}" 2>/dev/null)
     if python3 "$here/sweep.py" kafka-restarts "$STACK_STATE_DIR/sweep-doctor.log" "$restarts" \
       --now "$(date +%s)" --window 3600 | sed -E 's/^(NOTE|PASS|FAIL)  /\1  sweep[doctor]: /'; [ "${PIPESTATUS[0]}" = 0 ]; then
       :

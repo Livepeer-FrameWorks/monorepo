@@ -42,7 +42,9 @@ deployed cluster (STACK_TARGET=staging make verify-stack):
   target.env       public endpoints, cells, edges and database names
   service-map.txt  scenario-service|ssh-target|systemd-unit, one row per replica
   access-map.txt   how each database and ClickHouse is read over SSH
-  operator.env     the platform operator's login and cell A's artifact-store
+  kafka-controllers.txt
+                   ssh-target|systemd-unit of every KRaft controller
+  operator.env    the platform operator's login and cell A's artifact-store
                    keys for read-only listings (mode 0600)
 
 Everything comes from the cluster manifest, its edge manifest, the bootstrap
@@ -105,12 +107,14 @@ func runClusterStackTarget(cmd *cobra.Command, rc *resolvedCluster, outDir strin
 		[2]string{"STACK_CLI_CONTEXT", rc.ContextName},
 		[2]string{"STAGING_SERVICE_MAP_FILE", filepath.Join(absOut, "service-map.txt")},
 		[2]string{"STACK_ACCESS_MAP_FILE", filepath.Join(absOut, "access-map.txt")},
+		[2]string{"STACK_KAFKA_CONTROLLERS_FILE", filepath.Join(absOut, "kafka-controllers.txt")},
 	)
 	files := map[string]string{
-		"target.env":      renderStackTargetEnv(target.env),
-		"service-map.txt": strings.Join(target.services, "\n") + "\n",
-		"access-map.txt":  strings.Join(target.access, "\n") + "\n",
-		"operator.env":    renderStackTargetEnv(secrets),
+		"target.env":            renderStackTargetEnv(target.env),
+		"service-map.txt":       strings.Join(target.services, "\n") + "\n",
+		"access-map.txt":        strings.Join(target.access, "\n") + "\n",
+		"kafka-controllers.txt": strings.Join(target.kafkaControllers, "\n") + "\n",
+		"operator.env":          renderStackTargetEnv(secrets),
 	}
 	for name, content := range files {
 		mode := os.FileMode(0o644)
@@ -126,9 +130,10 @@ func runClusterStackTarget(cmd *cobra.Command, rc *resolvedCluster, outDir strin
 }
 
 type stackTarget struct {
-	env      [][2]string
-	services []string
-	access   []string
+	env              [][2]string
+	services         []string
+	access           []string
+	kafkaControllers []string
 }
 
 // buildStackTarget derives the scenario runner's view of a deployed cluster.
@@ -223,7 +228,8 @@ func buildStackTarget(m *inventory.Manifest, edges *inventory.EdgeManifest) (*st
 	if err != nil {
 		return nil, err
 	}
-	t.services = append(append(services, controllers...), t.services...)
+	t.services = append(services, t.services...)
+	t.kafkaControllers = controllers
 
 	for _, db := range stackTargetDatabases {
 		cfg, ok := m.Services[db.service]
@@ -371,8 +377,9 @@ func stackTargetServiceRows(m *inventory.Manifest) ([]string, error) {
 	return rows, nil
 }
 
-// stackTargetKafkaControllerRows maps every dedicated KRaft controller of every Kafka cluster as kafka-controller, so
-// the sweep can tell which controllers restarted inside the doctor's quorum window.
+// stackTargetKafkaControllerRows lists every dedicated KRaft controller of every Kafka cluster as ssh-target|unit, so
+// the sweep can tell which controllers restarted inside the doctor's quorum window. They stay out of service-map.txt,
+// whose rows are the application services the log checks and scenarios read.
 func stackTargetKafkaControllerRows(m *inventory.Manifest) ([]string, error) {
 	kafka := m.Infrastructure.Kafka
 	if kafka == nil || !kafka.Enabled {
@@ -388,7 +395,7 @@ func stackTargetKafkaControllerRows(m *inventory.Manifest) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("kafka controller %d: %w", ctrl.ID, err)
 		}
-		rows = append(rows, fmt.Sprintf("kafka-controller|%s|frameworks-kafka-controller.service", ssh))
+		rows = append(rows, ssh+"|frameworks-kafka-controller.service")
 	}
 	return rows, nil
 }
