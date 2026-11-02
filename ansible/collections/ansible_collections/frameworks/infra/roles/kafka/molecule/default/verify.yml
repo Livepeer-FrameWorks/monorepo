@@ -1,6 +1,6 @@
 ---
-- name: Verify
-  hosts: all
+- name: Verify (combined mode)
+  hosts: kafka-instance
   become: true
   gather_facts: true
   tasks:
@@ -49,3 +49,94 @@
       ansible.builtin.assert:
         that: idem is not changed
         fail_msg: "kafka role not idempotent"
+
+# Restarting the controller must leave the colocated broker's JVM running: each
+# unit stops with SIGTERM to its own process, while kafka-server-stop.sh would
+# signal every Kafka JVM on the host.
+- name: Verify (split mode)
+  hosts: kafka-split-instance
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Refresh service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert the controller and broker units run
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['frameworks-kafka-controller.service'].state == 'running'
+          - ansible_facts.services['frameworks-kafka.service'].state == 'running'
+
+    - name: Wait for the broker and controller ports
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ item }}"
+        timeout: 60
+      loop: [9092, 9093]
+
+    - name: Read the broker's main PID before the controller restart
+      ansible.builtin.command: systemctl show -p MainPID --value frameworks-kafka
+      register: kafka_broker_pid_before
+      changed_when: false
+
+    - name: Restart the controller through the role
+      ansible.builtin.include_role:
+        name: frameworks.infra.kafka
+        tasks_from: restart
+      vars:
+        kafka_role: controller
+        kafka_node_id: 1
+        kafka_jmx_port: 9406
+
+    - name: Read the broker's main PID and state after the controller restart
+      ansible.builtin.command: systemctl show -p MainPID -p ActiveState frameworks-kafka
+      register: kafka_broker_after
+      changed_when: false
+
+    - name: Assert the broker JVM survived the controller restart
+      ansible.builtin.assert:
+        that:
+          - kafka_broker_pid_before.stdout | int > 0
+          - "('MainPID=' ~ kafka_broker_pid_before.stdout) in kafka_broker_after.stdout_lines"
+          - "'ActiveState=active' in kafka_broker_after.stdout_lines"
+        fail_msg: >-
+          broker before: {{ kafka_broker_pid_before.stdout }};
+          after: {{ kafka_broker_after.stdout_lines | join(', ') }}
+
+    - name: Read the KRaft quorum through the broker after the restart
+      ansible.builtin.command: >-
+        /opt/kafka/bin/kafka-metadata-quorum.sh --bootstrap-server 127.0.0.1:9092 describe --status
+      environment:
+        KAFKA_HEAP_OPTS: "-Xms64m -Xmx256m"
+        KAFKA_JMX_OPTS: "-Djava.awt.headless=true"
+      register: kafka_quorum_status
+      changed_when: false
+      retries: 12
+      delay: 5
+      until: kafka_quorum_status.rc == 0 and kafka_quorum_status.stdout is search('LeaderId:\s+1')
+
+    - name: Rerun the split roles (idempotence)
+      ansible.builtin.include_role:
+        name: frameworks.infra.kafka
+      vars:
+        kafka_role: "{{ kafka_split_item.role }}"
+        kafka_node_id: "{{ kafka_split_item.id }}"
+        kafka_jmx_port: "{{ kafka_split_item.jmx }}"
+      loop:
+        - { role: controller, id: 1, jmx: 9406 }
+        - { role: broker, id: 2, jmx: 9405 }
+      loop_control:
+        loop_var: kafka_split_item
+      register: kafka_split_idem
+
+    - name: Read the broker's main PID after the rerun
+      ansible.builtin.command: systemctl show -p MainPID --value frameworks-kafka
+      register: kafka_broker_pid_rerun
+      changed_when: false
+
+    - name: Assert the rerun restarted nothing
+      ansible.builtin.assert:
+        that:
+          - kafka_split_idem is not changed
+          - kafka_broker_pid_rerun.stdout == kafka_broker_pid_before.stdout
+        fail_msg: "kafka split roles not idempotent"

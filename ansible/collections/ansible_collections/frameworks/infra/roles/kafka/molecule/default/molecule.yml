@@ -20,6 +20,22 @@ platforms:
     tmpfs:
       - /run
       - /tmp
+  # Split mode: a controller unit and a broker unit on one host, as a regional
+  # node runs them.
+  - name: kafka-split-instance
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    pre_build_image: true
+    privileged: true
+    command: /usr/sbin/init
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    dns_servers:
+      - "1.1.1.1"
+      - "8.8.8.8"
+    tmpfs:
+      - /run
+      - /tmp
 provisioner:
   name: ansible
   playbooks:
@@ -46,5 +62,8 @@ provisioner:
           - host: 127.0.0.1
             id: 1
         kafka_advertised_host: "127.0.0.1"
+    host_vars:
+      kafka-split-instance:
+        kafka_heap_opts: "-Xmx512m -Xms512m"
 verifier:
   name: ansible

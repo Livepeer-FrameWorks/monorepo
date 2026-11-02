@@ -1,9 +1,32 @@
 ---
-- name: Converge
-  hosts: all
+- name: Converge (combined mode)
+  hosts: kafka-instance
   become: true
   gather_facts: true
   tasks:
     - name: Apply frameworks.infra.kafka (combined mode)
       ansible.builtin.include_role:
         name: frameworks.infra.kafka
+
+# The controller and the broker are two units of one installation, each with its
+# own config, data and log directories and JMX port, as the CLI renders them.
+- name: Converge (split mode)
+  hosts: kafka-split-instance
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Apply frameworks.infra.kafka (controller)
+      ansible.builtin.include_role:
+        name: frameworks.infra.kafka
+      vars:
+        kafka_role: controller
+        kafka_node_id: 1
+        kafka_jmx_port: 9406
+
+    - name: Apply frameworks.infra.kafka (broker)
+      ansible.builtin.include_role:
+        name: frameworks.infra.kafka
+      vars:
+        kafka_role: broker
+        kafka_node_id: 2
+        kafka_jmx_port: 9405
