@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
+# The fixture runs against the compose stack unless a case below sets the
+# target; the caller's target (verify-stack against staging) must not leak in.
+unset STACK_TARGET
 . "$here/storage-pressure-fixture.sh"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
