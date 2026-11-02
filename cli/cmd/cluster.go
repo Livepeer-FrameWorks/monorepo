@@ -764,8 +764,10 @@ Default mode (read-only, no SOPS decryption):
     through Quartermaster.
   - Account and billing recovery, read from the Commodore and Purser
     databases: tenant closures failing Quartermaster synchronization, session
-    stops pending over 5 minutes, held downgrades and billing recovery items
-    failing repeatedly, each with the tenants behind it.
+    stops pending over 5 minutes, held downgrades, billing recovery items
+    failing repeatedly and spent prepaid tenants past the -€10 threshold that
+    were not suspended, each with the tenants behind it. Spent prepaid tenants
+    whose new sessions are refused are listed without failing the check.
   - YugabyteDB migration checks can use DATABASE_PASSWORD from decrypted
     env_files when postgres.password is not set directly in the manifest.
   - Requires a readable age key (SOPS_AGE_KEY_FILE, --age-key, or the active

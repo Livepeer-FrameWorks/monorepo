@@ -70,16 +70,50 @@ WITH stuck AS (
 )
 SELECT 'recovery_stuck_tenant:' || COALESCE(NULLIF(headers->>'tenant_id', ''), 'unbound') || '=' || count(*) FROM stuck
   GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT 10;
+` + purserSpendHoldDoctorSQL
+
+// purserSpendHoldDoctorSQL counts the tenants whose signed authority refuses
+// new sessions for a spent balance: Commodore's prepaid_balance_unavailable
+// decision is a prepaid current subscription, not suspended or closed, whose
+// EUR balance (absent counts as zero) is at or below zero. Below the -€10
+// suspension threshold Purser suspends the tenant and running sessions stop.
+const purserSpendHoldDoctorSQL = `WITH current_subscription AS (
+  SELECT DISTINCT ON (tenant_id) tenant_id, billing_model, status
+  FROM purser.tenant_subscriptions WHERE status <> 'cancelled'
+  ORDER BY tenant_id, created_at DESC
+), held AS (
+  SELECT current_subscription.tenant_id, COALESCE(balance.balance_cents, 0) AS balance_cents
+  FROM current_subscription
+  LEFT JOIN purser.prepaid_balances balance
+    ON balance.tenant_id = current_subscription.tenant_id AND balance.currency = 'EUR'
+  WHERE current_subscription.billing_model = 'prepaid' AND current_subscription.status <> 'suspended'
+    AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = current_subscription.tenant_id)
+    AND COALESCE(balance.balance_cents, 0) <= 0
+)
+SELECT 'spend_held=' || count(*) || E'\nspend_held_below_limit=' || count(*) FILTER (WHERE balance_cents < -1000) FROM held;
+WITH current_subscription AS (
+  SELECT DISTINCT ON (tenant_id) tenant_id, billing_model, status
+  FROM purser.tenant_subscriptions WHERE status <> 'cancelled'
+  ORDER BY tenant_id, created_at DESC
+)
+SELECT 'spend_held_tenant:' || current_subscription.tenant_id::text || '=' || -balance.balance_cents
+FROM current_subscription
+JOIN purser.prepaid_balances balance ON balance.tenant_id = current_subscription.tenant_id AND balance.currency = 'EUR'
+WHERE current_subscription.billing_model = 'prepaid' AND current_subscription.status <> 'suspended'
+  AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = current_subscription.tenant_id)
+  AND balance.balance_cents < 0
+ORDER BY balance.balance_cents, current_subscription.tenant_id LIMIT 10;
 `
 
 var (
 	commodoreAccountRecoveryDoctorKeys = []string{"closures_unsynced", "closures_failing", "ingest_stops_pending", "ingest_stops_oldest_seconds"}
-	purserAccountRecoveryDoctorKeys    = []string{"held_downgrades", "recovery_open", "recovery_stuck"}
+	purserAccountRecoveryDoctorKeys    = []string{"held_downgrades", "recovery_open", "recovery_stuck", "spend_held", "spend_held_below_limit"}
 )
 
 // doctorAccountRecovery reports the account and billing recovery work that
 // needs an operator: failed tenant closures, session stops a cell has not
-// confirmed, held downgrades and stuck billing recovery items.
+// confirmed, held downgrades, stuck billing recovery items and spent prepaid
+// tenants that crossed the suspension threshold without being suspended.
 func doctorAccountRecovery(ctx context.Context, rc *resolvedCluster, pool *ssh.Pool, sshKey string) doctorOutcome {
 	result := &health.CheckResult{Name: "account_recovery", CheckedAt: time.Now(), Metadata: map[string]string{"check_kind": "queue_state"}}
 	targets, err := postgresSnapshotTargets(rc)
@@ -228,6 +262,12 @@ func evaluateAccountRecoveryDoctor(expected []string, values map[string]map[stri
 			}
 			if n := count("recovery_stuck"); n > 0 {
 				report.problems = append(report.problems, fmt.Sprintf("purser: %d billing recovery item(s) failing repeatedly or unresolved over 14 days (%s)", n, listedTenants(state, "recovery_stuck_tenant:", "items")))
+			}
+			if n := count("spend_held_below_limit"); n > 0 {
+				report.problems = append(report.problems, fmt.Sprintf("purser: %d prepaid tenant(s) below the -€10 suspension threshold but not suspended; their running sessions continue (%s)", n, listedTenants(state, "spend_held_tenant:", "cents owed")))
+				report.steps = append(report.steps, ux.NextStep{Cmd: "frameworks cluster logs purser", Why: "Find why threshold enforcement did not suspend the tenant."})
+			} else if n := count("spend_held"); n > 0 {
+				report.notes = append(report.notes, fmt.Sprintf("purser: %d prepaid tenant(s) at or below €0; running sessions continue, new ones are refused (%s)", n, listedTenants(state, "spend_held_tenant:", "cents owed")))
 			}
 			if count("held_downgrades") > 0 || count("recovery_stuck") > 0 {
 				report.steps = append(report.steps, ux.NextStep{Cmd: "frameworks admin billing recovery list", Why: "Inspect held downgrades and recovery items with their errors and resolve them."})

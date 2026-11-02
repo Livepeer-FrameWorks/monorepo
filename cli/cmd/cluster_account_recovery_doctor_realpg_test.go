@@ -101,6 +101,9 @@ func TestAccountRecoveryDoctorRealPG(t *testing.T) {
 		heldTenant   = "22222222-2222-4222-8222-222222222222"
 		lowerTier    = "33333333-3333-4333-8333-333333333333"
 		upperTier    = "44444444-4444-4444-8444-444444444444"
+		// The spent tenants sort after the others so the listing order is fixed.
+		spentTenant       = "55555555-5555-4555-8555-555555555555"
+		unsuspendedTenant = "66666666-6666-4666-8666-666666666666"
 	)
 	mustExec := func(db *sql.DB, query string, args ...any) {
 		t.Helper()
@@ -117,6 +120,17 @@ func TestAccountRecoveryDoctorRealPG(t *testing.T) {
 		VALUES ($1, $2, 'active', 'postpaid', $3, 'downgrade', $3, NOW() - INTERVAL '3 days')`, heldTenant, upperTier, lowerTier)
 	mustExec(purser, `INSERT INTO purser.provider_webhook_inbox(provider, event_key, headers, raw_payload, status, attempts)
 		VALUES ('tier_downgrade', 'tier-downgrade:' || $1, jsonb_build_object('tenant_id', $1::text), '{}'::bytea, 'failed', 4)`, heldTenant)
+	// A spent prepaid tenant only refuses new sessions; one past the -€10
+	// threshold that was never suspended is a failed enforcement.
+	mustExec(purser, `INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model)
+		VALUES ($1, $3, 'active', 'prepaid'), ($2, $3, 'active', 'prepaid')`, spentTenant, unsuspendedTenant, lowerTier)
+	mustExec(purser, `INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency) VALUES ($1, -400, 'EUR')`, spentTenant)
+
+	outcome = doctorAccountRecovery(ctx, &resolvedCluster{Manifest: manifest}, pool, "")
+	if strings.Contains(outcome.result.Error, "suspension threshold") {
+		t.Fatalf("a spent balance above -€10 judged a failed suspension: %q", outcome.result.Error)
+	}
+	mustExec(purser, `INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency) VALUES ($1, -1500, 'EUR')`, unsuspendedTenant)
 
 	outcome = doctorAccountRecovery(ctx, &resolvedCluster{Manifest: manifest}, pool, "")
 	if outcome.passed || outcome.result.Status != "unhealthy" {
@@ -128,6 +142,7 @@ func TestAccountRecoveryDoctorRealPG(t *testing.T) {
 		"(" + closedTenant + ": 1 stops)",
 		"1 confirmed downgrade(s) held past their effective time (" + heldTenant,
 		"1 billing recovery item(s) failing repeatedly or unresolved over 14 days (" + heldTenant + ": 1 items)",
+		"1 prepaid tenant(s) below the -€10 suspension threshold but not suspended; their running sessions continue (" + unsuspendedTenant + ": 1500 cents owed, " + spentTenant + ": 400 cents owed)",
 	} {
 		if !strings.Contains(outcome.result.Error, want) {
 			t.Fatalf("doctor error %q missing %q", outcome.result.Error, want)

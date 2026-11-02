@@ -16,6 +16,9 @@ ingest_stops_oldest_seconds=12
 held_downgrades=0
 recovery_open=2
 recovery_stuck=0
+spend_held=3
+spend_held_below_limit=0
+spend_held_tenant:tenant-f=450
 `
 
 func TestAccountRecoveryDoctorPassesNormalWaits(t *testing.T) {
@@ -24,7 +27,8 @@ func TestAccountRecoveryDoctorPassesNormalWaits(t *testing.T) {
 		t.Fatalf("normal waits judged a problem: %+v", report)
 	}
 	notes := strings.Join(report.notes, "; ")
-	if !strings.Contains(notes, "1 closure(s) synchronizing") || !strings.Contains(notes, "2 billing recovery item(s) waiting normally") {
+	if !strings.Contains(notes, "1 closure(s) synchronizing") || !strings.Contains(notes, "2 billing recovery item(s) waiting normally") ||
+		!strings.Contains(notes, "3 prepaid tenant(s) at or below €0; running sessions continue, new ones are refused (tenant-f: 450 cents owed)") {
 		t.Fatalf("notes=%q", notes)
 	}
 }
@@ -49,6 +53,10 @@ recovery_open=5
 recovery_stuck=2
 recovery_stuck_tenant:unbound=1
 recovery_stuck_tenant:tenant-e=1
+spend_held=2
+spend_held_below_limit=1
+spend_held_tenant:tenant-g=1500
+spend_held_tenant:tenant-h=0
 `
 	report := evaluateAccountRecoveryDoctor([]string{"purser", "commodore"}, parseAccountRecoveryDoctorOutput(stuck))
 	problems := strings.Join(report.problems, "\n")
@@ -57,6 +65,7 @@ recovery_stuck_tenant:tenant-e=1
 		"4 session stop(s) pending, oldest 7200s (tenant-c: 3 stops)",
 		"1 confirmed downgrade(s) held past their effective time (tenant-d: 93600 s past effective)",
 		"2 billing recovery item(s) failing repeatedly or unresolved over 14 days (tenant-e: 1 items, unbound: 1 items)",
+		"1 prepaid tenant(s) below the -€10 suspension threshold but not suspended; their running sessions continue (tenant-g: 1500 cents owed, tenant-h: 0 cents owed)",
 	} {
 		if !strings.Contains(problems, want) {
 			t.Fatalf("problems %q missing %q", problems, want)
