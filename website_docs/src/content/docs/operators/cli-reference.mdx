@@ -192,8 +192,10 @@ frameworks cluster doctor [flags]
   and be listed ALIVE by the masters; vanilla PostgreSQL must answer `SELECT 1`
   within one second
 - **Kafka KRaft quorum:** per Kafka cluster, a quorum leader, the manifest's voter
-  set, no voter more than 5 seconds behind, and no controller leadership loss in
-  the last hour (read from each controller's `controller.log`)
+  set, no voter more than 5 seconds behind, and no leaderless or unplanned
+  controller leadership loss in the last hour (read from each controller's
+  `controller.log`; a handover during the leader's own graceful shutdown is
+  planned and passes, see [`diagnose kafka`](#frameworks-cluster-diagnose-kafka))
 - **Host crashes:** unit failures, automatic restarts, core dumps, segfaults, and
   OOM kills in the last 24 hours on every host and edge
   (`cluster diagnose crashes` lists them)
@@ -1642,9 +1644,20 @@ when there is no leader, when the voter set differs from the manifest's
 controllers, or when a voter has not caught up with the leader for more than
 5 seconds (2.5 times the controllers' 2-second fetch timeout). It also counts,
 in every controller's `controller.log` and its rotations under the unit's
-`LOG_DIR` since `--since`, how often a controller gave up leadership with no
-successor; any such loss fails the check, and
-exceptionally slow controller events are reported alongside. `cluster doctor`
+`LOG_DIR` since `--since`, how often a controller gave up leadership, and sorts
+each loss three ways:
+
+- **leaderless**: no new leader followed within the controllers'
+  `controller.quorum.election.timeout.ms` (Kafka's 1000 ms default when unset).
+  This fails the check.
+- **unplanned**: a new leader followed, but the old leader was not shutting
+  down. This fails the check as well.
+- **planned**: the leader logged its graceful shutdown and handed leadership to
+  a successor within the election timeout, as a controller restart through
+  `release apply`, `cluster upgrade` or `cluster restart` does. This does not
+  fail the check.
+
+Exceptionally slow controller events are reported alongside. `cluster doctor`
 runs the same check per Kafka cluster over the last hour.
 
 The report covers topic listing, consumer groups, a committed-offset lag
