@@ -98,3 +98,83 @@ describe("IngestControllerV2 audio processing", () => {
     controller.destroy();
   });
 });
+
+describe("IngestControllerV2 ducking as the mixer's sources change", () => {
+  function controllerWithMixedSources(mixed: string[]) {
+    const controller = new IngestControllerV2({
+      whipUrl: "https://edge.example/webrtc/key",
+      useWebCodecs: false,
+    });
+    const inMixer = new Set(mixed);
+    vi.spyOn(AudioMixer.prototype, "getState").mockReturnValue("running");
+    vi.spyOn(AudioMixer.prototype, "hasSource").mockImplementation((id) => inMixer.has(id));
+    vi.spyOn(AudioMixer.prototype, "addSource").mockImplementation((id) => {
+      inMixer.add(id);
+    });
+    vi.spyOn(AudioMixer.prototype, "removeSource").mockImplementation((id) => {
+      inMixer.delete(id);
+    });
+    const applied = vi
+      .spyOn(AudioMixer.prototype, "setAudioProcessing")
+      .mockImplementation(() => {});
+    const internals = controller as unknown as {
+      sources: Map<string, unknown>;
+      deviceManager: { openMicrophone: (...args: unknown[]) => Promise<unknown> };
+      updateOutputStreamFromSources(): void;
+      moveMicrophone(deviceId: string | undefined, muted: boolean): Promise<void>;
+      replaceMediaStream(source: unknown, stream: unknown): void;
+    };
+    internals.updateOutputStreamFromSources = () => {};
+    return { controller, applied, internals };
+  }
+
+  const stream = (audio: unknown[] = []) => ({
+    getAudioTracks: () => audio,
+    getVideoTracks: () => [],
+    getTracks: () => [],
+    addTrack: (track: unknown) => audio.push(track),
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("keys the ducker to the camera the microphone moves to", async () => {
+    const { controller, applied, internals } = controllerWithMixedSources(["media-1"]);
+    internals.sources.set("camera-2", { id: "camera-2", type: "camera", stream: stream() });
+    internals.sources.set("media-1", {
+      id: "media-1",
+      type: "media",
+      stream: stream([{ kind: "audio" }]),
+    });
+    internals.deviceManager.openMicrophone = async () => ({ kind: "audio", enabled: true });
+    controller.setAudioDucking(true);
+
+    await internals.moveMicrophone(undefined, false);
+
+    expect(applied).toHaveBeenLastCalledWith({
+      sidechain: { enabled: true, keySourceId: "camera-2", targetSourceIds: ["media-1"] },
+    });
+    controller.destroy();
+  });
+
+  it("keeps ducking a media file after it is captured again", () => {
+    const { controller, applied, internals } = controllerWithMixedSources(["camera-1", "media-1"]);
+    const media = { id: "media-1", type: "media", stream: stream([{ kind: "audio" }]) };
+    internals.sources.set("camera-1", {
+      id: "camera-1",
+      type: "camera",
+      stream: stream([{ kind: "audio" }]),
+    });
+    internals.sources.set("media-1", media);
+    controller.setAudioDucking(true);
+    applied.mockClear();
+
+    internals.replaceMediaStream(media, stream([{ kind: "audio" }]));
+
+    expect(applied).toHaveBeenLastCalledWith({
+      sidechain: { enabled: true, keySourceId: "camera-1", targetSourceIds: ["media-1"] },
+    });
+    controller.destroy();
+  });
+});

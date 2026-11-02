@@ -497,6 +497,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
           volume: camera.volume,
           muted: camera.muted,
         });
+        this.refreshDucking();
       } else {
         track.enabled = !camera.muted;
       }
@@ -2074,6 +2075,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
         volume: source.volume,
         muted: source.muted,
       });
+      // Removing the old capture also took it off the ducker's targets.
+      this.refreshDucking();
     }
 
     this.emit("sourceUpdated", { source, changes: { stream } });
