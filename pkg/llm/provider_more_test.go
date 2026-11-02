@@ -43,70 +43,37 @@ func TestParseRetryAfter(t *testing.T) {
 
 func TestBackoffExponentialGrowth(t *testing.T) {
 	t.Parallel()
-	tests := []struct {
-		name    string
-		attempt int
-		base    time.Duration
-		wantMin time.Duration
-		wantMax time.Duration
-	}{
-		{name: "attempt0 = base", attempt: 0, base: 10 * time.Millisecond, wantMin: 9 * time.Millisecond, wantMax: 25 * time.Millisecond},
-		{name: "attempt1 = 2x base", attempt: 1, base: 10 * time.Millisecond, wantMin: 18 * time.Millisecond, wantMax: 35 * time.Millisecond},
-		{name: "attempt2 = 4x base", attempt: 2, base: 10 * time.Millisecond, wantMin: 38 * time.Millisecond, wantMax: 60 * time.Millisecond},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			start := time.Now()
-			backoff(context.Background(), tt.attempt, nil, tt.base)
-			elapsed := time.Since(start)
-			if elapsed < tt.wantMin || elapsed > tt.wantMax {
-				t.Fatalf("attempt %d base %v: slept %v, want between %v and %v", tt.attempt, tt.base, elapsed, tt.wantMin, tt.wantMax)
-			}
-		})
+	for attempt, want := range []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 40 * time.Millisecond} {
+		if got := backoffDelay(attempt, nil, 10*time.Millisecond); got != want {
+			t.Fatalf("attempt %d: delay %v, want %v", attempt, got, want)
+		}
 	}
 }
 
 func TestBackoffRetryAfterOverridesWhenLarger(t *testing.T) {
 	t.Parallel()
-	base := 5 * time.Millisecond
-	// attempt 0 => exponential delay = base = 5ms. retryAfter 60ms is larger,
-	// so backoff must sleep ~60ms, not 5ms.
 	retryAfter := 60 * time.Millisecond
-	start := time.Now()
-	backoff(context.Background(), 0, &retryAfter, base)
-	elapsed := time.Since(start)
-	if elapsed < 50*time.Millisecond {
-		t.Fatalf("expected retry-after %v to dominate, slept only %v", retryAfter, elapsed)
+	if got := backoffDelay(0, &retryAfter, 5*time.Millisecond); got != retryAfter {
+		t.Fatalf("delay %v, want the larger retry-after %v", got, retryAfter)
 	}
 }
 
 func TestBackoffRetryAfterIgnoredWhenSmaller(t *testing.T) {
 	t.Parallel()
-	base := 40 * time.Millisecond
-	// exponential delay = 40ms; retryAfter 1ms is smaller and must be ignored.
-	retryAfter := 1 * time.Millisecond
-	start := time.Now()
-	backoff(context.Background(), 0, &retryAfter, base)
-	elapsed := time.Since(start)
-	if elapsed < 30*time.Millisecond {
-		t.Fatalf("expected exponential %v to dominate small retry-after, slept only %v", base, elapsed)
+	retryAfter := time.Millisecond
+	if got := backoffDelay(0, &retryAfter, 40*time.Millisecond); got != 40*time.Millisecond {
+		t.Fatalf("delay %v, want the exponential delay to dominate", got)
 	}
 }
 
 func TestBackoffCapsAtThirtySeconds(t *testing.T) {
 	t.Parallel()
-	// retryAfter way above the cap; backoff must clamp to 30s. Cancel the
-	// context immediately so we don't actually wait, but assert the timer was
-	// constructed with the clamped value by checking the function returns fast
-	// under cancellation regardless. Instead verify the clamp via a context
-	// that we cancel and measure it doesn't run longer than the cap path.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
 	retryAfter := 90 * time.Second
-	start := time.Now()
-	backoff(ctx, 0, &retryAfter, time.Second)
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Fatalf("cancelled context should return immediately, took %v", elapsed)
+	if got := backoffDelay(0, &retryAfter, time.Second); got != 30*time.Second {
+		t.Fatalf("delay %v, want the 30s cap", got)
+	}
+	if got := backoffDelay(10, nil, time.Second); got != 30*time.Second {
+		t.Fatalf("delay %v, want the 30s cap", got)
 	}
 }
 

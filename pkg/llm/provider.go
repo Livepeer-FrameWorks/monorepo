@@ -183,19 +183,22 @@ func (e *retryableError) Error() string {
 }
 
 func backoff(ctx context.Context, attempt int, retryAfter *time.Duration, baseDelay time.Duration) {
-	delay := baseDelay * (1 << attempt)
-	if retryAfter != nil && *retryAfter > delay {
-		delay = *retryAfter
-	}
-	if delay > 30*time.Second {
-		delay = 30 * time.Second
-	}
-	timer := time.NewTimer(delay)
+	timer := time.NewTimer(backoffDelay(attempt, retryAfter, baseDelay))
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 	case <-timer.C:
 	}
+}
+
+// backoffDelay doubles the base per attempt, lets a larger Retry-After win, and
+// caps the wait at thirty seconds.
+func backoffDelay(attempt int, retryAfter *time.Duration, baseDelay time.Duration) time.Duration {
+	delay := baseDelay * (1 << attempt)
+	if retryAfter != nil && *retryAfter > delay {
+		delay = *retryAfter
+	}
+	return min(delay, 30*time.Second)
 }
 
 func parseRetryAfter(value string) *time.Duration {
