@@ -43,8 +43,10 @@ frameworks cluster backup create --to s3://ops-backups/frameworks --database pur
 
 - `--to` is a local directory or an `s3://bucket/prefix` URL. The backup goes into a new
   `frameworks-backup-<UTC time>` directory under it; the command prints the full path.
-- `--all` covers every database and the ClickHouse facts. Otherwise name databases with `--database`
-  (repeatable; `<instance>/<name>` for a named instance) and add `--clickhouse` for the facts.
+- `--all` covers every database and the ClickHouse facts. A database the manifest declares but the
+  server does not have yet is skipped and listed: the next release apply creates it from its
+  baseline. Otherwise name databases with `--database` (repeatable; `<instance>/<name>` for a named
+  instance) and add `--clickhouse` for the facts.
 - S3 destinations use the standard AWS configuration: `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
   (or a profile), `AWS_REGION`, and `AWS_ENDPOINT_URL_S3` for an S3-compatible store such as Hetzner
   Object Storage or Cloudflare R2. A custom endpoint uses path-style requests.
@@ -87,7 +89,11 @@ run without a backup:
 - **Irreversible data migrations**: `frameworks cluster data-migrate run <service>.<id>`, except with
   `--dry-run`, which runs inside a read-only transaction. A data migration is irreversible when the
   release that declares it lists its service under `rollback_disabled`, when the service binary marks it
-  irreversible, or when the binary does not report the field.
+  irreversible, or when the binary does not report the field. `frameworks cluster release apply` applies
+  the same gate, `--dry-run` included, before it runs an earlier release's pending data migration.
+
+Without `--backup`, the refusal prints the `backup create` command for exactly the databases the
+operation changes, so the backup covers only what the gate checks.
 
 Pass the backup with `--backup <dir|s3-url>`. It is accepted only when:
 
@@ -99,7 +105,8 @@ Pass the backup with `--backup <dir|s3-url>`. It is accepted only when:
 The one-hour limit is fixed. Nothing is written to the database; the gate only reads.
 
 ```bash
-frameworks cluster backup create --to /var/backups/frameworks --all
+frameworks cluster migrate --phase contract --to-version v0.3.11 --dry-run   # prints the backup command
+frameworks cluster backup create --to /var/backups/frameworks --database purser --clickhouse
 frameworks cluster migrate --phase contract --to-version v0.3.11 --backup /var/backups/frameworks/frameworks-backup-20260919T101500Z --yes
 frameworks cluster data-migrate run purser.purser_eur_ledger_conversion_v0_3_11 --backup /var/backups/frameworks/frameworks-backup-20260919T101500Z
 ```
