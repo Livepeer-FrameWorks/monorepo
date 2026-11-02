@@ -52,7 +52,7 @@ func runCheckoutRecoveryList(ctx context.Context, w io.Writer, p checkoutRecover
 		}
 	} else {
 		if len(res.GetItems()) == 0 {
-			fmt.Fprintln(w, "No checkout recovery work found.")
+			fmt.Fprintln(w, "No provider recovery work found.")
 		} else {
 			fmt.Fprintln(w, "PROVIDER  TENANT  RESERVATION  STATE  AMOUNT  NEXT ATTEMPT  DETAIL")
 		}
@@ -73,7 +73,9 @@ func runCheckoutRecoveryList(ctx context.Context, w io.Writer, p checkoutRecover
 				break
 			}
 		}
-		writeHeldDowngrades(w, res.GetHeldDowngrades())
+		if r.GetOffset() == 0 {
+			writeHeldDowngrades(w, res.GetHeldDowngrades(), res.GetHeldDowngradesHasMore())
+		}
 	}
 	if res.GetHasMore() {
 		fmt.Fprintf(w, "More results: repeat with --offset %d\n", r.GetOffset()+r.GetLimit())

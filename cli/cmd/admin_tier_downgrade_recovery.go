@@ -35,8 +35,8 @@ func runTierDowngradeRecovery(cmd *cobra.Command, p tierDowngradeRecoveryClient,
 		return err
 	}
 	held := preview.GetDowngrade()
-	fmt.Fprintf(cmd.ErrOrStderr(), "Downgrade to %s, effective %s, closing invoice %s (%s). %s\n",
-		held.GetTargetTierName(), recoveryTimestamp(held.GetEffectiveAt()), dashIfEmpty(held.GetInvoiceId()), dashIfEmpty(held.GetInvoiceStatus()), preview.GetDetail())
+	fmt.Fprintf(cmd.ErrOrStderr(), "Downgrade to %s, effective %s, closing invoice %s (%s): %s. %s\n",
+		held.GetTargetTierName(), recoveryTimestamp(held.GetEffectiveAt()), dashIfEmpty(held.GetInvoiceId()), dashIfEmpty(held.GetInvoiceStatus()), preview.GetStatus(), preview.GetDetail())
 	fmt.Fprintln(cmd.ErrOrStderr(), "Confirming closes the tenant's billing period now and applies the downgrade if nothing still holds it; your identity and reason are recorded.")
 	if !yes {
 		fmt.Fprint(cmd.ErrOrStderr(), "Type yes to confirm: ")
@@ -64,13 +64,19 @@ func writeTierDowngradeRecovery(w io.Writer, r *purserpb.AdminRecoverTierDowngra
 }
 
 // writeHeldDowngrades prints the downgrades PurserTierDowngradeHeld alerts on.
-func writeHeldDowngrades(w io.Writer, held []*purserpb.HeldTierDowngrade) {
+func writeHeldDowngrades(w io.Writer, held []*purserpb.HeldTierDowngrade, hasMore bool) {
+	fmt.Fprintln(w)
 	if len(held) == 0 {
+		fmt.Fprintln(w, "No held downgrades found.")
 		return
 	}
-	fmt.Fprintln(w, "HELD DOWNGRADE TENANT  TARGET  EFFECTIVE  INVOICE  INVOICE STATUS")
+	fmt.Fprintln(w, "Held downgrades (PurserTierDowngradeHeld):")
+	fmt.Fprintln(w, "TENANT  TARGET  EFFECTIVE  INVOICE  INVOICE STATUS")
 	for _, h := range held {
 		fmt.Fprintf(w, "%s  %s  %s  %s  %s\n", h.GetTenantId(), h.GetTargetTierName(), recoveryTimestamp(h.GetEffectiveAt()), dashIfEmpty(h.GetInvoiceId()), dashIfEmpty(h.GetInvoiceStatus()))
+	}
+	if hasMore {
+		fmt.Fprintln(w, "More held downgrades exist than --limit lists; raise --limit or pass --tenant-id.")
 	}
 	fmt.Fprintln(w, "Inspect and release a held downgrade with admin billing recovery downgrade --tenant-id <tenant> --reason <reason>.")
 }

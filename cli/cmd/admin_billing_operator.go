@@ -338,6 +338,11 @@ Purser reconciles cluster access for the new tier, refreshes cached tenant
 limits, and records billing.subscription_updated with --reason and the
 calling identity (your user when logged in).
 
+When the tenant has a staged downgrade and keeps its Stripe or Mollie
+subscription, set-tier clears the downgrade and queues the provider step that
+reprices that subscription to the assigned tier; its retries and errors appear
+as tier_downgrade work in 'frameworks admin billing recovery list'.
+
 A postpaid paid tier admits rated work only once its charges can be collected:
 the tenant's own Stripe or Mollie setup, or an operator arrangement. To bill a
 tenant differently (no monthly fee, invoices you collect by hand, nothing owed

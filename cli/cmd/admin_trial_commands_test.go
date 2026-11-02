@@ -296,10 +296,10 @@ func TestRecoveryCommandsValidateBeforeRPCAndShowEmptyInventory(t *testing.T) {
 			t.Fatalf("invalid list called RPC: request=%v calls=%d err=%v", r, fake.calls, err)
 		}
 	}
-	for _, history := range []bool{false, true} {
+	for history, empty := range map[bool]string{false: "No provider recovery work found.", true: "No checkout recovery history found."} {
 		fake := &recoveryValidationClient{}
 		var out bytes.Buffer
-		if err := runCheckoutRecoveryList(t.Context(), &out, fake, "jwt", &purserpb.AdminListCheckoutRecoveryRequest{TenantId: id, Limit: 10, History: history}, false); err != nil || !strings.Contains(out.String(), "No checkout recovery") {
+		if err := runCheckoutRecoveryList(t.Context(), &out, fake, "jwt", &purserpb.AdminListCheckoutRecoveryRequest{TenantId: id, Limit: 10, History: history}, false); err != nil || !strings.Contains(out.String(), empty) {
 			t.Fatalf("empty inventory=%q err=%v", out.String(), err)
 		}
 	}

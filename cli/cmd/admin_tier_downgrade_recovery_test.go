@@ -22,7 +22,7 @@ func (f *tierDowngradeRecoveryFake) AdminRecoverTierDowngrade(_ context.Context,
 	held := &purserpb.HeldTierDowngrade{TenantId: r.GetTenantId(), TargetTierId: "target-tier", TargetTierName: "developer",
 		EffectiveAt: timestamppb.New(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)), InvoiceId: "invoice-1", InvoiceStatus: "manual_review"}
 	if !r.GetConfirmed() {
-		return &purserpb.AdminRecoverTierDowngradeResponse{Status: "held", Downgrade: held, Detail: "Invoice invoice-1 is in manual review"}, nil
+		return &purserpb.AdminRecoverTierDowngradeResponse{Status: "invoice_held", Downgrade: held, Detail: "Invoice invoice-1 is in manual review"}, nil
 	}
 	return &purserpb.AdminRecoverTierDowngradeResponse{Status: "applied", Downgrade: held, Detail: "The tenant is on developer"}, nil
 }
@@ -70,7 +70,7 @@ func TestTierDowngradeRecoveryConfirmsThePreviewedTarget(t *testing.T) {
 	if confirm := fake.requests[1]; !confirm.GetConfirmed() || confirm.GetTargetTierId() != "target-tier" || confirm.GetReason() != "pricing fixed" {
 		t.Fatalf("confirmation request = %v, want the previewed target and the reason", confirm)
 	}
-	for _, want := range []string{"developer", "invoice-1", "manual_review", "2026-11-01T00:00:00Z", "your identity and reason are recorded"} {
+	for _, want := range []string{"developer", "invoice-1", "manual_review", "2026-11-01T00:00:00Z", ": invoice_held.", "your identity and reason are recorded"} {
 		if !strings.Contains(errOut.String(), want) {
 			t.Fatalf("preview output misses %q: %s", want, errOut.String())
 		}
@@ -96,15 +96,37 @@ func TestRecoveryListNamesHeldDowngrades(t *testing.T) {
 	client := &recoveryValidationClient{response: &purserpb.AdminListCheckoutRecoveryResponse{HeldDowngrades: []*purserpb.HeldTierDowngrade{{
 		TenantId: "00000000-0000-4000-8000-000000000007", TargetTierName: "developer",
 		EffectiveAt: timestamppb.New(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)), InvoiceId: "invoice-7", InvoiceStatus: "manual_review",
-	}, {TenantId: "00000000-0000-4000-8000-000000000008", TargetTierName: "free"}}}}
+	}, {TenantId: "00000000-0000-4000-8000-000000000008", TargetTierName: "free"}}, HeldDowngradesHasMore: true}}
 	var out bytes.Buffer
 	if err := runCheckoutRecoveryList(t.Context(), &out, client, "jwt", &purserpb.AdminListCheckoutRecoveryRequest{Limit: 10}, false); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"HELD DOWNGRADE", "00000000-0000-4000-8000-000000000007  developer  2026-11-01T00:00:00Z  invoice-7  manual_review",
-		"00000000-0000-4000-8000-000000000008  free  -  -  -", "admin billing recovery downgrade --tenant-id <tenant> --reason <reason>"} {
+	for _, want := range []string{"No provider recovery work found.", "Held downgrades (PurserTierDowngradeHeld):",
+		"00000000-0000-4000-8000-000000000007  developer  2026-11-01T00:00:00Z  invoice-7  manual_review",
+		"00000000-0000-4000-8000-000000000008  free  -  -  -", "More held downgrades exist than --limit lists",
+		"admin billing recovery downgrade --tenant-id <tenant> --reason <reason>"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("missing %q in %s", want, out.String())
 		}
+	}
+}
+
+// Held downgrades are listed on the first page only, so later pages do not
+// claim there are none.
+func TestRecoveryListLaterPagesOmitHeldDowngrades(t *testing.T) {
+	client := &recoveryValidationClient{response: &purserpb.AdminListCheckoutRecoveryResponse{}}
+	var out bytes.Buffer
+	if err := runCheckoutRecoveryList(t.Context(), &out, client, "jwt", &purserpb.AdminListCheckoutRecoveryRequest{Limit: 10, Offset: 10}, false); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "held downgrade") || strings.Contains(out.String(), "Held downgrades") {
+		t.Fatalf("later page reported held downgrades: %s", out.String())
+	}
+	out.Reset()
+	if err := runCheckoutRecoveryList(t.Context(), &out, client, "jwt", &purserpb.AdminListCheckoutRecoveryRequest{Limit: 10}, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "No held downgrades found.") {
+		t.Fatalf("first page misses the empty held-downgrade section: %s", out.String())
 	}
 }
