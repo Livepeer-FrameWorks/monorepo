@@ -71,9 +71,9 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
   {
     id: "contact",
     path: "/contact",
-    title: "Contact FrameWorks - Streaming Infrastructure Support",
+    title: "Contact FrameWorks - Talk to the Video Engineers",
     description:
-      "Contact the FrameWorks team for self-hosted streaming deployments, hosted load balancing, enterprise live video infrastructure, and community support.",
+      "Talk to the video engineers who build FrameWorks and MistServer about a project, trial usage, custom pricing, or a shared Slack or WhatsApp channel.",
   },
   {
     id: "network",

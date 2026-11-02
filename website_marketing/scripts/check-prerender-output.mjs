@@ -28,7 +28,7 @@ const routes = [
     ...showcaseTierLabels,
   ],
   ["stream-test/index.html", "Stream Test - Try the FrameWorks Player and StreamCrafter"],
-  ["contact/index.html", "Contact FrameWorks - Streaming Infrastructure Support"],
+  ["contact/index.html", "Contact FrameWorks - Talk to the Video Engineers"],
   [
     "network/index.html",
     "Network explorer",
