@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import config from "../../config";
+import { signupUrl } from "@/lib/siteLinks";
+import { contactPath } from "@/lib/contactTopics";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -290,7 +292,7 @@ const StatusPage = () => {
           description="Get QoE metrics and routing visibility on every plan."
           primaryAction={{
             label: "Start Free",
-            href: config.appUrl,
+            href: signupUrl(config.appUrl, "status-final"),
             external: true,
           }}
           secondaryAction={[
@@ -300,8 +302,8 @@ const StatusPage = () => {
               external: true,
             },
             {
-              label: "Talk to our team",
-              to: "/contact",
+              label: "Talk to the engineers",
+              to: contactPath("engineering"),
             },
           ]}
         />

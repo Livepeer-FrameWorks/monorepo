@@ -1,6 +1,8 @@
 import { Navigate, useParams } from "react-router";
 import config from "../../config";
 import { findCustomerStory } from "../../lib/customerStories";
+import { signupUrl } from "@/lib/siteLinks";
+import { contactPath } from "@/lib/contactTopics";
 import { Section, SectionContainer } from "@/components/ui/section";
 import {
   MarketingHero,
@@ -102,8 +104,14 @@ const CustomerStory = () => {
           title="Talk to the engineers"
           description="Tell us about your workflow. We help with the whole media pipeline, including the parts before and after FrameWorks."
           variant="band"
-          primaryAction={{ label: "Talk to the engineers", href: "/contact" }}
-          secondaryAction={[{ label: "Start Free", href: config.appUrl, external: true }]}
+          primaryAction={{ label: "Talk to the engineers", to: contactPath("engineering") }}
+          secondaryAction={[
+            {
+              label: "Start Free",
+              href: signupUrl(config.appUrl, `customer-${story.slug}`),
+              external: true,
+            },
+          ]}
         />
       </Section>
     </div>

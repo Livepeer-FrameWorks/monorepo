@@ -1,5 +1,7 @@
 import { motion } from "framer-motion";
 import config from "../../config";
+import { signupUrl } from "@/lib/siteLinks";
+import { contactPath } from "@/lib/contactTopics";
 import { GlobeAltIcon, SignalIcon, LockClosedIcon } from "@heroicons/react/24/outline";
 import { Section, SectionContainer } from "@/components/ui/section";
 import SovereigntyNote from "../shared/SovereigntyNote";
@@ -306,7 +308,7 @@ const Analytics = () => {
                   <MarketingCTAButton
                     intent="primary"
                     label="Start Free"
-                    href={config.appUrl}
+                    href={signupUrl(config.appUrl, "analytics-intro")}
                     external
                   />
                   <MarketingCTAButton
@@ -349,10 +351,14 @@ const Analytics = () => {
             title="Start measuring in minutes"
             description="Every plan includes the full analytics suite. Point a stream at FrameWorks and watch the data arrive."
             variant="band"
-            primaryAction={{ label: "Start Free", href: config.appUrl, external: true }}
+            primaryAction={{
+              label: "Start Free",
+              href: signupUrl(config.appUrl, "analytics-final"),
+              external: true,
+            }}
             secondaryAction={[
               { label: "Browse Docs", href: config.docsUrl, external: true },
-              { label: "Talk to our team", to: "/contact" },
+              { label: "Talk to the engineers", to: contactPath("engineering") },
             ]}
           />
         </motion.div>
