@@ -20,6 +20,12 @@ describe("embedSnippet", () => {
     expect(embedSnippet("JavaScript", input)).toContain('mistUrl: "https://mist.example.com"');
   });
 
+  it("names the element the JavaScript snippet renders into", () => {
+    const code = embedSnippet("JavaScript", { contentId: "abc" });
+    expect(code).toContain('target: "#player"');
+    expect(code).toContain('<div id="player"></div>');
+  });
+
   it("carries pre-resolved endpoints for a direct URL", () => {
     const url = "https://cdn.example.com/live/index.m3u8";
     const input = {

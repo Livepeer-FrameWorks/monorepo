@@ -101,6 +101,7 @@ export function embedSnippet(framework: SnippetFramework, input: PlayerInput): s
   if (input.endpoints) config.push(`endpoints: ${indent(endpointsLiteral(input), 2).trimStart()}`);
   for (const [name, value] of options) config.push(`${name}: ${JSON.stringify(value)}`);
   return [
+    '// Renders into <div id="player"></div> on your page.',
     'import { createPlayer } from "@livepeer-frameworks/player-core";',
     'import "@livepeer-frameworks/player-core/player.css";',
     "",

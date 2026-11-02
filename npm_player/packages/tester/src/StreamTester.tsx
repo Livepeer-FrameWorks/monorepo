@@ -7,6 +7,7 @@ import {
 import { PlayPanel, type TesterSample } from "./PlayPanel";
 import { PublishPanel } from "./PublishPanel";
 import type { PlaySource } from "./source";
+import { tabListKeyDown } from "./tabs";
 
 export interface TesterLink {
   label: string;
@@ -37,7 +38,8 @@ export interface StreamTesterProps {
   toolbar?: ReactNode;
 }
 
-type Tab = "play" | "publish";
+const TABS = ["play", "publish"] as const;
+type Tab = (typeof TABS)[number];
 
 export function StreamTester({
   gatewayUrl,
@@ -76,8 +78,13 @@ export function StreamTester({
   return (
     <div className="fwt-root">
       <div className="fwt-toolbar">
-        <div className="fwt-tabs" role="tablist" aria-label="Stream test">
-          {(["play", "publish"] as const).map((t) => (
+        <div
+          className="fwt-tabs"
+          role="tablist"
+          aria-label="Stream test"
+          onKeyDown={tabListKeyDown(TABS, tab, selectTab)}
+        >
+          {TABS.map((t) => (
             <button
               key={t}
               id={tabId(t)}
@@ -85,6 +92,7 @@ export function StreamTester({
               role="tab"
               aria-selected={tab === t}
               aria-controls={panelId(t)}
+              tabIndex={tab === t ? 0 : -1}
               className="fwt-tabs__tab"
               onClick={() => selectTab(t)}
             >

@@ -165,6 +165,44 @@ describe("StreamTester", () => {
     expect(window.location.search).toBe("");
   });
 
+  it("moves between the Play and Publish tabs with the arrow keys", () => {
+    setLocation("");
+    render(<StreamTester />);
+
+    const play = screen.getByRole("tab", { name: "Play" });
+    const publish = screen.getByRole("tab", { name: "Publish" });
+    expect(play.tabIndex).toBe(0);
+    expect(publish.tabIndex).toBe(-1);
+
+    fireEvent.keyDown(play, { key: "ArrowRight" });
+    expect(publish.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(publish);
+    expect(publish.tabIndex).toBe(0);
+
+    fireEvent.keyDown(publish, { key: "ArrowRight" });
+    expect(play.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(play);
+  });
+
+  it("gives each embed section its own heading and panel ids", async () => {
+    setLocation("?url=https%3A%2F%2Fcdn.example.com%2Flive%2Findex.m3u8");
+    render(
+      <>
+        <StreamTester />
+        <StreamTester />
+      </>
+    );
+
+    await waitFor(() => expect(screen.getAllByRole("tab", { name: "JavaScript" })).toHaveLength(2));
+    const regions = screen.getAllByRole("region", { name: "Embed this player" });
+    expect(regions).toHaveLength(2);
+    const [a, b] = regions.map((r) => r.getAttribute("aria-labelledby"));
+    expect(a).not.toBe(b);
+    const tab = screen.getAllByRole("tab", { name: "JavaScript" })[0];
+    const panel = document.getElementById(tab.getAttribute("aria-controls")!);
+    expect(panel?.getAttribute("role")).toBe("tabpanel");
+  });
+
   it("keeps the studio broadcasting while the play tab is open", async () => {
     setLocation("");
     render(<StreamTester />);
