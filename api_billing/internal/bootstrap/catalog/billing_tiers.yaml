@@ -142,8 +142,8 @@ tiers:
     currency: EUR
     billing_period: monthly
     features:
-      support_level: basic
-    support_level: basic
+      support_level: business_hours
+    support_level: business_hours
     metering_enabled: true
     entitlements:
       recording_retention_days: 0
@@ -175,13 +175,13 @@ tiers:
 
   - tier_name: developer
     display_name: Developer
-    description: 500K delivered mins, team features, advanced analytics, priority support. ~500-1K viewers.
+    description: 500K delivered mins, lower overage rates, team features as they ship. ~500-1K viewers.
     base_price: 249.00
     currency: EUR
     billing_period: monthly
     features:
-      support_level: priority
-    support_level: priority
+      support_level: business_hours
+    support_level: business_hours
     metering_enabled: true
     entitlements:
       recording_retention_days: 0
@@ -213,7 +213,7 @@ tiers:
 
   - tier_name: production
     display_name: Production
-    description: 2M delivered mins, business-hours support, dedicated capacity options. ~2-5K viewers.
+    description: 2M delivered mins, lowest overage rates, dedicated processing allocation. ~2-5K viewers.
     base_price: 999.00
     currency: EUR
     billing_period: monthly

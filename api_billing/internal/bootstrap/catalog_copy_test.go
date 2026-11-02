@@ -34,3 +34,23 @@ func TestEmbeddedCatalogSellsNoSelfServeSLAOrUnshippedFeature(t *testing.T) {
 		}
 	}
 }
+
+// Every paid self-serve tier gets the same support Pricing sells: business
+// hours from the engineers. A lower tier never reads as better supported.
+func TestEmbeddedCatalogGivesEveryPaidSelfServeTierTheSameSupport(t *testing.T) {
+	tiers, err := EmbeddedTiers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tier := range tiers {
+		if strings.Contains(strings.ToLower(tier.Description), "advanced analytics") || strings.Contains(strings.ToLower(tier.Description), "priority support") {
+			t.Errorf("tier %s description %q sells an analytics or support level no tier has", tier.TierName, tier.Description)
+		}
+		if tier.IsEnterprise || tier.BasePrice <= 0 {
+			continue
+		}
+		if tier.SupportLevel != "business_hours" || tier.Features["support_level"] != "business_hours" {
+			t.Errorf("paid tier %s support = %q (features %v), want business_hours", tier.TierName, tier.SupportLevel, tier.Features["support_level"])
+		}
+	}
+}
