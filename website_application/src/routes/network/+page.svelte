@@ -14,6 +14,7 @@
     type NetworkView,
     type ExplorerViewport,
   } from "../../../../packages/map-core/network-explorer";
+  import "../../../../packages/map-core/network-explorer.css";
   let diagnostics = $state(false);
   const viewport: ExplorerViewport = {};
   const marketing = getMarketingSiteUrl().replace(/\/+$/, "");
@@ -43,11 +44,11 @@
 
 <svelte:head><title>Network explorer | FrameWorks</title></svelte:head>
 <div class="p-4 md:p-6">
-  <header class="explorer-heading">
+  <header class="fw-explorer-heading">
     <h1>Network explorer</h1>
     <p>Infrastructure, compute and the paths between them.</p>
   </header>
-  <div role="tablist" aria-label="Network view" class="explorer-tabs">
+  <div role="tablist" aria-label="Network view" class="fw-explorer-tabs">
     {#each ["frameworks", "livepeer"] as key (key)}
       <button
         type="button"
@@ -58,7 +59,7 @@
         tabindex={view === key ? 0 : -1}
         onkeydown={onTabKey}
         onclick={() => choose(key as NetworkView)}
-        class="explorer-tab">{key === "frameworks" ? "FrameWorks" : "Livepeer"}</button
+        class="fw-explorer-tab">{key === "frameworks" ? "FrameWorks" : "Livepeer"}</button
       >
     {/each}
   </div>
@@ -75,94 +76,28 @@
         />{/key}
     {/if}
   </div>
-  <nav aria-label="Next steps" class="explorer-actions">
+  <nav aria-label="Next steps" class="fw-explorer-actions">
     {#each actions as action (action.id)}
       <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external docs and marketing URLs; the in-app link is resolved above -->
-      <a href={action.href} class="explorer-action">{action.label}</a>
+      <a href={action.href} class="fw-explorer-action">{action.label}</a>
     {/each}
   </nav>
 </div>
 
 <style>
-  .explorer-heading {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 1rem;
-    padding-bottom: 1.25rem;
-  }
-  .explorer-heading h1 {
-    font-size: 1.5rem;
-    font-weight: 600;
-  }
-  .explorer-heading p {
-    color: hsl(var(--muted-foreground));
-    font-size: 0.8125rem;
-  }
-  .explorer-tabs {
-    display: flex;
-    border: 1px solid hsl(var(--border));
-    border-bottom: 0;
-    background: hsl(var(--brand-surface-strong));
-  }
-  .explorer-tab {
-    padding: 0.875rem 1.5rem;
-    border-right: 1px solid hsl(var(--border));
-    color: hsl(var(--muted-foreground));
-    font-size: 0.8125rem;
-  }
-  .explorer-tab[aria-selected="true"] {
-    color: hsl(var(--brand-cyan));
-    background: hsl(var(--brand-surface));
-    box-shadow: inset 0 -2px hsl(var(--brand-cyan));
-  }
-  .explorer-tab:focus-visible {
-    outline: 2px solid hsl(var(--brand-cyan));
-    outline-offset: -3px;
-  }
+  /* The slab draws the panel's one border, as .fw-network does on the Livepeer tab; the topology's text rows sit
+     flush inside it as seamed rows and its map frame loses its own border. */
   .explorer-slab {
-    padding: 1rem;
     border: 1px solid hsl(var(--border));
-    background: hsl(var(--brand-surface));
-  }
-  .explorer-actions {
-    display: flex;
-    flex-wrap: wrap;
-    border: 1px solid hsl(var(--border));
-    border-top: 0;
     background: hsl(var(--brand-surface-strong));
   }
-  .explorer-action {
-    padding: 0.875rem 1.5rem;
-    border-right: 1px solid hsl(var(--border));
-    color: hsl(var(--brand-cyan));
+  .explorer-slab > :global(p) {
+    margin: 0;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid hsl(var(--border));
     font-size: 0.8125rem;
   }
-  .explorer-action:first-child {
-    color: hsl(var(--background));
-    background: hsl(var(--brand-cyan));
-  }
-  .explorer-action:hover,
-  .explorer-action:focus-visible {
-    text-decoration: underline;
-  }
-  .explorer-action:focus-visible {
-    outline: 2px solid hsl(var(--brand-cyan));
-    outline-offset: -3px;
-  }
-  @media (max-width: 640px) {
-    .explorer-heading {
-      display: block;
-    }
-    .explorer-heading p {
-      margin-top: 0.375rem;
-    }
-    .explorer-tab {
-      flex: 1;
-    }
-    .explorer-action {
-      flex: 1 1 50%;
-      border-bottom: 1px solid hsl(var(--border));
-    }
+  .explorer-slab > :global(div) {
+    border-width: 0;
   }
 </style>

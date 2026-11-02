@@ -1,0 +1,82 @@
+/* Network explorer chrome shared by the marketing and dashboard shells: the
+   heading, the view tabs, the panel slab and the next-step row. The tabs, the
+   panel and the row share one seam, so each piece draws only the borders the
+   piece next to it does not. */
+.fw-explorer-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 1.25rem;
+}
+.fw-explorer-heading h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+.fw-explorer-heading p {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8125rem;
+}
+.fw-explorer-tabs {
+  display: flex;
+  border: 1px solid hsl(var(--border));
+  border-bottom: 0;
+  background: hsl(var(--brand-surface-strong));
+}
+.fw-explorer-tab {
+  padding: 0.875rem 1.5rem;
+  border-right: 1px solid hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8125rem;
+}
+.fw-explorer-tab[aria-selected="true"] {
+  color: hsl(var(--brand-cyan));
+  background: hsl(var(--brand-surface));
+  box-shadow: inset 0 -2px hsl(var(--brand-cyan));
+}
+.fw-explorer-tab:focus-visible {
+  outline: 2px solid hsl(var(--brand-cyan));
+  outline-offset: -3px;
+}
+.fw-explorer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  border: 1px solid hsl(var(--border));
+  border-top: 0;
+  background: hsl(var(--brand-surface-strong));
+}
+.fw-explorer-action {
+  padding: 0.875rem 1.5rem;
+  border-right: 1px solid hsl(var(--border));
+  color: hsl(var(--brand-cyan));
+  font-size: 0.8125rem;
+}
+.fw-explorer-action:first-child {
+  color: hsl(var(--background));
+  background: hsl(var(--brand-cyan));
+}
+.fw-explorer-action:hover,
+.fw-explorer-action:focus-visible {
+  text-decoration: underline;
+}
+.fw-explorer-action:focus-visible {
+  outline: 2px solid hsl(var(--brand-cyan));
+  outline-offset: -3px;
+}
+@media (max-width: 640px) {
+  .fw-explorer-heading {
+    display: block;
+  }
+  .fw-explorer-heading p {
+    margin-top: 0.375rem;
+  }
+  .fw-explorer-tab {
+    flex: 1;
+  }
+  .fw-explorer-action {
+    flex: 1 1 50%;
+    border-bottom: 1px solid hsl(var(--border));
+  }
+}

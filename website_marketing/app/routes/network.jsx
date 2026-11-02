@@ -8,6 +8,7 @@ import {
   networkView,
   networkViewURL,
 } from "../../../packages/map-core/network-explorer";
+import "../../../packages/map-core/network-explorer.css";
 import config from "../../src/config";
 import { signupUrl } from "../../src/lib/siteLinks";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -74,11 +75,11 @@ export default function NetworkPage() {
   };
   return (
     <div className="network-explorer">
-      <header className="network-explorer__heading">
+      <header className="fw-explorer-heading">
         <h1>Network explorer</h1>
         <p>Infrastructure, compute and the paths between them.</p>
       </header>
-      <div role="tablist" aria-label="Network view" className="network-explorer__tabs">
+      <div role="tablist" aria-label="Network view" className="fw-explorer-tabs">
         {[
           ["frameworks", "FrameWorks"],
           ["livepeer", "Livepeer"],
@@ -93,7 +94,7 @@ export default function NetworkPage() {
             tabIndex={view === key ? 0 : -1}
             onKeyDown={onTabKey}
             onClick={() => choose(key)}
-            className="network-explorer__tab"
+            className="fw-explorer-tab"
           >
             {label}
           </button>
@@ -106,14 +107,14 @@ export default function NetworkPage() {
           <LivepeerView viewport={viewport} onQueryChange={onQueryChange} />
         )}
       </div>
-      <nav aria-label="Next steps" className="network-explorer__actions">
+      <nav aria-label="Next steps" className="fw-explorer-actions">
         {explorerActions.map((action) =>
           action.href.startsWith("/") ? (
-            <Link key={action.id} to={action.href} className="network-explorer__action">
+            <Link key={action.id} to={action.href} className="fw-explorer-action">
               {action.label}
             </Link>
           ) : (
-            <a key={action.id} href={action.href} className="network-explorer__action">
+            <a key={action.id} href={action.href} className="fw-explorer-action">
               {action.label}
             </a>
           )
