@@ -1246,7 +1246,10 @@ definition is never included in failure logs. The read/check has a one-second co
 The schema-1 connected-versus-signed source-readiness comparison precedes the policy
 check, so a fresh legacy projection can become usable. It cannot promote schema 2; that schema
 needs placement-aware readiness proof, and a readiness marker does not override placement
-permission. Explicit hard, lifecycle or billing denial uses the reconciler's denied/retract outcome. Missing,
+permission. Explicit hard, lifecycle or billing denial uses the reconciler's denied/retract outcome, except a
+spent prepaid balance (`PAYMENT_REQUIRED` with `prepaid_balance_unavailable`): the managed-stream set holds that
+tenant's rows instead of omitting them, so a held stream keeps running where it runs, starts on no new node and
+leaves the set complete for other tenants; suspension is what retracts it. Missing,
 inconsistent, expired or unreadable evidence is transient: preserve prior applied state and
 retry, without materializing or sending a new Apply. With a configured store, a missing joined
 pair cannot fall back to a positive connected answer. A matched schema-1 pair retains schema-1
@@ -1486,7 +1489,11 @@ The paths where a node dials a configured source (a pull input or a managed Mist
 use `control.SourceDialNodePlacement` or the same verdict mapping: `Eligible` permits; a policy,
 lifecycle or billing denial denies; unready or inconsistent authority and missing facts
 (including an unknown node against a node selector) are unavailable, never a permission. A
-schema-1 pair carries no policy and passes this check.
+schema-1 pair carries no policy and passes this check. A spent prepaid balance denies a new
+dial but not a restart in place: when the source of a held managed stream restarts on the node
+whose sidecar still reports its configuration, `STREAM_SOURCE` answers empty so Mist boots it
+from that configuration, and a held stream on any other node gets the offline-unavailable
+source. Unknown billing, suspension and every other denial get no such exception.
 
 | Path                                                                                          | Behaviour                                                                                                                                                                                                    |
 | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

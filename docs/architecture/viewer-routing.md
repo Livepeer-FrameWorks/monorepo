@@ -181,7 +181,12 @@ accounting applies. `USER_NEW` rechecks admission without preparing media again.
   for becomes one grant fetch and a local re-check instead of a `USER_NEW` for
   every session. A revoked grant (tombstone, tenant or billing denial) sends
   every session of the stream back to Mist's `USER_NEW`, refused on the edge.
-  Tenant suspension's `stop_sessions` also drops the stream's grant.
+  A spent prepaid balance is not a revocation: Foghorn answers the grant fetch
+  with `new_sessions_blocked` set, sessions already playing keep playing on it,
+  and Helmsman refuses every new session it would decide locally with "stream
+  owner's prepaid balance is spent". Sessions end only when the balance reaches
+  the suspension threshold, where tenant suspension's `stop_sessions` drops the
+  stream's grant.
 - **Restart.** Helmsman rebuilds the table from Mist's live session list (session
   id, address, stream, protocol) and fetches one grant per stream. Mist's list
   has no token, so a rebuilt session binds to the first request from its address
