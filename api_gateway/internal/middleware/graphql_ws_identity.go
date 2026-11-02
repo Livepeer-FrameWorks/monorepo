@@ -9,9 +9,6 @@ import (
 
 	"frameworks/api_gateway/internal/clients"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // DefaultWebsocketRevalidateInterval bounds how long a GraphQL WebSocket keeps
@@ -479,13 +476,6 @@ func authenticateWebsocketBearer(ctx context.Context, token string, serviceClien
 	return result, nil
 }
 
-// isAccountDeactivated reports Commodore's refusal of a deactivated user's
-// credential, which it answers as Unauthenticated "account deactivated".
-func isAccountDeactivated(err error) bool {
-	st, ok := status.FromError(err)
-	return ok && st.Code() == codes.Unauthenticated && st.Message() == "account deactivated"
-}
-
 // watch closes the connection through closeConn when its session expires or
 // a re-check finds the credential no longer authenticates, and returns when
 // ctx, the connection's context, ends. A re-check that cannot reach the
@@ -524,9 +514,6 @@ func (w websocketIdentityWatch) watch(ctx context.Context, id websocketIdentity,
 				if w.logger != nil {
 					w.logger.WithError(err).Warn("WebSocket credential re-check could not reach the authentication backend")
 				}
-			case isAccountDeactivated(err):
-				closeConn(ErrWebsocketAccountDeactivated)
-				return
 			default:
 				closeConn(ErrWebsocketCredentialRevoked)
 				return

@@ -508,3 +508,36 @@ func TestAccountDeactivationClosesOnlyItsOwnersAPISockets(t *testing.T) {
 		return
 	}
 }
+
+// awaitCloseFrame reads until the server closes the connection and returns
+// its close code and reason.
+func awaitCloseFrame(t *testing.T, conn *websocket.Conn, within time.Duration) (int, string) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(within))
+	for {
+		_, _, err := conn.ReadMessage()
+		if err == nil {
+			continue
+		}
+		var closeErr *websocket.CloseError
+		if !errors.As(err, &closeErr) {
+			t.Fatalf("read: %v", err)
+		}
+		return closeErr.Code, closeErr.Text
+	}
+}
+
+// Deactivating a user closes its signed-in browser sockets with the reason
+// the dashboard maps to signing out, not with a plain revocation.
+func TestAccountDeactivationClosesTheUsersSessionSocketsAsDeactivated(t *testing.T) {
+	sc, _ := switchableClients(t)
+	sessions := NewWebsocketSessions(nil)
+	now := time.Now()
+	conn, _ := openSubscription(t, sc, "Bearer "+sessionJWTIssuedAt(t, now.Add(-time.Minute), now.Add(time.Hour)), sessions, 0)
+	if n := sessions.CloseDeactivatedUser("tenant-1", "user-1", now); n != 1 {
+		t.Fatalf("deactivation closed %d sockets, want 1", n)
+	}
+	if code, text := awaitCloseFrame(t, conn, 2*time.Second); code != WebsocketCloseForbidden || text != "account deactivated" {
+		t.Fatalf("deactivated session socket closed with %d %q, want %d \"account deactivated\"", code, text, WebsocketCloseForbidden)
+	}
+}
