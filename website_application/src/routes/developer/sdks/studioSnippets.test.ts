@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest";
 import { studioCodeExamples } from "./studioSnippets";
 
 const studioRoot = path.resolve(__dirname, "../../../../../npm_studio/packages");
-const examples = studioCodeExamples("https://api.example.com/graphql");
+const wcVersion = JSON.parse(fs.readFileSync(path.join(studioRoot, "wc/package.json"), "utf8"))
+  .version as string;
+const examples = studioCodeExamples("https://api.example.com/graphql", wcVersion);
 
 /** Type-checks one snippet against the package sources and returns its errors. */
 function typeErrors(snippet: string, fileName: string): string[] {
@@ -95,6 +97,14 @@ describe("SDK page StreamCrafter examples", () => {
     );
     for (const attribute of tagAttributes(examples.wc, "fw-streamcrafter")) {
       expect(element).toContain(`attribute: "${attribute}"`);
+    }
+  });
+
+  it("web component example loads the pinned version from both CDNs", () => {
+    const scripts = [...examples.wc.matchAll(/<script src="([^"]+)"/g)].map((m) => m[1]);
+    expect(scripts).toHaveLength(2);
+    for (const src of scripts) {
+      expect(src).toContain(`/@livepeer-frameworks/streamcrafter-wc@${wcVersion}/dist/`);
     }
   });
 

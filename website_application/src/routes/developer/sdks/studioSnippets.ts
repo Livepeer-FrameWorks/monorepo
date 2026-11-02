@@ -10,7 +10,11 @@ const _imp = "import";
 
 export type StudioFramework = "react" | "svelte" | "wc" | "vanilla";
 
-export function studioCodeExamples(gatewayUrl: string): Record<StudioFramework, string> {
+/** `wcVersion` pins the CDN script, since the SDK is beta and changes between versions. */
+export function studioCodeExamples(
+  gatewayUrl: string,
+  wcVersion: string
+): Record<StudioFramework, string> {
   return {
     react: `${_imp} { StreamCrafter } from '@livepeer-frameworks/streamcrafter-react';
 ${_imp} '@livepeer-frameworks/streamcrafter-react/streamcrafter.css';
@@ -36,9 +40,9 @@ export function Studio() {
 />`,
     wc: `<!-- IIFE via npm CDN — no bundler needed -->
 <!-- unpkg -->
-<script src="https://unpkg.com/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"><\/script>
+<script src="https://unpkg.com/@livepeer-frameworks/streamcrafter-wc@${wcVersion}/dist/fw-streamcrafter.iife.js"><\/script>
 <!-- or jsdelivr -->
-<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"><\/script>
+<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc@${wcVersion}/dist/fw-streamcrafter.iife.js"><\/script>
 
 <fw-streamcrafter
   gateway-url="${gatewayUrl}"

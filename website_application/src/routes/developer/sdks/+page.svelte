@@ -124,7 +124,7 @@ player.destroy();`,
       vanilla: streamcrafterCorePkg.version,
     },
     features: studioFeatures,
-    codeExamples: studioCodeExamples(graphqlUrl),
+    codeExamples: studioCodeExamples(graphqlUrl, streamcrafterWcPkg.version),
     docsUrl: `${docsBaseUrl}/builders/ingest`,
     githubUrl: `${githubBaseUrl}/tree/master/npm_studio`,
   };
@@ -290,7 +290,8 @@ with FrameWorksClient("${graphqlUrl}", token=os.environ["FRAMEWORKS_API_TOKEN"])
         <div>
           <h1 class="text-xl font-bold text-foreground">SDKs & Libraries</h1>
           <p class="text-sm text-muted-foreground">
-            Player and Studio SDKs for the browser, and API SDKs for TypeScript, Go, and Python
+            Player and StreamCrafter SDKs for the browser, and API SDKs for TypeScript, Go, and
+            Python
           </p>
         </div>
       </div>
@@ -459,7 +460,7 @@ with FrameWorksClient("${graphqlUrl}", token=os.environ["FRAMEWORKS_API_TOKEN"])
           </div>
         </div>
 
-        <!-- Studio SDK -->
+        <!-- StreamCrafter SDK -->
         <div class="slab col-span-full">
           <div class="slab-header flex items-center justify-between">
             <div class="flex items-center gap-3">
