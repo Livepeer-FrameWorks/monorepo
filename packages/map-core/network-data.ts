@@ -99,6 +99,10 @@ export type Options = {
   headers?: () => Record<string, string>;
   viewport?: ExplorerViewport;
   onQueryChange?: (query: URLSearchParams) => void;
+  // livepeerExplorerURL links each orchestrator to its Livepeer Explorer page.
+  livepeerExplorerURL?: string;
+  // operatorDiagnostics renders the platform operator's diagnostics switch in the dashboard header.
+  operatorDiagnostics?: { enabled: boolean; onToggle: (enabled: boolean) => void };
 };
 export type InfrastructureNode = {
   nodeId: string;

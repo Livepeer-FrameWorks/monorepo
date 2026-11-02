@@ -5,7 +5,9 @@
   import NetworkObservations from "$lib/components/NetworkObservations.svelte";
   import NetworkTopology from "$lib/components/NetworkTopology.svelte";
   import { auth } from "$lib/stores/auth";
+  import { getDocsSiteUrl, getMarketingSiteUrl } from "$lib/config";
   import {
+    networkExplorerActions,
     networkTabKey,
     networkView,
     networkViewURL,
@@ -14,6 +16,12 @@
   } from "../../../../packages/map-core/network-explorer";
   let diagnostics = $state(false);
   const viewport: ExplorerViewport = {};
+  const marketing = getMarketingSiteUrl().replace(/\/+$/, "");
+  const actions = networkExplorerActions({
+    startStreaming: resolve("/go-live"),
+    docsURL: getDocsSiteUrl(),
+    showcase: marketing ? `${marketing}/showcase` : "",
+  });
   let view = $derived(networkView(page.url.searchParams));
   function choose(next: NetworkView) {
     void goto(resolve(networkViewURL(page.url.searchParams, next)), {
@@ -56,16 +64,23 @@
   </div>
   <div role="tabpanel" id="network-panel" aria-labelledby="network-tab-{view}" tabindex="0">
     {#if view === "frameworks"}
-      <NetworkTopology {viewport} />
+      <div class="explorer-slab"><NetworkTopology {viewport} /></div>
     {:else}
-      {#if $auth.user?.platform_operator}
-        <label class="flex items-center gap-2 mb-4"
-          ><input type="checkbox" bind:checked={diagnostics} />Operator diagnostics</label
-        >
-      {/if}
-      {#key diagnostics}<NetworkObservations {diagnostics} {viewport} {onQueryChange} />{/key}
+      {#key diagnostics}<NetworkObservations
+          {diagnostics}
+          operator={Boolean($auth.user?.platform_operator)}
+          onDiagnosticsChange={(enabled) => (diagnostics = enabled)}
+          {viewport}
+          {onQueryChange}
+        />{/key}
     {/if}
   </div>
+  <nav aria-label="Next steps" class="explorer-actions">
+    {#each actions as action (action.id)}
+      <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external docs and marketing URLs; the in-app link is resolved above -->
+      <a href={action.href} class="explorer-action">{action.label}</a>
+    {/each}
+  </nav>
 </div>
 
 <style>
@@ -105,6 +120,36 @@
     outline: 2px solid hsl(var(--brand-cyan));
     outline-offset: -3px;
   }
+  .explorer-slab {
+    padding: 1rem;
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--brand-surface));
+  }
+  .explorer-actions {
+    display: flex;
+    flex-wrap: wrap;
+    border: 1px solid hsl(var(--border));
+    border-top: 0;
+    background: hsl(var(--brand-surface-strong));
+  }
+  .explorer-action {
+    padding: 0.875rem 1.5rem;
+    border-right: 1px solid hsl(var(--border));
+    color: hsl(var(--brand-cyan));
+    font-size: 0.8125rem;
+  }
+  .explorer-action:first-child {
+    color: hsl(var(--background));
+    background: hsl(var(--brand-cyan));
+  }
+  .explorer-action:hover,
+  .explorer-action:focus-visible {
+    text-decoration: underline;
+  }
+  .explorer-action:focus-visible {
+    outline: 2px solid hsl(var(--brand-cyan));
+    outline-offset: -3px;
+  }
   @media (max-width: 640px) {
     .explorer-heading {
       display: block;
@@ -114,6 +159,10 @@
     }
     .explorer-tab {
       flex: 1;
+    }
+    .explorer-action {
+      flex: 1 1 50%;
+      border-bottom: 1px solid hsl(var(--border));
     }
   }
 </style>

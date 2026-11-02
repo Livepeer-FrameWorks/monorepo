@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { NetworkMap } from "../../src/components/marketing/network/NetworkMap";
 import {
+  networkAPIURL,
+  networkExplorerActions,
   networkTabKey,
   networkView,
   networkViewURL,
 } from "../../../packages/map-core/network-explorer";
 import config from "../../src/config";
+import { signupUrl } from "../../src/lib/siteLinks";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 export function meta() {
@@ -28,8 +31,9 @@ function LivepeerView({ viewport, onQueryChange }) {
     import("../../../packages/map-core/network-dashboard").then(({ mountNetworkDashboard }) => {
       if (!disposed && container.current) {
         stop = mountNetworkDashboard(container.current, {
-          apiURL: new URL("/v1/network/livepeer", config.gatewayUrl).toString(),
+          apiURL: networkAPIURL("/v1/network/livepeer", config.gatewayUrl, window.location.origin),
           graphqlURL: config.gatewayUrl,
+          livepeerExplorerURL: config.livepeerExplorerUrl,
           viewport,
           onQueryChange,
         });
@@ -42,6 +46,12 @@ function LivepeerView({ viewport, onQueryChange }) {
   }, [viewport, onQueryChange]);
   return <div ref={container} />;
 }
+
+const explorerActions = networkExplorerActions({
+  startStreaming: signupUrl(config.appUrl, "network-explorer"),
+  docsURL: config.docsUrl,
+  showcase: "/showcase",
+});
 
 export default function NetworkPage() {
   const [search] = useSearchParams();
@@ -96,6 +106,19 @@ export default function NetworkPage() {
           <LivepeerView viewport={viewport} onQueryChange={onQueryChange} />
         )}
       </div>
+      <nav aria-label="Next steps" className="network-explorer__actions">
+        {explorerActions.map((action) =>
+          action.href.startsWith("/") ? (
+            <Link key={action.id} to={action.href} className="network-explorer__action">
+              {action.label}
+            </Link>
+          ) : (
+            <a key={action.id} href={action.href} className="network-explorer__action">
+              {action.label}
+            </a>
+          )
+        )}
+      </nav>
     </div>
   );
 }

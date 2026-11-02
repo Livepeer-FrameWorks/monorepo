@@ -89,6 +89,20 @@
 .fw-network .map-status.is-warning {
   color: #e0af68;
 }
+.fw-network .map-diagnostics-toggle {
+  flex-shrink: 0;
+  padding: 0;
+  font-size: 0.75rem;
+  color: var(--map-muted);
+}
+.fw-network a.explorer-link {
+  display: inline-block;
+  text-decoration: none;
+}
+.fw-network a.explorer-link:hover,
+.fw-network a.explorer-link:focus-visible {
+  text-decoration: underline;
+}
 .fw-network .map-icon-button {
   display: grid;
   place-items: center;

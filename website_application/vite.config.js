@@ -4,6 +4,32 @@ import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, loadEnv } from "vite";
 import { codecovSvelteKitPlugin } from "@codecov/sveltekit-plugin";
 
+// devProxy keeps the gateway's routes on the dev server's origin, so cookies and the relative GraphQL URL work as they
+// do behind the production ingress.
+/** @param {string} proxyGatewayUrl */
+export function devProxy(proxyGatewayUrl) {
+  return {
+    "/auth": {
+      target: proxyGatewayUrl,
+      changeOrigin: true,
+    },
+    "/graphql": {
+      target: proxyGatewayUrl,
+      changeOrigin: true,
+      ws: true,
+    },
+    // Bridge's REST routes, such as the public network observations.
+    "/v1": {
+      target: proxyGatewayUrl,
+      changeOrigin: true,
+    },
+    "/assets": {
+      target: "http://localhost:18020",
+      changeOrigin: true,
+    },
+  };
+}
+
 export default defineConfig(({ mode, command }) => {
   const env = loadEnv(mode, process.cwd(), "");
 
@@ -19,22 +45,7 @@ export default defineConfig(({ mode, command }) => {
     devServer = {
       host,
       port,
-      proxy: {
-        // Proxy API routes to backend so cookies stay on same origin
-        "/auth": {
-          target: proxyGatewayUrl,
-          changeOrigin: true,
-        },
-        "/graphql": {
-          target: proxyGatewayUrl,
-          changeOrigin: true,
-          ws: true,
-        },
-        "/assets": {
-          target: "http://localhost:18020",
-          changeOrigin: true,
-        },
-      },
+      proxy: devProxy(proxyGatewayUrl),
       fs: {
         // Allow serving files from the monorepo root (for pkg/graphql/operations/)
         allow: [".."],

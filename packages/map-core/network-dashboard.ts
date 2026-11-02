@@ -6,7 +6,11 @@ import {
   loadMapLibre,
   readRuntimePublicConfig,
 } from "./index";
-import { bindExplorerViewport } from "./network-explorer";
+import {
+  bindExplorerViewport,
+  livepeerOrchestratorURL,
+  observationsFailure,
+} from "./network-explorer";
 import {
   observingRegions,
   orchestratorGroups,
@@ -152,7 +156,18 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
   message.setAttribute("role", "status");
   message.setAttribute("aria-live", "polite");
   const refresh = iconButton("Refresh observations", "refresh", () => void fetchData());
-  header.append(title, message, refresh);
+  header.append(title, message);
+  if (options.operatorDiagnostics) {
+    const { enabled, onToggle } = options.operatorDiagnostics;
+    const toggle = node("label", undefined, "map-check map-diagnostics-toggle");
+    const input = node("input");
+    input.type = "checkbox";
+    input.checked = enabled;
+    input.onchange = () => onToggle(input.checked);
+    toggle.append(input, node("span", "Operator diagnostics"));
+    header.append(toggle);
+  }
+  header.append(refresh);
   const toolbar = node("div", undefined, "map-toolbar");
   const windowChoice = select("Period", [
     ["0.25", "15 minutes"],
@@ -263,6 +278,17 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
   );
   root.append(header, toolbar, workspace, foot);
   container.replaceChildren(root);
+  function livepeerExplorerLink(address: string) {
+    const href = options.livepeerExplorerURL
+      ? livepeerOrchestratorURL(options.livepeerExplorerURL, address)
+      : undefined;
+    if (!href) return undefined;
+    const link = node("a", "View on Livepeer Explorer", "text-action explorer-link");
+    link.href = href;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    return link;
+  }
   let data: Response | undefined;
   let selected = initial.get("lp_endpoint") ?? "";
   type ExplorerSelection = { kind: "region" | "orchestrator" | "site"; id: string };
@@ -771,6 +797,8 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
           ["Scheduled checks", `${p.cadence_seconds}s`],
         ])
       );
+      const explorerLink = livepeerExplorerLink(p.resource.id);
+      if (explorerLink) address.append(explorerLink);
       const siblings = data!.inventory.endpoints.filter(
         (entry) => entry.resource.id.toLowerCase() === p.resource.id.toLowerCase()
       );
@@ -1160,6 +1188,8 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         "muted"
       )
     );
+    const identityLink = identity ? livepeerExplorerLink(identity.id) : undefined;
+    if (identityLink) heading.append(identityLink);
     const content = node("div", undefined, "inspector-content");
     if (site)
       content.append(
@@ -1605,7 +1635,26 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         signal: controller.signal,
         headers: options.headers?.(),
       });
-      if (!response.ok) throw new Error(`Observations unavailable (HTTP ${response.status})`);
+      if (!response.ok) {
+        const failure = observationsFailure(
+          response.status,
+          await response.json().catch(() => null)
+        );
+        if (disposed || version !== fetchVersion) return;
+        if (failure.notConfigured) {
+          message.textContent = failure.message;
+          message.classList.remove("is-warning");
+          overviewBody.replaceChildren(
+            node(
+              "div",
+              "This deployment runs without the Livepeer network observer, so there are no worker observations to show.",
+              "rail-section evidence-note"
+            )
+          );
+          return;
+        }
+        throw new Error(failure.message);
+      }
       const next = (await response.json()) as Response;
       if (disposed || version !== fetchVersion) return;
       if (!Array.isArray(next.inventory?.endpoints) || !Array.isArray(next.history?.cohorts))
