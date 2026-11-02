@@ -1,5 +1,16 @@
 /* Page-specific styles for contact */
 @layer components {
+  /* Native select: the option list renders on the page background in every
+     browser instead of the OS default light popup. */
+  .contact-select {
+    color: hsl(var(--foreground));
+  }
+
+  .contact-select option {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+  }
+
   /* Form panel — right column container */
   .contact-form-panel {
     gap: clamp(1.4rem, 2vw, 1.8rem);

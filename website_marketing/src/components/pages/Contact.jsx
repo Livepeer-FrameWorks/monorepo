@@ -1,5 +1,8 @@
 import { motion } from "framer-motion";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useSyncExternalStore } from "react";
+import { useLocation } from "react-router";
+import { CONTACT_TOPICS, contactTopic } from "@/lib/contactTopics";
+import { signupUrl } from "@/lib/siteLinks";
 import { Turnstile } from "@marsidev/react-turnstile";
 import config from "../../config";
 import { DISCORD_GUILD_ID } from "@frameworks/site-config";
@@ -39,9 +42,26 @@ import {
   SectionDivider,
 } from "@/components/marketing";
 
+const subscribeNever = () => () => {};
+
 const Contact = () => {
   const isTurnstileEnabled = Boolean(config.turnstileSiteKey);
   const defaultHumanCheck = isTurnstileEnabled ? "human" : "robot";
+
+  // The page is prerendered without a query string, so ?topic= is read only
+  // after hydration; until then the default topic renders on both sides.
+  const location = useLocation();
+  const isClient = useSyncExternalStore(
+    subscribeNever,
+    () => true,
+    () => false
+  );
+  const search = isClient ? location.search : "";
+  const urlTopic = contactTopic(new URLSearchParams(search).get("topic"));
+  // A topic picked in the form applies until the URL names another one.
+  const [topicChoice, setTopicChoice] = useState(null);
+  const topic =
+    topicChoice && topicChoice.search === search ? contactTopic(topicChoice.id) : urlTopic;
 
   const [formData, setFormData] = useState({
     name: "",
@@ -97,7 +117,7 @@ const Contact = () => {
       tone: "accent",
       title: "Email",
       subtitle: config.contactEmail,
-      description: "Sales, support, and partnership inquiries.",
+      description: "Projects, support, pricing, and partnership questions.",
       link: { label: config.contactEmail, href: `mailto:${config.contactEmail}`, external: true },
     },
     {
@@ -138,12 +158,17 @@ const Contact = () => {
     {
       question: "How do I get started with FrameWorks?",
       answer:
-        "Deploy the full stack yourself using the Docker Compose setup, or use our hosted service and add your own edge nodes for a hybrid approach. Both paths get you streaming in minutes.",
+        "Sign up for the hosted platform and stream on the Free plan, with no card needed. You can attach your own edge nodes later, or run the whole stack yourself with the frameworks CLI.",
     },
     {
-      question: "Do you offer commercial support?",
+      question: "Who answers support requests?",
       answer:
-        "Yes. We provide enterprise support with SLAs, custom development, managed hosting, and priority access to advanced processing. Reach out to discuss enterprise pricing and requirements.",
+        "The video engineers who build FrameWorks and MistServer, during business hours on every plan. Enterprise agreements add custom terms such as SLAs, on-call support, custom development, and co-managed deployments.",
+    },
+    {
+      question: "Can I get trial usage or custom pricing?",
+      answer:
+        "Yes. Choose trial usage or custom pricing in the form above and tell us about the workload. We set trial usage and custom terms up on your account.",
     },
     {
       question: "Can I run FrameWorks entirely on my own infrastructure?",
@@ -186,6 +211,7 @@ const Contact = () => {
 
       const submissionData = {
         ...formData,
+        topic: topic.id,
         behavior: {
           ...behavior,
           submittedAt: Date.now(),
@@ -283,8 +309,9 @@ const Contact = () => {
     <div className="pt-16">
       <MarketingHero
         seed="/contact"
-        title="Contact us"
-        description="Sales, support, partnerships, and bug reports. Choose a channel below or send a note."
+        eyebrow="Contact"
+        title={topic.title}
+        description={topic.description}
         align="left"
         surface="gradient"
         support="Email • Discord • Forum • Enterprise requests"
@@ -434,6 +461,24 @@ const Contact = () => {
                         disabled={success}
                         placeholder="Your company"
                       />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="topic">What is this about?</Label>
+                      <select
+                        id="topic"
+                        name="topic"
+                        value={topic.id}
+                        onChange={(e) => setTopicChoice({ id: e.target.value, search })}
+                        disabled={success}
+                        className="contact-select flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
+                      >
+                        {CONTACT_TOPICS.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
                     </div>
 
                     <div className="space-y-2">
@@ -597,7 +642,7 @@ const Contact = () => {
           description="Tell us what you are building. We usually reply within one business day."
           primaryAction={{
             label: "Start Free",
-            href: config.appUrl,
+            href: signupUrl(config.appUrl, "contact-final"),
             external: true,
           }}
           secondaryAction={[
@@ -607,8 +652,8 @@ const Contact = () => {
               external: true,
             },
             {
-              label: "Get in touch",
-              to: "/contact",
+              label: "See the showcase",
+              to: "/showcase",
             },
           ]}
         />
