@@ -515,7 +515,7 @@ func (c *Client) FindOrCreateProduct(ctx context.Context, knownProductID, tierNa
 		switch {
 		case err == nil:
 			if prod.Active && prod.Metadata["tier_name"] == tierName {
-				return prod, nil
+				return c.syncProductCopy(ctx, prod, displayName, description)
 			}
 		case errors.As(err, &apiErr) && apiErr.HTTPStatusCode == http.StatusNotFound:
 		default:
@@ -532,7 +532,7 @@ func (c *Client) FindOrCreateProduct(ctx context.Context, knownProductID, tierNa
 			"product_id": prod.ID,
 			"tier_name":  tierName,
 		}).Debug("Found existing Stripe product")
-		return prod, nil
+		return c.syncProductCopy(ctx, prod, displayName, description)
 	}
 	if err := iter.Err(); err != nil {
 		return nil, fmt.Errorf("failed to search Stripe products: %w", err)
@@ -557,6 +557,25 @@ func (c *Client) FindOrCreateProduct(ctx context.Context, knownProductID, tierNa
 	}).Info("Created Stripe product")
 
 	return prod, nil
+}
+
+// syncProductCopy updates an existing product's name and description to the
+// catalog's. Prices are immutable in Stripe and stay with FindOrCreatePrice.
+func (c *Client) syncProductCopy(ctx context.Context, prod *stripe.Product, displayName, description string) (*stripe.Product, error) {
+	if prod.Name == displayName && prod.Description == description {
+		return prod, nil
+	}
+	params := &stripe.ProductParams{Name: stripe.String(displayName), Description: stripe.String(description)}
+	params.Context = ctx
+	updated, err := stripeproduct.Update(prod.ID, params)
+	if err != nil {
+		return nil, fmt.Errorf("update Stripe product %s name and description: %w", prod.ID, err)
+	}
+	c.logger.WithFields(map[string]any{
+		"product_id": prod.ID,
+		"tier_name":  prod.Metadata["tier_name"],
+	}).Info("Updated Stripe product name and description from the tier catalog")
+	return updated, nil
 }
 
 // catalogCreateIdempotencyKey names one catalog object creation for Stripe.

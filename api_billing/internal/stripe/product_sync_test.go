@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -19,9 +20,10 @@ import (
 type productBackend struct {
 	products map[string]stripe.Product
 	calls    []string
+	updates  map[string]*stripe.ProductParams
 }
 
-func (b *productBackend) Call(method, path, _ string, _ stripe.ParamsContainer, v stripe.LastResponseSetter) error {
+func (b *productBackend) Call(method, path, _ string, params stripe.ParamsContainer, v stripe.LastResponseSetter) error {
 	b.calls = append(b.calls, method+" "+path)
 	if method == http.MethodGet {
 		id := path[len("/v1/products/"):]
@@ -29,6 +31,17 @@ func (b *productBackend) Call(method, path, _ string, _ stripe.ParamsContainer, 
 		if !ok {
 			return &stripe.Error{HTTPStatusCode: http.StatusNotFound, Code: stripe.ErrorCodeResourceMissing}
 		}
+		*v.(*stripe.Product) = prod
+		return nil
+	}
+	if id, ok := strings.CutPrefix(path, "/v1/products/"); ok && method == http.MethodPost {
+		if b.updates == nil {
+			b.updates = map[string]*stripe.ProductParams{}
+		}
+		update := params.(*stripe.ProductParams)
+		b.updates[id] = update
+		prod := b.products[id]
+		prod.Name, prod.Description = *update.Name, *update.Description
 		*v.(*stripe.Product) = prod
 		return nil
 	}
@@ -58,12 +71,12 @@ func (b *productBackend) SetMaxNetworkRetries(int64) {}
 // would leave two products for one tier.
 func TestFindOrCreateProductUsesTheRecordedProduct(t *testing.T) {
 	backend := &productBackend{products: map[string]stripe.Product{
-		"prod_known": {ID: "prod_known", Active: true, Metadata: map[string]string{"tier_name": "pro"}},
+		"prod_known": {ID: "prod_known", Name: "Pro", Description: "For teams", Active: true, Metadata: map[string]string{"tier_name": "pro"}},
 	}}
 	installBackend(t, backend)
 	c := &Client{logger: logging.NewLogger()}
 
-	prod, err := c.FindOrCreateProduct(context.Background(), "prod_known", "pro", "Pro", "")
+	prod, err := c.FindOrCreateProduct(context.Background(), "prod_known", "pro", "Pro", "For teams")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +85,36 @@ func TestFindOrCreateProductUsesTheRecordedProduct(t *testing.T) {
 	}
 	if len(backend.calls) != 1 || backend.calls[0] != "GET /v1/products/prod_known" {
 		t.Fatalf("Stripe calls = %v, want only the recorded product's retrieval", backend.calls)
+	}
+}
+
+// Catalog copy changes reach products Stripe already has: checkout and the
+// customer portal show the product's name and description.
+func TestFindOrCreateProductUpdatesExistingProductCopy(t *testing.T) {
+	backend := &productBackend{products: map[string]stripe.Product{
+		"prod_known": {ID: "prod_known", Name: "Pro", Description: "24/7 support + SLA", Active: true, Metadata: map[string]string{"tier_name": "pro"}},
+	}}
+	installBackend(t, backend)
+	c := &Client{logger: logging.NewLogger()}
+
+	prod, err := c.FindOrCreateProduct(context.Background(), "prod_known", "pro", "Pro Plan", "Business-hours support")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prod.ID != "prod_known" || prod.Name != "Pro Plan" || prod.Description != "Business-hours support" {
+		t.Fatalf("product = %s %q %q, want prod_known with the catalog copy", prod.ID, prod.Name, prod.Description)
+	}
+	update := backend.updates["prod_known"]
+	if update == nil {
+		t.Fatalf("Stripe calls = %v, want an update of prod_known", backend.calls)
+	}
+	if *update.Name != "Pro Plan" || *update.Description != "Business-hours support" {
+		t.Fatalf("update sent name %q description %q", *update.Name, *update.Description)
+	}
+	for _, call := range backend.calls {
+		if call == "POST /v1/products" {
+			t.Fatalf("Stripe calls = %v, want no new product", backend.calls)
+		}
 	}
 }
 
