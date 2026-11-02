@@ -1328,11 +1328,18 @@ their gzip-compressed output streams to the CLI and is written under a new
 `frameworks-backup-<UTC time>` directory below `--to`. The manifest is written last. Any failure
 fails the command, and a backup without a manifest is incomplete.
 
+`--all` skips a database the manifest declares but the server does not have yet: the next
+`release apply` creates it from its baseline, so it holds nothing to back up. The command lists
+each skipped database. A backup gate that refuses (contract migrations, irreversible data
+migrations, `release apply` running an earlier release's data migration) prints the
+`backup create` command for exactly the databases that operation changes, with one `--database`
+per database and `--clickhouse` when the billing facts are among them.
+
 **Flags:**
 
 - `--manifest string` - Cluster manifest file
 - `--to string` - Destination directory or `s3://bucket/prefix` (required)
-- `--all` - Every PostgreSQL/YugabyteDB database and the ClickHouse billing facts
+- `--all` - Every PostgreSQL/YugabyteDB database that exists on the server, and the ClickHouse billing facts
 - `--database string` - Database to back up: physical name, or `<instance>/<name>` for a named postgres instance (repeatable)
 - `--clickhouse` - The ClickHouse billing facts
 
@@ -1946,7 +1953,13 @@ frameworks admin tenants deactivate <UUID> --yes --tenant-name "Exact Tenant Nam
 
 #### frameworks admin tenants get
 
-Read a tenant directly by UUID, without paging through the tenant list.
+Read a tenant directly by UUID, without paging through the tenant list. The
+output adds Commodore's account state: `open`, or for a closed account whether
+Quartermaster synchronization is `pending`, `retrying` (with the last error and
+next attempt) or `synchronized`, and every session stop still owed to a cell with
+its cells, retired cells and last error. JSON output keeps the Quartermaster
+fields and adds `account_state`, or `account_state_error` when Commodore cannot
+be read.
 
 ```bash
 frameworks admin tenants get <UUID> --output json
@@ -1956,7 +1969,8 @@ frameworks admin tenants get <UUID> --output json
 
 Read private operator account changes and their reasons. Requires a platform-operator JWT.
 Use `--limit` (1..500, default 100) and the returned `--before` cursor to page
-through the newest entries first. Reasons are escaped in text output.
+through the newest entries first. Reasons are escaped in text output. The first
+page starts with the same account state as `tenants get`.
 
 ```bash
 frameworks admin tenants history <UUID> --output json
@@ -1979,6 +1993,7 @@ List and manage clusters.
 - `migrate-artifacts` - Migrate artifact metadata from a source cluster for one tenant
 - `reassign-control-cell` - Move a tenant-private cluster to another Foghorn control cell (`--to`, `--timeout`)
 - `control-cell` - Show a tenant-private cluster's control cell, reassignment state, and edges not yet moved
+- `retire` - Record a permanently removed cell so session stops owed to it settle (`--reason`, `--yes`)
 
 ```bash
 # List all clusters (shows name and ID)
@@ -2033,7 +2048,21 @@ frameworks admin clusters migrate-artifacts \
 # its edges moving; reassigning back to the previous cell is the rollback
 frameworks admin clusters reassign-control-cell <cluster-id> --to <control-cell-id> --timeout 30m
 frameworks admin clusters control-cell <cluster-id>
+
+# Settle session stops owed to a cell that was removed for good
+frameworks admin clusters retire <cluster-id> --reason "Cell decommissioned"
 ```
+
+`retire` exists for `CommodoreAccountIngestRevocationStuck`. Account closure and
+user deactivation stop active ingest on every cell that recorded the account's
+streams, and a removed cell can never confirm that stop. After retirement, a stop
+that cannot reach the cell counts as delivered there; a stop still owed to another
+unreachable cell keeps waiting for it. Commodore refuses while Quartermaster
+cannot be read or any registered Foghorn of the cell answers, and a retired cell
+that comes back still receives its stops. Type the cluster ID to confirm, or pass
+`--yes`. Retirement is permanent and changes nothing else about the cluster.
+`frameworks admin tenants get` lists each pending stop with its cells and the
+retired ones.
 
 **Sample output:**
 

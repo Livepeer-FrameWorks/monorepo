@@ -28,6 +28,7 @@ type trialCommandServer struct {
 	quartermasterpb.UnimplementedTenantServiceServer
 	purserpb.UnimplementedPrepaidServiceServer
 	history           *commodorepb.AdminListAccountHistoryRequest
+	retired           *commodorepb.AdminRetireIngestCellRequest
 	tenant            string
 	failure           bool
 	jwt               string
@@ -52,7 +53,30 @@ func (s *trialCommandServer) AdminListAccountHistory(ctx context.Context, req *c
 	if s.failure {
 		return nil, status.Error(codes.Unavailable, "history unavailable")
 	}
-	return &commodorepb.AdminListAccountHistoryResponse{Entries: []*commodorepb.OperatorAccountAuditEntry{{Id: "audit-1", Action: "user_active:false", Reason: "line one\nline two", ActorUserId: "operator", TargetId: "departing-user", CreatedAt: timestamppb.New(time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC))}}, HasMore: true}, nil
+	return &commodorepb.AdminListAccountHistoryResponse{Entries: []*commodorepb.OperatorAccountAuditEntry{{Id: "audit-1", Action: "user_active:false", Reason: "line one\nline two", ActorUserId: "operator", TargetId: "departing-user", CreatedAt: timestamppb.New(time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC))}}, HasMore: true, AccountState: retryingAccountState(req.GetTenantId())}, nil
+}
+
+func retryingAccountState(tenantID string) *commodorepb.TenantAccountState {
+	at := timestamppb.New(time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC))
+	return &commodorepb.TenantAccountState{
+		TenantId: tenantID, ClosureSync: "retrying", ClosedAt: at, ClosedBy: "operator", ClosureAttemptedAt: at, ClosureRetryAfter: at,
+		ClosureError: "quartermaster unavailable", ClosureFailures: 3,
+		PendingIngestStops: []*commodorepb.PendingIngestStop{{TargetKind: "tenant", TargetId: tenantID, Status: "pending", Attempts: 3, PendingSince: at, NextAttemptAt: at, LastError: "stop ingest on cell removed-cell: unavailable", Cells: []string{"live-cell", "removed-cell"}, RetiredCells: []string{"removed-cell"}}},
+	}
+}
+
+func (s *trialCommandServer) AdminGetTenantAccountState(ctx context.Context, req *commodorepb.AdminGetTenantAccountStateRequest) (*commodorepb.TenantAccountState, error) {
+	s.readJWT(ctx)
+	if s.failure {
+		return nil, status.Error(codes.Unavailable, "account state unavailable")
+	}
+	return retryingAccountState(req.GetTenantId()), nil
+}
+
+func (s *trialCommandServer) AdminRetireIngestCell(ctx context.Context, req *commodorepb.AdminRetireIngestCellRequest) (*commodorepb.AdminRetireIngestCellResponse, error) {
+	s.readJWT(ctx)
+	s.retired = req
+	return &commodorepb.AdminRetireIngestCellResponse{ClusterId: req.GetClusterId(), RetiredAt: timestamppb.New(time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)), RetiredBy: "operator", Reason: req.GetReason(), PendingIngestStops: 2}, nil
 }
 
 func (s *trialCommandServer) AdminListBillingGrants(ctx context.Context, req *purserpb.AdminListBillingGrantsRequest) (*purserpb.AdminListBillingGrantsResponse, error) {
@@ -185,7 +209,17 @@ func TestTrialAccountCommandsUseRealRPCs(t *testing.T) {
 	}{
 		{"lookup text", []string{"admin", "tenants", "get", id}, "Trial tenant (aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa)", false},
 		{"lookup json", []string{"--output", "json", "admin", "tenants", "get", id}, `"name": "Trial tenant"`, false},
+		{"lookup closure text", []string{"admin", "tenants", "get", id}, `Quartermaster synchronization failing (3 attempts`, false},
+		{"lookup stop text", []string{"admin", "tenants", "get", id}, "cells=live-cell,removed-cell  retired=removed-cell", false},
+		{"lookup closure json", []string{"--output", "json", "admin", "tenants", "get", id}, `"closure_sync": "retrying"`, false},
 		{"history text", []string{"admin", "tenants", "history", id, "--limit", "7", "--before", "test-cursor"}, `line one\nline two`, false},
+		{"history closure text", []string{"admin", "tenants", "history", id}, "Pending session stops: 1", false},
+		{"history closure json", []string{"--output", "json", "admin", "tenants", "history", id}, `"closure_error": "quartermaster unavailable"`, false},
+		{"retire missing reason", []string{"admin", "clusters", "retire", "removed-cell", "--yes"}, "--reason is required", true},
+		{"retire mismatched confirmation", []string{"admin", "clusters", "retire", "removed-cell", "--reason", "decommissioned"}, "nothing was retired", true},
+		{"retire interactive", []string{"admin", "clusters", "retire", "removed-cell", "--reason", "decommissioned"}, "Cell removed-cell retired", false},
+		{"retire", []string{"admin", "clusters", "retire", "removed-cell", "--reason", "decommissioned", "--yes"}, "2 include this cell and retry now", false},
+		{"retire json", []string{"--output", "json", "admin", "clusters", "retire", "removed-cell", "--reason", "decommissioned", "--yes"}, `"pending_ingest_stops": 2`, false},
 		{"history json", []string{"--output", "json", "admin", "tenants", "history", id}, `"actor_user_id": "operator"`, false},
 		{"recovery text", []string{"admin", "billing", "recovery", "list", "--limit", "7"}, "provider offline", false},
 		{"recovery json", []string{"--output", "json", "admin", "billing", "recovery", "list"}, `"reservation_id": "reservation"`, false},
@@ -232,16 +266,26 @@ func TestTrialAccountCommandsUseRealRPCs(t *testing.T) {
 			if tc.name == "recover checkout interactive yes" || tc.name == "recover upgrade interactive yes" || tc.name == "notice retry interactive yes" {
 				command.SetIn(strings.NewReader("yes\n"))
 			}
+			if tc.name == "retire interactive" {
+				command.SetIn(strings.NewReader("removed-cell\n"))
+			}
+			service.retired = nil
 			command.SetArgs(tc.args)
 			err := command.Execute()
 			if (tc.name == "recover checkout refuses unconfirmed" || tc.name == "recover upgrade unconfirmed" || tc.name == "retain delivered unconfirmed" || tc.name == "notice unconfirmed" || (tc.name == "retain delivered older server" || tc.name == "notice older server")) && service.recoveryCalls != callsBefore {
 				t.Fatal("unconfirmed request moved money")
+			}
+			if strings.HasPrefix(tc.name, "retire ") && tc.fail && service.retired != nil {
+				t.Fatalf("a refused retirement reached Commodore: %v", service.retired)
 			}
 			if tc.fail {
 				if err == nil || !strings.Contains(err.Error(), tc.want) {
 					t.Fatalf("error=%v want %s", err, tc.want)
 				}
 				return
+			}
+			if strings.HasPrefix(tc.name, "retire") && (service.retired.GetClusterId() != "removed-cell" || service.retired.GetReason() != "decommissioned") {
+				t.Fatalf("retirement request=%v", service.retired)
 			}
 			if err != nil {
 				t.Fatal(err)

@@ -1615,3 +1615,14 @@ func (c *GRPCClient) AdminDeactivateTenant(ctx context.Context, req *commodorepb
 func (c *GRPCClient) AdminListAccountHistory(ctx context.Context, req *commodorepb.AdminListAccountHistoryRequest) (*commodorepb.AdminListAccountHistoryResponse, error) {
 	return c.user.AdminListAccountHistory(ctx, req)
 }
+
+// AdminGetTenantAccountState reads closure synchronization and pending session
+// stops. Requires a platform-operator JWT.
+func (c *GRPCClient) AdminGetTenantAccountState(ctx context.Context, tenantID string) (*commodorepb.TenantAccountState, error) {
+	return c.user.AdminGetTenantAccountState(ctx, &commodorepb.AdminGetTenantAccountStateRequest{TenantId: tenantID})
+}
+
+// AdminRetireIngestCell records a permanently removed cell. Requires a platform-operator JWT.
+func (c *GRPCClient) AdminRetireIngestCell(ctx context.Context, req *commodorepb.AdminRetireIngestCellRequest) (*commodorepb.AdminRetireIngestCellResponse, error) {
+	return c.user.AdminRetireIngestCell(ctx, req)
+}

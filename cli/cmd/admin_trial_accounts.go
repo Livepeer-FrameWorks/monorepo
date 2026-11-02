@@ -165,9 +165,10 @@ func confirmTenantClosure(actual, confirmed string, yes bool) error {
 	return nil
 }
 
-// newAdminTenantsGetCmd reads one tenant by UUID without scanning the tenant list.
+// newAdminTenantsGetCmd reads one tenant by UUID without scanning the tenant
+// list, with its closure synchronization and pending session stops.
 func newAdminTenantsGetCmd() *cobra.Command {
-	return &cobra.Command{Use: "get <tenant-id>", Short: "Read a tenant by UUID", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	return &cobra.Command{Use: "get <tenant-id>", Short: "Read a tenant by UUID with its closure state", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		id, err := uuid.Parse(args[0])
 		if err != nil {
 			return err
@@ -184,12 +185,31 @@ func newAdminTenantsGetCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		state, stateErr := readTenantAccountState(cmd.Context(), id.String())
 		if output == "json" {
-			return writeProtoJSON(cmd.OutOrStdout(), response)
+			return writeTenantWithAccountStateJSON(cmd.OutOrStdout(), response, state, stateErr)
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "%s (%s)\n", response.GetTenant().GetName(), response.GetTenant().GetId())
+		if stateErr != nil {
+			ux.Warn(cmd.OutOrStdout(), fmt.Sprintf("Closure state unavailable from Commodore: %v", stateErr))
+			return nil
+		}
+		writeTenantAccountState(cmd.OutOrStdout(), state)
 		return nil
 	}}
+}
+
+// readTenantAccountState reads Commodore's account state with the operator JWT.
+func readTenantAccountState(ctx context.Context, tenantID string) (*commodorepb.TenantAccountState, error) {
+	client, cfg, cleanup, err := commodoreGRPCClientFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	defer client.Close()
+	callCtx, cancel := adminRPCContext(ctx, cfg.Auth.JWT)
+	defer cancel()
+	return client.AdminGetTenantAccountState(callCtx, tenantID)
 }
 
 // newAdminTenantsHistoryCmd reads private operator lifecycle reasons with stable pagination.
@@ -215,6 +235,9 @@ func newAdminTenantsHistoryCmd() *cobra.Command {
 		}
 		if output == "json" {
 			return writeProtoJSON(cmd.OutOrStdout(), response)
+		}
+		if state := response.GetAccountState(); state != nil {
+			writeTenantAccountState(cmd.OutOrStdout(), state)
 		}
 		if len(response.GetEntries()) == 0 {
 			fmt.Fprintln(cmd.OutOrStdout(), "No account history found.")
