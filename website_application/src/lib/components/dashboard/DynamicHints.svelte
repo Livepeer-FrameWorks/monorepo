@@ -36,6 +36,18 @@
       priority: 100,
     },
     {
+      id: "go-live-browser",
+      icon: "Signal",
+      iconColor: "text-primary",
+      title: "Go Live from Your Browser",
+      getDescription: () =>
+        "Broadcast your camera and screen from this tab with StreamCrafter. No encoder to install.",
+      link: "/go-live",
+      linkText: "Open Go Live",
+      condition: () => hasStreams && !hasLiveStreams,
+      priority: 90,
+    },
+    {
       id: "obs-setup",
       icon: "Settings2",
       iconColor: "text-info",
@@ -145,24 +157,21 @@
   function dismissHint() {
     if (currentHint) {
       dismissedHints = [...dismissedHints, currentHint.id];
-      // Save to localStorage
-      if (typeof window !== "undefined") {
+      try {
         localStorage.setItem("dismissedHints", JSON.stringify(dismissedHints));
+      } catch {
+        // Storage can be blocked; the dismissal then lasts for this page view.
       }
     }
   }
 
-  // Load dismissed hints from localStorage on mount
   $effect(() => {
-    if (typeof window !== "undefined") {
+    try {
       const stored = localStorage.getItem("dismissedHints");
-      if (stored) {
-        try {
-          dismissedHints = JSON.parse(stored);
-        } catch {
-          dismissedHints = [];
-        }
-      }
+      const parsed: unknown = stored ? JSON.parse(stored) : [];
+      dismissedHints = Array.isArray(parsed) ? parsed.filter((v) => typeof v === "string") : [];
+    } catch {
+      dismissedHints = [];
     }
   });
 

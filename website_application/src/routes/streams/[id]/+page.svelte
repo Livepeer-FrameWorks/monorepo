@@ -812,6 +812,7 @@
   const PlayIcon = getIconComponent("Play");
   const ShieldCheckIcon = getIconComponent("ShieldCheck");
   const MapPinIcon = getIconComponent("MapPin");
+  const SignalIcon = getIconComponent("Signal");
 </script>
 
 <svelte:head>
@@ -863,6 +864,18 @@
 
       {#if stream && !loading}
         <div class="flex items-center space-x-2">
+          {#if stream.ingestMode === "PUSH" && stream.streamId}
+            <Button
+              variant="outline"
+              size="sm"
+              class="gap-2"
+              href={`${resolve("/go-live")}?stream=${encodeURIComponent(stream.streamId)}`}
+            >
+              <SignalIcon class="w-4 h-4" />
+              <span class="hidden sm:inline">Go live in browser</span>
+              <span class="sm:hidden">Go Live</span>
+            </Button>
+          {/if}
           <!-- Analytics Button -->
           <Button
             variant="ghost"

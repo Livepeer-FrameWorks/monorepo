@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { resolve } from "$app/paths";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Badge } from "$lib/components/ui/badge";
@@ -76,6 +77,9 @@
   }: Props = $props();
 
   let copiedField = $state<string | null>(null);
+  let goLiveHref = $derived(
+    stream.streamId ? `${resolve("/go-live")}?stream=${encodeURIComponent(stream.streamId)}` : null
+  );
 
   function clusterName(clusterId: string) {
     return (
@@ -107,7 +111,7 @@
       name: "WHIP",
       icon: "Globe",
       description: "WebRTC HTTP Ingest Protocol - browser-based streaming",
-      setup: "Use with StreamCrafter SDK: npm i @livepeer-frameworks/streamcrafter-react",
+      setup: "Broadcast from this browser in Go Live, or embed the StreamCrafter SDK in your app",
     },
   ];
 
@@ -131,6 +135,7 @@
   const LoaderIcon = getIconComponent("Loader");
   const LinkIcon = getIconComponent("Link");
   const ActivityIcon = getIconComponent("Activity");
+  const SignalIcon = getIconComponent("Signal");
 </script>
 
 <div class="dashboard-grid border-t border-[hsl(var(--tn-fg-gutter)/0.3)]">
@@ -296,6 +301,12 @@
             </div>
             {#if protocol.setup}
               <p class="text-xs text-muted-foreground/70 mt-1">{protocol.setup}</p>
+            {/if}
+            {#if protocol.key === "whip" && goLiveHref}
+              <Button href={goLiveHref} variant="outline" size="sm" class="mt-3 gap-2">
+                <SignalIcon class="w-4 h-4" />
+                Go live in browser
+              </Button>
             {/if}
           </div>
         {/each}

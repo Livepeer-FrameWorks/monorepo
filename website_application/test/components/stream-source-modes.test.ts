@@ -21,6 +21,16 @@ describe("stream source mode setup", () => {
     expect(screen.queryByText("Stream Keys Management")).toBeNull();
   });
 
+  it("offers Go Live for a pushed stream's WHIP ingest", () => {
+    render(StreamSetupPanel, {
+      stream: { streamId: "stream-3", streamKey: "key-3", ingestMode: "PUSH" },
+    });
+
+    const link = screen.getByText("Go live in browser").closest("a");
+    expect(link?.getAttribute("href")).toBe("/go-live?stream=stream-3");
+    expect(screen.queryByText(/npm i @livepeer-frameworks/)).toBeNull();
+  });
+
   it("shows only redacted managed-source metadata", () => {
     render(StreamSetupPanel, {
       stream: {
