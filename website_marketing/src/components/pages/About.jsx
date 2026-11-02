@@ -9,8 +9,6 @@ import SovereigntyNote from "../shared/SovereigntyNote";
 import { featureOf, showcaseTiers } from "@/lib/featureStatus";
 import { signupUrl } from "@/lib/siteLinks";
 import { contactPath } from "@/lib/contactTopics";
-
-const streamcrafter = featureOf(status, "streamcrafter");
 import {
   MarketingHero,
   MarketingBand,
@@ -28,6 +26,8 @@ import {
   MarketingStackedSeam,
   SectionDivider,
 } from "@/components/marketing";
+
+const streamcrafter = featureOf(status, "streamcrafter");
 
 const About = () => {
   const team = [

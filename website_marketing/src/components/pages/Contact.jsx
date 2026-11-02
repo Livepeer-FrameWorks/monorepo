@@ -58,7 +58,8 @@ const Contact = () => {
   );
   const search = isClient ? location.search : "";
   const urlTopic = contactTopic(new URLSearchParams(search).get("topic"));
-  // A topic picked in the form applies until the URL names another one.
+  // A topic picked in the form sets the submitted value until the URL names
+  // another one; the hero follows the URL topic only.
   const [topicChoice, setTopicChoice] = useState(null);
   const topic =
     topicChoice && topicChoice.search === search ? contactTopic(topicChoice.id) : urlTopic;
@@ -310,8 +311,8 @@ const Contact = () => {
       <MarketingHero
         seed="/contact"
         eyebrow="Contact"
-        title={topic.title}
-        description={topic.description}
+        title={urlTopic.title}
+        description={urlTopic.description}
         align="left"
         surface="gradient"
         support="Email • Discord • Forum • Enterprise requests"
