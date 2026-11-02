@@ -1,11 +1,10 @@
 import { useState } from "react";
+import { Link } from "react-router";
+import status from "@/data/status.json";
+import { compactLabel, featureOf, statusKey } from "@/lib/featureStatus";
 
-const STATUS_LABELS = {
-  available: "Available",
-  expanding: "Expanding",
-  next: "Next",
-};
-
+// Each chip names a registry feature; its label and colour come from
+// status.json, so the journey cannot disagree with the showcase or the docs.
 const workflows = [
   {
     id: "broadcast",
@@ -17,11 +16,11 @@ const workflows = [
         verb: "Bring it in",
         title: "Contribution",
         detail:
-          "SRT, RIST, RTMP, HLS and MPEG-TS today; physical and local sources are being productized.",
+          "Push SRT, RTMP or WHIP, or pull RIST, HLS and MPEG-TS sources; physical and local sources are being productized.",
         features: [
-          { label: "SRT · RIST · MPEG-TS", status: "available" },
-          { label: "SCTE-35 + HLS I/O", status: "expanding" },
-          { label: "SDI · NDI · devices", status: "next" },
+          { label: "SRT · RTMP · WHIP push", id: "streams" },
+          { label: "SCTE-35 passthrough", id: "scte35-cues" },
+          { label: "SDI · NDI · devices", id: "device-discovery-contribution-inputs" },
         ],
       },
       {
@@ -30,9 +29,9 @@ const workflows = [
         detail:
           "Preserve the source, create renditions, add cue metadata, and place work where capacity exists.",
         features: [
-          { label: "Transmux + passthrough", status: "available" },
-          { label: "ABR transcoding", status: "expanding" },
-          { label: "Composition + SSAI", status: "next" },
+          { label: "Transmux + passthrough", id: "streams" },
+          { label: "ABR transcoding", id: "gateway-backed-transcoding" },
+          { label: "Composition + SSAI", id: "composition" },
         ],
       },
       {
@@ -41,9 +40,9 @@ const workflows = [
         detail:
           "Route each viewer to an eligible edge and fan the same live source out to external destinations.",
         features: [
-          { label: "HLS · DASH · WebRTC", status: "available" },
-          { label: "Geo + health routing", status: "available" },
-          { label: "Multistream targets", status: "available" },
+          { label: "HLS · DASH · WebRTC", id: "playback" },
+          { label: "Geo + health routing", id: "viewer-routing" },
+          { label: "Multistream targets", id: "multistream-targets" },
         ],
       },
       {
@@ -52,9 +51,9 @@ const workflows = [
         detail:
           "Turn the live buffer into durable recordings, chapters, clips, thumbnails, and replayable assets.",
         features: [
-          { label: "24/7 DVR", status: "available" },
-          { label: "Clips + VOD", status: "available" },
-          { label: "Scheduled programming", status: "next" },
+          { label: "24/7 DVR", id: "dvr-recordings" },
+          { label: "Clips + VOD", id: "clips" },
+          { label: "Scheduled programming", id: "scheduled-recordings" },
         ],
       },
       {
@@ -63,9 +62,9 @@ const workflows = [
         detail:
           "Connect media health, routing decisions, player experience, usage, and automation in one view.",
         features: [
-          { label: "Routing telemetry", status: "available" },
-          { label: "Viewer QoE", status: "expanding" },
-          { label: "Incidents + alerts", status: "expanding" },
+          { label: "Routing telemetry", id: "viewer-routing" },
+          { label: "Viewer QoE", id: "analytics" },
+          { label: "Incidents + alerts", id: "incidents-and-alerts" },
         ],
       },
     ],
@@ -81,20 +80,20 @@ const workflows = [
         title: "Go live",
         detail: "Publish from StreamCrafter, OBS, a hardware encoder, or an upstream feed.",
         features: [
-          { label: "WHIP · RTMP · SRT", status: "available" },
-          { label: "Browser studio", status: "available" },
-          { label: "Remote guests", status: "next" },
+          { label: "WHIP · RTMP · SRT", id: "streams" },
+          { label: "StreamCrafter browser studio", id: "streamcrafter" },
+          { label: "Remote guests", id: "conferencing" },
         ],
       },
       {
         verb: "Shape it",
         title: "Produce",
         detail:
-          "Mix browser sources now and move heavier processing to the right media or compute node.",
+          "Mix cameras, screens, and media files into scenes in the browser now; server-side production comes next.",
         features: [
-          { label: "Browser composition", status: "available" },
-          { label: "Live renditions", status: "expanding" },
-          { label: "On-edge AI", status: "next" },
+          { label: "Scenes, layers, transitions", id: "streamcrafter" },
+          { label: "StreamCrafter cloud production", id: "composition" },
+          { label: "On-edge AI", id: "live-ai" },
         ],
       },
       {
@@ -103,9 +102,9 @@ const workflows = [
         detail:
           "Serve your own player while pushing the same event to social and partner platforms.",
         features: [
-          { label: "Player SDKs", status: "available" },
-          { label: "Multistreaming", status: "available" },
-          { label: "Playback policies", status: "available" },
+          { label: "Player SDKs", id: "player-sdks" },
+          { label: "Multistreaming", id: "multistream-targets" },
+          { label: "Playback policies", id: "playback-access-control" },
         ],
       },
       {
@@ -114,9 +113,9 @@ const workflows = [
         detail:
           "Keep a rewind window live, preserve the event, and cut moments without a separate media pipeline.",
         features: [
-          { label: "Live rewind", status: "available" },
-          { label: "Recordings + clips", status: "available" },
-          { label: "Sprite previews", status: "expanding" },
+          { label: "Live rewind", id: "dvr-recordings" },
+          { label: "Recordings + clips", id: "clips" },
+          { label: "Sprite previews", id: "thumbnails-and-previews" },
         ],
       },
       {
@@ -124,9 +123,9 @@ const workflows = [
         title: "See the experience",
         detail: "Measure who watched, where they landed, and whether playback felt healthy.",
         features: [
-          { label: "Live audience", status: "available" },
-          { label: "Startup + buffering", status: "expanding" },
-          { label: "VOD retention", status: "expanding" },
+          { label: "Viewer routing", id: "viewer-routing" },
+          { label: "Startup + buffering", id: "analytics" },
+          { label: "VOD retention", id: "analytics" },
         ],
       },
     ],
@@ -143,9 +142,9 @@ const workflows = [
         detail:
           "Give every creator or channel a managed input with API-controlled credentials and placement.",
         features: [
-          { label: "Stream keys", status: "available" },
-          { label: "Direct browser ingest", status: "available" },
-          { label: "Pull-source lifecycle", status: "expanding" },
+          { label: "Stream keys", id: "stream-keys" },
+          { label: "Direct browser ingest", id: "streamcrafter" },
+          { label: "Pull-source lifecycle", id: "pull-streams" },
         ],
       },
       {
@@ -154,9 +153,9 @@ const workflows = [
         detail:
           "Use APIs and reusable components instead of binding product logic to one hosted video vendor.",
         features: [
-          { label: "GraphQL API", status: "expanding" },
-          { label: "React · Svelte · Web Components", status: "available" },
-          { label: "Backend SDKs", status: "available" },
+          { label: "GraphQL API", id: "developer-api" },
+          { label: "React · Svelte · Web Components", id: "player-sdks" },
+          { label: "Backend SDKs", id: "backend-sdks" },
         ],
       },
       {
@@ -165,9 +164,9 @@ const workflows = [
         detail:
           "Resolve the right playback path and enforce public, signed, or application-defined access.",
         features: [
-          { label: "Adaptive player", status: "available" },
-          { label: "JWT + webhook auth", status: "available" },
-          { label: "DRM", status: "next" },
+          { label: "Adaptive player", id: "player-sdks" },
+          { label: "JWT + webhook auth", id: "playback-access-control" },
+          { label: "DRM", id: "drm" },
         ],
       },
       {
@@ -175,9 +174,9 @@ const workflows = [
         title: "Manage assets",
         detail: "Give live recordings, uploads, clips, and retention one consistent lifecycle.",
         features: [
-          { label: "DVR · VOD · clips", status: "available" },
-          { label: "Retention policy", status: "available" },
-          { label: "Upload hardening", status: "expanding" },
+          { label: "DVR · VOD · clips", id: "vod" },
+          { label: "Retention policy", id: "media-retention" },
+          { label: "Upload hardening", id: "vod-upload-validation" },
         ],
       },
       {
@@ -186,18 +185,40 @@ const workflows = [
         detail:
           "Let people, software, and agents use the same controls and the same operational evidence.",
         features: [
-          { label: "Dashboard · API · MCP", status: "available" },
-          { label: "Skipper diagnostics", status: "expanding" },
-          { label: "Event webhooks", status: "available" },
+          { label: "Dashboard · API · MCP", id: "agents-mcp" },
+          { label: "Skipper diagnostics", id: "skipper" },
+          { label: "Event webhooks", id: "outbound-webhooks" },
         ],
       },
     ],
   },
 ];
 
+const resolveChip = (chip) => {
+  const feature = featureOf(status, chip.id);
+  return { ...chip, key: statusKey(feature), text: compactLabel(feature) };
+};
+
+// Legend entries for the chips in one workflow, in a fixed status order.
+const LEGEND_ORDER = ["available", "expanding", "beta", "next", "later"];
+const legendFor = (stages) => {
+  const seen = new Map();
+  for (const stage of stages) {
+    for (const chip of stage.features) {
+      if (!seen.has(chip.key)) seen.set(chip.key, chip.text);
+    }
+  }
+  return LEGEND_ORDER.filter((key) => seen.has(key)).map((key) => ({ key, text: seen.get(key) }));
+};
+
 export default function StreamJourney() {
   const [activeId, setActiveId] = useState(workflows[0].id);
   const active = workflows.find((workflow) => workflow.id === activeId) ?? workflows[0];
+  const stages = active.stages.map((stage) => ({
+    ...stage,
+    features: stage.features.map(resolveChip),
+  }));
+  const legend = legendFor(stages);
 
   return (
     <div className="stream-journey">
@@ -220,7 +241,7 @@ export default function StreamJourney() {
       <div id="stream-journey-panel" role="tabpanel" className="stream-journey__panel">
         <p className="stream-journey__summary">{active.summary}</p>
         <ol className="stream-journey__stages">
-          {active.stages.map((stage, index) => (
+          {stages.map((stage, index) => (
             <li key={stage.verb} className="stream-journey__stage">
               <div className="stream-journey__stage-head">
                 <span className="stream-journey__index">{String(index + 1).padStart(2, "0")}</span>
@@ -233,8 +254,8 @@ export default function StreamJourney() {
               <ul className="stream-journey__features">
                 {stage.features.map((feature) => (
                   <li key={feature.label}>
-                    <span className="stream-journey__status" data-status={feature.status}>
-                      {STATUS_LABELS[feature.status]}
+                    <span className="stream-journey__status" data-status={feature.key}>
+                      {feature.text}
                     </span>
                     <span>{feature.label}</span>
                   </li>
@@ -243,6 +264,21 @@ export default function StreamJourney() {
             </li>
           ))}
         </ol>
+
+        <div className="stream-journey__legend">
+          <ul aria-label="Status legend">
+            {legend.map((entry) => (
+              <li key={entry.key}>
+                <span className="stream-journey__status" data-status={entry.key}>
+                  {entry.text}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <Link to="/showcase" className="stream-journey__legend-link">
+            What ships today and what comes next <span aria-hidden="true">→</span>
+          </Link>
+        </div>
 
         <div className="stream-journey__control">
           <span>One control plane</span>

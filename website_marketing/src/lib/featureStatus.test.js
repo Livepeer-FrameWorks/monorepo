@@ -8,6 +8,7 @@ import {
   roadmapHref,
   showcaseLink,
   showcaseTiers,
+  statusKey,
   statusTone,
   tierAnchor,
 } from "./featureStatus.js";
@@ -47,6 +48,14 @@ test("compact labels say Available, Expanding or Beta for shipped work and the t
     featureOf(status, "streamcrafter").tag
   );
   assert.equal(compactLabel(featureOf(status, "drm")), featureOf(status, "drm").tag);
+});
+
+test("status keys follow registry status, maturity and horizon", () => {
+  assert.equal(statusKey(featureOf(status, "streams")), "available");
+  assert.equal(statusKey(featureOf(status, "pull-streams")), "expanding");
+  assert.equal(statusKey(featureOf(status, "streamcrafter")), "beta");
+  assert.equal(statusKey(featureOf(status, "drm")), "next");
+  assert.equal(statusKey(featureOf(status, "sdk-languages")), "later");
 });
 
 test("tones separate shipping, beta, next and later", () => {

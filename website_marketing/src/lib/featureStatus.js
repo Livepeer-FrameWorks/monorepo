@@ -43,6 +43,14 @@ export function compactLabel(feature) {
   return feature.maturity ? feature.tag : feature.availability;
 }
 
+// Styling key for a status chip: available, expanding, or beta for shipped
+// work, otherwise the horizon (next or later).
+export function statusKey(feature) {
+  if (feature.horizon !== "now") return feature.horizon;
+  if (feature.maturity) return "beta";
+  return feature.status === "shipped" ? "available" : "expanding";
+}
+
 // Showcase groups in display order, each with its anchor and features.
 export function showcaseTiers(status) {
   return status.tiers.map((tier) => ({

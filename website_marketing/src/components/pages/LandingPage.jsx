@@ -22,6 +22,7 @@ import {
   AgentPipelineStrip,
   DeploymentModes,
   MultistreamFanout,
+  StudioComposite,
   DashboardFrame,
   StatRow,
   RetentionCurve,
@@ -38,10 +39,19 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { useState, useEffect, useMemo, useRef } from "react";
+import { Link } from "react-router";
 import config from "../../config";
 import pricingCatalog from "@/data/pricing-catalog.json";
+import status from "@/data/status.json";
+import { compactLabel, featureOf, statusKey, tierAnchor, tierOf } from "@/lib/featureStatus";
+import { docsLink, signupUrl } from "@/lib/siteLinks";
+import { contactPath } from "@/lib/contactTopics";
+import StatusTag from "../shared/StatusTag";
 
 const paygCatalog = pricingCatalog.tiers.find((t) => t.id === "payg");
+const freeCatalog = pricingCatalog.tiers.find((t) => t.id === "free");
+const streamcrafter = featureOf(status, "streamcrafter");
+const cloudProduction = featureOf(status, "composition");
 const lowestPaidBase = Math.min(
   ...pricingCatalog.tiers.filter((t) => t.basePrice > 0).map((t) => t.basePrice)
 );
@@ -105,18 +115,42 @@ function DeferredNetworkMap() {
     >
       {NetworkMapComponent ? <NetworkMapComponent /> : null}
       <nav className="network-viz-actions" aria-label="Explore the network">
-        <a href="/network">
+        <Link to="/network">
           <span>FrameWorks topology</span>
-          <span aria-hidden="true">↗</span>
-        </a>
-        <a href="/network?view=livepeer">
+          <span aria-hidden="true">→</span>
+        </Link>
+        <Link to="/network?view=livepeer">
           <span>Livepeer network</span>
-          <span aria-hidden="true">↗</span>
-        </a>
+          <span aria-hidden="true">→</span>
+        </Link>
       </nav>
     </div>
   );
 }
+
+// Preview chips name registry features; labels and colours come from status.json.
+const PREVIEW_SOURCES = [
+  ["RTMP · SRT · WHIP", "streams"],
+  ["RIST · HLS · MPEG-TS", "pull-streams"],
+  ["Browser studio", "streamcrafter"],
+  ["SDI · NDI", "device-discovery-contribution-inputs"],
+];
+const PREVIEW_OPERATIONS = [
+  ["Transmux + passthrough", "streams"],
+  ["SCTE-35 passthrough", "scte35-cues"],
+  ["ABR processing", "gateway-backed-transcoding"],
+  ["Composition + AI", "composition"],
+];
+
+const PreviewNode = ({ label, id }) => {
+  const feature = featureOf(status, id);
+  return (
+    <div className="media-control-preview__node" data-status={statusKey(feature)}>
+      <span>{label}</span>
+      <small>{compactLabel(feature)}</small>
+    </div>
+  );
+};
 
 function MediaControlPreview() {
   return (
@@ -128,16 +162,8 @@ function MediaControlPreview() {
       <div className="media-control-preview__grid">
         <div className="media-control-preview__column">
           <span className="media-control-preview__label">Sources</span>
-          {[
-            ["SRT · RIST", "available"],
-            ["RTMP · WHIP", "available"],
-            ["HLS · MPEG-TS", "available"],
-            ["SDI · NDI", "next"],
-          ].map(([label, status]) => (
-            <div key={label} className="media-control-preview__node" data-status={status}>
-              <span>{label}</span>
-              <small>{status === "next" ? "NEXT" : "LIVE"}</small>
-            </div>
+          {PREVIEW_SOURCES.map(([label, id]) => (
+            <PreviewNode key={label} label={label} id={id} />
           ))}
         </div>
 
@@ -152,18 +178,8 @@ function MediaControlPreview() {
 
         <div className="media-control-preview__column">
           <span className="media-control-preview__label">Live operations</span>
-          {[
-            ["Transmux + passthrough", "available"],
-            ["SCTE-35 + HLS I/O", "expanding"],
-            ["ABR processing", "expanding"],
-            ["Composition + AI", "next"],
-          ].map(([label, status]) => (
-            <div key={label} className="media-control-preview__node" data-status={status}>
-              <span>{label}</span>
-              <small>
-                {status === "available" ? "LIVE" : status === "expanding" ? "EXPANDING" : "NEXT"}
-              </small>
-            </div>
+          {PREVIEW_OPERATIONS.map(([label, id]) => (
+            <PreviewNode key={label} label={label} id={id} />
           ))}
         </div>
       </div>
@@ -387,18 +403,18 @@ const LandingPage = () => {
   ];
 
   const freeTierFeatures = [
-    "All self-hosted features",
-    "Shared bandwidth pool",
-    "Livepeer-backed compute",
-    "Open source & permissive licenses",
-    "No proprietary video-cloud dependency",
-    "Web dashboard with analytics included",
+    `${freeCatalog.deliveredMinutes.included.toLocaleString("en-US")} delivered minutes a month`,
+    `${freeCatalog.limits.storageGiB} GB storage with ${freeCatalog.limits.retentionDays}-day retention`,
+    `${freeCatalog.limits.maxConcurrentStreams} streams and ${freeCatalog.limits.maxConcurrentViewers} viewers at a time`,
+    "Adaptive bitrate through Livepeer transcoding",
+    "Multistreaming to other platforms",
+    "Dashboard with analytics included",
   ];
 
   const paidPlanHighlights = [
-    "Custom subdomains and hosted load balancers",
-    "Reserved processing capacity and bandwidth pools",
-    "Team collaboration and advanced analytics",
+    "Hosted load balancer and a custom subdomain",
+    "More included delivered minutes and lower overage rates",
+    "Adaptive bitrate and multistreaming on every plan",
     "Support from the video engineers who build it",
   ];
 
@@ -406,17 +422,17 @@ const LandingPage = () => {
     {
       id: "free",
       tone: "green",
-      badge: "Complete Open Stack",
+      badge: "Hosted",
       name: "Free Tier",
       price: "Free",
       period: "",
       description:
-        "Complete self-hosting stack with shared pool access. Open source with permissive licenses: deploy it anywhere.",
+        "Stream on FrameWorks infrastructure at no cost. Self-hosting the whole platform is free as well.",
       features: freeTierFeatures,
       ctaType: "external",
       ctaLabel: "Start Free",
-      ctaHref: config.appUrl,
-      note: "No credit card required · Deploy in minutes",
+      ctaHref: signupUrl(config.appUrl, "landing-pricing-free"),
+      note: "No credit card required",
     },
     {
       id: "payg",
@@ -435,7 +451,7 @@ const LandingPage = () => {
       ],
       ctaType: "internal",
       ctaLabel: "How wallet pay works",
-      ctaTo: "/pricing",
+      ctaTo: "/pricing#pay-as-you-go",
       note: "No subscription · No minimum · Agent-native",
     },
     {
@@ -446,7 +462,7 @@ const LandingPage = () => {
       price: `€${lowestPaidBase}+`,
       period: "/month",
       description:
-        "Run on FrameWorks infrastructure, connect your own edges, or combine both. Add reserved capacity, advanced analytics, and hands-on support as you scale.",
+        "Run on FrameWorks infrastructure, connect your own edges, or combine both. Larger allowances, hosted load balancing, and hands-on support as you scale.",
       features: paidPlanHighlights,
       ctaType: "internal",
       ctaLabel: "Compare paid tiers",
@@ -507,7 +523,7 @@ const LandingPage = () => {
         support="MistServer at the core. Bare-metal capacity. Open APIs. Hosted, hybrid, or fully self-hosted."
         primaryAction={{
           label: "Start Free",
-          href: config.appUrl,
+          href: signupUrl(config.appUrl, "landing-hero"),
           external: true,
           className: "cta-motion",
         }}
@@ -518,7 +534,7 @@ const LandingPage = () => {
           className: "cta-motion",
           variant: "secondary",
         }}
-        footnote="Built by the MistServer team, running our own media server on bare metal. One video stack, operated your way."
+        footnote="Built by the MistServer team, running our own media server and delivery network on bare metal. One video stack, operated your way."
         mediaSurface="none"
         media={
           <motion.div
@@ -780,9 +796,8 @@ const LandingPage = () => {
                   <CTACluster align="end">
                     <MarketingCTAButton
                       intent="secondary"
-                      href={`${docsBase}/platform/feature-matrix`}
-                      label="All capabilities"
-                      icon="book"
+                      to="/showcase"
+                      label="See the showcase"
                     />
                   </CTACluster>
                 }
@@ -826,8 +841,19 @@ const LandingPage = () => {
                         },
                         {
                           title: "Grow into physical production",
-                          description:
-                            "NDI, SDI, capture devices, PTZ control, composition, and server-side ad workflows join the same managed model as they land.",
+                          description: (
+                            <>
+                              NDI, SDI, capture devices, PTZ control, composition, and server-side
+                              ad workflows join the same managed model.{" "}
+                              <Link
+                                to={`/showcase#${tierAnchor(tierOf(status, "next").label)}`}
+                                className="landing-inline-link"
+                              >
+                                See what is coming next
+                              </Link>
+                              .
+                            </>
+                          ),
                         },
                       ]}
                       variant="list"
@@ -852,7 +878,69 @@ const LandingPage = () => {
 
         <SectionDivider />
 
-        <Section id="delivery" className="bg-brand-surface-muted landing-section--delivery">
+        <Section id="streamcrafter" className="bg-brand-surface-muted landing-section--studio">
+          <SectionContainer>
+            <MarketingBand
+              preset="foundation"
+              tone="cool"
+              texturePattern="pinlines"
+              textureNoise="film"
+            >
+              <HeadlineStack
+                eyebrow={`StreamCrafter · ${streamcrafter.tag}`}
+                title="A live production studio in the browser"
+                subtitle={streamcrafter.showcase.summary}
+                align="left"
+                underlineAlign="start"
+              />
+              <MarketingGridSplit align="stretch" stackAt="lg" seam ratio="narrow-wide">
+                <div className="slab-zone">
+                  <div className="slab-zone__body">
+                    <IconList
+                      items={streamcrafter.showcase.bullets.map((bullet) => ({
+                        title: bullet,
+                      }))}
+                      variant="list"
+                      indicator="dot"
+                      headingLevel="h3"
+                      className="landing-studio__list"
+                    />
+                    <div className="landing-studio__next">
+                      <StatusTag feature={cloudProduction.id} />
+                      <p>
+                        <strong>{cloudProduction.showcase.title}.</strong>{" "}
+                        {cloudProduction.showcase.summary}
+                      </p>
+                    </div>
+                    {streamcrafter.note ? (
+                      <p className="landing-studio__note">{streamcrafter.note}</p>
+                    ) : null}
+                  </div>
+                  <div className="slab-zone__actions">
+                    <MarketingCTAButton intent="primary" to="/stream-test" label="Try it now" />
+                    <MarketingCTAButton
+                      intent="secondary"
+                      href={docsLink(config.docsUrl, "/builders/go-live-browser")}
+                      label="Go live guide"
+                    />
+                    <MarketingCTAButton
+                      intent="secondary"
+                      to={`/showcase#${streamcrafter.id}`}
+                      label="Showcase"
+                    />
+                  </div>
+                </div>
+                <div className="marketing-figure-cell">
+                  <StudioComposite />
+                </div>
+              </MarketingGridSplit>
+            </MarketingBand>
+          </SectionContainer>
+        </Section>
+
+        <SectionDivider />
+
+        <Section id="delivery" className="bg-brand-surface landing-section--delivery">
           <SectionContainer>
             <MarketingBand
               preset="foundation"
@@ -906,7 +994,7 @@ const LandingPage = () => {
 
         <SectionDivider />
 
-        <Section id="experience" className="bg-brand-surface landing-section--experience">
+        <Section id="experience" className="bg-brand-surface-muted landing-section--experience">
           <SectionContainer>
             <MarketingBand
               preset="foundation"
@@ -1169,6 +1257,16 @@ const LandingPage = () => {
                 subtitle="You work directly with the people who have built MistServer for more than 15 years. That experience covers your whole pipeline, not just our part of it: encoders and contribution before FrameWorks, players and delivery after it."
                 align="left"
                 underlineAlign="start"
+                actionsPlacement="inline"
+                actions={
+                  <CTACluster align="end">
+                    <MarketingCTAButton
+                      intent="primary"
+                      to={contactPath("engineering")}
+                      label="Talk to the engineers"
+                    />
+                  </CTACluster>
+                }
               />
             </MarketingBand>
           </SectionContainer>
@@ -1190,7 +1288,7 @@ const LandingPage = () => {
                     Pricing
                   </>
                 }
-                subtitle="Start free with self-hosting. Upgrade for advanced processing, hosted services, and enterprise support when you need more."
+                subtitle="Start free on our hosted platform. Upgrade for more delivery, hosted load balancing, and support from our engineers when you need more."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
@@ -1264,7 +1362,7 @@ const LandingPage = () => {
               variant="band"
               primaryAction={{
                 label: "Start Free",
-                href: config.appUrl,
+                href: signupUrl(config.appUrl, "landing-final"),
                 external: true,
               }}
               secondaryAction={[
@@ -1274,8 +1372,8 @@ const LandingPage = () => {
                   external: true,
                 },
                 {
-                  label: "Talk to our team",
-                  to: "/contact",
+                  label: "Talk to the engineers",
+                  to: contactPath("engineering"),
                 },
               ]}
             />

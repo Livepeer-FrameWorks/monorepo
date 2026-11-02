@@ -2571,13 +2571,23 @@
   }
 
   @media (max-width: 48rem) {
+    /* minmax(0, 1fr) keeps a long action label from widening the column past
+       the band, which would clip the title beside it. */
     .headline-stack__frame {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
     }
 
     .headline-stack__actions--inline {
       align-items: flex-start;
+      max-width: 100%;
       margin-top: clamp(0.85rem, 3vw, 1.4rem);
+    }
+
+    .headline-stack__actions--inline .marketing-cta__button {
+      max-width: 100%;
+      height: auto;
+      white-space: normal;
+      text-align: left;
     }
   }
 
