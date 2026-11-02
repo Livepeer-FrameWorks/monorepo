@@ -31,6 +31,53 @@ scenario_tenant() { sed -n 's/^# tenant: //p' "$1" | head -1; }
 scenario_needs_test_tenant() { [ "$(scenario_tenant "$1")" = test ]; }
 scenario_needs_qa_tenant() { [ "$(scenario_tenant "$1")" = qa ]; }
 
+RUN_TOKEN_ID='' RUN_TOKEN_VALUE='' RUN_TOKEN_ERROR=''
+
+# mint_run_token <session jwt> <token name prefix> <who> [busy seconds]: the
+# run's API token for the tenant the jwt signs in to. A killed run leaves an
+# active token named with the prefix and webhook endpoints described "stack
+# scenarios"; those are revoked and deleted first. With busy seconds, a token
+# used within that window belongs to a run still in progress, so nothing is
+# changed and it returns 3. Sets RUN_TOKEN_ID and RUN_TOKEN_VALUE, or
+# RUN_TOKEN_ERROR.
+mint_run_token() {
+  local jwt=$1 prefix=$2 who=$3 busy=${4:-} stale created id name idle
+  RUN_TOKEN_ID='' RUN_TOKEN_VALUE='' RUN_TOKEN_ERROR=''
+  stale=$(gql '{developerTokensConnection(page:{first:200}){nodes{id tokenName status lastUsedAt}}}' '{}' "$jwt" |
+    jq -r --arg prefix "$prefix" --argjson now "$(date +%s)" '.data.developerTokensConnection.nodes[]?
+      | select(.status == "active" and (.tokenName | startswith($prefix)))
+      | [.id, .tokenName, (if .lastUsedAt then ($now - (.lastUsedAt | sub("\\.[0-9]+"; "") | fromdateiso8601)) else 999999 end)] | @tsv')
+  if [ -n "$busy" ]; then
+    while IFS=$'\t' read -r id name idle; do
+      [ -n "$id" ] && [ "${idle%.*}" -lt "$busy" ] || continue
+      RUN_TOKEN_ERROR="another run is in progress (its token $name was used ${idle%.*}s ago)"
+      return 3
+    done <<<"$stale"
+  fi
+  while IFS=$'\t' read -r id name idle; do
+    [ -n "$id" ] || continue
+    echo "recovering a killed run: revoking $who token $name $(gql 'mutation($id:ID!){revokeDeveloperToken(id:$id){__typename}}' \
+      "$(jq -cn --arg id "$id" '{id:$id}')" "$jwt" | jq -r '.data.revokeDeveloperToken.__typename // .errors[0].message // "?"')"
+  done <<<"$stale"
+  gql '{webhookEndpointsConnection(page:{first:200}){nodes{id description}}}' '{}' "$jwt" |
+    jq -r '.data.webhookEndpointsConnection.nodes[]? | select(.description == "stack scenarios") | .id' |
+    while IFS= read -r id; do
+      echo "recovering a killed run: deleting $who webhook endpoint $id $(gql 'mutation($id:ID!){deleteWebhookEndpoint(id:$id){__typename}}' \
+        "$(jq -cn --arg id "$id" '{id:$id}')" "$jwt" | jq -r '.data.deleteWebhookEndpoint.__typename // .errors[0].message // "?"')"
+    done
+  created=$(gql 'mutation($i:CreateDeveloperTokenInput!){createDeveloperToken(input:$i){__typename ... on DeveloperToken{id tokenValue} ... on ValidationError{message} ... on AuthError{message}}}' \
+    "$(jq -cn --arg n "$prefix$(date -u +%Y%m%dT%H%M%SZ)" \
+      '{i:{name:$n, expiresIn:1, permissions:"streams:read,streams:write,analytics:read,developer:read,developer:write,account:read,billing:read,infrastructure:read,placement:read"}}')" \
+    "$jwt")
+  RUN_TOKEN_ID=$(jq -r '.data.createDeveloperToken.id // empty' <<<"$created")
+  RUN_TOKEN_VALUE=$(jq -r '.data.createDeveloperToken.tokenValue // empty' <<<"$created")
+  if [ -z "$RUN_TOKEN_ID" ] || [ -z "$RUN_TOKEN_VALUE" ]; then
+    RUN_TOKEN_ERROR="createDeveloperToken for the $who failed: $(jq -c 'del(.data.createDeveloperToken.tokenValue)' <<<"$created" 2>/dev/null)"
+    RUN_TOKEN_ID='' RUN_TOKEN_VALUE=''
+    return 1
+  fi
+}
+
 # test_tenant_session_jwt: a live test tenant access token. Scenario 37 signs
 # out every session of the test tenant, so a refused refresh signs in again.
 test_tenant_session_jwt() {
@@ -46,7 +93,7 @@ test_tenant_session_jwt() {
 # mint the run's token for it. On failure it records why in
 # TEST_BLOCKED_REASON; test tenant scenarios then report BLOCKED.
 test_tenant_login() {
-  local env_file=$1 cluster=$2 dir code created jwt
+  local env_file=$1 cluster=$2 dir jwt
   dir=$(test_tenant_dir)
   mkdir -p "$dir" && chmod 700 "$dir"
   (umask 077 && sops --decrypt "$env_file" 2>/dev/null | sed -n 's/^STACK_TEST_TENANT_WALLET_KEY=//p' >"$dir/wallet.key")
@@ -65,26 +112,13 @@ test_tenant_login() {
   fi
   jwt=$(awk '$6 == "access_token" { print $7 }' "$dir/session.jar" | tail -1)
   TEST_TENANT_ID=$(awk '$6 == "tenant_id" { print $7 }' "$dir/session.jar" | tail -1)
-  # Any active test tenant token is a killed run's: verify-target.sh has already
-  # refused to start while another run's token is in use.
-  gql '{developerTokensConnection(page:{first:200}){nodes{id tokenName status}}}' '{}' "$jwt" |
-    jq -r --arg prefix "stack-$cluster-test-" '.data.developerTokensConnection.nodes[]?
-      | select(.status == "active" and (.tokenName | startswith($prefix))) | .id' |
-    while IFS= read -r stale; do
-      echo "recovering a killed run: revoking test tenant token $stale $(gql 'mutation($id:ID!){revokeDeveloperToken(id:$id){__typename}}' \
-        "$(jq -cn --arg id "$stale" '{id:$id}')" "$jwt" | jq -r '.data.revokeDeveloperToken.__typename // .errors[0].message // "?"')"
-    done
-  created=$(gql 'mutation($i:CreateDeveloperTokenInput!){createDeveloperToken(input:$i){__typename ... on DeveloperToken{id tokenValue} ... on ValidationError{message} ... on AuthError{message}}}' \
-    "$(jq -cn --arg n "stack-$cluster-test-$(date -u +%Y%m%dT%H%M%SZ)" \
-      '{i:{name:$n, expiresIn:1, permissions:"streams:read,streams:write,analytics:read,developer:read,developer:write,account:read,billing:read,infrastructure:read,placement:read"}}')" \
-    "$jwt")
-  TEST_TOKEN_ID=$(jq -r '.data.createDeveloperToken.id // empty' <<<"$created")
-  TEST_API_TOKEN=$(jq -r '.data.createDeveloperToken.tokenValue // empty' <<<"$created")
-  if [ -z "$TEST_TENANT_ID" ] || [ -z "$TEST_TOKEN_ID" ] || [ -z "$TEST_API_TOKEN" ]; then
-    TEST_BLOCKED_REASON="createDeveloperToken for the test tenant failed: $(jq -c 'del(.data.createDeveloperToken.tokenValue)' <<<"$created" 2>/dev/null)"
-    TEST_API_TOKEN=''
+  # verify-target.sh has already refused to start while another run's token is
+  # in use, so any active test tenant token is a killed run's.
+  if ! mint_run_token "$jwt" "stack-$cluster-test-" "test tenant" || [ -z "$TEST_TENANT_ID" ]; then
+    TEST_BLOCKED_REASON=${RUN_TOKEN_ERROR:-"the test tenant session names no tenant"}
     return 1
   fi
+  TEST_TOKEN_ID=$RUN_TOKEN_ID TEST_API_TOKEN=$RUN_TOKEN_VALUE
   echo "test tenant run API token $TEST_TOKEN_ID for tenant $TEST_TENANT_ID"
   STACK_STATE_DIR="$dir" cleanup_run_objects "$TEST_API_TOKEN" | sed 's/^cleanup:/recovering a killed run:/'
 }
@@ -160,22 +194,17 @@ QA_BLOCKED_REASON=${QA_BLOCKED_REASON:-}
 qa_tenant_dir() { printf '%s/qa-tenant' "$STACK_STATE_DIR"; }
 
 # qa_tenant_declaration <bootstrap.yaml>: the QA tenant's declared user email,
-# tier, operator grant base fee and usage waiver, tab-separated, read from the
-# gitops bootstrap overlay (accounts and purser.customer_billing).
+# tier, operator grant base fee and usage waiver, tab-separated. The gitops
+# overlay is read with the CLI's own bootstrap loader (bootstrapdecl), so a
+# declaration the release apply would reject fails here too.
 qa_tenant_declaration() {
-  awk -v ref="ref: quartermaster.tenants[$QA_TENANT_ALIAS]" '
-    function value(line) { sub(/^[^:]*:[ \t]*/, "", line); gsub(/["\047]/, "", line); return line }
-    /^[a-z_]+:/ { section = $1 }
-    section == "accounts:" && /^  - kind:/ { account = 0 }
-    section == "accounts:" && index($0, ref) { account = 1 }
-    section == "accounts:" && account && email == "" && /^ *- email:/ { email = value($0) }
-    section == "purser:" && /^    - tenant:/ { billing = 0 }
-    section == "purser:" && index($0, ref) { billing = 1 }
-    section == "purser:" && billing && /^      tier:/ { tier = value($0) }
-    section == "purser:" && billing && /^        base_fee:/ { fee = value($0) }
-    section == "purser:" && billing && /^        waive_usage:/ { waive = value($0) }
-    END { printf "%s\t%s\t%s\t%s\n", email, tier, fee, (waive == "" ? "false" : waive) }
-  ' "$1"
+  local bin="$STACK_STATE_DIR/bin/bootstrapdecl"
+  if [ ! -x "$bin" ]; then
+    mkdir -p "$STACK_STATE_DIR/bin" &&
+      (cd "$STACK_REPO/scripts/stack/bootstrapdecl" && go build -o "$bin" .) >"$STACK_STATE_DIR/bootstrapdecl-build.log" 2>&1 ||
+      { echo "bootstrapdecl build failed: $STACK_STATE_DIR/bootstrapdecl-build.log" >&2; return 1; }
+  fi
+  "$bin" "$1" "$QA_TENANT_ALIAS"
 }
 
 # qa_tenant_session_jwt: a live QA tenant access token from its own jar.
@@ -193,7 +222,7 @@ qa_tenant_session_jwt() {
 # On failure it records why in QA_BLOCKED_REASON; QA scenarios then report
 # BLOCKED.
 qa_tenant_login() {
-  local env_file=$1 declaration=$2 cluster=$3 dir body code jwt created
+  local env_file=$1 declaration=$2 cluster=$3 dir body code jwt
   dir=$(qa_tenant_dir)
   mkdir -p "$dir" && chmod 700 "$dir"
   QA_EMAIL=$(qa_tenant_declaration "$declaration" | cut -f1)
@@ -217,30 +246,11 @@ qa_tenant_login() {
   fi
   rm -f "$body"
   jwt=$(awk '$6 == "access_token" { print $7 }' "$dir/session.jar" | tail -1)
-  gql '{developerTokensConnection(page:{first:200}){nodes{id tokenName status}}}' '{}' "$jwt" |
-    jq -r --arg prefix "stack-$cluster-qa-" '.data.developerTokensConnection.nodes[]?
-      | select(.status == "active" and (.tokenName | startswith($prefix))) | .id' |
-    while IFS= read -r stale; do
-      echo "recovering a killed run: revoking QA tenant token $stale $(gql 'mutation($id:ID!){revokeDeveloperToken(id:$id){__typename}}' \
-        "$(jq -cn --arg id "$stale" '{id:$id}')" "$jwt" | jq -r '.data.revokeDeveloperToken.__typename // .errors[0].message // "?"')"
-    done
-  gql '{webhookEndpointsConnection(page:{first:200}){nodes{id description}}}' '{}' "$jwt" |
-    jq -r '.data.webhookEndpointsConnection.nodes[]? | select(.description == "stack scenarios") | .id' |
-    while IFS= read -r stale; do
-      echo "recovering a killed run: deleting QA tenant webhook endpoint $stale $(gql 'mutation($id:ID!){deleteWebhookEndpoint(id:$id){__typename}}' \
-        "$(jq -cn --arg id "$stale" '{id:$id}')" "$jwt" | jq -r '.data.deleteWebhookEndpoint.__typename // .errors[0].message // "?"')"
-    done
-  created=$(gql 'mutation($i:CreateDeveloperTokenInput!){createDeveloperToken(input:$i){__typename ... on DeveloperToken{id tokenValue} ... on ValidationError{message} ... on AuthError{message}}}' \
-    "$(jq -cn --arg n "stack-$cluster-qa-$(date -u +%Y%m%dT%H%M%SZ)" \
-      '{i:{name:$n, expiresIn:1, permissions:"streams:read,streams:write,analytics:read,developer:read,developer:write,account:read,billing:read,infrastructure:read,placement:read"}}')" \
-    "$jwt")
-  QA_TOKEN_ID=$(jq -r '.data.createDeveloperToken.id // empty' <<<"$created")
-  QA_API_TOKEN=$(jq -r '.data.createDeveloperToken.tokenValue // empty' <<<"$created")
-  if [ -z "$QA_TENANT_ID" ] || [ -z "$QA_TOKEN_ID" ] || [ -z "$QA_API_TOKEN" ]; then
-    QA_BLOCKED_REASON="createDeveloperToken for the QA tenant failed: $(jq -c 'del(.data.createDeveloperToken.tokenValue)' <<<"$created" 2>/dev/null)"
-    QA_API_TOKEN=''
+  if ! mint_run_token "$jwt" "stack-$cluster-qa-" "QA tenant" || [ -z "$QA_TENANT_ID" ]; then
+    QA_BLOCKED_REASON=${RUN_TOKEN_ERROR:-"the QA sign-in names no tenant"}
     return 1
   fi
+  QA_TOKEN_ID=$RUN_TOKEN_ID QA_API_TOKEN=$RUN_TOKEN_VALUE
   echo "QA tenant run API token $QA_TOKEN_ID for tenant $QA_TENANT_ID ($QA_EMAIL, not a platform operator)"
   STACK_STATE_DIR="$dir" cleanup_run_objects "$QA_API_TOKEN" | sed 's/^cleanup:/recovering a killed run:/'
 }

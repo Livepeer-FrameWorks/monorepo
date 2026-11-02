@@ -5,9 +5,8 @@
 # logs in as the platform operator, mints a short-lived API token for its own
 # test streams, and revokes it on exit. Scenarios declared "# tenant: qa" or
 # "# tenant: test" run as that declared tenant instead (test-tenant.sh). Only
-# scenarios declared "staging: safe"
-# run (scenarios/list.sh); this runner never provisions, restarts, drains or
-# tears anything down.
+# scenarios declared "staging: safe" run (scenarios/list.sh); this runner never
+# provisions, restarts, drains or tears anything down.
 #
 #   STACK_TARGET_CLUSTER   gitops cluster to verify (default staging)
 #   FRAMEWORKS_GITOPS_DIR  gitops checkout (default: ../gitops beside the repo)
@@ -156,41 +155,24 @@ trap cleanup_run EXIT
 # A run killed before its exit cleanup leaves its token, webhook endpoint and
 # objects behind; this run recovers them. A stack token used in the last 15
 # minutes belongs to a run still in progress, which this one must not disturb.
-stale_tokens=$(gql '{developerTokensConnection(page:{first:200}){nodes{id tokenName status lastUsedAt}}}' '{}' "$operator_jwt" |
-  jq -r --arg prefix "stack-$cluster-" --argjson now "$(date +%s)" '.data.developerTokensConnection.nodes[]?
-    | select(.status == "active" and (.tokenName | startswith($prefix)))
-    | [.id, .tokenName, (if .lastUsedAt then ($now - (.lastUsedAt | sub("\\.[0-9]+"; "") | fromdateiso8601)) else 999999 end)] | @tsv')
-while IFS=$'\t' read -r stale_id stale_name idle; do
-  [ -n "$stale_id" ] || continue
-  if [ "${idle%.*}" -lt 900 ]; then
-    echo "BLOCKED: another $cluster run is in progress (its token $stale_name was used ${idle%.*}s ago)" >&2
+mint_run_token "$operator_jwt" "stack-$cluster-" operator 900
+case $? in
+  0) ;;
+  3)
+    echo "BLOCKED: another $cluster run is in progress: $RUN_TOKEN_ERROR" >&2
     exit 2
-  fi
-  echo "recovering a killed run: revoking $stale_name $(gql 'mutation($id:ID!){revokeDeveloperToken(id:$id){__typename}}' \
-    "$(jq -cn --arg id "$stale_id" '{id:$id}')" "$operator_jwt" | jq -r '.data.revokeDeveloperToken.__typename // .errors[0].message // "?"')"
-done <<<"$stale_tokens"
+    ;;
+  *)
+    echo "BLOCKED: $RUN_TOKEN_ERROR" >&2
+    exit 2
+    ;;
+esac
+token_id=$RUN_TOKEN_ID STACK_API_TOKEN=$RUN_TOKEN_VALUE
 # No other run is in progress, so earlier runs' evidence directories hold only
 # what a killed run could not remove.
 for stale_dir in "$repo/.stack/$cluster"-*/; do
   [ "${stale_dir%/}" = "$STACK_STATE_DIR" ] || purge_run_credentials "$stale_dir"
 done
-gql '{webhookEndpointsConnection(page:{first:200}){nodes{id description}}}' '{}' "$operator_jwt" |
-  jq -r '.data.webhookEndpointsConnection.nodes[]? | select(.description == "stack scenarios") | .id' |
-  while IFS= read -r stale_endpoint; do
-    echo "recovering a killed run: deleting webhook endpoint $stale_endpoint $(gql 'mutation($id:ID!){deleteWebhookEndpoint(id:$id){__typename}}' \
-      "$(jq -cn --arg id "$stale_endpoint" '{id:$id}')" "$operator_jwt" | jq -r '.data.deleteWebhookEndpoint.__typename // .errors[0].message // "?"')"
-  done
-
-created=$(gql 'mutation($i:CreateDeveloperTokenInput!){createDeveloperToken(input:$i){__typename ... on DeveloperToken{id tokenValue} ... on ValidationError{message} ... on AuthError{message}}}' \
-  "$(jq -cn --arg n "stack-$cluster-$(date -u +%Y%m%dT%H%M%SZ)" \
-    '{i:{name:$n, expiresIn:1, permissions:"streams:read,streams:write,analytics:read,developer:read,developer:write,account:read,infrastructure:read,placement:read"}}')" \
-  "$operator_jwt")
-token_id=$(jq -r '.data.createDeveloperToken.id // empty' <<<"$created")
-STACK_API_TOKEN=$(jq -r '.data.createDeveloperToken.tokenValue // empty' <<<"$created")
-if [ -z "$token_id" ] || [ -z "$STACK_API_TOKEN" ]; then
-  echo "BLOCKED: createDeveloperToken failed: $(jq -c 'del(.data.createDeveloperToken.tokenValue)' <<<"$created" 2>/dev/null)" >&2
-  exit 2
-fi
 export STACK_TENANT_ID STACK_API_TOKEN
 echo "run API token $token_id for tenant $STACK_TENANT_ID"
 # Scenario objects a killed run left (its ledger died with it, so by name).

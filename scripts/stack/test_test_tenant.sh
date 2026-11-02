@@ -134,17 +134,83 @@ purser:
         base_fee: "5"
         reason: Stack test tenant
 EOF
-declaration_read() {
+declared() { # declared <bootstrap.yaml>: qa_tenant_declaration's output for it
   (
+    export STACK_STATE_DIR="$work/decl" STACK_REPO="$here/../.."
+    mkdir -p "$STACK_STATE_DIR"
     # shellcheck source=scripts/stack/test-tenant.sh
     . "$here/test-tenant.sh" || exit 1
-    [ "$(qa_tenant_declaration "$work/bootstrap.yaml")" = $'qa@example.test\tenterprise\t0\ttrue' ]
+    qa_tenant_declaration "$1"
   )
 }
+declaration_read() { [ "$(declared "$work/bootstrap.yaml")" = $'qa@example.test\tenterprise\t0\ttrue' ]; }
 expect "the QA tenant's email, tier and grant come from its own gitops rows" declaration_read
+# The same declaration in another YAML layout (flow style, other indentation)
+# reads the same, and a field the CLI loader rejects fails the read.
+cat >"$work/bootstrap-reformatted.yaml" <<'EOF'
+purser:
+    customer_billing:
+        - {tenant: {ref: "quartermaster.tenants[frameworks-qa]"}, model: postpaid, tier: enterprise,
+           operator_grant: {base_fee: "0", waive_usage: true, reason: Internal QA account}}
+accounts:
+    - tenant: {ref: "quartermaster.tenants[frameworks-qa]"}
+      kind: customer
+      users: [{email: qa@example.test, role: owner}]
+EOF
+declaration_survives_reformat() { [ "$(declared "$work/bootstrap-reformatted.yaml")" = $'qa@example.test\tenterprise\t0\ttrue' ]; }
+expect "the QA declaration reads the same from a reformatted overlay" declaration_survives_reformat
+{ cat "$work/bootstrap.yaml"; printf '      tierr: typo\n'; } >"$work/bootstrap-typo.yaml"
+declaration_rejects_unknown_field() { ! declared "$work/bootstrap-typo.yaml" >/dev/null 2>&1; }
+expect "an overlay the CLI loader rejects gives no QA declaration" declaration_rejects_unknown_field
+
+# mint_run_token recovers a killed run's token and webhook endpoint before it
+# mints, and leaves a token another run used recently alone.
+mint() { # mint <token last used, seconds ago>: RUN_TOKEN_* and the mutations it sent
+  (
+    export STACK_STATE_DIR="$work/mint"
+    MINT_USED=$(jq -rn --argjson t "$(($(date +%s) - $1))" '$t | todate | sub("Z$"; ".123Z")')
+    export MINT_USED
+    rm -rf "$STACK_STATE_DIR" && mkdir -p "$STACK_STATE_DIR"
+    # shellcheck source=scripts/stack/test-tenant.sh
+    . "$here/test-tenant.sh" || exit 1
+    gql() {
+      echo "$1 $2" >>"$STACK_STATE_DIR/calls"
+      case "$1" in
+        *developerTokensConnection*)
+          jq -cn --arg used "$MINT_USED" '{data:{developerTokensConnection:{nodes:[
+            {id:"old",tokenName:"stack-x-qa-1",status:"active",lastUsedAt:$used},
+            {id:"other",tokenName:"personal",status:"active",lastUsedAt:null}]}}}' ;;
+        *webhookEndpointsConnection*)
+          echo '{"data":{"webhookEndpointsConnection":{"nodes":[{"id":"hook","description":"stack scenarios"},{"id":"mine","description":"prod"}]}}}' ;;
+        *createDeveloperToken*)
+          echo '{"data":{"createDeveloperToken":{"__typename":"DeveloperToken","id":"new","tokenValue":"secret"}}}' ;;
+        *) echo '{"data":{"revokeDeveloperToken":{"__typename":"DeveloperToken"},"deleteWebhookEndpoint":{"__typename":"DeleteSuccess"}}}' ;;
+      esac
+    }
+    mint_run_token jwt stack-x-qa- "QA tenant" 900 >/dev/null
+    echo "rc=$? id=$RUN_TOKEN_ID value=$RUN_TOKEN_VALUE"
+    grep '^mutation' "$STACK_STATE_DIR/calls" | sed -E 's/^mutation[^{]*\{([a-zA-Z]+).*/\1/' | tr '\n' ' '
+    echo
+    grep '^mutation' "$STACK_STATE_DIR/calls" | grep -o '"id":"[a-z]*"' | tr '\n' ' '
+  )
+}
+mint_recovers_then_mints() {
+  local out
+  out=$(mint 3600)
+  grep -q '^rc=0 id=new value=secret$' <<<"$out" &&
+    grep -q '^revokeDeveloperToken deleteWebhookEndpoint createDeveloperToken $' <<<"$out" &&
+    grep -q '^"id":"old" "id":"hook" $' <<<"$out"
+}
+expect "mint_run_token revokes a killed run's token, deletes its webhook endpoint, then mints" mint_recovers_then_mints
+mint_refuses_busy_run() {
+  local out
+  out=$(mint 60)
+  grep -q '^rc=3 id= value=$' <<<"$out" && ! grep -q '^mutation' "$work/mint/calls"
+}
+expect "mint_run_token changes nothing while another run's token is in use" mint_refuses_busy_run
 qa_check() { # qa_check <billing response>: qa_tenant_check's result against the fixture declaration
   (
-    export STACK_STATE_DIR="$work/qacheck" QA_RESPONSE="$1"
+    export STACK_STATE_DIR="$work/qacheck" STACK_REPO="$here/../.." QA_RESPONSE="$1"
     mkdir -p "$STACK_STATE_DIR"
     # shellcheck source=scripts/stack/test-tenant.sh
     . "$here/test-tenant.sh" || exit 1
