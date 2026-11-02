@@ -1,10 +1,23 @@
 {
-  "extends": "../tsconfig.json",
   "compilerOptions": {
-    "composite": false,
-    "types": ["vite/client", "node"],
+    "target": "ES2020",
+    "module": "ESNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
-    "baseUrl": "./src"
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "types": ["vite/client", "node"],
+    "paths": {
+      "@livepeer-frameworks/player-core": ["../packages/core/src/index.ts"],
+      "@livepeer-frameworks/player-react": ["../packages/react/src/index.tsx"]
+    }
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src", "vite.config.ts", "../packages/react/src/global.d.ts"]
 }
