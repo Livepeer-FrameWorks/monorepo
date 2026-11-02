@@ -54,6 +54,30 @@ describe("protocol-specific ingest requests", () => {
     );
   });
 
+  it("keeps the gateway's error code when the resolver refuses", async () => {
+    fetchDestination.mockResolvedValue({
+      data: null,
+      errors: [{ message: "permission denied", extensions: { code: "FORBIDDEN" } }],
+    });
+    await expect(
+      resolveIngestDestination(streamId, "key", undefined, "WHIP")
+    ).rejects.toMatchObject({ name: "IngestResolutionError", code: "FORBIDDEN" });
+  });
+
+  it("codes an unusable response by what was missing", async () => {
+    fetchDestination.mockResolvedValue({
+      data: {
+        resolveIngestEndpoint: {
+          primary: { ...primary, whipUrl: null },
+          metadata: { streamId },
+        },
+      },
+    });
+    await expect(
+      resolveIngestDestination(streamId, "key", undefined, "WHIP")
+    ).rejects.toMatchObject({ code: "PROTOCOL_UNAVAILABLE" });
+  });
+
   it("keeps unspecified protocol discovery available for manual setup", async () => {
     await resolveIngestDestination(streamId, "key");
     expect(fetchDestination).toHaveBeenCalledWith(
