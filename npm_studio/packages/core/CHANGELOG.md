@@ -1,5 +1,29 @@
 # @livepeer-frameworks/streamcrafter-core
 
+## 0.6.0
+
+### Minor Changes
+
+- 278b951: The echo cancellation, noise suppression and auto gain toggles live only in the Audio section; the dev-mode advanced panel no longer repeats them and shows the capture format instead. `AdvancedPanel` (Svelte) drops its `audioProcessing` and `onAudioProcessingChange` props, and `<fw-sc-advanced>` drops its `audioProcessing` property and no longer fires `fw-audio-processing-change`. `AudioProcessingSettings` is now a core type; the Svelte package still re-exports it, and `<fw-sc-audio-controls>` takes it for `browserProcessing` in place of `BrowserAudioProcessing`.
+- 267f1d1: `audioMixing` defaults to true for `IngestControllerV2` and `createStreamCrafter()`, as it already was in the React, Svelte and web component studios. Master volume, levels, media file audio and the audio processing chain work without setting it. Pass `audioMixing: false` to skip the Web Audio mixer.
+- 177c851: `IngestControllerV2.setAudioProcessing()` sets the noise gate, EQ and de-esser on the mixed audio; settings made before capture are kept and applied once the mixer runs. `setAudioDucking(true)` lowers every other source while the first camera's microphone has signal, and follows sources as they come and go. Ducking no longer overwrites a source's volume, and a source ducked when ducking is turned off returns to full level. `assessConnectionHealth()` grades the publish connection from its stats.
+
+  `IngestStats.connection.rtt` is now in milliseconds, as the advanced panels already displayed it; it was in seconds.
+
+- 94464dd: `]` and `[` switch to the next and previous scene in every drop-in studio, as they already did in the vanilla studio; a key typed into a field is left alone. Scene tiles take keyboard focus and switch with Enter or Space. The layer list in the producer panel removes a layer and edits its opacity. Core exports `handleStudioSceneHotkey()`, `adjacentSceneId()` and `isTypingTarget()`.
+- 5971599: Copy Stream Info masks the stream key in the WHIP URL it copies, and the menu item that copies the full URL says that it contains the stream key. The context menu and the quality popup take their colours from the studio theme tokens, so a themed studio no longer shows Tokyo Night colours there. Core exports `formatStreamInfo()`, and the `.fw-sc-portal` class gives the theme tokens to popups rendered outside the studio root. `StudioSettings` takes `defaultOpen` and extra sections as children.
+
+### Patch Changes
+
+- ff9532e: The studio has an Audio section while capturing, without dev mode: echo cancellation, noise suppression and auto gain for the microphones, and a noise gate with its threshold, a de-esser, a three-band EQ and ducking of other sources under the camera microphone. While live, a pill next to the status badge grades the connection as good, unstable or poor, with the send rate, packet loss and round-trip time as its title. New `StudioAudioControls` and `StudioConnectionHealth` on React and Svelte, and `<fw-sc-audio-controls>` and `<fw-sc-connection-health>` on the web component.
+- 6381331: `IngestStats` reports packet loss from the receiver's reports (`remote-inbound-rtp`), which it read as 0 before, and adds `connection.packetLossPct`, the loss over the last stats interval. The connection health pill grades on that interval loss, so it follows the link as it is now, and falls back to the receiver's round-trip time when the candidate pair has none.
+- 72334c5: Audio ducking stays on when the microphone moves to another camera after its camera is removed, and a media file that loops or is captured again stays ducked.
+- 88694e8: The READMEs say that StreamCrafter is in beta and will change a lot, and describe the producer panel, the audio section and the bound web component sub-elements.
+- 17e7159: A scene tile selects its scene with a native button (`.fw-sc-scene-select`, `aria-pressed` on the active scene) and keeps the delete button beside it instead of inside it, so screen readers announce both. The delete button has an accessible name and shows when it has keyboard focus.
+- 7fb5951: `createStreamCrafter()` instances have `setAudioProcessing()` and `setAudioDucking()`, the same as the controller.
+- Updated dependencies [30d2f3e]
+  - @livepeer-frameworks/api@0.5.0
+
 ## 0.5.0
 
 ### Minor Changes

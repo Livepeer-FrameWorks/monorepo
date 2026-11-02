@@ -1,5 +1,37 @@
 # @livepeer-frameworks/streamcrafter-svelte
 
+## 0.6.0
+
+### Minor Changes
+
+- 278b951: The echo cancellation, noise suppression and auto gain toggles live only in the Audio section; the dev-mode advanced panel no longer repeats them and shows the capture format instead. `AdvancedPanel` (Svelte) drops its `audioProcessing` and `onAudioProcessingChange` props, and `<fw-sc-advanced>` drops its `audioProcessing` property and no longer fires `fw-audio-processing-change`. `AudioProcessingSettings` is now a core type; the Svelte package still re-exports it, and `<fw-sc-audio-controls>` takes it for `browserProcessing` in place of `BrowserAudioProcessing`.
+- ff9532e: The studio has an Audio section while capturing, without dev mode: echo cancellation, noise suppression and auto gain for the microphones, and a noise gate with its threshold, a de-esser, a three-band EQ and ducking of other sources under the camera microphone. While live, a pill next to the status badge grades the connection as good, unstable or poor, with the send rate, packet loss and round-trip time as its title. New `StudioAudioControls` and `StudioConnectionHealth` on React and Svelte, and `<fw-sc-audio-controls>` and `<fw-sc-connection-health>` on the web component.
+- c626985: The bindings match on three APIs. React `StreamCrafter` and the `<fw-streamcrafter>` `resolveWhipUrl` property take a resolver that returns the destination right before each connection, as the Svelte component already did. The `<fw-streamcrafter>` `theme` property takes an object of token overrides as well as a preset name. The Svelte compositor store has `setRenderer()`, like the React `useCompositor`.
+- 94464dd: `]` and `[` switch to the next and previous scene in every drop-in studio, as they already did in the vanilla studio; a key typed into a field is left alone. Scene tiles take keyboard focus and switch with Enter or Space. The layer list in the producer panel removes a layer and edits its opacity. Core exports `handleStudioSceneHotkey()`, `adjacentSceneId()` and `isTypingTarget()`.
+- 462f661: Add Media File sits in the action bar next to Add Camera and Share Screen, in the drop-in UI and in `StudioActionBar`. A browser that cannot play a file into the stream gets the button turned off with the reason as its title. The media section of the producer panel lists the files with their playback controls. New `MediaFileButton` on React and Svelte, and `<fw-sc-media-button>` on the web component. `StudioMediaControls` no longer takes `addMediaFile`.
+- 7593ca0: The producer panel is on by default whenever the compositor runs. Turn it off with `showProducerPanel={false}` on React and Svelte, or `show-producer-panel="false"` on the web component. On the web component, `enable-compositor="false"` now turns the compositor off; before, any value of the attribute left it on.
+- 527d1a5: `StudioPreview` shows the layout toolbar over the preview while the compositor runs, as the React one does. Pass `enableCompositor={false}` to leave it out.
+
+### Patch Changes
+
+- 69a3a54: The Layout and Display labels on the compositor toolbar follow the studio locale, as they already did in the web component.
+- 5971599: Copy Stream Info masks the stream key in the WHIP URL it copies, and the menu item that copies the full URL says that it contains the stream key. The context menu and the quality popup take their colours from the studio theme tokens, so a themed studio no longer shows Tokyo Night colours there. Core exports `formatStreamInfo()`, and the `.fw-sc-portal` class gives the theme tokens to popups rendered outside the studio root. `StudioSettings` takes `defaultOpen` and extra sections as children.
+- aad2032: The Add Media File button has an accessible name, and its error note closes on a click elsewhere or Escape, like the camera menu.
+- 88694e8: The READMEs say that StreamCrafter is in beta and will change a lot, and describe the producer panel, the audio section and the bound web component sub-elements.
+- 17e7159: A scene tile selects its scene with a native button (`.fw-sc-scene-select`, `aria-pressed` on the active scene) and keeps the delete button beside it instead of inside it, so screen readers announce both. The delete button has an accessible name and shows when it has keyboard focus.
+- Updated dependencies [278b951]
+- Updated dependencies [267f1d1]
+- Updated dependencies [177c851]
+- Updated dependencies [ff9532e]
+- Updated dependencies [6381331]
+- Updated dependencies [72334c5]
+- Updated dependencies [94464dd]
+- Updated dependencies [5971599]
+- Updated dependencies [88694e8]
+- Updated dependencies [17e7159]
+- Updated dependencies [7fb5951]
+  - @livepeer-frameworks/streamcrafter-core@0.6.0
+
 ## 0.5.0
 
 ### Minor Changes

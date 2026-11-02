@@ -1,5 +1,17 @@
 # @livepeer-frameworks/player-react
 
+## 0.7.0
+
+### Minor Changes
+
+- 89afac9: `<Player>` forwards a `ref` to its `PlayerController`. The ref receives the controller once it exists and `null` after it is destroyed, so a page can read stats, tracks and events from the same controller the player uses, as `controller` already allows on `<fw-player>`.
+
+### Patch Changes
+
+- Updated dependencies [08f04dd]
+- Updated dependencies [f5c8759]
+  - @livepeer-frameworks/player-core@0.7.0
+
 ## 0.6.4
 
 ### Patch Changes
