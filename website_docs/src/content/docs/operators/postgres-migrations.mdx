@@ -208,6 +208,14 @@ Guidelines for contributors:
 8. **Use `.notx.sql` only when PostgreSQL requires autocommit** - for example
    `CREATE INDEX CONCURRENTLY`; keep the file idempotent because the SQL and
    `_migrations` insert cannot be one database transaction in that mode
+9. **Add constraints `NOT VALID` in expand and validate them in postdeploy** -
+   an expand `ADD CONSTRAINT … NOT VALID` pairs by exact name with a
+   `VALIDATE CONSTRAINT` in the same release's postdeploy phase, so adding the
+   constraint never scans existing rows under a lock. A new column carries no
+   inline `CHECK` or `REFERENCES`; add a separately named `NOT VALID` constraint
+   instead. The validator refuses an unpaired constraint in either direction. The
+   one exception is a compatibility constraint that a contract migration of the
+   same release drops.
 
 Run the validator before opening a PR:
 
