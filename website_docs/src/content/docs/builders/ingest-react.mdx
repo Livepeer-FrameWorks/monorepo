@@ -60,6 +60,7 @@ the dashboard DNS ingest URL or Foghorn's `/ingest/{streamKey}` front door inste
 | Prop                | Type                                         | Default       | Description                                                                |
 | ------------------- | -------------------------------------------- | ------------- | -------------------------------------------------------------------------- |
 | `whipUrl`           | `string`                                     | —             | Direct WHIP endpoint; takes priority over `gatewayUrl`                     |
+| `resolveWhipUrl`    | `(signal: AbortSignal) => Promise<string>`   | —             | Refresh the destination right before each connection                       |
 | `gatewayUrl`        | `string`                                     | —             | Gateway GraphQL endpoint, used with `streamKey`                            |
 | `streamKey`         | `string`                                     | —             | Stream key for gateway resolution                                          |
 | `initialProfile`    | `QualityProfile`                             | `"broadcast"` | Starting quality preset                                                    |

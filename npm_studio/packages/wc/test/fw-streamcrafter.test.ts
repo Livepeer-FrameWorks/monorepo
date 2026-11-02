@@ -95,6 +95,42 @@ describe("FwStreamCrafter", () => {
     el.remove();
   });
 
+  it("takes custom theme overrides as a property", async () => {
+    const el = document.createElement("fw-streamcrafter") as FwStreamCrafter;
+    el.setAttribute("enable-compositor", "false");
+    el.theme = { surface: "10 20% 30%" };
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    const root = el.shadowRoot!.querySelector<HTMLElement>(".fw-sc-root")!;
+    expect(root.style.getPropertyValue("--fw-sc-surface")).toBe("10 20% 30%");
+    el.remove();
+  });
+
+  it("hands resolveWhipUrl to the controller and calls the current one", async () => {
+    const first = vi.fn(async () => "https://edge.example/webrtc/first");
+    const second = vi.fn(async () => "https://edge.example/webrtc/second");
+    const el = document.createElement("fw-streamcrafter") as FwStreamCrafter;
+    el.setAttribute("whip-url", "https://edge.example/webrtc/key");
+    el.setAttribute("enable-compositor", "false");
+    el.resolveWhipUrl = first;
+    document.body.appendChild(el);
+    await el.updateComplete;
+    el.resolveWhipUrl = second;
+
+    const config = (
+      el.pc.getController() as unknown as {
+        config: { resolveWhipUrl?: (signal: AbortSignal) => Promise<string> };
+      }
+    ).config;
+    const signal = new AbortController().signal;
+    await expect(config.resolveWhipUrl?.(signal)).resolves.toBe(
+      "https://edge.example/webrtc/second"
+    );
+    expect(first).not.toHaveBeenCalled();
+    el.remove();
+  });
+
   it("keeps theme colours in tokens", () => {
     expect(source).not.toMatch(/#(1a1b26|565f89|7aa2f7|a9b1d6|c0caf5|9ece6a|f7768e)/i);
   });

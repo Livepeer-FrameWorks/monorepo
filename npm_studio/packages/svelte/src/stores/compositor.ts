@@ -74,6 +74,9 @@ export interface CompositorStore extends Readable<CompositorState> {
   applyLayout: (layout: LayoutConfig) => void;
   cycleSourceOrder: (direction?: "forward" | "backward") => void;
 
+  // Renderer
+  setRenderer: (renderer: RendererType) => void;
+
   // Lifecycle
   destroy: () => void;
 }
@@ -360,6 +363,11 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
     syncState();
   }
 
+  // The new renderer type arrives through the scene manager's rendererChanged event.
+  function setRenderer(renderer: RendererType): void {
+    controller?.getSceneManager()?.setRenderer(renderer);
+  }
+
   // Destroy
   function destroy(): void {
     unsubscribers.forEach((unsub) => unsub());
@@ -392,6 +400,7 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
 
     applyLayout,
     cycleSourceOrder,
+    setRenderer,
     destroy,
   };
 }

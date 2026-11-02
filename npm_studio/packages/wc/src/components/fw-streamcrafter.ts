@@ -46,9 +46,11 @@ import {
   type QualityProfile,
   type ReconnectionState,
   type FwThemePreset,
+  type StudioThemeOverrides,
   type SceneManager,
   type StudioSupport,
   applyStudioTheme,
+  applyStudioThemeOverrides,
   clearStudioTheme,
   createStudioTranslator,
   type StudioTranslateFn,
@@ -92,6 +94,8 @@ const _iifeScriptSrc: string | undefined =
 @customElement("fw-streamcrafter")
 export class FwStreamCrafter extends LitElement {
   @property({ type: String, attribute: "whip-url" }) whipUrl = "";
+  /** Refresh authorization/placement immediately before each connection without rebuilding capture. */
+  @property({ attribute: false }) resolveWhipUrl?: (signal: AbortSignal) => Promise<string>;
   @property({ type: String, attribute: "gateway-url" }) gatewayUrl = "";
   @property({ type: String, attribute: "stream-key" }) streamKey = "";
   @property({ type: String, attribute: "initial-profile" }) initialProfile: QualityProfile =
@@ -104,7 +108,8 @@ export class FwStreamCrafter extends LitElement {
   @property({ type: Boolean }) debug = false;
   @property({ attribute: "enable-compositor", converter: defaultTrueBoolean })
   enableCompositor = true;
-  @property({ type: String }) theme: FwThemePreset | "" = "";
+  /** A preset name (also as the `theme` attribute), or custom overrides set as a property. */
+  @property({ type: String }) theme: FwThemePreset | StudioThemeOverrides | "" = "";
   @property({ type: String, attribute: "class-name" }) className = "";
   @property({ attribute: false }) onStateChange?:
     | ((state: IngestState, context?: IngestStateContextV2) => void)
@@ -267,13 +272,23 @@ export class FwStreamCrafter extends LitElement {
     ];
   }
 
+  // The controller keeps the resolver it was built with; this reaches the current property.
+  private _callResolveWhipUrl(signal: AbortSignal): Promise<string> {
+    return (
+      this.resolveWhipUrl?.(signal) ?? Promise.reject(new Error("resolveWhipUrl is no longer set"))
+    );
+  }
+
   private _applyTheme() {
     const root = this.renderRoot.querySelector<HTMLElement>(".fw-sc-root");
     if (!root) return;
     if (!this.theme || this.theme === "default") {
       clearStudioTheme(root);
+    } else if (typeof this.theme === "object") {
+      clearStudioTheme(root);
+      applyStudioThemeOverrides(root, this.theme);
     } else {
-      applyStudioTheme(root, this.theme as FwThemePreset);
+      applyStudioTheme(root, this.theme);
     }
   }
 
@@ -398,6 +413,9 @@ export class FwStreamCrafter extends LitElement {
 
     this.pc.initialize({
       whipUrl: this._resolvedWhipUrl,
+      resolveWhipUrl: this.resolveWhipUrl
+        ? (signal) => this._callResolveWhipUrl(signal)
+        : undefined,
       profile: this.initialProfile,
       debug: this.debug,
       reconnection: { enabled: true, maxAttempts: 5 },

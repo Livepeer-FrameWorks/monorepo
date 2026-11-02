@@ -2,7 +2,13 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-const controllers = vi.hoisted(() => [] as { enableCompositor: ReturnType<typeof vi.fn> }[]);
+const controllers = vi.hoisted(
+  () =>
+    [] as {
+      enableCompositor: ReturnType<typeof vi.fn>;
+      config: { resolveWhipUrl?: (signal: AbortSignal) => Promise<string> };
+    }[]
+);
 const sceneSwitches = vi.hoisted(() => vi.fn());
 
 vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
@@ -25,8 +31,8 @@ vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
         isInitialized: () => true,
       };
     });
-    constructor() {
-      controllers.push(this);
+    constructor(public config: Record<string, unknown>) {
+      controllers.push(this as never);
     }
     on() {
       return () => {};
@@ -136,6 +142,21 @@ describe("StreamCrafter producer panel", () => {
     const copied = writeText.mock.calls[0][0];
     expect(copied).toContain("WHIP: https://edge.example/webrtc/•••");
     expect(copied).not.toContain("secret-key");
+  });
+
+  it("hands resolveWhipUrl to the controller and calls the latest one", async () => {
+    const first = vi.fn(async () => "https://edge.example/webrtc/first");
+    const second = vi.fn(async () => "https://edge.example/webrtc/second");
+    const { rerender } = render(<StreamCrafter whipUrl={WHIP_URL} resolveWhipUrl={first} />);
+    await waitFor(() => expect(controllers).toHaveLength(1));
+    rerender(<StreamCrafter whipUrl={WHIP_URL} resolveWhipUrl={second} />);
+
+    const signal = new AbortController().signal;
+    await expect(controllers[0].config.resolveWhipUrl?.(signal)).resolves.toBe(
+      "https://edge.example/webrtc/second"
+    );
+    expect(second).toHaveBeenCalledWith(signal);
+    expect(first).not.toHaveBeenCalled();
   });
 
   it("stays away when the compositor is turned off", async () => {

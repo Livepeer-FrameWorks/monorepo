@@ -65,6 +65,8 @@ import { StreamCrafterProvider } from "../context/StreamCrafterContext";
 export interface StreamCrafterProps {
   /** Direct WHIP endpoint URL */
   whipUrl?: string;
+  /** Refresh authorization/placement immediately before each connection without rebuilding capture. */
+  resolveWhipUrl?: (signal: AbortSignal) => Promise<string>;
   /** Gateway URL for endpoint resolution (alternative to whipUrl) */
   gatewayUrl?: string;
   /** Stream key for gateway mode */
@@ -462,6 +464,7 @@ const SourceRow: React.FC<SourceRowProps> = ({
 
 const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
   whipUrl,
+  resolveWhipUrl,
   gatewayUrl,
   streamKey,
   initialProfile = "broadcast",
@@ -522,9 +525,19 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
   // Track if we're waiting for gateway resolution
   const isResolvingEndpoint = !whipUrl && gatewayUrl && streamKey && endpointStatus === "loading";
 
+  // The controller keeps the resolver it was built with, so it calls through a
+  // ref and always reaches the latest prop.
+  const resolveWhipUrlRef = useRef(resolveWhipUrl);
+  resolveWhipUrlRef.current = resolveWhipUrl;
+
   // Initialize StreamCrafter hook — capture the full return for context + destructure for local use
   const hookReturn = useStreamCrafterV2({
     whipUrl: resolvedWhipUrl || "",
+    resolveWhipUrl: resolveWhipUrl
+      ? (signal) =>
+          resolveWhipUrlRef.current?.(signal) ??
+          Promise.reject(new Error("resolveWhipUrl is no longer set"))
+      : undefined,
     profile: initialProfile,
     debug,
     reconnection: { enabled: true, maxAttempts: 5 },
