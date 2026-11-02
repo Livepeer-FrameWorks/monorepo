@@ -7,10 +7,16 @@ The public Livepeer tab at `/network?view=livepeer` and `GET /v1/network/livepee
 with real gateway transcoding observations. Unknown coverage remains unknown; regional
 performance is shown separately. The platform-operator webapp can enable private
 correlation through the authenticated diagnostics route.
-The default FrameWorks tab shows infrastructure topology. Livepeer has Compare and Map
-modes with shared filters and independent worker, gateway-cluster and prober layers.
-Gateway map positions are cluster locations. Unknown prober/worker locations remain
-listed. Price and performance comparisons retain their units, region and profile.
+The default FrameWorks tab shows infrastructure topology. The Livepeer tab opens on a
+map: the toolbar sets the time window, history region and what the map shows
+(availability, observed errors or transcoding activity), and "Layers & filters" toggles
+the worker, gateway, prober and FrameWorks node layers. The side panel lists the
+observing regions and the orchestrator identities; choosing a region, orchestrator or
+prober site opens its detail with regional history, prices and measured performance.
+The view is kept in the URL, so a link reopens the same selection. Gateway map positions
+are cluster locations. Workers and probers without a known location stay listed. Prices
+and performance keep their units, region and output profile. When the platform runs no
+observer, the tab says the network view is not configured instead of offering a retry.
 
 This feature requires platform `v0.3.13` and CLI `v0.3.13` or later. Upgrade
 existing clusters with the release's ClickHouse expand migration and initialize
