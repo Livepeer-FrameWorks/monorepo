@@ -181,7 +181,7 @@ cleanup_run_objects "$STACK_API_TOKEN" | sed 's/^cleanup:/recovering a killed ru
 # declared "tenant: qa" as the QA customer.
 for path in "${scenarios[@]}"; do
   if scenario_needs_test_tenant "$path"; then
-    test_tenant_login "$gitops/secrets/$cluster.env" "$cluster" ||
+    test_tenant_login "$gitops/secrets/$cluster.env" "$gitops/clusters/$cluster/bootstrap.yaml" "$cluster" ||
       echo "WARN: $TEST_BLOCKED_REASON; test tenant scenarios will report BLOCKED" >&2
     break
   fi

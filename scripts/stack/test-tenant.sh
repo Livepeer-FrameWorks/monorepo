@@ -19,6 +19,7 @@
 # cluster's SOPS env.
 
 QA_TENANT_ALIAS=frameworks-qa
+TEST_TENANT_ALIAS=frameworks-stack-test
 TEST_TENANT_ID=${TEST_TENANT_ID:-}
 TEST_API_TOKEN=${TEST_API_TOKEN:-}
 TEST_TOKEN_ID=${TEST_TOKEN_ID:-}
@@ -89,13 +90,22 @@ test_tenant_session_jwt() {
   awk '$6 == "access_token" { print $7 }' "$dir/session.jar" | tail -1
 }
 
-# test_tenant_login <secrets env file> <cluster>: sign in as the test tenant and
-# mint the run's token for it. On failure it records why in
+# test_tenant_login <secrets env file> <bootstrap.yaml> <cluster>: sign in as the
+# test tenant and mint the run's token for it. A run never creates an account:
+# a wallet sign-in creates one for a wallet no account holds, so the key must
+# be the wallet the gitops declaration gives the test tenant's user, and the
+# sign-in must land on that declared user. On failure it records why in
 # TEST_BLOCKED_REASON; test tenant scenarios then report BLOCKED.
 test_tenant_login() {
-  local env_file=$1 cluster=$2 dir jwt
+  local env_file=$1 declaration=$2 cluster=$3 dir jwt declared email wallet address body signed_in
   dir=$(test_tenant_dir)
   mkdir -p "$dir" && chmod 700 "$dir"
+  declared=$(tenant_declaration "$declaration" "$TEST_TENANT_ALIAS")
+  email=$(cut -f1 <<<"$declared") wallet=$(cut -f5 <<<"$declared")
+  if [ -z "$email" ] || [ -z "$wallet" ]; then
+    TEST_BLOCKED_REASON="$declaration declares no account user with a wallet for $TEST_TENANT_ALIAS"
+    return 1
+  fi
   (umask 077 && sops --decrypt "$env_file" 2>/dev/null | sed -n 's/^STACK_TEST_TENANT_WALLET_KEY=//p' >"$dir/wallet.key")
   if [ ! -s "$dir/wallet.key" ]; then
     TEST_BLOCKED_REASON="no STACK_TEST_TENANT_WALLET_KEY in $env_file"
@@ -105,9 +115,22 @@ test_tenant_login() {
     TEST_BLOCKED_REASON="walletsign build failed: $dir/walletsign-build.log"
     return 1
   fi
+  address=$(STACK_WALLET_KEY=$(cat "$dir/wallet.key") "$dir/walletsign" address)
+  if [ -z "$address" ] || [ "$(tr '[:upper:]' '[:lower:]' <<<"$address")" != "$(tr '[:upper:]' '[:lower:]' <<<"$wallet")" ]; then
+    TEST_BLOCKED_REASON="STACK_TEST_TENANT_WALLET_KEY is wallet ${address:-unreadable}, not the $wallet that $declaration declares for $email"
+    return 1
+  fi
+  body="$dir/wallet-login.json"
   if ! STACK_WALLET_SIGNER="$dir/walletsign" STACK_WALLET_KEY_FILE="$dir/wallet.key" \
-    bash "$STACK_REPO/scripts/stack/wallet-login.sh" jar "$dir/session.jar"; then
+    bash "$STACK_REPO/scripts/stack/wallet-login.sh" jar "$dir/session.jar" "$body"; then
     TEST_BLOCKED_REASON="test tenant wallet sign-in failed"
+    rm -f "$body"
+    return 1
+  fi
+  signed_in=$(jq -r '.user.email // empty' "$body" 2>/dev/null)
+  rm -f "$body"
+  if [ "$(tr '[:upper:]' '[:lower:]' <<<"$signed_in")" != "$(tr '[:upper:]' '[:lower:]' <<<"$email")" ]; then
+    TEST_BLOCKED_REASON="wallet $wallet signed in as ${signed_in:-a user without an email}, not the declared $email: the declared account does not hold this wallet"
     return 1
   fi
   jwt=$(awk '$6 == "access_token" { print $7 }' "$dir/session.jar" | tail -1)
@@ -193,19 +216,21 @@ QA_BLOCKED_REASON=${QA_BLOCKED_REASON:-}
 
 qa_tenant_dir() { printf '%s/qa-tenant' "$STACK_STATE_DIR"; }
 
-# qa_tenant_declaration <bootstrap.yaml>: the QA tenant's declared user email,
-# tier, operator grant base fee and usage waiver, tab-separated. The gitops
-# overlay is read with the CLI's own bootstrap loader (bootstrapdecl), so a
-# declaration the release apply would reject fails here too.
-qa_tenant_declaration() {
+# tenant_declaration <bootstrap.yaml> <alias>: the tenant's declared user email,
+# tier, operator grant base fee, usage waiver and user wallet, tab-separated.
+# The gitops overlay is read with the CLI's own bootstrap loader
+# (bootstrapdecl), so a declaration the release apply would reject fails here
+# too.
+tenant_declaration() {
   local bin="$STACK_STATE_DIR/bin/bootstrapdecl"
   if [ ! -x "$bin" ]; then
     mkdir -p "$STACK_STATE_DIR/bin" &&
       (cd "$STACK_REPO/scripts/stack/bootstrapdecl" && go build -o "$bin" .) >"$STACK_STATE_DIR/bootstrapdecl-build.log" 2>&1 ||
       { echo "bootstrapdecl build failed: $STACK_STATE_DIR/bootstrapdecl-build.log" >&2; return 1; }
   fi
-  "$bin" "$1" "$QA_TENANT_ALIAS"
+  "$bin" "$1" "$2"
 }
+qa_tenant_declaration() { tenant_declaration "$1" "$QA_TENANT_ALIAS"; }
 
 # qa_tenant_session_jwt: a live QA tenant access token from its own jar.
 qa_tenant_session_jwt() {

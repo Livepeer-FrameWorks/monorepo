@@ -6,8 +6,9 @@
 //
 // prints one tab-separated line: the first account user's email, the
 // customer_billing tier, the operator grant's base fee and its usage waiver
-// (empty fee and "false" when the row declares no grant). It exits 1 when the
-// overlay does not parse or declares no customer account for the alias.
+// (empty fee and "false" when the row declares no grant), and that user's
+// declared wallet (empty when none). It exits 1 when the overlay does not parse
+// or declares no customer account for the alias.
 package main
 
 import (
@@ -39,10 +40,10 @@ func declaration(path, alias string) (string, error) {
 		return "", fmt.Errorf("no overlay path")
 	}
 	ref := bootstrap.TenantRefAlias(alias)
-	email := ""
+	email, wallet := "", ""
 	for _, account := range overlay.Accounts {
 		if account.Tenant == ref && len(account.Users) > 0 {
-			email = account.Users[0].Email
+			email, wallet = account.Users[0].Email, account.Users[0].Wallet
 			break
 		}
 	}
@@ -63,5 +64,5 @@ func declaration(path, alias string) (string, error) {
 		}
 		break
 	}
-	return fmt.Sprintf("%s\t%s\t%s\t%t", email, tier, fee, waive), nil
+	return fmt.Sprintf("%s\t%s\t%s\t%t\t%s", email, tier, fee, waive, wallet), nil
 }

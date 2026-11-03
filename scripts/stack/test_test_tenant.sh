@@ -111,6 +111,7 @@ accounts:
     users:
       - email: stack-test@example.test
         role: owner
+        wallet: "0x00000000000000000000000000000000000AbC01"
 
 purser:
   customer_billing:
@@ -143,7 +144,7 @@ declared() { # declared <bootstrap.yaml>: qa_tenant_declaration's output for it
     qa_tenant_declaration "$1"
   )
 }
-declaration_read() { [ "$(declared "$work/bootstrap.yaml")" = $'qa@example.test\tenterprise\t0\ttrue' ]; }
+declaration_read() { [ "$(declared "$work/bootstrap.yaml")" = $'qa@example.test\tenterprise\t0\ttrue\t' ]; }
 expect "the QA tenant's email, tier and grant come from its own gitops rows" declaration_read
 # The same declaration in another YAML layout (flow style, other indentation)
 # reads the same, and a field the CLI loader rejects fails the read.
@@ -157,7 +158,7 @@ accounts:
       kind: customer
       users: [{email: qa@example.test, role: owner}]
 EOF
-declaration_survives_reformat() { [ "$(declared "$work/bootstrap-reformatted.yaml")" = $'qa@example.test\tenterprise\t0\ttrue' ]; }
+declaration_survives_reformat() { [ "$(declared "$work/bootstrap-reformatted.yaml")" = $'qa@example.test\tenterprise\t0\ttrue\t' ]; }
 expect "the QA declaration reads the same from a reformatted overlay" declaration_survives_reformat
 { cat "$work/bootstrap.yaml"; printf '      tierr: typo\n'; } >"$work/bootstrap-typo.yaml"
 declaration_rejects_unknown_field() { ! declared "$work/bootstrap-typo.yaml" >/dev/null 2>&1; }
@@ -236,7 +237,7 @@ mkdir -p "$work/bin"
 cat >"$work/bin/walletsign" <<'EOF'
 #!/usr/bin/env bash
 [ -n "$STACK_WALLET_KEY" ] || exit 1
-case "$1" in address) echo 0xabc ;; sign) echo "sig-of-${2%%$'\n'*}" ;; esac
+case "$1" in address) echo 0x00000000000000000000000000000000000abc01 ;; sign) echo "sig-of-${2%%$'\n'*}" ;; esac
 EOF
 cat >"$work/bin/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -275,9 +276,74 @@ body_is_fresh_wallet_login() {
     STACK_WALLET_KEY_FILE="$work/wallet.key" bash "$here/wallet-login.sh" body)
   [ "$(jq -r '.path' <<<"$out")" = /auth/wallet-login ] &&
     [ "$(jq -r '.body.signature' <<<"$out")" = "sig-of-bridge wants you to sign in" ] &&
-    [ "$(jq -r '.body.address' <<<"$out")" = 0xabc ]
+    [ "$(jq -r '.body.address' <<<"$out")" = 0x00000000000000000000000000000000000abc01 ]
 }
 expect "wallet-login.sh body signs a fresh challenge for the sign-out probe" body_is_fresh_wallet_login
+
+# A run never creates an account: the test key must be the wallet the
+# declaration gives the test tenant's user, and its sign-in must land on that
+# declared user. Bridge answers a wallet no account holds by creating one.
+mkdir -p "$work/loginbin" "$work/loginrepo/scripts/stack/walletsign"
+cp "$here/wallet-login.sh" "$work/loginrepo/scripts/stack/wallet-login.sh"
+cat >"$work/loginbin/sops" <<'EOF'
+#!/usr/bin/env bash
+echo STACK_TEST_TENANT_WALLET_KEY=deadbeef
+EOF
+cat >"$work/loginbin/go" <<'EOF'
+#!/usr/bin/env bash
+cp "$FIXTURE_SIGNER" "$3"
+EOF
+cat >"$work/loginbin/curl" <<'EOF'
+#!/usr/bin/env bash
+jar='' out='' prev=''
+for a in "$@"; do
+  [ "$prev" = -c ] && jar=$a
+  [ "$prev" = -o ] && out=$a
+  prev=$a
+done
+case " $* " in
+  *"/auth/wallet-challenge"*) echo '{"message":"bridge wants you to sign in"}' ;;
+  *"/auth/wallet-login"*)
+    echo post >>"$FIXTURE_DIR/wallet-login-posts"
+    printf 'bridge\tFALSE\t/\tFALSE\t0\taccess_token\twallet-jwt\nbridge\tFALSE\t/\tFALSE\t0\ttenant_id\tsigned-tenant\n' >"$jar"
+    printf '%s' "$WALLET_LOGIN_RESPONSE" >"${out:-/dev/null}"
+    printf 200 ;;
+esac
+EOF
+chmod +x "$work/loginbin/sops" "$work/loginbin/go" "$work/loginbin/curl"
+test_login() { # test_login <declaration> <login response>: rc, TEST_BLOCKED_REASON and sign-in posts
+  (
+    export PATH="$work/loginbin:$PATH" FIXTURE_DIR="$work" FIXTURE_SIGNER="$work/bin/walletsign" \
+      STACK_STATE_DIR="$work/loginstate" STACK_REPO="$work/loginrepo" BRIDGE_URL=http://bridge.test \
+      WALLET_LOGIN_RESPONSE=$2
+    rm -rf "$STACK_STATE_DIR" "$work/wallet-login-posts"
+    mkdir -p "$STACK_STATE_DIR/bin"
+    ln -s "$work/decl/bin/bootstrapdecl" "$STACK_STATE_DIR/bin/bootstrapdecl"
+    # shellcheck source=scripts/stack/test-tenant.sh
+    . "$here/test-tenant.sh" || exit 1
+    mint_run_token() { RUN_TOKEN_ID=tok RUN_TOKEN_VALUE=val; }
+    cleanup_run_objects() { :; }
+    test_tenant_login "$work/secrets.env" "$1" staging >/dev/null 2>&1
+    echo "rc=$? tenant=$TEST_TENANT_ID reason=$TEST_BLOCKED_REASON posts=$(wc -l <"$work/wallet-login-posts" 2>/dev/null | tr -d ' ')"
+  )
+}
+login_as_declared_user() {
+  [[ "$(test_login "$work/bootstrap.yaml" '{"user":{"email":"stack-test@example.test","tenant_id":"signed-tenant"}}')" == "rc=0 tenant=signed-tenant reason= posts=1" ]]
+}
+expect "the test wallet signs in as the declared stack-test user" login_as_declared_user
+login_refuses_undeclared_account() {
+  local out
+  out=$(test_login "$work/bootstrap.yaml" '{"user":{"email":"","tenant_id":"new-wallet-tenant"}}')
+  [[ "$out" == "rc=1 tenant= reason="*"not the declared stack-test@example.test"* ]]
+}
+expect "a wallet sign-in that lands on an undeclared account blocks the test tenant" login_refuses_undeclared_account
+sed 's/0x00000000000000000000000000000000000AbC01/0x00000000000000000000000000000000000Def02/' "$work/bootstrap.yaml" >"$work/bootstrap-otherwallet.yaml"
+login_refuses_undeclared_wallet() {
+  local out
+  out=$(test_login "$work/bootstrap-otherwallet.yaml" '{"user":{"email":"stack-test@example.test","tenant_id":"signed-tenant"}}')
+  [[ "$out" == "rc=1 tenant= reason=STACK_TEST_TENANT_WALLET_KEY is wallet"*"posts=" ]]
+}
+expect "a test key that is not the declared wallet never signs in" login_refuses_undeclared_wallet
 
 # The sweep covers what test tenant scenarios created: a second pass over the
 # test tenant's own ledger with its own token, without repeating the doctor.

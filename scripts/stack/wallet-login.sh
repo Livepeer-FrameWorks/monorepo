@@ -5,7 +5,9 @@
 #
 #   wallet-login.sh body        prints {"path": "/auth/wallet-login", "body": {...}}
 #                               signed for a fresh challenge
-#   wallet-login.sh jar <file>  signs in and writes the session's cookies to <file>
+#   wallet-login.sh jar <file> [body file]
+#                               signs in and writes the session's cookies to
+#                               <file>, and the sign-in response to [body file]
 #
 # Needs BRIDGE_URL, STACK_WALLET_SIGNER (scripts/stack/walletsign built) and
 # STACK_WALLET_KEY_FILE (the 0600 key file the runner wrote).
@@ -32,14 +34,14 @@ case "${1:-}" in
     jq -cn --argjson b "$body" '{path:"/auth/wallet-login", body:$b}'
     ;;
   jar)
-    [ -n "${2:-}" ] || { echo 'usage: wallet-login.sh jar <file>' >&2; exit 2; }
+    [ -n "${2:-}" ] || { echo 'usage: wallet-login.sh jar <file> [body file]' >&2; exit 2; }
     body=$(signed_body) || exit 1
-    code=$(curl -s -m 30 -c "$2" -o /dev/null -w '%{http_code}' "$BRIDGE_URL/auth/wallet-login" \
+    code=$(curl -s -m 30 -c "$2" -o "${3:-/dev/null}" -w '%{http_code}' "$BRIDGE_URL/auth/wallet-login" \
       -H 'Content-Type: application/json' --data "$body")
     [ "$code" = 200 ] || { echo "wallet-login: sign-in answered HTTP $code" >&2; exit 1; }
     ;;
   *)
-    echo 'usage: wallet-login.sh body | jar <file>' >&2
+    echo 'usage: wallet-login.sh body | jar <file> [body file]' >&2
     exit 2
     ;;
 esac
