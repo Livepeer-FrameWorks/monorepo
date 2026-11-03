@@ -298,16 +298,26 @@ In the drop-ins, a new `compositorConfig.renderer` switches the running composit
 
 ### Saving the layout
 
-`exportLayout()` returns the scenes, their image and text overlays and the layout preset as plain JSON; `importLayout()` applies it. Camera, screen and media-file layers are not part of it, because they belong to the captures of one session; sources added later join the active scene. A picked image is carried as a data URL.
+`exportLayout()` returns the scenes, their image and text overlays and the layout preset as plain JSON; `importLayout()` applies it. Camera, screen and media-file layers are not part of it, because they belong to the captures of one session; sources added later join the active scene. A picked image is carried as a data URL, at most the size of the output frame. While the compositor is off, `exportLayout()` returns the layout from when it was last on.
 
 ```ts
-const layout = await studio.exportLayout();
-localStorage.setItem(`studio-layout:${streamId}`, JSON.stringify(layout));
+const key = `studio-layout:${streamId}`;
+try {
+  localStorage.setItem(key, JSON.stringify(await studio.exportLayout()));
+} catch {
+  // Storage is blocked, or full: a layout with a picked image can pass the quota.
+}
 
-await studio.importLayout(JSON.parse(localStorage.getItem(`studio-layout:${streamId}`)!));
+let stored = null;
+try {
+  stored = JSON.parse(localStorage.getItem(key) ?? "null");
+} catch {}
+if (stored) await studio.importLayout(stored);
 ```
 
-The drop-ins take `initialLayout` and call `onLayoutChange(layout)` shortly after the scenes, overlays or preset change; `<fw-streamcrafter>` also fires `fw-sc-layout-change` with `{ layout }`.
+`importLayout()` checks the layout first and refuses one it cannot apply, leaving the studio as it was.
+
+The drop-ins take `initialLayout` and call `onLayoutChange(layout)` shortly after the scenes, overlays or preset change; `<fw-streamcrafter>` also fires `fw-sc-layout-change` with `{ layout }`. They keep the current layout when they build a new controller for the same stream (a new endpoint, profile or `debug` setting) and start from `initialLayout` again only when it changes to another object, which marks another stream.
 
 ### Encoder settings
 

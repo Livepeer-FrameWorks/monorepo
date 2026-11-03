@@ -43,6 +43,21 @@ Notes:
 />
 ```
 
+### Controlling playback from code
+
+`bind:controller` hands you the `PlayerController` of the current content, the same object a React ref gets. It is replaced when the content changes and is `null` once the player is torn down. `getController()` on the component instance returns the same object.
+
+```svelte
+<script lang="ts">
+  import { Player, type PlayerController } from "@livepeer-frameworks/player-svelte";
+
+  let controller = $state<PlayerController | null>(null);
+</script>
+
+<Player contentType="live" contentId="pk_..." bind:controller />
+<button onclick={() => controller?.jumpToLive()} disabled={!controller}>Go live</button>
+```
+
 ### Styles
 
 ```ts

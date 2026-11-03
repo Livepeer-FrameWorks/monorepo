@@ -49,11 +49,31 @@ Notes:
 
 `onLayoutChange` reports the scenes, overlays and layout preset as JSON; give it back as `initialLayout`. Changing `enableCompositor` or `compositorConfig.renderer` takes effect without a remount, so no `{#key}` block is needed.
 
+The studio keeps its current layout when it builds a new controller for the same stream (a new `whipUrl` from the gateway, or a new `initialProfile` or `debug`). It starts from `initialLayout` again only when `initialLayout` changes to another object, which marks another stream. On a stream switch, change `whipUrl` and `initialLayout` together.
+
 ```svelte
+<script lang="ts">
+  function readLayout(streamId: string): StudioLayout | null {
+    try {
+      return JSON.parse(localStorage.getItem(`layout:${streamId}`) ?? "null");
+    } catch {
+      return null;
+    }
+  }
+
+  function saveLayout(streamId: string, layout: StudioLayout) {
+    try {
+      localStorage.setItem(`layout:${streamId}`, JSON.stringify(layout));
+    } catch {
+      // Storage is blocked, or full: a picked image is carried as a data URL.
+    }
+  }
+</script>
+
 <StreamCrafter
   {whipUrl}
-  initialLayout={JSON.parse(localStorage.getItem(`layout:${streamId}`) ?? "null")}
-  onLayoutChange={(layout) => localStorage.setItem(`layout:${streamId}`, JSON.stringify(layout))}
+  initialLayout={readLayout(streamId)}
+  onLayoutChange={(layout) => saveLayout(streamId, layout)}
 />
 ```
 

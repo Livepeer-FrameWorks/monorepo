@@ -85,7 +85,7 @@ Notes:
 | `encoder-worker-url`       | `string`  | `""`          | Custom encoder worker URL                         |
 | `rtc-transform-worker-url` | `string`  | `""`          | Custom RTC transform worker URL                   |
 
-Set as properties: `compositorConfig` (a new `renderer` switches the running compositor), `initialLayout` (a layout from `exportLayout()` to start from) and `onLayoutChange(layout)`. The element also fires `fw-sc-layout-change` with `{ layout }` shortly after the scenes, overlays or layout preset change, and has `exportLayout()` and `importLayout(layout)` methods.
+Set as properties: `compositorConfig` (a new `renderer` switches the running compositor), `initialLayout` (a layout from `exportLayout()` to start from) and `onLayoutChange(layout)`. The element also fires `fw-sc-layout-change` with `{ layout }` shortly after the scenes, overlays or layout preset change, and has `exportLayout()` and `importLayout(layout)` methods. It keeps its current layout when it builds a new controller for the same stream (a new endpoint, profile, `debug` or worker URL), and starts from `initialLayout` again only when that property is set to another object, which marks another stream. Wrap `localStorage` reads and writes in `try`/`catch`: storage can be blocked, and a layout holding a picked image can be larger than the quota.
 
 ## Methods
 
