@@ -220,7 +220,7 @@ running under it, so invoices still show what the tenant used.
 A tenant that owes nothing (no base fee and usage waived) needs no collection
 setup. Setting a grant replaces the previous one.`,
 	}
-	cmd.AddCommand(newAdminBillingGrantSetCmd(), newAdminBillingGrantShowCmd(), newAdminBillingGrantRevokeCmd(), newAdminBillingGrantListCmd())
+	cmd.AddCommand(newAdminBillingGrantSetCmd(), newAdminBillingGrantShowCmd(), newAdminBillingGrantRevokeCmd(), newAdminBillingGrantListCmd(), newAdminGrantNoticeRecoveryCmd())
 	return cmd
 }
 

@@ -142,6 +142,12 @@ func TestAccountRecoveryDoctorRealPG(t *testing.T) {
 		INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model) VALUES ($1, $2, 'active', 'postpaid') RETURNING id)
 		INSERT INTO purser.subscription_operator_grants (subscription_id, reason, expires_at, expiry_error, expiry_failures)
 		SELECT id, 'trial', NOW() - INTERVAL '1 hour', 'fallback tier inactive', 2 FROM subscription`, grantTenant, upperTier)
+	// A grant ending email that keeps failing, and an ended email abandoned
+	// after five failures: only the first counts as failing.
+	mustExec(purser, `INSERT INTO purser.operator_grant_notices (tenant_id, subscription_id, kind, ends_at, attempted_at, failures, error)
+		SELECT tenant_id, id, 'ending', NOW() + INTERVAL '3 days', NOW(), 3, 'mailbox unavailable' FROM purser.tenant_subscriptions WHERE tenant_id = $1`, grantTenant)
+	mustExec(purser, `INSERT INTO purser.operator_grant_notices (tenant_id, subscription_id, kind, ends_at, attempted_at, failures, error, abandoned_at)
+		SELECT tenant_id, id, 'ended', NOW() - INTERVAL '1 day', NOW(), 5, 'mailbox unavailable', NOW() FROM purser.tenant_subscriptions WHERE tenant_id = $1`, fallbackTenant)
 
 	outcome = doctorAccountRecovery(ctx, &resolvedCluster{Manifest: manifest}, pool, "")
 	if outcome.passed || outcome.result.Status != "unhealthy" {
@@ -156,6 +162,8 @@ func TestAccountRecoveryDoctorRealPG(t *testing.T) {
 		"1 prepaid tenant(s) below the -€10 suspension threshold but not suspended; their running sessions continue (" + unsuspendedTenant + ": €15.00 owed)",
 		"1 move(s) to Free failing or waiting on settlement over 14 days (" + fallbackTenant + ": 3 failures)",
 		"1 operator grant expiry(ies) failing repeatedly (" + grantTenant + ": 2 failures)",
+		"1 operator grant ending or ended email(s) failing (" + grantTenant + ": 3 failures)",
+		"1 operator grant ending or ended email(s) abandoned after five failures (" + fallbackTenant + ": 5 failures)",
 	} {
 		if !strings.Contains(outcome.result.Error, want) {
 			t.Fatalf("doctor error %q missing %q", outcome.result.Error, want)

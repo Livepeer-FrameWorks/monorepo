@@ -2285,6 +2285,7 @@ Billing tier and subscription management.
 - `set-tier` - Put a tenant on a billing tier as an operator decision
 - `grant set` / `grant show` / `grant revoke` / `grant list` - Operator billing arrangements: base fee, usage
   waiver, manual invoicing, expiry
+- `grant notice` - Requeue an abandoned grant ending or ended email
 - `record-payment` - Record a bank transfer that paid an invoice
 - `prepaid-double-charges` - List invoices that charged prepaid tenants twice for the same usage
   (read-only)
@@ -2438,6 +2439,17 @@ grants; `--include-expired` adds retained history,
 frameworks admin billing grant list --expiring 7d
 frameworks admin billing grant list --include-expired --output json
 ```
+
+#### frameworks admin billing grant notice
+
+`frameworks admin billing grant notice --tenant-id <UUID> --reason "Billing email repaired"`
+previews the tenant's newest grant ending or ended email that Purser abandoned
+after five failed sends, then requires interactive `yes` or `--yes` to requeue
+it. Repair `billing_email` or the mail service first. Confirmation is fenced to
+the displayed notice and grant end. It records the operator and reason on
+`billing.subscription_updated` without changing the grant or the subscription.
+`frameworks cluster doctor --deep` lists abandoned grant notices. Requires a
+platform-operator JWT.
 
 #### frameworks admin billing recovery list
 

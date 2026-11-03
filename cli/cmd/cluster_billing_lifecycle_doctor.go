@@ -15,8 +15,9 @@ const purserFreeFallbackWaitDays = 14
 // purserBillingLifecycleDoctorSQL reads the inputs of PurserFreeFallbackStuck
 // (Purser's CountRepeatedFreeFallbackFailures: closed tenants and granted
 // subscriptions excluded), PurserOperatorGrantExpiryStuck
-// (CountRepeatedOperatorGrantExpiryFailures) and the operator grant notices
-// that keep failing (CountRepeatedOperatorGrantNoticeFailures). It runs after
+// (CountRepeatedOperatorGrantExpiryFailures), the operator grant notices
+// that keep failing (CountRepeatedOperatorGrantNoticeFailures) and those
+// abandoned after five failures, which wait for an operator requeue. It runs after
 // the other Purser probes: on a schema without these tables and columns its
 // statements fail and only its own keys are missing, which
 // billing_lifecycle_installed=0 explains.
@@ -59,15 +60,20 @@ SELECT 'grant_expiry_tenant:' || subscription.tenant_id::text || '=' || grant_ro
 SELECT 'grants_ending_within_7d=' || count(*) FROM purser.subscription_operator_grants
   WHERE expires_at > NOW() AND expires_at <= NOW() + INTERVAL '7 days';
 SELECT 'grant_notices_failing=' || count(*) FROM purser.operator_grant_notices
-  WHERE notified_at IS NULL AND error IS NOT NULL AND failures > 1;
+  WHERE notified_at IS NULL AND error IS NOT NULL AND failures > 1 AND abandoned_at IS NULL;
 SELECT 'grant_notice_tenant:' || tenant_id::text || '=' || max(failures) FROM purser.operator_grant_notices
-  WHERE notified_at IS NULL AND error IS NOT NULL AND failures > 1
+  WHERE notified_at IS NULL AND error IS NOT NULL AND failures > 1 AND abandoned_at IS NULL
+  GROUP BY tenant_id ORDER BY max(failures) DESC, tenant_id LIMIT 10;
+SELECT 'grant_notices_abandoned=' || count(*) FROM purser.operator_grant_notices
+  WHERE notified_at IS NULL AND abandoned_at IS NOT NULL;
+SELECT 'grant_notice_abandoned_tenant:' || tenant_id::text || '=' || max(failures) FROM purser.operator_grant_notices
+  WHERE notified_at IS NULL AND abandoned_at IS NOT NULL
   GROUP BY tenant_id ORDER BY max(failures) DESC, tenant_id LIMIT 10;
 `, purserFreeFallbackWaitDays)
 
 var purserBillingLifecycleDoctorKeys = []string{
 	"free_fallback_moves_failing", "free_fallback_notices_failing", "free_fallback_notices_abandoned",
-	"grant_expiries_failing", "grants_ending_within_7d", "grant_notices_failing",
+	"grant_expiries_failing", "grants_ending_within_7d", "grant_notices_failing", "grant_notices_abandoned",
 }
 
 // evaluateBillingLifecycleDoctor judges moves to Free, grant expiry and their
@@ -117,6 +123,10 @@ func evaluateBillingLifecycleDoctor(state map[string]string, report *accountReco
 	if n := count("grant_notices_failing"); n > 0 {
 		report.problems = append(report.problems, fmt.Sprintf("purser: %d operator grant ending or ended email(s) failing (%s)", n, listedTenants(state, "grant_notice_tenant:", countUnit("failure"))))
 		report.steps = append(report.steps, ux.NextStep{Cmd: "frameworks cluster logs purser", Why: "Find the mail error of the operator grant notice; fix the tenant's billing email or the mail service."})
+	}
+	if n := count("grant_notices_abandoned"); n > 0 {
+		report.problems = append(report.problems, fmt.Sprintf("purser: %d operator grant ending or ended email(s) abandoned after five failures (%s)", n, listedTenants(state, "grant_notice_abandoned_tenant:", countUnit("failure"))))
+		report.steps = append(report.steps, ux.NextStep{Cmd: "frameworks admin billing grant notice --tenant-id <tenant-id> --reason <reason>", Why: "Send an abandoned grant ending or ended email again once the tenant's billing email is fixed."})
 	}
 	if n := count("grants_ending_within_7d"); n > 0 {
 		report.notes = append(report.notes, fmt.Sprintf("purser: %d operator grant(s) end within 7 days", n))

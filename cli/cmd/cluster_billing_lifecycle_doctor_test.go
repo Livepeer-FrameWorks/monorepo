@@ -17,6 +17,7 @@ free_fallback_notices_abandoned=0
 grant_expiries_failing=0
 grants_ending_within_7d=0
 grant_notices_failing=0
+grant_notices_abandoned=0
 `
 
 func evaluatePurserLifecycle(t *testing.T, purser string) accountRecoveryDoctorReport {
@@ -51,6 +52,8 @@ grant_expiry_tenant:tenant-d=2
 grants_ending_within_7d=0
 grant_notices_failing=1
 grant_notice_tenant:tenant-e=3
+grant_notices_abandoned=1
+grant_notice_abandoned_tenant:tenant-f=5
 `)
 	problems := strings.Join(report.problems, "\n")
 	for _, want := range []string{
@@ -59,6 +62,7 @@ grant_notice_tenant:tenant-e=3
 		"1 grace or move-to-Free email(s) abandoned after five failures (tenant-c: 6 failures)",
 		"1 operator grant expiry(ies) failing repeatedly (tenant-d: 2 failures)",
 		"1 operator grant ending or ended email(s) failing (tenant-e: 3 failures)",
+		"1 operator grant ending or ended email(s) abandoned after five failures (tenant-f: 5 failures)",
 	} {
 		if !strings.Contains(problems, want) {
 			t.Fatalf("problems %q missing %q", problems, want)
@@ -73,6 +77,7 @@ grant_notice_tenant:tenant-e=3
 		"frameworks admin billing recovery list",
 		"frameworks admin billing recovery notice --tenant-id <tenant-id> --reason <reason>",
 		"frameworks admin billing grant list --include-expired",
+		"frameworks admin billing grant notice --tenant-id <tenant-id> --reason <reason>",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("next steps %q missing %q", joined, want)
@@ -129,8 +134,14 @@ func TestBillingLifecycleDoctorMatchesServiceRules(t *testing.T) {
 		t.Fatal("doctor grant expiry predicate drifted from CountRepeatedOperatorGrantExpiryFailures")
 	}
 	notices := read("api_billing/internal/database/queries/operator_grant_notices.sql")
-	if !strings.Contains(notices, "WHERE notified_at IS NULL AND error IS NOT NULL AND failures > 1;") ||
-		!strings.Contains(doctor, "WHERE notified_at IS NULL AND error IS NOT NULL AND failures > 1") {
-		t.Fatal("doctor grant notice predicate drifted from CountRepeatedOperatorGrantNoticeFailures")
+	// Abandoned notices are not retried, so neither the gauge nor the doctor's
+	// failing count may hold them; the doctor lists them on their own.
+	failing := "WHERE notified_at IS NULL AND error IS NOT NULL AND failures > 1 AND abandoned_at IS NULL"
+	if !strings.Contains(notices, failing+";") || !strings.Contains(doctor, failing+";") {
+		t.Fatal("doctor grant notice predicate drifted from CountRepeatedOperatorGrantNoticeFailures, or one of them counts abandoned notices")
+	}
+	if !strings.Contains(notices, "n.notified_at IS NULL AND n.abandoned_at IS NOT NULL") ||
+		!strings.Contains(doctor, "WHERE notified_at IS NULL AND abandoned_at IS NOT NULL;") {
+		t.Fatal("doctor abandoned grant notice predicate drifted from GetAbandonedOperatorGrantNotice")
 	}
 }
