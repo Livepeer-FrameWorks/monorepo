@@ -35,9 +35,9 @@ export default tseslint.config(
     },
   },
 
-  // React package - TSX files
+  // React package and the shared stream tester - TSX files
   {
-    files: ["packages/react/src/**/*.{ts,tsx}"],
+    files: ["packages/react/src/**/*.{ts,tsx}", "packages/tester/src/**/*.{ts,tsx}"],
     languageOptions: {
       parser: tseslint.parser,
       parserOptions: {
