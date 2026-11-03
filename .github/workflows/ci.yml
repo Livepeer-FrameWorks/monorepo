@@ -21,6 +21,7 @@ jobs:
     outputs:
       go: ${{ steps.filter.outputs.go }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      format: ${{ steps.filter.outputs.format }}
       marketing_browser: ${{ steps.filter.outputs.marketing_browser }}
       registry: ${{ steps.filter.outputs.registry }}
       pricing: ${{ steps.filter.outputs.pricing }}
@@ -71,12 +72,30 @@ jobs:
             frontend:
               - '**/*.ts'
               - '**/*.tsx'
+              - '**/*.mts'
+              - '**/*.cts'
               - '**/*.svelte'
+              - '**/*.astro'
               - '**/*.js'
+              - '**/*.jsx'
+              - '**/*.mjs'
+              - '**/*.cjs'
               - '**/*.json'
+              - '**/*.css'
+              - '**/*.html'
+              - '**/*.gql'
+              - '**/*.graphql'
+              - '.prettierignore'
               - 'pnpm-lock.yaml'
               - 'scripts/test-logbook-image-health.sh'
               - 'website_docs/**'
+            # pnpm format:check runs Prettier over the whole tree, so Markdown and
+            # YAML anywhere can fail Frontend lint.
+            format:
+              - '**/*.md'
+              - '**/*.mdx'
+              - '**/*.yml'
+              - '**/*.yaml'
             marketing_browser:
               - 'website_marketing/**'
               - 'packages/site-config/**'
@@ -449,7 +468,7 @@ jobs:
   frontend-lint:
     name: Frontend lint
     needs: changes
-    if: needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.format == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -934,6 +953,7 @@ jobs:
         go-lint,
         frontend-lint,
         frontend-test,
+        marketing-browser,
         frontend-build,
         feature-registry,
         pricing-catalog,
