@@ -120,6 +120,7 @@ export { sendableVideoCodecs, videoCodecOrder } from "./core/WhipClient";
 // Compositor and scene management
 export { SceneManager } from "./core/SceneManager";
 export {
+  createDefaultStudioLayout,
   parseStudioLayout,
   STUDIO_LAYOUT_VERSION,
   type StudioLayout,
@@ -128,6 +129,7 @@ export {
   type StudioLayoutTextOverlay,
   type StudioLayoutImageOverlay,
 } from "./core/studioLayout";
+export { StudioLayoutKeeper, type StudioLayoutHost } from "./core/StudioLayoutKeeper";
 export {
   TextOverlaySource,
   TEXT_OVERLAY_DEFAULTS,

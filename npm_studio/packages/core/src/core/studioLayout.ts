@@ -6,6 +6,7 @@
  */
 
 import type { LayoutConfig, LayoutMode } from "../types";
+import { createDefaultLayoutConfig } from "./layouts";
 import type { TextOverlayConfig } from "./TextOverlaySource";
 
 export const STUDIO_LAYOUT_VERSION = 1;
@@ -47,6 +48,17 @@ export interface StudioLayout {
   scenes: StudioLayoutScene[];
   /** Bottom to top. */
   overlays: StudioLayoutOverlay[];
+}
+
+/** What a compositor starts with: one empty scene and the default layout preset. */
+export function createDefaultStudioLayout(): StudioLayout {
+  return {
+    version: STUDIO_LAYOUT_VERSION,
+    layout: createDefaultLayoutConfig(),
+    activeScene: 0,
+    scenes: [{ name: "Default", backgroundColor: "#000000" }],
+    overlays: [],
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

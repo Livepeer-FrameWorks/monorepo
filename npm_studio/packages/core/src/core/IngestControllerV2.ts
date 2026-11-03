@@ -153,6 +153,25 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     return this.getCurrentWhipUrl();
   }
 
+  /**
+   * Point the next connection at another WHIP endpoint, such as another
+   * stream's. Sources, scenes and overlays stay. A connection that is open,
+   * connecting or reconnecting goes to the old endpoint, so it is stopped.
+   */
+  async setWhipUrl(whipUrl: string, whipUrls?: string[]): Promise<void> {
+    const next = { ...this.config, whipUrl, whipUrls };
+    const endpoints = this.buildWhipEndpoints(next);
+    const unchanged =
+      endpoints.length === this.whipEndpoints.length &&
+      endpoints.every((url, i) => url === this.whipEndpoints[i]);
+    this.config = next;
+    if (unchanged) return;
+    this.whipEndpoints = endpoints;
+    this.currentEndpointIndex = 0;
+    this.log("WHIP endpoint changed");
+    if (this.isSessionActive()) await this.stopStreaming();
+  }
+
   private async resolveWhipDestination(): Promise<string> {
     this.destinationResolution?.abort();
     const abort = new AbortController();
