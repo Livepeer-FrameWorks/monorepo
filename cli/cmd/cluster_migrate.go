@@ -115,9 +115,9 @@ reach an operator cluster.`,
 
 // migrateStallWindow is how long one migrate step may go without progress before it is cancelled. Progress is every
 // ansible-playbook output line of a migrate role (each task and loop item) and each preflight check that finished, so
-// a step runs as long as it keeps moving. The window must outlast the longest single silent task: a transactional
-// migration statement, bounded by its 15-minute statement_timeout. A .notx.sql item and a ClickHouse item, which have
-// no statement timeout, run as async jobs whose poll lines keep reporting while they run.
+// a step runs as long as it keeps moving. Every migrate item runs as an async job whose poll lines keep reporting while
+// it runs, including one waiting for the per-database migration lock, which it retries for about a quarter of an hour
+// instead of waiting without bound, so the window bounds the silent tasks between items.
 var migrateStallWindow = 30 * time.Minute
 
 func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase string, yes bool, toVersion string, skipDataMigrationCheck, completeInterruptedBaselines bool) error {
@@ -482,10 +482,10 @@ func recordDryRunExpandMigrations(set map[string]struct{}, engine string, items 
 	}
 }
 
-// splitDryRunExpandMigrations separates the missing expand migrations a dry-run expand step in this run would apply
-// from those it would not. A checksum mismatch stays a refusal: the migrate role does not re-apply a ledgered
-// migration. With no recorded set (every real apply) all missing migrations remain.
-func splitDryRunExpandMigrations(missing []provisioner.MigrationKey, engine string, recorded map[string]struct{}) (remaining, wouldApply []provisioner.MigrationKey) {
+// splitDryRunMigrations separates the missing migrations a dry-run step of this run submitted (recorded) from those it
+// did not. A checksum mismatch stays a refusal: the migrate role does not re-apply a ledgered migration. With no
+// recorded set (every real apply) all missing migrations remain.
+func splitDryRunMigrations(missing []provisioner.MigrationKey, engine string, recorded map[string]struct{}) (remaining, wouldApply []provisioner.MigrationKey) {
 	if len(recorded) == 0 {
 		return missing, nil
 	}

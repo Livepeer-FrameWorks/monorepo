@@ -3,10 +3,12 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"frameworks/cli/internal/releases"
 	"frameworks/cli/pkg/backup"
@@ -24,9 +26,14 @@ import (
 // baseline convergence, which the harness records; it stops at the service database step of the expand migrations.
 type releaseApplyHarness struct {
 	missingFrom       string // prior releases at or above this version report a missing postdeploy migration
+	mismatched        bool   // the missing postdeploy migration is ledgered with a different checksum
 	pendingDataID     string // this required data migration reports pending; every other one is completed
+	backupPath        string // passed as --backup when set
 	mutationCalled    bool
 	nodeBaselineHosts []string
+	// priorPostdeployRuns records each `migrate --phase postdeploy` release apply sends before its own postdeploy
+	// step, as "<to-version> dry-run=<bool> mutated=<bool>"; a real run applies the missing migration.
+	priorPostdeployRuns []string
 }
 
 var errHarnessStoppedAtMutation = errors.New("harness: stopped at the first mutation")
@@ -35,12 +42,31 @@ func (h *releaseApplyHarness) install(t *testing.T) {
 	t.Helper()
 	origFetch, origEnsure, origStates := fetchReleaseManifestFn, ensureServiceDatabasesFn, readServiceDatabaseStatesFn
 	origPG, origCH, origData := missingPostgresMigrationsFn, missingClickHouseMigrationsFn, priorDataMigrationSourceFn
-	origHostConvergence := releaseNewHostConvergenceFn
+	origHostConvergence, origMigrate, origDigests, origNow := releaseNewHostConvergenceFn, releaseRunMigrateFn, priorPostgresDigestsFn, backupNowFn
 	t.Cleanup(func() {
 		fetchReleaseManifestFn, ensureServiceDatabasesFn, readServiceDatabaseStatesFn = origFetch, origEnsure, origStates
 		missingPostgresMigrationsFn, missingClickHouseMigrationsFn, priorDataMigrationSourceFn = origPG, origCH, origData
-		releaseNewHostConvergenceFn = origHostConvergence
+		releaseNewHostConvergenceFn, releaseRunMigrateFn, priorPostgresDigestsFn, backupNowFn = origHostConvergence, origMigrate, origDigests, origNow
 	})
+	backupNowFn = func() time.Time { return gateNow }
+	priorPostgresDigestsFn = func(_ context.Context, _ *ssh.Pool, _ inventory.Host, _ *inventory.PostgresConfig, _ string, names []string, digests map[string]string) error {
+		for _, name := range names {
+			digests[backup.DatabaseKey("", name)] = backup.LedgerDigest(gateLedger)
+		}
+		return nil
+	}
+	// The release's own expand and postdeploy steps run the real migrate command, which stops the harness at its
+	// first mutation; postdeploy through an earlier release is recorded.
+	releaseRunMigrateFn = func(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase string, yes bool, toVersion string, skip, complete bool) error {
+		if phase == "postdeploy" && releases.CompareSemver(toVersion, "v0.3.11") < 0 {
+			h.priorPostdeployRuns = append(h.priorPostdeployRuns, fmt.Sprintf("%s dry-run=%t mutated=%t", toVersion, dryRun, h.mutationCalled))
+			if !dryRun {
+				h.missingFrom = ""
+			}
+			return nil
+		}
+		return runMigrate(cmd, rc, dryRun, phase, yes, toVersion, skip, complete)
+	}
 	releaseNewHostConvergenceFn = func(cmd *cobra.Command, rc *resolvedCluster, _ string, _ *ssh.Pool) (*releaseHostConvergence, error) {
 		return &releaseHostConvergence{
 			cmd:         cmd,
@@ -73,7 +99,11 @@ func (h *releaseApplyHarness) install(t *testing.T) {
 		if phase != "postdeploy" || h.missingFrom == "" || releases.CompareSemver(version, h.missingFrom) < 0 {
 			return nil, nil
 		}
-		return []provisioner.MigrationKey{{Database: databases[0].Name, Version: h.missingFrom, Phase: "postdeploy", Seq: 1, Filename: "001_backfill.sql"}}, nil
+		key := provisioner.MigrationKey{Database: databases[0].Name, Version: h.missingFrom, Phase: "postdeploy", Seq: 1, Filename: "001_backfill.sql"}
+		if h.mismatched {
+			key.MismatchedChecksum = "ledgered"
+		}
+		return []provisioner.MigrationKey{key}, nil
 	}
 	missingClickHouseMigrationsFn = func(context.Context, *ssh.Pool, inventory.Host, int, string, []string, string, string) ([]provisioner.MigrationKey, error) {
 		t.Fatal("the manifest has no ClickHouse; its ledger must not be read")
@@ -100,6 +130,11 @@ func (h *releaseApplyHarness) apply(t *testing.T, dryRun bool) (string, error) {
 	if err := cmd.Flags().Set(unsafeCLIFloorFlag, "true"); err != nil {
 		t.Fatal(err)
 	}
+	if h.backupPath != "" {
+		if err := cmd.Flags().Set(backupFlag, h.backupPath); err != nil {
+			t.Fatal(err)
+		}
+	}
 	manifest := &inventory.Manifest{
 		Hosts: map[string]inventory.Host{"db-1": {Name: "db-1", ExternalIP: "192.0.2.10", User: "root"}},
 		Infrastructure: inventory.InfrastructureConfig{
@@ -110,21 +145,100 @@ func (h *releaseApplyHarness) apply(t *testing.T, dryRun bool) (string, error) {
 	return out.String(), err
 }
 
-func TestReleaseApplyRefusesIncompletePriorReleaseBeforeFirstMutation(t *testing.T) {
+// An earlier release's missing postdeploy migration is applied by release apply itself, through that release, after
+// the backup gate and before this release's first mutation.
+func TestReleaseApplyAppliesMissingPriorPostdeployFirst(t *testing.T) {
 	h := &releaseApplyHarness{missingFrom: "v0.3.9"}
 	h.install(t)
+	h.backupPath = writeGateBackupOf(t, "commodore", 10*time.Minute)
+	out, err := h.apply(t, false)
+	if !h.mutationCalled || !errors.Is(err, errHarnessStoppedAtMutation) {
+		t.Fatalf("err = %v, mutation reached = %v; a missing earlier postdeploy migration must be applied, not refused\n%s", err, h.mutationCalled, out)
+	}
+	if strings.Join(h.priorPostdeployRuns, ",") != "v0.3.9 dry-run=false mutated=false" {
+		t.Fatalf("prior postdeploy runs = %v; want one real run through v0.3.9 before any other mutation", h.priorPostdeployRuns)
+	}
+	if !strings.Contains(out, "0. postdeploy migrations of earlier releases, through v0.3.9: commodore/v0.3.9/postdeploy/001_backfill.sql") {
+		t.Fatalf("the release plan does not list the earlier postdeploy migration:\n%s", out)
+	}
+	if strings.Index(out, "Postdeploy migrations of earlier releases") > strings.Index(out, "Pre-upgrade host convergence") {
+		t.Fatalf("the earlier postdeploy migrations did not run before host convergence:\n%s", out)
+	}
+}
+
+func TestReleaseApplyDryRunPreviewsMissingPriorPostdeploy(t *testing.T) {
+	h := &releaseApplyHarness{missingFrom: "v0.3.9"}
+	h.install(t)
+	h.backupPath = writeGateBackupOf(t, "commodore", 10*time.Minute)
+	_, err := h.apply(t, true)
+	if !h.mutationCalled || !errors.Is(err, errHarnessStoppedAtMutation) {
+		t.Fatalf("err = %v; a dry run must preview the earlier postdeploy migrations and continue", err)
+	}
+	if strings.Join(h.priorPostdeployRuns, ",") != "v0.3.9 dry-run=true mutated=false" {
+		t.Fatalf("prior postdeploy runs = %v; want one check-mode run through v0.3.9", h.priorPostdeployRuns)
+	}
+}
+
+// Without a fresh backup of the database it changes, the earlier postdeploy migration is refused, in the dry run as in
+// the real run, and nothing runs.
+func TestReleaseApplyGatesMissingPriorPostdeployOnBackup(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		h := &releaseApplyHarness{missingFrom: "v0.3.9"}
+		h.install(t)
+		_, err := h.apply(t, dryRun)
+		if h.mutationCalled || len(h.priorPostdeployRuns) != 0 {
+			t.Fatalf("dry-run=%v: the earlier postdeploy ran or the release mutated without a backup (runs=%v, err=%v)", dryRun, h.priorPostdeployRuns, err)
+		}
+		if err == nil || !errors.Is(err, backup.ErrBackupRequired) || !strings.Contains(err.Error(), "postdeploy migrations of v0.3.9") ||
+			!strings.Contains(err.Error(), "--database commodore") {
+			t.Fatalf("dry-run=%v: err = %v; want the backup gate refusal naming the release and the database to back up", dryRun, err)
+		}
+	}
+}
+
+// A ledgered earlier postdeploy migration whose checksum differs cannot be applied again, so it still refuses before
+// the first mutation.
+func TestReleaseApplyRefusesPriorPostdeployChecksumMismatch(t *testing.T) {
+	h := &releaseApplyHarness{missingFrom: "v0.3.9", mismatched: true}
+	h.install(t)
+	h.backupPath = writeGateBackupOf(t, "commodore", 10*time.Minute)
 	for _, dryRun := range []bool{false, true} {
 		out, err := h.apply(t, dryRun)
-		if h.mutationCalled || errors.Is(err, errHarnessStoppedAtMutation) {
-			t.Fatalf("dry-run=%v: release apply reached the expand step before refusing the incomplete v0.3.9 (err=%v)", dryRun, err)
+		if h.mutationCalled || len(h.priorPostdeployRuns) != 0 {
+			t.Fatalf("dry-run=%v: release apply ran past a checksum mismatch (err=%v)", dryRun, err)
 		}
-		if err == nil || !strings.Contains(err.Error(), "v0.3.9") || !strings.Contains(err.Error(), "commodore/v0.3.9/postdeploy/001_backfill.sql") ||
-			!strings.Contains(err.Error(), "frameworks cluster release apply --version v0.3.9") {
-			t.Fatalf("dry-run=%v: err = %v; want a refusal naming v0.3.9, its missing migration, and the release to apply first", dryRun, err)
+		if err == nil || !strings.Contains(err.Error(), "commodore/v0.3.9/postdeploy/001_backfill.sql (checksum mismatch") ||
+			strings.Contains(err.Error(), "release apply --version") {
+			t.Fatalf("dry-run=%v: err = %v; want a refusal naming the mismatched migration and no release to apply", dryRun, err)
 		}
-		if strings.Contains(out, "Pre-upgrade host convergence") || strings.Contains(out, "Expand migrations") {
+		if strings.Contains(out, "Pre-upgrade host convergence") {
 			t.Fatalf("dry-run=%v: a release step started before the refusal:\n%s", dryRun, out)
 		}
+	}
+}
+
+// The dry-run pre-deploy gate counts an earlier postdeploy migration the dry run submitted as applied, exactly as the
+// real run will have applied it, and refuses it otherwise.
+func TestDryRunGateCountsPriorPostdeployTheDryRunSubmitted(t *testing.T) {
+	rc := pendingExpandReleaseCluster(t)
+	missingPostgresMigrationsFn = func(_ context.Context, _ *ssh.Pool, _ inventory.Host, _ *inventory.PostgresConfig, _ string, databases []provisioner.SchemaDatabase, phase, version string) ([]provisioner.MigrationKey, error) {
+		if phase != "postdeploy" || releases.CompareSemver(version, "v0.3.12") < 0 {
+			return nil, nil
+		}
+		return []provisioner.MigrationKey{{Database: databases[0].Name, Version: "v0.3.12", Phase: "postdeploy", Seq: 1, Filename: "001_backfill.sql"}}, nil
+	}
+	missingClickHouseMigrationsFn = func(context.Context, *ssh.Pool, inventory.Host, int, string, []string, string, string) ([]provisioner.MigrationKey, error) {
+		return nil, nil
+	}
+	cmd, _ := commandWithOutput()
+	err := checkPostgresMigrationGate(context.Background(), cmd.OutOrStdout(), rc, nil, rc.Manifest, "periscope", "periscope-ingest", newDatabaseReleaseTarget)
+	if err == nil || !strings.Contains(err.Error(), "periscope/v0.3.12/postdeploy/001_backfill.sql") {
+		t.Fatalf("gate without a dry-run record: %v, want the earlier postdeploy migration refused", err)
+	}
+	rc.dryRunPriorPostdeploy = map[string]struct{}{}
+	recordMigrationKeys(rc.dryRunPriorPostdeploy, dryRunEnginePostgres, []provisioner.MigrationKey{{Database: "periscope", Version: "v0.3.12", Phase: "postdeploy", Seq: 1}})
+	if err := checkPostgresMigrationGate(context.Background(), cmd.OutOrStdout(), rc, nil, rc.Manifest, "periscope", "periscope-ingest", newDatabaseReleaseTarget); err != nil {
+		t.Fatalf("gate after the dry run submitted the earlier postdeploy migration: %v", err)
 	}
 }
 

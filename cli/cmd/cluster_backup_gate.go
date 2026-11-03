@@ -118,15 +118,22 @@ func contractGateDigests(ctx context.Context, rc *resolvedCluster, sshPool *ssh.
 		if err != nil {
 			return nil, err
 		}
-		for _, db := range databasesOf(missing) {
-			entries, readErr := provisioner.ReadClickHouseMigrationLedger(ctx, sshPool, host, ch.EffectivePort(), env["CLICKHOUSE_PASSWORD"], db)
-			if readErr != nil {
-				return nil, readErr
-			}
-			digests[backup.ClickHouseKey(db)] = backup.LedgerDigest(ledgerRows(entries))
+		if err := addClickHouseDigests(ctx, sshPool, host, ch.EffectivePort(), env["CLICKHOUSE_PASSWORD"], databasesOf(missing), digests); err != nil {
+			return nil, err
 		}
 	}
 	return digests, nil
+}
+
+func addClickHouseDigests(ctx context.Context, sshPool *ssh.Pool, host inventory.Host, port int, password string, names []string, digests map[string]string) error {
+	for _, db := range names {
+		entries, err := provisioner.ReadClickHouseMigrationLedger(ctx, sshPool, host, port, password, db)
+		if err != nil {
+			return err
+		}
+		digests[backup.ClickHouseKey(db)] = backup.LedgerDigest(ledgerRows(entries))
+	}
+	return nil
 }
 
 func postgresLedgerAccess(ctx context.Context, rc *resolvedCluster, pg *inventory.PostgresConfig, sshPool *ssh.Pool) (inventory.Host, string, error) {

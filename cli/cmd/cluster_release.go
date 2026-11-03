@@ -409,7 +409,7 @@ func newClusterReleaseApplyCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.skipValidation, "skip-validation", false, "Skip health validation after each service upgrade")
 	cmd.Flags().BoolVar(&opts.noRollback, "no-rollback", false, "Skip automatic rollback on a service health-check failure")
 	cmd.Flags().BoolVar(&opts.completeInterruptedBaselines, "complete-interrupted-baselines", false, "Reapply and verify baselines for populated databases without migration provenance")
-	cmd.Flags().String(backupFlag, "", "Backup (directory or s3:// URL) taken within the last hour; required when an earlier release's pending required data migration is irreversible")
+	cmd.Flags().String(backupFlag, "", "Backup (directory or s3:// URL) taken within the last hour; required when an earlier release's postdeploy migrations are missing or its pending required data migration is irreversible")
 	cmd.Flags().Bool(unsafeCLIFloorFlag, false, "UNSAFE: let a non-concrete (dev/unversioned) CLI bypass the release's min_cli_version floor")
 	return cmd
 }
@@ -469,12 +469,16 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	}
 	// Every earlier release must be finished before this one mutates anything; the per-service gate would otherwise
 	// refuse only after host convergence and this release's expand migrations. Its pending required data migrations
-	// are the exception: this run executes them first, behind their backup gate.
-	priorDataMigrations, priorErr := enforcePriorReleasesComplete(cmd.Context(), out, rc, sshPool, platformVersion)
+	// and missing postdeploy migrations are the exception: this run applies them first, behind their backup gates.
+	prior, priorErr := enforcePriorReleasesComplete(cmd.Context(), out, rc, sshPool, platformVersion)
 	if priorErr != nil {
 		return priorErr
 	}
+	priorDataMigrations := prior.dataMigrations
 	if backupErr := requirePriorDataMigrationBackups(cmd.Context(), cmd, rc, sshPool, priorDataMigrations); backupErr != nil {
+		return backupErr
+	}
+	if backupErr := requirePriorPostdeployBackup(cmd.Context(), cmd, rc, prior.postdeploy); backupErr != nil {
 		return backupErr
 	}
 
@@ -515,6 +519,9 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	ux.Heading(out, fmt.Sprintf("Release plan for %s (platform %s)", version, platformVersion))
 	if len(priorDataMigrations) > 0 {
 		fmt.Fprintf(out, "  0. required data migrations of earlier releases: %s\n", priorDataMigrationList(priorDataMigrations))
+	}
+	if !prior.postdeploy.empty() {
+		fmt.Fprintf(out, "  0. postdeploy migrations of earlier releases, through %s: %s\n", strings.Join(prior.postdeploy.releases(), ", then "), prior.postdeploy.list())
 	}
 	writeReleaseHostConvergencePlan(out, "1. pre-upgrade host convergence", manifest, hostSteps, releaseYugabyteEngine(gm))
 	fmt.Fprintln(out, releaseApplyServiceDatabasesStep)
@@ -588,6 +595,12 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	if len(priorDataMigrations) > 0 {
 		ux.Subheading(out, "Required data migrations of earlier releases")
 		if runErr := runPriorDataMigrations(cmd.Context(), cmd, rc, sshPool, priorDataMigrations, opts.dryRun); runErr != nil {
+			return runErr
+		}
+	}
+	if !prior.postdeploy.empty() {
+		ux.Subheading(out, "Postdeploy migrations of earlier releases")
+		if runErr := runPriorPostdeploy(cmd, rc, prior.postdeploy, opts.dryRun, opts.completeInterruptedBaselines); runErr != nil {
 			return runErr
 		}
 	}

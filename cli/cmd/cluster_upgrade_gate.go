@@ -101,10 +101,12 @@ func checkPostgresMigrationGate(ctx context.Context, out io.Writer, rc *resolved
 	if err != nil {
 		return fmt.Errorf("[gate] check postgres expand migrations: %w", err)
 	}
-	missingExpand, wouldApply := splitDryRunExpandMigrations(missingExpand, dryRunEnginePostgres, rc.dryRunExpandMigrations)
+	missingExpand, wouldApply := splitDryRunMigrations(missingExpand, dryRunEnginePostgres, rc.dryRunExpandMigrations)
 	reportDryRunExpandMigrations(out, serviceName, wouldApply)
 	incompleteRelease, missingPostdeploy, err := firstIncompletePriorRelease(target, releases.ReleasesBelow, func(v string) ([]provisioner.MigrationKey, error) {
-		return missingPostgresMigrationsFn(ctx, sshPool, dbHost, pg, password, databases, "postdeploy", v)
+		missing, readErr := missingPostgresMigrationsFn(ctx, sshPool, dbHost, pg, password, databases, "postdeploy", v)
+		remaining, _ := splitDryRunMigrations(missing, dryRunEnginePostgres, rc.dryRunPriorPostdeploy)
+		return remaining, readErr
 	})
 	if err != nil {
 		return fmt.Errorf("[gate] check postgres prior postdeploy: %w", err)
@@ -160,10 +162,12 @@ func checkClickHouseMigrationGate(ctx context.Context, out io.Writer, rc *resolv
 	if err != nil {
 		return fmt.Errorf("[gate] check clickhouse expand migrations: %w", err)
 	}
-	missingExpand, wouldApply := splitDryRunExpandMigrations(missingExpand, dryRunEngineClickHouse, rc.dryRunExpandMigrations)
+	missingExpand, wouldApply := splitDryRunMigrations(missingExpand, dryRunEngineClickHouse, rc.dryRunExpandMigrations)
 	reportDryRunExpandMigrations(out, serviceName, wouldApply)
 	incompleteRelease, missingPostdeploy, err := firstIncompletePriorRelease(target, releases.ReleasesBelow, func(v string) ([]provisioner.MigrationKey, error) {
-		return missingClickHouseMigrationsFn(ctx, sshPool, host, port, password, ch.Databases, "postdeploy", v)
+		missing, readErr := missingClickHouseMigrationsFn(ctx, sshPool, host, port, password, ch.Databases, "postdeploy", v)
+		remaining, _ := splitDryRunMigrations(missing, dryRunEngineClickHouse, rc.dryRunPriorPostdeploy)
+		return remaining, readErr
 	})
 	if err != nil {
 		return fmt.Errorf("[gate] check clickhouse prior postdeploy: %w", err)

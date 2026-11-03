@@ -25,13 +25,19 @@ var gateLedger = []backup.LedgerRow{
 // recording gateLedger, started `age` before gateNow.
 func writeGateBackup(t *testing.T, age time.Duration) string {
 	t.Helper()
+	return writeGateBackupOf(t, "purser", age)
+}
+
+// writeGateBackupOf is writeGateBackup for the postgres database name.
+func writeGateBackupOf(t *testing.T, name string, age time.Duration) string {
+	t.Helper()
 	dir := t.TempDir()
 	loc, err := backup.ParseLocation(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	db := backup.Database{Name: "purser", Engine: backup.EngineYugabyte, Owner: "purser", Ledger: gateLedger, LedgerDigest: backup.LedgerDigest(gateLedger), RowCounts: map[string]int64{"purser.invoices": 2}}
+	db := backup.Database{Name: name, Engine: backup.EngineYugabyte, Owner: name, Ledger: gateLedger, LedgerDigest: backup.LedgerDigest(gateLedger), RowCounts: map[string]int64{name + ".rows": 2}}
 	for _, section := range backup.Sections {
 		file, storeErr := backup.StoreFile(ctx, loc, db.Key()+"/"+section+".sql.gz", func(w io.Writer) error {
 			_, writeErr := io.WriteString(w, "section "+section)

@@ -173,14 +173,14 @@ func TestDryRunExpandSplitKeepsChecksumMismatches(t *testing.T) {
 		{Database: "periscope", Version: "v0.3.13", Phase: "expand", Seq: 6, MismatchedChecksum: "abc"},
 		{Database: "periscope", Version: "v0.3.13", Phase: "expand", Seq: 8},
 	}
-	remaining, wouldApply := splitDryRunExpandMigrations(missing, dryRunEngineClickHouse, recorded)
+	remaining, wouldApply := splitDryRunMigrations(missing, dryRunEngineClickHouse, recorded)
 	if len(wouldApply) != 1 || wouldApply[0].Seq != 7 {
 		t.Fatalf("would apply %v, want only the recorded migration without a checksum mismatch", wouldApply)
 	}
 	if len(remaining) != 2 || remaining[0].Seq != 6 || remaining[1].Seq != 8 {
 		t.Fatalf("remaining %v, want the checksum mismatch and the unrecorded migration", remaining)
 	}
-	if remaining, _ := splitDryRunExpandMigrations(missing, dryRunEnginePostgres, recorded); len(remaining) != 3 {
+	if remaining, _ := splitDryRunMigrations(missing, dryRunEnginePostgres, recorded); len(remaining) != 3 {
 		t.Fatalf("postgres split used clickhouse records: remaining %v", remaining)
 	}
 }

@@ -154,6 +154,11 @@ type resolvedCluster struct {
 	// migration gates do not count them. Only a dry run sets it.
 	dryRunDataMigrations map[string]struct{}
 
+	// dryRunPriorPostdeploy names, keyed by dryRunMigrationKey, the earlier releases' postdeploy migrations a dry-run
+	// `release apply` submitted in check mode. The real apply applies them before any upgrade, so later dry-run
+	// pre-deploy gates count them as applied. Only a dry run sets it.
+	dryRunPriorPostdeploy map[string]struct{}
+
 	bootstrapYAMLOnce sync.Once
 	bootstrapYAML     []byte
 	bootstrapYAMLErr  error
