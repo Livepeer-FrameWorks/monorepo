@@ -98,3 +98,43 @@ func TestProcessAVPreDecoderSampleStaysOutOfBillingWindow(t *testing.T) {
 		t.Fatalf("window duration %d ms, want 2000", total)
 	}
 }
+
+// A node's own tenant is not the owner of the streams it transcodes. Billing events name no tenant, so
+// Foghorn bills the stream owner it resolves instead of refusing the node's tenant as a conflicting claim.
+func TestProcessBillingEventsAssertNoNodeTenant(t *testing.T) {
+	setupTriggerTest(t, "tenant-node-seed")
+
+	var livepeer *ipcpb.MistTrigger
+	stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
+		livepeer = trigger
+		return &control.MistTriggerResult{}, nil
+	})
+	ctx, recorder := newWebhookContext(strings.Join([]string{
+		"live+stream", "session-1", "7", "42000", "2000", "1280", "720", "250000",
+		"600000", "3", "1", "https://gateway.example", "180", "11.1", `[]`,
+	}, "\n"))
+	HandleLivepeerSegmentComplete(ctx)
+	if recorder.Code != http.StatusOK || livepeer.GetProcessBilling() == nil {
+		t.Fatalf("Livepeer segment: code %d, billing %v", recorder.Code, livepeer.GetProcessBilling())
+	}
+	if got := livepeer.GetProcessBilling().GetTenantId(); got != "" {
+		t.Fatalf("Livepeer billing event asserts tenant %q; the stream owner is Foghorn's to resolve", got)
+	}
+
+	var av *ipcpb.MistTrigger
+	original := recordProcessBillingSample
+	recordProcessBillingSample = func(_ string, trigger *ipcpb.MistTrigger) (string, error) {
+		av = trigger
+		return "window", nil
+	}
+	t.Cleanup(func() { recordProcessBillingSample = original })
+	ctx, recorder = newWebhookContext(processAVPayload("audio", "1", "48", "48", "aac", "libopus", "48000"))
+	ctx.Request.Header.Set("X-PID", "4242")
+	HandleProcessAVSegmentComplete(ctx)
+	if recorder.Code != http.StatusOK || av.GetProcessBilling() == nil {
+		t.Fatalf("AV segment: code %d, billing %v", recorder.Code, av.GetProcessBilling())
+	}
+	if got := av.GetProcessBilling().GetTenantId(); got != "" {
+		t.Fatalf("AV billing event asserts tenant %q; the stream owner is Foghorn's to resolve", got)
+	}
+}

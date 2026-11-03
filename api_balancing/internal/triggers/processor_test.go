@@ -1839,6 +1839,47 @@ func TestHandleProcessBilling_ResolvesProcessLabel(t *testing.T) {
 	}
 }
 
+// Helmsman stamps its node's own tenant on the envelope and names no tenant in the billing event. A stream
+// another tenant owns is billed to that owner; a payload that asserts a tenant other than the owner is refused.
+func TestHandleProcessBilling_BillsResolvedOwnerNotNodeTenant(t *testing.T) {
+	processor := newTestProcessor(t)
+	nodeTenant := "tenant-node-seed"
+	ownerTenant := "tenant-owner"
+	internalName := "stream-abc"
+	processor.streamCache.Set(nodeTenant+":"+internalName, streamContext{
+		TenantID: ownerTenant,
+		StreamID: "stream-id",
+		Source:   "test",
+	}, time.Minute)
+
+	unasserted := &ipcpb.MistTrigger{
+		TenantId: &nodeTenant,
+		TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+			ProcessBilling: &ipcpb.ProcessBillingEvent{StreamName: "live+" + internalName},
+		},
+	}
+	if _, _, err := processor.handleProcessBilling(unasserted); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := unasserted.GetProcessBilling(); got.GetTenantId() != ownerTenant || got.GetStreamId() != "stream-id" {
+		t.Fatalf("billing event without a tenant assertion billed tenant %q stream %q, want owner %q stream-id",
+			got.GetTenantId(), got.GetStreamId(), ownerTenant)
+	}
+
+	asserted := &ipcpb.MistTrigger{
+		TenantId: &nodeTenant,
+		TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+			ProcessBilling: &ipcpb.ProcessBillingEvent{StreamName: "live+" + internalName, TenantId: &nodeTenant},
+		},
+	}
+	if _, _, err := processor.handleProcessBilling(asserted); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := asserted.GetProcessBilling(); got.GetTenantId() != nodeTenant || got.GetStreamId() != "" {
+		t.Fatalf("conflicting tenant assertion was not refused: tenant %q stream %q", got.GetTenantId(), got.GetStreamId())
+	}
+}
+
 func TestHandleStorageLifecycleData_UsesCacheAndStreamIDFallback(t *testing.T) {
 	processor := newTestProcessor(t)
 	tenantID := "tenant-2"

@@ -2549,13 +2549,14 @@ func HandleLivepeerSegmentComplete(c *gin.Context) {
 		SpeedFactor:       speedFactorFloat,
 	})
 
+	// The event names no tenant: the node's own tenant is not the stream owner, and Foghorn bills
+	// the owner it resolves from the stream.
 	billingEvent := &ipcpb.ProcessBillingEvent{
 		NodeId:            nodeName,
 		StreamName:        streamName,
 		ProcessType:       "Livepeer",
 		DurationMs:        durationMsInt,
 		Timestamp:         time.Now().Unix(),
-		TenantId:          stringPtr(config.GetTenantID()),
 		OutputCodec:       stringPtr(outputCodec),
 		TrackType:         stringPtr("video"),
 		LivepeerSessionId: stringPtr(livepeerSessionId),
@@ -2742,13 +2743,13 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 	}
 	logger.WithFields(segmentFields).Info("MistProcAV segment processed")
 
+	// Like the Livepeer event, this names no tenant; Foghorn bills the stream owner it resolves.
 	billingEvent := &ipcpb.ProcessBillingEvent{
 		NodeId:              nodeName,
 		StreamName:          streamName,
 		ProcessType:         "AV",
 		DurationMs:          durationMs,
 		Timestamp:           time.Now().Unix(),
-		TenantId:            stringPtr(config.GetTenantID()),
 		TrackType:           stringPtr(trackType),
 		InputFrames:         int64Ptr(inputFramesInt),
 		OutputFrames:        int64Ptr(outputFramesInt),
