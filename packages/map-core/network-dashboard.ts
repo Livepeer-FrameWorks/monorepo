@@ -9,6 +9,7 @@ import {
 import {
   bindExplorerViewport,
   livepeerOrchestratorURL,
+  OBSERVATIONS_NOT_CONFIGURED_NOTE,
   observationsFailure,
 } from "./network-explorer";
 import {
@@ -1645,11 +1646,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
           message.textContent = failure.message;
           message.classList.remove("is-warning");
           overviewBody.replaceChildren(
-            node(
-              "div",
-              "This deployment runs without the Livepeer network observer, so there are no worker observations to show.",
-              "rail-section evidence-note"
-            )
+            node("div", OBSERVATIONS_NOT_CONFIGURED_NOTE, "rail-section evidence-note")
           );
           return;
         }

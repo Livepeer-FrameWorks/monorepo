@@ -56,6 +56,11 @@ export type ObservationsFailure = { message: string; notConfigured: boolean };
 export const OBSERVATIONS_NOT_CONFIGURED = "NETWORK_OBSERVATIONS_NOT_CONFIGURED";
 export const OBSERVATIONS_UNAVAILABLE = "NETWORK_OBSERVATIONS_UNAVAILABLE";
 
+// The not-configured code covers a missing observer, a missing analytics reader and a
+// missing or invalid network scope alike, so the note names no single cause.
+export const OBSERVATIONS_NOT_CONFIGURED_NOTE =
+  "This deployment does not publish Livepeer network observations, so there are no worker observations to show.";
+
 export function observationsFailure(status: number, body: unknown): ObservationsFailure {
   const code =
     typeof body === "object" &&
