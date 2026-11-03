@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { describeResolveFailure, describeStudioFailure } from "./failures";
+import { describeIngestRefusal } from "$lib/placement/ingest-refusals";
 import { DEFAULT_STUDIO_SETTINGS, loadStudioSettings, saveStudioSettings } from "./studio-settings";
 
 describe("Go Live failure guidance", () => {
@@ -32,6 +33,13 @@ describe("Go Live failure guidance", () => {
     expect(describeStudioFailure("WHIP request failed: 402 Payment Required - ").actions).toEqual([
       "billing",
     ]);
+  });
+
+  it("names an ended grant on a WHIP 402 instead of the balance copy", () => {
+    const failure = describeStudioFailure(
+      'WHIP request failed: 402 Payment Required - {"code":"GRANT_EXPIRED"}'
+    );
+    expect(failure).toEqual(describeIngestRefusal("GRANT_EXPIRED"));
   });
 
   it("names the specific refusal from extensions.reason over the shared code", () => {

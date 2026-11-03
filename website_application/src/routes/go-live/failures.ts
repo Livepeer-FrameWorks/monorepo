@@ -117,6 +117,10 @@ export function describeStudioFailure(message: string): GoLiveFailure {
       actions: ["settings"],
     };
   }
+  // The WHIP error carries the response body, which names an ended operator grant.
+  if (/WHIP request failed: 402/.test(message) && /GRANT_EXPIRED/.test(message)) {
+    return describeIngestRefusal("GRANT_EXPIRED");
+  }
   if (/WHIP request failed: 402/.test(message)) return BALANCE_REFUSAL;
   if (/WHIP request failed: 40[13]/.test(message)) return refusedFailure;
   if (
