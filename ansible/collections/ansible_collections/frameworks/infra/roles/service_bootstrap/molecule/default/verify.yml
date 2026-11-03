@@ -1,0 +1,110 @@
+---
+# Drives the role's dry_run mode the way `cluster release apply --dry-run`
+# does: at the installed version it runs the binary's own dry run with the
+# rendered file and the extra args and prints the plan; at another version it
+# runs nothing; a failing plan fails the role; the rendered file never stays.
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    plan_yaml: |
+      accounts:
+        - tenant: {ref: frameworks-qa}
+    plan_file: /var/lib/frameworks/commodore/bootstrap-dry-run.yaml
+  tasks:
+    - name: Plan at the installed version
+      ansible.builtin.include_role:
+        name: frameworks.infra.service_bootstrap
+      vars:
+        service_bootstrap_service: commodore
+        service_bootstrap_mode: dry_run
+        service_bootstrap_yaml: "{{ plan_yaml }}"
+        service_bootstrap_extra_args: [--accounts-only]
+        service_bootstrap_target_version: v0.3.14
+
+    - name: Read what the binary was given
+      ansible.builtin.slurp:
+        src: "{{ path }}"
+      loop: [/tmp/bootstrap-argv, /tmp/bootstrap-seen.yaml]
+      loop_control:
+        loop_var: path
+      register: plan_inputs
+
+    - name: Stat the rendered file after the plan
+      ansible.builtin.stat:
+        path: "{{ plan_file }}"
+      register: plan_file_after
+
+    - name: Assert the binary planned with the rendered file, the extra args and its env, and the file is gone
+      ansible.builtin.assert:
+        that:
+          - (plan_inputs.results[0].content | b64decode | trim) == 'bootstrap --file ' ~ plan_file ~ ' --dry-run --accounts-only'
+          - (plan_inputs.results[1].content | b64decode) == plan_yaml
+          - "'commodore bootstrap [dry-run] would: create user qa@example.test' in service_bootstrap_plan.stdout_lines"
+          - "'env MOLECULE_MARKER=sourced' in service_bootstrap_plan.stdout_lines"
+          - not plan_file_after.stat.exists
+        fail_msg: "plan: {{ service_bootstrap_plan }}; inputs: {{ plan_inputs.results | map(attribute='content') | map('b64decode') | list }}"
+
+    - name: Forget the previous plan's inputs
+      ansible.builtin.file:
+        path: /tmp/bootstrap-argv
+        state: absent
+
+    - name: Plan at a version the service does not run
+      ansible.builtin.include_role:
+        name: frameworks.infra.service_bootstrap
+      vars:
+        service_bootstrap_service: commodore
+        service_bootstrap_mode: dry_run
+        service_bootstrap_yaml: "{{ plan_yaml }}"
+        service_bootstrap_target_version: v0.3.15
+
+    - name: Stat the binary's argv record
+      ansible.builtin.stat:
+        path: /tmp/bootstrap-argv
+      register: argv_after_skip
+
+    - name: Assert the older binary was not run
+      ansible.builtin.assert:
+        that:
+          - service_bootstrap_plan is skipped
+          - not argv_after_skip.stat.exists
+        fail_msg: "plan: {{ service_bootstrap_plan }}"
+
+    - name: Make the binary's plan fail
+      ansible.builtin.copy:
+        dest: /tmp/bootstrap-exit
+        content: "1\n"
+        mode: "0644"
+
+    - name: Plan that the binary refuses
+      block:
+        - name: Run the failing plan
+          ansible.builtin.include_role:
+            name: frameworks.infra.service_bootstrap
+          vars:
+            service_bootstrap_service: commodore
+            service_bootstrap_mode: dry_run
+            service_bootstrap_yaml: "{{ plan_yaml }}"
+            service_bootstrap_target_version: v0.3.14
+
+        - name: Record that the failing plan passed
+          ansible.builtin.set_fact:
+            failed_plan_error: ""
+      rescue:
+        - name: Record the failing plan
+          ansible.builtin.set_fact:
+            failed_plan_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Stat the rendered file after the failing plan
+      ansible.builtin.stat:
+        path: "{{ plan_file }}"
+      register: plan_file_after_failure
+
+    - name: Assert a failing plan fails the role and leaves no rendered file
+      ansible.builtin.assert:
+        that:
+          - "'commodore bootstrap --dry-run exited 1' in failed_plan_error"
+          - not plan_file_after_failure.stat.exists
+        fail_msg: "error: {{ failed_plan_error }}"

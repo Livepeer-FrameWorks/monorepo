@@ -29,7 +29,7 @@ func TestReleaseApplyReconcilesPurserTierCatalog(t *testing.T) {
 	installFakeSQLClient(t, "f", `{}`)
 
 	var steps []string
-	releasePrepareAccountsFn = func(*cobra.Command, *resolvedCluster, *ssh.Pool, string) (func(context.Context, bool) error, error) {
+	releasePrepareAccountsFn = func(*cobra.Command, *resolvedCluster, *ssh.Pool, string, string) (func(context.Context, bool) error, error) {
 		steps = append(steps, "accounts:render")
 		return func(_ context.Context, dryRun bool) error {
 			if !dryRun {
@@ -39,7 +39,7 @@ func TestReleaseApplyReconcilesPurserTierCatalog(t *testing.T) {
 			return nil
 		}, nil
 	}
-	releasePrepareTierCatalogFn = func(*cobra.Command, *resolvedCluster, *ssh.Pool) (func(context.Context, bool) error, error) {
+	releasePrepareTierCatalogFn = func(*cobra.Command, *resolvedCluster, *ssh.Pool, string) (func(context.Context, bool) error, error) {
 		steps = append(steps, "catalog:render")
 		return func(_ context.Context, dryRun bool) error {
 			if !dryRun {
@@ -84,7 +84,7 @@ func TestReleaseApplyReconcilesPurserTierCatalog(t *testing.T) {
 }
 
 func TestPrepareReleaseTierCatalogSkipsManifestWithoutPurser(t *testing.T) {
-	step, err := prepareReleaseTierCatalog(&cobra.Command{}, &resolvedCluster{Manifest: postExpandReportManifest()}, nil)
+	step, err := prepareReleaseTierCatalog(&cobra.Command{}, &resolvedCluster{Manifest: postExpandReportManifest()}, nil, "v0.3.14")
 	if err != nil || step != nil {
 		t.Fatalf("prepare without purser = (%v, %v), want no step", step != nil, err)
 	}
@@ -97,7 +97,7 @@ func TestPrepareReleaseAccountsIncludesReleaseCandidate(t *testing.T) {
 				Manifest:     &inventory.Manifest{Profile: "dev", WireGuard: &inventory.WireGuardConfig{MeshCIDR: "10.99.0.0/16"}, Services: map[string]inventory.ServiceConfig{"commodore": {Enabled: true}}},
 				ManifestPath: filepath.Join(t.TempDir(), "cluster.yaml"), SourcePersistsManifest: true,
 			}
-			step, err := prepareReleaseAccounts(&cobra.Command{}, rc, nil, version)
+			step, err := prepareReleaseAccounts(&cobra.Command{}, rc, nil, version, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -113,9 +113,48 @@ func TestPrepareReleaseAccountsIncludesReleaseCandidate(t *testing.T) {
 	}
 }
 
+// stubBootstrapPlans records each bootstrap dry-run plan the release dry run asks for, as
+// "<service> <args> at <target version>".
+func stubBootstrapPlans(t *testing.T) *[]string {
+	t.Helper()
+	original := releaseRunBootstrapPlanFn
+	t.Cleanup(func() { releaseRunBootstrapPlanFn = original })
+	var plans []string
+	releaseRunBootstrapPlanFn = func(_ context.Context, _ *cobra.Command, _ *inventory.Manifest, _ *ssh.Pool, service string, rendered []byte, args []string, target string) error {
+		if len(rendered) == 0 {
+			t.Fatalf("%s plan without the rendered desired state", service)
+		}
+		plans = append(plans, strings.TrimSpace(service+" "+strings.Join(args, " "))+" at "+target)
+		return nil
+	}
+	return &plans
+}
+
+// The release dry run asks Purser for its own bootstrap plan with the rendered desired state, at the version the
+// release installs; the real run applies instead.
+func TestReleaseTierCatalogDryRunPrintsPurserPlan(t *testing.T) {
+	plans := stubBootstrapPlans(t)
+	original := releaseRunAccountsBootstrapFn
+	t.Cleanup(func() { releaseRunAccountsBootstrapFn = original })
+	rc := &resolvedCluster{Manifest: &inventory.Manifest{Profile: "dev", WireGuard: &inventory.WireGuardConfig{MeshCIDR: "10.99.0.0/16"}, Services: map[string]inventory.ServiceConfig{"purser": {Enabled: true}}}, ManifestPath: filepath.Join(t.TempDir(), "cluster.yaml"), SourcePersistsManifest: true}
+	cmd := &cobra.Command{}
+	cmd.SetOut(&strings.Builder{})
+	step, err := prepareReleaseTierCatalog(cmd, rc, nil, "v0.3.14")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = step(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(*plans, ",") != "purser at v0.3.14" {
+		t.Fatalf("plans = %v, want purser's own dry run at v0.3.14", *plans)
+	}
+}
+
 func TestReleaseAccountsUsesOnlyAccountsAndShowsNames(t *testing.T) {
 	original := releaseRunAccountsBootstrapFn
 	t.Cleanup(func() { releaseRunAccountsBootstrapFn = original })
+	plans := stubBootstrapPlans(t)
 	calls := 0
 	releaseRunAccountsBootstrapFn = func(_ context.Context, _ *cobra.Command, _ *inventory.Manifest, _ *ssh.Pool, service string, _ []byte, args []string) error {
 		calls++
@@ -130,7 +169,7 @@ func TestReleaseAccountsUsesOnlyAccountsAndShowsNames(t *testing.T) {
 	cmd.Flags().String("bootstrap-admin-password", "must-stay-private", "")
 	var out strings.Builder
 	cmd.SetOut(&out)
-	step, err := prepareReleaseAccounts(cmd, rc, nil, "v0.3.14-rc1")
+	step, err := prepareReleaseAccounts(cmd, rc, nil, "v0.3.14-rc1", "v0.3.14-rc1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,11 +179,14 @@ func TestReleaseAccountsUsesOnlyAccountsAndShowsNames(t *testing.T) {
 	if !strings.Contains(out.String(), "operator@example.test owner") || strings.Contains(out.String(), "must-stay-private") || calls != 0 {
 		t.Fatalf("dry-run output=%s calls=%d", out.String(), calls)
 	}
+	if strings.Join(*plans, ",") != "commodore --accounts-only at v0.3.14-rc1" {
+		t.Fatalf("plans = %v, want commodore's accounts-only dry run at v0.3.14-rc1", *plans)
+	}
 	if err = step(context.Background(), false); err != nil {
 		t.Fatal(err)
 	}
-	if calls != 1 {
-		t.Fatalf("bootstrap calls=%d", calls)
+	if calls != 1 || len(*plans) != 1 {
+		t.Fatalf("bootstrap calls=%d plans=%v; the real run applies and plans nothing", calls, *plans)
 	}
 }
 

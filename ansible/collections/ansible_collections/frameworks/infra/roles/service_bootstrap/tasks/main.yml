@@ -3,11 +3,99 @@
   ansible.builtin.assert:
     that:
       - service_bootstrap_service | length > 0
-      - service_bootstrap_mode in ["apply", "validate"]
-      - service_bootstrap_mode != "apply" or (service_bootstrap_yaml | length > 0)
+      - service_bootstrap_mode in ["apply", "validate", "dry_run"]
+      - service_bootstrap_mode == "validate" or (service_bootstrap_yaml | length > 0)
+      - service_bootstrap_mode != "dry_run" or (service_bootstrap_target_version | length > 0)
     fail_msg: >-
-      service_bootstrap_service is required, mode must be "apply" or
-      "validate", and apply mode requires service_bootstrap_yaml.
+      service_bootstrap_service is required, mode must be "apply",
+      "validate" or "dry_run", apply and dry_run require
+      service_bootstrap_yaml, and dry_run requires
+      service_bootstrap_target_version.
+
+# The plan comes from the binary that will apply it: an older installed
+# binary would report the previous release's reconcile. The installed version
+# is read from go_service's install record, never by running the binary.
+- name: Service_bootstrap | dry run | read installed version
+  ansible.builtin.command: cat "{{ service_bootstrap_install_dir }}/.artifact-version"
+  register: service_bootstrap_installed_version
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: service_bootstrap_mode == "dry_run"
+
+- name: Service_bootstrap | dry run | report a service not yet at the target
+  ansible.builtin.debug:
+    msg: >-
+      {{ service_bootstrap_service }} is installed at
+      {{ service_bootstrap_installed_version.stdout | default('') | trim | default('an unrecorded version', true) }},
+      not {{ service_bootstrap_target_version }}; its bootstrap plan is
+      reported once it runs {{ service_bootstrap_target_version }}.
+  when:
+    - service_bootstrap_mode == "dry_run"
+    - (service_bootstrap_installed_version.stdout | default('') | trim) != service_bootstrap_target_version
+
+- name: Service_bootstrap | dry run
+  when:
+    - service_bootstrap_mode == "dry_run"
+    - (service_bootstrap_installed_version.stdout | default('') | trim) == service_bootstrap_target_version
+  vars:
+    ansible_remote_tmp: "{{ service_bootstrap_state_dir }}/.ansible/tmp"
+    service_bootstrap_plan_file: "{{ service_bootstrap_state_dir }}/bootstrap-dry-run.yaml"
+  block:
+    - name: Service_bootstrap | dry run | ensure Ansible temp dir exists
+      ansible.builtin.file:
+        path: "{{ service_bootstrap_state_dir }}/.ansible/tmp"
+        state: directory
+        owner: "{{ service_bootstrap_user }}"
+        group: "{{ service_bootstrap_group }}"
+        mode: "0700"
+
+    - name: Service_bootstrap | dry run | write rendered desired-state file
+      ansible.builtin.copy:
+        content: "{{ service_bootstrap_yaml }}"
+        dest: "{{ service_bootstrap_plan_file }}"
+        owner: "{{ service_bootstrap_user }}"
+        group: "{{ service_bootstrap_group }}"
+        mode: "0600"
+      no_log: true
+
+    # --dry-run runs the full reconcile in a transaction the service rolls
+    # back, and prints what it would change.
+    - name: Service_bootstrap | dry run | run subcommand
+      ansible.builtin.command:
+        argv: >-
+          {{
+            ['/bin/bash', '-c',
+             'set -a; . "$1"; set +a; shift; exec "$@"',
+             '--',
+             service_bootstrap_env_file,
+             service_bootstrap_install_dir + '/' + service_bootstrap_service,
+             'bootstrap',
+             '--file', service_bootstrap_plan_file,
+             '--dry-run']
+            + (service_bootstrap_extra_args | default([]))
+          }}
+      become_user: "{{ service_bootstrap_user }}"
+      become: true
+      register: service_bootstrap_plan
+      changed_when: false
+      failed_when: false
+
+    - name: Service_bootstrap | dry run | print the plan
+      ansible.builtin.debug:
+        msg: "{{ service_bootstrap_plan.stdout_lines + service_bootstrap_plan.stderr_lines }}"
+
+    - name: Service_bootstrap | dry run | fail when the plan would not apply
+      ansible.builtin.fail:
+        msg: >-
+          {{ service_bootstrap_service }} bootstrap --dry-run exited
+          {{ service_bootstrap_plan.rc }}; the apply would fail the same way.
+      when: service_bootstrap_plan.rc != 0
+  always:
+    - name: Service_bootstrap | dry run | remove desired-state file
+      ansible.builtin.file:
+        path: "{{ service_bootstrap_plan_file }}"
+        state: absent
 
 - name: Service_bootstrap | apply
   when: service_bootstrap_mode == "apply"

@@ -21,6 +21,10 @@ const (
 	// ServiceBootstrapModeValidate runs `<service> bootstrap validate` only —
 	// the post-apply cross-service invariant check. No file upload.
 	ServiceBootstrapModeValidate ServiceBootstrapMode = "validate"
+	// ServiceBootstrapModeDryRun runs `<service> bootstrap --file --dry-run`
+	// and prints its plan when the installed binary is TargetVersion, and
+	// otherwise reports that it is not. YAML and TargetVersion are required.
+	ServiceBootstrapModeDryRun ServiceBootstrapMode = "dry_run"
 )
 
 // ServiceBootstrapOptions describes one invocation of the service_bootstrap
@@ -28,14 +32,18 @@ const (
 type ServiceBootstrapOptions struct {
 	Service string
 	Host    inventory.Host
-	// Mode selects apply (default when empty) or validate.
+	// Mode selects apply (default when empty), validate or dry_run.
 	Mode ServiceBootstrapMode
-	// YAML is the rendered desired-state document. Required for apply mode.
+	// YAML is the rendered desired-state document. Required for apply and
+	// dry_run.
 	YAML string
-	// ExtraArgs appends to the apply invocation (today: --reset-credentials
-	// for commodore). Ignored in validate mode.
-	ExtraArgs   []string
-	AnsibleRoot string
+	// ExtraArgs appends to the apply and dry_run invocations (today:
+	// --reset-credentials and --accounts-only for commodore). Ignored in
+	// validate mode.
+	ExtraArgs []string
+	// TargetVersion is the artifact version the dry_run plan needs installed.
+	TargetVersion string
+	AnsibleRoot   string
 }
 
 // RunServiceBootstrap uploads the rendered desired-state YAML to the host and
@@ -60,6 +68,10 @@ func RunServiceBootstrap(ctx context.Context, pool *ssh.Pool, opts ServiceBootst
 		}
 	case ServiceBootstrapModeValidate:
 		// no YAML required.
+	case ServiceBootstrapModeDryRun:
+		if opts.YAML == "" || opts.TargetVersion == "" {
+			return fmt.Errorf("RunServiceBootstrap: YAML and TargetVersion required for dry_run mode")
+		}
 	default:
 		return fmt.Errorf("RunServiceBootstrap: unknown mode %q", mode)
 	}
@@ -126,11 +138,14 @@ func RunServiceBootstrap(ctx context.Context, pool *ssh.Pool, opts ServiceBootst
 		"service_bootstrap_service": opts.Service,
 		"service_bootstrap_mode":    string(mode),
 	}
-	if mode == ServiceBootstrapModeApply {
+	if mode == ServiceBootstrapModeApply || mode == ServiceBootstrapModeDryRun {
 		vars["service_bootstrap_yaml"] = opts.YAML
 		if len(opts.ExtraArgs) > 0 {
 			vars["service_bootstrap_extra_args"] = opts.ExtraArgs
 		}
+	}
+	if mode == ServiceBootstrapModeDryRun {
+		vars["service_bootstrap_target_version"] = opts.TargetVersion
 	}
 
 	return exec.Execute(ctx, ansiblerun.ExecuteOptions{

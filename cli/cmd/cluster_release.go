@@ -200,6 +200,9 @@ var (
 	releasePrepareAccountsFn = prepareReleaseAccounts
 	// releaseRunAccountsBootstrapFn invokes the service with --accounts-only.
 	releaseRunAccountsBootstrapFn = runServiceBootstrap
+	// releaseRunBootstrapPlanFn prints a service's bootstrap --dry-run plan
+	// in the release dry run.
+	releaseRunBootstrapPlanFn = runServiceBootstrapPlan
 	// releaseNewHostConvergenceFn builds the pre-upgrade host convergence.
 	releaseNewHostConvergenceFn = newReleaseHostConvergence
 	// releasePrepareQuartermasterBootstrapFn renders the Quartermaster
@@ -269,8 +272,9 @@ func reconcileReleaseServiceAssignments(ctx context.Context, cmd *cobra.Command,
 // prepareReleaseTierCatalog renders the bootstrap desired state that
 // provision and finalize hand to `purser bootstrap`, so a release reconciles
 // the tier catalog its Purser binary embeds. The returned step is nil when
-// the manifest runs no Purser.
-func prepareReleaseTierCatalog(cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool) (func(ctx context.Context, dryRun bool) error, error) {
+// the manifest runs no Purser. Its dry run also prints `purser bootstrap
+// --dry-run` when Purser is already installed at targetVersion.
+func prepareReleaseTierCatalog(cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool, targetVersion string) (func(ctx context.Context, dryRun bool) error, error) {
 	manifest := rc.Manifest
 	if _, ok := manifest.Services["purser"]; !ok {
 		return nil, nil
@@ -289,7 +293,7 @@ func prepareReleaseTierCatalog(cmd *cobra.Command, rc *resolvedCluster, sshPool 
 			for _, billing := range desired.Purser.CustomerBilling {
 				fmt.Fprintf(cmd.OutOrStdout(), "    billing %s: %s\n", billing.Tenant.Ref, describeReleaseCustomerBilling(billing))
 			}
-			return nil
+			return releaseBootstrapPlan(ctx, cmd, manifest, sshPool, "purser", bootstrapYAML, nil, targetVersion)
 		}
 		if err := runServiceBootstrap(ctx, cmd, manifest, sshPool, "purser", bootstrapYAML, nil); err != nil {
 			return fmt.Errorf("purser bootstrap: %w", err)
@@ -301,8 +305,9 @@ func prepareReleaseTierCatalog(cmd *cobra.Command, rc *resolvedCluster, sshPool 
 	}, nil
 }
 
-// prepareReleaseAccounts prepares a catalog-gated accounts-only reconcile and its dry-run report.
-func prepareReleaseAccounts(cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool, platformVersion string) (func(context.Context, bool) error, error) {
+// prepareReleaseAccounts prepares a catalog-gated accounts-only reconcile and its dry-run report, which also prints
+// `commodore bootstrap --dry-run --accounts-only` when Commodore is already installed at targetVersion.
+func prepareReleaseAccounts(cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool, platformVersion, targetVersion string) (func(context.Context, bool) error, error) {
 	if !releases.Supports(platformVersion, releases.CapabilityAccountsBootstrap) {
 		return nil, nil
 	}
@@ -325,10 +330,35 @@ func prepareReleaseAccounts(cmd *cobra.Command, rc *resolvedCluster, sshPool *ss
 					fmt.Fprintf(cmd.OutOrStdout(), "    account %s: %s\n", account.Tenant.Ref, describeReleaseAccountUser(user))
 				}
 			}
-			return nil
+			return releaseBootstrapPlan(ctx, cmd, rc.Manifest, sshPool, "commodore", rendered, []string{"--accounts-only"}, targetVersion)
 		}
 		return releaseRunAccountsBootstrapFn(ctx, cmd, rc.Manifest, sshPool, "commodore", rendered, []string{"--accounts-only"})
 	}, nil
+}
+
+// releaseBootstrapPlan prints the service's bootstrap dry-run plan in the release dry run. Without a target version
+// in the release metadata there is no binary to plan with, which the dry run says rather than guessing.
+func releaseBootstrapPlan(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, sshPool *ssh.Pool, service string, rendered []byte, extraArgs []string, targetVersion string) error {
+	if targetVersion == "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "  dry-run: the release metadata names no %s version; its bootstrap plan is not shown\n", service)
+		return nil
+	}
+	if err := releaseRunBootstrapPlanFn(ctx, cmd, manifest, sshPool, service, rendered, extraArgs, targetVersion); err != nil {
+		return fmt.Errorf("%s bootstrap dry run: %w", service, err)
+	}
+	return nil
+}
+
+// releaseServiceVersion is the artifact version the release metadata installs for service, or "" when it lists none.
+func releaseServiceVersion(gm *gitops.Manifest, service string) string {
+	if gm == nil {
+		return ""
+	}
+	info, err := gm.GetServiceInfo(service)
+	if err != nil || info == nil {
+		return ""
+	}
+	return info.Version
 }
 
 // describeReleaseCustomerBilling names a declared tenant's billing model, tier,
@@ -501,11 +531,11 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 		}
 	}
 
-	reconcileAccounts, err := releasePrepareAccountsFn(cmd, rc, sshPool, platformVersion)
+	reconcileAccounts, err := releasePrepareAccountsFn(cmd, rc, sshPool, platformVersion, releaseServiceVersion(gm, "commodore"))
 	if err != nil {
 		return fmt.Errorf("commodore accounts: %w", err)
 	}
-	reconcileTierCatalog, err := releasePrepareTierCatalogFn(cmd, rc, sshPool)
+	reconcileTierCatalog, err := releasePrepareTierCatalogFn(cmd, rc, sshPool, releaseServiceVersion(gm, "purser"))
 	if err != nil {
 		return fmt.Errorf("purser billing declarations: %w", err)
 	}

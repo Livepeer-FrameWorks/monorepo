@@ -59,6 +59,22 @@ func TestRunServiceBootstrap_ValidateAcceptsEmptyYAML(t *testing.T) {
 	}
 }
 
+// A dry-run plan is only meaningful from the binary that will apply it, so the
+// runner refuses one without the version the role compares the install with.
+func TestRunServiceBootstrap_DryRunRequiresYAMLAndTargetVersion(t *testing.T) {
+	pool := ssh.NewPool(0, "")
+	defer pool.Close()
+	for _, opts := range []ServiceBootstrapOptions{
+		{Service: "commodore", Host: inventory.Host{Name: "h", ExternalIP: "127.0.0.1"}, Mode: ServiceBootstrapModeDryRun, YAML: "x"},
+		{Service: "commodore", Host: inventory.Host{Name: "h", ExternalIP: "127.0.0.1"}, Mode: ServiceBootstrapModeDryRun, TargetVersion: "v0.3.14"},
+	} {
+		err := RunServiceBootstrap(context.Background(), pool, opts)
+		if err == nil || !strings.Contains(err.Error(), "YAML and TargetVersion required for dry_run mode") {
+			t.Fatalf("dry_run with YAML=%q TargetVersion=%q: %v", opts.YAML, opts.TargetVersion, err)
+		}
+	}
+}
+
 func TestRunServiceBootstrap_RejectsUnknownMode(t *testing.T) {
 	pool := ssh.NewPool(0, "")
 	defer pool.Close()

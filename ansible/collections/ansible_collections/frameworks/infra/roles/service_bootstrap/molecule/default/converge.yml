@@ -1,0 +1,67 @@
+---
+# Installs a stand-in for an installed commodore the way go_service lays one
+# out: the binary, its install record and its env file. The stand-in records
+# its argv and the desired-state file it was given, prints a plan line and the
+# env it was started with, and exits with the code in /tmp/bootstrap-exit.
+- name: Converge
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Create the service user
+      ansible.builtin.user:
+        name: frameworks
+        system: true
+        create_home: false
+
+    - name: Create the install directory
+      ansible.builtin.file:
+        path: /opt/frameworks/commodore
+        state: directory
+        owner: root
+        group: frameworks
+        mode: "0755"
+
+    - name: Install the stand-in binary
+      ansible.builtin.copy:
+        dest: /opt/frameworks/commodore/commodore
+        owner: root
+        group: frameworks
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          set -eu
+          printf '%s\n' "$*" > /tmp/bootstrap-argv
+          file=""
+          while [ $# -gt 0 ]; do
+            if [ "$1" = "--file" ]; then file="$2"; shift; fi
+            shift
+          done
+          cp "$file" /tmp/bootstrap-seen.yaml
+          echo "commodore bootstrap [dry-run] would: create user qa@example.test"
+          echo "env MOLECULE_MARKER=${MOLECULE_MARKER:-unset}"
+          exit "$(cat /tmp/bootstrap-exit 2>/dev/null || echo 0)"
+
+    - name: Record the installed version
+      ansible.builtin.copy:
+        dest: /opt/frameworks/commodore/.artifact-version
+        content: "v0.3.14\n"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Create the env directory
+      ansible.builtin.file:
+        path: /etc/frameworks
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Write the service env file
+      ansible.builtin.copy:
+        dest: /etc/frameworks/commodore.env
+        content: "MOLECULE_MARKER=sourced\n"
+        owner: root
+        group: frameworks
+        mode: "0640"

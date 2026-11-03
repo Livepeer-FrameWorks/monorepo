@@ -1,0 +1,38 @@
+---
+role_name_check: 1
+prerun: false
+
+dependency:
+  name: galaxy
+
+driver:
+  name: docker
+
+platforms:
+  - name: service-bootstrap-instance
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    pre_build_image: true
+    privileged: true
+    command: /usr/sbin/init
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    tmpfs:
+      - /run
+      - /tmp
+
+provisioner:
+  name: ansible
+
+# The role runs a service binary, so converge only installs a stand-in for one;
+# verify drives the role and asserts what it ran. Nothing converges twice.
+scenario:
+  test_sequence:
+    - destroy
+    - create
+    - converge
+    - verify
+    - destroy
+
+verifier:
+  name: ansible

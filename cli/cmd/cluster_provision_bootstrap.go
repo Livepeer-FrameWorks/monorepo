@@ -119,6 +119,26 @@ func runServiceBootstrap(ctx context.Context, cmd *cobra.Command, manifest *inve
 	})
 }
 
+// runServiceBootstrapPlan runs `<service> bootstrap --dry-run` with the
+// rendered desired state and prints its plan when the installed binary is
+// targetVersion; the role reports instead when it is not, because an older
+// binary would plan the previous release's reconcile.
+func runServiceBootstrapPlan(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, sshPool *ssh.Pool, service string, yamlBytes []byte, extraArgs []string, targetVersion string) error {
+	host, err := serviceHostForBootstrap(manifest, service)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "  Planning %s bootstrap on %s (runs when it is installed at %s)...\n", service, host.Name, targetVersion)
+	return provisioner.RunServiceBootstrap(ctx, sshPool, provisioner.ServiceBootstrapOptions{
+		Service:       service,
+		Host:          host,
+		Mode:          provisioner.ServiceBootstrapModeDryRun,
+		YAML:          string(yamlBytes),
+		ExtraArgs:     extraArgs,
+		TargetVersion: targetVersion,
+	})
+}
+
 // runServiceBootstrapValidate runs `<service> bootstrap validate` — the
 // post-apply cross-service invariant check. Today only purser uses it (every
 // platform-official cluster must have a cluster_pricing row).
