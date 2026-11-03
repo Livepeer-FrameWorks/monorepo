@@ -7842,6 +7842,310 @@
           "title": "Privateer peers",
           "transparent": false,
           "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "victoriametrics"
+          },
+          "description": "Inputs of the billing and account lifecycle alerts. Any value above zero is work a tenant is waiting on: held downgrades, repeatedly failing moves to Free and their notices, grant expiries, provider recovery and tenant closure synchronization, and queue reads that failed.",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "auto",
+                "showValues": false,
+                "spanNulls": false,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              },
+              "unit": "short"
+            }
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 48
+          },
+          "id": 124,
+          "options": {
+            "annotations": {
+              "clustering": -1,
+              "multiLane": false
+            },
+            "legend": {
+              "calcs": [],
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "pluginVersion": "13.0.1",
+          "targets": [
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "victoriametrics"
+              },
+              "editorMode": "code",
+              "expr": "max(purser_tier_downgrades_held_items{region=~\"$region\", cluster=~\"$cluster\"})",
+              "format": "time_series",
+              "legendFormat": "held downgrades",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "victoriametrics"
+              },
+              "editorMode": "code",
+              "expr": "max by (stage) (purser_free_fallback_repeatedly_failed_items{region=~\"$region\", cluster=~\"$cluster\"})",
+              "format": "time_series",
+              "legendFormat": "move to Free: {{stage}}",
+              "range": true,
+              "refId": "B"
+            },
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "victoriametrics"
+              },
+              "editorMode": "code",
+              "expr": "max(purser_operator_grant_expiry_repeatedly_failed_items{region=~\"$region\", cluster=~\"$cluster\"})",
+              "format": "time_series",
+              "legendFormat": "grant expiry",
+              "range": true,
+              "refId": "C"
+            },
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "victoriametrics"
+              },
+              "editorMode": "code",
+              "expr": "max(purser_provider_webhook_inbox_repeatedly_failed_items{region=~\"$region\", cluster=~\"$cluster\"})",
+              "format": "time_series",
+              "legendFormat": "provider recovery",
+              "range": true,
+              "refId": "D"
+            },
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "victoriametrics"
+              },
+              "editorMode": "code",
+              "expr": "max(commodore_tenant_account_closure_repeatedly_failed_items{region=~\"$region\", cluster=~\"$cluster\"})",
+              "format": "time_series",
+              "legendFormat": "tenant closure",
+              "range": true,
+              "refId": "E"
+            },
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "victoriametrics"
+              },
+              "editorMode": "code",
+              "expr": "sum(increase(purser_free_fallback_read_failures_total{region=~\"$region\", cluster=~\"$cluster\"}[$__rate_interval]))",
+              "format": "time_series",
+              "legendFormat": "read failures: move to Free",
+              "range": true,
+              "refId": "F"
+            },
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "victoriametrics"
+              },
+              "editorMode": "code",
+              "expr": "sum(increase(purser_operator_grant_expiry_read_failures_total{region=~\"$region\", cluster=~\"$cluster\"}[$__rate_interval]))",
+              "format": "time_series",
+              "legendFormat": "read failures: grant expiry",
+              "range": true,
+              "refId": "G"
+            },
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "victoriametrics"
+              },
+              "editorMode": "code",
+              "expr": "sum(increase(purser_provider_webhook_inbox_read_failures_total{region=~\"$region\", cluster=~\"$cluster\"}[$__rate_interval]))",
+              "format": "time_series",
+              "legendFormat": "read failures: provider recovery",
+              "range": true,
+              "refId": "H"
+            },
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "victoriametrics"
+              },
+              "editorMode": "code",
+              "expr": "sum(increase(commodore_tenant_account_closure_read_failures_total{region=~\"$region\", cluster=~\"$cluster\"}[$__rate_interval]))",
+              "format": "time_series",
+              "legendFormat": "read failures: tenant closure",
+              "range": true,
+              "refId": "I"
+            }
+          ],
+          "title": "Billing and account lifecycle recovery",
+          "transparent": false,
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "victoriametrics-metrics-datasource",
+            "uid": "victoriametrics"
+          },
+          "description": "Oldest pending session stop per cell its last attempt failed on. CommodoreAccountIngestRevocationStuck fires per cell above 300s; \"unknown\" is a stop that has not reached any cell yet.",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "auto",
+                "showValues": false,
+                "spanNulls": false,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "line"
+                }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  },
+                  {
+                    "color": "red",
+                    "value": 300
+                  }
+                ]
+              },
+              "unit": "s"
+            }
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 48
+          },
+          "id": 125,
+          "options": {
+            "annotations": {
+              "clustering": -1,
+              "multiLane": false
+            },
+            "legend": {
+              "calcs": [],
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "pluginVersion": "13.0.1",
+          "targets": [
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "victoriametrics"
+              },
+              "editorMode": "code",
+              "expr": "max by (cell) (commodore_account_ingest_stop_oldest_pending_seconds{region=~\"$region\", cluster=~\"$cluster\"})",
+              "format": "time_series",
+              "legendFormat": "{{cell}}",
+              "range": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Account session stops awaiting a cell",
+          "transparent": false,
+          "type": "timeseries"
         }
       ],
       "title": "Purser / Privateer / DB Pools",
