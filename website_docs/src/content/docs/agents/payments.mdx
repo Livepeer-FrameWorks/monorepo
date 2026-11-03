@@ -245,6 +245,15 @@ Call `update_billing_details` with the listed fields, then request fresh payment
 }
 ```
 
+**Other blockers** a rated tool can return:
+
+| Code                         | Meaning                                                                                                    | What to do                                                                                            |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `ACCOUNT_SUSPENDED`          | Settled prepaid balance below -€10, an ended FrameWorks arrangement not yet processed, or a closed account | Read `account://status`. Top up to lift a balance suspension; an agent cannot reopen a closed account |
+| `PAYMENT_SETUP_REQUIRED`     | A postpaid paid plan without a confirmed Stripe or Mollie subscription or mandate                          | A person completes payment setup on the dashboard's Billing page; rated work stays refused until then |
+| `BILLING_STATUS_UNAVAILABLE` | FrameWorks could not read the account's billing status                                                     | Retry the operation; nothing was charged                                                              |
+| `AUTHENTICATION_REQUIRED`    | No wallet headers or bearer token                                                                          | Authenticate with a wallet signature or `Authorization: Bearer <token>`                               |
+
 <Aside type="caution">
   Exactly €100 remains eligible for a simplified document. More than €100, or any VAT-number claim,
   uses the full-document path and requires the fields returned in `required_fields`. A submitted VAT
