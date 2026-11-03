@@ -90,7 +90,8 @@ run without a backup:
   `--dry-run`, which runs inside a read-only transaction. A data migration is irreversible when the
   release that declares it lists its service under `rollback_disabled`, when the service binary marks it
   irreversible, or when the binary does not report the field. `frameworks cluster release apply` applies
-  the same gate, `--dry-run` included, before it runs an earlier release's pending data migration.
+  the same gate, `--dry-run` included, before it runs an earlier release's pending data migration or
+  its missing postdeploy migrations.
 
 Without `--backup`, the refusal prints the `backup create` command for exactly the databases the
 operation changes, so the backup covers only what the gate checks.

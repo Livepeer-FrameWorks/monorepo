@@ -1253,7 +1253,11 @@ it first, in catalog order, through the service binary, and confirms it reads `c
 afterwards. An irreversible one needs `--backup`, the same gate as `data-migrate run`; the gate
 also applies under `--dry-run`, which runs the migration read-only. A failure stops the release
 before anything of the new release is applied and names the migration and the
-`data-migrate status` command. A missing postdeploy migration of an earlier release, or a data
+`data-migrate status` command. Postdeploy migrations of earlier releases that are missing from a
+PostgreSQL, YugabyteDB or ClickHouse ledger are also step 0: after those data migrations, the apply
+runs `cluster migrate --phase postdeploy --to-version <release>` through each such release, lowest
+first. They always need `--backup`, `--dry-run` included, which runs them in check mode. A
+postdeploy migration whose ledger checksum differs from the file this CLI embeds, or a data
 migration that is running, paused, unreadable or unknown to its binary, still refuses and names
 what to do first.
 
@@ -1267,7 +1271,7 @@ Long steps are bounded by a [progress watchdog](#progress-watchdog), not a fixed
 - `--skip-validation` - Skip health validation after each service upgrade
 - `--no-rollback` - Skip automatic rollback on a service health-check failure
 - `--complete-interrupted-baselines` - Reapply and verify baselines for inspected populated databases without migration provenance
-- `--backup string` - Backup directory or `s3://` URL taken within the last hour; required when an earlier release's pending required data migration is irreversible
+- `--backup string` - Backup directory or `s3://` URL taken within the last hour; required when an earlier release's postdeploy migrations are missing or its pending required data migration is irreversible
 
 **Examples:**
 

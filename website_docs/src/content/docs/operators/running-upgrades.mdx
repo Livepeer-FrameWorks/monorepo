@@ -141,10 +141,9 @@ Before the first change, and under `--dry-run` too, `release apply` refuses to s
 - the CLI is below the release's minimum CLI version;
 - a platform service replica runs a version below a declared minimum source version, or a version
   that is not a release version;
-- an earlier release is unfinished in a way `release apply` cannot finish itself: its postdeploy
-  migrations are missing from a PostgreSQL, YugabyteDB, or ClickHouse ledger, or one of its
-  required data migrations is running, paused, unreadable, or unknown to the installed service
-  binary. The error names the release to apply first or the migration to resolve. Databases this
+- an earlier release is unfinished in a way `release apply` cannot finish itself: a postdeploy
+  migration's ledger checksum differs from the file this CLI embeds, or one of its required data
+  migrations is running, paused, unreadable, or unknown to the installed service binary. The error names the release to apply first or the migration to resolve. Databases this
   release creates are exempt;
 - a planned artifact does not resolve for its host's deploy mode and architecture;
 - a required operator input is missing from a service's rendered environment.
@@ -163,6 +162,15 @@ frameworks cluster data-migrate status <service>.<id>
 ```
 
 Fix the cause and rerun `release apply`.
+
+Postdeploy migrations of an earlier release that are missing from a PostgreSQL, YugabyteDB, or
+ClickHouse ledger do not refuse the release either. They are listed in step 0 too, and after the
+earlier data migrations `release apply` runs
+`frameworks cluster migrate --phase postdeploy --to-version <release>` through each such release,
+lowest first, so each release's postdeploy gate reads only the data migrations up to it. They
+always need `--backup` on `release apply`, with the same one-hour backup gate; the dry run applies
+the gate too and runs them in check mode. A failure stops the release before anything of the new
+release is applied and names the release whose postdeploy migrations failed.
 
 Every long step, migrations and data migrations included, runs under a progress watchdog instead of
 a fixed deadline: it is cancelled only after its stall window passes with no output and no

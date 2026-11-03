@@ -55,12 +55,19 @@ preflight in this order: fetched release metadata against the CLI (`min_cli_vers
 required transitions, `min_source_version`), artifact resolution, the source floor
 against detected replica versions (`cli/cmd/cluster_source_floor.go`), then prior-release
 completeness (`enforcePriorReleasesComplete`, `cli/cmd/cluster_prior_release_preflight.go`).
-The last check reads every PostgreSQL/YugabyteDB service ledger that already has a
-baseline or ledger, and the ClickHouse ledgers, through `firstIncompletePriorRelease`,
-plus the required data migrations of earlier releases (`datamigrate.PreDeployBlockers`).
-A gap refuses the release and names the lowest unfinished release to apply first.
-Databases the release creates are skipped, because they are born from the current
-baseline. Env contracts and required operator inputs are checked next. The per-service
+The last check reads the postdeploy ledger of every PostgreSQL/YugabyteDB service
+database that already has a baseline or ledger, and the ClickHouse ledgers, plus the
+required data migrations of earlier releases (`datamigrate.PreDeployBlockers`). It
+returns the work `release apply` finishes itself before anything of the target release:
+pending or failed data migrations the installed binary registers, then the missing
+postdeploy migrations, applied with `cluster migrate --phase postdeploy --to-version <release>`
+through each earlier release, lowest first (`runPriorPostdeploy`). The postdeploy step
+always passes the backup gate (`requirePriorPostdeployBackup`); under `--dry-run` it runs
+in check mode and records the migrations so the per-service gates count them as applied.
+A ledgered postdeploy migration whose checksum differs from the embedded file, or a data
+migration that is running, paused, unreadable or unknown to its binary, refuses the
+release and names the release or migration to resolve first. Databases the release
+creates are skipped, because they are born from the current baseline. Env contracts and required operator inputs are checked next. The per-service
 pre-deploy gate (`runUpgradePreDeployGate`) repeats the ledger and data-migration checks
 for every service it deploys, so `cluster upgrade` keeps the same refusal.
 
