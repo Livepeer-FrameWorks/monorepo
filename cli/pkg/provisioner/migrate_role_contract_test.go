@@ -64,9 +64,10 @@ func TestMigrationRolesRepairInvalidIndexesOnlyInsideTheLockedApply(t *testing.T
 }
 
 // TestPostgresMigrationRoleAppliesEachItemInOneLockedTransaction pins the PostgreSQL apply: one transaction per
-// transactional item, the repair between its own timeouts inside the advisory lock, item timeouts for transactional
-// items only, and a whole-item replay only on the server's lock-timeout error rather than any message containing the
-// words.
+// transactional item, the advisory lock taken under its own lock_timeout, the repair between its own timeouts inside
+// the advisory lock, item timeouts for transactional items only, and a whole-item replay only on the server's
+// lock-timeout error: six replays for a statement, the full budget for the advisory lock, before which nothing of the
+// item ran.
 func TestPostgresMigrationRoleAppliesEachItemInOneLockedTransaction(t *testing.T) {
 	for _, role := range []string{"postgres"} {
 		t.Run(role, func(t *testing.T) {
@@ -86,18 +87,29 @@ func TestPostgresMigrationRoleAppliesEachItemInOneLockedTransaction(t *testing.T
 			if lockAt < 0 || repairAt < 0 || statementsAt < 0 || lockAt > repairAt || repairAt > statementsAt {
 				t.Fatalf("apply query runs the repair at %d, the lock at %d, and the statements at %d; want lock, repair, statements:\n%s", repairAt, lockAt, statementsAt, query)
 			}
+			// A migrator queued behind another fails the lock statement instead of waiting silently, and the
+			// timeout is gone before anything of the item runs.
+			lockOrder := []string{`"SET lock_timeout = '10s'",`, "pg_advisory_lock(", `"RESET lock_timeout"`, "invalid_index_repair_sql,"}
+			lockStep := -1
+			for _, step := range lockOrder {
+				next := strings.Index(query, step)
+				if next <= lockStep {
+					t.Fatalf("apply query takes the advisory lock out of order (want %v):\n%s", lockOrder, query)
+				}
+				lockStep = next
+			}
 			repair, _ := applyTask.Vars["invalid_index_repair_sql"].(string)
 			// A plain DROP INDEX takes an ACCESS EXCLUSIVE table lock, so the repair runs between its own timeouts. A
 			// statement's timeout is armed when it starts, so they are set before the repair and reset before the
 			// concurrent build that follows.
 			order := []string{"SET statement_timeout = '60s'", "SET lock_timeout = '5s'", "invalid_index_repair_sql,", "RESET lock_timeout", "RESET statement_timeout", "+ item.statements"}
-			at := -1
+			at := strings.Index(query, `"RESET lock_timeout"`) + 1
 			for _, step := range order {
-				next := strings.Index(query, step)
-				if next <= at {
+				next := strings.Index(query[at:], step)
+				if next < 0 {
 					t.Fatalf("apply query runs %q out of order (want %v):\n%s", step, order, query)
 				}
-				at = next
+				at += next + len(step)
 			}
 			for _, want := range []string{
 				"IF NOT EXISTS (SELECT 1 FROM _migrations",
@@ -113,21 +125,28 @@ func TestPostgresMigrationRoleAppliesEachItemInOneLockedTransaction(t *testing.T
 			if !strings.Contains(query, `(item.transactional | default(true)) | ternary(["SET lock_timeout = '5s'", "SET statement_timeout = '15min'"], [])`) {
 				t.Fatalf("apply query does not limit timeouts to transactional items:\n%s", query)
 			}
-			// lock_timeout appears in the transactional branch and in the repair's own set and reset, nowhere else.
-			if strings.Count(query, "lock_timeout") != 3 {
-				t.Fatalf("apply query sets lock_timeout outside the transactional branch and the repair:\n%s", query)
+			// lock_timeout appears around the advisory lock, in the transactional branch and in the repair's own set
+			// and reset, nowhere else.
+			if strings.Count(query, "lock_timeout") != 5 {
+				t.Fatalf("apply query sets lock_timeout outside the advisory lock, the transactional branch and the repair:\n%s", query)
 			}
 			until := applyTask.Until
-			if !strings.Contains(until, "or not (item.transactional | default(true))") ||
-				!strings.Contains(until, "'canceling statement due to lock timeout' not in") {
-				t.Fatalf("apply until = %q, want replays only for transactional lock timeouts", until)
+			if strings.Contains(until, "item.transactional") ||
+				!strings.Contains(until, "'canceling statement due to lock timeout' not in") ||
+				!strings.Contains(until, "(postgres_migration_apply.attempts | default(1)) > 6") ||
+				!strings.Contains(until, `startswith("Cannot execute SQL 'SELECT pg_advisory_lock(")`) {
+				t.Fatalf("apply until = %q, want lock-timeout replays: six for a statement, the retries for the advisory lock", until)
+			}
+			if retries := fmt.Sprint(itemTaskField(t, role, "Apply migration", "retries")); retries != "45" {
+				t.Fatalf("apply retries = %s, want 45 (the advisory lock budget)", retries)
 			}
 		})
 	}
 }
 
 // TestYugabyteMigrationRoleAppliesStatementByStatement pins the YugabyteDB apply: the role hands each item to
-// frameworks.infra.yugabyte_migration_apply, which holds the advisory lock on one autocommit session, repairs invalid
+// frameworks.infra.yugabyte_migration_apply, which tries the advisory lock with a bounded retry and holds it on one
+// autocommit session, repairs invalid
 // guarded indexes between their own timeouts, runs the statements one at a time as the owner with the item timeouts and
 // a per-statement replay for transactional items only, verifies guarded indexes, and writes the ledger row last.
 func TestYugabyteMigrationRoleAppliesStatementByStatement(t *testing.T) {
@@ -149,6 +168,7 @@ func TestYugabyteMigrationRoleAppliesStatementByStatement(t *testing.T) {
 		"statement_timeout":    "15min",
 		"retries":              "6",
 		"retry_delay":          "10",
+		"lock_retries":         "90",
 		"invalid_index_repair": "{{ (item.invalid_index_guards | default([]) | length > 0) | ternary(invalid_index_repair_sql, '') }}",
 		"invalid_index_verify": "{{ (item.invalid_index_guards | default([]) | length > 0) | ternary(invalid_index_verify_sql, '') }}",
 		"ledger_insert":        "{{ migration_ledger_sql }}",
@@ -182,8 +202,15 @@ func TestYugabyteMigrationRoleAppliesStatementByStatement(t *testing.T) {
 	if !strings.Contains(module, "connect_to_db(module, conn_params, autocommit=True)") {
 		t.Fatal("the module must run every statement in autocommit")
 	}
+	// The migration lock is tried, never waited on, so a queued migrator fails after lock_retries attempts whatever the
+	// engine does with lock_timeout on an advisory lock.
+	if strings.Contains(module, "SELECT pg_advisory_lock(") {
+		t.Fatal("the module waits on the migration lock; it must try it and retry")
+	}
 	order := []string{
-		"pg_advisory_lock(hashtext('frameworks_migrations'), hashtext(%s))",
+		"pg_try_advisory_lock(hashtext('frameworks_migrations'), hashtext(%s))",
+		`if lock_attempt >= params["lock_retries"]:`,
+		`time.sleep(params["retry_delay"])`,
 		`run("SET statement_timeout = '60s'")`,
 		`run("SET lock_timeout = '5s'")`,
 		`cursor.execute(params["invalid_index_repair"])`,
@@ -216,26 +243,27 @@ func TestYugabyteMigrationRoleAppliesStatementByStatement(t *testing.T) {
 	}
 }
 
-// TestMigrationApplyTasksWithoutStatementTimeoutReportWhileRunning pins that every migration apply that can run longer
-// than the CLI's migrate stall window prints while it runs: a .notx.sql item (no statement timeout; a concurrent index
-// build waits for older transactions) and every ClickHouse item run as async jobs whose poll lines reach the watchdog,
-// while a transactional item stays synchronous. Check mode never starts the job.
-func TestMigrationApplyTasksWithoutStatementTimeoutReportWhileRunning(t *testing.T) {
-	const maxPoll = 60
+// TestMigrationApplyTasksReportWhileRunning pins that every migration apply prints while it runs, so the CLI's
+// migrate stall window sees progress however long it takes: every PostgreSQL/YugabyteDB item, including one waiting
+// for the migration lock or a lock its statement needs, and every ClickHouse item run as async jobs whose poll lines
+// reach the watchdog. A transactional item is polled every 2s, a .notx.sql item every 15s, a ClickHouse item every
+// 10s. Check mode never starts the job.
+func TestMigrationApplyTasksReportWhileRunning(t *testing.T) {
+	const itemPoll = "{{ (item.transactional | default(true)) | ternary(2, 15) }}"
 	for _, tc := range []struct {
-		role, file, task, async string
+		role, file, task, async, poll string
 	}{
-		{"postgres", "migrate_item.yml", "Apply migration", "{{ (item.transactional | default(true)) | ternary(0, 86400) }}"},
-		{"yugabyte", "migrate_item.yml", "Apply migration (Yugabyte)", "{{ (item.transactional | default(true)) | ternary(0, 86400) }}"},
-		{"clickhouse", "migrate.yml", "Apply pending ClickHouse migrations via clickhouse-client", "86400"},
+		{"postgres", "migrate_item.yml", "Apply migration", "86400", itemPoll},
+		{"yugabyte", "migrate_item.yml", "Apply migration (Yugabyte)", "86400", itemPoll},
+		{"clickhouse", "migrate.yml", "Apply pending ClickHouse migrations via clickhouse-client", "86400", "10"},
 	} {
 		t.Run(tc.role, func(t *testing.T) {
 			task := namedRoleTask(t, tc.role, tc.file, tc.task)
 			if got := fmt.Sprint(task["async"]); got != tc.async {
 				t.Fatalf("%q async = %q, want %q", tc.task, got, tc.async)
 			}
-			if poll, _ := task["poll"].(int); poll <= 0 || poll > maxPoll {
-				t.Fatalf("%q poll = %v, want a poll line at least every %ds", tc.task, task["poll"], maxPoll)
+			if got := fmt.Sprint(task["poll"]); got != tc.poll {
+				t.Fatalf("%q poll = %q, want %q", tc.task, got, tc.poll)
 			}
 			if !strings.Contains(fmt.Sprint(task["when"]), "not ansible_check_mode") {
 				t.Fatalf("%q runs in check mode: when %v", tc.task, task["when"])
@@ -248,6 +276,12 @@ func TestMigrationApplyTasksWithoutStatementTimeoutReportWhileRunning(t *testing
 	if when := fmt.Sprint(errorTask["when"]); !strings.Contains(when, "map(attribute='rc', default=-1) | reject('eq', 0)") {
 		t.Fatalf("ClickHouse error task ignores items that ended without an rc: when %s", when)
 	}
+}
+
+// itemTaskField returns one keyword of the named migrate_item.yml task.
+func itemTaskField(t *testing.T, role, name, field string) any {
+	t.Helper()
+	return namedRoleTask(t, role, "migrate_item.yml", name)[field]
 }
 
 // namedRoleTask returns the task called name in a role task file, parsed without a fixed shape.

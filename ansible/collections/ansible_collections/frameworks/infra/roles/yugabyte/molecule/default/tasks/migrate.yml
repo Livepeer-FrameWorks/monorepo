@@ -225,3 +225,54 @@
       - migrate_fixture_after_rerun.query_all_results[0][2].filename == '004_fixture_fails.sql'
       - migrate_fixture_after_rerun.query_all_results[1][0].partial_exists
     fail_msg: "pending: {{ yugabyte_pending_migrate_items }}; state: {{ migrate_fixture_after_rerun.query_all_results }}"
+
+# Another migrator holds the database's migration lock for about 25s. The module tries the lock every 10s instead of
+# waiting on it, and applies the item once it is free.
+- name: Hold the migration lock of migrate_fixture from another session
+  ansible.builtin.shell: |
+    set -eu
+    ysqlsh=/opt/yugabyte/current/postgres/bin/ysqlsh
+    [ -x "$ysqlsh" ] || ysqlsh=/opt/yugabyte/current/bin/ysqlsh
+    "$ysqlsh" -X -h {{ yugabyte_node_address }} -p 5433 -U yugabyte -d migrate_fixture -v ON_ERROR_STOP=1 \
+      -c "SELECT pg_advisory_lock(hashtext('frameworks_migrations'), hashtext('migrate_fixture'))" \
+      -c "SELECT pg_sleep(25)"
+  async: 60
+  poll: 0
+  changed_when: false
+
+- name: Let the holder take the lock
+  ansible.builtin.pause:
+    seconds: 3
+
+- name: Apply an item while another session holds the migration lock
+  ansible.builtin.include_tasks: migrate-run.yml
+  vars:
+    yugabyte_migrate_items: >-
+      {{ [migrate_fixture_table, migrate_fixture_index,
+          migrate_fixture_table | combine(migrate_fixture_failing)
+            | combine({'statements': [migrate_fixture_failing.statements[0], 'SELECT 1']}),
+          migrate_fixture_table | combine({'sequence': 5, 'filename': '005_fixture_waited.sql', 'checksum': 'fixture-005',
+            'statements': ['CREATE TABLE IF NOT EXISTS migrate_fixture.waited (id bigint)']})] }}
+
+- name: Read the ledger after the lock wait
+  community.postgresql.postgresql_query:
+    login_host: "{{ yugabyte_ysql_local_host }}"
+    login_port: "{{ yugabyte_ysql_port }}"
+    login_user: "{{ yugabyte_superuser_role }}"
+    login_password: "{{ yugabyte_superuser_password }}"
+    login_db: migrate_fixture
+    query:
+      - SELECT seq FROM _migrations ORDER BY seq
+      - SELECT to_regclass('migrate_fixture.waited') IS NOT NULL AS waited_exists
+  register: migrate_fixture_after_wait
+  changed_when: false
+
+# The transactional item ran as an async job, so its poll lines reached the CLI watchdog while it waited.
+- name: Assert the item retried the lock, ran as an async job, and applied
+  ansible.builtin.assert:
+    that:
+      - yugabyte_migration_apply.ansible_job_id is defined
+      - yugabyte_migration_apply.lock_retried >= 1
+      - migrate_fixture_after_wait.query_all_results[0] | map(attribute='seq') | list == [1, 2, 4, 5]
+      - migrate_fixture_after_wait.query_all_results[1][0].waited_exists
+    fail_msg: "apply: {{ yugabyte_migration_apply }}; state: {{ migrate_fixture_after_wait.query_all_results }}"

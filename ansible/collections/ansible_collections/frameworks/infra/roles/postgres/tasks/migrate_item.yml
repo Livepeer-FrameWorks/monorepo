@@ -33,22 +33,25 @@
     - precheck_rows | length > 0
 
 # Migrations run while services are live. A transactional item sets lock_timeout, so a statement that cannot get its
-# lock fails fast instead of queueing live traffic behind it, and statement_timeout, and is replayed only when it
-# failed on the lock timeout: its own statements roll back with it (on YugabyteDB, DDL is not transactional by
-# default, so replay relies on migrations being written to re-run cleanly). A .notx.sql item runs without timeouts,
-# because a concurrent index build waits for older transactions and a large build can run long; it is never
-# replayed. An interrupted CREATE INDEX CONCURRENTLY leaves an invalid index that IF NOT EXISTS would skip, so the
+# lock fails fast instead of queueing live traffic behind it, and statement_timeout, and is replayed up to six times
+# when it failed on the lock timeout: its own statements roll back with it. A .notx.sql item runs without timeouts,
+# because a concurrent index build waits for older transactions and a large build can run long. The advisory lock
+# that serializes migrators of one database is taken under its own 10s lock_timeout, so a migrator queued behind
+# another fails that statement instead of waiting silently, and the item is replayed for as long as the retries last
+# (about a quarter of an hour). Nothing of the item has run at that point, which is why a .notx.sql item replays on
+# it too; the repair below is the only other place a .notx.sql item can hit a lock timeout, and it also runs before
+# the item's statements. An interrupted CREATE INDEX CONCURRENTLY leaves an invalid index that IF NOT EXISTS would skip, so the
 # ledger row would be written over a broken index; the item repairs it itself, inside the advisory lock. Only then is
 # a guarded index known to be abandoned: every migrator builds under that lock, and a build in progress is invalid
 # too. The repair also rechecks the ledger, so an item another migrator applied meanwhile keeps its valid index. A
 # plain DROP INDEX takes the table's ACCESS EXCLUSIVE lock, so the repair runs between its own lock and statement
 # timeouts and resets them before the concurrent build that follows (DROP INDEX CONCURRENTLY cannot run inside the
 # conditional block). The timeouts are set before the repair statement, because a statement's timeout is armed when
-# it starts. The item timeouts are set after the advisory lock so a concurrent migrator still waits for it.
-# A .notx.sql item runs as an async job polled every 15s: the poll lines are the only output while a build runs, and
-# the CLI's migration watchdog cancels a run that prints nothing for its stall window. The job is killed after 24
-# hours, and the rerun repairs the index that build left invalid. A transactional item stays synchronous, because an
-# async item takes at least one poll interval; it is bounded by statement_timeout.
+# it starts.
+# Every item runs as an async job: its poll lines and retry lines are the only output while it runs, and the CLI's
+# migration watchdog cancels a run that prints nothing for its stall window. A transactional item is polled every 2s,
+# because each item takes at least one poll interval; a .notx.sql item every 15s, because an index build can run for
+# hours. The job is killed after 24 hours, and the rerun repairs the index that build left invalid.
 - name: Apply migration
   become: true
   become_user: postgres
@@ -58,7 +61,9 @@
     query: >-
       {{
         [
-          "SELECT pg_advisory_lock(hashtext('frameworks_migrations'), hashtext('" ~ item.db ~ "'))"
+          "SET lock_timeout = '10s'",
+          "SELECT pg_advisory_lock(hashtext('frameworks_migrations'), hashtext('" ~ item.db ~ "'))",
+          "RESET lock_timeout"
         ]
         + ((item.invalid_index_guards | default([]) | length > 0) | ternary([
             "SET statement_timeout = '60s'",
@@ -82,12 +87,13 @@
   register: postgres_migration_apply
   until: >-
     postgres_migration_apply is succeeded
-    or not (item.transactional | default(true))
     or 'canceling statement due to lock timeout' not in (postgres_migration_apply.msg | default(''))
-  retries: 6
+    or ((postgres_migration_apply.attempts | default(1)) > 6
+        and not (postgres_migration_apply.msg | default('')).startswith("Cannot execute SQL 'SELECT pg_advisory_lock("))
+  retries: 45
   delay: 10
-  async: "{{ (item.transactional | default(true)) | ternary(0, 86400) }}"
-  poll: 15
+  async: 86400
+  poll: "{{ (item.transactional | default(true)) | ternary(2, 15) }}"
   when: not ansible_check_mode
   vars:
     invalid_index_repair_sql: >-

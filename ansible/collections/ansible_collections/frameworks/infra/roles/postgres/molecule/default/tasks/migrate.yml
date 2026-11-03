@@ -181,3 +181,58 @@
     fail_msg: >-
       precheck: {{ migrate_fixture_precheck_error }}; failure: {{ migrate_fixture_failed_error }};
       state: {{ migrate_fixture_after_failures.query_all_results }}
+
+# Another migrator holds the database's migration lock for about 25s. The item's lock statement times out after
+# 10s instead of waiting silently, the item is replayed, and it applies once the lock is free.
+- name: Hold the migration lock of tenants from another session
+  become: true
+  become_user: postgres
+  ansible.builtin.command:
+    argv:
+      - psql
+      - -X
+      - -d
+      - tenants
+      - -v
+      - ON_ERROR_STOP=1
+      - -c
+      - SELECT pg_advisory_lock(hashtext('frameworks_migrations'), hashtext('tenants'))
+      - -c
+      - SELECT pg_sleep(25)
+  async: 60
+  poll: 0
+  changed_when: false
+
+- name: Let the holder take the lock
+  ansible.builtin.pause:
+    seconds: 3
+
+- name: Apply an item while another session holds the migration lock
+  ansible.builtin.include_tasks: migrate-run.yml
+  vars:
+    postgres_migrate_items: >-
+      {{ [migrate_fixture_table, migrate_fixture_index,
+          migrate_fixture_table | combine({'sequence': 5, 'filename': '005_fixture_waited.sql', 'checksum': 'fixture-005',
+            'statements': ['CREATE TABLE IF NOT EXISTS tenants.migrate_fixture_waited (id bigint)']})] }}
+
+- name: Read the ledger after the lock wait
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_query:
+    login_unix_socket: /var/run/postgresql
+    login_db: tenants
+    query:
+      - SELECT seq FROM _migrations ORDER BY seq
+      - SELECT to_regclass('tenants.migrate_fixture_waited') IS NOT NULL AS waited_exists
+  register: migrate_fixture_after_wait
+  changed_when: false
+
+# The transactional item ran as an async job, so its poll lines reached the CLI watchdog while it waited.
+- name: Assert the item waited out the lock by replaying, as an async job, and applied
+  ansible.builtin.assert:
+    that:
+      - postgres_migration_apply.ansible_job_id is defined
+      - postgres_migration_apply.attempts | default(1) >= 2
+      - migrate_fixture_after_wait.query_all_results[0] | map(attribute='seq') | list == [1, 2, 5]
+      - migrate_fixture_after_wait.query_all_results[1][0].waited_exists
+    fail_msg: "apply: {{ postgres_migration_apply }}; state: {{ migrate_fixture_after_wait.query_all_results }}"

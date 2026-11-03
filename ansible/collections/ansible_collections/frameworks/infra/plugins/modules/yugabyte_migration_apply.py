@@ -11,7 +11,8 @@ DOCUMENTATION = r"""
 module: yugabyte_migration_apply
 short_description: Apply one FrameWorks migration item to a YugabyteDB database, one statement at a time
 description:
-  - Opens one autocommit YSQL session and holds the per-database migration advisory lock on it for the whole item.
+  - Opens one autocommit YSQL session and holds the per-database migration advisory lock on it for the whole item,
+    trying the lock every I(retry_delay) seconds, up to I(lock_retries) further times, while another session holds it.
   - Runs the item's statements one at a time, each in its own transaction, as the item's owner role, then the
     optional verification and the ledger insert. The ledger row is written only after every statement succeeded.
   - YugabyteDB runs DDL outside transaction blocks, and a schema change on a colocated database aborts a transaction
@@ -56,9 +57,16 @@ options:
     type: int
     default: 6
   retry_delay:
-    description: Seconds to wait before each further attempt.
+    description: Seconds to wait before each further attempt, of a statement or of the migration lock.
     type: int
     default: 10
+  lock_retries:
+    description:
+      - Further attempts to take the per-database migration lock while another session holds it. The lock is tried,
+        never waited on, so a migrator queued behind another fails after these attempts instead of waiting without
+        bound, whatever the engine does with lock_timeout on advisory locks. Nothing of the item has run when it fails.
+    type: int
+    default: 90
   invalid_index_repair:
     description:
       - Query run inside the advisory lock before the item's statements that returns one repair statement per row;
@@ -105,6 +113,10 @@ retried:
   description: Number of statement attempts repeated after a lock timeout, serialization failure, or deadlock.
   returned: always
   type: int
+lock_retried:
+  description: Number of further attempts the migration lock took because another session held it.
+  returned: success
+  type: int
 """
 
 import time
@@ -121,6 +133,12 @@ from ansible_collections.community.postgresql.plugins.module_utils.postgres impo
 # lock_not_available (lock_timeout), serialization_failure, deadlock_detected: the statement's own transaction was
 # rolled back, so executing it again is safe.
 RETRYABLE_SQLSTATES = ("55P03", "40001", "40P01")
+
+
+class LockUnavailable(Exception):
+    """The per-database migration lock stayed held by another session."""
+
+    pgcode = "55P03"
 
 
 def sqlstate(exc):
@@ -148,6 +166,7 @@ def main():
         statement_timeout=dict(type="str", default="15min"),
         retries=dict(type="int", default=6),
         retry_delay=dict(type="int", default=10),
+        lock_retries=dict(type="int", default=90),
         invalid_index_repair=dict(type="str", default=""),
         invalid_index_verify=dict(type="str", default=""),
         ledger_insert=dict(type="str", required=True),
@@ -167,11 +186,22 @@ def main():
     def run(sql):
         cursor.execute(sql)
 
+    lock_attempt = 0
     try:
-        cursor.execute(
-            "SELECT pg_advisory_lock(hashtext('frameworks_migrations'), hashtext(%s))",
-            (params["db"],),
-        )
+        while True:
+            cursor.execute(
+                "SELECT pg_try_advisory_lock(hashtext('frameworks_migrations'), hashtext(%s))",
+                (params["db"],),
+            )
+            if cursor.fetchone()[0]:
+                break
+            if lock_attempt >= params["lock_retries"]:
+                raise LockUnavailable(
+                    "another migrator of %s held the migration lock through %d attempts %ds apart; nothing of the "
+                    "item ran" % (params["db"], lock_attempt + 1, params["retry_delay"])
+                )
+            lock_attempt += 1
+            time.sleep(params["retry_delay"])
         if params["invalid_index_repair"]:
             stage = "invalid index repair"
             run("SET statement_timeout = '60s'")
@@ -227,7 +257,7 @@ def main():
     finally:
         db_connection.close()
 
-    module.exit_json(changed=True, statements=total, retried=retried)
+    module.exit_json(changed=True, statements=total, retried=retried, lock_retried=lock_attempt)
 
 
 if __name__ == "__main__":

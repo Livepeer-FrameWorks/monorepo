@@ -256,7 +256,7 @@ func TestArchitectureGuard_databaseSchemaTasksAvoidNoopCatalogDDL(t *testing.T) 
 			if strings.Contains(lockSource, "frameworks.infra.yugabyte_migration_apply:") {
 				lockSource = yugabyteMigrationModuleSource(t)
 			}
-			if !strings.Contains(lockSource, "pg_advisory_lock(hashtext('frameworks_migrations')") {
+			if !strings.Contains(lockSource, "_advisory_lock(hashtext('frameworks_migrations')") {
 				t.Fatalf("%s migrate task must serialize schema changes with an advisory lock", tc.name)
 			}
 			if !strings.Contains(migrateBody, "Report pending migrations") {
