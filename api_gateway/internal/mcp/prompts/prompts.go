@@ -316,6 +316,12 @@ func handleOptimizeCostsPrompt(ctx context.Context, clients *clients.ServiceClie
 	steps = append(steps, "- Review daily usage patterns")
 	steps = append(steps, "- Identify unused streams")
 
+	steps = append(steps, "\n### 5. Choose the Right Plan")
+	steps = append(steps, "- Read `account://status` for the current plan and any scheduled plan change or move to Free")
+	steps = append(steps, "- A postpaid account changes plan with `change_billing_tier`; tier IDs come from the GraphQL `billingTiers` query")
+	steps = append(steps, "- A downgrade takes effect at the end of the billing period; passing the current tier cancels a scheduled downgrade")
+	steps = append(steps, "- A paid upgrade starts a fresh billing month; confirm it with the account owner before calling the tool")
+
 	steps = append(steps, "\n## Billing Information")
 	steps = append(steps, "Read `billing://pricing` to see current rates for:")
 	steps = append(steps, "- Bandwidth (per GB delivered)")
@@ -640,7 +646,8 @@ func handleAgentInstructionsPrompt() (*mcp.GetPromptResult, error) {
 	parts = append(parts, "- Storage costs for DVR, clips, and VOD are continuous")
 	parts = append(parts, "- Prefer `mode: \"docs\"` for consultant queries when web search is unnecessary")
 	parts = append(parts, "- Clean up: delete streams, clips, and VOD assets when done")
-	parts = append(parts, "- Monitor `billing://balance` drain rate; top up proactively if `estimated_hours_left` is low\n")
+	parts = append(parts, "- Monitor `billing://balance` drain rate; top up proactively if `estimated_hours_left` is low")
+	parts = append(parts, "- Plan changes on a postpaid account go through `change_billing_tier`: a paid upgrade starts a fresh billing month, a downgrade applies at the end of the period, and the current tier cancels a scheduled downgrade. A refusal names its code (for example `PENDING_CHECKOUT`); resolve that instead of retrying\n")
 
 	parts = append(parts, "## 5. Prompt Discovery\n")
 	parts = append(parts, "Load these prompts for guided workflows:\n")

@@ -174,6 +174,14 @@ x402: authenticate first, make the rated request, read the tenant-bound 402 requ
 - At €0 or below, running streams and their viewers continue, but new streams, new viewers and reconnects are refused. Below -€10 the tenant is suspended and running sessions stop.
 - Use MCP `billing://balance` or GraphQL `prepaidBalance` / `billingStatus` queries to monitor balance and drain rate. Use `billing://documents` for retained invoices, receipts, and credit notes.
 
+## Plan Changes
+
+- A postpaid account changes plan with MCP `change_billing_tier` (`tier_id`) or GraphQL `changeBillingTier`. Tier IDs come from the GraphQL `billingTiers` query. It needs Owner/Admin and `billing:write`; API tokens also need `mcp:high-risk`.
+- A paid upgrade starts a fresh billing month and can stay pending (`pending_tier_id`) until the provider and usage reconcile. A downgrade takes effect at `effective_at`, the end of the billing period. Passing the current tier cancels a scheduled downgrade.
+- Prepaid accounts do not use it: they start postpaid billing with `start_postpaid_setup` or move to Free with `activate_free_tier`.
+- A refusal ends in `(code: <CODE>)`, for example `PENDING_CHECKOUT`, `OUTSTANDING_GRANT` or `COLLECTION_SETUP_REQUIRED`. Fix what the code names instead of retrying.
+- The `billing` section of `account://status` shows a scheduled plan change (`pending_tier`, `pending_effective_at`), a scheduled move to Free (`free_fallback`) and a FrameWorks arrangement in force (`billing_arrangement`).
+
 ## Streaming Best Practices
 
 - **Check balance before starting ingest or processing.** Stream configuration itself is available at zero balance; media admission is the rated boundary. Use `billing://balance` (MCP) or `prepaidBalance` / `billingStatus` queries (GraphQL).
