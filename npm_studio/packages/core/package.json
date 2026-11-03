@@ -5,7 +5,7 @@
   "description": "Core streaming logic for StreamCrafter - framework agnostic WebCodecs-based browser streaming",
   "main": "dist/esm/index.js",
   "types": "dist/types/index.d.ts",
-  "style": "dist/streamcrafter.css",
+  "style": "src/styles/streamcrafter.css",
   "files": [
     "dist",
     "src"
@@ -21,9 +21,9 @@
       "types": "./dist/types/vanilla/index.d.ts",
       "default": "./dist/esm/vanilla.js"
     },
-    "./streamcrafter.css": "./dist/streamcrafter.css",
-    "./styles.css": "./dist/streamcrafter.css",
-    "./styles/streamcrafter.css": "./dist/streamcrafter.css"
+    "./streamcrafter.css": "./src/styles/streamcrafter.css",
+    "./styles.css": "./src/styles/streamcrafter.css",
+    "./styles/streamcrafter.css": "./src/styles/streamcrafter.css"
   },
   "scripts": {
     "build": "pnpm run build:css && pnpm run build:types && NODE_ENV=production rollup -c",

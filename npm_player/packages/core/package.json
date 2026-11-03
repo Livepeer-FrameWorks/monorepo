@@ -5,7 +5,7 @@
   "description": "Core player logic for FrameWorks streaming - framework agnostic",
   "main": "dist/esm/index.js",
   "types": "dist/types/index.d.ts",
-  "style": "dist/player.css",
+  "style": "src/styles/player.css",
   "files": [
     "dist",
     "src"
@@ -21,16 +21,10 @@
       "types": "./dist/types/vanilla/index.d.ts",
       "default": "./dist/esm/vanilla.js"
     },
-    "./player.css": {
-      "source": "./src/styles/player.css",
-      "default": "./dist/player.css"
-    },
-    "./styles.css": {
-      "source": "./src/styles/player.css",
-      "default": "./dist/player.css"
-    },
-    "./themes/light.css": "./dist/themes/light.css",
-    "./themes/neutral-dark.css": "./dist/themes/neutral-dark.css"
+    "./player.css": "./src/styles/player.css",
+    "./styles.css": "./src/styles/player.css",
+    "./themes/light.css": "./src/styles/themes/light.css",
+    "./themes/neutral-dark.css": "./src/styles/themes/neutral-dark.css"
   },
   "scripts": {
     "build": "pnpm run build:css && pnpm run build:types && NODE_ENV=production rollup -c",

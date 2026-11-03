@@ -44,7 +44,7 @@ Framework-agnostic engine + transports:
 - Gateway endpoint discovery (GraphQL): `npm_player/packages/core/src/core`
 - MistServer stream state polling (WS/HTTP): `npm_player/packages/core/src/core`
 - Transport implementations: `npm_player/packages/core/src/players/*`
-- Styles: `npm_player/packages/core/src/styles/player.css` → copied to `dist/player.css` on build (`tailwind.css` is an internal utility source, not shipped)
+- Styles: `npm_player/packages/core/src/styles/player.css`, plain CSS that the `./player.css` export serves directly under every condition, because Vite and Tailwind resolve CSS `@import` with fixed conditions that ignore `source` (`tailwind.css` is an internal utility source, not shipped)
 
 ### `@livepeer-frameworks/player-react`
 
@@ -248,7 +248,7 @@ Some transports are intentionally **penalized** (deprioritized) even if supporte
 
 ## Styling and theming
 
-The player ships a prebuilt stylesheet (plain CSS, copied to `dist/player.css`):
+The player ships a plain-CSS stylesheet that needs no build step:
 
 - Import from wrapper: `@livepeer-frameworks/player-react/player.css` or `@livepeer-frameworks/player-svelte/player.css`
 - Vanilla/core direct: `@livepeer-frameworks/player-core/player.css`
