@@ -237,8 +237,12 @@ export class FwScAdvanced extends LitElement {
         width: 12px;
         height: 12px;
         border-radius: 50%;
-        background: hsl(var(--fw-sc-text-bright));
+        /* Foreground tokens of the track under the knob, so it shows in light and dark themes. */
+        background: hsl(var(--fw-sc-text-muted));
         transition: left 0.2s;
+      }
+      .toggle--on .toggle-knob {
+        background: hsl(var(--fw-sc-on-accent));
       }
       .toggle--on {
         background: hsl(var(--fw-sc-accent));

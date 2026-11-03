@@ -140,6 +140,9 @@ describe("FwStreamCrafter", () => {
       expect(file).not.toMatch(/#(1a1b26|565f89|7aa2f7|a9b1d6|c0caf5|9ece6a|f7768e)/i);
       expect(file).not.toMatch(/hsl\(\d|rgba?\(\d|:\s*(white|black)\b/);
     }
+    // text-bright is dark in the light presets; the knob takes the track's foreground.
+    expect(panel).not.toContain("--fw-sc-text-bright");
+    expect(panel).toContain("--fw-sc-on-accent");
   });
 
   it("references shared context-menu i18n keys", () => {

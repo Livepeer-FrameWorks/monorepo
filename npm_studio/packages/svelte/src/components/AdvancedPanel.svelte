@@ -1023,13 +1023,15 @@
     height: 16px;
     width: 16px;
     border-radius: 50%;
-    background: hsl(var(--fw-sc-text-bright));
+    /* Foreground tokens of the track under the knob, so it shows in light and dark themes. */
+    background: hsl(var(--fw-sc-text-muted));
     box-shadow: 0 2px 4px hsl(var(--fw-sc-shadow-color) / 0.3);
     transition: transform 0.2s;
     transform: translateX(0);
   }
 
   .fw-dev-mode-switch--on .fw-dev-mode-switch-thumb {
+    background: hsl(var(--fw-sc-on-accent));
     transform: translateX(16px);
   }
 
