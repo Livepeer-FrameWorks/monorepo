@@ -44,6 +44,12 @@ const REASON_REFUSALS: Record<string, IngestRefusal> = {
   INVALID_STREAM_KEY: KEY_REFUSAL,
   DUPLICATE_INGEST: CONFLICT_REFUSAL,
   CLUSTER_UNHEALTHY: UNREACHABLE_REFUSAL,
+  GRANT_EXPIRED: {
+    title: "Your FrameWorks trial or arranged plan has ended",
+    detail:
+      "Broadcasting pauses while the account moves back to its standard plan, which takes a few minutes. Check that plan on the billing page, then go live again. To extend the arrangement, contact support from the Messages page.",
+    actions: ["billing", "retry"],
+  },
   ACCOUNT_INACTIVE: {
     title: "This account is deactivated",
     detail:

@@ -375,6 +375,7 @@ a spent balance from a suspended account:
 | `ACCOUNT_INACTIVE`       | `FORBIDDEN`           | The stream owner's user is deactivated.                           |
 | `ACCOUNT_SUSPENDED`      | `FORBIDDEN`           | The account is suspended.                                         |
 | `PAYMENT_REQUIRED`       | `FAILED_PRECONDITION` | The prepaid balance is spent; add credit before going live.       |
+| `GRANT_EXPIRED`          | `FAILED_PRECONDITION` | A trial or arranged plan ended; retry once the plan has switched. |
 | `NON_PUSH_MODE_STREAM`   | `FAILED_PRECONDITION` | The stream pulls its source and does not accept a push.           |
 | `CLUSTER_NOT_ENTITLED`   | `FORBIDDEN`           | The account may not ingest on the cluster the stream resolves to. |
 | `CLUSTER_CLASS_MISMATCH` | `FORBIDDEN`           | The cluster's class is not permitted for the account.             |
