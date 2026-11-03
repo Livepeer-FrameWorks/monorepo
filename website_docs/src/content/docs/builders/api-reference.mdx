@@ -108,8 +108,10 @@ its expiry: refresh it and reconnect. `credential revoked` means the token or se
 authenticates: get a new token before reconnecting. `account deactivated` means an operator
 deactivated the user or closed the account: the gateway closes the user's session connections and
 every connection opened with one of the user's API tokens, and refreshing the session or signing
-in again is refused too, so stop reconnecting. A connection whose instance missed the
-deactivation event closes at its next one-minute re-check with `credential revoked`. Common
+in again is refused too, so stop reconnecting. A gateway instance that missed the deactivation
+event learns it from the account service at its next one-minute re-check, or when it reads back
+the revocations it missed, and closes with `account deactivated` as well; a reconnect is refused
+with the same reason. Common
 graphql-ws clients retry after `4403` unless you stop them, so check the reason in your close
 handler.
 

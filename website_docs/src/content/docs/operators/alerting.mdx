@@ -139,9 +139,12 @@ moves to Free, grant expiry, tenant closure and account session stops. Each fire
 minutes. The queue alerts also fire when a service fails to read its queue more than once in two
 minutes; that points at the service's database rather than at a tenant. The metrics carry no
 tenant label, so every alert below names the command that lists the affected tenants.
-`frameworks cluster doctor --deep` checks the provider recovery, held downgrade, tenant closure and
-session stop conditions and names up to ten tenants per finding; it does not check moves to Free or
-grant expiry. All commands need a platform-operator session. The procedures behind them are in
+`frameworks cluster doctor --deep` checks these conditions and names up to ten tenants per
+finding: provider recovery, held downgrades, tenant closure and session stops, moves to Free that
+keep failing or have waited on settlement over fourteen days, grace and move-to-Free emails that
+keep failing or were abandoned after five failures, grant expiries that keep failing, and grant
+ending or ended emails that keep failing or were abandoned. It also notes how many operator grants
+end within seven days. All commands need a platform-operator session. The procedures behind them are in
 [Test and trial accounts](/operators/trial-accounts/#recovery-and-internals).
 
 | Alert                                   | Identify the tenant                                                              | Resolve                                                                                                       |
@@ -223,8 +226,10 @@ Restore the cell, or upgrade its Foghorn if the error is `Unimplemented`. For a 
 good, `frameworks admin clusters retire <cell> --reason <reason>` settles the stops owed to it.
 
 `cell="unknown"` means the stop has not been attempted yet or its last attempt failed before
-contacting any cell. That error comes from Commodore's database; restore Commodore's database
-connection and Commodore retries. See [Session stops](/operators/trial-accounts/#session-stops).
+contacting any cell. A stop with a last error failed on Commodore's database; restore Commodore's
+database connection and Commodore retries. A stop with no last error has not been attempted: check
+that Commodore's media-authority refresh worker is running, and look in Commodore's logs for
+`Failed to claim media authority refresh obligations` with `lane=ingest_revocation`. See [Session stops](/operators/trial-accounts/#session-stops).
 
 ## Verify
 
