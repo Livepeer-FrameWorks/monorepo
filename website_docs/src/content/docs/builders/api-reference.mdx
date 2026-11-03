@@ -365,6 +365,27 @@ missing required input.
 The `/play` endpoint reports the same states as HTTP `503` with code `STREAM_STARTING` and a
 `Retry-After` header, and HTTP `404` with code `STREAM_OFFLINE`.
 
+`resolveIngestEndpoint` says why it refused a stream key in `extensions.reason`, next to the
+general `extensions.code`. Several reasons share a code, so read the reason to tell, for example,
+a spent balance from a suspended account:
+
+| `extensions.reason`      | `extensions.code`     | Meaning                                                           |
+| ------------------------ | --------------------- | ----------------------------------------------------------------- |
+| `INVALID_STREAM_KEY`     | `NOT_FOUND`           | No stream has this key.                                           |
+| `ACCOUNT_INACTIVE`       | `FORBIDDEN`           | The stream owner's user is deactivated.                           |
+| `ACCOUNT_SUSPENDED`      | `FORBIDDEN`           | The account is suspended.                                         |
+| `PAYMENT_REQUIRED`       | `FAILED_PRECONDITION` | The prepaid balance is spent; add credit before going live.       |
+| `NON_PUSH_MODE_STREAM`   | `FAILED_PRECONDITION` | The stream pulls its source and does not accept a push.           |
+| `CLUSTER_NOT_ENTITLED`   | `FORBIDDEN`           | The account may not ingest on the cluster the stream resolves to. |
+| `CLUSTER_CLASS_MISMATCH` | `FORBIDDEN`           | The cluster's class is not permitted for the account.             |
+| `PROTOCOL_NOT_SUPPORTED` | `VALIDATION_ERROR`    | The requested ingest protocol is not offered for this stream.     |
+| `CLUSTER_UNHEALTHY`      | `UNAVAILABLE`         | The ingest cluster is unhealthy; retry later.                     |
+| `DUPLICATE_INGEST`       | `CONFLICT`            | The stream is already being published elsewhere.                  |
+| `INGEST_DENIED`          | `FORBIDDEN`           | Ingest was refused for another reason.                            |
+
+An error without `extensions.reason` did not come from the ingest admission check, for example an
+unavailable service; handle it by its `extensions.code`.
+
 ### Partial results
 
 GraphQL resolves each field on its own. When a nullable field fails, the server sets it to `null`,

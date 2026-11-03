@@ -169,8 +169,13 @@ Activate in this order:
    services, and rolls the gateways to the release's go-livepeer pin.
 4. Verify with `frameworks cluster status`, then `GET /v1/network/livepeer` on Bridge:
    `inventory.network` is `42161`, `inventory.environment` is the manifest profile, and
-   the inventory lists catalog resources. A `503 network inventory temporarily
-unavailable` means Bridge cannot reach or verify the observer.
+   the inventory lists catalog resources. A 503 with code
+   `NETWORK_OBSERVATIONS_UNAVAILABLE` (`network inventory temporarily unavailable` or
+   `network inventory namespace mismatch`) means Bridge cannot reach or verify the observer.
+   A 503 with code `NETWORK_OBSERVATIONS_NOT_CONFIGURED` means Bridge has no observer
+   client, no analytics reader, or no valid `NETWORK_PUBLIC_TENANT_IDS`; check its
+   environment. The external prober relay answers the same code when Bridge has no observer
+   client.
 5. Install the external probers with `NETWORK_OBSERVER_URL=<public Bridge URL>/network-observer`
    and the same secret.
    The observer is ready once its database answers, the contract catalog has refreshed
