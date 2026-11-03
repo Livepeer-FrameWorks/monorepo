@@ -226,6 +226,11 @@ func (s *CommodoreServer) AdminDeactivateTenant(ctx context.Context, req *commod
 		if err = q.CloseTenantAccount(ctx, commodoredb.CloseTenantAccountParams{TenantID: tenantID, Reason: req.GetReason(), ClosedBy: middleware.GetUserID(ctx)}); err != nil {
 			return err
 		}
+		// A closed account never signs in again, so its wallet addresses are released for a new sign-up or a
+		// declared bootstrap account instead of staying bound to it.
+		if err = q.DeleteTenantWalletIdentities(ctx, tenantID); err != nil {
+			return err
+		}
 		users, listErr := q.ListTenantAccountUsers(ctx, tenantID)
 		if listErr != nil {
 			return listErr

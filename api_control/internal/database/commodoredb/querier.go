@@ -134,6 +134,7 @@ type Querier interface {
 	DeleteRefreshTokensForUser(ctx context.Context, arg DeleteRefreshTokensForUserParams) error
 	DeleteRetiredMediaAuthorityTargets(ctx context.Context, arg DeleteRetiredMediaAuthorityTargetsParams) (int64, error)
 	DeleteStreamKeysForDeletion(ctx context.Context, arg DeleteStreamKeysForDeletionParams) error
+	DeleteTenantWalletIdentities(ctx context.Context, tenantID string) error
 	DeleteUserWallet(ctx context.Context, arg DeleteUserWalletParams) (string, error)
 	EnableCreatedStreamRecording(ctx context.Context, id string) error
 	// A new request restarts delivery: attempts and the 24h window reset, so a

@@ -59,6 +59,10 @@ func TestOperatorAccountLifecycle_RealPG(t *testing.T) {
 	if _, writeErr := db.ExecContext(ctx, `INSERT INTO commodore.refresh_tokens(tenant_id,user_id,token_hash,expires_at) VALUES($1,$2,'trial-refresh',NOW()+INTERVAL '1 day')`, tenantID, userID); writeErr != nil {
 		t.Fatal(writeErr)
 	}
+	const closedWallet = "0x00000000000000000000000000000000000c1053"
+	if _, writeErr := db.ExecContext(ctx, `INSERT INTO commodore.wallet_identities(tenant_id,user_id,chain_type,wallet_address) VALUES($1,$2,'ethereum',$3)`, tenantID, userID, closedWallet); writeErr != nil {
+		t.Fatal(writeErr)
+	}
 	streamID := uuid.NewString()
 	if _, writeErr := db.ExecContext(ctx, `INSERT INTO commodore.streams(id,tenant_id,user_id,internal_name,stream_key,playback_id,title) VALUES($1,$2,$3,'trial-test','trial-key','trial-playback','Trial')`, streamID, tenantID, userID); writeErr != nil {
 		t.Fatal(writeErr)
@@ -166,6 +170,15 @@ func TestOperatorAccountLifecycle_RealPG(t *testing.T) {
 	// Quartermaster is deliberately unavailable: closure must persist locally and remain retryable.
 	if _, err = server.AdminDeactivateTenant(op, &commodorepb.AdminDeactivateTenantRequest{TenantId: tenantID, TenantName: "Trial Tenant", Reason: "permanent closure"}); status.Code(err) != codes.Unavailable {
 		t.Fatalf("closure error=%v, want Unavailable", err)
+	}
+	// A closed account signs in with nothing, so its wallets are released: the address can sign up again or be
+	// linked to a declared bootstrap account.
+	var closedWallets int
+	if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM commodore.wallet_identities WHERE wallet_address=$1`, closedWallet).Scan(&closedWallets); err != nil {
+		t.Fatal(err)
+	}
+	if closedWallets != 0 {
+		t.Fatalf("closed tenant kept %d wallet identit(ies) for %s", closedWallets, closedWallet)
 	}
 	for _, request := range []*commodorepb.ResolveStreamContextRequest{{Identifier: &commodorepb.ResolveStreamContextRequest_PlaybackId{PlaybackId: "trial-playback"}}, {Identifier: &commodorepb.ResolveStreamContextRequest_InternalName{InternalName: "trial-test"}}} {
 		result, resolveErr := server.ResolveStreamContext(context.WithValue(ctx, ctxkeys.KeyAuthType, "service"), request)

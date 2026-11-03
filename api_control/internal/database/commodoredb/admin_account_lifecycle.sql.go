@@ -123,6 +123,15 @@ func (q *Queries) CountRepeatedTenantAccountClosureFailures(ctx context.Context)
 	return count, err
 }
 
+const deleteTenantWalletIdentities = `-- name: DeleteTenantWalletIdentities :exec
+DELETE FROM commodore.wallet_identities WHERE tenant_id = $1::uuid
+`
+
+func (q *Queries) DeleteTenantWalletIdentities(ctx context.Context, tenantID string) error {
+	_, err := q.db.ExecContext(ctx, deleteTenantWalletIdentities, tenantID)
+	return err
+}
+
 const ensureTenantAccountState = `-- name: EnsureTenantAccountState :exec
 INSERT INTO commodore.tenant_account_states(tenant_id) VALUES ($1::uuid)
 ON CONFLICT (tenant_id) DO NOTHING

@@ -43,6 +43,9 @@ UPDATE commodore.tenant_account_states
 SET quartermaster_closed_at = NOW(), closure_error = NULL, closure_retry_after = NULL
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid AND closed_at IS NOT NULL;
 
+-- name: DeleteTenantWalletIdentities :exec
+DELETE FROM commodore.wallet_identities WHERE tenant_id = sqlc.arg(tenant_id)::uuid;
+
 -- name: ListTenantAccountUsers :many
 SELECT id::text FROM commodore.users WHERE tenant_id = sqlc.arg(tenant_id)::uuid ORDER BY id;
 
