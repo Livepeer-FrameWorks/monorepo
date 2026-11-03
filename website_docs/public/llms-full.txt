@@ -2507,6 +2507,13 @@ Use `inventory.generated_at`, endpoint check/quote timestamps, observer `last_se
 and the history window to determine freshness. Polling every few minutes is sufficient
 for typical importers; responses have a short public cache lifetime. On HTTP 429, back
 off; on an outage, retain your last successful import with its original timestamps.
+An HTTP 503 body carries `error` and a `code`:
+
+| `code`                                | Meaning                                                                                      |
+| ------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `NETWORK_OBSERVATIONS_NOT_CONFIGURED` | This deployment does not publish network observations. Retrying does not help.               |
+| `NETWORK_OBSERVATIONS_UNAVAILABLE`    | Bridge cannot reach or verify the inventory coordinator right now. Retry later with backoff. |
+
 `history_status=unavailable` can accompany HTTP 200 with valid inventory and empty
 history: that means historical data is unavailable, not zero traffic or zero failures.
 Inspect `history.truncated` and `history.rolled_up` before treating returned chart or
@@ -2694,8 +2701,10 @@ its expiry: refresh it and reconnect. `credential revoked` means the token or se
 authenticates: get a new token before reconnecting. `account deactivated` means an operator
 deactivated the user or closed the account: the gateway closes the user's session connections and
 every connection opened with one of the user's API tokens, and refreshing the session or signing
-in again is refused too, so stop reconnecting. A connection whose instance missed the
-deactivation event closes at its next one-minute re-check with `credential revoked`. Common
+in again is refused too, so stop reconnecting. A gateway instance that missed the deactivation
+event learns it from the account service at its next one-minute re-check, or when it reads back
+the revocations it missed, and closes with `account deactivated` as well; a reconnect is refused
+with the same reason. Common
 graphql-ws clients retry after `4403` unless you stop them, so check the reason in your close
 handler.
 
@@ -2948,6 +2957,27 @@ missing required input.
 
 The `/play` endpoint reports the same states as HTTP `503` with code `STREAM_STARTING` and a
 `Retry-After` header, and HTTP `404` with code `STREAM_OFFLINE`.
+
+`resolveIngestEndpoint` says why it refused a stream key in `extensions.reason`, next to the
+general `extensions.code`. Several reasons share a code, so read the reason to tell, for example,
+a spent balance from a suspended account:
+
+| `extensions.reason`      | `extensions.code`     | Meaning                                                           |
+| ------------------------ | --------------------- | ----------------------------------------------------------------- |
+| `INVALID_STREAM_KEY`     | `NOT_FOUND`           | No stream has this key.                                           |
+| `ACCOUNT_INACTIVE`       | `FORBIDDEN`           | The stream owner's user is deactivated.                           |
+| `ACCOUNT_SUSPENDED`      | `FORBIDDEN`           | The account is suspended.                                         |
+| `PAYMENT_REQUIRED`       | `FAILED_PRECONDITION` | The prepaid balance is spent; add credit before going live.       |
+| `NON_PUSH_MODE_STREAM`   | `FAILED_PRECONDITION` | The stream pulls its source and does not accept a push.           |
+| `CLUSTER_NOT_ENTITLED`   | `FORBIDDEN`           | The account may not ingest on the cluster the stream resolves to. |
+| `CLUSTER_CLASS_MISMATCH` | `FORBIDDEN`           | The cluster's class is not permitted for the account.             |
+| `PROTOCOL_NOT_SUPPORTED` | `VALIDATION_ERROR`    | The requested ingest protocol is not offered for this stream.     |
+| `CLUSTER_UNHEALTHY`      | `UNAVAILABLE`         | The ingest cluster is unhealthy; retry later.                     |
+| `DUPLICATE_INGEST`       | `CONFLICT`            | The stream is already being published elsewhere.                  |
+| `INGEST_DENIED`          | `FORBIDDEN`           | Ingest was refused for another reason.                            |
+
+An error without `extensions.reason` did not come from the ingest admission check, for example an
+unavailable service; handle it by its `extensions.code`.
 
 ### Partial results
 
@@ -6181,7 +6211,7 @@ A single line item on an invoice or usage preview, produced by the rating engine
 - **clusterId**: `String` — Cluster id this line was attributed to; null for tenant-scoped lines (base_subscription).
 - **clusterName**: `String` — Display name of the cluster, joined from Quartermaster at read time. Null when clusterId is null.
 - **clusterKind**: `String` — platform_official &#124; tenant_private &#124; third_party_marketplace; null when clusterId is null.
-- **pricingSource**: `String!` — Why the line was priced as it was: tier, cluster_metered, cluster_monthly, cluster_custom, free_unmetered, self_hosted, included_subscription.
+- **pricingSource**: `String!` — Why the line was priced as it was: tier, cluster_metered, cluster_monthly, cluster_custom, free_unmetered, self_hosted, included_subscription, beta_free (usage waived to zero by the platform waiver) or grant_waived (usage waived to zero by the tenant&#39;s FrameWorks arrangement).
 - **pricingLabel**: `String!` — Human-readable label of pricingSource (e.g. &#39;Self-hosted (no charge)&#39;, &#39;Marketplace metered&#39;). Empty when not populated by the gateway.
 - **unit**: `String!` — Canonical quantity unit.
 - **dimensions**: `JSON!` ([JSON](/builders/api-schema/shared/#json)) — Bounded pricing dimensions such as codec, rendition, backend, or model.
@@ -6866,7 +6896,7 @@ usageRecordsConnection(
 
 ### Mutation.changeBillingTier
 
-Change the postpaid billing tier. Upgrades start a fresh month and offset the replacement fee with the unused retained paid old fee, capped at the replacement price, without cash refund or spendable balance. Provider or metering reconciliation can leave them pending. Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement. Downgrades take effect at the current billing period end. A refusal returns ValidationError whose code is one of PENDING_CHECKOUT, PENDING_FREE_FALLBACK, PENDING_UPGRADE, OUTSTANDING_GRANT, ACCOUNT_CLOSED, DOWNGRADE_HELD, PAID_TERM_ENDING, PROVIDER_SUBSCRIPTION_LIVE, TIER_NOT_SELF_SERVICE, INVOICES_OUTSTANDING, COLLECTION_SETUP_REQUIRED or BILLING_PROFILE_REQUIRED, with a message to show the customer.
+Change the postpaid billing tier. Upgrades start a fresh month and offset the replacement fee with the unused retained paid old fee, capped at the replacement price, without cash refund or spendable balance. Provider or metering reconciliation can leave them pending. Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement. Downgrades take effect at the end of the current billing period. A Stripe or Mollie subscription is repriced to the lower tier before it renews; a move to Free cancels it instead, at billingLifecycle.freeMoveFinalAt. Choosing the current tier cancels a downgrade while billingLifecycle.pendingTierState is SCHEDULED; it needs no billing profile or collection setup. A refusal returns ValidationError whose code is one of PENDING_CHECKOUT, PENDING_FREE_FALLBACK, PENDING_UPGRADE, OUTSTANDING_GRANT, ACCOUNT_CLOSED, DOWNGRADE_HELD, PAID_TERM_ENDING, PROVIDER_SUBSCRIPTION_LIVE, TIER_NOT_SELF_SERVICE, INVOICES_OUTSTANDING, COLLECTION_SETUP_REQUIRED or BILLING_PROFILE_REQUIRED, with a message to show the customer.
 
 ```graphql
 changeBillingTier(
@@ -16132,18 +16162,42 @@ studio.setEncoderOverrides({
 });
 ```
 
-| Override                 | Type     | Description                 |
-| ------------------------ | -------- | --------------------------- |
-| `video.width`            | `number` | Output width in pixels      |
-| `video.height`           | `number` | Output height in pixels     |
-| `video.bitrate`          | `number` | Target video bitrate in bps |
-| `video.framerate`        | `number` | Target frame rate           |
-| `audio.bitrate`          | `number` | Target audio bitrate in bps |
-| `audio.sampleRate`       | `number` | Audio sample rate in Hz     |
-| `audio.numberOfChannels` | `number` | Audio channel count         |
+| Override                 | Type                       | Description                                                                         |
+| ------------------------ | -------------------------- | ----------------------------------------------------------------------------------- |
+| `video.codec`            | `"h264" \| "vp9" \| "av1"` | Video codec offered first to the server; takes the place of the `videoCodec` option |
+| `video.width`            | `number`                   | Output width in pixels                                                              |
+| `video.height`           | `number`                   | Output height in pixels                                                             |
+| `video.bitrate`          | `number`                   | Target video bitrate in bps                                                         |
+| `video.framerate`        | `number`                   | Target frame rate                                                                   |
+| `audio.bitrate`          | `number`                   | Target audio bitrate in bps                                                         |
+| `audio.sampleRate`       | `number`                   | Audio sample rate in Hz                                                             |
+| `audio.numberOfChannels` | `number`                   | Audio channel count                                                                 |
 
 Every field is optional; unset fields keep the quality profile's value. There is no keyframe-interval
 override.
+
+### Encoder Settings
+
+The settings popup of the React, Svelte and Web Component studios has an **Encoder** section below
+the quality profiles, outside dev mode too. It sets the same overrides through selects for video
+codec, resolution, frame rate, video bitrate and audio bitrate. Each select shows the override, or
+the quality profile's value when there is none. Choosing the profile's own value clears that
+override, so the profile keeps deciding it. An overridden select is marked, and **Reset to
+profile** clears every override. The codec select lists Auto and the codecs this browser can send
+over WebRTC, and is left out when there is nothing to choose between. The settings apply when
+streaming starts, so the selects are locked while streaming.
+
+In dev mode, the Encoder block of the Advanced panel shows the config the next stream starts with,
+read-only: video codec, resolution, frame rate, video bitrate, audio codec and audio bitrate, with
+each value that differs from the quality profile marked as overridden. Change them in the Encoder
+section of the settings popup.
+
+The Encoder section's rows are available to a custom UI from `@livepeer-frameworks/streamcrafter-core`:
+`encoderSettingRows(profile, overrides, codecs, autoLabel)` returns each select's value, options
+and whether it is overridden, `withEncoderSetting(profile, overrides, setting, value)` returns the
+overrides to pass to `setEncoderOverrides`, and `sendableVideoCodecs()` lists the codecs this
+browser can send. `encoderSummaryRows(profile, overrides, autoLabel)` returns the read-only rows
+of the Advanced panel.
 
 ## Audio Mixing
 
@@ -16708,6 +16762,88 @@ its last frame, and playing it again starts it over.
   is in the mix. A browser that cannot capture from a media element refuses the file with an error.
 </Aside>
 
+## Saving and Restoring the Layout
+
+A studio layout is plain JSON data: the scenes with their names and background colors, the active
+scene, the image and text overlays with their positions and the scenes that show them, and the
+layout preset. It holds no camera, screen or media-file layers, because those belong to one
+session's captures. Sources added after a layout is applied join the active scene and the preset
+places them. An image picked from disk is carried as a data URL, stored at no more than the
+frame size, so the layout stays small enough for page storage.
+
+The drop-in components take the layout to start from and report changes:
+
+| Prop / property  | Type                             | Description                                                                          |
+| ---------------- | -------------------------------- | ------------------------------------------------------------------------------------ |
+| `initialLayout`  | `StudioLayout \| null`           | Layout to apply when the compositor starts                                           |
+| `onLayoutChange` | `(layout: StudioLayout) => void` | Called about 300 ms after the scenes, overlays, active scene or layout preset change |
+
+`<fw-streamcrafter>` takes both as JS properties and also dispatches a `fw-sc-layout-change` event
+with `event.detail.layout`.
+
+**React:**
+
+```tsx
+const key = `studio-layout:${streamId}`;
+const saved = useMemo(() => {
+  try {
+    return JSON.parse(localStorage.getItem(key) ?? "null");
+  } catch {
+    return null;
+  }
+}, [key]);
+
+<StreamCrafter
+  whipUrl="..."
+  initialLayout={saved}
+  onLayoutChange={(layout) => localStorage.setItem(key, JSON.stringify(layout))}
+/>;
+```
+
+**Svelte:**
+
+```svelte
+<StreamCrafter
+  {whipUrl}
+  initialLayout={saved}
+  onLayoutChange={(layout) => localStorage.setItem(key, JSON.stringify(layout))}
+/>
+```
+
+**Web Components:**
+
+```html
+<fw-streamcrafter id="studio" whip-url="..."></fw-streamcrafter>
+<script>
+  const studio = document.getElementById("studio");
+  studio.initialLayout = JSON.parse(localStorage.getItem("studio-layout") ?? "null");
+  studio.addEventListener("fw-sc-layout-change", (e) => {
+    localStorage.setItem("studio-layout", JSON.stringify(e.detail.layout));
+  });
+</script>
+```
+
+The compositor keeps its own layout when it is turned off and on again, and when the studio gets a
+new controller for the same stream, for example after a new WHIP endpoint or quality profile.
+Change `initialLayout` together with the stream to start the new stream from its own layout. A
+stored layout that no longer applies is logged and skipped; it never keeps the compositor off.
+
+You can also read and apply a layout directly. `exportLayout()` returns the layout; while the
+compositor is off it returns the layout from when it was last on, and `null` when it never ran.
+`importLayout(layout)` replaces the scenes and overlays and needs the compositor to be on. It
+checks the layout and decodes its images first, so a layout that fails leaves the studio as it was.
+
+| Binding     | Where                                                           |
+| ----------- | --------------------------------------------------------------- |
+| React       | `exportLayout` and `importLayout` on the `useCompositor` result |
+| Svelte      | `exportLayout` and `importLayout` on the compositor store       |
+| Web Element | `studio.exportLayout()` and `studio.importLayout(layout)`       |
+| Vanilla     | `studio.exportLayout()` and `studio.importLayout(layout)`       |
+
+Layouts from storage or another page can be checked before use with `parseStudioLayout(value)` from
+`@livepeer-frameworks/streamcrafter-core`. It returns the layout or throws with the first problem,
+such as an unsupported `version` or an unknown layout mode.
+
 ## Renderer
 
 The compositor automatically selects the best available renderer:
@@ -16813,26 +16949,28 @@ the dashboard DNS ingest URL or Foghorn's `/ingest/{streamKey}` front door inste
 
 ### Props
 
-| Prop                | Type                                         | Default       | Description                                                                |
-| ------------------- | -------------------------------------------- | ------------- | -------------------------------------------------------------------------- |
-| `whipUrl`           | `string`                                     | —             | Direct WHIP endpoint; takes priority over `gatewayUrl`                     |
-| `resolveWhipUrl`    | `(signal: AbortSignal) => Promise<string>`   | —             | Refresh the destination right before each connection                       |
-| `gatewayUrl`        | `string`                                     | —             | Gateway GraphQL endpoint, used with `streamKey`                            |
-| `streamKey`         | `string`                                     | —             | Stream key for gateway resolution                                          |
-| `initialProfile`    | `QualityProfile`                             | `"broadcast"` | Starting quality preset                                                    |
-| `autoStartCamera`   | `boolean`                                    | `false`       | Start the camera once an endpoint is known                                 |
-| `enableCompositor`  | `boolean`                                    | `true`        | Run the compositor for layouts, scenes and overlays                        |
-| `compositorConfig`  | `{ renderer?, width?, height?, frameRate? }` | —             | Compositor renderer and output size                                        |
-| `showProducerPanel` | `boolean`                                    | `true`        | Scene, layer, overlay and media controls while the compositor runs         |
-| `showSettings`      | `boolean`                                    | `false`       | Open the quality popup on mount                                            |
-| `devMode`           | `boolean`                                    | `false`       | Debug rows in the quality popup and the Advanced panel in the context menu |
-| `debug`             | `boolean`                                    | `false`       | Debug logging                                                              |
-| `theme`             | `FwThemePreset \| StudioThemeOverrides`      | —             | Theme preset or token overrides                                            |
-| `locale`            | `StudioLocale`                               | `"en"`        | UI language                                                                |
-| `className`         | `string`                                     | —             | Extra class on the root                                                    |
-| `onStateChange`     | `(state, context?) => void`                  | —             | Lifecycle state changes                                                    |
-| `onError`           | `(error: string) => void`                    | —             | Errors                                                                     |
-| `children`          | `ReactNode`                                  | —             | Replaces the built-in UI with your own layout                              |
+| Prop                | Type                                         | Default       | Description                                                                                                                              |
+| ------------------- | -------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `whipUrl`           | `string`                                     | —             | Direct WHIP endpoint; takes priority over `gatewayUrl`                                                                                   |
+| `resolveWhipUrl`    | `(signal: AbortSignal) => Promise<string>`   | —             | Refresh the destination right before each connection                                                                                     |
+| `gatewayUrl`        | `string`                                     | —             | Gateway GraphQL endpoint, used with `streamKey`                                                                                          |
+| `streamKey`         | `string`                                     | —             | Stream key for gateway resolution                                                                                                        |
+| `initialProfile`    | `QualityProfile`                             | `"broadcast"` | Starting quality preset                                                                                                                  |
+| `autoStartCamera`   | `boolean`                                    | `false`       | Start the camera once an endpoint is known                                                                                               |
+| `enableCompositor`  | `boolean`                                    | `true`        | Run the compositor for layouts, scenes and overlays                                                                                      |
+| `compositorConfig`  | `{ renderer?, width?, height?, frameRate? }` | —             | Compositor renderer and output size                                                                                                      |
+| `initialLayout`     | `StudioLayout \| null`                       | —             | Layout to start the compositor from; see [Saving and Restoring the Layout](/builders/ingest-compositor/#saving-and-restoring-the-layout) |
+| `onLayoutChange`    | `(layout: StudioLayout) => void`             | —             | Called shortly after the scenes, overlays or layout preset change                                                                        |
+| `showProducerPanel` | `boolean`                                    | `true`        | Scene, layer, overlay and media controls while the compositor runs                                                                       |
+| `showSettings`      | `boolean`                                    | `false`       | Open the quality popup on mount                                                                                                          |
+| `devMode`           | `boolean`                                    | `false`       | Debug rows in the quality popup and the Advanced panel in the context menu                                                               |
+| `debug`             | `boolean`                                    | `false`       | Debug logging                                                                                                                            |
+| `theme`             | `FwThemePreset \| StudioThemeOverrides`      | —             | Theme preset or token overrides                                                                                                          |
+| `locale`            | `StudioLocale`                               | `"en"`        | UI language                                                                                                                              |
+| `className`         | `string`                                     | —             | Extra class on the root                                                                                                                  |
+| `onStateChange`     | `(state, context?) => void`                  | —             | Lifecycle state changes                                                                                                                  |
+| `onError`           | `(error: string) => void`                    | —             | Errors                                                                                                                                   |
+| `children`          | `ReactNode`                                  | —             | Replaces the built-in UI with your own layout                                                                                            |
 
 ## Producer Controls
 
@@ -16909,7 +17047,7 @@ created with `config` has no compositor.
 | `StudioPreview`          | Video preview with optional compositor overlay and live badge                  |
 | `StudioMixer`            | Source list with volume sliders, mute, and remove buttons                      |
 | `StudioActionBar`        | Add Camera, Share Screen, Add Media File, Settings, and Go Live                |
-| `StudioSettings`         | Quality profile selector popup                                                 |
+| `StudioSettings`         | Quality profile and encoder settings popup                                     |
 | `StudioStatusBadge`      | State badge (Idle, Capturing, Live, Connecting, etc.)                          |
 | `StudioConnectionHealth` | Good, unstable or poor while live, with bitrate, loss and round trip           |
 | `StudioProducerPanel`    | Scenes, layers, overlays and media; renders nothing until the compositor runs  |
@@ -17077,26 +17215,28 @@ the dashboard DNS ingest URL or Foghorn's `/ingest/{streamKey}` front door inste
 
 ### Props
 
-| Prop                | Type                                       | Default       | Description                                                                |
-| ------------------- | ------------------------------------------ | ------------- | -------------------------------------------------------------------------- |
-| `whipUrl`           | `string`                                   | —             | Direct WHIP endpoint; takes priority over `gatewayUrl`                     |
-| `resolveWhipUrl`    | `(signal: AbortSignal) => Promise<string>` | —             | Refresh the destination right before each connection                       |
-| `gatewayUrl`        | `string`                                   | —             | Gateway GraphQL endpoint, used with `streamKey`                            |
-| `streamKey`         | `string`                                   | —             | Stream key for gateway resolution                                          |
-| `initialProfile`    | `QualityProfile`                           | `"broadcast"` | Starting quality preset                                                    |
-| `autoStartCamera`   | `boolean`                                  | `false`       | Start the camera once an endpoint is known                                 |
-| `enableCompositor`  | `boolean`                                  | `true`        | Run the compositor for layouts, scenes and overlays                        |
-| `compositorConfig`  | `Partial<CompositorConfig>`                | `{}`          | Compositor renderer and output size                                        |
-| `showProducerPanel` | `boolean`                                  | `true`        | Scene, layer, overlay and media controls while the compositor runs         |
-| `showSettings`      | `boolean`                                  | `false`       | Open the quality popup on mount                                            |
-| `devMode`           | `boolean`                                  | `false`       | Debug rows in the quality popup and the Advanced panel in the context menu |
-| `debug`             | `boolean`                                  | `false`       | Debug logging                                                              |
-| `theme`             | `FwThemePreset \| StudioThemeOverrides`    | —             | Theme preset or token overrides                                            |
-| `locale`            | `StudioLocale`                             | `"en"`        | UI language                                                                |
-| `class`             | `string`                                   | `""`          | Extra class on the root                                                    |
-| `onStateChange`     | `(state, context?) => void`                | —             | Lifecycle state changes                                                    |
-| `onError`           | `(error: string) => void`                  | —             | Errors                                                                     |
-| `children`          | `Snippet`                                  | —             | Replaces the built-in UI with your own layout                              |
+| Prop                | Type                                       | Default       | Description                                                                                                                              |
+| ------------------- | ------------------------------------------ | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `whipUrl`           | `string`                                   | —             | Direct WHIP endpoint; takes priority over `gatewayUrl`                                                                                   |
+| `resolveWhipUrl`    | `(signal: AbortSignal) => Promise<string>` | —             | Refresh the destination right before each connection                                                                                     |
+| `gatewayUrl`        | `string`                                   | —             | Gateway GraphQL endpoint, used with `streamKey`                                                                                          |
+| `streamKey`         | `string`                                   | —             | Stream key for gateway resolution                                                                                                        |
+| `initialProfile`    | `QualityProfile`                           | `"broadcast"` | Starting quality preset                                                                                                                  |
+| `autoStartCamera`   | `boolean`                                  | `false`       | Start the camera once an endpoint is known                                                                                               |
+| `enableCompositor`  | `boolean`                                  | `true`        | Run the compositor for layouts, scenes and overlays                                                                                      |
+| `compositorConfig`  | `Partial<CompositorConfig>`                | `{}`          | Compositor renderer and output size                                                                                                      |
+| `initialLayout`     | `StudioLayout \| null`                     | —             | Layout to start the compositor from; see [Saving and Restoring the Layout](/builders/ingest-compositor/#saving-and-restoring-the-layout) |
+| `onLayoutChange`    | `(layout: StudioLayout) => void`           | —             | Called shortly after the scenes, overlays or layout preset change                                                                        |
+| `showProducerPanel` | `boolean`                                  | `true`        | Scene, layer, overlay and media controls while the compositor runs                                                                       |
+| `showSettings`      | `boolean`                                  | `false`       | Open the quality popup on mount                                                                                                          |
+| `devMode`           | `boolean`                                  | `false`       | Debug rows in the quality popup and the Advanced panel in the context menu                                                               |
+| `debug`             | `boolean`                                  | `false`       | Debug logging                                                                                                                            |
+| `theme`             | `FwThemePreset \| StudioThemeOverrides`    | —             | Theme preset or token overrides                                                                                                          |
+| `locale`            | `StudioLocale`                             | `"en"`        | UI language                                                                                                                              |
+| `class`             | `string`                                   | `""`          | Extra class on the root                                                                                                                  |
+| `onStateChange`     | `(state, context?) => void`                | —             | Lifecycle state changes                                                                                                                  |
+| `onError`           | `(error: string) => void`                  | —             | Errors                                                                                                                                   |
+| `children`          | `Snippet`                                  | —             | Replaces the built-in UI with your own layout                                                                                            |
 
 ## Producer Controls
 
@@ -17158,7 +17298,7 @@ compositor, so `<StudioProducerPanel />` and `<StudioAudioControls />` need no p
 | `StudioPreview`          | Video preview with optional compositor overlay and live badge                  |
 | `StudioMixer`            | Source list with volume sliders, mute, and remove buttons                      |
 | `StudioActionBar`        | Add Camera, Share Screen, Add Media File, Settings, and Go Live                |
-| `StudioSettings`         | Quality profile selector popup                                                 |
+| `StudioSettings`         | Quality profile and encoder settings popup                                     |
 | `StudioStatusBadge`      | State badge (Idle, Capturing, Live, etc.)                                      |
 | `StudioConnectionHealth` | Good, unstable or poor while live, with bitrate, loss and round trip           |
 | `StudioProducerPanel`    | Scenes, layers, overlays and media; renders nothing until the compositor runs  |
@@ -17170,7 +17310,7 @@ compositor, so `<StudioProducerPanel />` and `<StudioAudioControls />` need no p
 | `CameraPicker`           | Add Camera, with a list when there is more than one camera or one is live      |
 | `MediaFileButton`        | Add Media File; turned off with the reason where the browser cannot play files |
 | `CompositorControls`     | Layout and scaling selector over the preview                                   |
-| `AdvancedPanel`          | Dev-mode panel with stats, encoder overrides and compositor details            |
+| `AdvancedPanel`          | Dev-mode panel with stats, the effective encoder config and compositor details |
 
 ## Custom UI with Stores
 
@@ -17373,10 +17513,17 @@ All queries are synchronous getters on the instance.
 | `setAudioDucking(on)`         | `(enabled: boolean) => void`              | Duck under the camera mic |
 | `enableCompositor(config?)`   | `(config?) => Promise<void>`              | Start the compositor      |
 | `disableCompositor()`         | `() => void`                              | Stop the compositor       |
+| `exportLayout()`              | `() => Promise<StudioLayout \| null>`     | Read the studio layout    |
+| `importLayout(layout)`        | `(layout) => Promise<void>`               | Apply a studio layout     |
 | `destroy()`                   | `() => void`                              | Cleanup and tear down     |
 
 `masterVolume`, `setAudioProcessing()` and `setAudioDucking()` work through the audio mixer, which
 is on by default. With `audioMixing: false` they do nothing and `masterVolume` reads `1`.
+
+`exportLayout()` returns the compositor's scenes, overlays and layout preset as plain data, or the
+layout from when the compositor was last on, or `null` when it never ran. `importLayout()` needs
+the compositor to be on. See
+[Saving and Restoring the Layout](/builders/ingest-compositor/#saving-and-restoring-the-layout).
 
 ## Subscriptions — Events
 
@@ -17716,13 +17863,13 @@ or callback properties:
 `onSceneSelect`, `onTransitionTo`, `onVisibilityToggle`, `onReorder`, `onTransformEdit` and
 `onRemove`.
 
-| Element                  | Purpose                                                    |
-| ------------------------ | ---------------------------------------------------------- |
-| `<fw-sc-volume>`         | Volume slider with snap to 100%                            |
-| `<fw-sc-compositor>`     | Layout and scaling mode selector overlay                   |
-| `<fw-sc-scene-switcher>` | Scene tiles with transition controls                       |
-| `<fw-sc-layer-list>`     | Layer list with visibility, order, opacity and removal     |
-| `<fw-sc-advanced>`       | Dev-mode panel (stats, WebCodecs, encoder, capture format) |
+| Element                  | Purpose                                                                     |
+| ------------------------ | --------------------------------------------------------------------------- |
+| `<fw-sc-volume>`         | Volume slider with snap to 100%                                             |
+| `<fw-sc-compositor>`     | Layout and scaling mode selector overlay                                    |
+| `<fw-sc-scene-switcher>` | Scene tiles with transition controls                                        |
+| `<fw-sc-layer-list>`     | Layer list with visibility, order, opacity and removal                      |
+| `<fw-sc-advanced>`       | Dev-mode panel (stats, WebCodecs, effective encoder config, capture format) |
 
 ## Attributes Reference
 
@@ -17746,7 +17893,10 @@ or callback properties:
 | `rtc-transform-worker-url` | `string`  | —             | RTC transform worker script, when not next to the IIFE bundle    |
 | `debug`                    | `boolean` | `false`       | Enable debug logging                                             |
 
-`compositorConfig`, `resolveWhipUrl`, `onStateChange` and `onError` are JS properties.
+`compositorConfig`, `initialLayout`, `onLayoutChange`, `resolveWhipUrl`, `onStateChange` and
+`onError` are JS properties. `initialLayout` and `onLayoutChange` work as described in
+[Saving and Restoring the Layout](/builders/ingest-compositor/#saving-and-restoring-the-layout); the
+element also has `exportLayout()` and `importLayout(layout)` methods.
 `resolveWhipUrl(signal)` returns the destination right before each connection. The `theme`
 property also takes an object of token overrides, as in the React and Svelte packages.
 
@@ -17759,6 +17909,16 @@ const studio = document.querySelector("fw-streamcrafter");
 
 studio.addEventListener("fw-sc-state-change", (e) => {
   console.log("State:", e.detail.state);
+});
+```
+
+`fw-sc-layout-change` fires about 300 ms after the compositor's scenes, overlays, active scene or
+layout preset change, with the layout in `e.detail.layout`. Store it and pass it back as
+`initialLayout`:
+
+```js
+studio.addEventListener("fw-sc-layout-change", (e) => {
+  localStorage.setItem("studio-layout", JSON.stringify(e.detail.layout));
 });
 ```
 
@@ -20167,6 +20327,27 @@ component, use the dashboard playback DNS URL directly.
 <Player contentType="clip" contentId="a1b2c3d4e5f6g7h8" />
 ```
 
+### Controlling Playback from Code
+
+A `ref` on `<Player>` receives the `PlayerController` of the current content. It is replaced when
+the content changes and is `null` once the player is torn down. The Svelte player gives the same
+object through `bind:controller`.
+
+```tsx
+import { useRef } from "react";
+import { Player, type PlayerController } from "@livepeer-frameworks/player-react";
+
+function LiveWithButton() {
+  const controller = useRef<PlayerController | null>(null);
+  return (
+    <>
+      <Player ref={controller} contentType="live" contentId="<YOUR_PLAYBACK_ID>" />
+      <button onClick={() => controller.current?.jumpToLive()}>Go live</button>
+    </>
+  );
+}
+```
+
 ## Composable Controls
 
 Pass `children` to `<Player>` to replace the built-in controls with your own layout. Sub-components auto-connect to the parent via React context.
@@ -20397,6 +20578,23 @@ component, use the dashboard playback DNS URL directly.
 <Player contentType="clip" contentId="a1b2c3d4e5f6g7h8" />
 ```
 
+### Controlling Playback from Code
+
+`bind:controller` gives you the `PlayerController` of the current content, the same object a
+[React `ref`](/builders/playback-react/#controlling-playback-from-code) gets. It is replaced when the content changes and is `null` once the player is torn down.
+`getController()` on the component instance returns the same object.
+
+```svelte
+<script lang="ts">
+  import { Player, type PlayerController } from "@livepeer-frameworks/player-svelte";
+
+  let controller = $state<PlayerController | null>(null);
+</script>
+
+<Player contentType="live" contentId="<YOUR_PLAYBACK_ID>" bind:controller />
+<button onclick={() => controller?.jumpToLive()} disabled={!controller}>Go live</button>
+```
+
 ## Composable Controls
 
 Pass a `children` snippet to replace the default controls:
@@ -20548,6 +20746,7 @@ The context object from `getContext("fw-player-controller")` provides:
 | `options.locale`         | `string`                                             | Built-in UI locale                                                                                                                                                    |
 | `options.playbackMode`   | `string`                                             | Protocol selection mode (see [Playback Modes](/builders/playback-advanced/#playback-modes)); change at runtime with the store's `setDevModeOptions({ playbackMode })` |
 | `onStateChange`          | `function`                                           | State transition callback                                                                                                                                             |
+| `controller`             | `PlayerController \| null`                           | Bindable with `bind:controller`; see [Controlling Playback from Code](#controlling-playback-from-code)                                                                |
 
 
 ---
@@ -28785,13 +28984,16 @@ Activity selection and enqueue outcomes are recorded in
 ## Billing and account lifecycle
 
 These warnings cover work Purser and Commodore retry on their own: provider recovery, downgrades,
-moves to Free, grant expiry, tenant closure and account session stops. Each fires after five
+moves to Free, grant expiry, grant emails, tenant closure and account session stops. Each fires after five
 minutes. The queue alerts also fire when a service fails to read its queue more than once in two
 minutes; that points at the service's database rather than at a tenant. The metrics carry no
 tenant label, so every alert below names the command that lists the affected tenants.
-`frameworks cluster doctor --deep` checks the provider recovery, held downgrade, tenant closure and
-session stop conditions and names up to ten tenants per finding; it does not check moves to Free or
-grant expiry. All commands need a platform-operator session. The procedures behind them are in
+`frameworks cluster doctor --deep` checks these conditions and names up to ten tenants per
+finding: provider recovery, held downgrades, tenant closure and session stops, moves to Free that
+keep failing or have waited on settlement over fourteen days, grace and move-to-Free emails that
+keep failing or were abandoned after five failures, grant expiries that keep failing, and grant
+ending or ended emails that keep failing or were abandoned. It also notes how many operator grants
+end within seven days. All commands need a platform-operator session. The procedures behind them are in
 [Test and trial accounts](/operators/trial-accounts/#recovery-and-internals).
 
 | Alert                                   | Identify the tenant                                                              | Resolve                                                                                                       |
@@ -28800,6 +29002,7 @@ grant expiry. All commands need a platform-operator session. The procedures behi
 | `PurserTierDowngradeHeld`               | `frameworks admin billing recovery list` (held section)                          | `frameworks admin billing recovery downgrade --tenant-id <tenant> --reason <reason>`                          |
 | `PurserFreeFallbackStuck`               | `frameworks admin billing recovery list`                                         | restore provider access or metering, `recovery notice`, or cancel with `set-tier`                             |
 | `PurserOperatorGrantExpiryStuck`        | `frameworks admin billing grant list --include-expired`                          | correct the billing or pricing error; retries run every five minutes                                          |
+| `PurserOperatorGrantNoticeStuck`        | `frameworks cluster doctor --deep`, then `frameworks cluster logs purser`        | fix the tenant's `billing_email` or the mail service, or requeue an abandoned email with `grant notice`       |
 | `CommodoreTenantAccountClosureStuck`    | `frameworks cluster doctor --deep`, then `frameworks admin tenants get <tenant>` | restore Commodore's connection to Quartermaster, or to its database for read failures                         |
 | `CommodoreAccountIngestRevocationStuck` | `frameworks cluster doctor --deep`, then `frameworks admin tenants get <tenant>` | restore the cell named in the `cell` label, upgrade its Foghorn, or `frameworks admin clusters retire <cell>` |
 
@@ -28822,8 +29025,9 @@ locally past its effective time. The provider already charges the lower tier, an
 tier changes are refused. The held downgrades section of `recovery list` names each tenant, target
 tier, effective time and closing invoice. `recovery downgrade` previews what holds it: provider
 confirmation, a draft invoice whose metering is incomplete, a `manual_review` invoice waiting for
-cluster pricing, or a pricing refusal. Once nothing holds it, confirming applies it. See
-[Held downgrades](/operators/trial-accounts/#held-downgrades).
+cluster pricing, or a pricing refusal. Once nothing holds it, confirming applies it. The alert
+also fires when Purser cannot read its held downgrade count from its database; restore Purser's
+database connection. See [Held downgrades](/operators/trial-accounts/#held-downgrades).
 
 ### Moves to Free
 
@@ -28849,6 +29053,18 @@ failures and last error, and `grant show --tenant-id <tenant>` shows one grant i
 reported billing or pricing error; the retry runs automatically and other expiries continue. See
 [Grant expiry](/operators/trial-accounts/#grant-expiry).
 
+### Grant emails
+
+`PurserOperatorGrantNoticeStuck` fires when a grant ending or ended email to a tenant failed more
+than once, or when Purser cannot read or write its grant notice queue. `cluster doctor --deep`
+names each tenant with its failures, and `frameworks cluster logs purser` shows the mail error.
+Fix the tenant's `billing_email` or the mail service; Purser retries with backoff. After five
+failures a notice is abandoned and no longer counted by the alert. `cluster doctor --deep` lists
+abandoned notices, and
+`frameworks admin billing grant notice --tenant-id <tenant> --reason <reason>` sends one again.
+For read failures, restore Purser's database connection. Mail failures never change the grant.
+See [What the customer sees](/operators/trial-accounts/#what-the-customer-sees).
+
 ### Tenant closure
 
 `CommodoreTenantAccountClosureStuck` fires when a closed tenant's Quartermaster teardown failed more
@@ -28873,8 +29089,10 @@ Restore the cell, or upgrade its Foghorn if the error is `Unimplemented`. For a 
 good, `frameworks admin clusters retire <cell> --reason <reason>` settles the stops owed to it.
 
 `cell="unknown"` means the stop has not been attempted yet or its last attempt failed before
-contacting any cell. That error comes from Commodore's database; restore Commodore's database
-connection and Commodore retries. See [Session stops](/operators/trial-accounts/#session-stops).
+contacting any cell. A stop with a last error failed on Commodore's database; restore Commodore's
+database connection and Commodore retries. A stop with no last error has not been attempted: check
+that Commodore's media-authority refresh worker is running, and look in Commodore's logs for
+`Failed to claim media authority refresh obligations` with `lane=ingest_revocation`. See [Session stops](/operators/trial-accounts/#session-stops).
 
 ## Verify
 
@@ -30085,9 +30303,13 @@ frameworks cluster doctor --github-repo org/gitops --cluster production
 # With verbose output
 frameworks cluster doctor --verbose
 
-# Verify live schema capabilities and prepared runtime-role grants
+# Verify live schema capabilities and prepared runtime-role grants, and check the
+# billing lifecycle, account closure and session stop queues
 frameworks cluster doctor --deep
 ```
+
+`--deep` names up to ten tenants per billing or account finding; the full list of checks is in
+[Alerting](/operators/alerting/#billing-and-account-lifecycle).
 
 ---
 
@@ -31072,7 +31294,19 @@ runs `cluster migrate --phase postdeploy --to-version <release>` through each su
 first. They always need `--backup`, `--dry-run` included, which runs them in check mode. A
 postdeploy migration whose ledger checksum differs from the file this CLI embeds, or a data
 migration that is running, paused, unreadable or unknown to its binary, still refuses and names
-what to do first.
+what to do first. A missing postdeploy migration also refuses while an expand migration of its
+release or an earlier one is missing from the same ledger: that release was never applied. The
+refusal names the lowest such release; apply it with `release apply --version <release>`, then
+retry.
+
+Under `--dry-run`, the Purser billing reconcile and, from v0.3.14 on, the Commodore accounts
+reconcile print the plan of `purser bootstrap --dry-run` and
+`commodore bootstrap --dry-run --accounts-only`: the service runs the reconcile in a rolled-back
+transaction and prints what it would change, and a plan that would fail fails the dry run. The
+plan is printed only when the service is already installed at the release's version, because an
+older binary would plan the previous release's reconcile; otherwise the dry run names the
+installed version instead. When the release metadata lists no version for the service, the dry
+run says its bootstrap plan is not shown.
 
 Long steps are bounded by a [progress watchdog](#progress-watchdog), not a fixed deadline.
 
@@ -32098,6 +32332,7 @@ Billing tier and subscription management.
 - `set-tier` - Put a tenant on a billing tier as an operator decision
 - `grant set` / `grant show` / `grant revoke` / `grant list` - Operator billing arrangements: base fee, usage
   waiver, manual invoicing, expiry
+- `grant notice` - Requeue an abandoned grant ending or ended email
 - `record-payment` - Record a bank transfer that paid an invoice
 - `prepaid-double-charges` - List invoices that charged prepaid tenants twice for the same usage
   (read-only)
@@ -32251,6 +32486,17 @@ grants; `--include-expired` adds retained history,
 frameworks admin billing grant list --expiring 7d
 frameworks admin billing grant list --include-expired --output json
 ```
+
+#### frameworks admin billing grant notice
+
+`frameworks admin billing grant notice --tenant-id <UUID> --reason "Billing email repaired"`
+previews the tenant's newest grant ending or ended email that Purser abandoned
+after five failed sends, then requires interactive `yes` or `--yes` to requeue
+it. Repair `billing_email` or the mail service first. Confirmation is fenced to
+the displayed notice and grant end. It records the operator and reason on
+`billing.subscription_updated` without changing the grant or the subscription.
+`frameworks cluster doctor --deep` lists abandoned grant notices. Requires a
+platform-operator JWT.
 
 #### frameworks admin billing recovery list
 
@@ -39494,8 +39740,13 @@ Activate in this order:
    services, and rolls the gateways to the release's go-livepeer pin.
 4. Verify with `frameworks cluster status`, then `GET /v1/network/livepeer` on Bridge:
    `inventory.network` is `42161`, `inventory.environment` is the manifest profile, and
-   the inventory lists catalog resources. A `503 network inventory temporarily
-unavailable` means Bridge cannot reach or verify the observer.
+   the inventory lists catalog resources. A 503 with code
+   `NETWORK_OBSERVATIONS_UNAVAILABLE` (`network inventory temporarily unavailable` or
+   `network inventory namespace mismatch`) means Bridge cannot reach or verify the observer.
+   A 503 with code `NETWORK_OBSERVATIONS_NOT_CONFIGURED` means Bridge has no observer
+   client, no analytics reader, or no valid `NETWORK_PUBLIC_TENANT_IDS`; check its
+   environment. The external prober relay answers the same code when Bridge has no observer
+   client.
 5. Install the external probers with `NETWORK_OBSERVER_URL=<public Bridge URL>/network-observer`
    and the same secret.
    The observer is ready once its database answers, the contract catalog has refreshed
@@ -40563,9 +40814,11 @@ Before the first change, and under `--dry-run` too, `release apply` refuses to s
 - a platform service replica runs a version below a declared minimum source version, or a version
   that is not a release version;
 - an earlier release is unfinished in a way `release apply` cannot finish itself: a postdeploy
-  migration's ledger checksum differs from the file this CLI embeds, or one of its required data
-  migrations is running, paused, unreadable, or unknown to the installed service binary. The error names the release to apply first or the migration to resolve. Databases this
-  release creates are exempt;
+  migration's ledger checksum differs from the file this CLI embeds, one of its postdeploy
+  migrations is missing while an expand migration of that release or an earlier one is missing
+  too, or one of its required data migrations is running, paused, unreadable, or unknown to the
+  installed service binary. The error names the release to apply first or the migration to
+  resolve. Databases this release creates are exempt;
 - a planned artifact does not resolve for its host's deploy mode and architecture;
 - a required operator input is missing from a service's rendered environment.
 
@@ -40592,6 +40845,19 @@ lowest first, so each release's postdeploy gate reads only the data migrations u
 always need `--backup` on `release apply`, with the same one-hour backup gate; the dry run applies
 the gate too and runs them in check mode. A failure stops the release before anything of the new
 release is applied and names the release whose postdeploy migrations failed.
+
+A missing postdeploy migration refuses the release instead when an expand migration of its
+release, or of an earlier release, is missing from the same ledger. That release was never
+applied, so its postdeploy SQL would run against the schema and binaries of the release before
+it. The refusal lists the postdeploy and expand migrations involved, names the lowest release
+with a missing expand migration, and tells you to apply it first:
+
+```bash
+frameworks cluster release apply --version <named release> --yes
+```
+
+Then retry the target release. Skipping an unfinished release is not supported. Missing expand
+migrations on their own never refuse: this release's expand step applies them.
 
 Every long step, migrations and data migrations included, runs under a progress watchdog instead of
 a fixed deadline: it is cancelled only after its stall window passes with no output and no
@@ -40651,6 +40917,15 @@ plan` and `release apply --dry-run` list every step and, per host, the role task
    created or updated, stream declarations are left alone, and existing passwords are never
    rewritten. The rendered accounts and their secret references are validated before the release
    changes anything. See [Account passwords](#account-passwords).
+
+   A dry run lists each declared tenant's billing and each declared account, then prints the
+   plan of `purser bootstrap --dry-run` and of `commodore bootstrap --dry-run --accounts-only`.
+   The service runs the whole reconcile in a transaction it rolls back and prints what it would
+   change; a plan that would fail fails the dry run the same way. The plan comes from the
+   binary that will apply it, so it is printed only when the service is already installed at
+   the release's version. Otherwise the dry run reports the installed version and that the plan
+   is shown once the service runs the release's version; rerun the dry run after the service
+   upgrade to see it.
 
 After postdeploy, `release apply` checks that every replica of the auth services and the web app
 runs the release's version, since a readiness check cannot detect an older web app bundle. It
@@ -42078,7 +42353,10 @@ Purser emails the tenant's billing email once a grant's end date is seven days o
 again when any grant ends, by expiry or `grant revoke`, naming the plan the account returns to.
 A closed account gets no ended email. Moving the end date drops a queued ending email that no
 longer applies. Failed sends are retried with backoff and abandoned after five attempts;
-`purser_operator_grant_notice_repeatedly_failed_items` counts the ones still failing. Without a
+`purser_operator_grant_notice_repeatedly_failed_items` counts the ones still failing and
+`PurserOperatorGrantNoticeStuck` fires on it (see
+[Grant emails](/operators/alerting/#grant-emails)). Requeue an abandoned one with
+`frameworks admin billing grant notice --tenant-id <uuid> --reason <reason>`. Without a
 billing email nothing is sent, so tell the customer yourself. Customer-facing terms are in
 [Billing](/builders/billing/#trials-and-arrangements).
 
