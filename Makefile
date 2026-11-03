@@ -1945,7 +1945,8 @@ verify-feature-registry:
 	@echo "✓ Feature registry verified"
 
 # Regenerate the feature-registry artifacts in place (registry.json, feature-matrix.mdx,
-# platform-capabilities.mdx, pkg/platformfeatures/registry_gen.go). Run this after editing docs/platform-features.yaml, then commit.
+# platform-capabilities.mdx, pkg/platformfeatures/registry_gen.go, website_marketing/src/data/status.json).
+# Run this after editing docs/platform-features.yaml, then commit.
 generate-feature-registry:
 	@cd scripts/registry && go run .
 
