@@ -14,7 +14,7 @@
   let verificationStatus = $state<"pending" | "success" | "error">("pending");
   let message = $state("");
   let loading = $state(false);
-  let signInHref = $state(resolve("/login"));
+  let signInHref = $state<string>(resolve("/login"));
 
   // Resend form state
   let resendEmail = $state("");

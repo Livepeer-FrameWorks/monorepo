@@ -21,7 +21,6 @@
   const slug = $derived($page.params.slug ?? "");
   const feature = $derived(findFeature(slug));
   const family = $derived(feature ? familyOf(feature.slug) : undefined);
-  const featureRoadmapHref = $derived(feature ? roadmapHref(feature, docsBase) : undefined);
   const builtOn = $derived(resolveSlugs(feature?.depends_on));
   const enables = $derived(resolveSlugs(feature?.enables));
   const related = $derived(resolveSlugs(feature?.related));
@@ -56,6 +55,7 @@
   };
 
   const docsBase = getDocsSiteUrl().replace(/\/$/, "");
+  const featureRoadmapHref = $derived(feature ? roadmapHref(feature, docsBase) : undefined);
   const SCHEME_URL_RE = /^[a-z][a-z0-9+.-]*:/i;
 
   function stripMdxSuffix(path: string) {
