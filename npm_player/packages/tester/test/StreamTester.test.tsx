@@ -145,6 +145,43 @@ describe("StreamTester", () => {
     );
   });
 
+  it("lists live and on-demand samples under their headings and plays the VOD one", async () => {
+    setLocation("");
+    render(
+      <StreamTester
+        gatewayUrl="https://gw.example/graphql"
+        samples={[
+          {
+            id: "demo",
+            label: "Demo stream",
+            group: "Live",
+            source: { mode: "playback", playbackId: "demo" },
+          },
+          {
+            id: "vod",
+            label: "Demo recording",
+            group: "On demand",
+            source: { mode: "playback", playbackId: "vod-abc" },
+          },
+        ]}
+      />
+    );
+
+    const picker = screen.getByRole("combobox", { name: "Sample" });
+    const groups = [...picker.querySelectorAll("optgroup")].map((group) => [
+      group.label,
+      [...group.querySelectorAll("option")].map((option) => option.textContent),
+    ]);
+    expect(groups).toEqual([
+      ["Live", ["Demo stream"]],
+      ["On demand", ["Demo recording"]],
+    ]);
+
+    fireEvent.change(picker, { target: { value: "vod" } });
+    await screen.findByTestId("player");
+    expect(mocks.playerProps.at(-1)!.contentId).toBe("vod-abc");
+  });
+
   it("publishes to a WHIP URL without putting it in the page link", async () => {
     setLocation("");
     render(<StreamTester />);

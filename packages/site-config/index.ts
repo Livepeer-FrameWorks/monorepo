@@ -139,6 +139,10 @@ export const DEMO_FIXTURES: DemoFixture[] = [{ id: "frameworks-demo", label: "De
 // Prefer DEMO_FIXTURES for any UI that wants to surface the toggle.
 export const DEMO_STREAM_NAME = DEMO_FIXTURES[0].id;
 
+// Public playback ID of a FrameWorks VOD asset that /stream-test offers as its
+// on-demand sample. Empty hides the sample.
+export const DEMO_VOD_PLAYBACK_ID: string = "";
+
 // Protocol defaults — standard ports/paths baked into MistServer and edge nodes.
 export const STREAMING_RTMP_PORT = "1935";
 export const STREAMING_SRT_PORT = "8889";

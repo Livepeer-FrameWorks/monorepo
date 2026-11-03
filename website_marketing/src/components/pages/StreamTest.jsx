@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import config from "../../config";
 import { docsLink, signupUrl } from "../../lib/siteLinks";
 import { contactPath } from "../../lib/contactTopics";
+import { streamTestSamples } from "../../lib/streamTestSamples";
 import { Section, SectionContainer } from "@/components/ui/section";
 import { MarketingHero, MarketingFinalCTA, SectionDivider } from "@/components/marketing";
 
@@ -17,18 +18,7 @@ const loadTester = async () => {
   return module.StreamTester;
 };
 
-const samples = config.demoFixtures.flatMap((fixture) => [
-  {
-    id: fixture.id,
-    label: `FrameWorks ${fixture.label.toLowerCase()} stream`,
-    source: { mode: "playback", playbackId: fixture.id },
-  },
-  {
-    id: `${fixture.id}-whep`,
-    label: `FrameWorks ${fixture.label.toLowerCase()} stream over WHEP`,
-    source: { mode: "playback", playbackId: fixture.id, protocol: "WHEP" },
-  },
-]);
+const samples = streamTestSamples(config.demoFixtures, config.demoVodPlaybackId);
 
 const links = [
   { label: "Player guide", href: docsLink(config.docsUrl, "/builders/playback") },

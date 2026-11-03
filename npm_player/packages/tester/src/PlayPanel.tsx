@@ -22,6 +22,18 @@ export interface TesterSample {
   id: string;
   label: string;
   source: PlaySource;
+  /** Picker heading the sample is listed under, such as "Live" or "On demand". */
+  group?: string;
+}
+
+/** Samples by picker heading, in first-seen order; ungrouped samples come first. */
+export function sampleGroups(samples: TesterSample[]): Array<[string, TesterSample[]]> {
+  const groups = new Map<string, TesterSample[]>();
+  for (const sample of samples) {
+    const key = sample.group ?? "";
+    groups.set(key, [...(groups.get(key) ?? []), sample]);
+  }
+  return [...groups.entries()].sort(([a], [b]) => (a === "" ? -1 : b === "" ? 1 : 0));
 }
 
 interface PlayPanelProps {
@@ -224,11 +236,20 @@ export function PlayPanel({
                 onChange={(event) => pickSample(event.target.value)}
               >
                 <option value="">Choose a sample</option>
-                {samples.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.label}
-                  </option>
-                ))}
+                {sampleGroups(samples).map(([group, items]) => {
+                  const options = items.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                    </option>
+                  ));
+                  return group ? (
+                    <optgroup key={group} label={group}>
+                      {options}
+                    </optgroup>
+                  ) : (
+                    options
+                  );
+                })}
               </select>
             </label>
           ) : null}
