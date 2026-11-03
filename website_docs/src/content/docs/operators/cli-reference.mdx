@@ -1259,7 +1259,19 @@ runs `cluster migrate --phase postdeploy --to-version <release>` through each su
 first. They always need `--backup`, `--dry-run` included, which runs them in check mode. A
 postdeploy migration whose ledger checksum differs from the file this CLI embeds, or a data
 migration that is running, paused, unreadable or unknown to its binary, still refuses and names
-what to do first.
+what to do first. A missing postdeploy migration also refuses while an expand migration of its
+release or an earlier one is missing from the same ledger: that release was never applied. The
+refusal names the lowest such release; apply it with `release apply --version <release>`, then
+retry.
+
+Under `--dry-run`, the Purser billing reconcile and, from v0.3.14 on, the Commodore accounts
+reconcile print the plan of `purser bootstrap --dry-run` and
+`commodore bootstrap --dry-run --accounts-only`: the service runs the reconcile in a rolled-back
+transaction and prints what it would change, and a plan that would fail fails the dry run. The
+plan is printed only when the service is already installed at the release's version, because an
+older binary would plan the previous release's reconcile; otherwise the dry run names the
+installed version instead. When the release metadata lists no version for the service, the dry
+run says its bootstrap plan is not shown.
 
 Long steps are bounded by a [progress watchdog](#progress-watchdog), not a fixed deadline.
 
