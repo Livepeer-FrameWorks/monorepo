@@ -46,7 +46,8 @@ error classification.
 Tenant closure commits local revocation and its session-stop obligation, then
 synchronizes the inactive tenant with Quartermaster independently. Unreachable
 cells keep retrying in the stop lane; `CommodoreAccountIngestRevocationStuck`
-alerts on the age of pending delivery, including backoff. If a dependency prevents
+alerts on the age of pending delivery, including backoff, per cell the last
+attempt failed on (`commodore_account_ingest_stop_oldest_pending_seconds{cell}`). If a dependency prevents
 compiling the replacement, Commodore corrects the previous object by removing
 its credential. If that correction also fails, it publishes a deny rather than
 retaining publishing access. A changed or missing playback-source revision, including a rotated
