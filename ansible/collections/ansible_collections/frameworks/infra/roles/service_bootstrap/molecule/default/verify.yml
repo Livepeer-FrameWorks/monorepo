@@ -55,7 +55,7 @@
           - plan_state_dirs.results[1].stat.pw_name == 'frameworks'
           - plan_state_dirs.results[1].stat.gr_name == 'frameworks'
           - plan_state_dirs.results[1].stat.mode == '0750'
-        fail_msg: "{{ plan_state_dirs.results | map(attribute='stat') | list }}"
+        fail_msg: "state dirs: {{ plan_state_dirs.results | map(attribute='stat') | list }}"
 
     - name: Assert the binary planned with the rendered file, the extra args and its env, and the file is gone
       ansible.builtin.assert:
