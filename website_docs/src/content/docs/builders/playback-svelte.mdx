@@ -59,8 +59,8 @@ component, use the dashboard playback DNS URL directly.
 
 ### Controlling Playback from Code
 
-`bind:controller` gives you the `PlayerController` of the current content, the same object a React
-ref gets. It is replaced when the content changes and is `null` once the player is torn down.
+`bind:controller` gives you the `PlayerController` of the current content, the same object a
+[React `ref`](/builders/playback-react/#controlling-playback-from-code) gets. It is replaced when the content changes and is `null` once the player is torn down.
 `getController()` on the component instance returns the same object.
 
 ```svelte

@@ -272,9 +272,13 @@ frameworks cluster doctor --github-repo org/gitops --cluster production
 # With verbose output
 frameworks cluster doctor --verbose
 
-# Verify live schema capabilities and prepared runtime-role grants
+# Verify live schema capabilities and prepared runtime-role grants, and check the
+# billing lifecycle, account closure and session stop queues
 frameworks cluster doctor --deep
 ```
+
+`--deep` names up to ten tenants per billing or account finding; the full list of checks is in
+[Alerting](/operators/alerting/#billing-and-account-lifecycle).
 
 ---
 

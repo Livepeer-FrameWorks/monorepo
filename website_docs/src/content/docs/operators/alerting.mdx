@@ -135,7 +135,7 @@ Activity selection and enqueue outcomes are recorded in
 ## Billing and account lifecycle
 
 These warnings cover work Purser and Commodore retry on their own: provider recovery, downgrades,
-moves to Free, grant expiry, tenant closure and account session stops. Each fires after five
+moves to Free, grant expiry, grant emails, tenant closure and account session stops. Each fires after five
 minutes. The queue alerts also fire when a service fails to read its queue more than once in two
 minutes; that points at the service's database rather than at a tenant. The metrics carry no
 tenant label, so every alert below names the command that lists the affected tenants.

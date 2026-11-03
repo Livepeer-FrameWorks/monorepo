@@ -57,6 +57,27 @@ component, use the dashboard playback DNS URL directly.
 <Player contentType="clip" contentId="a1b2c3d4e5f6g7h8" />
 ```
 
+### Controlling Playback from Code
+
+A `ref` on `<Player>` receives the `PlayerController` of the current content. It is replaced when
+the content changes and is `null` once the player is torn down. The Svelte player gives the same
+object through `bind:controller`.
+
+```tsx
+import { useRef } from "react";
+import { Player, type PlayerController } from "@livepeer-frameworks/player-react";
+
+function LiveWithButton() {
+  const controller = useRef<PlayerController | null>(null);
+  return (
+    <>
+      <Player ref={controller} contentType="live" contentId="<YOUR_PLAYBACK_ID>" />
+      <button onClick={() => controller.current?.jumpToLive()}>Go live</button>
+    </>
+  );
+}
+```
+
 ## Composable Controls
 
 Pass `children` to `<Player>` to replace the built-in controls with your own layout. Sub-components auto-connect to the parent via React context.
