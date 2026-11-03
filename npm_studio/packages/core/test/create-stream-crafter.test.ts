@@ -41,6 +41,7 @@ vi.mock("../src/core/IngestControllerV2", () => {
       this.setPrimaryVideoSource = vi.fn();
       this.startStreaming = vi.fn().mockResolvedValue(undefined);
       this.stopStreaming = vi.fn().mockResolvedValue(undefined);
+      this.setWhipUrl = vi.fn().mockResolvedValue(undefined);
       this.switchVideoDevice = vi.fn().mockResolvedValue(undefined);
       this.switchAudioDevice = vi.fn().mockResolvedValue(undefined);
       this.setEncoderOverrides = vi.fn();
@@ -222,6 +223,16 @@ describe("createStreamCrafter", () => {
       await studio.goLive();
       const ctrl = getCtrl();
       expect(ctrl.startStreaming).toHaveBeenCalled();
+      studio.destroy();
+    });
+
+    it("setWhipUrl sends the next connection elsewhere on the same controller", async () => {
+      const studio = createStreamCrafter({ whipUrl: "https://x.com/whip" });
+      const ctrl = getCtrl();
+      await studio.setWhipUrl("https://x.com/whip-b");
+      expect(ctrl.setWhipUrl).toHaveBeenCalledWith("https://x.com/whip-b", undefined);
+      expect(getCtrl()).toBe(ctrl);
+      expect(ctrl.destroy).not.toHaveBeenCalled();
       studio.destroy();
     });
 

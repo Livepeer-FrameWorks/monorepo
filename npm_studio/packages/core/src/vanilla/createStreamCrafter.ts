@@ -146,6 +146,11 @@ export interface StreamCrafterInstance {
 
   goLive(): Promise<void>;
   stop(): Promise<void>;
+  /**
+   * Point the next connection at another WHIP endpoint, such as another
+   * stream's, keeping the sources. A live connection to the old one is stopped.
+   */
+  setWhipUrl(whipUrl: string, whipUrls?: string[]): Promise<void>;
 
   switchVideoDevice(deviceId: string, sourceId?: string): Promise<void>;
   switchAudioDevice(deviceId: string): Promise<void>;
@@ -403,6 +408,7 @@ export function createStreamCrafter(config: CreateStreamCrafterConfig): StreamCr
 
     goLive: () => ctrl.startStreaming(),
     stop: () => ctrl.stopStreaming(),
+    setWhipUrl: (whipUrl, whipUrls) => ctrl.setWhipUrl(whipUrl, whipUrls),
 
     switchVideoDevice: (id, sourceId) => ctrl.switchVideoDevice(id, sourceId),
     switchAudioDevice: (id) => ctrl.switchAudioDevice(id),

@@ -245,6 +245,14 @@ export class StreamCrafterV2 {
     return this.controller.stopStreaming();
   }
 
+  /**
+   * Point the next connection at another WHIP endpoint, keeping the sources.
+   * A live connection to the old endpoint is stopped.
+   */
+  async setWhipUrl(whipUrl: string, whipUrls?: string[]): Promise<void> {
+    return this.controller.setWhipUrl(whipUrl, whipUrls);
+  }
+
   // ========================================
   // Quality Methods
   // ========================================
