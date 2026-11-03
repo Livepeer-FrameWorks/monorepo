@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 export default defineConfig({
   plugins: [svelte()],
   resolve: {
-    conditions: ["browser"],
+    conditions: ["browser", "source"],
     alias: {
       $lib: resolve(import.meta.dirname, "src/lib"),
       $houdini: resolve(import.meta.dirname, "$houdini"),
