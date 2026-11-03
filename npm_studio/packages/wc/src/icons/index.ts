@@ -100,6 +100,19 @@ export const xIcon = (size = 14) =>
     <line x1="6" y1="6" x2="18" y2="18" />
   </svg>`;
 
+/** The small close cross of the advanced panel header. */
+export const closeIcon = (size = 12) =>
+  html` <svg
+    width="${size}"
+    height="${size}"
+    viewBox="0 0 12 12"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.5"
+  >
+    <path d="M2 2l8 8M10 2l-8 8" />
+  </svg>`;
+
 export const settingsIcon = (size = 16) =>
   html` <svg
     width="${size}"

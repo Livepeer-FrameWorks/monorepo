@@ -7,7 +7,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import { classMap } from "lit/directives/class-map.js";
 import { sharedStyles } from "../styles/shared-styles.js";
 import { utilityStyles } from "../styles/utility-styles.js";
-import { xIcon } from "../icons/index.js";
+import { closeIcon } from "../icons/index.js";
 import type { IngestControllerHost } from "../controllers/ingest-controller-host.js";
 import {
   createEncoderConfig,
@@ -358,7 +358,7 @@ export class FwScAdvanced extends LitElement {
               this.dispatchEvent(new CustomEvent("fw-close", { bubbles: true, composed: true }))}
             aria-label=${this.t("closeAdvancedPanel")}
           >
-            ${xIcon(12)}
+            ${closeIcon(12)}
           </button>
         </div>
         <div class="body">
