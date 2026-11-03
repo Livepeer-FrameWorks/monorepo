@@ -47,6 +47,18 @@ Notes:
 - There is **no default gateway**; pass either `whipUrl` or (`gatewayUrl` + `streamKey`).
 - If both are provided, `whipUrl` takes priority.
 
+### Keeping the layout per stream
+
+`onLayoutChange` reports the scenes, overlays and layout preset as JSON; give it back as `initialLayout`. Turning `enableCompositor` off and on, or a new `compositorConfig.renderer`, needs no remount.
+
+```tsx
+<StreamCrafter
+  whipUrl={whipUrl}
+  initialLayout={JSON.parse(localStorage.getItem(`layout:${streamId}`) ?? "null")}
+  onLayoutChange={(layout) => localStorage.setItem(`layout:${streamId}`, JSON.stringify(layout))}
+/>
+```
+
 ## Usage (Hook)
 
 ```tsx

@@ -85,6 +85,8 @@ Notes:
 | `encoder-worker-url`       | `string`  | `""`          | Custom encoder worker URL                         |
 | `rtc-transform-worker-url` | `string`  | `""`          | Custom RTC transform worker URL                   |
 
+Set as properties: `compositorConfig` (a new `renderer` switches the running compositor), `initialLayout` (a layout from `exportLayout()` to start from) and `onLayoutChange(layout)`. The element also fires `fw-sc-layout-change` with `{ layout }` shortly after the scenes, overlays or layout preset change, and has `exportLayout()` and `importLayout(layout)` methods.
+
 ## Methods
 
 ```js

@@ -294,6 +294,25 @@ await studio.enableCompositor();
 
 Available renderers: `canvas2d`, `webgl`, `webgpu`, `auto` (default — auto-selects WebGPU → WebGL → Canvas2D).
 
+In the drop-ins, a new `compositorConfig.renderer` switches the running compositor, and turning `enableCompositor` off and on keeps the scenes and overlays.
+
+### Saving the layout
+
+`exportLayout()` returns the scenes, their image and text overlays and the layout preset as plain JSON; `importLayout()` applies it. Camera, screen and media-file layers are not part of it, because they belong to the captures of one session; sources added later join the active scene. A picked image is carried as a data URL.
+
+```ts
+const layout = await studio.exportLayout();
+localStorage.setItem(`studio-layout:${streamId}`, JSON.stringify(layout));
+
+await studio.importLayout(JSON.parse(localStorage.getItem(`studio-layout:${streamId}`)!));
+```
+
+The drop-ins take `initialLayout` and call `onLayoutChange(layout)` shortly after the scenes, overlays or preset change; `<fw-streamcrafter>` also fires `fw-sc-layout-change` with `{ layout }`.
+
+### Encoder settings
+
+The settings popup of every drop-in has an Encoder section with resolution, frame rate, video and audio bitrate, and the video codec when the browser can send more than one. A choice equal to the quality profile clears that override. The values apply when streaming starts. In your own UI, `encoderSettingRows()` and `withEncoderSetting()` from core give the same choices, and `setEncoderOverrides()` applies them; `video.codec` is offered to the server first.
+
 ### WebCodecs Encoder
 
 Hardware-accelerated encoding that continues in background tabs. **Auto-enabled on Chromium** (Chrome, Edge) where `RTCRtpScriptTransform` is available. Firefox and Safari gracefully fall back to standard WebRTC encoding.
