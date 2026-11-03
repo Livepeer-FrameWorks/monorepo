@@ -7848,7 +7848,7 @@
             "type": "victoriametrics-metrics-datasource",
             "uid": "victoriametrics"
           },
-          "description": "Inputs of the billing and account lifecycle alerts. Any value above zero is work a tenant is waiting on: held downgrades, repeatedly failing moves to Free and their notices, grant expiries, provider recovery and tenant closure synchronization, and queue reads that failed.",
+          "description": "Inputs of the billing and account lifecycle alerts. Any value above zero is work a tenant is waiting on: held downgrades, repeatedly failing moves to Free and their notices, grant expiries, grant ending or ended emails, provider recovery and tenant closure synchronization, and queue reads that failed.",
           "fieldConfig": {
             "defaults": {
               "color": {
@@ -8037,6 +8037,42 @@
               "legendFormat": "read failures: tenant closure",
               "range": true,
               "refId": "I"
+            },
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "victoriametrics"
+              },
+              "editorMode": "code",
+              "expr": "max(purser_operator_grant_notice_repeatedly_failed_items{region=~\"$region\", cluster=~\"$cluster\"})",
+              "format": "time_series",
+              "legendFormat": "grant notice",
+              "range": true,
+              "refId": "J"
+            },
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "victoriametrics"
+              },
+              "editorMode": "code",
+              "expr": "sum(increase(purser_operator_grant_notice_read_failures_total{region=~\"$region\", cluster=~\"$cluster\"}[$__rate_interval]))",
+              "format": "time_series",
+              "legendFormat": "read failures: grant notice",
+              "range": true,
+              "refId": "K"
+            },
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "victoriametrics"
+              },
+              "editorMode": "code",
+              "expr": "sum(increase(purser_tier_downgrades_held_read_failures_total{region=~\"$region\", cluster=~\"$cluster\"}[$__rate_interval]))",
+              "format": "time_series",
+              "legendFormat": "read failures: held downgrades",
+              "range": true,
+              "refId": "L"
             }
           ],
           "title": "Billing and account lifecycle recovery",
