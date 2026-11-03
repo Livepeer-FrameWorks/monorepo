@@ -93,7 +93,7 @@
       - ledger | map(attribute='transactional') | list == [true, false]
       - migrate_fixture_state.query_all_results[1][0].table_exists
       - migrate_fixture_state.query_all_results[2][0].index_valid
-    fail_msg: "{{ migrate_fixture_state.query_all_results }}"
+    fail_msg: "state: {{ migrate_fixture_state.query_all_results }}"
   vars:
     ledger: "{{ migrate_fixture_state.query_all_results[0] }}"
 
@@ -117,10 +117,13 @@
     - name: Fail when the edited item was accepted
       ansible.builtin.set_fact:
         migrate_fixture_edited_error: ""
+  # The role's checksum check loops over the items, so its refusal is the failed item's message.
   rescue:
     - name: Record the edited-item refusal
       ansible.builtin.set_fact:
-        migrate_fixture_edited_error: "{{ ansible_failed_result.msg | default('') }}"
+        migrate_fixture_edited_error: >-
+          {{ ansible_failed_result.results | default([]) | selectattr('failed', 'defined') | selectattr('failed')
+             | map(attribute='msg') | join('; ') }}
 
 - name: Assert an edited applied item is refused
   ansible.builtin.assert:
