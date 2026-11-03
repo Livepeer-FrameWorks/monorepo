@@ -41,7 +41,8 @@ var ansibleSpecialVariables = map[string]bool{
 }
 
 var (
-	ansibleVarToken     = regexp.MustCompile(`\bansible_[a-z0-9_]+\b`)
+	// An attribute of a registered result (result.ansible_job_id) is not an injected fact.
+	ansibleVarToken     = regexp.MustCompile(`(?:^|[^.\w])(ansible_[a-z0-9_]+)\b`)
 	internalVarsDict    = regexp.MustCompile(`\bvars\s*(\[|\.[A-Za-z_])`)
 	jinjaSpan           = regexp.MustCompile(`(?s)\{\{.*?\}\}|\{%.*?%\}`)
 	deprecatedModuleUse = regexp.MustCompile(`ansible\.module_utils\.(_text|six|common\._collections_compat|compat\.)`)
@@ -54,7 +55,8 @@ var ansibleExpressionKeys = map[string]bool{
 
 func ansibleExpressionViolations(expr string) []string {
 	var out []string
-	for _, tok := range ansibleVarToken.FindAllString(expr, -1) {
+	for _, m := range ansibleVarToken.FindAllStringSubmatch(expr, -1) {
+		tok := m[1]
 		if !ansibleSpecialVariables[tok] {
 			out = append(out, fmt.Sprintf("injected fact %s (use ansible_facts.%s)", tok, strings.TrimPrefix(tok, "ansible_")))
 		}
@@ -157,7 +159,7 @@ func TestAnsibleCoreDeprecationScanFlagsEachForm(t *testing.T) {
 		"tasks.yml": `---
 - name: Uses an injected fact in a bare conditional
   ansible.builtin.debug:
-    msg: "{{ ansible_facts.os_family }} {{ ansible_check_mode }}"
+    msg: "{{ ansible_facts.os_family }} {{ ansible_check_mode }} {{ job.ansible_job_id }}"
   when:
     - ansible_os_family == "Debian"
     - inventory_hostname in ansible_play_hosts
