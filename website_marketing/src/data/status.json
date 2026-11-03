@@ -857,13 +857,13 @@
     "plan-lifecycle": {
       "id": "plan-lifecycle",
       "title": "Plan changes, payment grace, and Free fallback",
-      "status": "partial",
-      "availability": "Expanding",
+      "status": "shipped",
+      "availability": "Available",
       "maturity": null,
       "horizon": "now",
       "tier": "Shipping today",
       "tag": "Shipping",
-      "note": "Plan changes, the 14-day payment grace, and the move to Free run today, and the billing page shows each of them. Agents cannot change the plan yet.",
+      "note": "Plan changes, the 14-day payment grace, and the move to Free run today. The billing page shows each of them, and agents change or keep the plan with the change_billing_tier MCP tool.",
       "roadmap": null,
       "showcase": null
     },

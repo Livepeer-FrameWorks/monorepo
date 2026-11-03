@@ -23,6 +23,7 @@ var shipped = []string{
 	"node-mode",
 	"nodes",
 	"outbound-webhooks",
+	"plan-lifecycle",
 	"playback",
 	"playback-access-control",
 	"player-sdks",

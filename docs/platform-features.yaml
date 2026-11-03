@@ -2044,13 +2044,8 @@ features:
       - slug: plan-lifecycle
         name: Plan changes, payment grace, and Free fallback
         description: Self-serve upgrades start a fresh month and offset the unused part of the old fee; downgrades and cancellations keep the paid plan to the end of the period, then move the account to Free. A failed payment keeps the plan for 14 days with email notices, then moves the account to Free with a final invoice for usage up to the move.
-        status: partial
-        gap_reason: |
-          Purser runs the upgrade credit, scheduled downgrades carried to Stripe and Mollie, the 14-day payment grace, and
-          the move to Free with its notices. GraphQL billingLifecycle exposes the grace end date, the scheduled tier change
-          and its state, and the pending Free move; the billing page shows them with a banner, the payment portal, and
-          cancelling a scheduled downgrade. Agents have no MCP tool for tier changes yet.
-        note: Plan changes, the 14-day payment grace, and the move to Free run today, and the billing page shows each of them. Agents cannot change the plan yet.
+        status: shipped
+        note: Plan changes, the 14-day payment grace, and the move to Free run today. The billing page shows each of them, and agents change or keep the plan with the change_billing_tier MCP tool.
         depends_on: [billing]
         required_surfaces:
           graphql: { required: true }
@@ -2065,10 +2060,12 @@ features:
           graphql:
             mutations: [changeBillingTier, createStripeBillingPortal]
             queries: [billingStatus, billingTiers, billingLifecycle]
+          mcp:
+            tools: [change_billing_tier]
           webapp:
             routes: ["/account/billing"]
           docs:
-            pages: [builders/billing.mdx]
+            pages: [builders/billing.mdx, agents/mcp.mdx]
 
       - slug: operator-trials
         name: Operator trials and account closure

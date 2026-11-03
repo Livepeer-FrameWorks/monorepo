@@ -3563,10 +3563,9 @@
           "kind": "product",
           "audience": "product",
           "description": "Self-serve upgrades start a fresh month and offset the unused part of the old fee; downgrades and cancellations keep the paid plan to the end of the period, then move the account to Free. A failed payment keeps the plan for 14 days with email notices, then moves the account to Free with a final invoice for usage up to the move.",
-          "status": "partial",
-          "gap_reason": "Purser runs the upgrade credit, scheduled downgrades carried to Stripe and Mollie, the 14-day payment grace, and\nthe move to Free with its notices. GraphQL billingLifecycle exposes the grace end date, the scheduled tier change\nand its state, and the pending Free move; the billing page shows them with a banner, the payment portal, and\ncancelling a scheduled downgrade. Agents have no MCP tool for tier changes yet.\n",
+          "status": "shipped",
           "horizon": "now",
-          "note": "Plan changes, the 14-day payment grace, and the move to Free run today, and the billing page shows each of them. Agents cannot change the plan yet.",
+          "note": "Plan changes, the 14-day payment grace, and the move to Free run today. The billing page shows each of them, and agents change or keep the plan with the change_billing_tier MCP tool.",
           "required_surfaces": {
             "docs": {
               "required": true
@@ -3596,7 +3595,11 @@
                 "billingLifecycle"
               ]
             },
-            "mcp": {},
+            "mcp": {
+              "tools": [
+                "change_billing_tier"
+              ]
+            },
             "cli": {},
             "webapp": {
               "routes": [
@@ -3605,7 +3608,8 @@
             },
             "docs": {
               "pages": [
-                "builders/billing.mdx"
+                "builders/billing.mdx",
+                "agents/mcp.mdx"
               ]
             }
           },
@@ -3616,7 +3620,7 @@
             "cli": false,
             "docs": true,
             "graphql": true,
-            "mcp": false,
+            "mcp": true,
             "webapp": true
           }
         },
