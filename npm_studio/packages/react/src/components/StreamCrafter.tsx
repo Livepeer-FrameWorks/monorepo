@@ -933,15 +933,8 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
 
                 {/* What this browser cannot do */}
                 {browserNotices.map((notice) => (
-                  <div
-                    key={notice}
-                    className="fw-sc-error"
-                    style={{ borderLeftColor: "hsl(40 80% 65%)" }}
-                    role="alert"
-                  >
-                    <div className="fw-sc-error-title" style={{ color: "hsl(40 80% 65%)" }}>
-                      {t("warning")}
-                    </div>
+                  <div key={notice} className="fw-sc-error fw-sc-error--warning" role="alert">
+                    <div className="fw-sc-error-title">{t("warning")}</div>
                     <div className="fw-sc-error-message">{notice}</div>
                   </div>
                 ))}
@@ -956,20 +949,16 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
 
                 {/* No Endpoint Warning */}
                 {!resolvedWhipUrl && !error && !endpointError && !isResolvingEndpoint && (
-                  <div className="fw-sc-error" style={{ borderLeftColor: "hsl(40 80% 65%)" }}>
-                    <div className="fw-sc-error-title" style={{ color: "hsl(40 80% 65%)" }}>
-                      {t("warning")}
-                    </div>
+                  <div className="fw-sc-error fw-sc-error--warning">
+                    <div className="fw-sc-error-title">{t("warning")}</div>
                     <div className="fw-sc-error-message">{t("configureWhipEndpoint")}</div>
                   </div>
                 )}
 
                 {/* Resolving Endpoint State */}
                 {isResolvingEndpoint && (
-                  <div className="fw-sc-error" style={{ borderLeftColor: "hsl(210 80% 65%)" }}>
-                    <div className="fw-sc-error-title" style={{ color: "hsl(210 80% 65%)" }}>
-                      {t("resolvingEndpoint")}
-                    </div>
+                  <div className="fw-sc-error fw-sc-error--info">
+                    <div className="fw-sc-error-title">{t("connecting")}</div>
                     <div className="fw-sc-error-message">{t("resolvingEndpoint")}</div>
                   </div>
                 )}

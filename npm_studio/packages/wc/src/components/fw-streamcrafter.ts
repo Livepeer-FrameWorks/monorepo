@@ -821,10 +821,8 @@ export class FwStreamCrafter extends LitElement {
             : nothing}
           ${browserNotices.map(
             (notice) => html`
-              <div class="fw-sc-error" style="border-left-color: hsl(40 80% 65%)" role="alert">
-                <div class="fw-sc-error-title" style="color: hsl(40 80% 65%)">
-                  ${this._t("warning")}
-                </div>
+              <div class="fw-sc-error fw-sc-error--warning" role="alert">
+                <div class="fw-sc-error-title">${this._t("warning")}</div>
                 <div class="fw-sc-error-message">${notice}</div>
               </div>
             `
@@ -839,20 +837,16 @@ export class FwStreamCrafter extends LitElement {
             : nothing}
           ${!this._resolvedWhipUrl && !s.error && !this._endpointError && !isResolvingEndpoint
             ? html`
-                <div class="fw-sc-error" style="border-left-color: hsl(40 80% 65%)">
-                  <div class="fw-sc-error-title" style="color: hsl(40 80% 65%)">
-                    ${this._t("warning")}
-                  </div>
+                <div class="fw-sc-error fw-sc-error--warning">
+                  <div class="fw-sc-error-title">${this._t("warning")}</div>
                   <div class="fw-sc-error-message">${this._t("configureWhipEndpoint")}</div>
                 </div>
               `
             : nothing}
           ${isResolvingEndpoint
             ? html`
-                <div class="fw-sc-error" style="border-left-color: hsl(210 80% 65%)">
-                  <div class="fw-sc-error-title" style="color: hsl(210 80% 65%)">
-                    ${this._t("resolvingEndpoint")}
-                  </div>
+                <div class="fw-sc-error fw-sc-error--info">
+                  <div class="fw-sc-error-title">${this._t("connecting")}</div>
                   <div class="fw-sc-error-message">${this._t("resolvingEndpoint")}</div>
                 </div>
               `

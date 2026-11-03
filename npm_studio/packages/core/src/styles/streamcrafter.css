@@ -908,6 +908,24 @@
     color: hsl(var(--fw-sc-text-muted));
   }
 
+  .fw-sc-error--warning {
+    background: hsl(var(--fw-sc-warning) / 0.1);
+    border-left-color: hsl(var(--fw-sc-warning));
+  }
+
+  .fw-sc-error--warning .fw-sc-error-title {
+    color: hsl(var(--fw-sc-warning));
+  }
+
+  .fw-sc-error--info {
+    background: hsl(var(--fw-sc-info) / 0.1);
+    border-left-color: hsl(var(--fw-sc-info));
+  }
+
+  .fw-sc-error--info .fw-sc-error-title {
+    color: hsl(var(--fw-sc-info));
+  }
+
   /* =============================================
    Utility Classes
    ============================================= */
@@ -1084,19 +1102,68 @@
     overflow: hidden;
   }
 
-  /* Quality and debug popup above the settings button in the action bar */
+  /* Quality, encoder and debug popup above the settings button in the action bar */
   .fw-sc-settings-popup {
     position: absolute;
     bottom: 100%;
     left: 0;
-    width: 192px;
+    width: 248px;
+    max-height: min(70vh, 32rem);
     margin-bottom: 8px;
     background: hsl(var(--fw-sc-surface-deep));
     border: 1px solid hsl(var(--fw-sc-border) / 0.3);
     border-radius: 4px;
     box-shadow: 0 4px 12px hsl(var(--fw-sc-shadow-color) / 0.5);
     z-index: 50;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .fw-sc-encoder-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .fw-sc-encoder-reset {
+    margin-right: 0.5rem;
+    padding: 0.125rem 0.25rem;
+    border: none;
+    background: transparent;
+    color: hsl(var(--fw-sc-accent-secondary));
+    font-size: 0.65rem;
+    cursor: pointer;
+  }
+
+  .fw-sc-encoder-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.2rem 0.75rem;
+    font-size: 0.75rem;
+    color: hsl(var(--fw-sc-text-muted));
+  }
+
+  .fw-sc-encoder-row .fw-sc-select {
+    max-width: 8.5rem;
+    font-size: 0.75rem;
+  }
+
+  .fw-sc-select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .fw-sc-select--overridden {
+    border-color: hsl(var(--fw-sc-accent-secondary) / 0.6);
+    color: hsl(var(--fw-sc-accent-secondary));
+  }
+
+  .fw-sc-encoder-note {
+    padding: 0.25rem 0.75rem 0.5rem;
+    font-size: 0.65rem;
+    color: hsl(var(--fw-sc-warning));
   }
 
   .fw-sc-dropdown-option--active .fw-sc-dropdown-option-label {

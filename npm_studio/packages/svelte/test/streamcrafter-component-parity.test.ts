@@ -22,7 +22,14 @@ describe("StreamCrafter Svelte component parity", () => {
   });
 
   it("keeps theme colours in tokens", () => {
-    expect(source).not.toMatch(/#(1a1b26|565f89|7aa2f7|a9b1d6|c0caf5|9ece6a|f7768e)/i);
+    const panel = fs.readFileSync(
+      path.resolve(__dirname, "../src/components/AdvancedPanel.svelte"),
+      "utf8"
+    );
+    for (const file of [source, panel]) {
+      expect(file).not.toMatch(/#(1a1b26|565f89|7aa2f7|a9b1d6|c0caf5|9ece6a|f7768e)/i);
+      expect(file).not.toMatch(/hsl\(\d|rgba?\(\d|:\s*(white|black)\b/);
+    }
   });
 
   it("invokes shared callback props from component state flow", () => {

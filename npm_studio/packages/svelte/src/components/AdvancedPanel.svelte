@@ -1023,8 +1023,8 @@
     height: 16px;
     width: 16px;
     border-radius: 50%;
-    background: white;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    background: hsl(var(--fw-sc-text-bright));
+    box-shadow: 0 2px 4px hsl(var(--fw-sc-shadow-color) / 0.3);
     transition: transform 0.2s;
     transform: translateX(0);
   }

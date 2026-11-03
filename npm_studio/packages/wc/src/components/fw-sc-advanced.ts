@@ -237,7 +237,7 @@ export class FwScAdvanced extends LitElement {
         width: 12px;
         height: 12px;
         border-radius: 50%;
-        background: white;
+        background: hsl(var(--fw-sc-text-bright));
         transition: left 0.2s;
       }
       .toggle--on {

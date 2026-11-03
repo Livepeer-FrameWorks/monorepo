@@ -150,8 +150,8 @@ const ToggleSwitch: React.FC<ToggleSwitchProps> = ({ checked, onChange, disabled
           height: "16px",
           width: "16px",
           borderRadius: "50%",
-          background: "white",
-          boxShadow: "0 2px 4px rgba(0,0,0,0.3)",
+          background: "hsl(var(--fw-sc-text-bright))",
+          boxShadow: "0 2px 4px hsl(var(--fw-sc-shadow-color) / 0.3)",
           transition: "transform 0.2s",
           transform: checked ? "translateX(16px)" : "translateX(0)",
         }}

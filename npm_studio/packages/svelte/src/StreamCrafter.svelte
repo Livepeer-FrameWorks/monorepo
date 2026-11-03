@@ -872,8 +872,8 @@
 
       <!-- What this browser cannot do -->
       {#each browserNotices as notice (notice)}
-        <div class="fw-sc-error" style="border-left-color: hsl(40 80% 65%)" role="alert">
-          <div class="fw-sc-error-title" style="color: hsl(40 80% 65%)">{t("warning")}</div>
+        <div class="fw-sc-error fw-sc-error--warning" role="alert">
+          <div class="fw-sc-error-title">{t("warning")}</div>
           <div class="fw-sc-error-message">{notice}</div>
         </div>
       {/each}
@@ -888,16 +888,16 @@
 
       <!-- No Endpoint Warning -->
       {#if !resolvedWhipUrl && !crafterState.error && !ingestEndpointsState.error && !isResolvingEndpoint}
-        <div class="fw-sc-error" style="border-left-color: hsl(40 80% 65%)">
-          <div class="fw-sc-error-title" style="color: hsl(40 80% 65%)">{t("warning")}</div>
+        <div class="fw-sc-error fw-sc-error--warning">
+          <div class="fw-sc-error-title">{t("warning")}</div>
           <div class="fw-sc-error-message">{t("configureWhipEndpoint")}</div>
         </div>
       {/if}
 
       <!-- Resolving Endpoint State -->
       {#if isResolvingEndpoint}
-        <div class="fw-sc-error" style="border-left-color: hsl(210 80% 65%)">
-          <div class="fw-sc-error-title" style="color: hsl(210 80% 65%)">{t("connecting")}</div>
+        <div class="fw-sc-error fw-sc-error--info">
+          <div class="fw-sc-error-title">{t("connecting")}</div>
           <div class="fw-sc-error-message">{t("resolvingEndpoint")}</div>
         </div>
       {/if}

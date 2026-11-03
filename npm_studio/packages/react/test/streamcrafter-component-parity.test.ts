@@ -23,8 +23,13 @@ describe("StreamCrafter React component parity", () => {
 
   it("keeps theme colours in tokens", () => {
     const menu = fs.readFileSync(path.resolve(__dirname, "../src/ui/context-menu.tsx"), "utf8");
-    for (const file of [source, menu]) {
+    const panel = fs.readFileSync(
+      path.resolve(__dirname, "../src/components/AdvancedPanel.tsx"),
+      "utf8"
+    );
+    for (const file of [source, menu, panel]) {
       expect(file).not.toMatch(/#(1a1b26|565f89|7aa2f7|a9b1d6|c0caf5|9ece6a|f7768e|33395e)/i);
+      expect(file).not.toMatch(/hsl\(\d|rgba?\(\d|"(white|black)"/);
     }
   });
 
