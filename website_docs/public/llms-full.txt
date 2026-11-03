@@ -974,6 +974,15 @@ Call `update_billing_details` with the listed fields, then request fresh payment
 }
 ```
 
+**Other blockers** a rated tool can return:
+
+| Code                         | Meaning                                                                                                    | What to do                                                                                            |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `ACCOUNT_SUSPENDED`          | Settled prepaid balance below -€10, an ended FrameWorks arrangement not yet processed, or a closed account | Read `account://status`. Top up to lift a balance suspension; an agent cannot reopen a closed account |
+| `PAYMENT_SETUP_REQUIRED`     | A postpaid paid plan without a confirmed Stripe or Mollie subscription or mandate                          | A person completes payment setup on the dashboard's Billing page; rated work stays refused until then |
+| `BILLING_STATUS_UNAVAILABLE` | FrameWorks could not read the account's billing status                                                     | Retry the operation; nothing was charged                                                              |
+| `AUTHENTICATION_REQUIRED`    | No wallet headers or bearer token                                                                          | Authenticate with a wallet signature or `Authorization: Bearer <token>`                               |
+
 <Aside type="caution">
   Exactly €100 remains eligible for a simplified document. More than €100, or any VAT-number claim,
   uses the full-document path and requires the fields returned in `required_fields`. A submitted VAT
@@ -2667,6 +2676,16 @@ started afterwards is unaffected. A client reconnects with a current token; reco
 revoked, signed-out, or expired one is refused before acknowledgement as above. Over HTTP, every
 gateway instance answers a request with a signed-out session token with `401` within a few
 seconds of the sign-out.
+
+The close reason says which case applies. `credential expired` means the session token reached
+its expiry: refresh it and reconnect. `credential revoked` means the token or session no longer
+authenticates: get a new token before reconnecting. `account deactivated` means an operator
+deactivated the user or closed the account: the gateway closes the user's session connections and
+every connection opened with one of the user's API tokens, and refreshing the session or signing
+in again is refused too, so stop reconnecting. A connection whose instance missed the
+deactivation event closes at its next one-minute re-check with `credential revoked`. Common
+graphql-ws clients retry after `4403` unless you stop them, so check the reason in your close
+handler.
 
 ## Try It Out
 
@@ -14760,7 +14779,8 @@ A trial, a custom base fee or invoice billing is an arrangement FrameWorks sets 
 - move collection to invoices that FrameWorks sends for payment by bank transfer
 - end on a set date, when the account returns to a named plan at its standard price
 
-The billing page shows the arrangement's terms and end date, and the plan you return to. While it is
+The billing page shows the arrangement's terms and end date, and the plan you return to. We email
+your billing email seven days before an arrangement's end date and again when it ends. While it is
 in force, plan changes and checkouts are refused with the code `OUTSTANDING_GRANT`; ask us to change
 the arrangement instead.
 
@@ -15849,26 +15869,25 @@ For a long or high-stakes broadcast, a dedicated encoder is still the steadier c
 
 ## 1. Pick a stream
 
-Open **Go Live** in the dashboard sidebar and choose your stream under **Broadcast to**.
+Open **Go Live** in the dashboard sidebar and choose your stream under **Broadcast to**. A link from a stream page opens Go Live with that stream already chosen.
 
-## 2. Prepare the connection
+FrameWorks then finds an ingest node for the stream and opens the studio underneath. The line under the stream picker shows whether recording is on, and the node's address and region once it is found. FrameWorks looks up the best node again each time you go live, so the node can change between broadcasts.
 
-Click **Prepare connection**. FrameWorks finds a recommended node for your stream and shows its region, and the studio appears underneath.
+If no node is found, a message under the picker says why and offers the next step, such as **Try again**, **Open stream keys**, or **Open billing**.
 
-If no destination is confirmed, check your stream access and try again. FrameWorks looks up the best node again each time you connect, so the one shown here can change.
+## 2. Add your sources
 
-## 3. Add your sources
-
-Use the buttons along the bottom of the studio:
+The action bar at the bottom of the studio has a button for each kind of source. Hover a button to see its name.
 
 - **Add Camera** starts your camera and microphone. Allow access when the browser asks. If your computer has more than one camera, the button lists them, and you can add another camera at any time. A camera already in use is marked as active. Only the first camera brings a microphone.
 - **Share Screen** lets you choose a screen, a window, or a browser tab.
+- **Add media file** plays a video or audio file from your computer through the mix like any other source. The file plays from your browser tab and is not uploaded, so keep the tab open while it is in the mix. **Play**, **Pause**, and **Loop** for each file are in the **Media** section of the panel under the preview.
 
-To play a video or audio file, use **Add media file** in the panel under the preview. The file plays through the mix like any other source, with **Play**, **Pause**, and **Loop** next to its name. It plays from your browser tab and is not uploaded, so keep the tab open while the file is in the mix.
+Each source appears in the mixer, where you can mute it, hide it from the picture, or remove it. You can add sources during a broadcast, but you can't remove one until the broadcast ends.
 
-Each source appears in the mixer, where you can mute it, hide it from the picture, or remove it. You can add and remove sources during a broadcast.
+Once a source is capturing, the **Audio** section under the preview has the browser's own processing (echo cancellation, noise suppression, automatic gain) and the studio's noise gate, de-esser, EQ, and a setting that lowers other sources while the camera microphone picks up sound.
 
-## 4. Choose a layout
+## 3. Choose a layout
 
 With two or more sources, the layout controls on the preview arrange them. You can show one source alone, place one inside another as picture-in-picture, or use a split, focus, or grid layout. The cycle control swaps which source goes in which position.
 
@@ -15879,7 +15898,7 @@ The mix runs in your browser, so every source you add puts more load on your com
 A scene is a saved arrangement of sources. The panel under the preview lists your scenes and the layers of the scene you're on.
 
 - **Add a scene** with the **+** button. A new scene starts empty: while you're on it, click the eye next to a source in the mixer to put that source in the scene.
-- **Switch scenes** by clicking one. The transition menu next to the scene list sets how the picture changes: a cut, a fade, or a slide, with a duration in milliseconds.
+- **Switch scenes** by clicking one, or with the **]** and **[** keys while the studio has focus. The transition menu next to the scene list sets how the picture changes: a cut, a fade, or a slide, with a duration in milliseconds.
 - **Stack layers** with the arrows. The top of the list is drawn on top. The eye hides a layer in this scene and keeps its place in the stack.
 
 Rehearse your transitions in the preview before you go live.
@@ -15891,13 +15910,17 @@ The **Overlays** section of the panel puts a logo or text above your sources in 
 - **Add logo** takes an image file, such as a PNG with a transparent background or an SVG. Set its size and position with the sliders. The image file stays in your browser; only the finished mix is sent.
 - **Add text** puts a lower third near the bottom left. Type your text, then set its size, color, and position. The picture updates as you edit.
 
-## 5. Rehearse
+### Studio settings
+
+The gear next to **Broadcast to** opens **Studio settings**. **Compositor** turns scenes, layers, and layouts on or off, and **Renderer** picks how the browser draws the mix. Leave both at their defaults unless the studio reports that the compositor could not start. Applying a change restarts the studio, which clears your sources, so change these before you set up.
+
+## 4. Rehearse
 
 Nothing is public until you click **Go Live**, so use the preview to check everything first:
 
 - Check your framing and layout.
 - Watch the audio meter while you speak.
-- Open the settings button to choose a quality setting. You can't change it during a broadcast.
+- Open the settings button in the action bar to choose a quality setting. You can't change it during a broadcast.
 
 | Setting      | Video           | Use it for                        |
 | ------------ | --------------- | --------------------------------- |
@@ -15905,23 +15928,27 @@ Nothing is public until you click **Go Live**, so use the preview to check every
 | Broadcast    | 1080p, 4.5 Mbps | Most streams. This is the default |
 | Conference   | 720p, 2.5 Mbps  | Limited upload, meetings          |
 
-## 6. Go live
+The **Encoder** section under the quality settings overrides single values of the chosen setting:
+video codec, resolution, framerate, video bitrate, and audio bitrate. **Reset to Profile** returns
+to the setting's own values. The encoder is also locked during a broadcast.
 
-Click **Go Live**. The button stays disabled until you've added a source. A **LIVE** indicator appears at the top of the page when your broadcast starts.
+## 5. Go live
+
+Click **Go Live** at the right end of the action bar. The button stays disabled until you've added a source. A **LIVE** indicator appears at the top of the page when your broadcast starts, and the connection indicator in the studio header shows whether the upload is good, unstable, or poor; hover it for the bitrate, packet loss, and round trip.
 
 Keep the tab open for the whole broadcast. To check what viewers see, open the stream in **Content → Streams** in a second window and go to the **Playback** tab, which also has the playback link and embed code.
 
-## 7. Send it to other platforms
+## 6. Send it to other platforms
 
 To stream to YouTube, Twitch, or anywhere else at the same time, open your stream in **Content → Streams** and add destinations on its **Multistream** tab. Enabled destinations start and stop with your broadcast. See [Multistreaming](/builders/multistreaming).
 
 ## If something goes wrong
 
 - **The connection drops.** The studio shows **Reconnecting...** and retries a few times on its own. If it shows an error instead, click **Go Live** again. Your sources stay in place.
-- **The browser blocks your camera or microphone.** Allow access in the browser's site settings, then reload the page.
+- **The browser blocks your camera or microphone.** Allow camera and microphone access for this site in the browser's site settings, then add the source again. Your other sources and scenes stay in place. Don't reload the page: a reload clears the studio, and you would set up your sources and scenes again.
 - **The picture freezes when you change tabs.** Your browser is pausing the encoder in the background. Stay on the tab, or switch to a Chromium-based browser.
 - **Video is choppy.** Close other applications, remove sources you don't need, or switch to the Conference setting before your next broadcast.
-- **The stream won't start on a prepaid account.** At €0 new streams are blocked, and a broadcast that disconnects can't reconnect until you [top up](/builders/billing).
+- **The stream won't start on a prepaid account.** At €0 new broadcasts are refused, and a broadcast that disconnects can't reconnect until you [top up](/builders/billing). A broadcast that is already running keeps going, and stops if the balance falls below -€10.
 
 More fixes are in [Troubleshooting](/builders/troubleshooting).
 
@@ -16713,7 +16740,7 @@ import {
 `<fw-sc-scene-switcher>`, and `<fw-sc-layer-list>` elements are presentational: they do not
 connect to a `<fw-streamcrafter>` on their own, so you set their data through JS properties and
 handle their events or callbacks. See
-[Standalone Sub-Components](/builders/ingest-wc/#standalone-sub-components) for the wiring.
+[Presentational Sub-Components](/builders/ingest-wc/#presentational-sub-components) for the wiring.
 
 The compositor overlay shows layout icons and scaling mode buttons. Click a layout icon to apply it; click the active layout to cycle source order.
 
@@ -21551,6 +21578,8 @@ Gateway resolution returns the right Foghorn-backed edge endpoints for that view
 
 ## Troubleshooting
 
+To check a playback ID or URL outside your app, open the [stream test](https://frameworks.network/stream-test). It plays a playback ID, a media or WHEP URL, or a MistServer stream in the FrameWorks player, and its diagnostics panel shows the protocol the player picked and an event log.
+
 ### Stream Not Found
 
 - **Is the stream live?** HLS playlists and WHEP endpoints are only active while broadcasting.
@@ -23438,6 +23467,8 @@ This typically indicates network instability or packet loss between your locatio
 - **Try Alternative Protocols:** If your ISP throttles RTMP/E-RTMP (port 1935), try switching to SRT or WHIP, which handle unstable networks better.
 
 ## Playback Problems
+
+To rule out your own player or page, paste the playback ID or URL into the [stream test](https://frameworks.network/stream-test). It plays the stream in the FrameWorks player and shows the protocol, the stream state and an event log. Its publish tab sends your camera to a WHIP URL, which checks ingest without an encoder.
 
 ### Viewers see "Stream not found"
 
@@ -25543,6 +25574,51 @@ https://logbook.frameworks.network/
 ## Quick Links
 
 <section class="slab-grid quick-grid tokyo-night">
+  <a class="slab quick-slab" href="/builders/go-live-browser">
+    <div class="slab-header">
+      <div class="slab-label">
+        <svg class="label-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="3" y="5" width="13" height="10" rx="1" />
+          <path d="M16 9L21 6V14L16 11" />
+          <path d="M7 19H13" />
+        </svg>
+        <span>Go Live</span>
+      </div>
+    </div>
+    <div class="slab-body">
+      Go live from your browser with StreamCrafter. No encoder to install.
+    </div>
+    <div class="slab-actions">
+      <span>Open guide</span>
+      <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 12H19" />
+        <path d="M13 6L19 12L13 18" />
+      </svg>
+    </div>
+  </a>
+  <a class="slab quick-slab" href="/migrate">
+    <div class="slab-header">
+      <div class="slab-label">
+        <svg class="label-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 8H17" />
+          <path d="M13 4L17 8L13 12" />
+          <path d="M20 16H7" />
+          <path d="M11 12L7 16L11 20" />
+        </svg>
+        <span>Migrating?</span>
+      </div>
+    </div>
+    <div class="slab-body">
+      Move from Mux, Livepeer Studio, Bunny Stream, Castr, Flussonic, MistServer, or any video API.
+    </div>
+    <div class="slab-actions">
+      <span>Migration guides</span>
+      <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 12H19" />
+        <path d="M13 6L19 12L13 18" />
+      </svg>
+    </div>
+  </a>
   <a class="slab quick-slab" href="/builders/encoder-setup">
     <div class="slab-header">
       <div class="slab-label">
@@ -26637,6 +26713,11 @@ restreamer. FrameWorks is a live video platform whose media edges run MistServer
 routing, analytics, billing, and playback access control above them. It is built by the MistServer
 team.
 
+Three FrameWorks services come up in this guide. **Foghorn** routes viewers and encoders to an edge
+and relays streams between edges. **Helmsman** runs next to MistServer on every edge and connects it
+to Foghorn. **Chandler** serves a cluster's thumbnails, seek-preview sprites, VOD metadata, and
+assets cached from object storage.
+
 The two overlap on live ingest, HTTP delivery, DVR, and multi-server routing. They differ most on
 broadcast-network work. Event streaming is the closest fit: encoders repoint to RTMP, SRT, or WHIP,
 and DVR, clips, multistreaming, playback policies, analytics, and StreamCrafter work as described
@@ -26848,7 +26929,7 @@ FrameWorks for reach.
 | [Scheduled Programming](/roadmap#scheduled-programming)                                       | Calendar-driven recordings, and linear channels built from VOD                                                                        |
 | [Device Discovery and Contribution Inputs](/roadmap#device-discovery-and-contribution-inputs) | Cameras, PTZ devices, NDI, USB, and HDMI sources becoming managed streams                                                             |
 | [Stream Replication Orchestration](/roadmap#stream-replication-orchestration)                 | Streams placed in a region ahead of demand                                                                                            |
-| [Live AI Processing](/roadmap#live-ai-processing)                                             | Detection and transcription on media edges, with pilot access by contact                                                              |
+| [Live AI Processing](/roadmap#live-ai-processing)                                             | Object detection and transcription on media edges                                                                                     |
 | [Workload Cost Model](/roadmap#workload-cost-model)                                           | Transcode placement based on predicted CPU and GPU cost                                                                               |
 | [Placement Policy and Storage Tiering](/roadmap#placement-policy-and-storage-tiering)         | Data residency rules for where content may live                                                                                       |
 | [NAT-Aware Routing and Traversal](/roadmap#nat-aware-routing-and-traversal)                   | Self-hosted nodes behind NAT taking full part in the network                                                                          |
@@ -27261,37 +27342,37 @@ This section holds the FrameWorks **migration program**: dedicated guides for th
   <LinkCard
     title="Livepeer Studio"
     href="/migrate/livepeer-studio"
-    description="Available now — REST → GraphQL, player swap, multistream, and playback access-control differences."
+    description="REST → GraphQL, player swap, multistream, and playback access-control differences."
   />
   <LinkCard
     title="MistServer"
     href="/migrate/mistserver"
-    description="Available now — stay on raw MistServer, add FrameWorks edge capacity, or move to managed SaaS."
+    description="Stay on raw MistServer, add FrameWorks edge capacity, or move to managed SaaS."
   />
   <LinkCard
     title="Bunny Stream"
     href="/migrate/bunny-stream"
-    description="Available now — VOD/CDN swap, plus RTMP/SRT/WHIP live ingest, which Bunny Stream doesn't offer today."
+    description="VOD/CDN swap, plus RTMP/SRT/WHIP live ingest, which Bunny Stream doesn't offer today."
   />
   <LinkCard
     title="Mux"
     href="/migrate/mux"
-    description="Available now — REST → GraphQL, signed playback (RS256 → ES256), simulcast, and where Mux Data fits in the migration."
+    description="REST → GraphQL, signed playback (RS256 → ES256), simulcast, and where Mux Data fits in the migration."
   />
   <LinkCard
     title="Castr"
     href="/migrate/castr"
-    description="Available now — move live streams, destinations, embeds, and recordings, with what's up next on the roadmap."
+    description="Move live streams, destinations, embeds, and recordings, with what's up next on the roadmap."
   />
   <LinkCard
     title="Flussonic Media Server"
     href="/migrate/flussonic"
-    description="Available now — keep your hardware with FrameWorks edges, self-host the full stack, or move to managed SaaS."
+    description="Keep your hardware with FrameWorks edges, self-host the full stack, or move to managed SaaS."
   />
   <LinkCard
     title="Any video API"
     href="/migrate/generic"
-    description="Available now — universal checklist for platforms without a dedicated guide."
+    description="Universal checklist for platforms without a dedicated guide."
   />
 </CardGrid>
 
@@ -34127,6 +34208,30 @@ Optional path to a bootstrap desired-state overlay. The CLI renders manifest-der
 ```yaml
 bootstrap_overlay: gitops/clusters/production/bootstrap.yaml
 ```
+
+#### Account users
+
+`accounts[*].users` in the overlay declares the users of operator and customer accounts. Each user
+takes `email`, `role` and `password_ref`, and optionally `first_name`, `last_name`,
+`platform_operator`, `reset_credentials`, and `wallet`.
+
+```yaml
+accounts:
+  - kind: customer
+    tenant:
+      ref: quartermaster.tenants[frameworks-qa]
+    users:
+      - email: qa@example.com
+        role: owner
+        password_ref: { sops: ../../secrets/staging.env, key: QA_ACCOUNT_PASSWORD }
+        wallet: "0x0000000000000000000000000000000000000001"
+```
+
+`wallet` is an Ethereum address (`0x` and 40 hex characters) that Commodore links to the user for
+wallet sign-in. Validation refuses a malformed address and an address declared for two users.
+Bootstrap never moves a wallet that is already linked to a different user: it reports that
+user's wallet as deferred and exits non-zero. Removing the field leaves an existing link in place.
+See [Test and Trial Accounts](/operators/trial-accounts/#declare-a-test-account-in-bootstrap).
 
 #### Stream source location
 
@@ -41933,8 +42038,15 @@ whether usage is waived, invoice collection, and the plan the account returns to
 arrangement ends. Usage stays metered and appears on each invoice at no charge when it is waived.
 Plan changes and checkouts are refused with the code `OUTSTANDING_GRANT` while the grant is in
 force, and the page tells the customer to contact FrameWorks instead. A scheduled downgrade waits
-until the grant ends. No email is sent when a grant ends, so tell the customer about the end date
-yourself. Customer-facing terms are in [Billing](/builders/billing/#trials-and-arrangements).
+until the grant ends.
+
+Purser emails the tenant's billing email once a grant's end date is seven days or less away, and
+again when any grant ends, by expiry or `grant revoke`, naming the plan the account returns to.
+A closed account gets no ended email. Moving the end date drops a queued ending email that no
+longer applies. Failed sends are retried with backoff and abandoned after five attempts;
+`purser_operator_grant_notice_repeatedly_failed_items` counts the ones still failing. Without a
+billing email nothing is sent, so tell the customer yourself. Customer-facing terms are in
+[Billing](/builders/billing/#trials-and-arrangements).
 
 ## Pause or close an account
 
@@ -42012,6 +42124,7 @@ accounts:
         password_ref:
           sops: ../../secrets/staging.env
           key: QA_ACCOUNT_PASSWORD
+        wallet: "0x0000000000000000000000000000000000000001" # optional, for wallet sign-in
 
 purser:
   customer_billing:
@@ -42028,6 +42141,12 @@ purser:
 ```
 
 - Add the password to the SOPS file with `gitops/scripts/sops-env.sh set <file> <KEY> <VALUE>`.
+- `wallet` is an optional Ethereum address (`0x` and 40 hex characters) linked to the user for
+  wallet sign-in, so automation can sign in as the account with the matching key instead of a
+  password. The address is public; keep the private key in your secrets store. An address
+  declared for two users fails validation. An address already linked to a different user is never
+  moved: bootstrap reports that user's wallet as deferred and exits non-zero, so unlink the wallet
+  from the old user first, signed in as that user. Removing the field leaves an existing link in place.
 - An account entry carries no billing of its own; validation refuses one. Billing is declared once
   per tenant in `purser.customer_billing`.
 - `operator_grant` takes the same fields as `grant set`: `base_fee`, `waive_usage`, `collection`
@@ -42531,7 +42650,7 @@ for all of them.
 # Platform capabilities
 https://logbook.frameworks.network/platform/feature-matrix
 
-FrameWorks capabilities are available through the GraphQL API, MCP tools, dashboard, CLI, and documented operator workflows. This matrix shows what is usable now, what is expanding, and what remains planned.
+FrameWorks capabilities are available through the GraphQL API, MCP tools, dashboard, CLI, and documented operator workflows. This matrix shows what is usable now, what is expanding, and what remains planned. For a shorter tour of the product, see the [showcase](https://frameworks.network/showcase).
 
 ## Why teams pick FrameWorks
 
@@ -42657,8 +42776,8 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#commerce--bill
 | --- | --- | --- | --- |
 | **Billing & prepaid balance** | Available | API, Agents (MCP), CLI, Dashboard, Docs | Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance. |
 | ↳ Usage caps, alerts, retention cost preview | Expanding | — | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. *Storage cost previews per asset ship. Caps and alerts you set per meter are not there yet.* |
-| ↳ Plan changes, payment grace, and Free fallback | Expanding | API, Dashboard, Docs | Self-serve upgrades start a fresh month and offset the unused part of the old fee; downgrades and cancellations keep the paid plan to the end of the period, then move the account to Free. A failed payment keeps the plan for 14 days with email notices, then moves the account to Free with a final invoice for usage up to the move. *Plan changes and the 14-day payment grace run today. The dashboard does not yet show the grace end date, a scheduled plan change, or the coming move to Free.* |
-| ↳ Operator trials and account closure | Expanding | CLI, Docs | Platform operators give a tenant a time-boxed billing arrangement — a different base fee, waived usage, or manual invoicing — for trials and custom deals, expiring back to the tenant's fallback plan, and close tenant accounts permanently. Every change is audited. *Trials and custom arrangements are set up by our team. Your dashboard does not yet show an active arrangement or when it ends.* |
+| ↳ Plan changes, payment grace, and Free fallback | Expanding | API, Dashboard, Docs | Self-serve upgrades start a fresh month and offset the unused part of the old fee; downgrades and cancellations keep the paid plan to the end of the period, then move the account to Free. A failed payment keeps the plan for 14 days with email notices, then moves the account to Free with a final invoice for usage up to the move. *Plan changes, the 14-day payment grace, and the move to Free run today, and the billing page shows each of them. Agents cannot change the plan yet.* |
+| ↳ Operator trials and account closure | Expanding | API, CLI, Dashboard, Docs | Platform operators give a tenant a time-boxed billing arrangement — a different base fee, waived usage, or manual invoicing — for trials and custom deals, expiring back to the tenant's fallback plan, and close tenant accounts permanently. Every change is audited. *Trials and custom arrangements are set up by our team. The billing page shows the arrangement, when it ends, and the plan you return to, and we email you a week before it ends.* |
 | **Wallet & on-chain identity** | Expanding | API, Agents (MCP), Dashboard, Docs | Wallet sign-in, linked-wallet account identity, and x402 micropayments. *Wallet sign-in, linked wallets, crypto top-ups, and x402 top-ups for agents are implemented. Each deployment enables them once its payment configuration passes the live readiness checks.* |
 | **Operator settlement and attribution** | [Planned](/roadmap#operator-settlement-and-attribution) | — | Attribute served traffic to the operators whose clusters actually carried it — manipulation-resistant across independent operators — and settle the full loop, from credit accrual through operator-visible reporting to payout execution. |
 | **Stream-level balances** | [Planned](/roadmap#stream-level-balances) | — | Optional per-stream balances that fund usage before the tenant balance — paywalled and pay-per-view streams, tips, sponsor-funded streams — plus promo codes, referral rewards, and volume discounts. |
@@ -42708,7 +42827,7 @@ The [Roadmap](/roadmap) carries sequencing and detail for planned work; this mat
 # Platform capability inventory
 https://logbook.frameworks.network/platform/platform-capabilities
 
-This broader inventory includes the [product capability matrix](/platform/feature-matrix) and the infrastructure, trust, and orchestration capabilities behind it. Rows marked *(platform)* are operated capabilities, not customer-facing features.
+This broader inventory includes the [product capability matrix](/platform/feature-matrix) and the infrastructure, trust, and orchestration capabilities behind it. Rows marked *(platform)* are operated capabilities, not customer-facing features. For a shorter tour of the product, see the [showcase](https://frameworks.network/showcase).
 
 ### Streaming
 
@@ -42814,8 +42933,8 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | --- | --- | --- | --- |
 | **Billing & prepaid balance** | Available | API, Agents (MCP), CLI, Dashboard, Docs | Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance. |
 | ↳ Usage caps, alerts, retention cost preview | Expanding | — | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. *Storage cost previews per asset ship. Caps and alerts you set per meter are not there yet.* |
-| ↳ Plan changes, payment grace, and Free fallback | Expanding | API, Dashboard, Docs | Self-serve upgrades start a fresh month and offset the unused part of the old fee; downgrades and cancellations keep the paid plan to the end of the period, then move the account to Free. A failed payment keeps the plan for 14 days with email notices, then moves the account to Free with a final invoice for usage up to the move. *Plan changes and the 14-day payment grace run today. The dashboard does not yet show the grace end date, a scheduled plan change, or the coming move to Free.* |
-| ↳ Operator trials and account closure | Expanding | CLI, Docs | Platform operators give a tenant a time-boxed billing arrangement — a different base fee, waived usage, or manual invoicing — for trials and custom deals, expiring back to the tenant's fallback plan, and close tenant accounts permanently. Every change is audited. *Trials and custom arrangements are set up by our team. Your dashboard does not yet show an active arrangement or when it ends.* |
+| ↳ Plan changes, payment grace, and Free fallback | Expanding | API, Dashboard, Docs | Self-serve upgrades start a fresh month and offset the unused part of the old fee; downgrades and cancellations keep the paid plan to the end of the period, then move the account to Free. A failed payment keeps the plan for 14 days with email notices, then moves the account to Free with a final invoice for usage up to the move. *Plan changes, the 14-day payment grace, and the move to Free run today, and the billing page shows each of them. Agents cannot change the plan yet.* |
+| ↳ Operator trials and account closure | Expanding | API, CLI, Dashboard, Docs | Platform operators give a tenant a time-boxed billing arrangement — a different base fee, waived usage, or manual invoicing — for trials and custom deals, expiring back to the tenant's fallback plan, and close tenant accounts permanently. Every change is audited. *Trials and custom arrangements are set up by our team. The billing page shows the arrangement, when it ends, and the plan you return to, and we email you a week before it ends.* |
 | **Wallet & on-chain identity** | Expanding | API, Agents (MCP), Dashboard, Docs | Wallet sign-in, linked-wallet account identity, and x402 micropayments. *Wallet sign-in, linked wallets, crypto top-ups, and x402 top-ups for agents are implemented. Each deployment enables them once its payment configuration passes the live readiness checks.* |
 | **Operator settlement and attribution** | [Planned](/roadmap#operator-settlement-and-attribution) | — | Attribute served traffic to the operators whose clusters actually carried it — manipulation-resistant across independent operators — and settle the full loop, from credit accrual through operator-visible reporting to payout execution. |
 | **Stream-level balances** | [Planned](/roadmap#stream-level-balances) | — | Optional per-stream balances that fund usage before the tenant balance — paywalled and pay-per-view streams, tips, sponsor-funded streams — plus promo codes, referral rewards, and volume discounts. |
