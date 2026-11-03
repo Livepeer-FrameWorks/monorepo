@@ -2077,9 +2077,10 @@ features:
         gap_reason: |
           Operators manage grants and closure with frameworks admin billing grant and frameworks admin tenants
           deactivate, documented in the trial accounts guide. GraphQL billingLifecycle.operatorGrant and the billing
-          page show the tenant the arrangement's terms, its end date, and the plan it returns to. The tenant gets no
-          email before an arrangement ends.
-        note: Trials and custom arrangements are set up by our team. The billing page shows the arrangement, when it ends, and the plan you return to.
+          page show the tenant the arrangement's terms, its end date, and the plan it returns to, and Purser emails the
+          billing email seven days before the end and when the arrangement ends. frameworks cluster doctor --deep does
+          not check grant expiry or these emails yet.
+        note: Trials and custom arrangements are set up by our team. The billing page shows the arrangement, when it ends, and the plan you return to, and we email you a week before it ends.
         depends_on: [billing]
         required_surfaces:
           graphql: { required: true }

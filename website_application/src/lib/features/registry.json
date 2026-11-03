@@ -3628,9 +3628,9 @@
           "audience": "product",
           "description": "Platform operators give a tenant a time-boxed billing arrangement — a different base fee, waived usage, or manual invoicing — for trials and custom deals, expiring back to the tenant's fallback plan, and close tenant accounts permanently. Every change is audited.",
           "status": "partial",
-          "gap_reason": "Operators manage grants and closure with frameworks admin billing grant and frameworks admin tenants\ndeactivate, documented in the trial accounts guide. GraphQL billingLifecycle.operatorGrant and the billing\npage show the tenant the arrangement's terms, its end date, and the plan it returns to. The tenant gets no\nemail before an arrangement ends.\n",
+          "gap_reason": "Operators manage grants and closure with frameworks admin billing grant and frameworks admin tenants\ndeactivate, documented in the trial accounts guide. GraphQL billingLifecycle.operatorGrant and the billing\npage show the tenant the arrangement's terms, its end date, and the plan it returns to, and Purser emails the\nbilling email seven days before the end and when the arrangement ends. frameworks cluster doctor --deep does\nnot check grant expiry or these emails yet.\n",
           "horizon": "now",
-          "note": "Trials and custom arrangements are set up by our team. The billing page shows the arrangement, when it ends, and the plan you return to.",
+          "note": "Trials and custom arrangements are set up by our team. The billing page shows the arrangement, when it ends, and the plan you return to, and we email you a week before it ends.",
           "required_surfaces": {
             "cli": {
               "required": true
