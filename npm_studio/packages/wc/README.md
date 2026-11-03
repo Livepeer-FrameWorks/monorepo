@@ -72,6 +72,7 @@ Notes:
 | `gateway-url`              | `string`  | `""`          | Gateway GraphQL endpoint                          |
 | `stream-key`               | `string`  | `""`          | Stream key (used with `gateway-url`)              |
 | `initial-profile`          | `string`  | `"broadcast"` | `"broadcast"` · `"professional"` · `"conference"` |
+| `layout-key`               | `string`  | —             | Stream the layout belongs to; see below           |
 | `enable-compositor`        | `boolean` | `true`        | Scene composition; `"false"` turns it off         |
 | `show-producer-panel`      | `boolean` | `true`        | Producer panel; `"false"` turns it off            |
 | `auto-start-camera`        | `boolean` | `false`       | Start camera on load                              |
@@ -85,7 +86,28 @@ Notes:
 | `encoder-worker-url`       | `string`  | `""`          | Custom encoder worker URL                         |
 | `rtc-transform-worker-url` | `string`  | `""`          | Custom RTC transform worker URL                   |
 
-Set as properties: `compositorConfig` (a new `renderer` switches the running compositor), `initialLayout` (a layout from `exportLayout()` to start from) and `onLayoutChange(layout)`. The element also fires `fw-sc-layout-change` with `{ layout }` shortly after the scenes, overlays or layout preset change, and has `exportLayout()` and `importLayout(layout)` methods. It keeps its current layout when it builds a new controller for the same stream (a new endpoint, profile, `debug` or worker URL), and starts from `initialLayout` again only when that property is set to another object, which marks another stream. Wrap `localStorage` reads and writes in `try`/`catch`: storage can be blocked, and a layout holding a picked image can be larger than the quota.
+Set as properties: `compositorConfig` (a new `renderer` switches the running compositor), `layoutKey` (also the `layout-key` attribute: the stream the layout belongs to), `initialLayout` (a layout from `exportLayout()` for that key) and `onLayoutChange(layout, layoutKey)`. The element also fires `fw-sc-layout-change` with `{ layout, layoutKey }` shortly after the scenes, overlays or layout preset change, and has `exportLayout()` and `importLayout(layout)` methods.
+
+To switch streams, set `whipUrl`, `layoutKey` and `initialLayout` together. The running studio keeps its camera, screen and media sources, shows the new stream's `initialLayout` (or the default layout when it is `null`), and sends the next broadcast to the new `whipUrl`; a broadcast that is live when `whipUrl` changes is stopped. A report exported for the previous key is dropped, so save each layout under the key it comes with. For the same `layoutKey`, the element keeps its current layout, also when it builds a new controller for a new profile, `debug` or worker URL. Wrap `localStorage` reads and writes in `try`/`catch`: storage can be blocked, and a layout holding a picked image can be larger than the quota.
+
+```js
+function showStream(streamId, whipUrl) {
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(`layout:${streamId}`) ?? "null");
+  } catch {}
+  studio.whipUrl = whipUrl;
+  studio.layoutKey = streamId;
+  studio.initialLayout = saved;
+}
+
+studio.addEventListener("fw-sc-layout-change", (e) => {
+  const { layout, layoutKey } = e.detail;
+  try {
+    if (layoutKey) localStorage.setItem(`layout:${layoutKey}`, JSON.stringify(layout));
+  } catch {}
+});
+```
 
 ## Methods
 

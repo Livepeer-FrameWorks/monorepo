@@ -317,7 +317,9 @@ if (stored) await studio.importLayout(stored);
 
 `importLayout()` checks the layout first and refuses one it cannot apply, leaving the studio as it was.
 
-The drop-ins take `initialLayout` and call `onLayoutChange(layout)` shortly after the scenes, overlays or preset change; `<fw-streamcrafter>` also fires `fw-sc-layout-change` with `{ layout }`. They keep the current layout when they build a new controller for the same stream (a new endpoint, profile or `debug` setting) and start from `initialLayout` again only when it changes to another object, which marks another stream.
+The drop-ins take `layoutKey` (the stream the layout belongs to) and `initialLayout`, and call `onLayoutChange(layout, layoutKey)` shortly after the scenes, overlays or preset change; `<fw-streamcrafter>` also fires `fw-sc-layout-change` with `{ layout, layoutKey }`. To switch streams, change `whipUrl`, `layoutKey` and `initialLayout` together: the running studio keeps its sources, shows the new key's `initialLayout` or the default layout, and sends the next broadcast to the new endpoint, stopping one that is live. A report exported for the previous key is dropped. For the same key, they keep the current layout, also on a new controller for a new profile or `debug` setting.
+
+With the vanilla studio, switch in place with `setWhipUrl(url)` and `importLayout(saved ?? createDefaultStudioLayout())`. Framework bindings of your own can use `StudioLayoutKeeper` from core, which the drop-ins use for these rules.
 
 ### Encoder settings
 

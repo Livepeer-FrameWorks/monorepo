@@ -49,9 +49,9 @@ Notes:
 
 ### Keeping the layout per stream
 
-`onLayoutChange` reports the scenes, overlays and layout preset as JSON; give it back as `initialLayout`. Turning `enableCompositor` off and on, or a new `compositorConfig.renderer`, needs no remount.
+`onLayoutChange(layout, layoutKey)` reports the scenes, overlays and layout preset as JSON, with the `layoutKey` they belong to; give the layout back as `initialLayout`. Turning `enableCompositor` off and on, or a new `compositorConfig.renderer`, needs no remount.
 
-The studio keeps its current layout when it builds a new controller for the same stream (a new `whipUrl` from the gateway, or a new `initialProfile` or `debug`). It starts from `initialLayout` again only when you pass a different `initialLayout` object, which marks another stream, so keep the object the same between renders with `useMemo`.
+`layoutKey` names the stream the layout belongs to. To switch streams, change `whipUrl`, `layoutKey` and `initialLayout` together. The running studio keeps its camera, screen and media sources, shows the new stream's `initialLayout` (or the default layout when it is `null`), and sends the next broadcast to the new `whipUrl`. A broadcast that is live when `whipUrl` changes is stopped. A report exported for the previous key is dropped, so save each layout under the key it comes with. For the same `layoutKey`, the studio keeps its current layout, also when it builds a new controller for a new `initialProfile` or `debug`; `initialLayout` is only read when the key changes, so a new object for the same key changes nothing.
 
 ```tsx
 function readLayout(streamId: string): StudioLayout | null {
@@ -70,12 +70,11 @@ function saveLayout(streamId: string, layout: StudioLayout) {
   }
 }
 
-const initialLayout = useMemo(() => readLayout(streamId), [streamId]);
-
 <StreamCrafter
   whipUrl={whipUrl}
-  initialLayout={initialLayout}
-  onLayoutChange={(layout) => saveLayout(streamId, layout)}
+  layoutKey={streamId}
+  initialLayout={readLayout(streamId)}
+  onLayoutChange={(layout, key) => key && saveLayout(key, layout)}
 />;
 ```
 

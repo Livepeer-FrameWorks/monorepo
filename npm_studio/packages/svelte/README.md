@@ -47,9 +47,9 @@ Notes:
 
 ### Keeping the layout per stream
 
-`onLayoutChange` reports the scenes, overlays and layout preset as JSON; give it back as `initialLayout`. Changing `enableCompositor` or `compositorConfig.renderer` takes effect without a remount, so no `{#key}` block is needed.
+`onLayoutChange(layout, layoutKey)` reports the scenes, overlays and layout preset as JSON, with the `layoutKey` they belong to; give the layout back as `initialLayout`. Changing `enableCompositor` or `compositorConfig.renderer` takes effect without a remount, so no `{#key}` block is needed.
 
-The studio keeps its current layout when it builds a new controller for the same stream (a new `whipUrl` from the gateway, or a new `initialProfile` or `debug`). It starts from `initialLayout` again only when `initialLayout` changes to another object, which marks another stream. On a stream switch, change `whipUrl` and `initialLayout` together.
+`layoutKey` names the stream the layout belongs to. To switch streams, change `whipUrl`, `layoutKey` and `initialLayout` together. The running studio keeps its camera, screen and media sources, shows the new stream's `initialLayout` (or the default layout when it is `null`), and sends the next broadcast to the new `whipUrl`. A broadcast that is live when `whipUrl` changes is stopped. A report exported for the previous key is dropped, so save each layout under the key it comes with. For the same `layoutKey`, the studio keeps its current layout, also when it builds a new controller for a new `initialProfile` or `debug`.
 
 ```svelte
 <script lang="ts">
@@ -72,8 +72,9 @@ The studio keeps its current layout when it builds a new controller for the same
 
 <StreamCrafter
   {whipUrl}
+  layoutKey={streamId}
   initialLayout={readLayout(streamId)}
-  onLayoutChange={(layout) => saveLayout(streamId, layout)}
+  onLayoutChange={(layout, key) => key && saveLayout(key, layout)}
 />
 ```
 
