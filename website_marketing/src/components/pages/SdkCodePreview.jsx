@@ -10,6 +10,7 @@ import {
 } from "@heroicons/react/24/outline";
 import { cn } from "@/lib/utils";
 import config from "../../config";
+import { studioSnippets } from "@/lib/studioSnippets";
 
 const sdkGuideUrl = `${config.docsUrl.replace(/\/+$/, "")}/builders/sdks`;
 
@@ -70,57 +71,7 @@ player.state.on('playing', (isPlaying) => {
   console.log(isPlaying ? 'Playing' : 'Paused')
 })`;
 
-const snippetIngestReact = `import { StreamCrafter } from "@livepeer-frameworks/streamcrafter-react";
-import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
-
-export function BroadcastPanel() {
-  return (
-    <StreamCrafter
-      gatewayUrl="${config.gatewayUrl}"
-      streamKey="sk_live_..."
-      initialProfile="broadcast"
-    />
-  );
-}`;
-
-const snippetIngestSvelte = `<script lang="ts">
-  import { StreamCrafter } from '@livepeer-frameworks/streamcrafter-svelte'
-  import '@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css'
-</script>
-
-<StreamCrafter
-  gatewayUrl="${config.gatewayUrl}"
-  streamKey="sk_live_..."
-  initialProfile="broadcast"
-/>`;
-
-const snippetIngestVanilla = `import { createStreamCrafter } from '@livepeer-frameworks/streamcrafter-core'
-
-const studio = createStreamCrafter({
-  target: '#studio',
-  whipUrl: 'https://edge-ingest.eu.example.com/webrtc/stream-key',
-  profile: 'broadcast',
-  theme: 'dracula',
-  locale: 'en',
-})
-
-studio.on('stateChange', ({ state }) => {
-  console.log(state === 'streaming' ? 'LIVE' : state)
-})
-
-await studio.startCamera()
-await studio.goLive()`;
-
-const snippetIngestWc = `<!-- IIFE via npm CDN, no bundler needed -->
-<!-- unpkg -->
-<script src="https://unpkg.com/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"></script>
-<!-- or jsdelivr -->
-<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"></script>
-
-<fw-streamcrafter
-  whip-url="https://edge-ingest.eu.example.com/webrtc/your-stream-key"
-  initial-profile="broadcast"
-></fw-streamcrafter>`;
+const ingestSnippets = studioSnippets(config.gatewayUrl);
 
 const snippetBackendTs = `// npm i @livepeer-frameworks/api
 import { createClient, CreateStreamDocument, expectResult } from "@livepeer-frameworks/api";
@@ -225,12 +176,7 @@ export default function SdkCodePreview({ variant = "default", className }) {
       wc: snippetPlayerWc,
       vanilla: snippetPlayerVanilla,
     },
-    ingest: {
-      react: snippetIngestReact,
-      svelte: snippetIngestSvelte,
-      wc: snippetIngestWc,
-      vanilla: snippetIngestVanilla,
-    },
+    ingest: ingestSnippets,
     backend: {
       ts: snippetBackendTs,
       go: snippetBackendGo,
