@@ -536,9 +536,19 @@ PostgreSQL and YugabyteDB:
   commit. YugabyteDB retries them on the server under Read Committed, which
   `yb_enable_read_committed_isolation=true` enables to match PostgreSQL's default.
 - On PostgreSQL a transactional migration item runs as one transaction: it sets `lock_timeout`
-  and `statement_timeout` after taking the migration advisory lock, and is replayed only when
-  the server cancels it with `canceling statement due to lock timeout`, so a blocked `ALTER`
-  never queues live traffic behind it.
+  5 s and `statement_timeout` 15 min after taking the migration advisory lock, and is replayed,
+  up to six times, only when the server cancels it with
+  `canceling statement due to lock timeout`, so a blocked `ALTER` never queues live traffic behind it.
+- The migration advisory lock that serializes migrators of one database is never waited on
+  without bound. On PostgreSQL it is taken under its own 10 s `lock_timeout` and the item is
+  replayed every 10 s, up to 45 times (about a quarter of an hour), while another migrator holds
+  it. The Yugabyte module tries it with `pg_try_advisory_lock` every 10 s, up to 90 more times.
+  Nothing of the item has run when the lock is refused, so both engines retry a `.notx.sql`
+  item on it too, and a migrator that runs out of attempts fails with an error naming the lock.
+- Every PostgreSQL and Yugabyte item runs as an Ansible async job. A transactional item is
+  polled every 2 s and a `.notx.sql` item every 15 s; the poll and retry lines are the progress
+  the CLI's migration watchdog sees, so a migrator waiting for the lock or a long index build is
+  not cancelled as stalled. The job is killed after 24 hours.
 - On YugabyteDB DDL runs outside transaction blocks (`ysql_yb_ddl_transaction_block_enabled`
   is off in 2026.1), and a schema change on a colocated database aborts a transaction that
   already wrote rows with `40001`, so an item is never sent as one transaction. The role's
@@ -554,7 +564,7 @@ PostgreSQL and YugabyteDB:
   (see Schema Migrations); statements of shipped files that are not are executed under the
   equivalent guards in `cli/pkg/provisioner/migrate_rerun_safety.go`.
 - A `.notx.sql` item runs without timeouts, because a concurrent index build waits for older
-  transactions, and is never replayed. An interrupted concurrent build leaves an invalid
+  transactions, and is never replayed once its statements have started. An interrupted concurrent build leaves an invalid
   index that `IF NOT EXISTS` would skip, so a `.notx.sql` item drops the invalid indexes it
   builds and then rebuilds them. It does so inside the migration advisory lock, and only
   while the ledger still lacks the item: a build in progress is invalid too, so outside the

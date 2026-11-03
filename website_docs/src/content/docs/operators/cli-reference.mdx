@@ -130,8 +130,11 @@ Rerun the same command after fixing the cause; completed work is skipped.
 | `cluster os update`                                                                                | 10 minutes check, 60 minutes apply  | playbook output and each Yugabyte node that finished its roll            |
 
 A transactional migration statement is bounded by its own 15-minute `statement_timeout`, inside
-the 30-minute window. A `.notx.sql` item and a ClickHouse item, which have no statement timeout,
-run as asynchronous jobs whose poll lines keep reporting progress.
+the 30-minute window. Every migration item runs as an asynchronous job whose poll lines keep
+reporting progress: a transactional PostgreSQL or Yugabyte item every 2 seconds, a `.notx.sql`
+item, which has no statement timeout, every 15 seconds, and a ClickHouse item every 10 seconds. A migrator waiting
+for another one's migration lock on the same database retries every 10 seconds for about a quarter
+of an hour, then fails with an error naming the lock; nothing of its item has run.
 
 ## Detection & Health Commands
 
