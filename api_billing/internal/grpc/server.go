@@ -4135,7 +4135,7 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *purse
 				return writeErr
 			})
 			if errors.Is(activateErr, subscriptions.ErrTenantBillingClosed) {
-				return nil, status.Error(codes.FailedPrecondition, activateErr.Error())
+				return nil, tenantPricingRefusal(activateErr)
 			}
 			if errors.Is(activateErr, sql.ErrNoRows) {
 				return nil, status.Error(codes.FailedPrecondition, "cluster already has a Stripe subscription")

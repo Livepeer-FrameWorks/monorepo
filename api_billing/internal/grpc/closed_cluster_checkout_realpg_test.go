@@ -9,15 +9,12 @@ import (
 
 	"frameworks/api_billing/internal/database/purserdb"
 	billingstripe "frameworks/api_billing/internal/stripe"
-	"frameworks/api_billing/internal/subscriptions"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/google/uuid"
 	stripeapi "github.com/stripe/stripe-go/v85"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type closingClusterStripeClient struct {
@@ -89,7 +86,8 @@ func TestClosedAccountRefusesMonthlyClusterPurchase_RealPG(t *testing.T) {
 				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 				defer cancel()
 				_, err := server.CreateClusterSubscription(ctx, req)
-				if status.Code(err) != codes.FailedPrecondition || status.Convert(err).Message() != subscriptions.ErrTenantBillingClosed.Error() || provider.checkoutKey == "" {
+				assertTenantRefusal(t, err, RefusalAccountClosed)
+				if provider.checkoutKey == "" {
 					t.Fatalf("in-flight provider response bypassed closure: %v", err)
 				}
 				row, err := purserdb.New(db).GetProviderCheckoutReservation(t.Context(), purserdb.GetProviderCheckoutReservationParams{TenantID: tenant, IntentID: intentID})
@@ -112,9 +110,7 @@ func TestClosedAccountRefusesMonthlyClusterPurchase_RealPG(t *testing.T) {
 			provider.checkoutKey = ""
 			qm.materialized = nil
 			_, err = server.CreateClusterSubscription(t.Context(), req)
-			if status.Code(err) != codes.FailedPrecondition || status.Convert(err).Message() != subscriptions.ErrTenantBillingClosed.Error() {
-				t.Fatalf("closed account can create another monthly purchase: %v", err)
-			}
+			assertTenantRefusal(t, err, RefusalAccountClosed)
 			if provider.checkoutKey != "" || qm.materialized != nil {
 				t.Fatal("closed purchase reached the provider or materialized cluster access")
 			}
