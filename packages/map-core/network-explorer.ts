@@ -48,21 +48,30 @@ export function networkExplorerActions(links: {
   return actions;
 }
 
-// ObservationsFailure is a failed observations request. notConfigured marks a deployment without a network observer,
-// which Bridge answers with 503 and an error naming the missing configuration; a retry cannot fix it.
+// ObservationsFailure is a failed observations request. notConfigured marks a deployment without a network observer
+// or network scope, which a retry cannot fix.
 export type ObservationsFailure = { message: string; notConfigured: boolean };
 
+// Codes of Bridge's network observation 503 bodies (api_gateway/internal/handlers/network.go).
+export const OBSERVATIONS_NOT_CONFIGURED = "NETWORK_OBSERVATIONS_NOT_CONFIGURED";
+export const OBSERVATIONS_UNAVAILABLE = "NETWORK_OBSERVATIONS_UNAVAILABLE";
+
 export function observationsFailure(status: number, body: unknown): ObservationsFailure {
-  const error =
+  const code =
     typeof body === "object" &&
     body !== null &&
-    typeof (body as { error?: unknown }).error === "string"
-      ? (body as { error: string }).error
+    typeof (body as { code?: unknown }).code === "string"
+      ? (body as { code: string }).code
       : "";
-  if (status === 503 && /not configured/i.test(error))
+  if (code === OBSERVATIONS_NOT_CONFIGURED)
     return {
       message: "Network observations are not set up on this deployment.",
       notConfigured: true,
+    };
+  if (code === OBSERVATIONS_UNAVAILABLE)
+    return {
+      message: "Network observations are temporarily unavailable. Try again shortly.",
+      notConfigured: false,
     };
   return { message: `Observations unavailable (HTTP ${status})`, notConfigured: false };
 }

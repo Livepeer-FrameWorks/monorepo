@@ -45,21 +45,41 @@ describe("observations failure", () => {
       "network observations are not configured",
       "network scope is not configured",
     ]) {
-      expect(observationsFailure(503, { error })).toEqual({
+      expect(
+        observationsFailure(503, { error, code: "NETWORK_OBSERVATIONS_NOT_CONFIGURED" })
+      ).toEqual({
         message: "Network observations are not set up on this deployment.",
         notConfigured: true,
       });
     }
   });
 
+  it("decides on the code, not the error text", () => {
+    expect(
+      observationsFailure(503, {
+        error: "observer missing",
+        code: "NETWORK_OBSERVATIONS_NOT_CONFIGURED",
+      }).notConfigured
+    ).toBe(true);
+    expect(observationsFailure(503, { error: "something is not configured" }).notConfigured).toBe(
+      false
+    );
+  });
+
   it("keeps a temporary outage retryable", () => {
     expect(
-      observationsFailure(503, { error: "network inventory temporarily unavailable" })
+      observationsFailure(503, {
+        error: "network inventory temporarily unavailable",
+        code: "NETWORK_OBSERVATIONS_UNAVAILABLE",
+      })
     ).toEqual({
-      message: "Observations unavailable (HTTP 503)",
+      message: "Network observations are temporarily unavailable. Try again shortly.",
       notConfigured: false,
     });
-    expect(observationsFailure(502, null).notConfigured).toBe(false);
+    expect(observationsFailure(502, null)).toEqual({
+      message: "Observations unavailable (HTTP 502)",
+      notConfigured: false,
+    });
   });
 });
 
