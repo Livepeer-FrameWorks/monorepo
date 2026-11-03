@@ -35,7 +35,7 @@
     type CompositorRenderer,
     type StudioSettings,
   } from "./studio-settings";
-  import { loadStudioLayout, saveStudioLayout, studioTarget } from "./studio-layout";
+  import { loadStudioLayout, saveReportedLayout, studioTarget } from "./studio-layout";
   import type { StudioLayout } from "@livepeer-frameworks/streamcrafter-core";
 
   const streamsStore = new GetStreamsConnectionStore();
@@ -47,15 +47,14 @@
   let selectedStreamId = $state<string | null>(null);
   let isStreaming = $state(false);
   let connectionBusy = $state(false);
-  // The studio follows the stream it was opened for: its WHIP URL and that
-  // stream's saved layout change together once the destination of another
-  // stream resolves, which the SDK takes as a stream switch and starts from
-  // that layout. Every connection still asks resolveConnectionDestination for
-  // the selected stream. Streams cannot be switched while connected, so a live
-  // encoder is never rebuilt.
+  // The studio follows the stream it was opened for. Once the destination of
+  // another stream resolves, its WHIP URL, layout key and saved layout change
+  // together, and the running studio shows that layout with its sources kept.
+  // Every connection still asks resolveConnectionDestination for the selected
+  // stream, and streams cannot be switched while connected.
   let studioWhipUrl = $state<string | null>(null);
   let studioLayout = $state.raw<StudioLayout | null>(null);
-  let studioStreamId = "";
+  let studioStreamId = $state("");
   let studioIdentity = "";
   let checking = $state(false);
   let destination = $state<ResolvedIngest | null>(null);
@@ -269,8 +268,8 @@
     if (changed && failure?.source === "studio") failure = null;
   }
 
-  function handleLayoutChange(layout: StudioLayout) {
-    saveStudioLayout(storage(), studioStreamId, layout);
+  function handleLayoutChange(layout: StudioLayout, layoutKey: string | undefined) {
+    saveReportedLayout(storage(), layout, layoutKey);
   }
 
   const SignalIcon = getIconComponent("Signal");
@@ -468,6 +467,7 @@
                 theme={themeStore.playerTheme as import("@livepeer-frameworks/streamcrafter-core").FwThemePreset}
                 enableCompositor={settings.enableCompositor}
                 compositorConfig={{ renderer: settings.compositorRenderer }}
+                layoutKey={studioStreamId}
                 initialLayout={studioLayout}
                 onLayoutChange={handleLayoutChange}
                 onStateChange={handleStateChange}

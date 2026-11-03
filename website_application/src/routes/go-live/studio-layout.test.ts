@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { StudioLayout } from "@livepeer-frameworks/streamcrafter-core";
-import { loadStudioLayout, saveStudioLayout, studioTarget } from "./studio-layout";
+import {
+  loadStudioLayout,
+  saveReportedLayout,
+  saveStudioLayout,
+  studioTarget,
+} from "./studio-layout";
 
 function memoryStorage(): Storage {
   const values = new Map<string, string>();
@@ -73,6 +78,29 @@ describe("Go Live studio layout per stream", () => {
     expect(next.whipUrl).toBe("https://edge/b");
     expect(next.layout).toEqual(layout("B"));
     expect(next.layout).not.toBe(current.layout);
+  });
+
+  it("stores a reported layout under the key it was reported for", () => {
+    const storage = memoryStorage();
+    let target = studioTarget({ streamId: "", whipUrl: null, layout: null }, "stream-a", "a", () =>
+      loadStudioLayout(storage, "stream-a")
+    );
+    const reportedForA = layout("A");
+    target = studioTarget(target, "stream-b", "b", (id) => loadStudioLayout(storage, id));
+
+    // A report exported for stream A arrives after the page moved to stream B.
+    saveReportedLayout(storage, reportedForA, "stream-a");
+
+    expect(target.streamId).toBe("stream-b");
+    expect(loadStudioLayout(storage, "stream-a")).toEqual(layout("A"));
+    expect(loadStudioLayout(storage, "stream-b")).toBeNull();
+  });
+
+  it("ignores a layout reported without a key", () => {
+    const storage = memoryStorage();
+    saveReportedLayout(storage, layout("A"), undefined);
+    saveReportedLayout(storage, layout("A"), "");
+    expect(storage.length).toBe(0);
   });
 
   it("opens the first stream with its saved layout", () => {

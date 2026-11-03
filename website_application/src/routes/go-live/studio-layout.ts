@@ -20,9 +20,9 @@ export interface StudioTarget {
 
 /**
  * What the studio is opened for once a destination of `streamId` resolved.
- * The same stream keeps its WHIP URL and layout object, so the studio keeps
- * its controller and current scenes. Another stream gets the new URL and its
- * saved layout together, which the SDK takes as a stream switch.
+ * The studio takes `streamId` as its layout key: the same stream keeps its
+ * current scenes, and another stream gets its saved layout, or the default
+ * one, on the running studio, with its sources kept.
  */
 export function studioTarget(
   current: StudioTarget,
@@ -48,6 +48,19 @@ export function loadStudioLayout(
   } catch {
     return null;
   }
+}
+
+/**
+ * Store a layout the studio reported under the layout key it was reported
+ * for. The selected stream can already be another one by the time a report
+ * arrives.
+ */
+export function saveReportedLayout(
+  storage: Storage | undefined,
+  layout: StudioLayout,
+  layoutKey: string | undefined
+): void {
+  if (layoutKey) saveStudioLayout(storage, layoutKey, layout);
 }
 
 export function saveStudioLayout(
