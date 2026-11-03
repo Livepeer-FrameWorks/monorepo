@@ -259,6 +259,51 @@ cat >"$work/leftovers-dvr.json" <<JSON
 JSON
 expect "a deleted recording's tree left on an edge fails" fails leftovers "$work/leftovers-dvr.json"
 
+# ---- lifecycle alerts ---------------------------------------------------------------
+# lifecycle <file> <first purser> <first commodore> <last purser> <last commodore>:
+# a two-replica scrape pair, each argument a file of exposition lines.
+lifecycle() {
+  jq -n --rawfile fp "$2" --rawfile fc "$3" --rawfile lp "$4" --rawfile lc "$5" '{first:[$fp,$fc], last:[$lp,$lc]}' >"$1"
+}
+cat >"$work/purser-quiet.prom" <<'PROM'
+# HELP purser_tier_downgrades_held_items Confirmed downgrades held past their effective time
+# TYPE purser_tier_downgrades_held_items gauge
+purser_tier_downgrades_held_items 0
+purser_free_fallback_repeatedly_failed_items{stage="move"} 0
+purser_free_fallback_repeatedly_failed_items{stage="notice"} 0
+purser_free_fallback_read_failures_total 3
+purser_operator_grant_expiry_repeatedly_failed_items 0
+purser_provider_webhook_inbox_repeatedly_failed_items 0
+PROM
+cat >"$work/commodore-quiet.prom" <<'PROM'
+commodore_tenant_account_closure_repeatedly_failed_items 0
+commodore_tenant_account_closure_read_failures_total 0
+PROM
+lifecycle "$work/lifecycle-quiet.json" "$work/purser-quiet.prom" "$work/commodore-quiet.prom" "$work/purser-quiet.prom" "$work/commodore-quiet.prom"
+expect "a quiet Purser and Commodore pass, earlier read failures included" passes lifecycle "$work/lifecycle-quiet.json"
+# Scenario 49 leaves a confirmed downgrade the provider already charges unflipped.
+sed 's/^purser_tier_downgrades_held_items 0/purser_tier_downgrades_held_items 1/' "$work/purser-quiet.prom" >"$work/purser-held.prom"
+lifecycle "$work/lifecycle-held.json" "$work/purser-quiet.prom" "$work/commodore-quiet.prom" "$work/purser-held.prom" "$work/commodore-quiet.prom"
+expect "a held downgrade fails" fails lifecycle "$work/lifecycle-held.json"
+expect "  ...naming the alert" said '^PurserTierDowngradeHeld: purser_tier_downgrades_held_items = 1'
+sed 's/stage="notice"} 0/stage="notice"} 2/' "$work/purser-quiet.prom" >"$work/purser-notice.prom"
+lifecycle "$work/lifecycle-notice.json" "$work/purser-quiet.prom" "$work/commodore-quiet.prom" "$work/purser-notice.prom" "$work/commodore-quiet.prom"
+expect "a failing move-to-Free notice fails by stage" fails lifecycle "$work/lifecycle-notice.json"
+expect "  ...naming the stage" said 'PurserFreeFallbackStuck: purser_free_fallback_repeatedly_failed_items\{stage=notice\} = 2'
+printf '%s\n' 'commodore_account_ingest_stop_oldest_pending_seconds{cell="eu"} 120' \
+  'commodore_account_ingest_stop_oldest_pending_seconds{cell="us"} 900' >>"$work/commodore-stops.prom"
+cat "$work/commodore-quiet.prom" >>"$work/commodore-stops.prom"
+lifecycle "$work/lifecycle-stops.json" "$work/purser-quiet.prom" "$work/commodore-quiet.prom" "$work/purser-quiet.prom" "$work/commodore-stops.prom"
+expect "a session stop over 300s on one cell fails for that cell only" fails lifecycle "$work/lifecycle-stops.json"
+expect "  ...naming the cell" said 'cell=us\} = 900' && expect "  ...and not the cell under the threshold" bash -c "! grep -q 'cell=eu' '$work/out'"
+sed 's/read_failures_total 0/read_failures_total 4/' "$work/commodore-quiet.prom" >"$work/commodore-reads.prom"
+lifecycle "$work/lifecycle-reads.json" "$work/purser-quiet.prom" "$work/commodore-quiet.prom" "$work/purser-quiet.prom" "$work/commodore-reads.prom"
+expect "closure queue reads failing during the run fail" fails lifecycle "$work/lifecycle-reads.json"
+expect "  ...naming the counter" said 'CommodoreTenantAccountClosureStuck: commodore_tenant_account_closure_read_failures_total rose by 4'
+expect "the lifecycle alert table matches the alert rules" passes lifecycle-rules "$here/../../pkg/grafana/rules/frameworks.yml"
+sed 's/max(purser_tier_downgrades_held_items) > 0/max(purser_tier_downgrades_held_items) > 1/' "$here/../../pkg/grafana/rules/frameworks.yml" >"$work/rules-drift.yml"
+expect "a rule whose threshold moved is reported as drift" fails lifecycle-rules "$work/rules-drift.yml"
+
 # ---- allowlist narrowness (Report) ------------------------------------------------
 narrow() {
   python3 - "$here" <<'PY'

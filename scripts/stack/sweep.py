@@ -21,6 +21,9 @@ properties of every entity the run created, whichever scenario created it:
              every Kafka KRaft quorum check ran and passed
   host       no container restarted or was OOM-killed, no core dump, no
              wildcard listener outside an edge's public set
+  lifecycle  no billing or account lifecycle alert would fire on the Purser and
+             Commodore /metrics at the end of the run (on staging the doctor's
+             account_recovery check reads the same state)
 
 Subcommands:
   run ...          collect from the API, ClickHouse, Postgres and Docker, check
@@ -36,6 +39,8 @@ Subcommands:
   listeners <file> wildcard listeners of {"proc":{...},"public":{...},"owners":{...}}
   edge-listeners <container>  the same, read from a running stack edge container
   leftovers <file> edge files of deleted artifacts in {"deleted":[...],"edges":{...}}
+  lifecycle <file> lifecycle alerts of {"first":[exposition...],"last":[exposition...]}
+  lifecycle-rules <file>  LIFECYCLE_ALERTS against the alert rule file
 
 Every check prints PASS/FAIL/ALLOW lines naming the entity and the scenario
 that created it. A scenario that produces a failure state on purpose declares
@@ -258,6 +263,93 @@ def kafka_restart_problems(text, restarts, now, window):
     if not checks:
         return [f"{names} restarted in the doctor's window, but the doctor ran no Kafka KRaft quorum check"], recent
     return [f"{detail} [{state}] after {names} restarted" for state, detail in checks if state != "OK"], recent
+
+
+# The billing and account lifecycle alerts of pkg/grafana/rules/frameworks.yml
+# as (alert, gauge, threshold, label the rule groups by, read-failure counter).
+# A gauge above its threshold or a counter that rose by more than one fires the
+# alert; "lifecycle-rules" checks this table against the rule file.
+LIFECYCLE_ALERTS = [
+    ("CommodoreAccountIngestRevocationStuck", "commodore_account_ingest_stop_oldest_pending_seconds", 300, "cell", None),
+    ("CommodoreTenantAccountClosureStuck", "commodore_tenant_account_closure_repeatedly_failed_items", 0, None,
+     "commodore_tenant_account_closure_read_failures_total"),
+    ("PurserProviderWebhookInboxStuck", "purser_provider_webhook_inbox_repeatedly_failed_items", 0, None,
+     "purser_provider_webhook_inbox_read_failures_total"),
+    ("PurserTierDowngradeHeld", "purser_tier_downgrades_held_items", 0, None, None),
+    ("PurserFreeFallbackStuck", "purser_free_fallback_repeatedly_failed_items", 0, "stage",
+     "purser_free_fallback_read_failures_total"),
+    ("PurserOperatorGrantExpiryStuck", "purser_operator_grant_expiry_repeatedly_failed_items", 0, None,
+     "purser_operator_grant_expiry_read_failures_total"),
+]
+
+METRIC_LINE_RE = re.compile(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(.*)\})?\s+(\S+)")
+METRIC_LABEL_RE = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\]|\\.)*)"')
+
+
+def parse_metrics(text):
+    """{(name, ((label, value), ...)): value} of a Prometheus text exposition."""
+    out = {}
+    for line in (text or "").splitlines():
+        if not line or line.startswith("#"):
+            continue
+        m = METRIC_LINE_RE.match(line)
+        if not m:
+            continue
+        try:
+            value = float(m.group(3))
+        except ValueError:
+            continue
+        labels = tuple(sorted(METRIC_LABEL_RE.findall(m.group(2) or "")))
+        out[(m.group(1), labels)] = value
+    return out
+
+
+def lifecycle_alert_problems(first, last):
+    """{alert: [problem]} for the lifecycle alerts the scraped state would fire.
+    first and last are each replica's exposition at the sweep's start and end;
+    a gauge is judged on the last scrape, as the rule's max over replicas, and a
+    read-failure counter on its rise between the two (a restart resets it)."""
+    before = [parse_metrics(t) for t in first]
+    after = [parse_metrics(t) for t in last]
+    problems = {}
+    for alert, gauge, threshold, by, counter in LIFECYCLE_ALERTS:
+        worst = {}
+        for metrics in after:
+            for (name, labels), value in metrics.items():
+                if name != gauge:
+                    continue
+                group = dict(labels).get(by, "") if by else ""
+                worst[group] = max(worst.get(group, value), value)
+        for group, value in sorted(worst.items()):
+            if value > threshold:
+                where = f"{{{by}={group}}}" if by else ""
+                problems.setdefault(alert, []).append(f"{gauge}{where} = {value:g} (fires above {threshold})")
+        if counter:
+            for i, metrics in enumerate(after):
+                end = sum(v for (name, _), v in metrics.items() if name == counter)
+                start = sum(v for (name, _), v in (before[i] if i < len(before) else {}).items() if name == counter)
+                rise = end - start if end >= start else end
+                if rise > 1:
+                    problems.setdefault(alert, []).append(f"{counter} rose by {rise:g} on replica {i + 1}")
+    return problems
+
+
+def lifecycle_rule_drift(rules_text):
+    """Entries of LIFECYCLE_ALERTS whose rule in the rule file does not compare
+    the same gauge with the same threshold and grouping."""
+    drift = []
+    for alert, gauge, threshold, by, counter in LIFECYCLE_ALERTS:
+        m = re.search(r"- alert: " + re.escape(alert) + r"\s*\n\s*expr: (.*)", rules_text)
+        if not m:
+            drift.append(f"{alert}: not in the rule file")
+            continue
+        expr = m.group(1)
+        grouped = f"max by ({by}) ({gauge})" if by else f"max({gauge})"
+        if f"{grouped} > {threshold}" not in expr:
+            drift.append(f"{alert}: rule {expr!r} does not fire on {grouped} > {threshold}")
+        if counter and f"increase({counter}[2m])) > 1" not in expr:
+            drift.append(f"{alert}: rule {expr!r} does not fire on a rise of {counter}")
+    return drift
 
 
 def parse_proc_net(text, proto):
@@ -809,6 +901,8 @@ def run(args):
         foghorn_dbs = []
     deadline = time.time() + args.wait
     started = time.time()
+    lifecycle_urls = env.get("LIFECYCLE_METRICS_URLS", "").split()
+    lifecycle_first = [src.fetch(u)[0] for u in lifecycle_urls] if not staging else []
 
     # ---- analytics ----
     scope = None
@@ -918,6 +1012,29 @@ def run(args):
                 problems.append(f"{query}(id: {sid}) {when} -> {gql_errors(resp) or json.dumps(obj)}")
         report.check("api", f"stream {sid}", problems, scenario=entry.get("scenario"))
     report.note("api", f"{len(deleted)} streams round-tripped ({len(live)} still present at the sweep)")
+
+    # ---- lifecycle ----
+    # Every scenario that holds a downgrade, spends a balance, expires a grant
+    # or closes a tenant (49, 50 among them) must leave its recovery work done.
+    if staging:
+        report.note("lifecycle", "staging's lifecycle alert inputs are the doctor's account_recovery check")
+    elif not lifecycle_urls:
+        report.block("lifecycle", "LIFECYCLE_METRICS_URLS names no Purser or Commodore /metrics endpoint")
+    else:
+        while True:
+            last = [src.fetch(u) for u in lifecycle_urls]
+            unread = [f"{u}: {err}" for u, (text, err) in zip(lifecycle_urls, last) if text is None]
+            bad = lifecycle_alert_problems([t or "" for t in lifecycle_first], [t or "" for t, _ in last])
+            if unread or not bad or time.time() >= deadline:
+                break
+            time.sleep(10)
+        if unread:
+            report.block("lifecycle", "; ".join(unread))
+        else:
+            for alert, _, _, _, _ in LIFECYCLE_ALERTS:
+                report.check("lifecycle", alert, bad.get(alert, []), scenario="run")
+            report.note("lifecycle", f"{len(LIFECYCLE_ALERTS)} lifecycle alerts quiet on {len(lifecycle_urls)} replica(s)"
+                        if not bad else f"{len(bad)} lifecycle alert(s) would fire")
 
     # ---- host ----
     if staging:
@@ -1121,6 +1238,10 @@ def main(argv):
     el.add_argument("container")
     lo = sub.add_parser("leftovers")
     lo.add_argument("file")
+    lc = sub.add_parser("lifecycle")
+    lc.add_argument("file")
+    lr = sub.add_parser("lifecycle-rules")
+    lr.add_argument("file")
     o = p.parse_args(argv)
 
     if o.cmd == "run":
@@ -1172,6 +1293,11 @@ def main(argv):
     elif o.cmd == "leftovers":
         doc = json.load(open(o.file))
         problems = [f"{k}: {p}" for k, ps in sorted(deleted_leftovers(doc["deleted"], doc["edges"]).items()) for p in ps]
+    elif o.cmd == "lifecycle":
+        doc = json.load(open(o.file))
+        problems = [f"{k}: {p}" for k, ps in sorted(lifecycle_alert_problems(doc["first"], doc["last"]).items()) for p in ps]
+    elif o.cmd == "lifecycle-rules":
+        problems = lifecycle_rule_drift(open(o.file).read())
     for line in problems:
         print(line)
     return 1 if problems else 0

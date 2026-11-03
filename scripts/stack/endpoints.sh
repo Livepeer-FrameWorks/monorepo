@@ -44,6 +44,10 @@ export LIVEPEER_CHAIN_URL="http://livepeer-chain:8545"
 export NETWORK_OBSERVATION_NETWORK="42161"
 export NETWORK_OBSERVATION_ENVIRONMENT="stack"
 
+# Every Purser and Commodore replica's /metrics: the sweep reads the lifecycle
+# alert inputs there.
+export LIFECYCLE_METRICS_URLS="http://purser:18003/metrics http://commodore:18001/metrics http://commodore-2:18001/metrics"
+
 # Test doubles
 export WEBHOOK_RECEIVER_URL="http://webhook-receiver:18777"
 export WEBHOOK_TARGET_URL="$WEBHOOK_RECEIVER_URL/hooks"
