@@ -2,7 +2,13 @@
   import { resolve } from "$app/paths";
   import { Button } from "$lib/components/ui/button";
   import { getIconComponent } from "$lib/iconUtils";
-  import { getDocsSiteUrl, getGithubUrl, getGraphqlHttpUrl, getMcpEndpoint } from "$lib/config";
+  import {
+    getDocsSiteUrl,
+    getGithubUrl,
+    getGraphqlHttpUrl,
+    getMarketingSiteUrl,
+    getMcpEndpoint,
+  } from "$lib/config";
   import { studioCodeExamples, studioFeatures } from "./studioSnippets";
   import playerCorePkg from "../../../../../npm_player/packages/core/package.json";
   import playerReactPkg from "../../../../../npm_player/packages/react/package.json";
@@ -25,6 +31,8 @@
   let selectedFramework = $state<Framework>("react");
 
   const docsSiteUrl = getDocsSiteUrl();
+  // The public stream test page runs both SDKs in the browser without an account.
+  const streamTestUrl = `${getMarketingSiteUrl().replace(/\/$/, "")}/stream-test`;
   const docsBaseUrl = docsSiteUrl.replace(/\/$/, "");
   const githubBaseUrl = getGithubUrl().replace(/\/$/, "");
   const graphqlUrl = getGraphqlHttpUrl();
@@ -379,6 +387,16 @@ with FrameWorksClient("${graphqlUrl}", token=os.environ["FRAMEWORKS_API_TOKEN"])
                 variant="outline"
                 size="sm"
                 class="gap-2 h-8"
+                href={streamTestUrl}
+                target="_blank"
+              >
+                <PlayIcon class="w-3.5 h-3.5" />
+                Stream test
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                class="gap-2 h-8"
                 href={playerSdk.docsUrl}
                 target="_blank"
               >
@@ -483,6 +501,16 @@ with FrameWorksClient("${graphqlUrl}", token=os.environ["FRAMEWORKS_API_TOKEN"])
               </div>
             </div>
             <div class="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                class="gap-2 h-8"
+                href={streamTestUrl}
+                target="_blank"
+              >
+                <RadioIcon class="w-3.5 h-3.5" />
+                Stream test
+              </Button>
               <Button
                 variant="outline"
                 size="sm"

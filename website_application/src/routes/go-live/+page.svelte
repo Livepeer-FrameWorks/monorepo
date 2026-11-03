@@ -515,7 +515,14 @@
                   target="_blank"
                   rel="noopener noreferrer"
                   class="text-primary hover:underline">StreamCrafter SDK docs</a
-                >.
+                >. The
+                <a
+                  href={`${marketingSiteUrl}/stream-test`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-primary hover:underline">stream test page</a
+                >
+                publishes to any WHIP URL and plays any stream URL, without an account.
               </p>
               <p>
                 StreamCrafter is in beta and changes quickly.
