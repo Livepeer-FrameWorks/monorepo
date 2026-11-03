@@ -28,6 +28,24 @@ export interface Configurability {
 
 export type FeatureKind = "product" | "foundation";
 
+export type FeatureHorizon = "now" | "next" | "later";
+
+// The labels the marketing showcase and the docs roadmap use for each horizon.
+const HORIZON_LABELS: Record<FeatureHorizon, string> = {
+  now: "Shipping today",
+  next: "Up next",
+  later: "Further out",
+};
+
+export function horizonLabel(horizon: FeatureHorizon | undefined): string | undefined {
+  return horizon ? HORIZON_LABELS[horizon] : undefined;
+}
+
+export function roadmapHref(feature: { roadmap?: string }, docsBase: string): string | undefined {
+  if (!feature.roadmap) return undefined;
+  return `${docsBase.replace(/\/+$/, "")}/roadmap#${encodeURIComponent(feature.roadmap)}`;
+}
+
 export interface FeatureSurfaces {
   graphql: {
     mutations?: string[];
@@ -55,6 +73,14 @@ export interface Feature {
   description?: string;
   status: FeatureStatus;
   gap_reason?: string;
+  // Release horizon on the public status pages: now, next or later.
+  horizon?: FeatureHorizon;
+  // "beta" marks shipped work whose API or behaviour may still change.
+  maturity?: "beta";
+  // Caveat shown with the status, such as the SDK-evolution warning.
+  note?: string;
+  // Anchor of the feature's section on the docs roadmap page.
+  roadmap?: string;
   required_surfaces: Record<string, SurfaceRequirement>;
   configurability?: Configurability;
   surfaces: FeatureSurfaces;

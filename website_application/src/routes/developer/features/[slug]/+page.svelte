@@ -8,8 +8,10 @@
   import {
     familyOf,
     findFeature,
+    horizonLabel,
     pillarLabel,
     resolveSlugs,
+    roadmapHref,
     SURFACE_KEYS,
     surfaceCell,
     type FeatureStatus,
@@ -19,6 +21,7 @@
   const slug = $derived($page.params.slug ?? "");
   const feature = $derived(findFeature(slug));
   const family = $derived(feature ? familyOf(feature.slug) : undefined);
+  const featureRoadmapHref = $derived(feature ? roadmapHref(feature, docsBase) : undefined);
   const builtOn = $derived(resolveSlugs(feature?.depends_on));
   const enables = $derived(resolveSlugs(feature?.enables));
   const related = $derived(resolveSlugs(feature?.related));
@@ -110,6 +113,14 @@
         <span class="text-xs px-1.5 py-0.5 rounded {STATUS_CLASS[feature.status]}">
           {STATUS_LABEL[feature.status]}
         </span>
+        {#if feature.maturity === "beta"}
+          <span class="text-xs px-1.5 py-0.5 rounded bg-info/15 text-info">Beta</span>
+        {/if}
+        {#if horizonLabel(feature.horizon) && feature.horizon !== "now"}
+          <span class="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+            {horizonLabel(feature.horizon)}
+          </span>
+        {/if}
         {#if feature.kind === "foundation"}
           <span
             class="text-[10px] uppercase tracking-wide px-1 py-0.5 rounded bg-muted text-muted-foreground"
@@ -132,7 +143,36 @@
       {#if feature.description}
         <p class="text-sm text-muted-foreground max-w-3xl">{feature.description}</p>
       {/if}
+      {#if feature.note}
+        <p class="text-sm text-warning max-w-3xl mt-2">{feature.note}</p>
+      {/if}
+      {#if featureRoadmapHref}
+        <!-- eslint-disable svelte/no-navigation-without-resolve -->
+        <a
+          href={featureRoadmapHref}
+          target="_blank"
+          rel="noopener"
+          class="text-sm text-primary hover:underline inline-flex items-center gap-1 mt-2"
+        >
+          Roadmap entry
+          <ExternalLink class="w-3 h-3" />
+        </a>
+        <!-- eslint-enable svelte/no-navigation-without-resolve -->
+      {/if}
     </header>
+
+    {#if feature.gap_reason && feature.status !== "shipped"}
+      <section class="mb-8">
+        <h3 class="text-xs uppercase tracking-wider text-muted-foreground mb-2">
+          What is not available yet
+        </h3>
+        <p
+          class="text-sm text-muted-foreground max-w-3xl whitespace-pre-line border border-border rounded-md p-4"
+        >
+          {feature.gap_reason.trim()}
+        </p>
+      </section>
+    {/if}
 
     <!-- Subitems -->
     {#if feature.subitems?.length}
