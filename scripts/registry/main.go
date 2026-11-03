@@ -405,7 +405,7 @@ func renderMatrixMDX(reg Registry) string {
 	b.WriteString("title: Platform capabilities\n")
 	b.WriteString("description: What FrameWorks exposes across APIs, agents, dashboard workflows, and docs.\n")
 	b.WriteString("---\n\n")
-	b.WriteString("FrameWorks capabilities are available through the GraphQL API, MCP tools, dashboard, CLI, and documented operator workflows. This matrix shows what is usable now, what is expanding, and what remains planned.\n\n")
+	b.WriteString("FrameWorks capabilities are available through the GraphQL API, MCP tools, dashboard, CLI, and documented operator workflows. This matrix shows what is usable now, what is expanding, and what remains planned. For a shorter tour of the product, see the [showcase](%MARKETING_URL%/showcase).\n\n")
 	b.WriteString("## Why teams pick FrameWorks\n\n")
 	b.WriteString("- **Sovereign deployment options** — use FrameWorks hosted, attach your own edge nodes to it, or self-host the entire stack with the CLI and GitOps.\n")
 	b.WriteString("- **Complete live-video workflow** — ingest, playback, multistreaming, playback access control, 24/7 DVR, chapters, clips, VOD, thumbnails, and analytics in one control plane.\n")
@@ -497,7 +497,7 @@ func renderCapabilitiesMDX(reg Registry) string {
 	b.WriteString("title: Platform capability inventory\n")
 	b.WriteString("description: FrameWorks product features and the platform capabilities that support them.\n")
 	b.WriteString("---\n\n")
-	b.WriteString("This broader inventory includes the [product capability matrix](/platform/feature-matrix) and the infrastructure, trust, and orchestration capabilities behind it. Rows marked *(platform)* are operated capabilities, not customer-facing features.\n\n")
+	b.WriteString("This broader inventory includes the [product capability matrix](/platform/feature-matrix) and the infrastructure, trust, and orchestration capabilities behind it. Rows marked *(platform)* are operated capabilities, not customer-facing features. For a shorter tour of the product, see the [showcase](%MARKETING_URL%/showcase).\n\n")
 
 	surfaceLabel := map[string]string{"graphql": "API", "mcp": "Agents (MCP)", "cli": "CLI", "webapp": "Dashboard", "docs": "Docs"}
 	surfaceKeys := []string{"graphql", "mcp", "cli", "webapp", "docs"}

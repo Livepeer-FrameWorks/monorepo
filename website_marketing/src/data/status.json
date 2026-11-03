@@ -93,7 +93,7 @@
           "Confirmation gates on sensitive and billable actions",
           "Diagnostics tools for buffering, packet loss, and routing"
         ],
-        "figure": null,
+        "figure": "AgentLoop",
         "link": {
           "label": "Agent docs",
           "site": "docs",
@@ -123,7 +123,7 @@
           "Startup time, rebuffering, and frame drops per view from the FrameWorks player",
           "VOD retention and watch density per asset"
         ],
-        "figure": null,
+        "figure": "RoutingEvidence",
         "link": {
           "label": "See analytics",
           "site": "marketing",
@@ -821,7 +821,7 @@
       "horizon": "now",
       "tier": "Shipping today",
       "tag": "Shipping",
-      "note": "Trials and custom arrangements are set up by our team. Your dashboard does not yet show an active arrangement or when it ends.",
+      "note": "Trials and custom arrangements are set up by our team. The billing page shows the arrangement, when it ends, and the plan you return to.",
       "roadmap": null,
       "showcase": null
     },
@@ -863,7 +863,7 @@
       "horizon": "now",
       "tier": "Shipping today",
       "tag": "Shipping",
-      "note": "Plan changes and the 14-day payment grace run today. The dashboard does not yet show the grace end date, a scheduled plan change, or the coming move to Free.",
+      "note": "Plan changes, the 14-day payment grace, and the move to Free run today, and the billing page shows each of them. Agents cannot change the plan yet.",
       "roadmap": null,
       "showcase": null
     },

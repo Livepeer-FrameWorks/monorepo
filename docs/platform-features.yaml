@@ -1012,6 +1012,7 @@ features:
         - Stream health, audience geography, and routing decisions in real time
         - Startup time, rebuffering, and frame drops per view from the FrameWorks player
         - VOD retention and watch density per asset
+      figure: RoutingEvidence
       link: { label: See analytics, to: /analytics }
     required_surfaces:
       graphql: { required: true }
@@ -2046,10 +2047,10 @@ features:
         status: partial
         gap_reason: |
           Purser runs the upgrade credit, scheduled downgrades carried to Stripe and Mollie, the 14-day payment grace, and
-          the move to Free with its notices. GraphQL exposes changeBillingTier and the billing status, but not the grace
-          end date, the scheduled tier change, or the pending Free move, so the dashboard cannot show them or offer the
-          payment action, and agents have no tool for tier changes.
-        note: Plan changes and the 14-day payment grace run today. The dashboard does not yet show the grace end date, a scheduled plan change, or the coming move to Free.
+          the move to Free with its notices. GraphQL billingLifecycle exposes the grace end date, the scheduled tier change
+          and its state, and the pending Free move; the billing page shows them with a banner, the payment portal, and
+          cancelling a scheduled downgrade. Agents have no MCP tool for tier changes yet.
+        note: Plan changes, the 14-day payment grace, and the move to Free run today, and the billing page shows each of them. Agents cannot change the plan yet.
         depends_on: [billing]
         required_surfaces:
           graphql: { required: true }
@@ -2062,8 +2063,8 @@ features:
           docs: { required: true }
         surfaces:
           graphql:
-            mutations: [changeBillingTier]
-            queries: [billingStatus, billingTiers]
+            mutations: [changeBillingTier, createStripeBillingPortal]
+            queries: [billingStatus, billingTiers, billingLifecycle]
           webapp:
             routes: ["/account/billing"]
           docs:
@@ -2075,9 +2076,10 @@ features:
         status: partial
         gap_reason: |
           Operators manage grants and closure with frameworks admin billing grant and frameworks admin tenants
-          deactivate, documented in the trial accounts guide. The tenant sees nothing of a grant: GraphQL and the
-          dashboard show neither the arrangement, its end date, nor the fallback plan.
-        note: Trials and custom arrangements are set up by our team. Your dashboard does not yet show an active arrangement or when it ends.
+          deactivate, documented in the trial accounts guide. GraphQL billingLifecycle.operatorGrant and the billing
+          page show the tenant the arrangement's terms, its end date, and the plan it returns to. The tenant gets no
+          email before an arrangement ends.
+        note: Trials and custom arrangements are set up by our team. The billing page shows the arrangement, when it ends, and the plan you return to.
         depends_on: [billing]
         required_surfaces:
           graphql: { required: true }
@@ -2090,10 +2092,14 @@ features:
           cli: { required: true }
           docs: { required: true }
         surfaces:
+          graphql:
+            queries: [billingLifecycle]
+          webapp:
+            routes: ["/account/billing"]
           cli:
             commands: ["admin billing grant", "admin tenants deactivate"]
           docs:
-            pages: [operators/trial-accounts.mdx]
+            pages: [operators/trial-accounts.mdx, builders/billing.mdx]
 
   - slug: wallet
     name: Wallet & on-chain identity
@@ -2393,6 +2399,7 @@ features:
       bullets:
         - Confirmation gates on sensitive and billable actions
         - Diagnostics tools for buffering, packet loss, and routing
+      figure: AgentLoop
       link: { label: Agent docs, docs: agents/overview.mdx }
     required_surfaces:
       mcp: { required: true }

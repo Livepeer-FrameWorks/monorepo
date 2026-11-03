@@ -283,3 +283,17 @@ func TestMatrixCellsCarryBetaRoadmapAndNote(t *testing.T) {
 		t.Fatalf("plain availability = %q", got)
 	}
 }
+
+func TestCapabilityPagesPointAtTheShowcase(t *testing.T) {
+	const pointer = "[showcase](%MARKETING_URL%/showcase)"
+	reg := Registry{}
+	for name, page := range map[string]string{
+		"feature-matrix.mdx":        renderMatrixMDX(reg),
+		"platform-capabilities.mdx": renderCapabilitiesMDX(reg),
+	} {
+		intro, _, _ := strings.Cut(page, "\n#")
+		if !strings.Contains(intro, pointer) {
+			t.Errorf("%s intro lacks the showcase pointer %q:\n%s", name, pointer, intro)
+		}
+	}
+}

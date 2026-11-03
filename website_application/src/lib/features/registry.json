@@ -3564,9 +3564,9 @@
           "audience": "product",
           "description": "Self-serve upgrades start a fresh month and offset the unused part of the old fee; downgrades and cancellations keep the paid plan to the end of the period, then move the account to Free. A failed payment keeps the plan for 14 days with email notices, then moves the account to Free with a final invoice for usage up to the move.",
           "status": "partial",
-          "gap_reason": "Purser runs the upgrade credit, scheduled downgrades carried to Stripe and Mollie, the 14-day payment grace, and\nthe move to Free with its notices. GraphQL exposes changeBillingTier and the billing status, but not the grace\nend date, the scheduled tier change, or the pending Free move, so the dashboard cannot show them or offer the\npayment action, and agents have no tool for tier changes.\n",
+          "gap_reason": "Purser runs the upgrade credit, scheduled downgrades carried to Stripe and Mollie, the 14-day payment grace, and\nthe move to Free with its notices. GraphQL billingLifecycle exposes the grace end date, the scheduled tier change\nand its state, and the pending Free move; the billing page shows them with a banner, the payment portal, and\ncancelling a scheduled downgrade. Agents have no MCP tool for tier changes yet.\n",
           "horizon": "now",
-          "note": "Plan changes and the 14-day payment grace run today. The dashboard does not yet show the grace end date, a scheduled plan change, or the coming move to Free.",
+          "note": "Plan changes, the 14-day payment grace, and the move to Free run today, and the billing page shows each of them. Agents cannot change the plan yet.",
           "required_surfaces": {
             "docs": {
               "required": true
@@ -3587,11 +3587,13 @@
           "surfaces": {
             "graphql": {
               "mutations": [
-                "changeBillingTier"
+                "changeBillingTier",
+                "createStripeBillingPortal"
               ],
               "queries": [
                 "billingStatus",
-                "billingTiers"
+                "billingTiers",
+                "billingLifecycle"
               ]
             },
             "mcp": {},
@@ -3626,9 +3628,9 @@
           "audience": "product",
           "description": "Platform operators give a tenant a time-boxed billing arrangement — a different base fee, waived usage, or manual invoicing — for trials and custom deals, expiring back to the tenant's fallback plan, and close tenant accounts permanently. Every change is audited.",
           "status": "partial",
-          "gap_reason": "Operators manage grants and closure with frameworks admin billing grant and frameworks admin tenants\ndeactivate, documented in the trial accounts guide. The tenant sees nothing of a grant: GraphQL and the\ndashboard show neither the arrangement, its end date, nor the fallback plan.\n",
+          "gap_reason": "Operators manage grants and closure with frameworks admin billing grant and frameworks admin tenants\ndeactivate, documented in the trial accounts guide. GraphQL billingLifecycle.operatorGrant and the billing\npage show the tenant the arrangement's terms, its end date, and the plan it returns to. The tenant gets no\nemail before an arrangement ends.\n",
           "horizon": "now",
-          "note": "Trials and custom arrangements are set up by our team. Your dashboard does not yet show an active arrangement or when it ends.",
+          "note": "Trials and custom arrangements are set up by our team. The billing page shows the arrangement, when it ends, and the plan you return to.",
           "required_surfaces": {
             "cli": {
               "required": true
@@ -3648,7 +3650,11 @@
             }
           },
           "surfaces": {
-            "graphql": {},
+            "graphql": {
+              "queries": [
+                "billingLifecycle"
+              ]
+            },
             "mcp": {},
             "cli": {
               "commands": [
@@ -3656,10 +3662,15 @@
                 "admin tenants deactivate"
               ]
             },
-            "webapp": {},
+            "webapp": {
+              "routes": [
+                "/account/billing"
+              ]
+            },
             "docs": {
               "pages": [
-                "operators/trial-accounts.mdx"
+                "operators/trial-accounts.mdx",
+                "builders/billing.mdx"
               ]
             }
           },
@@ -3669,9 +3680,9 @@
           "actual_surfaces": {
             "cli": true,
             "docs": true,
-            "graphql": false,
+            "graphql": true,
             "mcp": false,
-            "webapp": false
+            "webapp": true
           }
         }
       ],
