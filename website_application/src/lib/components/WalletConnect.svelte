@@ -12,6 +12,7 @@
   } from "$lib/wallet/store.svelte";
   import { auth } from "$lib/stores/auth";
   import { safeReturnTo } from "$lib/auth/returnTo";
+  import { browserPlanStorage, postLoginTarget } from "$lib/auth/signupPlan";
   import {
     connectAndLogin,
     subscribeToConnectors,
@@ -68,9 +69,16 @@
                   new URLSearchParams(window.location.search).get("return_to"),
                   loginPath
                 );
-          // safeReturnTo accepts only a same-origin absolute path.
+          const target = postLoginTarget(
+            returnTo,
+            resolve("/account/billing"),
+            resolve("/"),
+            browserPlanStorage()
+          );
+          // safeReturnTo accepts only a same-origin absolute path; the
+          // fallbacks are resolve()'d paths.
           // eslint-disable-next-line svelte/no-navigation-without-resolve
-          goto(returnTo ?? resolve("/"));
+          goto(target);
         }
       } else {
         throw new Error(loginResult.error || "Wallet login failed");

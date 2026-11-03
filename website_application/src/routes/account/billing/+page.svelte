@@ -4,7 +4,7 @@
   import { get } from "svelte/store";
   import { base, resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
-  import { browserPlanStorage, forgetSignupPlan, requestedPlanTier } from "$lib/auth/signupPlan";
+  import { browserPlanStorage, forgetSignupPlan, resolveRequestedPlan } from "$lib/auth/signupPlan";
   import {
     fragment,
     GetBillingStatusStore,
@@ -167,7 +167,7 @@
       document.getElementById("update-payment")?.scrollIntoView({ block: "start" });
     }
     await handleSetupReturn(params);
-    applyRequestedPlan(params.get("plan"));
+    applyRequestedPlan();
     if (requestedInvoiceId && invoices.some((invoice) => invoice.id === requestedInvoiceId)) {
       expandedInvoiceId = requestedInvoiceId;
       document.getElementById(`invoice-${requestedInvoiceId}`)?.scrollIntoView({ block: "center" });
@@ -176,17 +176,15 @@
 
   // A plan picked at signup (?plan=<tier_name>) opens that tier's change flow
   // once: the confirmation, or payment setup with the tier selected.
-  function applyRequestedPlan(plan: string | null) {
-    if (!plan) return;
-    forgetSignupPlan(browserPlanStorage());
-    const url = new URL(window.location.href);
-    url.searchParams.delete("plan");
-    window.history.replaceState(
-      window.history.state,
-      "",
-      `${url.pathname}${url.search}${url.hash}`
+  function applyRequestedPlan() {
+    const { tier, cleanedHref } = resolveRequestedPlan(
+      window.location.href,
+      availableTiers,
+      currentTier?.id
     );
-    const tier = requestedPlanTier(availableTiers, plan, currentTier?.id);
+    if (!cleanedHref) return;
+    forgetSignupPlan(browserPlanStorage());
+    window.history.replaceState(window.history.state, "", cleanedHref);
     if (tier) chooseTier(tier);
   }
 

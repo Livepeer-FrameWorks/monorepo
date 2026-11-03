@@ -5,6 +5,7 @@
   import { asset, resolve } from "$app/paths";
   import { isEmailVerificationRequired } from "$lib/auth/errors";
   import { safeReturnTo } from "$lib/auth/returnTo";
+  import { browserPlanStorage, postLoginTarget } from "$lib/auth/signupPlan";
   import { takeSessionEnd } from "$lib/houdini/session-end";
   import { auth } from "$lib/stores/auth";
   import { getMarketingSiteUrl } from "$lib/config";
@@ -128,10 +129,16 @@
                 new URLSearchParams(window.location.search).get("return_to"),
                 resolve("/login")
               );
+        const target = postLoginTarget(
+          returnTo,
+          resolve("/account/billing"),
+          resolve("/"),
+          browserPlanStorage()
+        );
         // returnTo is a validated same-origin path (safeReturnTo enforces
-        // it starts with a single "/"); falls back to a resolve()'d default.
+        // it starts with a single "/"); the fallbacks are resolve()'d paths.
         // eslint-disable-next-line svelte/no-navigation-without-resolve
-        goto(returnTo ?? resolve("/"));
+        goto(target);
       } else {
         const loginError = result.error || "Login failed";
         if (isEmailVerificationRequired(result)) {

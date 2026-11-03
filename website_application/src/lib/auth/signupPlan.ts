@@ -55,6 +55,14 @@ export function forgetSignupPlan(storage: PlanStorage): void {
   }
 }
 
+// The billing page with the remembered plan in the query, or null when no
+// plan is remembered.
+export function signupPlanBillingPath(billingPath: string, storage: PlanStorage): string | null {
+  const plan = storedSignupPlan(storage);
+  if (!plan) return null;
+  return `${billingPath}?${new URLSearchParams({ plan })}`;
+}
+
 // Sign-in link after verification: with a remembered plan it returns to the
 // billing page with that plan in the query.
 export function signupPlanLoginHref(
@@ -62,20 +70,55 @@ export function signupPlanLoginHref(
   billingPath: string,
   storage: PlanStorage
 ): string {
-  const plan = storedSignupPlan(storage);
-  if (!plan) return loginPath;
-  const returnTo = `${billingPath}?${new URLSearchParams({ plan })}`;
+  const returnTo = signupPlanBillingPath(billingPath, storage);
+  if (!returnTo) return loginPath;
   return `${loginPath}?${new URLSearchParams({ return_to: returnTo })}`;
 }
 
+// Where a successful sign-in goes: the validated return_to, else the billing
+// page for a remembered plan (the visitor opened /login without the
+// verify-email link), else the dashboard.
+export function postLoginTarget(
+  returnTo: string | null,
+  billingPath: string,
+  homePath: string,
+  storage: PlanStorage
+): string {
+  return returnTo ?? signupPlanBillingPath(billingPath, storage) ?? homePath;
+}
+
+type PlanTier = { id?: string | null; tierName?: string | null; isEnterprise?: boolean | null };
+
 // The billing tier a ?plan= value names, or null for an unknown name, the
 // tenant's current tier, or Enterprise, which is arranged with sales.
-export function requestedPlanTier<
-  T extends { id?: string | null; tierName?: string | null; isEnterprise?: boolean | null },
->(tiers: readonly T[], plan: string | null, currentTierId: string | null | undefined): T | null {
+export function requestedPlanTier<T extends PlanTier>(
+  tiers: readonly T[],
+  plan: string | null,
+  currentTierId: string | null | undefined
+): T | null {
   const name = validPlan(plan);
   if (!name) return null;
   const tier = tiers.find((candidate) => (candidate.tierName ?? "").toLowerCase() === name);
   if (!tier || tier.isEnterprise || tier.id === currentTierId) return null;
   return tier;
+}
+
+// What the billing page does with ?plan= on load. With no plan in the URL, or
+// before the tier list has loaded, nothing is consumed (cleanedHref is null),
+// so the plan is not forgotten unapplied. Otherwise the page drops ?plan= from
+// the URL (cleanedHref, a path with search and hash), forgets the stored plan
+// and opens the change flow for tier when it is not null.
+export function resolveRequestedPlan<T extends PlanTier>(
+  href: string,
+  tiers: readonly T[],
+  currentTierId: string | null | undefined
+): { tier: T | null; cleanedHref: string | null } {
+  const url = new URL(href);
+  const plan = url.searchParams.get("plan");
+  if (!plan || tiers.length === 0) return { tier: null, cleanedHref: null };
+  url.searchParams.delete("plan");
+  return {
+    tier: requestedPlanTier(tiers, plan, currentTierId),
+    cleanedHref: `${url.pathname}${url.search}${url.hash}`,
+  };
 }

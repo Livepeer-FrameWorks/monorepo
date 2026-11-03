@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   forgetSignupPlan,
+  postLoginTarget,
   rememberSignupPlan,
   requestedPlanTier,
+  resolveRequestedPlan,
   signupPlanLoginHref,
   storedSignupPlan,
 } from "./signupPlan";
@@ -71,5 +73,39 @@ describe("signup plan", () => {
     expect(requestedPlanTier(tiers, "enterprise", "t-free")).toBeNull();
     expect(requestedPlanTier(tiers, "unknown", "t-free")).toBeNull();
     expect(requestedPlanTier(tiers, null, "t-free")).toBeNull();
+  });
+
+  it("sends a sign-in without return_to to billing while a plan is remembered", () => {
+    const storage = memoryStorage();
+    expect(postLoginTarget(null, "/account/billing", "/", storage)).toBe("/");
+
+    rememberSignupPlan(new URLSearchParams("plan=developer"), storage);
+    expect(postLoginTarget(null, "/account/billing", "/", storage)).toBe(
+      "/account/billing?plan=developer"
+    );
+    expect(postLoginTarget("/streams", "/account/billing", "/", storage)).toBe("/streams");
+    expect(postLoginTarget(null, "/account/billing", "/", blockedStorage)).toBe("/");
+  });
+
+  it("consumes ?plan= on the billing page only once the tiers are known", () => {
+    const tiers = [
+      { id: "t-free", tierName: "free" },
+      { id: "t-dev", tierName: "developer" },
+    ];
+    const href = "https://app.example/account/billing?plan=developer&invoice=i1#update-payment";
+
+    expect(resolveRequestedPlan(href, [], "t-free")).toEqual({ tier: null, cleanedHref: null });
+    expect(resolveRequestedPlan("https://app.example/account/billing", tiers, "t-free")).toEqual({
+      tier: null,
+      cleanedHref: null,
+    });
+
+    const applied = resolveRequestedPlan(href, tiers, "t-free");
+    expect(applied.tier?.id).toBe("t-dev");
+    expect(applied.cleanedHref).toBe("/account/billing?invoice=i1#update-payment");
+
+    const current = resolveRequestedPlan(href, tiers, "t-dev");
+    expect(current.tier).toBeNull();
+    expect(current.cleanedHref).toBe("/account/billing?invoice=i1#update-payment");
   });
 });
