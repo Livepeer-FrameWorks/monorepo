@@ -435,6 +435,14 @@ func TestEvaluateIngestAdmission_ReasonMapping(t *testing.T) {
 			wantDenied: true,
 		},
 		{
+			name:       "expired operator grant is its own refusal, not a spent balance",
+			resp:       denied(commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_GRANT_EXPIRED),
+			wantHTTP:   402,
+			wantCode:   "GRANT_EXPIRED",
+			wantGRPC:   codes.FailedPrecondition,
+			wantDenied: true,
+		},
+		{
 			name:       "not admitted with no reason fails closed",
 			resp:       denied(commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_UNSPECIFIED),
 			wantHTTP:   403,
@@ -483,6 +491,26 @@ func TestEvaluateIngestAdmission_AdmittedNonPushStreamStillDenied(t *testing.T) 
 			}
 			if denial.Code != "NON_PUSH_MODE_STREAM" {
 				t.Fatalf("got %q want NON_PUSH_MODE_STREAM", denial.Code)
+			}
+		})
+	}
+}
+
+// Iterates the proto enum so a rejection reason added to Commodore cannot
+// reach broadcasters as the generic INGEST_DENIED without a mapping here.
+func TestEvaluateIngestAdmission_EveryRejectionReasonHasACode(t *testing.T) {
+	for value, name := range commodorepb.StreamKeyRejectionReason_name {
+		reason := commodorepb.StreamKeyRejectionReason(value)
+		if reason == commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_UNSPECIFIED {
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			denial := EvaluateIngestAdmission(denied(reason))
+			if denial == nil {
+				t.Fatal("expected denial")
+			}
+			if denial.Code == "INGEST_DENIED" {
+				t.Errorf("%s falls through to INGEST_DENIED; map it to its own code", name)
 			}
 		})
 	}

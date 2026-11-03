@@ -225,6 +225,8 @@ func EvaluateIngestAdmission(resp *commodorepb.ResolveStreamContextResponse) *In
 		return denial(503, "CLUSTER_UNHEALTHY", codes.Unavailable, "ingest cluster is unhealthy")
 	case commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_DUPLICATE_INGEST:
 		return denial(409, "DUPLICATE_INGEST", codes.AlreadyExists, "stream is already ingesting elsewhere")
+	case commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_GRANT_EXPIRED:
+		return denial(402, "GRANT_EXPIRED", codes.FailedPrecondition, "operator grant has expired")
 	default:
 		return denial(403, "INGEST_DENIED", codes.PermissionDenied, "ingest denied")
 	}
