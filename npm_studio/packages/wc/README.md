@@ -117,7 +117,7 @@ studio.getMasterVolume();
 await studio.setQualityProfile("professional");
 await studio.getStats();
 studio.setUseWebCodecs(true);
-studio.setEncoderOverrides({ videoBitrate: 6000000 });
+studio.setEncoderOverrides({ video: { bitrate: 6_000_000 } });
 
 // Devices
 await studio.getDevices();
