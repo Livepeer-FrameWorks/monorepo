@@ -1612,6 +1612,18 @@
     "read_requests": 9,
     "rows_scanned": 52598
   },
+  "purser:DiscardStaleOperatorGrantEndingNotices@declared": {
+    "reason": "Platform-wide sweep as one merge anti-join of the unsent ending notices (idx_operator_grant_notices_unsent_ending) against the grants in force (idx_operator_grants_expiry), both read in end-time order in one pass. The grant side reads every in-force grant once; the fixture holds 1246 of them and only one matches a notice's subscription and end time.",
+    "flags": ["INDEX_SCAN_AMPLIFICATION"],
+    "read_requests": 2,
+    "rows_scanned": 1862
+  },
+  "purser:DiscardStaleOperatorGrantEndingNotices@distributed": {
+    "reason": "Platform-wide sweep as one merge anti-join of the unsent ending notices (idx_operator_grant_notices_unsent_ending) against the grants in force (idx_operator_grants_expiry), both read in end-time order in one pass. The grant side reads every in-force grant once; the fixture holds 1246 of them and only one matches a notice's subscription and end time.",
+    "flags": ["INDEX_SCAN_AMPLIFICATION"],
+    "read_requests": 4,
+    "rows_scanned": 1862
+  },
   "purser:EnqueueUnconfirmedTierDowngrades@declared": {
     "reason": "Service-wide discovery over tenant_subscriptions, which holds one row per tenant, so the scan is bounded by tenant count rather than backlog. One RPC with the filter pushed to storage, same shape as ListDuePendingDowngradeTenantIDs.",
     "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
