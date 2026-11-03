@@ -1055,14 +1055,24 @@ System-tenant managed sources (`mist_native` and pull) belong to the tenant.
 Deactivating their original owner revokes publisher keys and active push sessions;
 managed-source reconciliation and playback continue while the tenant is active.
 
-Cluster retirement remains an open operator requirement: Quartermaster
-has no persisted retirement state or command. An unreachable historical ingest
-cell therefore retains its durable session-stop obligation and raises
-`CommodoreAccountIngestRevocationStuck`; it is never silently treated as retired.
-Tenant closure still completes independently. The alert continues until the cell
-is restored: confirming that it is offline does not settle the obligation. There
-is no retirement command. Silence this alert while awaiting a supported cluster
-retirement mechanism.
+An unreachable historical ingest cell retains its durable session-stop
+obligation and raises `CommodoreAccountIngestRevocationStuck`; it is never
+silently treated as gone. Tenant closure still completes independently. For a
+cell that was removed for good, an operator runs
+`frameworks admin clusters retire <cluster-id> --reason <text>`. Commodore
+records the retirement in `commodore.retired_ingest_cells` only after
+Quartermaster lists the cell's Foghorn registrations and none of those
+instances answers a probe; an unreadable registry or any answering instance
+refuses the retirement. Retirement then ends the backoff of every pending stop
+that includes the cell. On the next delivery attempt, a stop to a retired cell
+that cannot be reached (resolution failure, `Unavailable` or deadline) counts as
+delivered there. A retired cell that answers, including with an error, still
+keeps the stop pending, so a cell that returns receives its stops. Retirement
+changes nothing else about the cluster.
+`frameworks admin clusters unretire <cluster-id> --reason <text>` removes the
+record; stops already settled while the cell was retired are not reopened.
+`frameworks admin tenants get` lists a tenant's pending stops with the retired
+cells among their targets.
 
 Account reactivation supersedes queued owner stops. Commodore rechecks the owner
 before each cell call. A stop already in flight can end a publisher that reconnects
