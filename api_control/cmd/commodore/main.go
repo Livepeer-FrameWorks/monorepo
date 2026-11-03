@@ -212,6 +212,11 @@ func main() {
 			"Unix timestamp of the last complete authority obligation observation",
 			[]string{},
 		),
+		AccountIngestStopOldestPendingSeconds: metricsCollector.NewGauge(
+			"account_ingest_stop_oldest_pending_seconds",
+			"Seconds the oldest pending session stop has waited, by the cell its last attempt failed on",
+			[]string{"cell"},
+		),
 		MediaAuthorityRefreshSettlements: metricsCollector.NewCounter(
 			"media_authority_refresh_settlements_total",
 			"Claimed refresh obligations by how they settled",

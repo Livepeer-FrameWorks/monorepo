@@ -2276,6 +2276,7 @@ func (s *CommodoreServer) observeMediaAuthorityQueues(ctx context.Context) {
 	s.observeMediaAuthorityDeliveryStats(statsCtx)
 	statsCancel()
 	s.observeMediaAuthorityObligationStats(ctx)
+	s.observeAccountIngestStops(ctx)
 }
 
 // mediaAuthorityQueueObservationDue reports whether the queue observation is

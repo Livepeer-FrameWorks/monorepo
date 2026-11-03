@@ -146,10 +146,14 @@ tests:
         exp_alerts: []
   - interval: 1m
     input_series:
-      - series: commodore_media_authority_refresh_oldest_pending_seconds{instance="a",lane="ingest_revocation"}
+      # Two replicas report cell eu until it clears; cell us stays stuck. Each
+      # cell fires and resolves on its own.
+      - series: commodore_account_ingest_stop_oldest_pending_seconds{instance="a",cell="eu"}
         values: "0 600x10 0x5"
-      - series: commodore_media_authority_refresh_oldest_pending_seconds{instance="b",lane="ingest_revocation"}
+      - series: commodore_account_ingest_stop_oldest_pending_seconds{instance="b",cell="eu"}
         values: "0 600x10 0x5"
+      - series: commodore_account_ingest_stop_oldest_pending_seconds{instance="a",cell="us"}
+        values: "0 600x20"
     alert_rule_test:
       - eval_time: 4m
         groupname: frameworks.rules
@@ -161,9 +165,41 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              cell: eu
             exp_annotations:
-              summary: Account session-stop delivery is awaiting a cell
-              description: "A revoked user, tenant or stream still has an ingest stop that a cell has not accepted, including backoff. frameworks cluster doctor --deep names the affected tenants. frameworks cluster diagnose media-authority lists the retrying refresh targets on lane ingest_revocation with the tenant and the last error, which names the cell; frameworks admin tenants get <tenant> lists that tenant's pending stops with their cells. Restore that cell, or upgrade its Foghorn if the error is Unimplemented; Commodore retries the stop until the cell accepts it. For a cell removed for good, frameworks admin clusters retire <cluster-id> --reason <reason> settles the stops owed to it. Tenant closure proceeds independently of stop delivery. This alert aggregates all cells: silencing it also hides stops pending on other cells."
+              summary: Cell eu has not accepted an account session stop
+              description: "A revoked user, tenant or stream still has an ingest stop that cell eu has not accepted, including backoff. frameworks cluster doctor --deep names the affected tenants and frameworks admin tenants get <tenant> lists each pending stop with its cells and last error. Restore cell eu, or upgrade its Foghorn if the error is Unimplemented; Commodore retries the stop until the cell accepts it. If the cell is removed for good, frameworks admin clusters retire eu --reason <reason> settles the stops owed to it. Tenant closure proceeds independently of stop delivery. The alert fires per cell, so silencing one cell leaves the others visible."
+          - exp_labels:
+              severity: warning
+              cell: us
+            exp_annotations:
+              summary: Cell us has not accepted an account session stop
+              description: "A revoked user, tenant or stream still has an ingest stop that cell us has not accepted, including backoff. frameworks cluster doctor --deep names the affected tenants and frameworks admin tenants get <tenant> lists each pending stop with its cells and last error. Restore cell us, or upgrade its Foghorn if the error is Unimplemented; Commodore retries the stop until the cell accepts it. If the cell is removed for good, frameworks admin clusters retire us --reason <reason> settles the stops owed to it. Tenant closure proceeds independently of stop delivery. The alert fires per cell, so silencing one cell leaves the others visible."
+      - eval_time: 15m
+        groupname: frameworks.rules
+        alertname: CommodoreAccountIngestRevocationStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              cell: us
+            exp_annotations:
+              summary: Cell us has not accepted an account session stop
+              description: "A revoked user, tenant or stream still has an ingest stop that cell us has not accepted, including backoff. frameworks cluster doctor --deep names the affected tenants and frameworks admin tenants get <tenant> lists each pending stop with its cells and last error. Restore cell us, or upgrade its Foghorn if the error is Unimplemented; Commodore retries the stop until the cell accepts it. If the cell is removed for good, frameworks admin clusters retire us --reason <reason> settles the stops owed to it. Tenant closure proceeds independently of stop delivery. The alert fires per cell, so silencing one cell leaves the others visible."
+  - interval: 1m
+    input_series:
+      - series: commodore_account_ingest_stop_oldest_pending_seconds{instance="a",cell="unknown"}
+        values: "0 600x10 0x5"
+    alert_rule_test:
+      - eval_time: 7m
+        groupname: frameworks.rules
+        alertname: CommodoreAccountIngestRevocationStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              cell: unknown
+            exp_annotations:
+              summary: Account session-stop delivery has not reached a cell
+              description: "A revoked user, tenant or stream has an ingest stop whose last attempt failed before contacting any cell, or that has not been attempted yet. frameworks cluster doctor --deep names the affected tenants and frameworks admin tenants get <tenant> shows each pending stop with its last error; that error comes from Commodore's database, so restore Commodore's database connection and Commodore retries. Tenant closure proceeds independently of stop delivery. The alert fires per cell, so silencing one cell leaves the others visible."
       - eval_time: 15m
         groupname: frameworks.rules
         alertname: CommodoreAccountIngestRevocationStuck

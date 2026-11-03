@@ -142,11 +142,14 @@ type ServerMetrics struct {
 	// they replace had used less than a quarter of its validity. Renewal is due
 	// at a third, so a healthy compiler never counts one, whatever the catalog
 	// size or validity class.
-	MediaAuthorityEarlyRenewals          *prometheus.CounterVec
-	FieldDecryptFailures                 *prometheus.CounterVec
-	TenantAccountClosureReadFailures     *prometheus.CounterVec
-	TenantAccountClosureFailures         *prometheus.GaugeVec
-	TenantAccountClosureRepeatedFailures *prometheus.GaugeVec
+	MediaAuthorityEarlyRenewals *prometheus.CounterVec
+	// AccountIngestStopOldestPendingSeconds is the oldest pending session stop
+	// per cell its last attempt failed on, so one cell can be silenced alone.
+	AccountIngestStopOldestPendingSeconds *prometheus.GaugeVec
+	FieldDecryptFailures                  *prometheus.CounterVec
+	TenantAccountClosureReadFailures      *prometheus.CounterVec
+	TenantAccountClosureFailures          *prometheus.GaugeVec
+	TenantAccountClosureRepeatedFailures  *prometheus.GaugeVec
 }
 
 type streamAdmissionBilling interface {
@@ -245,6 +248,9 @@ type CommodoreServer struct {
 	// for, so each cell has exactly one.
 	mediaAuthorityDeliveryCells    sync.Map
 	mediaAuthorityQueuesObservedAt atomic.Int64
+	// ingestStopObservedCells holds the cells the last session-stop observation
+	// published; only the queue observation worker touches it.
+	ingestStopObservedCells map[string]struct{}
 	// foghornDiscovery remembers a cell's Foghorn addresses briefly. Deliveries
 	// to one cell arrive in bursts, and asking Quartermaster for each of them is
 	// the same answer many times over.

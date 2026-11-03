@@ -49,7 +49,7 @@ func (s *CommodoreServer) stopAccountIngest(ctx context.Context, tenantID, strea
 			defer cancel()
 			client, resolveErr := s.resolveFoghornForClusterDirect(callCtx, cell)
 			if resolveErr != nil {
-				failures[i] = fmt.Errorf("resolve historical ingest cell %s: %w", cell, resolveErr)
+				failures[i] = ingestStopCellError("resolve historical ingest", cell, resolveErr)
 				unreachable[i] = true
 				return
 			}
@@ -71,7 +71,7 @@ func (s *CommodoreServer) stopAccountIngest(ctx context.Context, tenantID, strea
 				_, _, stopErr = client.TerminateNamedTenantStreams(callCtx, tenantID, sharedauthority.ReasonAccountInactive, names)
 			}
 			if stopErr != nil {
-				failures[i] = fmt.Errorf("stop ingest on cell %s: %w", cell, stopErr)
+				failures[i] = ingestStopCellError("stop ingest on", cell, stopErr)
 				unreachable[i] = ingestCellUnreachable(stopErr)
 			}
 		}()
