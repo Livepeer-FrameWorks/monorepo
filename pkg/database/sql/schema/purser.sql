@@ -3598,7 +3598,7 @@ CREATE TABLE IF NOT EXISTS purser.operator_grant_notices (
 );
 
 CREATE INDEX IF NOT EXISTS idx_operator_grant_notices_pending
-ON purser.operator_grant_notices(attempted_at, ends_at)
+ON purser.operator_grant_notices(attempted_at ASC, ends_at)
 WHERE notified_at IS NULL AND abandoned_at IS NULL;
 
 -- Binding a fallback writes its parent row as well as locking it. Yugabyte's
