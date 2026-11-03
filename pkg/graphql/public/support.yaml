@@ -7,8 +7,14 @@
 # make verify-api-compat validates them against every such release.
 #
 # docs/standards/graphql-deprecation.md is the policy these lines enforce.
-current: "0.4"
+current: "0.5"
 lines:
+  # 0.5 adds GetBillingLifecycle (served from v0.3.14; the SDKs refuse it
+  # against older releases) beside every 0.4 operation. It is a line of its
+  # own because the release is a 0.x minor.
+  - line: "0.5"
+    status: live
+    min_server: v0.3.11
   # 0.4 drops Stream.metrics and Stream.streamKey from the shared stream
   # selection, so stream operations need only the streams:* scopes; live
   # state moves to GetStreamMetrics and ListStreamMetrics (analytics:read),

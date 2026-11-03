@@ -822,7 +822,11 @@ class GraphQLClient(BaseClient):
         price, without cash refund or spendable balance. Provider or metering
         reconciliation can leave them pending.
         Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement.
-        Downgrades take effect at the current billing period end.
+        Downgrades take effect at the end of the current billing period. A Stripe or
+        Mollie subscription is repriced to the lower tier before it renews; a move to
+        Free cancels it instead, at billingLifecycle.freeMoveFinalAt. Choosing the
+        current tier cancels a downgrade while billingLifecycle.pendingTierState is
+        SCHEDULED; it needs no billing profile or collection setup.
         A refusal returns ValidationError whose code is one of PENDING_CHECKOUT,
         PENDING_FREE_FALLBACK, PENDING_UPGRADE, OUTSTANDING_GRANT, ACCOUNT_CLOSED,
         DOWNGRADE_HELD, PAID_TERM_ENDING, PROVIDER_SUBSCRIPTION_LIVE,

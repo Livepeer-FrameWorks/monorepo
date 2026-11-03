@@ -1,5 +1,15 @@
 # @livepeer-frameworks/player-svelte
 
+## 0.7.0
+
+### Minor Changes
+
+- 2e96c5a: `<Player bind:controller>` and `getController()` on the component instance give the `PlayerController` of the current content, as a ref does on the React `Player`. The bound value changes when the content changes and is null once the player is torn down.
+
+### Patch Changes
+
+- @livepeer-frameworks/player-core@0.7.1
+
 ## 0.6.5
 
 ### Patch Changes

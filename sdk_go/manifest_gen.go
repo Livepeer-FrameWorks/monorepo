@@ -3,10 +3,10 @@
 package frameworks
 
 // SDKVersion is the version of this SDK.
-const SDKVersion = "0.4.1"
+const SDKVersion = "0.5.0"
 
 // SDKLine is the compatibility line of this SDK; under 0.x each minor version is its own line.
-const SDKLine = "0.4"
+const SDKLine = "0.5"
 
 // MinServerVersion is the oldest FrameWorks release this SDK line supports.
 const MinServerVersion = "v0.3.11"

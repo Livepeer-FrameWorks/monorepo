@@ -1,5 +1,11 @@
 # @livepeer-frameworks/player-react
 
+## 0.7.1
+
+### Patch Changes
+
+- @livepeer-frameworks/player-core@0.7.1
+
 ## 0.7.0
 
 ### Minor Changes

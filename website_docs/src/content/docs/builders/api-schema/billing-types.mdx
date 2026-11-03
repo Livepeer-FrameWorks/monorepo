@@ -479,7 +479,7 @@ A single line item on an invoice or usage preview, produced by the rating engine
 - **clusterId**: `String` — Cluster id this line was attributed to; null for tenant-scoped lines (base_subscription).
 - **clusterName**: `String` — Display name of the cluster, joined from Quartermaster at read time. Null when clusterId is null.
 - **clusterKind**: `String` — platform_official &#124; tenant_private &#124; third_party_marketplace; null when clusterId is null.
-- **pricingSource**: `String!` — Why the line was priced as it was: tier, cluster_metered, cluster_monthly, cluster_custom, free_unmetered, self_hosted, included_subscription.
+- **pricingSource**: `String!` — Why the line was priced as it was: tier, cluster_metered, cluster_monthly, cluster_custom, free_unmetered, self_hosted, included_subscription, beta_free (usage waived to zero by the platform waiver) or grant_waived (usage waived to zero by the tenant&#39;s FrameWorks arrangement).
 - **pricingLabel**: `String!` — Human-readable label of pricingSource (e.g. &#39;Self-hosted (no charge)&#39;, &#39;Marketplace metered&#39;). Empty when not populated by the gateway.
 - **unit**: `String!` — Canonical quantity unit.
 - **dimensions**: `JSON!` ([JSON](/builders/api-schema/shared/#json)) — Bounded pricing dimensions such as codec, rendition, backend, or model.

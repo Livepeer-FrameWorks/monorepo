@@ -2055,9 +2055,9 @@ class BillingStatusDefaultInvoicePreviewLineItems(BaseModel):
     "platform_official | tenant_private | third_party_marketplace; null when clusterId is null."
     pricing_source: str = Field(
         alias="pricingSource",
-        description="Why the line was priced as it was: tier, cluster_metered, cluster_monthly, cluster_custom, free_unmetered, self_hosted, included_subscription.",
+        description="Why the line was priced as it was: tier, cluster_metered, cluster_monthly, cluster_custom, free_unmetered, self_hosted, included_subscription, beta_free (usage waived to zero by the platform waiver) or grant_waived (usage waived to zero by the tenant's FrameWorks arrangement).",
     )
-    "Why the line was priced as it was: tier, cluster_metered, cluster_monthly, cluster_custom, free_unmetered, self_hosted, included_subscription."
+    "Why the line was priced as it was: tier, cluster_metered, cluster_monthly, cluster_custom, free_unmetered, self_hosted, included_subscription, beta_free (usage waived to zero by the platform waiver) or grant_waived (usage waived to zero by the tenant's FrameWorks arrangement)."
     pricing_label: str = Field(
         alias="pricingLabel",
         description="Human-readable label of pricingSource (e.g. 'Self-hosted (no charge)', 'Marketplace metered'). Empty when not populated by the gateway.",
@@ -6510,9 +6510,9 @@ class InvoiceDefaultLineItems(BaseModel):
     "platform_official | tenant_private | third_party_marketplace; null when clusterId is null."
     pricing_source: str = Field(
         alias="pricingSource",
-        description="Why the line was priced as it was: tier, cluster_metered, cluster_monthly, cluster_custom, free_unmetered, self_hosted, included_subscription.",
+        description="Why the line was priced as it was: tier, cluster_metered, cluster_monthly, cluster_custom, free_unmetered, self_hosted, included_subscription, beta_free (usage waived to zero by the platform waiver) or grant_waived (usage waived to zero by the tenant's FrameWorks arrangement).",
     )
-    "Why the line was priced as it was: tier, cluster_metered, cluster_monthly, cluster_custom, free_unmetered, self_hosted, included_subscription."
+    "Why the line was priced as it was: tier, cluster_metered, cluster_monthly, cluster_custom, free_unmetered, self_hosted, included_subscription, beta_free (usage waived to zero by the platform waiver) or grant_waived (usage waived to zero by the tenant's FrameWorks arrangement)."
     pricing_label: str = Field(
         alias="pricingLabel",
         description="Human-readable label of pricingSource (e.g. 'Self-hosted (no charge)', 'Marketplace metered'). Empty when not populated by the gateway.",

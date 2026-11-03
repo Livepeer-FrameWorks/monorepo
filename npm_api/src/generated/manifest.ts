@@ -9,10 +9,10 @@ export interface OperationInfo {
 }
 
 /** The SDK package version. */
-export const sdkVersion = "0.4.1";
+export const sdkVersion = "0.5.0";
 
 /** The SDK compatibility line; under 0.x each minor version is its own line. */
-export const sdkLine = "0.4";
+export const sdkLine = "0.5";
 
 /** The oldest FrameWorks release this SDK line supports. */
 export const minServerVersion = "v0.3.11";

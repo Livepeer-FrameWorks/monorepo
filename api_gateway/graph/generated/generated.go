@@ -26865,7 +26865,11 @@ type Mutation {
   price, without cash refund or spendable balance. Provider or metering
   reconciliation can leave them pending.
   Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement.
-  Downgrades take effect at the current billing period end.
+  Downgrades take effect at the end of the current billing period. A Stripe or
+  Mollie subscription is repriced to the lower tier before it renews; a move to
+  Free cancels it instead, at billingLifecycle.freeMoveFinalAt. Choosing the
+  current tier cancels a downgrade while billingLifecycle.pendingTierState is
+  SCHEDULED; it needs no billing profile or collection setup.
   A refusal returns ValidationError whose code is one of PENDING_CHECKOUT,
   PENDING_FREE_FALLBACK, PENDING_UPGRADE, OUTSTANDING_GRANT, ACCOUNT_CLOSED,
   DOWNGRADE_HELD, PAID_TERM_ENDING, PROVIDER_SUBSCRIPTION_LIVE,
@@ -30226,7 +30230,7 @@ type LineItem {
   clusterName: String
   "platform_official | tenant_private | third_party_marketplace; null when clusterId is null."
   clusterKind: String
-  "Why the line was priced as it was: tier, cluster_metered, cluster_monthly, cluster_custom, free_unmetered, self_hosted, included_subscription."
+  "Why the line was priced as it was: tier, cluster_metered, cluster_monthly, cluster_custom, free_unmetered, self_hosted, included_subscription, beta_free (usage waived to zero by the platform waiver) or grant_waived (usage waived to zero by the tenant's FrameWorks arrangement)."
   pricingSource: String!
   "Human-readable label of pricingSource (e.g. 'Self-hosted (no charge)', 'Marketplace metered'). Empty when not populated by the gateway."
   pricingLabel: String!
@@ -30268,8 +30272,9 @@ type TenantSubscription {
   # Payment
   paymentMethod: String
   billingModel: String!
-  # Scheduled tier change (typically a downgrade) staged via changeBillingTier,
-  # applied by the billing close job after the current period's invoice clears.
+  # Scheduled tier change (typically a downgrade) staged via changeBillingTier.
+  # A downgrade applies once the invoice closing its period is finalized and,
+  # for a Stripe or Mollie subscription, the provider charges the target tier.
   pendingTier: BillingTier
   pendingEffectiveAt: Time
   """
