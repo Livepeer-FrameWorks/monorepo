@@ -14,7 +14,7 @@ routing, analytics, billing, and playback access control above them. It is built
 team.
 
 Three FrameWorks services come up in this guide. **Foghorn** routes viewers and encoders to an edge
-and relays streams between edges. **Helmsman** runs next to MistServer on every edge and connects it
+and tells an edge which other edge to pull a stream from. **Helmsman** runs next to MistServer on every edge and connects it
 to Foghorn. **Chandler** serves a cluster's thumbnails, seek-preview sprites, VOD metadata, and
 assets cached from object storage.
 
@@ -178,15 +178,15 @@ Flussonic's cluster page advises building new clusters on its Catena product rat
 If you are planning a new cluster, weigh that route as well. Existing FMS clusters translate
 as follows.
 
-| Flussonic                                                        | FrameWorks                                                                                                                                                   |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `cluster_key` shared by servers                                  | Enrollment tokens; each node joins a cluster through `frameworks edge deploy`                                                                                |
-| `source` restreamer pulling from an origin                       | Foghorn relays over DTSC on viewer demand. Up next: pre-emptive replication in [Stream Replication Orchestration](/roadmap#stream-replication-orchestration) |
-| `balancer` redirect by bitrate, clients, usage, or streams       | Foghorn scores edges by geography, load, and health, and redirects viewers                                                                                   |
-| Per-peer `countries` GeoIP routing                               | [Viewer placement policy](/builders/media-placement), plus geo-routed DNS for tenant domains                                                                 |
-| `cluster_ingest`: restarts a stream on another peer if one fails | `sourceLocation` limits where a source may run. More than one edge per region per cluster is planned; until then, test node loss on your topology            |
-| `capture_at` soft preference for a server                        | `sourceLocation` with `nodeIds`, which is a hard restriction                                                                                                 |
-| `config_external` configuration backend                          | A polling equivalent is not planned. Use GraphQL, or the GitOps manifest on a full self-host                                                                 |
+| Flussonic                                                        | FrameWorks                                                                                                                                                                                         |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cluster_key` shared by servers                                  | Enrollment tokens; each node joins a cluster through `frameworks edge deploy`                                                                                                                      |
+| `source` restreamer pulling from an origin                       | Edges pull from the origin edge over DTSC on viewer demand, arranged by Foghorn. Up next: pre-emptive replication in [Stream Replication Orchestration](/roadmap#stream-replication-orchestration) |
+| `balancer` redirect by bitrate, clients, usage, or streams       | Foghorn scores edges by geography, load, and health, and redirects viewers                                                                                                                         |
+| Per-peer `countries` GeoIP routing                               | [Viewer placement policy](/builders/media-placement), plus geo-routed DNS for tenant domains                                                                                                       |
+| `cluster_ingest`: restarts a stream on another peer if one fails | `sourceLocation` limits where a source may run. More than one edge per region per cluster is planned; until then, test node loss on your topology                                                  |
+| `capture_at` soft preference for a server                        | `sourceLocation` with `nodeIds`, which is a hard restriction                                                                                                                                       |
+| `config_external` configuration backend                          | A polling equivalent is not planned. Use GraphQL, or the GitOps manifest on a full self-host                                                                                                       |
 
 ### API and events
 
