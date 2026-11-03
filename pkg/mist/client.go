@@ -854,6 +854,48 @@ func (c *Client) SetBandwidthLimit(bytesPerSec uint64) error {
 	return nil
 }
 
+// CountEveryConnection is the bandwidth exception list that matches no
+// address. Mist leaves a connection from an excepted address out of the
+// server's and its stream's byte totals, and refills an empty list with its
+// loopback and private-range defaults, so one empty entry is how every
+// connection is counted.
+var CountEveryConnection = []string{""}
+
+// SetBandwidthExceptions sets Mist's bandwidth exception list through the
+// top-level bandwidth command; Mist keeps its limit when only the list is sent.
+// The response echoes the stored bandwidth object.
+func (c *Client) SetBandwidthExceptions(exceptions []string) error {
+	resp, err := c.makeAPIRequest(map[string]interface{}{
+		"bandwidth": map[string]interface{}{"exceptions": exceptions},
+	})
+	if err != nil {
+		return err
+	}
+	echo, ok := resp["bandwidth"].(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("bandwidth response missing")
+	}
+	if !BandwidthExceptionsEqual(echo["exceptions"], exceptions) {
+		return fmt.Errorf("bandwidth exceptions = %v after setting %q", echo["exceptions"], exceptions)
+	}
+	return nil
+}
+
+// BandwidthExceptionsEqual reports whether a decoded exceptions value from
+// Mist holds exactly want, in order.
+func BandwidthExceptionsEqual(got interface{}, want []string) bool {
+	list, ok := got.([]interface{})
+	if !ok || len(list) != len(want) {
+		return false
+	}
+	for i, entry := range list {
+		if s, isString := entry.(string); !isString || s != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // AddStreams adds or updates streams without deleting others
 func (c *Client) AddStreams(streams map[string]map[string]interface{}) error {
 	return c.AddStreamsContext(context.Background(), streams)

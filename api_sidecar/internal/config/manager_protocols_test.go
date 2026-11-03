@@ -20,6 +20,7 @@ type recordingMistAPI struct {
 	calls          []string
 	discoverySets  []bool
 	bandwidthSets  []uint64
+	exceptionSets  [][]string
 	dedicatedError error
 }
 
@@ -47,7 +48,33 @@ func (m *recordingMistAPI) SetBandwidthLimit(bytesPerSec uint64) error {
 	}
 	m.bandwidthSets = append(m.bandwidthSets, bytesPerSec)
 	if m.backupResult != nil {
-		m.backupResult["bandwidth"] = map[string]interface{}{"limit": float64(bytesPerSec)}
+		section, _ := m.backupResult["bandwidth"].(map[string]interface{})
+		if section == nil {
+			section = map[string]interface{}{}
+			m.backupResult["bandwidth"] = section
+		}
+		section["limit"] = float64(bytesPerSec)
+	}
+	return nil
+}
+
+func (m *recordingMistAPI) SetBandwidthExceptions(exceptions []string) error {
+	m.calls = append(m.calls, "SetBandwidthExceptions")
+	if m.dedicatedError != nil {
+		return m.dedicatedError
+	}
+	m.exceptionSets = append(m.exceptionSets, exceptions)
+	if m.backupResult != nil {
+		section, _ := m.backupResult["bandwidth"].(map[string]interface{})
+		if section == nil {
+			section = map[string]interface{}{}
+			m.backupResult["bandwidth"] = section
+		}
+		list := make([]interface{}, len(exceptions))
+		for i, e := range exceptions {
+			list[i] = e
+		}
+		section["exceptions"] = list
 	}
 	return nil
 }

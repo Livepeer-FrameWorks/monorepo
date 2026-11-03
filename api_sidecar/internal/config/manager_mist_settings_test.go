@@ -71,6 +71,17 @@ func TestReconcileAppliesConfiguredBandwidthLimit(t *testing.T) {
 	assertNoDroppedConfigKeys(t, fake.updatedConfigs)
 }
 
+func TestReconcileCountsEveryConnectionWithoutConfiguredLimit(t *testing.T) {
+	fake := &recordingMistAPI{}
+	m := &Manager{mistClient: fake, logger: logging.NewLogger(), lastSeed: reconcileSeed()}
+
+	m.reconcile()
+
+	if len(fake.exceptionSets) != 1 || !slices.Equal(fake.exceptionSets[0], mist.CountEveryConnection) {
+		t.Fatalf("SetBandwidthExceptions calls = %q, want one setting %q", fake.exceptionSets, mist.CountEveryConnection)
+	}
+}
+
 func TestReconcileLeavesMistBandwidthWithoutConfiguredLimit(t *testing.T) {
 	fake := &recordingMistAPI{}
 	m := &Manager{mistClient: fake, logger: logging.NewLogger(), lastSeed: reconcileSeed()}
@@ -148,9 +159,12 @@ func TestRepairConfigDriftReassertsBandwidthLimit(t *testing.T) {
 	}
 }
 
-// The drift loop against Mist's HTTP API: config_backup shows discovery on
-// and no bandwidth limit, and the repair must send exactly Mist's dedicated
-// commands, then save.
+// The drift loop against Mist's HTTP API: config_backup shows discovery on,
+// a bandwidth exception list and no bandwidth limit, and the repair must send
+// exactly Mist's dedicated commands, then save. Mist leaves a connection from an
+// excepted address out of its stream's byte totals, so a publisher on a private
+// network would report no ingest bytes; the list that matches no address is
+// [""], because Mist refills an empty list with its private-range defaults.
 func TestRepairConfigDriftSendsMistDedicatedCommands(t *testing.T) {
 	appconfigtest.Setenv(t, "HELMSMAN_BW_LIMIT_BYTES_PER_SEC", "125000000")
 	triggers, err := json.Marshal(desiredTriggers())
@@ -182,7 +196,15 @@ func TestRepairConfigDriftSendsMistDedicatedCommands(t *testing.T) {
 		case cmd["camera_config"] != nil:
 			_, _ = w.Write([]byte(`{"camera_config":{"device_discovery":false}}`))
 		case cmd["bandwidth"] != nil:
-			_, _ = w.Write([]byte(`{"bandwidth":{"limit":125000000,"exceptions":["::1"]}}`))
+			var sent struct {
+				Exceptions json.RawMessage `json:"exceptions"`
+			}
+			_ = json.Unmarshal(cmd["bandwidth"], &sent)
+			exceptions := `["::1"]`
+			if sent.Exceptions != nil {
+				exceptions = string(sent.Exceptions)
+			}
+			_, _ = w.Write([]byte(`{"bandwidth":{"limit":125000000,"exceptions":` + exceptions + `}}`))
 		default:
 			_, _ = w.Write([]byte(`{}`))
 		}
@@ -200,6 +222,7 @@ func TestRepairConfigDriftSendsMistDedicatedCommands(t *testing.T) {
 	defer mu.Unlock()
 	want := []string{
 		`{"camera_config":{"device_discovery":false}}`,
+		`{"bandwidth":{"exceptions":[""]}}`,
 		`{"bandwidth":{"limit":125000000}}`,
 		`{"save":true}`,
 	}

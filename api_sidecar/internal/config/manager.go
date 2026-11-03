@@ -62,6 +62,7 @@ type mistAPI interface {
 	UpdateConfig(partial map[string]interface{}) (map[string]interface{}, error)
 	SetDeviceDiscovery(enabled bool) error
 	SetBandwidthLimit(bytesPerSec uint64) error
+	SetBandwidthExceptions(exceptions []string) error
 	Save() error
 	AddProtocols(protocols []map[string]interface{}) error
 	UpdateProtocol(oldConfig, newConfig map[string]interface{}) error
@@ -557,15 +558,21 @@ func applyBaselineMistConfig(desiredConfig map[string]any) {
 }
 
 // applyDedicatedMistSettings writes the managed values Mist's generic config
-// command does not accept: device discovery (camera_config) and the node
-// bandwidth limit (bandwidth). FrameWorks does not use Mist's NDI/ONVIF/VISCA
-// camera auto-discovery, whose probe loop sends UDP broadcast and multicast
-// datagrams every few seconds, so discovery is always off; enabling cameras
-// later flips this managed value, not an app-level toggle. A zero configured
-// bandwidth limit leaves Mist's own limit in place.
+// command does not accept: device discovery (camera_config), the bandwidth
+// exception list and the node bandwidth limit (bandwidth). FrameWorks does not
+// use Mist's NDI/ONVIF/VISCA camera auto-discovery, whose probe loop sends UDP
+// broadcast and multicast datagrams every few seconds, so discovery is always
+// off; enabling cameras later flips this managed value, not an app-level
+// toggle. Every connection counts toward the byte totals that stream
+// analytics and node load read, whatever network it comes from, so the
+// exception list matches nothing. A zero configured bandwidth limit leaves
+// Mist's own limit in place.
 func (m *Manager) applyDedicatedMistSettings() error {
 	if err := m.mistClient.SetDeviceDiscovery(false); err != nil {
 		return fmt.Errorf("device discovery: %w", err)
+	}
+	if err := m.mistClient.SetBandwidthExceptions(mist.CountEveryConnection); err != nil {
+		return fmt.Errorf("bandwidth exceptions: %w", err)
 	}
 	if limit := ConfiguredBandwidthLimitBytesPerSec(); limit > 0 {
 		if err := m.mistClient.SetBandwidthLimit(limit); err != nil {
@@ -576,8 +583,8 @@ func (m *Manager) applyDedicatedMistSettings() error {
 }
 
 // dedicatedMistSettingsDrifted reports whether a config_backup shows device
-// discovery not disabled or a bandwidth limit other than the configured one.
-// Mist treats an absent device_discovery key as enabled.
+// discovery not disabled, or a bandwidth exception list or limit other than
+// the managed one. Mist treats an absent device_discovery key as enabled.
 func dedicatedMistSettingsDrifted(current map[string]any) (discovery, bandwidth bool) {
 	discovery = true
 	if configSection, ok := current["config"].(map[string]any); ok {
@@ -585,13 +592,11 @@ func dedicatedMistSettingsDrifted(current map[string]any) (discovery, bandwidth 
 			discovery = enabled
 		}
 	}
+	bandwidthSection, hasBandwidth := current["bandwidth"].(map[string]any)
+	bandwidth = !hasBandwidth || !mist.BandwidthExceptionsEqual(bandwidthSection["exceptions"], mist.CountEveryConnection)
 	if limit := ConfiguredBandwidthLimitBytesPerSec(); limit > 0 {
-		bandwidth = true
-		if bandwidthSection, ok := current["bandwidth"].(map[string]any); ok {
-			if got, isNumber := bandwidthSection["limit"].(float64); isNumber {
-				bandwidth = uint64(got) != limit
-			}
-		}
+		got, isNumber := bandwidthSection["limit"].(float64)
+		bandwidth = bandwidth || !isNumber || uint64(got) != limit
 	}
 	return discovery, bandwidth
 }
