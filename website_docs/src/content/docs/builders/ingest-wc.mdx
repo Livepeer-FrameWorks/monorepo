@@ -239,6 +239,7 @@ or callback properties:
 | `gateway-url`              | `string`  | —             | Gateway GraphQL endpoint for resolver-backed ingest environments |
 | `stream-key`               | `string`  | —             | Stream key used with `gateway-url`                               |
 | `initial-profile`          | `string`  | `"broadcast"` | Quality preset                                                   |
+| `layout-key`               | `string`  | —             | The stream the layout belongs to (`layoutKey` property)          |
 | `auto-start-camera`        | `boolean` | `false`       | Start the camera once an endpoint is known                       |
 | `enable-compositor`        | `boolean` | `true`        | Run the compositor; `"false"` turns it off                       |
 | `show-producer-panel`      | `boolean` | `true`        | Producer panel while the compositor runs; `"false"` turns it off |
@@ -254,9 +255,12 @@ or callback properties:
 | `debug`                    | `boolean` | `false`       | Enable debug logging                                             |
 
 `compositorConfig`, `initialLayout`, `onLayoutChange`, `resolveWhipUrl`, `onStateChange` and
-`onError` are JS properties. `initialLayout` and `onLayoutChange` work as described in
+`onError` are JS properties. `layoutKey`, `initialLayout` and `onLayoutChange(layout, layoutKey)`
+work as described in
 [Saving and Restoring the Layout](/builders/ingest-compositor/#saving-and-restoring-the-layout); the
-element also has `exportLayout()` and `importLayout(layout)` methods.
+element also has `exportLayout()` and `importLayout(layout)` methods. To switch streams, set
+`whipUrl`, `layoutKey` and `initialLayout` together: the element keeps its sources and shows the
+new key's layout.
 `resolveWhipUrl(signal)` returns the destination right before each connection. The `theme`
 property also takes an object of token overrides, as in the React and Svelte packages.
 
@@ -273,12 +277,13 @@ studio.addEventListener("fw-sc-state-change", (e) => {
 ```
 
 `fw-sc-layout-change` fires about 300 ms after the compositor's scenes, overlays, active scene or
-layout preset change, with the layout in `e.detail.layout`. Store it and pass it back as
-`initialLayout`:
+layout preset change, with the layout in `e.detail.layout` and its key in `e.detail.layoutKey`.
+Store it under that key and pass it back as `initialLayout`:
 
 ```js
 studio.addEventListener("fw-sc-layout-change", (e) => {
-  localStorage.setItem("studio-layout", JSON.stringify(e.detail.layout));
+  const { layout, layoutKey } = e.detail;
+  if (layoutKey) localStorage.setItem(`studio-layout:${layoutKey}`, JSON.stringify(layout));
 });
 ```
 

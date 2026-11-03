@@ -281,32 +281,38 @@ session's captures. Sources added after a layout is applied join the active scen
 places them. An image picked from disk is carried as a data URL, stored at no more than the
 frame size, so the layout stays small enough for page storage.
 
-The drop-in components take the layout to start from and report changes:
+The drop-in components take the stream a layout belongs to and the layout to start from, and
+report changes:
 
-| Prop / property  | Type                             | Description                                                                          |
-| ---------------- | -------------------------------- | ------------------------------------------------------------------------------------ |
-| `initialLayout`  | `StudioLayout \| null`           | Layout to apply when the compositor starts                                           |
-| `onLayoutChange` | `(layout: StudioLayout) => void` | Called about 300 ms after the scenes, overlays, active scene or layout preset change |
+| Prop / property  | Type                                                             | Description                                                                                                       |
+| ---------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `layoutKey`      | `string`                                                         | The stream (or anything else) the layout belongs to; `layout-key` attribute on `<fw-streamcrafter>`               |
+| `initialLayout`  | `StudioLayout \| null`                                           | Layout for `layoutKey`, applied when the compositor starts or the key changes                                     |
+| `onLayoutChange` | `(layout: StudioLayout, layoutKey: string \| undefined) => void` | Called about 300 ms after the scenes, overlays, active scene or layout preset change, with the key they belong to |
 
-`<fw-streamcrafter>` takes both as JS properties and also dispatches a `fw-sc-layout-change` event
-with `event.detail.layout`.
+`<fw-streamcrafter>` takes them as JS properties and also dispatches a `fw-sc-layout-change` event
+with `event.detail.layout` and `event.detail.layoutKey`. Save each layout under the key it comes
+with: a report for a key the studio has already left is dropped, so a late report never lands on
+the next stream.
 
 **React:**
 
 ```tsx
-const key = `studio-layout:${streamId}`;
-const saved = useMemo(() => {
+function readLayout(streamId: string): StudioLayout | null {
   try {
-    return JSON.parse(localStorage.getItem(key) ?? "null");
+    return JSON.parse(localStorage.getItem(`studio-layout:${streamId}`) ?? "null");
   } catch {
     return null;
   }
-}, [key]);
+}
 
 <StreamCrafter
-  whipUrl="..."
-  initialLayout={saved}
-  onLayoutChange={(layout) => localStorage.setItem(key, JSON.stringify(layout))}
+  whipUrl={whipUrl}
+  layoutKey={streamId}
+  initialLayout={readLayout(streamId)}
+  onLayoutChange={(layout, key) => {
+    if (key) localStorage.setItem(`studio-layout:${key}`, JSON.stringify(layout));
+  }}
 />;
 ```
 
@@ -315,28 +321,47 @@ const saved = useMemo(() => {
 ```svelte
 <StreamCrafter
   {whipUrl}
-  initialLayout={saved}
-  onLayoutChange={(layout) => localStorage.setItem(key, JSON.stringify(layout))}
+  layoutKey={streamId}
+  initialLayout={readLayout(streamId)}
+  onLayoutChange={(layout, key) => {
+    if (key) localStorage.setItem(`studio-layout:${key}`, JSON.stringify(layout));
+  }}
 />
 ```
 
 **Web Components:**
 
 ```html
-<fw-streamcrafter id="studio" whip-url="..."></fw-streamcrafter>
+<fw-streamcrafter id="studio"></fw-streamcrafter>
 <script>
   const studio = document.getElementById("studio");
-  studio.initialLayout = JSON.parse(localStorage.getItem("studio-layout") ?? "null");
+  function showStream(streamId, whipUrl) {
+    studio.whipUrl = whipUrl;
+    studio.layoutKey = streamId;
+    studio.initialLayout = JSON.parse(localStorage.getItem(`studio-layout:${streamId}`) ?? "null");
+  }
   studio.addEventListener("fw-sc-layout-change", (e) => {
-    localStorage.setItem("studio-layout", JSON.stringify(e.detail.layout));
+    const { layout, layoutKey } = e.detail;
+    if (layoutKey) localStorage.setItem(`studio-layout:${layoutKey}`, JSON.stringify(layout));
   });
 </script>
 ```
 
-The compositor keeps its own layout when it is turned off and on again, and when the studio gets a
-new controller for the same stream, for example after a new WHIP endpoint or quality profile.
-Change `initialLayout` together with the stream to start the new stream from its own layout. A
-stored layout that no longer applies is logged and skipped; it never keeps the compositor off.
+Wrap the `localStorage` calls in `try`/`catch` in a real page: storage can be blocked, and a
+layout holding a picked image can be larger than the quota.
+
+To switch streams, change `whipUrl`, `layoutKey` and `initialLayout` together. The running studio
+keeps its camera, screen and media sources and shows the new key's `initialLayout`, or the default
+layout when it is `null` or does not apply. The next broadcast goes to the new `whipUrl`; a
+broadcast that is live when `whipUrl` changes is stopped. With the vanilla studio, switch in place
+with `studio.setWhipUrl(url)` and `studio.importLayout(saved ?? createDefaultStudioLayout())`;
+`createDefaultStudioLayout` comes from `@livepeer-frameworks/streamcrafter-core`.
+
+For the same `layoutKey`, the compositor keeps its own layout: when it is turned off and on again,
+and when the studio builds a new controller for a new quality profile or `debug` setting.
+`initialLayout` is read only when the compositor starts or the key changes, so a new object for the
+same key changes nothing. A stored layout that does not apply when the compositor starts is logged
+and skipped; it never keeps the compositor off.
 
 You can also read and apply a layout directly. `exportLayout()` returns the layout; while the
 compositor is off it returns the layout from when it was last on, and `null` when it never ran.

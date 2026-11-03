@@ -16778,32 +16778,38 @@ session's captures. Sources added after a layout is applied join the active scen
 places them. An image picked from disk is carried as a data URL, stored at no more than the
 frame size, so the layout stays small enough for page storage.
 
-The drop-in components take the layout to start from and report changes:
+The drop-in components take the stream a layout belongs to and the layout to start from, and
+report changes:
 
-| Prop / property  | Type                             | Description                                                                          |
-| ---------------- | -------------------------------- | ------------------------------------------------------------------------------------ |
-| `initialLayout`  | `StudioLayout \| null`           | Layout to apply when the compositor starts                                           |
-| `onLayoutChange` | `(layout: StudioLayout) => void` | Called about 300 ms after the scenes, overlays, active scene or layout preset change |
+| Prop / property  | Type                                                             | Description                                                                                                       |
+| ---------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `layoutKey`      | `string`                                                         | The stream (or anything else) the layout belongs to; `layout-key` attribute on `<fw-streamcrafter>`               |
+| `initialLayout`  | `StudioLayout \| null`                                           | Layout for `layoutKey`, applied when the compositor starts or the key changes                                     |
+| `onLayoutChange` | `(layout: StudioLayout, layoutKey: string \| undefined) => void` | Called about 300 ms after the scenes, overlays, active scene or layout preset change, with the key they belong to |
 
-`<fw-streamcrafter>` takes both as JS properties and also dispatches a `fw-sc-layout-change` event
-with `event.detail.layout`.
+`<fw-streamcrafter>` takes them as JS properties and also dispatches a `fw-sc-layout-change` event
+with `event.detail.layout` and `event.detail.layoutKey`. Save each layout under the key it comes
+with: a report for a key the studio has already left is dropped, so a late report never lands on
+the next stream.
 
 **React:**
 
 ```tsx
-const key = `studio-layout:${streamId}`;
-const saved = useMemo(() => {
+function readLayout(streamId: string): StudioLayout | null {
   try {
-    return JSON.parse(localStorage.getItem(key) ?? "null");
+    return JSON.parse(localStorage.getItem(`studio-layout:${streamId}`) ?? "null");
   } catch {
     return null;
   }
-}, [key]);
+}
 
 <StreamCrafter
-  whipUrl="..."
-  initialLayout={saved}
-  onLayoutChange={(layout) => localStorage.setItem(key, JSON.stringify(layout))}
+  whipUrl={whipUrl}
+  layoutKey={streamId}
+  initialLayout={readLayout(streamId)}
+  onLayoutChange={(layout, key) => {
+    if (key) localStorage.setItem(`studio-layout:${key}`, JSON.stringify(layout));
+  }}
 />;
 ```
 
@@ -16812,28 +16818,47 @@ const saved = useMemo(() => {
 ```svelte
 <StreamCrafter
   {whipUrl}
-  initialLayout={saved}
-  onLayoutChange={(layout) => localStorage.setItem(key, JSON.stringify(layout))}
+  layoutKey={streamId}
+  initialLayout={readLayout(streamId)}
+  onLayoutChange={(layout, key) => {
+    if (key) localStorage.setItem(`studio-layout:${key}`, JSON.stringify(layout));
+  }}
 />
 ```
 
 **Web Components:**
 
 ```html
-<fw-streamcrafter id="studio" whip-url="..."></fw-streamcrafter>
+<fw-streamcrafter id="studio"></fw-streamcrafter>
 <script>
   const studio = document.getElementById("studio");
-  studio.initialLayout = JSON.parse(localStorage.getItem("studio-layout") ?? "null");
+  function showStream(streamId, whipUrl) {
+    studio.whipUrl = whipUrl;
+    studio.layoutKey = streamId;
+    studio.initialLayout = JSON.parse(localStorage.getItem(`studio-layout:${streamId}`) ?? "null");
+  }
   studio.addEventListener("fw-sc-layout-change", (e) => {
-    localStorage.setItem("studio-layout", JSON.stringify(e.detail.layout));
+    const { layout, layoutKey } = e.detail;
+    if (layoutKey) localStorage.setItem(`studio-layout:${layoutKey}`, JSON.stringify(layout));
   });
 </script>
 ```
 
-The compositor keeps its own layout when it is turned off and on again, and when the studio gets a
-new controller for the same stream, for example after a new WHIP endpoint or quality profile.
-Change `initialLayout` together with the stream to start the new stream from its own layout. A
-stored layout that no longer applies is logged and skipped; it never keeps the compositor off.
+Wrap the `localStorage` calls in `try`/`catch` in a real page: storage can be blocked, and a
+layout holding a picked image can be larger than the quota.
+
+To switch streams, change `whipUrl`, `layoutKey` and `initialLayout` together. The running studio
+keeps its camera, screen and media sources and shows the new key's `initialLayout`, or the default
+layout when it is `null` or does not apply. The next broadcast goes to the new `whipUrl`; a
+broadcast that is live when `whipUrl` changes is stopped. With the vanilla studio, switch in place
+with `studio.setWhipUrl(url)` and `studio.importLayout(saved ?? createDefaultStudioLayout())`;
+`createDefaultStudioLayout` comes from `@livepeer-frameworks/streamcrafter-core`.
+
+For the same `layoutKey`, the compositor keeps its own layout: when it is turned off and on again,
+and when the studio builds a new controller for a new quality profile or `debug` setting.
+`initialLayout` is read only when the compositor starts or the key changes, so a new object for the
+same key changes nothing. A stored layout that does not apply when the compositor starts is logged
+and skipped; it never keeps the compositor off.
 
 You can also read and apply a layout directly. `exportLayout()` returns the layout; while the
 compositor is off it returns the layout from when it was last on, and `null` when it never ran.
@@ -16956,28 +16981,29 @@ the dashboard DNS ingest URL or Foghorn's `/ingest/{streamKey}` front door inste
 
 ### Props
 
-| Prop                | Type                                         | Default       | Description                                                                                                                              |
-| ------------------- | -------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `whipUrl`           | `string`                                     | —             | Direct WHIP endpoint; takes priority over `gatewayUrl`                                                                                   |
-| `resolveWhipUrl`    | `(signal: AbortSignal) => Promise<string>`   | —             | Refresh the destination right before each connection                                                                                     |
-| `gatewayUrl`        | `string`                                     | —             | Gateway GraphQL endpoint, used with `streamKey`                                                                                          |
-| `streamKey`         | `string`                                     | —             | Stream key for gateway resolution                                                                                                        |
-| `initialProfile`    | `QualityProfile`                             | `"broadcast"` | Starting quality preset                                                                                                                  |
-| `autoStartCamera`   | `boolean`                                    | `false`       | Start the camera once an endpoint is known                                                                                               |
-| `enableCompositor`  | `boolean`                                    | `true`        | Run the compositor for layouts, scenes and overlays                                                                                      |
-| `compositorConfig`  | `{ renderer?, width?, height?, frameRate? }` | —             | Compositor renderer and output size                                                                                                      |
-| `initialLayout`     | `StudioLayout \| null`                       | —             | Layout to start the compositor from; see [Saving and Restoring the Layout](/builders/ingest-compositor/#saving-and-restoring-the-layout) |
-| `onLayoutChange`    | `(layout: StudioLayout) => void`             | —             | Called shortly after the scenes, overlays or layout preset change                                                                        |
-| `showProducerPanel` | `boolean`                                    | `true`        | Scene, layer, overlay and media controls while the compositor runs                                                                       |
-| `showSettings`      | `boolean`                                    | `false`       | Open the quality popup on mount                                                                                                          |
-| `devMode`           | `boolean`                                    | `false`       | Debug rows in the quality popup and the Advanced panel in the context menu                                                               |
-| `debug`             | `boolean`                                    | `false`       | Debug logging                                                                                                                            |
-| `theme`             | `FwThemePreset \| StudioThemeOverrides`      | —             | Theme preset or token overrides                                                                                                          |
-| `locale`            | `StudioLocale`                               | `"en"`        | UI language                                                                                                                              |
-| `className`         | `string`                                     | —             | Extra class on the root                                                                                                                  |
-| `onStateChange`     | `(state, context?) => void`                  | —             | Lifecycle state changes                                                                                                                  |
-| `onError`           | `(error: string) => void`                    | —             | Errors                                                                                                                                   |
-| `children`          | `ReactNode`                                  | —             | Replaces the built-in UI with your own layout                                                                                            |
+| Prop                | Type                                                             | Default       | Description                                                                                                                 |
+| ------------------- | ---------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `whipUrl`           | `string`                                                         | —             | Direct WHIP endpoint; takes priority over `gatewayUrl`                                                                      |
+| `resolveWhipUrl`    | `(signal: AbortSignal) => Promise<string>`                       | —             | Refresh the destination right before each connection                                                                        |
+| `gatewayUrl`        | `string`                                                         | —             | Gateway GraphQL endpoint, used with `streamKey`                                                                             |
+| `streamKey`         | `string`                                                         | —             | Stream key for gateway resolution                                                                                           |
+| `initialProfile`    | `QualityProfile`                                                 | `"broadcast"` | Starting quality preset                                                                                                     |
+| `autoStartCamera`   | `boolean`                                                        | `false`       | Start the camera once an endpoint is known                                                                                  |
+| `enableCompositor`  | `boolean`                                                        | `true`        | Run the compositor for layouts, scenes and overlays                                                                         |
+| `compositorConfig`  | `{ renderer?, width?, height?, frameRate? }`                     | —             | Compositor renderer and output size                                                                                         |
+| `layoutKey`         | `string`                                                         | —             | The stream the layout belongs to; a new key shows its `initialLayout` on the running studio, with the sources kept          |
+| `initialLayout`     | `StudioLayout \| null`                                           | —             | Layout for `layoutKey`; see [Saving and Restoring the Layout](/builders/ingest-compositor/#saving-and-restoring-the-layout) |
+| `onLayoutChange`    | `(layout: StudioLayout, layoutKey: string \| undefined) => void` | —             | Called shortly after the scenes, overlays or layout preset change, with the key they belong to                              |
+| `showProducerPanel` | `boolean`                                                        | `true`        | Scene, layer, overlay and media controls while the compositor runs                                                          |
+| `showSettings`      | `boolean`                                                        | `false`       | Open the quality popup on mount                                                                                             |
+| `devMode`           | `boolean`                                                        | `false`       | Debug rows in the quality popup and the Advanced panel in the context menu                                                  |
+| `debug`             | `boolean`                                                        | `false`       | Debug logging                                                                                                               |
+| `theme`             | `FwThemePreset \| StudioThemeOverrides`                          | —             | Theme preset or token overrides                                                                                             |
+| `locale`            | `StudioLocale`                                                   | `"en"`        | UI language                                                                                                                 |
+| `className`         | `string`                                                         | —             | Extra class on the root                                                                                                     |
+| `onStateChange`     | `(state, context?) => void`                                      | —             | Lifecycle state changes                                                                                                     |
+| `onError`           | `(error: string) => void`                                        | —             | Errors                                                                                                                      |
+| `children`          | `ReactNode`                                                      | —             | Replaces the built-in UI with your own layout                                                                               |
 
 ## Producer Controls
 
@@ -17222,28 +17248,29 @@ the dashboard DNS ingest URL or Foghorn's `/ingest/{streamKey}` front door inste
 
 ### Props
 
-| Prop                | Type                                       | Default       | Description                                                                                                                              |
-| ------------------- | ------------------------------------------ | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `whipUrl`           | `string`                                   | —             | Direct WHIP endpoint; takes priority over `gatewayUrl`                                                                                   |
-| `resolveWhipUrl`    | `(signal: AbortSignal) => Promise<string>` | —             | Refresh the destination right before each connection                                                                                     |
-| `gatewayUrl`        | `string`                                   | —             | Gateway GraphQL endpoint, used with `streamKey`                                                                                          |
-| `streamKey`         | `string`                                   | —             | Stream key for gateway resolution                                                                                                        |
-| `initialProfile`    | `QualityProfile`                           | `"broadcast"` | Starting quality preset                                                                                                                  |
-| `autoStartCamera`   | `boolean`                                  | `false`       | Start the camera once an endpoint is known                                                                                               |
-| `enableCompositor`  | `boolean`                                  | `true`        | Run the compositor for layouts, scenes and overlays                                                                                      |
-| `compositorConfig`  | `Partial<CompositorConfig>`                | `{}`          | Compositor renderer and output size                                                                                                      |
-| `initialLayout`     | `StudioLayout \| null`                     | —             | Layout to start the compositor from; see [Saving and Restoring the Layout](/builders/ingest-compositor/#saving-and-restoring-the-layout) |
-| `onLayoutChange`    | `(layout: StudioLayout) => void`           | —             | Called shortly after the scenes, overlays or layout preset change                                                                        |
-| `showProducerPanel` | `boolean`                                  | `true`        | Scene, layer, overlay and media controls while the compositor runs                                                                       |
-| `showSettings`      | `boolean`                                  | `false`       | Open the quality popup on mount                                                                                                          |
-| `devMode`           | `boolean`                                  | `false`       | Debug rows in the quality popup and the Advanced panel in the context menu                                                               |
-| `debug`             | `boolean`                                  | `false`       | Debug logging                                                                                                                            |
-| `theme`             | `FwThemePreset \| StudioThemeOverrides`    | —             | Theme preset or token overrides                                                                                                          |
-| `locale`            | `StudioLocale`                             | `"en"`        | UI language                                                                                                                              |
-| `class`             | `string`                                   | `""`          | Extra class on the root                                                                                                                  |
-| `onStateChange`     | `(state, context?) => void`                | —             | Lifecycle state changes                                                                                                                  |
-| `onError`           | `(error: string) => void`                  | —             | Errors                                                                                                                                   |
-| `children`          | `Snippet`                                  | —             | Replaces the built-in UI with your own layout                                                                                            |
+| Prop                | Type                                                             | Default       | Description                                                                                                                 |
+| ------------------- | ---------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `whipUrl`           | `string`                                                         | —             | Direct WHIP endpoint; takes priority over `gatewayUrl`                                                                      |
+| `resolveWhipUrl`    | `(signal: AbortSignal) => Promise<string>`                       | —             | Refresh the destination right before each connection                                                                        |
+| `gatewayUrl`        | `string`                                                         | —             | Gateway GraphQL endpoint, used with `streamKey`                                                                             |
+| `streamKey`         | `string`                                                         | —             | Stream key for gateway resolution                                                                                           |
+| `initialProfile`    | `QualityProfile`                                                 | `"broadcast"` | Starting quality preset                                                                                                     |
+| `autoStartCamera`   | `boolean`                                                        | `false`       | Start the camera once an endpoint is known                                                                                  |
+| `enableCompositor`  | `boolean`                                                        | `true`        | Run the compositor for layouts, scenes and overlays                                                                         |
+| `compositorConfig`  | `Partial<CompositorConfig>`                                      | `{}`          | Compositor renderer and output size                                                                                         |
+| `layoutKey`         | `string`                                                         | —             | The stream the layout belongs to; a new key shows its `initialLayout` on the running studio, with the sources kept          |
+| `initialLayout`     | `StudioLayout \| null`                                           | —             | Layout for `layoutKey`; see [Saving and Restoring the Layout](/builders/ingest-compositor/#saving-and-restoring-the-layout) |
+| `onLayoutChange`    | `(layout: StudioLayout, layoutKey: string \| undefined) => void` | —             | Called shortly after the scenes, overlays or layout preset change, with the key they belong to                              |
+| `showProducerPanel` | `boolean`                                                        | `true`        | Scene, layer, overlay and media controls while the compositor runs                                                          |
+| `showSettings`      | `boolean`                                                        | `false`       | Open the quality popup on mount                                                                                             |
+| `devMode`           | `boolean`                                                        | `false`       | Debug rows in the quality popup and the Advanced panel in the context menu                                                  |
+| `debug`             | `boolean`                                                        | `false`       | Debug logging                                                                                                               |
+| `theme`             | `FwThemePreset \| StudioThemeOverrides`                          | —             | Theme preset or token overrides                                                                                             |
+| `locale`            | `StudioLocale`                                                   | `"en"`        | UI language                                                                                                                 |
+| `class`             | `string`                                                         | `""`          | Extra class on the root                                                                                                     |
+| `onStateChange`     | `(state, context?) => void`                                      | —             | Lifecycle state changes                                                                                                     |
+| `onError`           | `(error: string) => void`                                        | —             | Errors                                                                                                                      |
+| `children`          | `Snippet`                                                        | —             | Replaces the built-in UI with your own layout                                                                               |
 
 ## Producer Controls
 
@@ -17501,28 +17528,29 @@ All queries are synchronous getters on the instance.
 
 ## Mutations (Change State)
 
-| Mutation                      | Signature                                 | Description               |
-| ----------------------------- | ----------------------------------------- | ------------------------- |
-| `startCamera(opts?)`          | `(opts?) => Promise<MediaSource>`         | Add camera source         |
-| `startScreenShare(opts?)`     | `(opts?) => Promise<MediaSource \| null>` | Add screen share source   |
-| `goLive()`                    | `() => Promise<void>`                     | Start streaming           |
-| `stop()`                      | `() => Promise<void>`                     | Stop streaming            |
-| `removeSource(id)`            | `(id: string) => void`                    | Remove a source           |
-| `setSourceVolume(id, vol)`    | `(id, number) => void`                    | Set source volume (0-2)   |
-| `setSourceMuted(id, muted)`   | `(id, boolean) => void`                   | Mute/unmute source        |
-| `setSourceActive(id, active)` | `(id, boolean) => void`                   | Set active source         |
-| `setPrimaryVideo(id)`         | `(id: string) => void`                    | Set primary video         |
-| `profile =`                   | `set profile(p)`                          | Change quality profile    |
-| `masterVolume =`              | `set masterVolume(v)`                     | Set master volume         |
-| `theme =`                     | `set theme(t)`                            | Switch theme preset       |
-| `setEncoderOverrides(o)`      | `(overrides) => void`                     | Override encoder settings |
-| `setAudioProcessing(c)`       | `(config) => void`                        | Noise gate, EQ, de-esser  |
-| `setAudioDucking(on)`         | `(enabled: boolean) => void`              | Duck under the camera mic |
-| `enableCompositor(config?)`   | `(config?) => Promise<void>`              | Start the compositor      |
-| `disableCompositor()`         | `() => void`                              | Stop the compositor       |
-| `exportLayout()`              | `() => Promise<StudioLayout \| null>`     | Read the studio layout    |
-| `importLayout(layout)`        | `(layout) => Promise<void>`               | Apply a studio layout     |
-| `destroy()`                   | `() => void`                              | Cleanup and tear down     |
+| Mutation                      | Signature                                 | Description                                                                                      |
+| ----------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `startCamera(opts?)`          | `(opts?) => Promise<MediaSource>`         | Add camera source                                                                                |
+| `startScreenShare(opts?)`     | `(opts?) => Promise<MediaSource \| null>` | Add screen share source                                                                          |
+| `goLive()`                    | `() => Promise<void>`                     | Start streaming                                                                                  |
+| `stop()`                      | `() => Promise<void>`                     | Stop streaming                                                                                   |
+| `setWhipUrl(url, urls?)`      | `(url, urls?) => Promise<void>`           | Point the next connection at another endpoint, keeping the sources; a live connection is stopped |
+| `removeSource(id)`            | `(id: string) => void`                    | Remove a source                                                                                  |
+| `setSourceVolume(id, vol)`    | `(id, number) => void`                    | Set source volume (0-2)                                                                          |
+| `setSourceMuted(id, muted)`   | `(id, boolean) => void`                   | Mute/unmute source                                                                               |
+| `setSourceActive(id, active)` | `(id, boolean) => void`                   | Set active source                                                                                |
+| `setPrimaryVideo(id)`         | `(id: string) => void`                    | Set primary video                                                                                |
+| `profile =`                   | `set profile(p)`                          | Change quality profile                                                                           |
+| `masterVolume =`              | `set masterVolume(v)`                     | Set master volume                                                                                |
+| `theme =`                     | `set theme(t)`                            | Switch theme preset                                                                              |
+| `setEncoderOverrides(o)`      | `(overrides) => void`                     | Override encoder settings                                                                        |
+| `setAudioProcessing(c)`       | `(config) => void`                        | Noise gate, EQ, de-esser                                                                         |
+| `setAudioDucking(on)`         | `(enabled: boolean) => void`              | Duck under the camera mic                                                                        |
+| `enableCompositor(config?)`   | `(config?) => Promise<void>`              | Start the compositor                                                                             |
+| `disableCompositor()`         | `() => void`                              | Stop the compositor                                                                              |
+| `exportLayout()`              | `() => Promise<StudioLayout \| null>`     | Read the studio layout                                                                           |
+| `importLayout(layout)`        | `(layout) => Promise<void>`               | Apply a studio layout                                                                            |
+| `destroy()`                   | `() => void`                              | Cleanup and tear down                                                                            |
 
 `masterVolume`, `setAudioProcessing()` and `setAudioDucking()` work through the audio mixer, which
 is on by default. With `audioMixing: false` they do nothing and `masterVolume` reads `1`.
@@ -17886,6 +17914,7 @@ or callback properties:
 | `gateway-url`              | `string`  | —             | Gateway GraphQL endpoint for resolver-backed ingest environments |
 | `stream-key`               | `string`  | —             | Stream key used with `gateway-url`                               |
 | `initial-profile`          | `string`  | `"broadcast"` | Quality preset                                                   |
+| `layout-key`               | `string`  | —             | The stream the layout belongs to (`layoutKey` property)          |
 | `auto-start-camera`        | `boolean` | `false`       | Start the camera once an endpoint is known                       |
 | `enable-compositor`        | `boolean` | `true`        | Run the compositor; `"false"` turns it off                       |
 | `show-producer-panel`      | `boolean` | `true`        | Producer panel while the compositor runs; `"false"` turns it off |
@@ -17901,9 +17930,12 @@ or callback properties:
 | `debug`                    | `boolean` | `false`       | Enable debug logging                                             |
 
 `compositorConfig`, `initialLayout`, `onLayoutChange`, `resolveWhipUrl`, `onStateChange` and
-`onError` are JS properties. `initialLayout` and `onLayoutChange` work as described in
+`onError` are JS properties. `layoutKey`, `initialLayout` and `onLayoutChange(layout, layoutKey)`
+work as described in
 [Saving and Restoring the Layout](/builders/ingest-compositor/#saving-and-restoring-the-layout); the
-element also has `exportLayout()` and `importLayout(layout)` methods.
+element also has `exportLayout()` and `importLayout(layout)` methods. To switch streams, set
+`whipUrl`, `layoutKey` and `initialLayout` together: the element keeps its sources and shows the
+new key's layout.
 `resolveWhipUrl(signal)` returns the destination right before each connection. The `theme`
 property also takes an object of token overrides, as in the React and Svelte packages.
 
@@ -17920,12 +17952,13 @@ studio.addEventListener("fw-sc-state-change", (e) => {
 ```
 
 `fw-sc-layout-change` fires about 300 ms after the compositor's scenes, overlays, active scene or
-layout preset change, with the layout in `e.detail.layout`. Store it and pass it back as
-`initialLayout`:
+layout preset change, with the layout in `e.detail.layout` and its key in `e.detail.layoutKey`.
+Store it under that key and pass it back as `initialLayout`:
 
 ```js
 studio.addEventListener("fw-sc-layout-change", (e) => {
-  localStorage.setItem("studio-layout", JSON.stringify(e.detail.layout));
+  const { layout, layoutKey } = e.detail;
+  if (layoutKey) localStorage.setItem(`studio-layout:${layoutKey}`, JSON.stringify(layout));
 });
 ```
 

@@ -100,28 +100,29 @@ All queries are synchronous getters on the instance.
 
 ## Mutations (Change State)
 
-| Mutation                      | Signature                                 | Description               |
-| ----------------------------- | ----------------------------------------- | ------------------------- |
-| `startCamera(opts?)`          | `(opts?) => Promise<MediaSource>`         | Add camera source         |
-| `startScreenShare(opts?)`     | `(opts?) => Promise<MediaSource \| null>` | Add screen share source   |
-| `goLive()`                    | `() => Promise<void>`                     | Start streaming           |
-| `stop()`                      | `() => Promise<void>`                     | Stop streaming            |
-| `removeSource(id)`            | `(id: string) => void`                    | Remove a source           |
-| `setSourceVolume(id, vol)`    | `(id, number) => void`                    | Set source volume (0-2)   |
-| `setSourceMuted(id, muted)`   | `(id, boolean) => void`                   | Mute/unmute source        |
-| `setSourceActive(id, active)` | `(id, boolean) => void`                   | Set active source         |
-| `setPrimaryVideo(id)`         | `(id: string) => void`                    | Set primary video         |
-| `profile =`                   | `set profile(p)`                          | Change quality profile    |
-| `masterVolume =`              | `set masterVolume(v)`                     | Set master volume         |
-| `theme =`                     | `set theme(t)`                            | Switch theme preset       |
-| `setEncoderOverrides(o)`      | `(overrides) => void`                     | Override encoder settings |
-| `setAudioProcessing(c)`       | `(config) => void`                        | Noise gate, EQ, de-esser  |
-| `setAudioDucking(on)`         | `(enabled: boolean) => void`              | Duck under the camera mic |
-| `enableCompositor(config?)`   | `(config?) => Promise<void>`              | Start the compositor      |
-| `disableCompositor()`         | `() => void`                              | Stop the compositor       |
-| `exportLayout()`              | `() => Promise<StudioLayout \| null>`     | Read the studio layout    |
-| `importLayout(layout)`        | `(layout) => Promise<void>`               | Apply a studio layout     |
-| `destroy()`                   | `() => void`                              | Cleanup and tear down     |
+| Mutation                      | Signature                                 | Description                                                                                      |
+| ----------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `startCamera(opts?)`          | `(opts?) => Promise<MediaSource>`         | Add camera source                                                                                |
+| `startScreenShare(opts?)`     | `(opts?) => Promise<MediaSource \| null>` | Add screen share source                                                                          |
+| `goLive()`                    | `() => Promise<void>`                     | Start streaming                                                                                  |
+| `stop()`                      | `() => Promise<void>`                     | Stop streaming                                                                                   |
+| `setWhipUrl(url, urls?)`      | `(url, urls?) => Promise<void>`           | Point the next connection at another endpoint, keeping the sources; a live connection is stopped |
+| `removeSource(id)`            | `(id: string) => void`                    | Remove a source                                                                                  |
+| `setSourceVolume(id, vol)`    | `(id, number) => void`                    | Set source volume (0-2)                                                                          |
+| `setSourceMuted(id, muted)`   | `(id, boolean) => void`                   | Mute/unmute source                                                                               |
+| `setSourceActive(id, active)` | `(id, boolean) => void`                   | Set active source                                                                                |
+| `setPrimaryVideo(id)`         | `(id: string) => void`                    | Set primary video                                                                                |
+| `profile =`                   | `set profile(p)`                          | Change quality profile                                                                           |
+| `masterVolume =`              | `set masterVolume(v)`                     | Set master volume                                                                                |
+| `theme =`                     | `set theme(t)`                            | Switch theme preset                                                                              |
+| `setEncoderOverrides(o)`      | `(overrides) => void`                     | Override encoder settings                                                                        |
+| `setAudioProcessing(c)`       | `(config) => void`                        | Noise gate, EQ, de-esser                                                                         |
+| `setAudioDucking(on)`         | `(enabled: boolean) => void`              | Duck under the camera mic                                                                        |
+| `enableCompositor(config?)`   | `(config?) => Promise<void>`              | Start the compositor                                                                             |
+| `disableCompositor()`         | `() => void`                              | Stop the compositor                                                                              |
+| `exportLayout()`              | `() => Promise<StudioLayout \| null>`     | Read the studio layout                                                                           |
+| `importLayout(layout)`        | `(layout) => Promise<void>`               | Apply a studio layout                                                                            |
+| `destroy()`                   | `() => void`                              | Cleanup and tear down                                                                            |
 
 `masterVolume`, `setAudioProcessing()` and `setAudioDucking()` work through the audio mixer, which
 is on by default. With `audioMixing: false` they do nothing and `masterVolume` reads `1`.
