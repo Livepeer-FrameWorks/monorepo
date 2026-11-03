@@ -18,6 +18,7 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -220,6 +221,38 @@ func TestResolveIngestEndpoint_InvalidKeyIsNotFound(t *testing.T) {
 	_, err := srv.ResolveIngestEndpoint(context.Background(), &sharedpb.IngestEndpointRequest{StreamKey: "bogus"})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("want NotFound, got %v", err)
+	}
+}
+
+// A spent balance and a suspended account share gRPC codes with other
+// denials; the ErrorInfo reason tells the caller which one refused.
+func TestResolveIngestEndpoint_DenialCarriesItsReason(t *testing.T) {
+	for _, tc := range []struct {
+		rejection commodorepb.StreamKeyRejectionReason
+		code      codes.Code
+		reason    string
+	}{
+		{commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_BALANCE_NEGATIVE, codes.FailedPrecondition, "PAYMENT_REQUIRED"},
+		{commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_TENANT_SUSPENDED, codes.PermissionDenied, "ACCOUNT_SUSPENDED"},
+	} {
+		sm := state.ResetDefaultManagerForTests()
+		seedGRPCIngestNode(t, sm, "ingest-a", "ingest-a.example.com:18090")
+		startCommodoreIngestFake(t, &commodoreIngestFake{
+			streamContext: func(context.Context, *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {
+				return &commodorepb.ResolveStreamContextResponse{Admitted: false, IngestMode: "push", RejectionReason: tc.rejection}, nil
+			},
+		})
+		_, err := newIngestGRPCServer().ResolveIngestEndpoint(context.Background(), &sharedpb.IngestEndpointRequest{StreamKey: "key"})
+		st := status.Convert(err)
+		reason := ""
+		for _, detail := range st.Details() {
+			if info, ok := detail.(*errdetails.ErrorInfo); ok && info.GetDomain() == control.IngestDenialDomain {
+				reason = info.GetReason()
+			}
+		}
+		if st.Code() != tc.code || reason != tc.reason {
+			t.Fatalf("%s: code=%v reason=%q, want %v %q", tc.rejection, st.Code(), reason, tc.code, tc.reason)
+		}
 	}
 }
 

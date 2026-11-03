@@ -58,7 +58,7 @@ func (s *FoghornGRPCServer) ResolveIngestEndpoint(ctx context.Context, req *shar
 		}
 		if localHandled {
 			if denial := control.EvaluateIngestAdmission(localContext); denial != nil {
-				return nil, status.Error(denial.GRPCCode, denial.Message)
+				return nil, denial.GRPCError()
 			}
 		}
 	}
@@ -95,7 +95,7 @@ func (s *FoghornGRPCServer) ResolveIngestEndpoint(ctx context.Context, req *shar
 	}
 
 	if denial := control.EvaluateIngestAdmission(streamCtx); denial != nil {
-		return nil, status.Error(denial.GRPCCode, denial.Message)
+		return nil, denial.GRPCError()
 	}
 
 	// Default to NaN so a missing GeoIP lookup is not mistaken for (0,0).

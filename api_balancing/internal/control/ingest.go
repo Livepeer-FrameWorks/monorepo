@@ -17,7 +17,9 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var localIngestAdmission struct {
@@ -145,6 +147,22 @@ type IngestDenial struct {
 }
 
 func (d *IngestDenial) Error() string { return d.Code + ": " + d.Message }
+
+// IngestDenialDomain is the ErrorInfo domain of a refused ingest resolution;
+// the reason is the denial's Code.
+const IngestDenialDomain = "ingest.frameworks.network"
+
+// GRPCError is the denial as a gRPC status carrying its Code as an ErrorInfo
+// reason, so callers can tell a spent balance from a suspended account
+// although both share a gRPC code with other denials.
+func (d *IngestDenial) GRPCError() error {
+	st := status.New(d.GRPCCode, d.Message)
+	withInfo, err := st.WithDetails(&errdetails.ErrorInfo{Reason: d.Code, Domain: IngestDenialDomain})
+	if err != nil {
+		return st.Err()
+	}
+	return withInfo.Err()
+}
 
 // EvaluateIngestAdmission decides whether a resolved stream context may be
 // published to. It reads the whole response rather than the rejection enum

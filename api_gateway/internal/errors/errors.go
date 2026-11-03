@@ -118,9 +118,28 @@ func ErrorPresenter(logger logging.Logger) graphql.ErrorPresenterFunc {
 			if _, hasCode := presented.Extensions["code"]; !hasCode {
 				presented.Extensions["code"] = PublicCode(st.Code())
 			}
+			if reason := ingestDenialReason(st); reason != "" {
+				presented.Extensions["reason"] = reason
+			}
 		}
 		return presented
 	}
+}
+
+// ingestDenialDomain is the ErrorInfo domain Foghorn sets on a refused
+// ingest resolution.
+const ingestDenialDomain = "ingest.frameworks.network"
+
+// ingestDenialReason is the reason of a refused ingest resolution, such as
+// PAYMENT_REQUIRED or ACCOUNT_SUSPENDED. It is presented as
+// extensions.reason beside the gRPC-derived extensions.code.
+func ingestDenialReason(st *status.Status) string {
+	for _, detail := range st.Details() {
+		if info, ok := detail.(*errdetails.ErrorInfo); ok && info.GetDomain() == ingestDenialDomain {
+			return info.GetReason()
+		}
+	}
+	return ""
 }
 
 // PublicCode is the extensions.code a gRPC status code is presented as. The

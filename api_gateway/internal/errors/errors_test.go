@@ -419,3 +419,22 @@ func TestClientFault(t *testing.T) {
 		})
 	}
 }
+
+// A refused ingest resolution keeps its gRPC-derived code and adds the
+// denial reason, so Go Live can tell a spent balance from other refusals.
+func TestErrorPresenterAddsIngestDenialReason(t *testing.T) {
+	st, err := status.New(codes.FailedPrecondition, "payment required").WithDetails(&errdetails.ErrorInfo{
+		Reason: "PAYMENT_REQUIRED", Domain: "ingest.frameworks.network",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	presented := ErrorPresenter(logging.NewLogger())(context.Background(), fmt.Errorf("failed to resolve ingest endpoints: %w", st.Err()))
+	if presented.Extensions["code"] != "FAILED_PRECONDITION" || presented.Extensions["reason"] != "PAYMENT_REQUIRED" {
+		t.Fatalf("extensions = %#v", presented.Extensions)
+	}
+	plain := ErrorPresenter(logging.NewLogger())(context.Background(), status.Error(codes.FailedPrecondition, "other"))
+	if _, has := plain.Extensions["reason"]; has {
+		t.Fatalf("a status without an ingest denial got a reason: %#v", plain.Extensions)
+	}
+}
