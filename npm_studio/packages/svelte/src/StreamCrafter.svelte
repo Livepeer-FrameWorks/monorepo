@@ -52,6 +52,7 @@
     FwThemePreset,
     StudioThemeOverrides,
     StudioLocale,
+    StudioLayout,
   } from "@livepeer-frameworks/streamcrafter-core";
   import {
     isWebCodecsEncodingPathSupported,
@@ -89,10 +90,14 @@
     showProducerPanel?: boolean;
     /** Enable debug logging */
     debug?: boolean;
-    /** Enable compositor for multi-source composition */
+    /** Enable compositor for multi-source composition. Turning it off and on keeps the layout. */
     enableCompositor?: boolean;
-    /** Configuration for the compositor */
+    /** Configuration for the compositor; a new `renderer` takes effect without a restart. */
     compositorConfig?: Partial<CompositorConfig>;
+    /** Scenes, overlays and layout preset to start from, as passed to onLayoutChange. */
+    initialLayout?: StudioLayout | null;
+    /** Called shortly after the scenes, overlays or layout preset change. */
+    onLayoutChange?: (layout: StudioLayout) => void;
     /** Theme preset or custom overrides */
     theme?: FwThemePreset | StudioThemeOverrides;
     /** Locale for i18n */
@@ -120,6 +125,8 @@
     debug = false,
     enableCompositor = true,
     compositorConfig = {},
+    initialLayout,
+    onLayoutChange,
     theme,
     locale,
     class: className = "",
@@ -194,7 +201,10 @@
     peakLevel: 0,
     isMonitoring: false,
   });
-  let compositorState = $state<CompositorState>({
+  /** Drags and typing settle before onLayoutChange reports the layout. */
+  const LAYOUT_CHANGE_DELAY_MS = 300;
+
+  const COMPOSITOR_OFF: CompositorState = {
     isEnabled: false,
     isInitialized: false,
     rendererType: null,
@@ -204,7 +214,10 @@
     currentLayout: null,
     overlays: [],
     error: null,
-  });
+  };
+  // The store hands over whole snapshots; raw keeps unchanged parts of them
+  // equal, so a stats update does not look like a layout change.
+  let compositorState = $state.raw<CompositorState>(COMPOSITOR_OFF);
   let ingestEndpointsState = $state<IngestEndpointsState>({
     endpoints: null,
     status: "idle",
@@ -276,6 +289,9 @@
     get compositorState() {
       return compositorState;
     },
+    get encoderOverrides() {
+      return encoderOverrides;
+    },
     // Actions
     startCamera: (opts?: any) => crafter.startCamera(opts),
     startScreenShare: (opts?: any) => crafter.startScreenShare(opts),
@@ -294,14 +310,14 @@
     stopStreaming: () => crafter.stopStreaming(),
     getController: () => crafter.getController(),
     setUseWebCodecs: (enabled: boolean) => crafter.setUseWebCodecs(enabled),
-    setEncoderOverrides: (o: any) => crafter.setEncoderOverrides(o),
+    setEncoderOverrides: (o: EncoderOverrides) => handleEncoderOverridesChange(o),
   });
 
   // Audio levels store
   let audioLevelsStore: ReturnType<typeof createAudioLevelsStore> | null = null;
 
   // Compositor store (must be $state for reactivity when assigned in $effect)
-  let compositorStore = $state<ReturnType<typeof createCompositorStore> | null>(null);
+  let compositorStore = $state.raw<ReturnType<typeof createCompositorStore> | null>(null);
   let unsubscribeCompositor: (() => void) | undefined;
 
   // Ingest endpoints store (for gateway resolution)
@@ -351,6 +367,8 @@
           reconnection: { enabled: true, maxAttempts: 5 },
           audioMixing: true,
         });
+        // A controller built for a new endpoint keeps the encoder choices made so far.
+        crafter.setEncoderOverrides(untrack(() => encoderOverrides));
         controllerInitKey = currentInitKey;
       }
 
@@ -358,13 +376,22 @@
       if (enableCompositor && !existingCompositorStore) {
         const controller = crafter.getController();
         if (controller) {
-          compositorStore = createCompositorStore({
+          const store = createCompositorStore({
             controller,
             config: compositorConfig,
-            autoEnable: true,
+            autoEnable: false,
+            initialLayout: () =>
+              savedLayout?.controller === controller
+                ? savedLayout.layout
+                : untrack(() => initialLayout),
           });
-          unsubscribeCompositor = compositorStore.subscribe((state) => {
+          compositorStore = store;
+          unsubscribeCompositor = store.subscribe((state) => {
             compositorState = state;
+          });
+          // Turning the compositor back on waits until turning it off has finished.
+          compositorTurnedOff.then(() => {
+            if (untrack(() => compositorStore) === store) store.enable().catch(() => {});
           });
         }
       }
@@ -372,6 +399,65 @@
     }
 
     controllerInitKey = "";
+  });
+
+  // The layout saved when the compositor was turned off, for the controller it
+  // came from; turning the compositor on again restores it.
+  let savedLayout: { controller: unknown; layout: StudioLayout } | null = null;
+  let compositorTurnedOff: Promise<void> = Promise.resolve();
+
+  $effect(() => {
+    if (enableCompositor) return;
+    const store = untrack(() => compositorStore);
+    if (!store) return;
+    const controller = crafter.getController();
+    unsubscribeCompositor?.();
+    unsubscribeCompositor = undefined;
+    compositorStore = null;
+    compositorState = COMPOSITOR_OFF;
+    compositorTurnedOff = store
+      .exportLayout()
+      .then((layout) => {
+        savedLayout = layout ? { controller, layout } : null;
+      })
+      .catch(() => {})
+      .finally(() => {
+        store.disable();
+        store.destroy();
+      });
+  });
+
+  // Switch the running compositor when the requested renderer changes.
+  let requestedRenderer = $derived(compositorConfig?.renderer);
+  $effect(() => {
+    const renderer = requestedRenderer;
+    if (!renderer || !compositorStore || !compositorState.isEnabled) return;
+    const sceneManager = crafter.getController()?.getSceneManager();
+    if (sceneManager && sceneManager.getRendererType() !== renderer) {
+      compositorStore.setRenderer(renderer);
+    }
+  });
+
+  // Report the layout once the scenes, overlays or preset have settled.
+  let layoutScenes = $derived(compositorState.scenes);
+  let layoutOverlays = $derived(compositorState.overlays);
+  let layoutPreset = $derived(compositorState.currentLayout);
+  let layoutActiveScene = $derived(compositorState.activeSceneId);
+  let compositorOn = $derived(compositorState.isEnabled);
+  $effect(() => {
+    void layoutScenes;
+    void layoutOverlays;
+    void layoutPreset;
+    void layoutActiveScene;
+    const store = compositorStore;
+    if (!compositorOn || !store || !onLayoutChange) return;
+    const timer = setTimeout(() => {
+      store
+        .exportLayout()
+        .then((layout) => layout && onLayoutChange?.(layout))
+        .catch((err: unknown) => console.warn("Could not export the studio layout:", err));
+    }, LAYOUT_CHANGE_DELAY_MS);
+    return () => clearTimeout(timer);
   });
 
   // Update video preview when stream changes

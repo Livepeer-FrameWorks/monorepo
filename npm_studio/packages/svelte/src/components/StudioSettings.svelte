@@ -5,6 +5,10 @@
   import { readable } from "svelte/store";
   import {
     createStudioTranslator,
+    encoderSettingRows,
+    sendableVideoCodecs,
+    withEncoderSetting,
+    type EncoderSetting,
     type StudioTranslateFn,
   } from "@livepeer-frameworks/streamcrafter-core";
   import SettingsIcon from "../icons/SettingsIcon.svelte";
@@ -16,7 +20,7 @@
     autoClose?: boolean;
     /** Open the popup on mount */
     defaultOpen?: boolean;
-    /** Extra sections below the quality profiles */
+    /** Extra sections below the quality profiles and encoder settings */
     children?: Snippet;
   }
 
@@ -73,6 +77,16 @@
     };
   });
 
+  const codecs = sendableVideoCodecs();
+  let encoderRows = $derived(
+    encoderSettingRows(profile, pc?.encoderOverrides, codecs, t("codecAuto"))
+  );
+  let hasEncoderOverrides = $derived(encoderRows.some((row) => row.overridden));
+
+  function handleEncoderChange(setting: EncoderSetting, value: string) {
+    pc?.setEncoderOverrides(withEncoderSetting(profile, pc?.encoderOverrides, setting, value));
+  }
+
   function handleSelect(id: QualityProfile) {
     if (pc?.isStreaming) return;
     if (onProfileChange) onProfileChange(id);
@@ -111,6 +125,38 @@
             </button>
           {/each}
         </div>
+      </div>
+      <div class="fw-sc-dropdown-section">
+        <div class="fw-sc-encoder-header">
+          <div class="fw-sc-dropdown-label">{t("encoder")}</div>
+          {#if hasEncoderOverrides && !pc?.isStreaming}
+            <button
+              type="button"
+              class="fw-sc-encoder-reset"
+              onclick={() => pc?.setEncoderOverrides({})}
+            >
+              {t("resetToProfile")}
+            </button>
+          {/if}
+        </div>
+        {#each encoderRows as row (row.setting)}
+          <label class="fw-sc-encoder-row">
+            <span>{t(row.labelKey)}</span>
+            <select
+              class="fw-sc-select {row.overridden ? 'fw-sc-select--overridden' : ''}"
+              value={row.value}
+              disabled={pc?.isStreaming}
+              onchange={(e) => handleEncoderChange(row.setting, e.currentTarget.value)}
+            >
+              {#each row.options as option (option.value)}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </select>
+          </label>
+        {/each}
+        {#if pc?.isStreaming}
+          <div class="fw-sc-encoder-note">{t("settingsLockedWhileStreaming")}</div>
+        {/if}
       </div>
       {@render children?.()}
     </div>

@@ -15,6 +15,7 @@ import type {
   CompositorConfig,
   MediaSource,
   OverlayPlacement,
+  StudioLayout,
   StudioOverlay,
   TextOverlayConfig,
 } from "@livepeer-frameworks/streamcrafter-core";
@@ -77,6 +78,10 @@ export interface CompositorStore extends Readable<CompositorState> {
   // Renderer
   setRenderer: (renderer: RendererType) => void;
 
+  // Layout as plain data, for storing per stream
+  exportLayout: () => Promise<StudioLayout | null>;
+  importLayout: (layout: StudioLayout) => Promise<void>;
+
   // Lifecycle
   destroy: () => void;
 }
@@ -100,10 +105,26 @@ export interface CreateCompositorStoreOptions {
   controller: IngestControllerV2 | null;
   config?: Partial<CompositorConfig>;
   autoEnable?: boolean;
+  /** Read each time the compositor starts and applied before it reports itself enabled. */
+  initialLayout?: () => StudioLayout | null | undefined;
 }
 
 export function createCompositorStore(options: CreateCompositorStoreOptions): CompositorStore {
-  const { controller, config, autoEnable = true } = options;
+  const { controller, config, autoEnable = true, initialLayout } = options;
+
+  // A stored layout that no longer applies must not keep the compositor off.
+  async function startCompositor(
+    target: IngestControllerV2,
+    enableConfig?: Partial<CompositorConfig>
+  ): Promise<void> {
+    await target.enableCompositor(enableConfig);
+    const layout = initialLayout?.();
+    if (layout) {
+      await target.importLayout(layout).catch((error: unknown) => {
+        console.warn("[CompositorStore] Could not apply the studio layout:", error);
+      });
+    }
+  }
 
   const store: Writable<CompositorState> = writable({
     isEnabled: false,
@@ -172,8 +193,7 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
   // Auto-enable if requested
   if (autoEnable && controller) {
     console.log("[CompositorStore] Auto-enabling compositor...");
-    controller
-      .enableCompositor(config)
+    startCompositor(controller, config)
       .then(() => {
         console.log("[CompositorStore] Compositor enabled successfully");
         store.update((state) => ({ ...state, isEnabled: true, error: null }));
@@ -198,7 +218,7 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
     }
     try {
       console.log("[CompositorStore] Enabling compositor...");
-      await controller.enableCompositor(enableConfig || config);
+      await startCompositor(controller, enableConfig || config);
       console.log("[CompositorStore] Compositor enabled successfully");
       store.update((state) => ({ ...state, isEnabled: true, error: null }));
       setupListeners();
@@ -368,6 +388,16 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
     controller?.getSceneManager()?.setRenderer(renderer);
   }
 
+  async function exportLayout(): Promise<StudioLayout | null> {
+    return controller ? controller.exportLayout() : null;
+  }
+
+  async function importLayout(layout: StudioLayout): Promise<void> {
+    if (!controller) return;
+    await controller.importLayout(layout);
+    syncState();
+  }
+
   // Destroy
   function destroy(): void {
     unsubscribers.forEach((unsub) => unsub());
@@ -401,6 +431,8 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
     applyLayout,
     cycleSourceOrder,
     setRenderer,
+    exportLayout,
+    importLayout,
     destroy,
   };
 }

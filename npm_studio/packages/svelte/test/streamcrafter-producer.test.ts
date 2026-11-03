@@ -1,7 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 
-const controllers = vi.hoisted(() => [] as { enableCompositor: ReturnType<typeof vi.fn> }[]);
+const controllers = vi.hoisted(
+  () =>
+    [] as {
+      enableCompositor: ReturnType<typeof vi.fn>;
+      disableCompositor: ReturnType<typeof vi.fn>;
+      setEncoderOverrides: ReturnType<typeof vi.fn>;
+      importLayout: ReturnType<typeof vi.fn>;
+      exportLayout: ReturnType<typeof vi.fn>;
+      renderer: ReturnType<typeof vi.fn>;
+      emit: (event: string) => void;
+    }[]
+);
 const sceneSwitches = vi.hoisted(() => vi.fn());
 
 vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
@@ -9,21 +20,39 @@ vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
 
   class FakeController {
     private sceneManager: unknown = null;
+    private handlers = new Map<string, Set<() => void>>();
+    rendererType = "auto";
+    renderer = vi.fn((type: string) => {
+      this.rendererType = type;
+    });
+    emit = (event: string) => this.handlers.get(event)?.forEach((handler) => handler());
     enableCompositor = vi.fn(async () => {
+      if (this.sceneManager) return;
       const scene = { id: "scene-1", name: "Default", layers: [], backgroundColor: "#000000" };
       const second = { id: "scene-2", name: "Scene 2", layers: [], backgroundColor: "#000000" };
       this.sceneManager = {
-        on: () => () => {},
+        on: (event: string, handler: () => void) => {
+          if (!this.handlers.has(event)) this.handlers.set(event, new Set());
+          this.handlers.get(event)!.add(handler);
+          return () => this.handlers.get(event)?.delete(handler);
+        },
         getAllScenes: () => [scene, second],
         getActiveScene: () => scene,
         setActiveScene: sceneSwitches,
-        getRendererType: () => "canvas2d",
+        getRendererType: () => this.rendererType,
+        setRenderer: this.renderer,
         getStats: () => ({ fps: 30, frameTimeMs: 1 }),
         getCurrentLayout: () => ({ mode: "solo" }),
         getOverlays: () => [],
         isInitialized: () => true,
       };
     });
+    disableCompositor = vi.fn(() => {
+      this.sceneManager = null;
+    });
+    setEncoderOverrides = vi.fn();
+    importLayout = vi.fn(async () => {});
+    exportLayout = vi.fn(async () => (this.sceneManager ? { version: 1, scenes: [] } : null));
     constructor() {
       controllers.push(this);
     }
@@ -150,5 +179,79 @@ describe("StreamCrafter producer panel", () => {
 
     await waitFor(() => expect(controllers).toHaveLength(2));
     await waitFor(() => expect(controllers[1].enableCompositor).toHaveBeenCalled());
+  });
+
+  it("turns the compositor off and on again without a remount, and keeps the layout", async () => {
+    const { container, rerender } = render(StreamCrafter, {
+      whipUrl: "https://ingest.example/whip",
+    });
+    await screen.findByText("Scenes");
+    const controller = controllers[0];
+
+    await rerender({ enableCompositor: false });
+    await waitFor(() => expect(controller.disableCompositor).toHaveBeenCalledTimes(1));
+    expect(controller.exportLayout).toHaveBeenCalled();
+    expect(container.querySelector(".fw-sc-producer")).toBeNull();
+
+    await rerender({ enableCompositor: true });
+    await waitFor(() => expect(controller.enableCompositor).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(controller.importLayout).toHaveBeenCalledWith({ version: 1, scenes: [] })
+    );
+    expect(await screen.findByText("Scenes")).toBeTruthy();
+    expect(controllers).toHaveLength(1);
+  });
+
+  it("switches the renderer of the running compositor", async () => {
+    const { rerender } = render(StreamCrafter, {
+      whipUrl: "https://ingest.example/whip",
+      compositorConfig: { renderer: "auto" },
+    });
+    await screen.findByText("Scenes");
+
+    await rerender({ compositorConfig: { renderer: "webgl" } });
+
+    await waitFor(() => expect(controllers[0].renderer).toHaveBeenCalledWith("webgl"));
+    expect(controllers).toHaveLength(1);
+    expect(controllers[0].enableCompositor).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts from initialLayout and reports layout changes", async () => {
+    const stored = {
+      version: 1,
+      layout: { mode: "solo" },
+      activeScene: 0,
+      scenes: [],
+      overlays: [],
+    };
+    const onLayoutChange = vi.fn();
+    render(StreamCrafter, {
+      whipUrl: "https://ingest.example/whip",
+      initialLayout: stored as never,
+      onLayoutChange,
+    });
+    await screen.findByText("Scenes");
+    expect(controllers[0].importLayout).toHaveBeenCalledWith(stored);
+
+    controllers[0].emit("sceneCreated");
+
+    await waitFor(() => expect(onLayoutChange).toHaveBeenCalledWith({ version: 1, scenes: [] }));
+  });
+
+  it("offers the encoder settings outside dev mode and hands them to the controller", async () => {
+    render(StreamCrafter, { whipUrl: "https://ingest.example/whip" });
+    await screen.findByText("Scenes");
+
+    await fireEvent.click(screen.getByTitle("Settings"));
+    const resolution = screen.getByLabelText("Resolution") as HTMLSelectElement;
+    await fireEvent.change(resolution, { target: { value: "1280x720" } });
+
+    expect(controllers[0].setEncoderOverrides).toHaveBeenLastCalledWith({
+      video: { width: 1280, height: 720 },
+    });
+    expect((screen.getByLabelText("Resolution") as HTMLSelectElement).value).toBe("1280x720");
+
+    await fireEvent.click(screen.getByText("Reset to Profile"));
+    expect(controllers[0].setEncoderOverrides).toHaveBeenLastCalledWith({});
   });
 });
