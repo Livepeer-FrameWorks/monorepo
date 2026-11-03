@@ -144,6 +144,7 @@ func main() {
 		ProviderWebhookInboxFailures:     metricsCollector.NewGauge("provider_webhook_inbox_repeatedly_failed_items", "Billing recovery items with repeated failures or unresolved waits older than fourteen days", nil),
 		ProviderWebhookInboxReadFailures: metricsCollector.NewCounter("provider_webhook_inbox_read_failures_total", "Failed reads of the provider webhook recovery inventory", nil),
 		TierDowngradesHeld:               metricsCollector.NewGauge("tier_downgrades_held_items", "Provider-confirmed downgrades still unapplied past the daily applier grace", nil),
+		TierDowngradesHeldReadFailures:   metricsCollector.NewCounter("tier_downgrades_held_read_failures_total", "Failed reads of the held confirmed downgrade count", nil),
 		CryptoAccountingAnomalies:        metricsCollector.NewGauge("crypto_accounting_anomalies", "Open crypto accounting anomalies", []string{"kind"}),
 		CryptoAnomalyOldest:              metricsCollector.NewGauge("crypto_accounting_anomaly_oldest_age_seconds", "Age of the oldest open crypto accounting anomaly", []string{"kind"}),
 		CryptoInvoiceReview:              metricsCollector.NewGauge("crypto_invoice_review_items", "Crypto invoice deposit events requiring operator review", []string{"network"}),
@@ -181,6 +182,7 @@ func main() {
 	serverMetrics.FreeFallbackFailures.WithLabelValues("move").Set(0)
 	serverMetrics.FreeFallbackFailures.WithLabelValues("notice").Set(0)
 	handlerMetrics.ProviderWebhookInboxReadFailures.WithLabelValues().Add(0)
+	handlerMetrics.TierDowngradesHeldReadFailures.WithLabelValues().Add(0)
 
 	// Create Quartermaster gRPC client for tenant lookups (used by webhooks)
 	qmGRPCClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{

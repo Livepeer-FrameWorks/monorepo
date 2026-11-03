@@ -198,3 +198,26 @@ func TestCheckoutRecoveryRetryDiscardsRolledBackDecision(t *testing.T) {
 		t.Fatalf("rolled-back completion skipped recovery: %v", err)
 	}
 }
+
+// A failed held-downgrade read counts on its own counter, so it cannot fire
+// the provider webhook inbox alert.
+func TestObserveHeldDowngradesReadFailureHasItsOwnCounter(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	mock.ExpectQuery(`CountHeldConfirmedDowngrades`).WillReturnError(errors.New("connection refused"))
+	metrics := &PurserMetrics{
+		TierDowngradesHeld:               prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "test_held"}, nil),
+		TierDowngradesHeldReadFailures:   prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_held_read_failures"}, nil),
+		ProviderWebhookInboxReadFailures: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_inbox_read_failures"}, nil),
+	}
+	(&providerWebhookInboxStore{db: db, metrics: metrics}).observeHeldDowngrades(context.Background())
+	if got := testutil.ToFloat64(metrics.TierDowngradesHeldReadFailures.WithLabelValues()); got != 1 {
+		t.Fatalf("held downgrade read failures = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(metrics.ProviderWebhookInboxReadFailures.WithLabelValues()); got != 0 {
+		t.Fatalf("inbox read failures = %v, want 0", got)
+	}
+}

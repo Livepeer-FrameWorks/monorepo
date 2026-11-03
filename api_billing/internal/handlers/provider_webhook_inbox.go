@@ -357,8 +357,10 @@ func (s *providerWebhookInboxStore) observeHeldDowngrades(ctx context.Context) {
 	defer cancel()
 	count, err := purserdb.New(s.db).CountHeldConfirmedDowngrades(observeCtx, int64(HeldDowngradeGrace/time.Second))
 	if err != nil {
-		if s.metrics.ProviderWebhookInboxReadFailures != nil {
-			s.metrics.ProviderWebhookInboxReadFailures.WithLabelValues().Inc()
+		// Its own counter: a failed held-downgrade read is not a stuck
+		// provider webhook inbox.
+		if s.metrics.TierDowngradesHeldReadFailures != nil {
+			s.metrics.TierDowngradesHeldReadFailures.WithLabelValues().Inc()
 		}
 		return
 	}
