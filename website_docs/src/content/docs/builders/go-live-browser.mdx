@@ -17,26 +17,25 @@ For a long or high-stakes broadcast, a dedicated encoder is still the steadier c
 
 ## 1. Pick a stream
 
-Open **Go Live** in the dashboard sidebar and choose your stream under **Broadcast to**.
+Open **Go Live** in the dashboard sidebar and choose your stream under **Broadcast to**. A link from a stream page opens Go Live with that stream already chosen.
 
-## 2. Prepare the connection
+FrameWorks then finds an ingest node for the stream and opens the studio underneath. The line under the stream picker shows whether recording is on, and the node's address and region once it is found. FrameWorks looks up the best node again each time you go live, so the node can change between broadcasts.
 
-Click **Prepare connection**. FrameWorks finds a recommended node for your stream and shows its region, and the studio appears underneath.
+If no node is found, a message under the picker says why and offers the next step, such as **Try again**, **Open stream keys**, or **Open billing**.
 
-If no destination is confirmed, check your stream access and try again. FrameWorks looks up the best node again each time you connect, so the one shown here can change.
+## 2. Add your sources
 
-## 3. Add your sources
-
-Use the buttons along the bottom of the studio:
+The action bar at the bottom of the studio has a button for each kind of source. Hover a button to see its name.
 
 - **Add Camera** starts your camera and microphone. Allow access when the browser asks. If your computer has more than one camera, the button lists them, and you can add another camera at any time. A camera already in use is marked as active. Only the first camera brings a microphone.
 - **Share Screen** lets you choose a screen, a window, or a browser tab.
+- **Add media file** plays a video or audio file from your computer through the mix like any other source. The file plays from your browser tab and is not uploaded, so keep the tab open while it is in the mix. **Play**, **Pause**, and **Loop** for each file are in the **Media** section of the panel under the preview.
 
-To play a video or audio file, use **Add media file** in the panel under the preview. The file plays through the mix like any other source, with **Play**, **Pause**, and **Loop** next to its name. It plays from your browser tab and is not uploaded, so keep the tab open while the file is in the mix.
+Each source appears in the mixer, where you can mute it, hide it from the picture, or remove it. You can add sources during a broadcast, but you can't remove one until the broadcast ends.
 
-Each source appears in the mixer, where you can mute it, hide it from the picture, or remove it. You can add and remove sources during a broadcast.
+Once a source is capturing, the **Audio** section under the preview has the browser's own processing (echo cancellation, noise suppression, automatic gain) and the studio's noise gate, de-esser, EQ, and a setting that lowers other sources while the camera microphone picks up sound.
 
-## 4. Choose a layout
+## 3. Choose a layout
 
 With two or more sources, the layout controls on the preview arrange them. You can show one source alone, place one inside another as picture-in-picture, or use a split, focus, or grid layout. The cycle control swaps which source goes in which position.
 
@@ -47,7 +46,7 @@ The mix runs in your browser, so every source you add puts more load on your com
 A scene is a saved arrangement of sources. The panel under the preview lists your scenes and the layers of the scene you're on.
 
 - **Add a scene** with the **+** button. A new scene starts empty: while you're on it, click the eye next to a source in the mixer to put that source in the scene.
-- **Switch scenes** by clicking one. The transition menu next to the scene list sets how the picture changes: a cut, a fade, or a slide, with a duration in milliseconds.
+- **Switch scenes** by clicking one, or with the **]** and **[** keys while the studio has focus. The transition menu next to the scene list sets how the picture changes: a cut, a fade, or a slide, with a duration in milliseconds.
 - **Stack layers** with the arrows. The top of the list is drawn on top. The eye hides a layer in this scene and keeps its place in the stack.
 
 Rehearse your transitions in the preview before you go live.
@@ -59,13 +58,17 @@ The **Overlays** section of the panel puts a logo or text above your sources in 
 - **Add logo** takes an image file, such as a PNG with a transparent background or an SVG. Set its size and position with the sliders. The image file stays in your browser; only the finished mix is sent.
 - **Add text** puts a lower third near the bottom left. Type your text, then set its size, color, and position. The picture updates as you edit.
 
-## 5. Rehearse
+### Studio settings
+
+The gear next to **Broadcast to** opens **Studio settings**. **Compositor** turns scenes, layers, and layouts on or off, and **Renderer** picks how the browser draws the mix. Leave both at their defaults unless the studio reports that the compositor could not start. Applying a change restarts the studio, which clears your sources, so change these before you set up.
+
+## 4. Rehearse
 
 Nothing is public until you click **Go Live**, so use the preview to check everything first:
 
 - Check your framing and layout.
 - Watch the audio meter while you speak.
-- Open the settings button to choose a quality setting. You can't change it during a broadcast.
+- Open the settings button in the action bar to choose a quality setting. You can't change it during a broadcast.
 
 | Setting      | Video           | Use it for                        |
 | ------------ | --------------- | --------------------------------- |
@@ -73,23 +76,23 @@ Nothing is public until you click **Go Live**, so use the preview to check every
 | Broadcast    | 1080p, 4.5 Mbps | Most streams. This is the default |
 | Conference   | 720p, 2.5 Mbps  | Limited upload, meetings          |
 
-## 6. Go live
+## 5. Go live
 
-Click **Go Live**. The button stays disabled until you've added a source. A **LIVE** indicator appears at the top of the page when your broadcast starts.
+Click **Go Live** at the right end of the action bar. The button stays disabled until you've added a source. A **LIVE** indicator appears at the top of the page when your broadcast starts, and the connection indicator in the studio header shows whether the upload is good, unstable, or poor; hover it for the bitrate, packet loss, and round trip.
 
 Keep the tab open for the whole broadcast. To check what viewers see, open the stream in **Content → Streams** in a second window and go to the **Playback** tab, which also has the playback link and embed code.
 
-## 7. Send it to other platforms
+## 6. Send it to other platforms
 
 To stream to YouTube, Twitch, or anywhere else at the same time, open your stream in **Content → Streams** and add destinations on its **Multistream** tab. Enabled destinations start and stop with your broadcast. See [Multistreaming](/builders/multistreaming).
 
 ## If something goes wrong
 
 - **The connection drops.** The studio shows **Reconnecting...** and retries a few times on its own. If it shows an error instead, click **Go Live** again. Your sources stay in place.
-- **The browser blocks your camera or microphone.** Allow access in the browser's site settings, then reload the page.
+- **The browser blocks your camera or microphone.** Allow camera and microphone access for this site in the browser's site settings, then add the source again. Your other sources and scenes stay in place. Don't reload the page: a reload clears the studio, and you would set up your sources and scenes again.
 - **The picture freezes when you change tabs.** Your browser is pausing the encoder in the background. Stay on the tab, or switch to a Chromium-based browser.
 - **Video is choppy.** Close other applications, remove sources you don't need, or switch to the Conference setting before your next broadcast.
-- **The stream won't start on a prepaid account.** At €0 new streams are blocked, and a broadcast that disconnects can't reconnect until you [top up](/builders/billing).
+- **The stream won't start on a prepaid account.** At €0 new broadcasts are refused, and a broadcast that disconnects can't reconnect until you [top up](/builders/billing). A broadcast that is already running keeps going, and stops if the balance falls below -€10.
 
 More fixes are in [Troubleshooting](/builders/troubleshooting).
 
