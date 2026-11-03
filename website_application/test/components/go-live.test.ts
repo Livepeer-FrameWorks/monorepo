@@ -89,6 +89,20 @@ Element.prototype.scrollIntoView ??= () => undefined;
 beforeEach(() => {
   studioMounts.count = 0;
   studioProps.current = {};
+  const values = new Map<string, string>();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (k: string) => values.get(k) ?? null,
+      setItem: (k: string, v: string) => void values.set(k, v),
+      removeItem: (k: string) => void values.delete(k),
+      clear: () => values.clear(),
+      key: () => null,
+      get length() {
+        return values.size;
+      },
+    },
+  });
   resolveFetch.mockImplementation(async ({ variables }: { variables: { streamKey: string } }) =>
     destinationFor(variables.streamKey)
   );
@@ -148,6 +162,74 @@ describe("Go Live page", () => {
       "https://key-b.node.example/webrtc/key-b"
     );
     expect(replaceState).toHaveBeenCalledWith(`/go-live?stream=${streamB.streamId}`, undefined);
+  });
+
+  it("saves the studio layout per stream and opens each stream with its own", async () => {
+    const layoutA = { version: 1, scenes: [{ name: "A" }] };
+    const layoutB = { version: 1, scenes: [{ name: "B" }] };
+    const stored = (relayId: string) =>
+      JSON.parse(window.localStorage.getItem(`fw.goLive.studioLayout.${relayId}`) ?? "null");
+    window.localStorage.setItem("fw.goLive.studioLayout.relay-b", JSON.stringify(layoutB));
+    render(GoLivePage);
+    await screen.findByTestId("studio");
+    expect(studioProps.current.initialLayout).toBeNull();
+    (studioProps.current.onLayoutChange as (layout: unknown) => void)(layoutA);
+    expect(stored("relay-a")).toEqual(layoutA);
+
+    await chooseStream("Stream B");
+    await waitFor(() =>
+      expect(studioProps.current.whipUrl).toBe("https://key-b.node.example/webrtc/key-b")
+    );
+    expect(studioProps.current.initialLayout).toEqual(layoutB);
+    expect(studioMounts.count).toBe(1);
+
+    (studioProps.current.onLayoutChange as (layout: unknown) => void)({ ...layoutB, edited: 1 });
+    expect(stored("relay-b")).toEqual({ ...layoutB, edited: 1 });
+    expect(stored("relay-a")).toEqual(layoutA);
+
+    await chooseStream("Stream A");
+    await waitFor(() => expect(studioProps.current.initialLayout).toEqual(layoutA));
+    expect(studioMounts.count).toBe(1);
+  });
+
+  it("applies studio settings without remounting the studio", async () => {
+    render(GoLivePage);
+    await screen.findByTestId("studio");
+    await fireEvent.click(screen.getByLabelText("Studio settings"));
+    await fireEvent.click(await screen.findByLabelText("Compositor"));
+    await fireEvent.click(screen.getByText("Apply"));
+    await waitFor(() => expect(studioProps.current.enableCompositor).toBe(false));
+    expect(studioMounts.count).toBe(1);
+  });
+
+  it("names a suspended account from the gateway's denial reason", async () => {
+    resolveFetch.mockResolvedValue({
+      data: null,
+      errors: [
+        {
+          message: "account suspended",
+          extensions: { code: "FORBIDDEN", reason: "ACCOUNT_SUSPENDED" },
+        },
+      ],
+    });
+    render(GoLivePage);
+    expect(await screen.findByText("This account is suspended")).toBeTruthy();
+    const link = screen.getByText("Open billing").closest("a");
+    expect(link?.getAttribute("href")).toBe("/account/billing");
+  });
+
+  it("names a deactivated account from the gateway's denial reason", async () => {
+    resolveFetch.mockResolvedValue({
+      data: null,
+      errors: [
+        {
+          message: "account is inactive",
+          extensions: { code: "FORBIDDEN", reason: "ACCOUNT_INACTIVE" },
+        },
+      ],
+    });
+    render(GoLivePage);
+    expect(await screen.findByText("This account is deactivated")).toBeTruthy();
   });
 
   it("links a refused key to the stream's keys", async () => {

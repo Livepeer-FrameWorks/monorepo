@@ -35,6 +35,8 @@
     type CompositorRenderer,
     type StudioSettings,
   } from "./studio-settings";
+  import { loadStudioLayout, saveStudioLayout, studioTarget } from "./studio-layout";
+  import type { StudioLayout } from "@livepeer-frameworks/streamcrafter-core";
 
   const streamsStore = new GetStreamsConnectionStore();
   const streamFragmentStore = new StreamCoreFieldsStore();
@@ -45,12 +47,16 @@
   let selectedStreamId = $state<string | null>(null);
   let isStreaming = $state(false);
   let connectionBusy = $state(false);
-  // The studio's controller is built once per signed-in user from the first
-  // destination found. Every connection then asks resolveConnectionDestination
-  // for the selected stream, so switching streams keeps sources and scenes.
+  // The studio follows the stream it was opened for: its WHIP URL and that
+  // stream's saved layout change together once the destination of another
+  // stream resolves, which the SDK takes as a stream switch and starts from
+  // that layout. Every connection still asks resolveConnectionDestination for
+  // the selected stream. Streams cannot be switched while connected, so a live
+  // encoder is never rebuilt.
   let studioWhipUrl = $state<string | null>(null);
+  let studioLayout = $state.raw<StudioLayout | null>(null);
+  let studioStreamId = "";
   let studioIdentity = "";
-  let studioEpoch = $state(0);
   let checking = $state(false);
   let destination = $state<ResolvedIngest | null>(null);
   let destinationTime = $state("");
@@ -80,6 +86,8 @@
       if (current !== studioIdentity) {
         studioIdentity = current;
         studioWhipUrl = null;
+        studioLayout = null;
+        studioStreamId = "";
       }
     });
   });
@@ -184,7 +192,9 @@
         destinationTime = "";
         lastResolveMessage = error instanceof Error ? error.message : String(error);
         failure = {
-          ...describeResolveFailure(error instanceof IngestResolutionError ? error.code : null),
+          ...(error instanceof IngestResolutionError
+            ? describeResolveFailure(error.code, error.reason)
+            : describeResolveFailure(null)),
           source: "resolve",
         };
       }
@@ -201,7 +211,18 @@
     checking = true;
     try {
       const url = await resolveConnectionDestination();
-      if (epoch === destinationEpoch && !studioWhipUrl) studioWhipUrl = url;
+      const stream = selectedStream;
+      if (epoch === destinationEpoch && stream && !connectionBusy) {
+        const next = studioTarget(
+          { streamId: studioStreamId, whipUrl: studioWhipUrl, layout: studioLayout },
+          stream.id,
+          url,
+          (id) => loadStudioLayout(storage(), id)
+        );
+        studioStreamId = next.streamId;
+        studioLayout = next.layout;
+        studioWhipUrl = next.whipUrl;
+      }
     } catch {
       // resolveConnectionDestination records what failed.
     } finally {
@@ -245,10 +266,11 @@
     settings = { ...settingsDraft };
     saveStudioSettings(storage(), settings);
     settingsOpen = false;
-    if (changed) {
-      if (failure?.source === "studio") failure = null;
-      studioEpoch++;
-    }
+    if (changed && failure?.source === "studio") failure = null;
+  }
+
+  function handleLayoutChange(layout: StudioLayout) {
+    saveStudioLayout(storage(), studioStreamId, layout);
   }
 
   const SignalIcon = getIconComponent("Signal");
@@ -436,23 +458,23 @@
 
         <div class="flex-1 bg-black relative flex flex-col">
           {#if selectedStream && studioWhipUrl && identity}
-            {#key `${identity}:${studioEpoch}`}
-              <div class="w-full min-h-full flex flex-col">
-                <StreamCrafter
-                  whipUrl={studioWhipUrl}
-                  resolveWhipUrl={resolveConnectionDestination}
-                  initialProfile="broadcast"
-                  autoStartCamera={false}
-                  showSettings={false}
-                  theme={themeStore.playerTheme as import("@livepeer-frameworks/streamcrafter-core").FwThemePreset}
-                  enableCompositor={settings.enableCompositor}
-                  compositorConfig={{ renderer: settings.compositorRenderer }}
-                  onStateChange={handleStateChange}
-                  onError={handleError}
-                  class="w-full flex-1"
-                />
-              </div>
-            {/key}
+            <div class="w-full min-h-full flex flex-col">
+              <StreamCrafter
+                whipUrl={studioWhipUrl}
+                resolveWhipUrl={resolveConnectionDestination}
+                initialProfile="broadcast"
+                autoStartCamera={false}
+                showSettings={false}
+                theme={themeStore.playerTheme as import("@livepeer-frameworks/streamcrafter-core").FwThemePreset}
+                enableCompositor={settings.enableCompositor}
+                compositorConfig={{ renderer: settings.compositorRenderer }}
+                initialLayout={studioLayout}
+                onLayoutChange={handleLayoutChange}
+                onStateChange={handleStateChange}
+                onError={handleError}
+                class="w-full flex-1"
+              />
+            </div>
           {:else}
             <div class="flex items-center justify-center h-full min-h-64 text-muted-foreground">
               <div class="text-center">
@@ -548,7 +570,7 @@
     <DialogHeader>
       <DialogTitle>Studio settings</DialogTitle>
       <DialogDescription>
-        Applying a change restarts the studio and clears its sources, scenes and overlays.
+        Changes apply right away. Sources, scenes and overlays stay in place.
       </DialogDescription>
     </DialogHeader>
     <div class="grid gap-4 py-4">
