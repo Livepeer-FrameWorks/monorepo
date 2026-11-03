@@ -3601,6 +3601,15 @@ CREATE INDEX IF NOT EXISTS idx_operator_grant_notices_pending
 ON purser.operator_grant_notices(attempted_at ASC, ends_at)
 WHERE notified_at IS NULL AND abandoned_at IS NULL;
 
+-- Unsent ending notices, for the platform-wide stale-notice discard.
+CREATE INDEX IF NOT EXISTS idx_operator_grant_notices_unsent_ending
+ON purser.operator_grant_notices(ends_at ASC)
+WHERE kind = 'ending' AND notified_at IS NULL;
+
+-- A tenant's notices by kind and end time, for the operator resend flow.
+CREATE INDEX IF NOT EXISTS idx_operator_grant_notices_tenant
+ON purser.operator_grant_notices(tenant_id ASC, kind ASC, ends_at ASC);
+
 -- Binding a fallback writes its parent row as well as locking it. Yugabyte's
 -- Read Committed retirement statement must restart its snapshot after waiting
 -- on a concurrent binding, so its guard sees the newly committed grant.
