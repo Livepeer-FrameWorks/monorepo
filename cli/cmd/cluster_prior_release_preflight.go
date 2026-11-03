@@ -115,7 +115,8 @@ func (m priorDataMigration) key() string { return m.service + "." + m.id }
 
 // enforcePriorReleasesComplete refuses a move to target while an earlier release is unfinished on the cluster in a way
 // `release apply` cannot finish itself: a postdeploy migration of an earlier release whose ledger checksum differs from
-// the embedded file, or a required data migration of an earlier release that is running, paused, unreadable or unknown
+// the embedded file, a missing postdeploy migration of an earlier release that was never applied (an expand migration
+// of it or an earlier release is missing too), or a required data migration of an earlier release that is running, paused, unreadable or unknown
 // to its installed binary. It returns what `release apply` finishes itself before this release changes anything: the
 // earlier releases' required data migrations that are pending or failed, and their postdeploy migrations missing from a
 // PostgreSQL/YugabyteDB or ClickHouse ledger. It runs before the first mutation and under --dry-run. The per-service
@@ -158,31 +159,27 @@ func enforcePriorReleasesComplete(ctx context.Context, out io.Writer, rc *resolv
 	fmt.Fprintf(out, "[preflight] checking that every release before %s is complete\n", target)
 
 	if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
-		part, gap, err := priorPostgresPostdeploy(ctx, out, rc, sshPool, pg, target)
+		part, engineGaps, err := priorPostgresPostdeploy(ctx, out, rc, sshPool, pg, target)
 		if interrupted := preflightInterrupted(ctx); interrupted != nil {
 			return priorReleaseWork{}, interrupted
 		}
 		if err != nil {
 			return priorReleaseWork{}, fmt.Errorf("[preflight] check earlier releases (postgres): %w", err)
 		}
-		if gap != nil {
-			gaps = append(gaps, *gap)
-		}
+		gaps = append(gaps, engineGaps...)
 		if err = work.postdeploy.merge(part); err != nil {
 			return priorReleaseWork{}, fmt.Errorf("[preflight] check earlier releases (postgres): %w", err)
 		}
 	}
 	if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled && len(ch.Databases) > 0 {
-		part, gap, err := priorClickHousePostdeploy(ctx, out, rc, sshPool, ch, target)
+		part, engineGaps, err := priorClickHousePostdeploy(ctx, out, rc, sshPool, ch, target)
 		if interrupted := preflightInterrupted(ctx); interrupted != nil {
 			return priorReleaseWork{}, interrupted
 		}
 		if err != nil {
 			return priorReleaseWork{}, fmt.Errorf("[preflight] check earlier releases (clickhouse): %w", err)
 		}
-		if gap != nil {
-			gaps = append(gaps, *gap)
-		}
+		gaps = append(gaps, engineGaps...)
 		if err = work.postdeploy.merge(part); err != nil {
 			return priorReleaseWork{}, fmt.Errorf("[preflight] check earlier releases (clickhouse): %w", err)
 		}
@@ -239,27 +236,48 @@ func highestPriorRelease(target string) string {
 	return prior[len(prior)-1].Version
 }
 
-// splitPriorPostdeploy separates the missing postdeploy migrations `release apply` can apply from the ledgered ones
-// whose checksum differs: the migrate role never reapplies a ledgered migration, so those refuse.
-func splitPriorPostdeploy(engine string, missing []provisioner.MigrationKey) (runnable []provisioner.MigrationKey, gap *priorReleaseGap) {
-	var mismatched []provisioner.MigrationKey
+// splitPriorPostdeploy separates the missing postdeploy migrations `release apply` can apply from those it refuses.
+// A ledgered one whose checksum differs refuses because the migrate role never reapplies a ledgered migration. A
+// release's postdeploy SQL also refuses while an expand migration of that release or an earlier one is missing: that
+// release was never applied, so its postdeploy SQL would run against the schema and binaries of the release before
+// it. That gap names the lowest release with a missing expand migration as the one to apply first. Missing expand
+// migrations alone are no gap: this release's expand step applies them.
+func splitPriorPostdeploy(engine string, missing, missingExpand []provisioner.MigrationKey) (runnable []provisioner.MigrationKey, gaps []priorReleaseGap) {
+	var unapplied []provisioner.MigrationKey
+	for _, key := range missingExpand {
+		if key.MismatchedChecksum == "" {
+			unapplied = append(unapplied, key)
+		}
+	}
+	slices.SortStableFunc(unapplied, func(a, b provisioner.MigrationKey) int { return releases.CompareSemver(a.Version, b.Version) })
+	var mismatched, blocked []provisioner.MigrationKey
 	for _, key := range missing {
-		if key.MismatchedChecksum != "" {
+		switch {
+		case key.MismatchedChecksum != "":
 			mismatched = append(mismatched, key)
-		} else {
+		case len(unapplied) > 0 && releases.CompareSemver(key.Version, unapplied[0].Version) >= 0:
+			blocked = append(blocked, key)
+		default:
 			runnable = append(runnable, key)
 		}
 	}
+	if len(blocked) > 0 {
+		gaps = append(gaps, priorReleaseGap{
+			release:      unapplied[0].Version,
+			detail:       fmt.Sprintf("%s postdeploy migrations of a release that was never applied: %s; expand migrations missing: %s", engine, migrationKeyList(blocked), migrationKeyList(unapplied)),
+			needsRelease: true,
+		})
+	}
 	if len(mismatched) > 0 {
-		gap = &priorReleaseGap{
+		gaps = append(gaps, priorReleaseGap{
 			release: mismatched[0].Version,
 			detail:  fmt.Sprintf("%s postdeploy migrations whose ledger checksum differs from this CLI's file (inspect with `frameworks cluster doctor`): %s", engine, migrationKeyList(mismatched)),
-		}
+		})
 	}
-	return runnable, gap
+	return runnable, gaps
 }
 
-func priorPostgresPostdeploy(ctx context.Context, out io.Writer, rc *resolvedCluster, sshPool *ssh.Pool, pg *inventory.PostgresConfig, target string) (priorPostdeploy, *priorReleaseGap, error) {
+func priorPostgresPostdeploy(ctx context.Context, out io.Writer, rc *resolvedCluster, sshPool *ssh.Pool, pg *inventory.PostgresConfig, target string) (priorPostdeploy, []priorReleaseGap, error) {
 	highest := highestPriorRelease(target)
 	if highest == "" {
 		return priorPostdeploy{}, nil, nil
@@ -308,18 +326,26 @@ func priorPostgresPostdeploy(ctx context.Context, out io.Writer, rc *resolvedClu
 	if err != nil {
 		return priorPostdeploy{}, nil, err
 	}
-	runnable, gap := splitPriorPostdeploy("postgres", missing)
+	if len(missing) == 0 {
+		return priorPostdeploy{}, nil, nil
+	}
+	fmt.Fprintf(out, "[preflight] reading postgres expand ledger through %s on %s\n", highest, hostLabel(host))
+	missingExpand, err := missingPostgresMigrationsFn(ctx, sshPool, host, pg, password, ledgered, "expand", highest)
+	if err != nil {
+		return priorPostdeploy{}, nil, err
+	}
+	runnable, gaps := splitPriorPostdeploy("postgres", missing, missingExpand)
 	if len(runnable) == 0 {
-		return priorPostdeploy{}, gap, nil
+		return priorPostdeploy{}, gaps, nil
 	}
 	digests := map[string]string{}
 	if err = priorPostgresDigestsFn(ctx, sshPool, host, pg, password, databasesOf(runnable), digests); err != nil {
 		return priorPostdeploy{}, nil, fmt.Errorf("read the ledgers the missing postdeploy migrations change: %w", err)
 	}
-	return priorPostdeploy{postgres: runnable, digests: digests}, gap, nil
+	return priorPostdeploy{postgres: runnable, digests: digests}, gaps, nil
 }
 
-func priorClickHousePostdeploy(ctx context.Context, out io.Writer, rc *resolvedCluster, sshPool *ssh.Pool, ch *inventory.ClickHouseConfig, target string) (priorPostdeploy, *priorReleaseGap, error) {
+func priorClickHousePostdeploy(ctx context.Context, out io.Writer, rc *resolvedCluster, sshPool *ssh.Pool, ch *inventory.ClickHouseConfig, target string) (priorPostdeploy, []priorReleaseGap, error) {
 	highest := highestPriorRelease(target)
 	if highest == "" {
 		return priorPostdeploy{}, nil, nil
@@ -339,15 +365,23 @@ func priorClickHousePostdeploy(ctx context.Context, out io.Writer, rc *resolvedC
 	if err != nil {
 		return priorPostdeploy{}, nil, err
 	}
-	runnable, gap := splitPriorPostdeploy("clickhouse", missing)
+	if len(missing) == 0 {
+		return priorPostdeploy{}, nil, nil
+	}
+	fmt.Fprintf(out, "[preflight] reading clickhouse expand ledger through %s on %s\n", highest, hostLabel(host))
+	missingExpand, err := missingClickHouseMigrationsFn(ctx, sshPool, host, ch.EffectivePort(), password, ch.Databases, "expand", highest)
+	if err != nil {
+		return priorPostdeploy{}, nil, err
+	}
+	runnable, gaps := splitPriorPostdeploy("clickhouse", missing, missingExpand)
 	if len(runnable) == 0 {
-		return priorPostdeploy{}, gap, nil
+		return priorPostdeploy{}, gaps, nil
 	}
 	digests := map[string]string{}
 	if err = priorClickHouseDigestsFn(ctx, sshPool, host, ch.EffectivePort(), password, databasesOf(runnable), digests); err != nil {
 		return priorPostdeploy{}, nil, fmt.Errorf("read the ledgers the missing postdeploy migrations change: %w", err)
 	}
-	return priorPostdeploy{clickhouse: runnable, digests: digests}, gap, nil
+	return priorPostdeploy{clickhouse: runnable, digests: digests}, gaps, nil
 }
 
 // priorDataMigrationGaps reads the state of every earlier release's required data migration. A pending or failed one

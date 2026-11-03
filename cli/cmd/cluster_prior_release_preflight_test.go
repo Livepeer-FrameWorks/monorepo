@@ -27,6 +27,7 @@ import (
 type releaseApplyHarness struct {
 	missingFrom       string // prior releases at or above this version report a missing postdeploy migration
 	mismatched        bool   // the missing postdeploy migration is ledgered with a different checksum
+	expandMissingFrom string // prior releases at or above this version report a missing expand migration
 	pendingDataID     string // this required data migration reports pending; every other one is completed
 	backupPath        string // passed as --backup when set
 	mutationCalled    bool
@@ -96,6 +97,10 @@ func (h *releaseApplyHarness) install(t *testing.T) {
 		return states, nil
 	}
 	missingPostgresMigrationsFn = func(_ context.Context, _ *ssh.Pool, _ inventory.Host, _ *inventory.PostgresConfig, _ string, databases []provisioner.SchemaDatabase, phase, version string) ([]provisioner.MigrationKey, error) {
+		if phase == "expand" && h.expandMissingFrom != "" && releases.CompareSemver(version, h.expandMissingFrom) >= 0 &&
+			releases.CompareSemver(version, "v0.3.11") < 0 {
+			return []provisioner.MigrationKey{{Database: databases[0].Name, Version: h.expandMissingFrom, Phase: "expand", Seq: 1, Filename: "001_columns.sql"}}, nil
+		}
 		if phase != "postdeploy" || h.missingFrom == "" || releases.CompareSemver(version, h.missingFrom) < 0 {
 			return nil, nil
 		}
@@ -214,6 +219,40 @@ func TestReleaseApplyRefusesPriorPostdeployChecksumMismatch(t *testing.T) {
 		if strings.Contains(out, "Pre-upgrade host convergence") {
 			t.Fatalf("dry-run=%v: a release step started before the refusal:\n%s", dryRun, out)
 		}
+	}
+}
+
+// An earlier release whose expand migrations are missing was never applied: its postdeploy SQL would run against the
+// schema and binaries of the release before it. release apply refuses before its first mutation and names that release
+// to apply first, in the dry run as in the real run, even with a backup.
+func TestReleaseApplyRefusesPostdeployOfSkippedRelease(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		h := &releaseApplyHarness{missingFrom: "v0.3.9", expandMissingFrom: "v0.3.9"}
+		h.install(t)
+		h.backupPath = writeGateBackupOf(t, "commodore", 10*time.Minute)
+		out, err := h.apply(t, dryRun)
+		if h.mutationCalled || len(h.priorPostdeployRuns) != 0 {
+			t.Fatalf("dry-run=%v: release apply ran the skipped release's postdeploy or mutated (runs=%v, err=%v)\n%s", dryRun, h.priorPostdeployRuns, err, out)
+		}
+		if err == nil || !strings.Contains(err.Error(), "release apply --version v0.3.9") ||
+			!strings.Contains(err.Error(), "commodore/v0.3.9/expand/001_columns.sql") {
+			t.Fatalf("dry-run=%v: err = %v; want a refusal naming v0.3.9 to apply first and its missing expand migration", dryRun, err)
+		}
+	}
+}
+
+// An earlier release's missing postdeploy migration still runs when only a later release's expand migrations are
+// missing: this release's expand step applies those.
+func TestReleaseApplyAppliesPriorPostdeployBelowAMissingLaterExpand(t *testing.T) {
+	h := &releaseApplyHarness{missingFrom: "v0.3.9", expandMissingFrom: "v0.3.10"}
+	h.install(t)
+	h.backupPath = writeGateBackupOf(t, "commodore", 10*time.Minute)
+	out, err := h.apply(t, false)
+	if !h.mutationCalled || !errors.Is(err, errHarnessStoppedAtMutation) {
+		t.Fatalf("err = %v; v0.3.9's expand is ledgered, so its postdeploy must be applied\n%s", err, out)
+	}
+	if strings.Join(h.priorPostdeployRuns, ",") != "v0.3.9 dry-run=false mutated=false" {
+		t.Fatalf("prior postdeploy runs = %v; want one real run through v0.3.9", h.priorPostdeployRuns)
 	}
 }
 
