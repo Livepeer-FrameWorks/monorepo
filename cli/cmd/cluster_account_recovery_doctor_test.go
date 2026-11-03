@@ -19,7 +19,7 @@ recovery_stuck=0
 spend_held=3
 spend_held_below_limit=0
 spend_held_tenant:tenant-f=450
-`
+` + healthyBillingLifecycleOutput
 
 func TestAccountRecoveryDoctorPassesNormalWaits(t *testing.T) {
 	report := evaluateAccountRecoveryDoctor([]string{"commodore", "purser"}, parseAccountRecoveryDoctorOutput(healthyAccountRecoveryOutput))
@@ -58,7 +58,7 @@ spend_held_below_limit=1
 spend_held_tenant:tenant-g=1500
 spend_held_tenant:tenant-h=0
 spend_below_limit_tenant:tenant-g=1500
-`
+` + healthyBillingLifecycleOutput
 	report := evaluateAccountRecoveryDoctor([]string{"purser", "commodore"}, parseAccountRecoveryDoctorOutput(stuck))
 	problems := strings.Join(report.problems, "\n")
 	for _, want := range []string{

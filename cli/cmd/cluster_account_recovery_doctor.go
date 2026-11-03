@@ -81,7 +81,7 @@ WITH stuck AS (
 )
 SELECT 'recovery_stuck_tenant:' || COALESCE(NULLIF(headers->>'tenant_id', ''), 'unbound') || '=' || count(*) FROM stuck
   GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT 10;
-`, purserHeldDowngradeGraceHours, purserRecoveryUnresolvedDays) + purserSpendHoldDoctorSQL
+`, purserHeldDowngradeGraceHours, purserRecoveryUnresolvedDays) + purserSpendHoldDoctorSQL + purserBillingLifecycleDoctorSQL
 
 // purserSpendHoldDoctorSQL reports the tenants whose signed authority refuses
 // new sessions for a spent balance: Commodore's prepaid_balance_unavailable
@@ -284,6 +284,7 @@ func evaluateAccountRecoveryDoctor(expected []string, values map[string]map[stri
 			} else if n := count("recovery_open"); n > 0 {
 				report.notes = append(report.notes, fmt.Sprintf("purser: %d billing recovery item(s) waiting normally", n))
 			}
+			evaluateBillingLifecycleDoctor(state, &report)
 		}
 	}
 	if len(report.notes) == 0 {

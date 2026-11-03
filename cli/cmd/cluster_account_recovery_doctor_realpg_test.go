@@ -105,6 +105,8 @@ func TestAccountRecoveryDoctorRealPG(t *testing.T) {
 		spentTenant       = "55555555-5555-4555-8555-555555555555"
 		unsuspendedTenant = "66666666-6666-4666-8666-666666666666"
 		unbalancedTenant  = "77777777-7777-4777-8777-777777777777"
+		fallbackTenant    = "88888888-8888-4888-8888-888888888888"
+		grantTenant       = "99999999-9999-4999-8999-999999999999"
 	)
 	mustExec := func(db *sql.DB, query string, args ...any) {
 		t.Helper()
@@ -133,6 +135,13 @@ func TestAccountRecoveryDoctorRealPG(t *testing.T) {
 	}
 	mustExec(purser, `INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency) VALUES ($1, -1500, 'EUR')`, unsuspendedTenant)
 	mustExec(purser, `INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model) VALUES ($1, $2, 'active', 'prepaid')`, unbalancedTenant, lowerTier)
+	// A move to Free that keeps failing, and a grant whose expiry keeps failing.
+	mustExec(purser, `INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model, free_fallback_at, free_fallback_reason, free_fallback_error, free_fallback_failures)
+		VALUES ($1, $2, 'active', 'postpaid', NOW() - INTERVAL '1 hour', 'payment_failed', 'provider unavailable', 3)`, fallbackTenant, upperTier)
+	mustExec(purser, `WITH subscription AS (
+		INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model) VALUES ($1, $2, 'active', 'postpaid') RETURNING id)
+		INSERT INTO purser.subscription_operator_grants (subscription_id, reason, expires_at, expiry_error, expiry_failures)
+		SELECT id, 'trial', NOW() - INTERVAL '1 hour', 'fallback tier inactive', 2 FROM subscription`, grantTenant, upperTier)
 
 	outcome = doctorAccountRecovery(ctx, &resolvedCluster{Manifest: manifest}, pool, "")
 	if outcome.passed || outcome.result.Status != "unhealthy" {
@@ -145,6 +154,8 @@ func TestAccountRecoveryDoctorRealPG(t *testing.T) {
 		"1 confirmed downgrade(s) held past their effective time (" + heldTenant,
 		"1 billing recovery item(s) failing repeatedly or unresolved over 14 days (" + heldTenant + ": 1 item)",
 		"1 prepaid tenant(s) below the -€10 suspension threshold but not suspended; their running sessions continue (" + unsuspendedTenant + ": €15.00 owed)",
+		"1 move(s) to Free failing or waiting on settlement over 14 days (" + fallbackTenant + ": 3 failures)",
+		"1 operator grant expiry(ies) failing repeatedly (" + grantTenant + ": 2 failures)",
 	} {
 		if !strings.Contains(outcome.result.Error, want) {
 			t.Fatalf("doctor error %q missing %q", outcome.result.Error, want)
