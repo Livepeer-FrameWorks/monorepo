@@ -127,6 +127,9 @@ var (
 	// the service that validates it failed. The credential may be valid; the
 	// caller should retry instead of treating it as rejected.
 	ErrAuthBackendUnavailable = errors.New("authentication backend unavailable")
+	// ErrAccountDeactivated means the token is live but Commodore reports its
+	// user deactivated. It wraps ErrInvalidCredential.
+	ErrAccountDeactivated = fmt.Errorf("%w: account deactivated", ErrInvalidCredential)
 )
 
 // AuthenticateBearerToken validates an interactive JWT or, failing that, a
@@ -189,6 +192,9 @@ func AuthenticateBearerToken(ctx context.Context, token string, clients *clients
 			APIToken:    token,
 			Permissions: resp.Permissions,
 		}, nil
+	}
+	if resp.GetAccountDeactivated() {
+		return nil, ErrAccountDeactivated
 	}
 
 	return nil, ErrInvalidCredential

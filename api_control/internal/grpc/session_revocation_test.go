@@ -186,18 +186,19 @@ func TestValidateSession(t *testing.T) {
 		return sqlmock.NewRows([]string{"is_active", "sessions_revoked_at"}).AddRow(active, revokedAt)
 	}
 	cases := []struct {
-		name  string
-		token string
-		rows  *sqlmock.Rows
-		want  bool
+		name        string
+		token       string
+		rows        *sqlmock.Rows
+		want        bool
+		deactivated bool
 	}{
-		{"never_revoked", token, stateRows(true, nil), true},
-		{"revoked_before_issue", token, stateRows(true, issuedAt.Add(-time.Second)), true},
-		{"revoked_in_issue_second", token, stateRows(true, issuedAt.Add(500*time.Millisecond)), false},
-		{"revoked_after_issue", token, stateRows(true, issuedAt.Add(time.Minute)), false},
-		{"inactive_user", token, stateRows(false, nil), false},
-		{"unknown_user", token, sqlmock.NewRows([]string{"is_active", "sessions_revoked_at"}), false},
-		{"not_a_session_token", "not-a-jwt", nil, false},
+		{"never_revoked", token, stateRows(true, nil), true, false},
+		{"revoked_before_issue", token, stateRows(true, issuedAt.Add(-time.Second)), true, false},
+		{"revoked_in_issue_second", token, stateRows(true, issuedAt.Add(500*time.Millisecond)), false, false},
+		{"revoked_after_issue", token, stateRows(true, issuedAt.Add(time.Minute)), false, false},
+		{"inactive_user", token, stateRows(false, issuedAt.Add(time.Minute)), false, true},
+		{"unknown_user", token, sqlmock.NewRows([]string{"is_active", "sessions_revoked_at"}), false, false},
+		{"not_a_session_token", "not-a-jwt", nil, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -213,8 +214,8 @@ func TestValidateSession(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ValidateSession error: %v", err)
 			}
-			if resp.GetValid() != tc.want {
-				t.Fatalf("valid = %v, want %v", resp.GetValid(), tc.want)
+			if resp.GetValid() != tc.want || resp.GetAccountDeactivated() != tc.deactivated {
+				t.Fatalf("valid = %v deactivated = %v, want %v %v", resp.GetValid(), resp.GetAccountDeactivated(), tc.want, tc.deactivated)
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatalf("expectations: %v", err)
@@ -232,9 +233,9 @@ func TestListRecentSessionRevocationsClampsItsLookback(t *testing.T) {
 	since := &capturedTime{}
 	mock.ExpectQuery(`FROM commodore\.users\s+WHERE sessions_revoked_at > \$1`).
 		WithArgs(since).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "sessions_revoked_at"}).
-			AddRow(sessionTestUserID, testTenantID, revokedAt).
-			AddRow("30000000-0000-4000-8000-0000000000c3", "40000000-0000-4000-8000-0000000000d4", revokedAt))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "sessions_revoked_at", "is_active"}).
+			AddRow(sessionTestUserID, testTenantID, revokedAt, true).
+			AddRow("30000000-0000-4000-8000-0000000000c3", "40000000-0000-4000-8000-0000000000d4", revokedAt, false))
 	start := time.Now()
 	resp, err := s.ListRecentSessionRevocations(context.Background(), &commodorepb.ListRecentSessionRevocationsRequest{
 		Since: timestamppb.New(start.Add(-24 * time.Hour)),
@@ -244,6 +245,10 @@ func TestListRecentSessionRevocationsClampsItsLookback(t *testing.T) {
 	}
 	if len(resp.GetRevocations()) != 2 || resp.GetRevocations()[0].GetUserId() != sessionTestUserID || resp.GetRevocations()[1].GetTenantId() != "40000000-0000-4000-8000-0000000000d4" {
 		t.Fatalf("revocations = %v", resp.GetRevocations())
+	}
+	// A deactivated user's revocation says so, for replicas that missed the event.
+	if resp.GetRevocations()[0].GetAccountDeactivated() || !resp.GetRevocations()[1].GetAccountDeactivated() {
+		t.Fatalf("account_deactivated = %v, %v; want false, true", resp.GetRevocations()[0].GetAccountDeactivated(), resp.GetRevocations()[1].GetAccountDeactivated())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)

@@ -416,7 +416,7 @@ func (q *Queries) InsertWalletUser(ctx context.Context, arg InsertWalletUserPara
 }
 
 const listSessionRevocationsSince = `-- name: ListSessionRevocationsSince :many
-SELECT id, tenant_id, sessions_revoked_at
+SELECT id, tenant_id, sessions_revoked_at, COALESCE(is_active, false)::boolean AS is_active
 FROM commodore.users
 WHERE sessions_revoked_at > $1
 ORDER BY sessions_revoked_at
@@ -426,6 +426,7 @@ type ListSessionRevocationsSinceRow struct {
 	ID                string       `db:"id" json:"id"`
 	TenantID          string       `db:"tenant_id" json:"tenant_id"`
 	SessionsRevokedAt sql.NullTime `db:"sessions_revoked_at" json:"sessions_revoked_at"`
+	IsActive          bool         `db:"is_active" json:"is_active"`
 }
 
 // Platform-wide by design: Gateway replicas refuse every tenant's signed-out
@@ -439,7 +440,12 @@ func (q *Queries) ListSessionRevocationsSince(ctx context.Context, sessionsRevok
 	items := []ListSessionRevocationsSinceRow{}
 	for rows.Next() {
 		var i ListSessionRevocationsSinceRow
-		if err := rows.Scan(&i.ID, &i.TenantID, &i.SessionsRevokedAt); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.SessionsRevokedAt,
+			&i.IsActive,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

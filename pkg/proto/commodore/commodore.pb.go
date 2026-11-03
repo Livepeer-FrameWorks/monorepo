@@ -3745,8 +3745,11 @@ type ValidateAPITokenResponse struct {
 	Permissions      []string               `protobuf:"bytes,6,rep,name=permissions,proto3" json:"permissions,omitempty"`                                    // json:"permissions,omitempty"
 	TokenId          string                 `protobuf:"bytes,7,opt,name=token_id,json=tokenId,proto3" json:"token_id,omitempty"`                             // json:"token_id,omitempty"
 	PlatformOperator bool                   `protobuf:"varint,8,opt,name=platform_operator,json=platformOperator,proto3" json:"platform_operator,omitempty"` // json:"platform_operator,omitempty" - computed from the token's user row
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// account_deactivated is set with valid=false when the token is live but
+	// its user was deactivated by an operator.
+	AccountDeactivated bool `protobuf:"varint,9,opt,name=account_deactivated,json=accountDeactivated,proto3" json:"account_deactivated,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ValidateAPITokenResponse) Reset() {
@@ -3835,6 +3838,13 @@ func (x *ValidateAPITokenResponse) GetPlatformOperator() bool {
 	return false
 }
 
+func (x *ValidateAPITokenResponse) GetAccountDeactivated() bool {
+	if x != nil {
+		return x.AccountDeactivated
+	}
+	return false
+}
+
 type ValidateSessionRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// token is an interactive session access token (JWT).
@@ -3885,10 +3895,13 @@ func (x *ValidateSessionRequest) GetToken() string {
 // issue time. An invalid token is valid=false, never an error; an error means
 // the session could not be checked.
 type ValidateSessionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Valid         bool                   `protobuf:"varint,1,opt,name=valid,proto3" json:"valid,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Valid bool                   `protobuf:"varint,1,opt,name=valid,proto3" json:"valid,omitempty"`
+	// account_deactivated is set with valid=false when the token's user was
+	// deactivated by an operator.
+	AccountDeactivated bool `protobuf:"varint,2,opt,name=account_deactivated,json=accountDeactivated,proto3" json:"account_deactivated,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ValidateSessionResponse) Reset() {
@@ -3924,6 +3937,13 @@ func (*ValidateSessionResponse) Descriptor() ([]byte, []int) {
 func (x *ValidateSessionResponse) GetValid() bool {
 	if x != nil {
 		return x.Valid
+	}
+	return false
+}
+
+func (x *ValidateSessionResponse) GetAccountDeactivated() bool {
+	if x != nil {
+		return x.AccountDeactivated
 	}
 	return false
 }
@@ -3976,12 +3996,15 @@ func (x *ListRecentSessionRevocationsRequest) GetSince() *timestamppb.Timestamp 
 // session token of the user issued in or before revoked_at's second is
 // revoked.
 type SessionRevocation struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	UserId        string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	RevokedAt     *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=revoked_at,json=revokedAt,proto3" json:"revoked_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	TenantId  string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	UserId    string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	RevokedAt *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=revoked_at,json=revokedAt,proto3" json:"revoked_at,omitempty"`
+	// account_deactivated is set when the user is deactivated, so the
+	// revocation also covers the user's API token connections.
+	AccountDeactivated bool `protobuf:"varint,4,opt,name=account_deactivated,json=accountDeactivated,proto3" json:"account_deactivated,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *SessionRevocation) Reset() {
@@ -4033,6 +4056,13 @@ func (x *SessionRevocation) GetRevokedAt() *timestamppb.Timestamp {
 		return x.RevokedAt
 	}
 	return nil
+}
+
+func (x *SessionRevocation) GetAccountDeactivated() bool {
+	if x != nil {
+		return x.AccountDeactivated
+	}
+	return false
 }
 
 type ListRecentSessionRevocationsResponse struct {
@@ -16595,7 +16625,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\x15serve_policy_resolved\x18\v \x01(\bH\x00R\x13servePolicyResolved\x88\x01\x01B\x18\n" +
 	"\x16_serve_policy_resolved\"/\n" +
 	"\x17ValidateAPITokenRequest\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\"\xfa\x01\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\"\xab\x02\n" +
 	"\x18ValidateAPITokenResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1b\n" +
@@ -16604,18 +16634,21 @@ const file_commodore_proto_rawDesc = "" +
 	"\x04role\x18\x05 \x01(\tR\x04role\x12 \n" +
 	"\vpermissions\x18\x06 \x03(\tR\vpermissions\x12\x19\n" +
 	"\btoken_id\x18\a \x01(\tR\atokenId\x12+\n" +
-	"\x11platform_operator\x18\b \x01(\bR\x10platformOperator\".\n" +
+	"\x11platform_operator\x18\b \x01(\bR\x10platformOperator\x12/\n" +
+	"\x13account_deactivated\x18\t \x01(\bR\x12accountDeactivated\".\n" +
 	"\x16ValidateSessionRequest\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\"/\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\"`\n" +
 	"\x17ValidateSessionResponse\x12\x14\n" +
-	"\x05valid\x18\x01 \x01(\bR\x05valid\"W\n" +
+	"\x05valid\x18\x01 \x01(\bR\x05valid\x12/\n" +
+	"\x13account_deactivated\x18\x02 \x01(\bR\x12accountDeactivated\"W\n" +
 	"#ListRecentSessionRevocationsRequest\x120\n" +
-	"\x05since\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x05since\"\x84\x01\n" +
+	"\x05since\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x05since\"\xb5\x01\n" +
 	"\x11SessionRevocation\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x129\n" +
 	"\n" +
-	"revoked_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\trevokedAt\"f\n" +
+	"revoked_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\trevokedAt\x12/\n" +
+	"\x13account_deactivated\x18\x04 \x01(\bR\x12accountDeactivated\"f\n" +
 	"$ListRecentSessionRevocationsResponse\x12>\n" +
 	"\vrevocations\x18\x01 \x03(\v2\x1c.commodore.SessionRevocationR\vrevocations\"6\n" +
 	"\x1bMintMistAdminSessionRequest\x12\x17\n" +

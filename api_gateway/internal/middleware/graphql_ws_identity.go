@@ -339,7 +339,7 @@ func (s *WebsocketSessions) revalidate(tenantID string, watch *tenantRevocationW
 				continue
 			}
 			for _, session := range sessions {
-				session.close(ErrWebsocketCredentialRevoked)
+				session.close(websocketRejection(err))
 			}
 		}
 	}
@@ -471,9 +471,22 @@ func authenticateWebsocketBearer(ctx context.Context, token string, serviceClien
 		return result, fmt.Errorf("%w: session check: %w", ErrAuthBackendUnavailable, err)
 	}
 	if !resp.GetValid() {
+		if resp.GetAccountDeactivated() {
+			return nil, ErrAccountDeactivated
+		}
 		return nil, fmt.Errorf("%w: session revoked", ErrInvalidCredential)
 	}
 	return result, nil
+}
+
+// websocketRejection is the close a connection gets when its credential
+// stopped authenticating: "account deactivated" when Commodore says the user
+// was deactivated, so every replica gives the reason the webapp acts on.
+func websocketRejection(err error) *WebsocketInitError {
+	if errors.Is(err, ErrAccountDeactivated) {
+		return ErrWebsocketAccountDeactivated
+	}
+	return ErrWebsocketCredentialRevoked
 }
 
 // watch closes the connection through closeConn when its session expires or
@@ -515,7 +528,7 @@ func (w websocketIdentityWatch) watch(ctx context.Context, id websocketIdentity,
 					w.logger.WithError(err).Warn("WebSocket credential re-check could not reach the authentication backend")
 				}
 			default:
-				closeConn(ErrWebsocketCredentialRevoked)
+				closeConn(websocketRejection(err))
 				return
 			}
 		}

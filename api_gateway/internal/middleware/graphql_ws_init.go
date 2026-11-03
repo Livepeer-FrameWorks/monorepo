@@ -270,6 +270,8 @@ func GraphQLWebsocketInit(serviceClients *clients.ServiceClients, jwtSecret []by
 				if result == nil {
 					return ctx, nil, ErrWebsocketAuthUnavailable
 				}
+			} else if errors.Is(err, ErrAccountDeactivated) {
+				return ctx, nil, ErrWebsocketAccountDeactivated
 			} else if err != nil {
 				return ctx, nil, ErrWebsocketInvalidAuthorization
 			}

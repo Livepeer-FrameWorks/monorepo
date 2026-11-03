@@ -966,6 +966,9 @@ message ValidateAPITokenResponse {
   repeated string permissions = 6;      // json:"permissions,omitempty"
   string token_id = 7;                  // json:"token_id,omitempty"
   bool platform_operator = 8;           // json:"platform_operator,omitempty" - computed from the token's user row
+  // account_deactivated is set with valid=false when the token is live but
+  // its user was deactivated by an operator.
+  bool account_deactivated = 9;
 }
 
 message ValidateSessionRequest {
@@ -979,6 +982,9 @@ message ValidateSessionRequest {
 // the session could not be checked.
 message ValidateSessionResponse {
   bool valid = 1;
+  // account_deactivated is set with valid=false when the token's user was
+  // deactivated by an operator.
+  bool account_deactivated = 2;
 }
 
 message ListRecentSessionRevocationsRequest {
@@ -992,6 +998,9 @@ message SessionRevocation {
   string tenant_id = 1;
   string user_id = 2;
   google.protobuf.Timestamp revoked_at = 3;
+  // account_deactivated is set when the user is deactivated, so the
+  // revocation also covers the user's API token connections.
+  bool account_deactivated = 4;
 }
 
 message ListRecentSessionRevocationsResponse {

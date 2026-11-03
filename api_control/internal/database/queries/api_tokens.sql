@@ -11,13 +11,15 @@ SET last_used_at = NOW()
 WHERE id = sqlc.arg(token_id)::uuid;
 
 -- name: GetAPITokenUserContext :one
+-- is_active is returned rather than filtered so a deactivated owner's token is
+-- refused as such.
 SELECT COALESCE(email::text, ''::text)::text AS email,
        COALESCE(role, ''::varchar)::varchar AS role,
-       platform_operator
+       platform_operator,
+       COALESCE(is_active, false)::boolean AS is_active
 FROM commodore.users
 WHERE id = sqlc.arg(user_id)::uuid
-  AND tenant_id = sqlc.arg(tenant_id)::uuid
-  AND is_active = true;
+  AND tenant_id = sqlc.arg(tenant_id)::uuid;
 
 -- name: InsertAPIToken :exec
 INSERT INTO commodore.api_tokens

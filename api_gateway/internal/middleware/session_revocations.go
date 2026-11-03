@@ -160,7 +160,12 @@ func (s *WebsocketSessions) backfillSessionRevocations(list RecentSessionRevocat
 		}
 		retry = sessionBackfillRetryFirst
 		for _, rev := range resp.GetRevocations() {
-			if rev.GetRevokedAt().IsValid() {
+			if !rev.GetRevokedAt().IsValid() {
+				continue
+			}
+			if rev.GetAccountDeactivated() {
+				s.CloseDeactivatedUser(rev.GetTenantId(), rev.GetUserId(), rev.GetRevokedAt().AsTime())
+			} else {
 				s.CloseUserSessions(rev.GetTenantId(), rev.GetUserId(), rev.GetRevokedAt().AsTime())
 			}
 		}

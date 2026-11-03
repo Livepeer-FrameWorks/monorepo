@@ -692,7 +692,7 @@ func TestValidateAPIToken(t *testing.T) {
 					AddRow("token-id", "user-id", "tenant-id", "{read,write}")
 				mock.ExpectQuery("FROM commodore.api_tokens").WithArgs(hashToken("good-token")).WillReturnRows(rows)
 				mock.ExpectExec("UPDATE commodore.api_tokens SET last_used_at").WithArgs("token-id").WillReturnResult(sqlmock.NewResult(1, 1))
-				userRows := sqlmock.NewRows([]string{"email", "role", "platform_operator"}).AddRow("user@example.com", "admin", false)
+				userRows := sqlmock.NewRows([]string{"email", "role", "platform_operator", "is_active"}).AddRow("user@example.com", "admin", false, true)
 				mock.ExpectQuery("FROM commodore.users").WithArgs("user-id", "tenant-id").WillReturnRows(userRows)
 			},
 			assert: func(t *testing.T, resp *commodorepb.ValidateAPITokenResponse, err error) {
@@ -727,8 +727,28 @@ func TestValidateAPIToken(t *testing.T) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
-				if resp.GetValid() {
-					t.Fatal("token owned by a removed user must be invalid")
+				if resp.GetValid() || resp.GetAccountDeactivated() {
+					t.Fatal("token owned by a removed user must be invalid, not deactivated")
+				}
+			},
+		},
+		{
+			name: "deactivated_user_reports_deactivation",
+			req:  &commodorepb.ValidateAPITokenRequest{Token: "deactivated-token"},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "permissions"}).
+					AddRow("token-id", "user-id", "tenant-id", "{read}")
+				mock.ExpectQuery("FROM commodore.api_tokens").WithArgs(hashToken("deactivated-token")).WillReturnRows(rows)
+				mock.ExpectExec("UPDATE commodore.api_tokens SET last_used_at").WithArgs("token-id").WillReturnResult(sqlmock.NewResult(1, 1))
+				userRows := sqlmock.NewRows([]string{"email", "role", "platform_operator", "is_active"}).AddRow("user@example.com", "admin", false, false)
+				mock.ExpectQuery("FROM commodore.users").WithArgs("user-id", "tenant-id").WillReturnRows(userRows)
+			},
+			assert: func(t *testing.T, resp *commodorepb.ValidateAPITokenResponse, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if resp.GetValid() || !resp.GetAccountDeactivated() || resp.GetUserId() != "" {
+					t.Fatalf("deactivated owner's token = %+v, want invalid with account_deactivated", resp)
 				}
 			},
 		},

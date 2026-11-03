@@ -23,6 +23,7 @@ import (
 	"github.com/gorilla/websocket"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // switchableInternalService answers API-token validation with whatever the
@@ -539,5 +540,55 @@ func TestAccountDeactivationClosesTheUsersSessionSocketsAsDeactivated(t *testing
 	}
 	if code, text := awaitCloseFrame(t, conn, 2*time.Second); code != WebsocketCloseForbidden || text != "account deactivated" {
 		t.Fatalf("deactivated session socket closed with %d %q, want %d \"account deactivated\"", code, text, WebsocketCloseForbidden)
+	}
+}
+
+// A replica that missed the deactivation event learns it from Commodore at
+// the next re-check, and closes with the same reason as the replica that got
+// the event; a reconnect is refused with it too.
+func TestGraphQLWebsocketRecheckReportsADeactivatedSessionUser(t *testing.T) {
+	sc, commodoreSvc := switchableClients(t)
+	token := "Bearer " + sessionJWTIssuedAt(t, time.Now(), time.Now().Add(time.Hour))
+	const interval = 100 * time.Millisecond
+	commodoreSvc.setSession(true, nil)
+	conn, _ := openSubscription(t, sc, token, nil, interval)
+
+	commodoreSvc.mu.Lock()
+	commodoreSvc.session = &commodorepb.ValidateSessionResponse{Valid: false, AccountDeactivated: true}
+	commodoreSvc.mu.Unlock()
+	if code, text := awaitCloseFrame(t, conn, 20*interval); code != WebsocketCloseForbidden || text != "account deactivated" {
+		t.Fatalf("re-check of a deactivated user's session closed with %d %q, want %d \"account deactivated\"", code, text, WebsocketCloseForbidden)
+	}
+	if outcome := dialGraphQLWSWith(t, sc, nil, token); outcome.first != "close" || outcome.reason != "account deactivated" {
+		t.Fatalf("connection_init of a deactivated user answered %+v, want close \"account deactivated\"", outcome)
+	}
+}
+
+// The same holds for an API token whose owner was deactivated.
+func TestGraphQLWebsocketRecheckReportsADeactivatedTokenOwner(t *testing.T) {
+	sc, commodoreSvc := switchableClients(t)
+	const interval = 100 * time.Millisecond
+	conn, _ := openSubscription(t, sc, "Bearer fw_api_token_value", nil, interval)
+
+	commodoreSvc.set(&commodorepb.ValidateAPITokenResponse{Valid: false, AccountDeactivated: true}, nil)
+	if code, text := awaitCloseFrame(t, conn, 20*interval); code != WebsocketCloseForbidden || text != "account deactivated" {
+		t.Fatalf("re-check of a deactivated owner's token closed with %d %q, want %d \"account deactivated\"", code, text, WebsocketCloseForbidden)
+	}
+}
+
+// Revocations read back after a missed event close a deactivated user's
+// sockets as deactivated.
+func TestSessionRevocationBackfillClosesADeactivatedUserAsDeactivated(t *testing.T) {
+	sc, _ := switchableClients(t)
+	sessions := NewWebsocketSessions(nil)
+	now := time.Now()
+	conn, _ := openSubscription(t, sc, "Bearer "+sessionJWTIssuedAt(t, now.Add(-time.Minute), now.Add(time.Hour)), sessions, 0)
+	sessions.ResumeSessionRevocations(func(context.Context, time.Time) (*commodorepb.ListRecentSessionRevocationsResponse, error) {
+		return &commodorepb.ListRecentSessionRevocationsResponse{Revocations: []*commodorepb.SessionRevocation{{
+			TenantId: "tenant-1", UserId: "user-1", RevokedAt: timestamppb.New(now), AccountDeactivated: true,
+		}}}, nil
+	}, nil)
+	if code, text := awaitCloseFrame(t, conn, 2*time.Second); code != WebsocketCloseForbidden || text != "account deactivated" {
+		t.Fatalf("backfilled deactivation closed with %d %q, want %d \"account deactivated\"", code, text, WebsocketCloseForbidden)
 	}
 }

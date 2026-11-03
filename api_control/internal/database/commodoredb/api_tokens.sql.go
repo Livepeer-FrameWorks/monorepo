@@ -36,11 +36,11 @@ func (q *Queries) CountAPITokensForUser(ctx context.Context, arg CountAPITokensF
 const getAPITokenUserContext = `-- name: GetAPITokenUserContext :one
 SELECT COALESCE(email::text, ''::text)::text AS email,
        COALESCE(role, ''::varchar)::varchar AS role,
-       platform_operator
+       platform_operator,
+       COALESCE(is_active, false)::boolean AS is_active
 FROM commodore.users
 WHERE id = $1::uuid
   AND tenant_id = $2::uuid
-  AND is_active = true
 `
 
 type GetAPITokenUserContextParams struct {
@@ -52,12 +52,20 @@ type GetAPITokenUserContextRow struct {
 	Email            string `db:"email" json:"email"`
 	Role             string `db:"role" json:"role"`
 	PlatformOperator bool   `db:"platform_operator" json:"platform_operator"`
+	IsActive         bool   `db:"is_active" json:"is_active"`
 }
 
+// is_active is returned rather than filtered so a deactivated owner's token is
+// refused as such.
 func (q *Queries) GetAPITokenUserContext(ctx context.Context, arg GetAPITokenUserContextParams) (GetAPITokenUserContextRow, error) {
 	row := q.db.QueryRowContext(ctx, getAPITokenUserContext, arg.UserID, arg.TenantID)
 	var i GetAPITokenUserContextRow
-	err := row.Scan(&i.Email, &i.Role, &i.PlatformOperator)
+	err := row.Scan(
+		&i.Email,
+		&i.Role,
+		&i.PlatformOperator,
+		&i.IsActive,
+	)
 	return i, err
 }
 

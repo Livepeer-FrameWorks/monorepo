@@ -183,6 +183,8 @@ type Querier interface {
 	FindOtherUserIDByEmail(ctx context.Context, arg FindOtherUserIDByEmailParams) (string, error)
 	FindUserByResetToken(ctx context.Context, resetToken sql.NullString) (string, error)
 	FindUserIDByEmail(ctx context.Context, email sql.NullString) (string, error)
+	// is_active is returned rather than filtered so a deactivated owner's token is
+	// refused as such.
 	GetAPITokenUserContext(ctx context.Context, arg GetAPITokenUserContextParams) (GetAPITokenUserContextRow, error)
 	GetAccountEmailRecipient(ctx context.Context, arg GetAccountEmailRecipientParams) (GetAccountEmailRecipientRow, error)
 	GetAccountUserForUpdate(ctx context.Context, arg GetAccountUserForUpdateParams) (GetAccountUserForUpdateRow, error)

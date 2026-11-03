@@ -3313,6 +3313,9 @@ func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *commodorepb
 		}).Error("Failed to fetch user details for API token")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
+	if !userRow.IsActive {
+		return &commodorepb.ValidateAPITokenResponse{Valid: false, AccountDeactivated: true}, nil
+	}
 
 	return &commodorepb.ValidateAPITokenResponse{
 		Valid:            true,
@@ -3351,7 +3354,7 @@ func (s *CommodoreServer) ValidateSession(ctx context.Context, req *commodorepb.
 		return nil, status.Error(codes.Internal, "database error")
 	}
 	if !state.IsActive {
-		return &commodorepb.ValidateSessionResponse{Valid: false}, nil
+		return &commodorepb.ValidateSessionResponse{Valid: false, AccountDeactivated: true}, nil
 	}
 	if state.SessionsRevokedAt.Valid {
 		if claims.IssuedAt == nil || claims.IssuedAt.Unix() <= state.SessionsRevokedAt.Time.Unix() {
@@ -3386,6 +3389,7 @@ func (s *CommodoreServer) ListRecentSessionRevocations(ctx context.Context, req 
 		}
 		resp.Revocations = append(resp.Revocations, &commodorepb.SessionRevocation{
 			TenantId: row.TenantID, UserId: row.ID, RevokedAt: timestamppb.New(row.SessionsRevokedAt.Time),
+			AccountDeactivated: !row.IsActive,
 		})
 	}
 	return resp, nil
