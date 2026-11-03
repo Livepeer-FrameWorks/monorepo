@@ -181,7 +181,7 @@ Errors use these statuses:
 | Status | Cause                                                                                              |
 | ------ | -------------------------------------------------------------------------------------------------- |
 | `400`  | Missing stream key, invalid or duplicate `protocol` parameter, or a `POST` that is not WHIP        |
-| `402`  | Negative account balance                                                                           |
+| `402`  | Negative account balance, or an ended trial or arranged plan (code `GRANT_EXPIRED`)                |
 | `403`  | Account suspended or inactive, or the tenant is not entitled to the cluster or its class           |
 | `404`  | Unknown stream key                                                                                 |
 | `409`  | The stream's source mode does not accept push ingest, or the stream is already ingesting elsewhere |
