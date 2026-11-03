@@ -18,7 +18,7 @@ const loadTester = async () => {
   return module.StreamTester;
 };
 
-const samples = streamTestSamples(config.demoFixtures, config.demoVodPlaybackId);
+const samples = streamTestSamples(config.demoFixtures);
 
 const links = [
   { label: "Player guide", href: docsLink(config.docsUrl, "/builders/playback") },

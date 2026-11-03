@@ -14,7 +14,6 @@ import {
   TWITTER_URL,
   DEMO_STREAM_NAME,
   DEMO_FIXTURES,
-  DEMO_VOD_PLAYBACK_ID,
 } from "@frameworks/site-config";
 
 function publicConfig(name, fallback) {
@@ -51,7 +50,6 @@ const config = {
   twitterUrl: TWITTER_URL,
   demoStreamName: DEMO_STREAM_NAME,
   demoFixtures: DEMO_FIXTURES,
-  demoVodPlaybackId: DEMO_VOD_PLAYBACK_ID,
   companyName: BRAND_NAME,
   domain,
 };
