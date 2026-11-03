@@ -1171,9 +1171,15 @@ test-release-state:
 
 test-release-preflight:
 	@set -e; version=$$(awk '/^releases:/ { in_releases = 1; next } in_releases && /^[^[:space:]#]/ { exit } in_releases && /^[[:space:]]*-[[:space:]]+version:/ { version = $$3 } END { print version }' cli/internal/releases/catalog.yaml); \
-		for target in "$$version" "$$version-rc1" "$$version-rc2"; do \
+		floor=$$(awk -v want="$$version" '/^[[:space:]]*-[[:space:]]+version:/ { current = $$3; next } current == want && $$1 == "min_cli_version:" { print $$2; exit }' cli/internal/releases/catalog.yaml); \
+		rc=1; case "$$floor" in "$$version"-rc*) rc=$${floor##*-rc};; esac; \
+		for target in "$$version" "$$version-rc$$rc" "$$version-rc$$((rc + 1))"; do \
 			scripts/release-preflight.sh "$$target"; \
 		done; \
+		if [ "$$rc" -gt 1 ] && scripts/release-preflight.sh "$$version-rc$$((rc - 1))" >/dev/null 2>&1; then \
+			echo "release preflight accepted $$version-rc$$((rc - 1)), below the CLI floor $$floor" >&2; \
+			exit 1; \
+		fi; \
 		for target in v0.0.0 v0.0.0-rc1 "$$version-RC1" "$$version-rc.1" "$$version-rc01"; do \
 			if scripts/release-preflight.sh "$$target" >/dev/null 2>&1; then \
 				echo "release preflight accepted unsupported target $$target" >&2; \
