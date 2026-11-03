@@ -33,7 +33,10 @@ import {
   IngestClient,
   type CompositorConfig,
   detectStudioSupport,
+  encoderSettingRows,
   formatStreamInfo,
+  sendableVideoCodecs,
+  withEncoderSetting,
   getAudioConstraints,
   handleStudioSceneHotkey,
   isSourceVisibleInScene,
@@ -56,8 +59,12 @@ import {
   type StudioTranslateFn,
   type StudioTranslationStrings,
   type StudioLocale,
+  type StudioLayout,
   type AudioProcessingSettings,
 } from "@livepeer-frameworks/streamcrafter-core";
+
+/** Drags and typing settle before the layout is reported. */
+const LAYOUT_CHANGE_DELAY_MS = 300;
 
 function getStatusBadgeClass(state: IngestState, isReconnecting: boolean): string {
   if (state === "streaming") return "fw-sc-badge fw-sc-badge--live";
@@ -115,7 +122,12 @@ export class FwStreamCrafter extends LitElement {
     | ((state: IngestState, context?: IngestStateContextV2) => void)
     | undefined;
   @property({ attribute: false }) onError?: ((error: string) => void) | undefined;
+  /** A new `renderer` switches the running compositor without a restart. */
   @property({ attribute: false }) compositorConfig: Partial<CompositorConfig> = {};
+  /** Scenes, overlays and layout preset to start from, as reported by fw-sc-layout-change. */
+  @property({ attribute: false }) initialLayout: StudioLayout | null = null;
+  /** Called with the layout shortly after the scenes, overlays or layout preset change. */
+  @property({ attribute: false }) onLayoutChange?: ((layout: StudioLayout) => void) | undefined;
   @property({ type: String, attribute: "compositor-worker-url" }) compositorWorkerUrl = "";
   @property({ type: String, attribute: "encoder-worker-url" }) encoderWorkerUrl = "";
   @property({ type: String, attribute: "rtc-transform-worker-url" }) rtcTransformWorkerUrl = "";
@@ -149,6 +161,11 @@ export class FwStreamCrafter extends LitElement {
   private _dismissListenersAttached = false;
   private _showSettingsInitialized = false;
   private _compositorEnabling: Promise<void> | null = null;
+  private _compositorDisabling: Promise<void> | null = null;
+  // The layout saved when the compositor was turned off, for the controller it came from.
+  private _savedLayout: { controller: unknown; layout: StudioLayout } | null = null;
+  private _layoutReportTimer: ReturnType<typeof setTimeout> | null = null;
+  private _reportedPreset: unknown = null;
   private _handleStateChangeEvent = (event: Event) => {
     const detail = (event as CustomEvent<{ state: IngestState; context?: IngestStateContextV2 }>)
       .detail;
@@ -194,6 +211,8 @@ export class FwStreamCrafter extends LitElement {
     this.removeEventListener("fw-sc-error", this._handleErrorEvent);
     this._teardownDismissListeners();
     this._bindSceneManager(null);
+    if (this._layoutReportTimer) clearTimeout(this._layoutReportTimer);
+    this._layoutReportTimer = null;
     this._destroyIngestClient();
     super.disconnectedCallback();
   }
@@ -247,7 +266,46 @@ export class FwStreamCrafter extends LitElement {
     this._syncVideoPreview();
     if (changed.has("theme")) this._applyTheme();
     this._bindSceneManager(this.sceneManager);
+    // A layout preset applied without animation fires no scene manager event.
+    const preset = this.sceneManager?.getCurrentLayout() ?? null;
+    if (preset && preset !== this._reportedPreset) {
+      this._reportedPreset = preset;
+      this._scheduleLayoutReport();
+    }
     this.dispatchEvent(new Event(STUDIO_UPDATE_EVENT, { bubbles: true, composed: true }));
+  }
+
+  /** The compositor's scenes, overlays and layout preset; null while it is off. */
+  async exportLayout(): Promise<StudioLayout | null> {
+    return this.sceneManager ? (this.pc.getController()?.exportLayout() ?? null) : null;
+  }
+
+  /** Apply a layout from exportLayout; the compositor has to be on. */
+  async importLayout(layout: StudioLayout): Promise<void> {
+    const controller = this.pc.getController();
+    if (!controller) throw new Error("The studio has no WHIP endpoint yet");
+    await controller.importLayout(layout);
+    this.requestUpdate();
+  }
+
+  private _scheduleLayoutReport() {
+    if (this._layoutReportTimer) clearTimeout(this._layoutReportTimer);
+    this._layoutReportTimer = setTimeout(() => {
+      this._layoutReportTimer = null;
+      this.exportLayout()
+        .then((layout) => {
+          if (!layout) return;
+          this.onLayoutChange?.(layout);
+          this.dispatchEvent(
+            new CustomEvent("fw-sc-layout-change", {
+              detail: { layout },
+              bubbles: true,
+              composed: true,
+            })
+          );
+        })
+        .catch((error) => console.warn("Could not export the studio layout:", error));
+    }, LAYOUT_CHANGE_DELAY_MS);
   }
 
   /** Renders again on scene and layer changes made through the scene manager by anyone. */
@@ -257,7 +315,10 @@ export class FwStreamCrafter extends LitElement {
     this._sceneManagerUnsubs = [];
     this._boundSceneManager = sceneManager;
     if (!sceneManager) return;
-    const refresh = () => this.requestUpdate();
+    const refresh = () => {
+      this.requestUpdate();
+      this._scheduleLayoutReport();
+    };
     this._sceneManagerUnsubs = [
       sceneManager.on("sceneCreated", refresh),
       sceneManager.on("sceneDeleted", refresh),
@@ -437,14 +498,35 @@ export class FwStreamCrafter extends LitElement {
     if (!controller) return;
 
     if (!this.enableCompositor) {
-      if (controller.getSceneManager()) {
-        controller.disableCompositor();
-        this.requestUpdate();
+      if (controller.getSceneManager() && !this._compositorDisabling) {
+        // The layout is saved first; turning the compositor on again restores it.
+        this._compositorDisabling = controller
+          .exportLayout()
+          .then((layout) => {
+            this._savedLayout = layout ? { controller, layout } : null;
+          })
+          .catch(() => {})
+          .finally(() => {
+            this._compositorDisabling = null;
+            if (!this.enableCompositor && controller.getSceneManager()) {
+              controller.disableCompositor();
+            }
+            this.requestUpdate();
+          });
       }
       return;
     }
 
-    if (controller.getSceneManager() || this._compositorEnabling) {
+    if (this._compositorEnabling || this._compositorDisabling) {
+      return;
+    }
+
+    const sceneManager = controller.getSceneManager();
+    if (sceneManager) {
+      const renderer = this.compositorConfig?.renderer;
+      if (renderer && sceneManager.getRendererType() !== renderer) {
+        sceneManager.setRenderer(renderer);
+      }
       return;
     }
 
@@ -456,7 +538,17 @@ export class FwStreamCrafter extends LitElement {
     this._compositorFailed = false;
     this._compositorEnabling = controller
       .enableCompositor(config)
-      .then(() => {
+      .then(async () => {
+        const layout =
+          this._savedLayout?.controller === controller
+            ? this._savedLayout.layout
+            : this.initialLayout;
+        // A stored layout that no longer applies must not keep the compositor off.
+        if (layout) {
+          await controller.importLayout(layout).catch((error) => {
+            console.warn("Could not apply the studio layout:", error);
+          });
+        }
         if (!this.enableCompositor && controller.getSceneManager()) {
           controller.disableCompositor();
         }
@@ -1167,6 +1259,67 @@ export class FwStreamCrafter extends LitElement {
     `;
   }
 
+  private _sendableCodecs = sendableVideoCodecs();
+
+  /** Resolution, frame rate, bitrates and video codec; they apply when streaming starts. */
+  private _renderEncoderSection() {
+    const s = this.pc.s;
+    const profile = s.qualityProfile;
+    const overrides = this._encoderOverrides;
+    const rows = encoderSettingRows(profile, overrides, this._sendableCodecs, this._t("codecAuto"));
+    const hasOverrides = rows.some((row) => row.overridden);
+    return html`
+      <div class="fw-sc-dropdown-section">
+        <div class="fw-sc-encoder-header">
+          <div class="fw-sc-dropdown-label">${this._t("encoder")}</div>
+          ${hasOverrides && !s.isStreaming
+            ? html`<button
+                type="button"
+                class="fw-sc-encoder-reset"
+                @click=${() => this.setEncoderOverrides({})}
+              >
+                ${this._t("resetToProfile")}
+              </button>`
+            : nothing}
+        </div>
+        ${rows.map(
+          (row) => html`
+            <label class="fw-sc-encoder-row">
+              <span>${this._t(row.labelKey)}</span>
+              <select
+                class=${classMap({
+                  "fw-sc-select": true,
+                  "fw-sc-select--overridden": row.overridden,
+                })}
+                .value=${row.value}
+                ?disabled=${s.isStreaming}
+                @change=${(e: Event) =>
+                  this.setEncoderOverrides(
+                    withEncoderSetting(
+                      profile,
+                      overrides,
+                      row.setting,
+                      (e.target as HTMLSelectElement).value
+                    )
+                  )}
+              >
+                ${row.options.map(
+                  (option) =>
+                    html`<option value=${option.value} ?selected=${option.value === row.value}>
+                      ${option.label}
+                    </option>`
+                )}
+              </select>
+            </label>
+          `
+        )}
+        ${s.isStreaming
+          ? html`<div class="fw-sc-encoder-note">${this._t("settingsLockedWhileStreaming")}</div>`
+          : nothing}
+      </div>
+    `;
+  }
+
   private _renderSettingsPopup() {
     const s = this.pc.s;
     return html`
@@ -1197,6 +1350,7 @@ export class FwStreamCrafter extends LitElement {
             )}
           </div>
         </div>
+        ${this._renderEncoderSection()}
         ${this.devMode
           ? html`
               <div class="fw-sc-dropdown-section">

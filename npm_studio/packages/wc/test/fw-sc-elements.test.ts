@@ -172,6 +172,7 @@ describe("scenes from the keyboard", () => {
       get: () => ({
         getAllScenes: () => scenes,
         getActiveScene: () => scenes[0],
+        getCurrentLayout: () => ({ mode: "solo" }),
         setActiveScene,
         on: () => () => {},
       }),
