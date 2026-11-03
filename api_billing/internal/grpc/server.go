@@ -6146,7 +6146,10 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 		if eligibilityErr := subscriptions.ValidateSelfServiceTier(target); eligibilityErr != nil {
 			return tenantPricingRefusal(eligibilityErr)
 		}
-		if !strings.EqualFold(target.TierName, "free") {
+		// Keeping the current tier (which also cancels a staged downgrade)
+		// starts no new paid commitment, so it needs no billing profile or
+		// collection setup.
+		if targetTierID != current.TierID && !strings.EqualFold(target.TierName, "free") {
 			if settleErr := s.requireSettledOnFree(ctx, queries, tenantID); settleErr != nil {
 				return settleErr
 			}

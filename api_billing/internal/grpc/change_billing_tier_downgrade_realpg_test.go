@@ -73,6 +73,8 @@ func TestChangeBillingTierQueuesProviderStep_RealPG(t *testing.T) {
 		t.Fatalf("refused target replaced the staged downgrade: %s", pending)
 	}
 	exec(`UPDATE purser.provider_webhook_inbox SET status='processed',processed_at=NOW() WHERE provider='tier_downgrade' AND headers->>'tenant_id'=$1`, tenant)
+	// Cancelling needs no billing profile: keeping the tier starts no new commitment.
+	exec(`UPDATE purser.tenant_subscriptions SET billing_name=NULL,billing_address=NULL WHERE tenant_id=$1`, tenant)
 	resp, err := change(paid)
 	if err != nil || resp.GetMessage() != "Scheduled downgrade cancelled" {
 		t.Fatalf("select the current tier: %+v %v", resp, err)
@@ -80,6 +82,8 @@ func TestChangeBillingTierQueuesProviderStep_RealPG(t *testing.T) {
 	if rows, pending := steps(); rows != 1 || pending != "" {
 		t.Fatalf("cancelled downgrade: provider steps=%d pending=%s, want the step reopened and nothing staged", rows, pending)
 	}
+	exec(`UPDATE purser.tenant_subscriptions SET billing_name='Customer',
+		billing_address='{"street":"Street 1","city":"Leiden","postal_code":"2332ED","country":"NL"}' WHERE tenant_id=$1`, tenant)
 
 	exec(`UPDATE purser.provider_webhook_inbox SET status='processed',processed_at=NOW() WHERE provider='tier_downgrade' AND headers->>'tenant_id'=$1`, tenant)
 	exec(`UPDATE purser.tenant_subscriptions SET pending_tier_id=$2,pending_reason='downgrade',pending_effective_at=$3 WHERE tenant_id=$1`, tenant, lower, time.Now().Add(time.Hour))

@@ -235,6 +235,9 @@ func TestChangeBillingTier_DowngradeWithoutSubscriptionPeriodUsesOpenDraftPeriod
 	}
 }
 
+// Keeping the current tier reads neither the settlement state nor the
+// billing profile and collection setup: a tenant without them can still
+// cancel a staged downgrade.
 func TestChangeBillingTier_SameTierNoOp(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
@@ -246,7 +249,6 @@ func TestChangeBillingTier_SameTierNoOp(t *testing.T) {
 	now := time.Now()
 	expectLoadSubscription(mock, tenantID, prodTierID, 4, "postpaid", now, now.Add(time.Hour))
 	expectLoadTargetTier(mock, prodTierID, 4, false, true)
-	expectCollectionReady(mock)
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET billing_period_start = COALESCE`).
 		WithArgs(now, now.Add(time.Hour), tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -318,7 +320,6 @@ func TestChangeBillingTier_ReplayReportsOnlyTheCommittedOutcome(t *testing.T) {
 
 	expectLoadSubscription(mock, tenantID, paygTierID, 2, "postpaid", periodStart, periodEnd)
 	expectLoadTargetTier(mock, paygTierID, 2, false, true)
-	expectCollectionReady(mock)
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET billing_period_start = COALESCE`).
 		WithArgs(periodStart, periodEnd, tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
