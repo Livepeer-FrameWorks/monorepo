@@ -22,7 +22,7 @@
     StudioTranslateFn,
   } from "@livepeer-frameworks/streamcrafter-core";
   import {
-    createEncoderConfig,
+    encoderSummaryRows,
     getAudioConstraints,
     getEncoderSettings,
     createStudioTranslator,
@@ -94,59 +94,9 @@
     onUseWebCodecsChange?: (enabled: boolean) => void;
     /** Whether WebCodecs encoding path is available */
     isWebCodecsAvailable?: boolean;
-    /** Encoder settings overrides */
+    /** Encoder overrides, shown read-only; the Settings Encoder section edits them */
     encoderOverrides?: EncoderOverrides;
-    /** Callback to change encoder overrides */
-    onEncoderOverridesChange?: (overrides: EncoderOverrides) => void;
   }
-
-  // Preset options for encoder settings
-  interface SettingOption<T> {
-    value: T;
-    label: string;
-  }
-
-  const RESOLUTION_OPTIONS: SettingOption<string>[] = [
-    { value: "3840x2160", label: "3840×2160 (4K)" },
-    { value: "2560x1440", label: "2560×1440 (1440p)" },
-    { value: "1920x1080", label: "1920×1080 (1080p)" },
-    { value: "1280x720", label: "1280×720 (720p)" },
-    { value: "854x480", label: "854×480 (480p)" },
-    { value: "640x360", label: "640×360 (360p)" },
-  ];
-
-  const VIDEO_BITRATE_OPTIONS: SettingOption<number>[] = [
-    { value: 50_000_000, label: "50 Mbps" },
-    { value: 35_000_000, label: "35 Mbps" },
-    { value: 25_000_000, label: "25 Mbps" },
-    { value: 15_000_000, label: "15 Mbps" },
-    { value: 10_000_000, label: "10 Mbps" },
-    { value: 8_000_000, label: "8 Mbps" },
-    { value: 6_000_000, label: "6 Mbps" },
-    { value: 4_000_000, label: "4 Mbps" },
-    { value: 2_500_000, label: "2.5 Mbps" },
-    { value: 2_000_000, label: "2 Mbps" },
-    { value: 1_500_000, label: "1.5 Mbps" },
-    { value: 1_000_000, label: "1 Mbps" },
-    { value: 500_000, label: "500 kbps" },
-  ];
-
-  const FRAMERATE_OPTIONS: SettingOption<number>[] = [
-    { value: 120, label: "120 fps" },
-    { value: 60, label: "60 fps" },
-    { value: 30, label: "30 fps" },
-    { value: 24, label: "24 fps" },
-    { value: 15, label: "15 fps" },
-  ];
-
-  const AUDIO_BITRATE_OPTIONS: SettingOption<number>[] = [
-    { value: 320_000, label: "320 kbps" },
-    { value: 256_000, label: "256 kbps" },
-    { value: 192_000, label: "192 kbps" },
-    { value: 128_000, label: "128 kbps" },
-    { value: 96_000, label: "96 kbps" },
-    { value: 64_000, label: "64 kbps" },
-  ];
 
   let {
     isOpen,
@@ -173,7 +123,6 @@
     onUseWebCodecsChange,
     isWebCodecsAvailable = true,
     encoderOverrides = {},
-    onEncoderOverridesChange,
   }: Props = $props();
 
   const fallbackT = createStudioTranslator({ locale: "en" });
@@ -182,14 +131,7 @@
   let t = $derived($translatorCtx);
 
   let profileEncoderSettings = $derived(getEncoderSettings(qualityProfile));
-  let effectiveEncoderConfig = $derived(
-    createEncoderConfig(qualityProfile === "auto" ? "broadcast" : qualityProfile, encoderOverrides)
-  );
-  // Computed values for encoder settings display
-  let currentResolution = $derived(
-    `${encoderOverrides?.video?.width ?? profileEncoderSettings.video.width}x${encoderOverrides?.video?.height ?? profileEncoderSettings.video.height}`
-  );
-  let hasEncoderOverrides = $derived(!!(encoderOverrides?.video || encoderOverrides?.audio));
+  let encoderRows = $derived(encoderSummaryRows(qualityProfile, encoderOverrides, t("codecAuto")));
 
   let activeTab = $state<"audio" | "stats" | "info" | "compositor">("audio");
   let profileDefaults = $derived(getAudioConstraints(qualityProfile));
@@ -441,49 +383,20 @@
         <div class="fw-dev-mode-section fw-dev-mode-section--flush">
           <div class="fw-dev-mode-section-header-bg">
             <span class="fw-dev-mode-section-header">{t("encoder")}</span>
-            {#if hasEncoderOverrides}
-              <button
-                type="button"
-                class="fw-dev-mode-reset-btn"
-                onclick={() => onEncoderOverridesChange?.({})}
+          </div>
+          {#each encoderRows as row (row.labelKey)}
+            <div class="fw-dev-mode-info-row" data-overridden={row.overridden || undefined}>
+              <span>{t(row.labelKey)}</span>
+              <span
+                class="fw-dev-mode-mono {row.overridden ? 'fw-dev-mode-value--overridden' : ''}"
               >
-                {t("resetToProfile")}
-              </button>
-            {/if}
-          </div>
-          <div class="fw-dev-mode-info-row">
-            <span>{t("videoCodec")}</span>
-            <span class="fw-dev-mode-mono">{effectiveEncoderConfig.video.codec}</span>
-          </div>
-          <div class="fw-dev-mode-info-row">
-            <span>{t("resolution")}</span>
-            <select
-              class="fw-dev-mode-select {encoderOverrides?.video?.width ||
-              encoderOverrides?.video?.height
-                ? 'fw-dev-mode-select--overridden'
-                : ''}"
-              value={currentResolution}
-              disabled={ingestState === "streaming"}
-              onchange={(e) => {
-                const [w, h] = (e.target as HTMLSelectElement).value.split("x").map(Number);
-                const isProfileDefault =
-                  w === profileEncoderSettings.video.width &&
-                  h === profileEncoderSettings.video.height;
-                onEncoderOverridesChange?.({
-                  ...encoderOverrides,
-                  video: {
-                    ...encoderOverrides?.video,
-                    width: isProfileDefault ? undefined : w,
-                    height: isProfileDefault ? undefined : h,
-                  },
-                });
-              }}
-            >
-              {#each RESOLUTION_OPTIONS as opt}
-                <option value={opt.value}>{opt.label}</option>
-              {/each}
-            </select>
-          </div>
+                {row.value}
+                {#if row.overridden}
+                  <span class="fw-dev-mode-overridden-tag">{t("encoderOverridden")}</span>
+                {/if}
+              </span>
+            </div>
+          {/each}
           {#if videoTrackSettings?.width && videoTrackSettings?.height}
             <div class="fw-dev-mode-info-row">
               <span>{t("actualResolution")}</span>
@@ -494,94 +407,13 @@
               >
             </div>
           {/if}
-          <div class="fw-dev-mode-info-row">
-            <span>{t("framerate")}</span>
-            <select
-              class="fw-dev-mode-select {encoderOverrides?.video?.framerate
-                ? 'fw-dev-mode-select--overridden'
-                : ''}"
-              value={encoderOverrides?.video?.framerate ?? profileEncoderSettings.video.framerate}
-              disabled={ingestState === "streaming"}
-              onchange={(e) => {
-                const value = Number((e.target as HTMLSelectElement).value);
-                const isProfileDefault = value === profileEncoderSettings.video.framerate;
-                onEncoderOverridesChange?.({
-                  ...encoderOverrides,
-                  video: {
-                    ...encoderOverrides?.video,
-                    framerate: isProfileDefault ? undefined : value,
-                  },
-                });
-              }}
-            >
-              {#each FRAMERATE_OPTIONS as opt}
-                <option value={opt.value}>{opt.label}</option>
-              {/each}
-            </select>
-          </div>
           {#if videoTrackSettings?.frameRate}
             <div class="fw-dev-mode-info-row">
               <span>{t("actualFramerate")}</span>
               <span class="fw-dev-mode-mono">{Math.round(videoTrackSettings.frameRate)} fps</span>
             </div>
           {/if}
-          <div class="fw-dev-mode-info-row">
-            <span>{t("videoBitrate")}</span>
-            <select
-              class="fw-dev-mode-select {encoderOverrides?.video?.bitrate
-                ? 'fw-dev-mode-select--overridden'
-                : ''}"
-              value={encoderOverrides?.video?.bitrate ?? profileEncoderSettings.video.bitrate}
-              disabled={ingestState === "streaming"}
-              onchange={(e) => {
-                const value = Number((e.target as HTMLSelectElement).value);
-                const isProfileDefault = value === profileEncoderSettings.video.bitrate;
-                onEncoderOverridesChange?.({
-                  ...encoderOverrides,
-                  video: {
-                    ...encoderOverrides?.video,
-                    bitrate: isProfileDefault ? undefined : value,
-                  },
-                });
-              }}
-            >
-              {#each VIDEO_BITRATE_OPTIONS as opt}
-                <option value={opt.value}>{opt.label}</option>
-              {/each}
-            </select>
-          </div>
-          <div class="fw-dev-mode-info-row">
-            <span>{t("audioCodec")}</span>
-            <span class="fw-dev-mode-mono">{effectiveEncoderConfig.audio.codec}</span>
-          </div>
-          <div class="fw-dev-mode-info-row">
-            <span>{t("audioBitrate")}</span>
-            <select
-              class="fw-dev-mode-select {encoderOverrides?.audio?.bitrate
-                ? 'fw-dev-mode-select--overridden'
-                : ''}"
-              value={encoderOverrides?.audio?.bitrate ?? profileEncoderSettings.audio.bitrate}
-              disabled={ingestState === "streaming"}
-              onchange={(e) => {
-                const value = Number((e.target as HTMLSelectElement).value);
-                const isProfileDefault = value === profileEncoderSettings.audio.bitrate;
-                onEncoderOverridesChange?.({
-                  ...encoderOverrides,
-                  audio: {
-                    ...encoderOverrides?.audio,
-                    bitrate: isProfileDefault ? undefined : value,
-                  },
-                });
-              }}
-            >
-              {#each AUDIO_BITRATE_OPTIONS as opt}
-                <option value={opt.value}>{opt.label}</option>
-              {/each}
-            </select>
-          </div>
-          {#if ingestState === "streaming"}
-            <div class="fw-dev-mode-locked-notice">{t("settingsLockedWhileStreaming")}</div>
-          {/if}
+          <div class="fw-dev-mode-encoder-pointer">{t("encoderEditInSettings")}</div>
         </div>
 
         <!-- Sources -->
@@ -1130,41 +962,19 @@
     color: hsl(var(--fw-sc-text-muted));
   }
 
-  .fw-dev-mode-reset-btn {
+  .fw-dev-mode-value--overridden {
+    color: hsl(var(--fw-sc-accent-secondary));
+  }
+
+  .fw-dev-mode-overridden-tag {
+    margin-left: 6px;
     font-size: 10px;
-    color: hsl(var(--fw-sc-accent-secondary));
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    padding: 2px 6px;
   }
 
-  .fw-dev-mode-reset-btn:hover {
-    color: hsl(var(--fw-sc-text));
-  }
-
-  .fw-dev-mode-select {
-    background: hsl(var(--fw-sc-border) / 0.3);
-    border: 1px solid hsl(var(--fw-sc-border) / 0.5);
-    border-radius: 4px;
-    color: hsl(var(--fw-sc-text));
-    padding: 4px 8px;
-    font-size: 12px;
-    font-family: inherit;
-    cursor: pointer;
-    min-width: 100px;
-    text-align: right;
-  }
-
-  .fw-dev-mode-select:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .fw-dev-mode-select--overridden {
-    background: hsl(var(--fw-sc-accent-secondary) / 0.15);
-    border-color: hsl(var(--fw-sc-accent-secondary) / 0.4);
-    color: hsl(var(--fw-sc-accent-secondary));
+  .fw-dev-mode-encoder-pointer {
+    padding: 8px 12px;
+    font-size: 10px;
+    color: hsl(var(--fw-sc-text-faint));
   }
 
   .fw-dev-mode-locked-notice {

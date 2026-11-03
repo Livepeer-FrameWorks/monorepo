@@ -150,6 +150,65 @@ export function encoderSettingRows(
   return rows;
 }
 
+/** One read-only line of the effective encoder config, as the advanced panel shows it. */
+export interface EncoderSummaryRow {
+  labelKey:
+    | "videoCodec"
+    | "resolution"
+    | "framerate"
+    | "videoBitrate"
+    | "audioCodec"
+    | "audioBitrate";
+  value: string;
+  overridden: boolean;
+}
+
+/**
+ * The encoder config the next stream starts with, for display only. Editing
+ * goes through `encoderSettingRows` and `withEncoderSetting` in the Settings
+ * Encoder section.
+ */
+export function encoderSummaryRows(
+  profile: QualityProfile,
+  overrides: EncoderOverrides | undefined,
+  autoLabel: string
+): EncoderSummaryRow[] {
+  const values = encoderSettingValues(profile, overrides);
+  const overridden = (setting: EncoderSetting) => isEncoderSettingOverridden(overrides, setting);
+  return [
+    {
+      labelKey: "videoCodec",
+      value: values.codec === "auto" ? autoLabel : ENCODER_CODEC_LABELS[values.codec],
+      overridden: overridden("codec"),
+    },
+    {
+      labelKey: "resolution",
+      value: values.resolution.replace("x", "×"),
+      overridden: overridden("resolution"),
+    },
+    {
+      labelKey: "framerate",
+      value: `${values.framerate} fps`,
+      overridden: overridden("framerate"),
+    },
+    {
+      labelKey: "videoBitrate",
+      value: formatRate(values.videoBitrate),
+      overridden: overridden("videoBitrate"),
+    },
+    {
+      labelKey: "audioCodec",
+      value: getEncoderSettings(profile).audio.codec,
+      overridden: false,
+    },
+    {
+      labelKey: "audioBitrate",
+      value: formatRate(values.audioBitrate),
+      overridden: overridden("audioBitrate"),
+    },
+  ];
+}
+
 /** What each Encoder setting shows: the override, or else the profile's value. */
 export interface EncoderSettingValues {
   resolution: string;

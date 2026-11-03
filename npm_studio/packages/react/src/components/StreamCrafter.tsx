@@ -577,7 +577,6 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
     encoderStats,
     setUseWebCodecs,
     encoderOverrides,
-    setEncoderOverrides,
   } = hookReturn;
 
   // Audio levels for VU meter
@@ -1116,7 +1115,6 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
                   encoderStats={encoderStats}
                   onUseWebCodecsChange={setUseWebCodecs}
                   encoderOverrides={encoderOverrides}
-                  onEncoderOverridesChange={setEncoderOverrides}
                 />
               )}
             </div>

@@ -10,7 +10,7 @@ import { utilityStyles } from "../styles/utility-styles.js";
 import { closeIcon } from "../icons/index.js";
 import type { IngestControllerHost } from "../controllers/ingest-controller-host.js";
 import {
-  createEncoderConfig,
+  encoderSummaryRows,
   getAudioConstraints,
   getEncoderSettings,
   type EncoderOverrides,
@@ -23,61 +23,9 @@ import {
 
 type TabId = "audio" | "stats" | "info" | "compositor";
 
-interface SettingOption<T> {
-  value: T;
-  label: string;
-}
-
-const RESOLUTION_OPTIONS: SettingOption<string>[] = [
-  { value: "3840x2160", label: "3840x2160 (4K)" },
-  { value: "2560x1440", label: "2560x1440 (1440p)" },
-  { value: "1920x1080", label: "1920x1080 (1080p)" },
-  { value: "1280x720", label: "1280x720 (720p)" },
-  { value: "854x480", label: "854x480 (480p)" },
-  { value: "640x360", label: "640x360 (360p)" },
-];
-
-const VIDEO_BITRATE_OPTIONS: SettingOption<number>[] = [
-  { value: 50_000_000, label: "50 Mbps" },
-  { value: 35_000_000, label: "35 Mbps" },
-  { value: 25_000_000, label: "25 Mbps" },
-  { value: 15_000_000, label: "15 Mbps" },
-  { value: 10_000_000, label: "10 Mbps" },
-  { value: 8_000_000, label: "8 Mbps" },
-  { value: 6_000_000, label: "6 Mbps" },
-  { value: 4_000_000, label: "4 Mbps" },
-  { value: 2_500_000, label: "2.5 Mbps" },
-  { value: 2_000_000, label: "2 Mbps" },
-  { value: 1_500_000, label: "1.5 Mbps" },
-  { value: 1_000_000, label: "1 Mbps" },
-  { value: 500_000, label: "500 kbps" },
-];
-
-const FRAMERATE_OPTIONS: SettingOption<number>[] = [
-  { value: 120, label: "120 fps" },
-  { value: 60, label: "60 fps" },
-  { value: 30, label: "30 fps" },
-  { value: 24, label: "24 fps" },
-  { value: 15, label: "15 fps" },
-];
-
-const AUDIO_BITRATE_OPTIONS: SettingOption<number>[] = [
-  { value: 320_000, label: "320 kbps" },
-  { value: 256_000, label: "256 kbps" },
-  { value: 192_000, label: "192 kbps" },
-  { value: 128_000, label: "128 kbps" },
-  { value: 96_000, label: "96 kbps" },
-  { value: 64_000, label: "64 kbps" },
-];
-
 function formatBitrate(bps: number): string {
   if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(1)} Mbps`;
   return `${(bps / 1000).toFixed(0)} kbps`;
-}
-
-function hasAnyDefinedValue(object?: Record<string, unknown>): boolean {
-  if (!object) return false;
-  return Object.values(object).some((value) => value !== undefined);
 }
 
 @customElement("fw-sc-advanced")
@@ -278,20 +226,17 @@ export class FwScAdvanced extends LitElement {
         padding: 2px 6px;
         text-transform: uppercase;
       }
-      .select {
-        background: hsl(var(--fw-sc-border) / 0.3);
-        border: 1px solid hsl(var(--fw-sc-border) / 0.5);
-        border-radius: 4px;
-        color: hsl(var(--fw-sc-text));
-        padding: 4px 8px;
-        font-size: 12px;
-        font-family: inherit;
-        min-width: 100px;
-      }
-      .select--overridden {
-        background: hsl(var(--fw-sc-accent-secondary) / 0.15);
-        border-color: hsl(var(--fw-sc-accent-secondary) / 0.4);
+      .row-value--overridden {
         color: hsl(var(--fw-sc-accent-secondary));
+      }
+      .overridden-tag {
+        margin-left: 6px;
+        font-size: 10px;
+      }
+      .encoder-pointer {
+        padding: 8px 12px;
+        font-size: 10px;
+        color: hsl(var(--fw-sc-text-faint));
       }
       .mini-button {
         margin-top: 8px;
@@ -560,15 +505,12 @@ export class FwScAdvanced extends LitElement {
   private _renderInfo() {
     const s = this.ic.s;
     const profileEncoderSettings = getEncoderSettings(s.qualityProfile);
-    const effectiveEncoderConfig = createEncoderConfig(
-      s.qualityProfile === "auto" ? "broadcast" : s.qualityProfile,
-      this.encoderOverrides
+    const encoderRows = encoderSummaryRows(
+      s.qualityProfile,
+      this.encoderOverrides,
+      this.t("codecAuto")
     );
     const videoTrackSettings = s.mediaStream?.getVideoTracks?.()[0]?.getSettings?.();
-    const hasEncoderOverrides =
-      hasAnyDefinedValue(this.encoderOverrides.video as Record<string, unknown>) ||
-      hasAnyDefinedValue(this.encoderOverrides.audio as Record<string, unknown>);
-    const currentResolution = `${this.encoderOverrides.video?.width ?? profileEncoderSettings.video.width}x${this.encoderOverrides.video?.height ?? profileEncoderSettings.video.height}`;
 
     return html`
       <div class="section">
@@ -599,55 +541,20 @@ export class FwScAdvanced extends LitElement {
       <div style="border-bottom:1px solid hsl(var(--fw-sc-border) / 0.3)">
         <div class="section-dark">
           <span class="section-header" style="margin-bottom:0">${this.t("encoder")}</span>
-          ${hasEncoderOverrides
-            ? html`
-                <button
-                  type="button"
-                  style="font-size:10px;color:hsl(var(--fw-sc-accent-secondary));background:transparent;border:none;cursor:pointer;padding:2px 6px"
-                  @click=${() => this._emitEncoderOverridesChange({})}
-                >
-                  ${this.t("resetToProfile")}
-                </button>
-              `
-            : nothing}
         </div>
-        <div class="row">
-          <span class="row-label">${this.t("videoCodec")}</span>
-          <span class="row-value">${effectiveEncoderConfig.video.codec}</span>
-        </div>
-        <div class="row">
-          <span class="row-label">${this.t("resolution")}</span>
-          <select
-            class=${classMap({
-              select: true,
-              "select--overridden":
-                this.encoderOverrides.video?.width !== undefined ||
-                this.encoderOverrides.video?.height !== undefined,
-            })}
-            .value=${currentResolution}
-            ?disabled=${s.state === "streaming"}
-            @change=${(e: Event) => {
-              const value = (e.target as HTMLSelectElement).value;
-              const [w, h] = value.split("x").map((part) => Number(part));
-              const isProfileDefault =
-                w === profileEncoderSettings.video.width &&
-                h === profileEncoderSettings.video.height;
-              const next: EncoderOverrides = {
-                ...this.encoderOverrides,
-                video: {
-                  ...this.encoderOverrides.video,
-                  width: isProfileDefault ? undefined : w,
-                  height: isProfileDefault ? undefined : h,
-                },
-              };
-              this._emitEncoderOverridesChange(next);
-            }}
-          >
-            ${RESOLUTION_OPTIONS.map(
-              (option) => html`<option .value=${option.value}>${option.label}</option>`
-            )}
-          </select>
-        </div>
+        ${encoderRows.map(
+          (row) => html`
+            <div class="row" ?data-overridden=${row.overridden}>
+              <span class="row-label">${this.t(row.labelKey)}</span>
+              <span
+                class=${classMap({ "row-value": true, "row-value--overridden": row.overridden })}
+                >${row.value}${row.overridden
+                  ? html`<span class="overridden-tag">${this.t("encoderOverridden")}</span>`
+                  : nothing}</span
+              >
+            </div>
+          `
+        )}
         ${videoTrackSettings?.width && videoTrackSettings?.height
           ? html`
               <div class="row">
@@ -658,35 +565,6 @@ export class FwScAdvanced extends LitElement {
               </div>
             `
           : nothing}
-        <div class="row">
-          <span class="row-label">${this.t("framerate")}</span>
-          <select
-            class=${classMap({
-              select: true,
-              "select--overridden": this.encoderOverrides.video?.framerate !== undefined,
-            })}
-            .value=${String(
-              this.encoderOverrides.video?.framerate ?? profileEncoderSettings.video.framerate
-            )}
-            ?disabled=${s.state === "streaming"}
-            @change=${(e: Event) => {
-              const value = Number((e.target as HTMLSelectElement).value);
-              const isProfileDefault = value === profileEncoderSettings.video.framerate;
-              const next: EncoderOverrides = {
-                ...this.encoderOverrides,
-                video: {
-                  ...this.encoderOverrides.video,
-                  framerate: isProfileDefault ? undefined : value,
-                },
-              };
-              this._emitEncoderOverridesChange(next);
-            }}
-          >
-            ${FRAMERATE_OPTIONS.map(
-              (option) => html`<option .value=${String(option.value)}>${option.label}</option>`
-            )}
-          </select>
-        </div>
         ${videoTrackSettings?.frameRate
           ? html`
               <div class="row">
@@ -695,75 +573,7 @@ export class FwScAdvanced extends LitElement {
               </div>
             `
           : nothing}
-        <div class="row">
-          <span class="row-label">${this.t("videoBitrate")}</span>
-          <select
-            class=${classMap({
-              select: true,
-              "select--overridden": this.encoderOverrides.video?.bitrate !== undefined,
-            })}
-            .value=${String(
-              this.encoderOverrides.video?.bitrate ?? profileEncoderSettings.video.bitrate
-            )}
-            ?disabled=${s.state === "streaming"}
-            @change=${(e: Event) => {
-              const value = Number((e.target as HTMLSelectElement).value);
-              const isProfileDefault = value === profileEncoderSettings.video.bitrate;
-              const next: EncoderOverrides = {
-                ...this.encoderOverrides,
-                video: {
-                  ...this.encoderOverrides.video,
-                  bitrate: isProfileDefault ? undefined : value,
-                },
-              };
-              this._emitEncoderOverridesChange(next);
-            }}
-          >
-            ${VIDEO_BITRATE_OPTIONS.map(
-              (option) => html`<option .value=${String(option.value)}>${option.label}</option>`
-            )}
-          </select>
-        </div>
-        <div class="row">
-          <span class="row-label">${this.t("audioCodec")}</span>
-          <span class="row-value">${effectiveEncoderConfig.audio.codec}</span>
-        </div>
-        <div class="row">
-          <span class="row-label">${this.t("audioBitrate")}</span>
-          <select
-            class=${classMap({
-              select: true,
-              "select--overridden": this.encoderOverrides.audio?.bitrate !== undefined,
-            })}
-            .value=${String(
-              this.encoderOverrides.audio?.bitrate ?? profileEncoderSettings.audio.bitrate
-            )}
-            ?disabled=${s.state === "streaming"}
-            @change=${(e: Event) => {
-              const value = Number((e.target as HTMLSelectElement).value);
-              const isProfileDefault = value === profileEncoderSettings.audio.bitrate;
-              const next: EncoderOverrides = {
-                ...this.encoderOverrides,
-                audio: {
-                  ...this.encoderOverrides.audio,
-                  bitrate: isProfileDefault ? undefined : value,
-                },
-              };
-              this._emitEncoderOverridesChange(next);
-            }}
-          >
-            ${AUDIO_BITRATE_OPTIONS.map(
-              (option) => html`<option .value=${String(option.value)}>${option.label}</option>`
-            )}
-          </select>
-        </div>
-        ${s.state === "streaming"
-          ? html`
-              <div style="padding:8px 12px;font-size:10px;color:hsl(var(--fw-sc-warning))">
-                ${this.t("settingsLockedWhileStreaming")}
-              </div>
-            `
-          : nothing}
+        <div class="encoder-pointer">${this.t("encoderEditInSettings")}</div>
       </div>
 
       <div style="border-bottom:1px solid hsl(var(--fw-sc-border) / 0.3)">
@@ -1009,24 +819,6 @@ export class FwScAdvanced extends LitElement {
   private _copyWhipUrl() {
     if (!this.whipUrl) return;
     navigator.clipboard.writeText(this.whipUrl).catch(console.error);
-  }
-
-  private _emitEncoderOverridesChange(overrides: EncoderOverrides) {
-    const normalized: EncoderOverrides = { ...overrides };
-    if (!hasAnyDefinedValue(normalized.video as Record<string, unknown>)) {
-      delete normalized.video;
-    }
-    if (!hasAnyDefinedValue(normalized.audio as Record<string, unknown>)) {
-      delete normalized.audio;
-    }
-
-    this.dispatchEvent(
-      new CustomEvent("fw-encoder-overrides-change", {
-        detail: { overrides: normalized },
-        bubbles: true,
-        composed: true,
-      })
-    );
   }
 }
 

@@ -132,4 +132,34 @@ describe("AdvancedPanel", () => {
     expect(screen.getByText("Sample Rate")).toBeTruthy();
     expect(screen.queryByText("Echo Cancellation")).toBeNull();
   });
+
+  it("shows the encoder config read-only and marks the overrides", async () => {
+    const { default: AdvancedPanel } = await import("../src/components/AdvancedPanel");
+    const { container } = render(
+      <AdvancedPanel
+        isOpen
+        onClose={() => {}}
+        state="capturing"
+        qualityProfile="broadcast"
+        sources={[]}
+        stats={null}
+        masterVolume={1}
+        onMasterVolumeChange={() => {}}
+        audioLevel={0}
+        audioMixingEnabled
+        error={null}
+        encoderOverrides={{ video: { width: 1280, height: 720 } }}
+      />
+    );
+    fireEvent.click(screen.getByText("Info"));
+
+    expect(container.querySelector("select")).toBeNull();
+    expect(screen.queryByText("Reset to Profile")).toBeNull();
+    const overridden = [...container.querySelectorAll("[data-overridden]")].map(
+      (row) => row.textContent
+    );
+    expect(overridden).toEqual(["Resolution1280×720Overridden"]);
+    expect(screen.getByText("2.5 Mbps")).toBeTruthy();
+    expect(screen.getByText("Change the encoder in Settings")).toBeTruthy();
+  });
 });

@@ -1132,7 +1132,6 @@
         onUseWebCodecsChange={(enabled) => crafter.setUseWebCodecs(enabled)}
         {isWebCodecsAvailable}
         {encoderOverrides}
-        onEncoderOverridesChange={handleEncoderOverridesChange}
       />
     {/if}
   </div>

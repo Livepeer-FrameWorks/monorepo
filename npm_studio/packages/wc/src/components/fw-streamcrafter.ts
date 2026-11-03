@@ -1071,9 +1071,6 @@ export class FwStreamCrafter extends LitElement {
                 .sceneCount=${this._getSceneCount()}
                 .layerCount=${this._getLayerCount()}
                 .t=${this._t}
-                @fw-encoder-overrides-change=${(
-                  event: CustomEvent<{ overrides: EncoderOverrides }>
-                ) => this._handleEncoderOverridesChange(event)}
                 @fw-close=${() => {
                   this._isAdvancedPanelOpen = false;
                 }}
@@ -1155,10 +1152,6 @@ export class FwStreamCrafter extends LitElement {
           });
       });
     }
-  }
-
-  private _handleEncoderOverridesChange(event: CustomEvent<{ overrides: EncoderOverrides }>) {
-    this.setEncoderOverrides(event.detail.overrides);
   }
 
   private _getCompositorRendererType() {

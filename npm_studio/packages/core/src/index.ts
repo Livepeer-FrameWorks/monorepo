@@ -106,12 +106,14 @@ export {
   ENCODER_CODEC_LABELS,
   encoderSettingRows,
   encoderSettingValues,
+  encoderSummaryRows,
   isEncoderSettingOverridden,
   withEncoderSetting,
   type EncoderOption,
   type EncoderSetting,
   type EncoderSettingRow,
   type EncoderSettingValues,
+  type EncoderSummaryRow,
 } from "./core/encoderOptions";
 export { sendableVideoCodecs, videoCodecOrder } from "./core/WhipClient";
 

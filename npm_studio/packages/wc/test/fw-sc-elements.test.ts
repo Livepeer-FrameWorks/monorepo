@@ -387,4 +387,33 @@ describe("<fw-sc-advanced>", () => {
     expect(text).toContain("Sample Rate");
     expect(text).not.toContain("Echo Cancellation");
   });
+
+  it("shows the encoder config read-only and marks the overrides", async () => {
+    const studio = fakeStudio({});
+    studio.pc.s.qualityProfile = "broadcast";
+    const advanced = document.createElement("fw-sc-advanced") as HTMLElement & {
+      ic: unknown;
+      encoderOverrides: unknown;
+      updateComplete: Promise<boolean>;
+    };
+    advanced.ic = studio.pc;
+    advanced.encoderOverrides = { video: { width: 1280, height: 720 } };
+    document.body.append(advanced);
+    await advanced.updateComplete;
+    const root = advanced.shadowRoot!;
+    const infoTab = [...root.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === "Info"
+    )!;
+    infoTab.click();
+    await advanced.updateComplete;
+
+    expect(root.querySelector("select")).toBeNull();
+    expect(root.textContent).not.toContain("Reset to Profile");
+    const overridden = [...root.querySelectorAll("[data-overridden]")].map((row) =>
+      row.textContent?.replace(/\s+/g, "")
+    );
+    expect(overridden).toEqual(["Resolution1280×720Overridden"]);
+    expect(root.textContent).toContain("2.5 Mbps");
+    expect(root.textContent).toContain("Change the encoder in Settings");
+  });
 });

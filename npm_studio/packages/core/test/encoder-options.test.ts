@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   encoderSettingRows,
   encoderSettingValues,
+  encoderSummaryRows,
   isEncoderSettingOverridden,
   withEncoderSetting,
 } from "../src/core/encoderOptions";
@@ -69,6 +70,41 @@ describe("encoder settings", () => {
     expect(overrides).toEqual({ video: { codec: "h264" } });
     expect(encoderSettingValues("broadcast", overrides).codec).toBe("h264");
     expect(withEncoderSetting("broadcast", overrides, "codec", "auto")).toEqual({});
+  });
+});
+
+describe("encoder summary", () => {
+  it("shows the profile's config with nothing marked overridden", () => {
+    expect(encoderSummaryRows("broadcast", undefined, "Auto")).toEqual([
+      { labelKey: "videoCodec", value: "Auto", overridden: false },
+      { labelKey: "resolution", value: "1920×1080", overridden: false },
+      { labelKey: "framerate", value: "30 fps", overridden: false },
+      { labelKey: "videoBitrate", value: "2.5 Mbps", overridden: false },
+      { labelKey: "audioCodec", value: "opus", overridden: false },
+      { labelKey: "audioBitrate", value: "128 kbps", overridden: false },
+    ]);
+  });
+
+  it("shows each override and marks only the settings it changes", () => {
+    const rows = encoderSummaryRows(
+      "broadcast",
+      { video: { codec: "vp9", width: 1280, height: 720 }, audio: { bitrate: 64_000 } },
+      "Auto"
+    );
+    const byKey = Object.fromEntries(rows.map((row) => [row.labelKey, row]));
+    expect(byKey.videoCodec).toEqual({ labelKey: "videoCodec", value: "VP9", overridden: true });
+    expect(byKey.resolution).toEqual({
+      labelKey: "resolution",
+      value: "1280×720",
+      overridden: true,
+    });
+    expect(byKey.framerate.overridden).toBe(false);
+    expect(byKey.videoBitrate.overridden).toBe(false);
+    expect(byKey.audioBitrate).toEqual({
+      labelKey: "audioBitrate",
+      value: "64 kbps",
+      overridden: true,
+    });
   });
 });
 

@@ -96,6 +96,30 @@ describe("Studio I18n", () => {
         }
       }
     });
+
+    it("non-en packs translate the encoder settings strings", () => {
+      const keys: (keyof StudioTranslationStrings)[] = [
+        "resetToProfile",
+        "videoCodec",
+        "codecAuto",
+        "resolution",
+        "actualResolution",
+        "framerate",
+        "actualFramerate",
+        "videoBitrate",
+        "audioCodec",
+        "audioBitrate",
+        "settingsLockedWhileStreaming",
+        "encoderOverridden",
+        "encoderEditInSettings",
+      ];
+      for (const locale of ["es", "fr", "de", "nl"] as StudioLocale[]) {
+        const pack = getStudioLocalePack(locale);
+        for (const key of keys) {
+          expect(pack[key], `${key} in ${locale}`).not.toBe(DEFAULT_STUDIO_TRANSLATIONS[key]);
+        }
+      }
+    });
   });
 
   // ===========================================================================

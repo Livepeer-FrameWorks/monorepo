@@ -19,7 +19,7 @@ import type {
   EncoderOverrides,
 } from "@livepeer-frameworks/streamcrafter-core";
 import {
-  createEncoderConfig,
+  encoderSummaryRows,
   getAudioConstraints,
   getEncoderSettings,
   maskWhipUrl,
@@ -95,10 +95,8 @@ export interface AdvancedPanelProps {
   onUseWebCodecsChange?: (enabled: boolean) => void;
   /** Whether WebCodecs encoding path is available (requires RTCRtpScriptTransform) */
   isWebCodecsAvailable?: boolean;
-  /** Encoder settings overrides (partial values override profile defaults) */
+  /** Encoder overrides, shown read-only; the Settings Encoder section edits them */
   encoderOverrides?: EncoderOverrides;
-  /** Callback to change encoder overrides */
-  onEncoderOverridesChange?: (overrides: EncoderOverrides) => void;
 }
 
 // ============================================================================
@@ -160,109 +158,6 @@ const ToggleSwitch: React.FC<ToggleSwitchProps> = ({ checked, onChange, disabled
     </button>
   );
 };
-
-// ============================================================================
-// Setting Select Component
-// ============================================================================
-
-interface SettingSelectOption<T> {
-  value: T;
-  label: string;
-}
-
-interface SettingSelectProps<T> {
-  value: T;
-  options: SettingSelectOption<T>[];
-  onChange: (value: T) => void;
-  disabled?: boolean;
-  isOverridden?: boolean;
-}
-
-function SettingSelect<T extends string | number>({
-  value,
-  options,
-  onChange,
-  disabled = false,
-  isOverridden = false,
-}: SettingSelectProps<T>) {
-  return (
-    <select
-      value={String(value)}
-      onChange={(e) => {
-        const newValue =
-          typeof value === "number" ? (Number(e.target.value) as T) : (e.target.value as T);
-        onChange(newValue);
-      }}
-      disabled={disabled}
-      style={{
-        background: isOverridden
-          ? "hsl(var(--fw-sc-accent-secondary) / 0.15)"
-          : "hsl(var(--fw-sc-border) / 0.3)",
-        border: isOverridden
-          ? "1px solid hsl(var(--fw-sc-accent-secondary) / 0.4)"
-          : "1px solid hsl(var(--fw-sc-border) / 0.5)",
-        borderRadius: "4px",
-        color: isOverridden ? "hsl(var(--fw-sc-accent-secondary))" : "hsl(var(--fw-sc-text))",
-        padding: "4px 8px",
-        fontSize: "12px",
-        fontFamily: "inherit",
-        cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.5 : 1,
-        minWidth: "100px",
-        textAlign: "right",
-      }}
-    >
-      {options.map((opt) => (
-        <option key={String(opt.value)} value={String(opt.value)}>
-          {opt.label}
-        </option>
-      ))}
-    </select>
-  );
-}
-
-// Preset options for encoder settings
-const RESOLUTION_OPTIONS: SettingSelectOption<string>[] = [
-  { value: "3840x2160", label: "3840×2160 (4K)" },
-  { value: "2560x1440", label: "2560×1440 (1440p)" },
-  { value: "1920x1080", label: "1920×1080 (1080p)" },
-  { value: "1280x720", label: "1280×720 (720p)" },
-  { value: "854x480", label: "854×480 (480p)" },
-  { value: "640x360", label: "640×360 (360p)" },
-];
-
-const VIDEO_BITRATE_OPTIONS: SettingSelectOption<number>[] = [
-  { value: 50_000_000, label: "50 Mbps" },
-  { value: 35_000_000, label: "35 Mbps" },
-  { value: 25_000_000, label: "25 Mbps" },
-  { value: 15_000_000, label: "15 Mbps" },
-  { value: 10_000_000, label: "10 Mbps" },
-  { value: 8_000_000, label: "8 Mbps" },
-  { value: 6_000_000, label: "6 Mbps" },
-  { value: 4_000_000, label: "4 Mbps" },
-  { value: 2_500_000, label: "2.5 Mbps" },
-  { value: 2_000_000, label: "2 Mbps" },
-  { value: 1_500_000, label: "1.5 Mbps" },
-  { value: 1_000_000, label: "1 Mbps" },
-  { value: 500_000, label: "500 kbps" },
-];
-
-const FRAMERATE_OPTIONS: SettingSelectOption<number>[] = [
-  { value: 120, label: "120 fps" },
-  { value: 60, label: "60 fps" },
-  { value: 30, label: "30 fps" },
-  { value: 24, label: "24 fps" },
-  { value: 15, label: "15 fps" },
-];
-
-const AUDIO_BITRATE_OPTIONS: SettingSelectOption<number>[] = [
-  { value: 320_000, label: "320 kbps" },
-  { value: 256_000, label: "256 kbps" },
-  { value: 192_000, label: "192 kbps" },
-  { value: 128_000, label: "128 kbps" },
-  { value: 96_000, label: "96 kbps" },
-  { value: 64_000, label: "64 kbps" },
-];
 
 // ============================================================================
 // Capture Format Component
@@ -344,16 +239,12 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
   onUseWebCodecsChange,
   isWebCodecsAvailable = true,
   encoderOverrides,
-  onEncoderOverridesChange,
 }) => {
   const t = useStudioTranslate();
   const [activeTab, setActiveTab] = useState<"audio" | "stats" | "info" | "compositor">("audio");
 
   const profileEncoderSettings = getEncoderSettings(qualityProfile);
-  const effectiveEncoderConfig = createEncoderConfig(
-    qualityProfile === "auto" ? "broadcast" : qualityProfile,
-    encoderOverrides
-  );
+  const encoderRows = encoderSummaryRows(qualityProfile, encoderOverrides, t("codecAuto"));
   const videoTrackSettings = mediaStream?.getVideoTracks?.()[0]?.getSettings?.();
 
   if (!isOpen) return null;
@@ -804,52 +695,31 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
               }}
             >
               <span style={sectionHeaderStyle}>{t("encoder")}</span>
-              {(encoderOverrides?.video || encoderOverrides?.audio) && (
-                <button
-                  type="button"
-                  onClick={() => onEncoderOverridesChange?.({})}
+            </div>
+            {encoderRows.map((row) => (
+              <div
+                key={row.labelKey}
+                style={rowStyle}
+                data-overridden={row.overridden || undefined}
+              >
+                <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t(row.labelKey)}</span>
+                <span
                   style={{
-                    fontSize: "10px",
-                    color: "hsl(var(--fw-sc-accent-secondary))",
-                    background: "transparent",
-                    border: "none",
-                    cursor: "pointer",
-                    padding: "2px 6px",
+                    color: row.overridden
+                      ? "hsl(var(--fw-sc-accent-secondary))"
+                      : "hsl(var(--fw-sc-text))",
+                    fontFamily: "monospace",
                   }}
                 >
-                  {t("resetToProfile")}
-                </button>
-              )}
-            </div>
-            <div style={rowStyle}>
-              <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("videoCodec")}</span>
-              <span style={{ color: "hsl(var(--fw-sc-text))", fontFamily: "monospace" }}>
-                {effectiveEncoderConfig.video.codec}
-              </span>
-            </div>
-            <div style={rowStyle}>
-              <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("resolution")}</span>
-              <SettingSelect
-                value={`${encoderOverrides?.video?.width ?? profileEncoderSettings.video.width}x${encoderOverrides?.video?.height ?? profileEncoderSettings.video.height}`}
-                options={RESOLUTION_OPTIONS}
-                isOverridden={!!(encoderOverrides?.video?.width || encoderOverrides?.video?.height)}
-                disabled={state === "streaming"}
-                onChange={(value) => {
-                  const [w, h] = value.split("x").map(Number);
-                  const isProfileDefault =
-                    w === profileEncoderSettings.video.width &&
-                    h === profileEncoderSettings.video.height;
-                  onEncoderOverridesChange?.({
-                    ...encoderOverrides,
-                    video: {
-                      ...encoderOverrides?.video,
-                      width: isProfileDefault ? undefined : w,
-                      height: isProfileDefault ? undefined : h,
-                    },
-                  });
-                }}
-              />
-            </div>
+                  {row.value}
+                  {row.overridden && (
+                    <span style={{ marginLeft: "6px", fontSize: "10px" }}>
+                      {t("encoderOverridden")}
+                    </span>
+                  )}
+                </span>
+              </div>
+            ))}
             {videoTrackSettings?.width && videoTrackSettings?.height && (
               <div style={rowStyle}>
                 <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>
@@ -860,25 +730,6 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
                 </span>
               </div>
             )}
-            <div style={rowStyle}>
-              <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("framerate")}</span>
-              <SettingSelect
-                value={encoderOverrides?.video?.framerate ?? profileEncoderSettings.video.framerate}
-                options={FRAMERATE_OPTIONS}
-                isOverridden={!!encoderOverrides?.video?.framerate}
-                disabled={state === "streaming"}
-                onChange={(value) => {
-                  const isProfileDefault = value === profileEncoderSettings.video.framerate;
-                  onEncoderOverridesChange?.({
-                    ...encoderOverrides,
-                    video: {
-                      ...encoderOverrides?.video,
-                      framerate: isProfileDefault ? undefined : value,
-                    },
-                  });
-                }}
-              />
-            </div>
             {videoTrackSettings?.frameRate && (
               <div style={rowStyle}>
                 <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>
@@ -889,61 +740,15 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
                 </span>
               </div>
             )}
-            <div style={rowStyle}>
-              <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("videoBitrate")}</span>
-              <SettingSelect
-                value={encoderOverrides?.video?.bitrate ?? profileEncoderSettings.video.bitrate}
-                options={VIDEO_BITRATE_OPTIONS}
-                isOverridden={!!encoderOverrides?.video?.bitrate}
-                disabled={state === "streaming"}
-                onChange={(value) => {
-                  const isProfileDefault = value === profileEncoderSettings.video.bitrate;
-                  onEncoderOverridesChange?.({
-                    ...encoderOverrides,
-                    video: {
-                      ...encoderOverrides?.video,
-                      bitrate: isProfileDefault ? undefined : value,
-                    },
-                  });
-                }}
-              />
+            <div
+              style={{
+                padding: "8px 12px",
+                fontSize: "10px",
+                color: "hsl(var(--fw-sc-text-faint))",
+              }}
+            >
+              {t("encoderEditInSettings")}
             </div>
-            <div style={rowStyle}>
-              <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("audioCodec")}</span>
-              <span style={{ color: "hsl(var(--fw-sc-text))", fontFamily: "monospace" }}>
-                {effectiveEncoderConfig.audio.codec}
-              </span>
-            </div>
-            <div style={rowStyle}>
-              <span style={{ color: "hsl(var(--fw-sc-text-faint))" }}>{t("audioBitrate")}</span>
-              <SettingSelect
-                value={encoderOverrides?.audio?.bitrate ?? profileEncoderSettings.audio.bitrate}
-                options={AUDIO_BITRATE_OPTIONS}
-                isOverridden={!!encoderOverrides?.audio?.bitrate}
-                disabled={state === "streaming"}
-                onChange={(value) => {
-                  const isProfileDefault = value === profileEncoderSettings.audio.bitrate;
-                  onEncoderOverridesChange?.({
-                    ...encoderOverrides,
-                    audio: {
-                      ...encoderOverrides?.audio,
-                      bitrate: isProfileDefault ? undefined : value,
-                    },
-                  });
-                }}
-              />
-            </div>
-            {state === "streaming" && (
-              <div
-                style={{
-                  padding: "8px 12px",
-                  fontSize: "10px",
-                  color: "hsl(var(--fw-sc-warning))",
-                }}
-              >
-                {t("settingsLockedWhileStreaming")}
-              </div>
-            )}
           </div>
 
           {/* Sources */}
