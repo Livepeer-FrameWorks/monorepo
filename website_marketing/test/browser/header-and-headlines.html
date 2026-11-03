@@ -28,14 +28,14 @@
   </style>
   <h1>Header menu and headline layout regression</h1>
   <p>
-    Use ?width=390 for the headline checks and ?width=1440 for the desktop Resources menu. Optional
-    ?path= picks the page (default /).
+    Use ?width=390 for the headline checks, ?width=1280 for the narrowest one-row desktop header and
+    ?width=1440 for the desktop Resources menu. Optional ?path= picks the page (default /).
   </p>
   <output aria-live="polite">Waiting for the page…</output>
   <iframe title="Marketing page under test" height="844"></iframe>
   <script type="module">
     const query = new URLSearchParams(location.search);
-    const width = [390, 768, 1440].includes(Number(query.get("width")))
+    const width = [390, 768, 1280, 1440].includes(Number(query.get("width")))
       ? Number(query.get("width"))
       : 390;
     const frame = document.querySelector("iframe");
@@ -50,8 +50,55 @@
       const report = document.querySelector("output");
       const checks = [];
       const check = (label, pass, detail) => checks.push({ label, pass, detail });
+      // The page arrives as prerendered HTML and React hydrates it after the
+      // iframe's load event; the header only handles events once React has
+      // attached to it.
+      const hydrated = () => {
+        const header = doc.querySelector('nav[aria-label="Primary"]');
+        return header && Object.keys(header).some((key) => key.startsWith("__reactFiber"));
+      };
+      const deadline = Date.now() + 15000;
+      while (!hydrated() && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
       await doc.fonts.ready;
       await nextFrame();
+      check("Header hydrated", Boolean(hydrated()), "primary navigation");
+
+      // From xl every header item sits on one row with no label wrapping.
+      const desktopNav = doc.querySelector('nav[aria-label="Primary"] .xl\\:flex');
+      if (width >= 1280 && desktopNav) {
+        const items = [...desktopNav.children];
+        const centers = items.map((item) => {
+          const rect = item.getBoundingClientRect();
+          return rect.top + rect.height / 2;
+        });
+        // A label wraps when its text boxes sit on more than one line.
+        const lineCount = (element) => {
+          const walker = doc.createTreeWalker(element, win.NodeFilter.SHOW_TEXT);
+          const tops = new Set();
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            if (!node.textContent.trim()) continue;
+            const range = doc.createRange();
+            range.selectNodeContents(node);
+            for (const box of range.getClientRects()) tops.add(Math.round(box.top));
+          }
+          return tops.size;
+        };
+        const wrapped = items.filter((item) => lineCount(item) > 1);
+        check(
+          "Desktop header items share one row",
+          Math.max(...centers) - Math.min(...centers) <= 2 && wrapped.length === 0,
+          wrapped.length
+            ? `wrapped: ${wrapped.map((item) => item.textContent.trim()).join(", ")}`
+            : `${items.length} items`
+        );
+        check(
+          "Desktop header fits the page",
+          desktopNav.getBoundingClientRect().right <= win.innerWidth,
+          `${Math.round(desktopNav.getBoundingClientRect().right)}px / ${win.innerWidth}px`
+        );
+      }
 
       check(
         "No page overflow",

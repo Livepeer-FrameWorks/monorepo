@@ -21,6 +21,7 @@ jobs:
     outputs:
       go: ${{ steps.filter.outputs.go }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      marketing_browser: ${{ steps.filter.outputs.marketing_browser }}
       registry: ${{ steps.filter.outputs.registry }}
       pricing: ${{ steps.filter.outputs.pricing }}
       contracts: ${{ steps.filter.outputs.contracts }}
@@ -76,6 +77,15 @@ jobs:
               - 'pnpm-lock.yaml'
               - 'scripts/test-logbook-image-health.sh'
               - 'website_docs/**'
+            marketing_browser:
+              - 'website_marketing/**'
+              - 'packages/site-config/**'
+              - 'packages/map-core/**'
+              - 'npm_player/packages/**'
+              - 'npm_studio/packages/**'
+              - 'docs/skills/**'
+              - 'scripts/copy-agent-files.sh'
+              - 'pnpm-lock.yaml'
             contracts:
               - 'pkg/config/**'
               - 'pkg/version/**'
@@ -497,6 +507,19 @@ jobs:
           files: ./npm_player/packages/core/test-results/junit.xml,./npm_player/packages/react/test-results/junit.xml,./npm_player/packages/svelte/test-results/junit.xml,./npm_studio/packages/core/test-results/junit.xml,./npm_studio/packages/react/test-results/junit.xml,./npm_studio/packages/svelte/test-results/junit.xml,./website_application/test-results/junit.xml
           flags: frontend
           report_type: test_results
+
+  marketing-browser:
+    name: Marketing browser fixtures
+    needs: changes
+    if: needs.changes.outputs.marketing_browser == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-node-pnpm
+      - name: Install Chromium for Playwright
+        run: pnpm --dir website_marketing exec playwright install --with-deps chromium
+      - name: Header, landing layout and Skipper fixtures in headless Chromium
+        run: pnpm --filter frameworks-website test:browser
 
   frontend-build:
     name: Frontend build

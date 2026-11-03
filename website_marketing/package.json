@@ -12,6 +12,7 @@
     "lint": "eslint . --report-unused-disable-directives --max-warnings 0",
     "test": "node --test src/lib/*.test.js",
     "test:coverage": "node --test --experimental-test-coverage src/lib/*.test.js",
+    "test:browser": "node scripts/browser-fixtures.mjs",
     "preview": "vite preview --outDir build/client"
   },
   "dependencies": {
@@ -61,6 +62,7 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.5.0",
+    "playwright": "1.64.1",
     "postcss": "^8.5.10",
     "tailwindcss": "^4.2.2",
     "vite": "^8.0.0"
