@@ -34,6 +34,7 @@
     DialogTitle,
   } from "$lib/components/ui/dialog";
   import { getMarketingSiteUrl } from "$lib/config";
+  import { invoiceLineAmountDisplay } from "$lib/utils/invoice-line-display";
   import { GridSeam } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
@@ -491,9 +492,6 @@
       changeTierLoadingId = null;
     }
   }
-
-  // Purser stamps a line waived to €0, by the beta waiver or an arrangement, with this source.
-  const WAIVED_PRICING_SOURCE = "beta_free";
 
   function isFreeTier(tier: TierChoice | null | undefined) {
     return (tier?.tierName ?? "").toLowerCase() === "free";
@@ -1615,6 +1613,10 @@
                                   </thead>
                                   <tbody>
                                     {#each group.items as item (`${invoice.id}-${item.lineKey}`)}
+                                      {@const amountDisplay = invoiceLineAmountDisplay(
+                                        moneyNumber(item.total),
+                                        item.pricingSource
+                                      )}
                                       <tr
                                         class="border-t border-border/20"
                                         class:text-muted-foreground={moneyNumber(item.total) === 0}
@@ -1642,10 +1644,16 @@
                                           )}</td
                                         >
                                         <td class="py-2 text-right font-mono font-semibold">
-                                          {#if moneyNumber(item.total) === 0 && item.pricingSource !== WAIVED_PRICING_SOURCE}
+                                          {#if amountDisplay.kind === "included"}
                                             <span
                                               class="px-2 py-0.5 text-[10px] font-medium rounded-full bg-emerald-50 text-emerald-700"
-                                              >Included</span
+                                              >{amountDisplay.badge}</span
+                                            >
+                                          {:else if amountDisplay.kind === "waived"}
+                                            <span
+                                              class="px-2 py-0.5 text-[10px] font-medium rounded-full bg-muted text-foreground"
+                                              title={amountDisplay.title}
+                                              >{amountDisplay.badge}</span
                                             >
                                           {:else}
                                             {formatCurrency(

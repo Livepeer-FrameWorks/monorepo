@@ -27,6 +27,7 @@
   import { palette } from "$lib/components/charts/theme";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import { getCountryName } from "$lib/utils/country-names";
+  import { invoiceLineAmountDisplay } from "$lib/utils/invoice-line-display";
   import { goto } from "$app/navigation";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
 
@@ -1042,14 +1043,24 @@
               <div class="space-y-3">
                 {#if ratedCosts.lineItems.length > 0}
                   {#each ratedCosts.lineItems as item, i (`${item.lineKey}-${item.meter}-${i}`)}
+                    {@const amountDisplay = invoiceLineAmountDisplay(
+                      moneyNumber(item.total),
+                      item.pricingSource
+                    )}
                     <div class="flex items-start justify-between gap-4 text-sm">
                       <span class="text-muted-foreground">
                         {item.description}
                         <span class="block text-xs">{lineItemDetail(item)}</span>
                       </span>
-                      <span class="text-foreground"
-                        >{formatCurrency(moneyNumber(item.total), item.currency)}</span
-                      >
+                      {#if amountDisplay.kind === "waived"}
+                        <span class="text-foreground" title={amountDisplay.title}
+                          >{amountDisplay.badge}</span
+                        >
+                      {:else}
+                        <span class="text-foreground"
+                          >{formatCurrency(moneyNumber(item.total), item.currency)}</span
+                        >
+                      {/if}
                     </div>
                   {/each}
                   {#if ratedCosts.credit > 0}
