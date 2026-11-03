@@ -173,22 +173,66 @@ describe("Go Live page", () => {
     render(GoLivePage);
     await screen.findByTestId("studio");
     expect(studioProps.current.initialLayout).toBeNull();
-    (studioProps.current.onLayoutChange as (layout: unknown) => void)(layoutA);
+    type Report = (layout: unknown, layoutKey: string | undefined) => void;
+    const report = () => studioProps.current.onLayoutChange as Report;
+    expect(studioProps.current.layoutKey).toBe("relay-a");
+    report()(layoutA, "relay-a");
     expect(stored("relay-a")).toEqual(layoutA);
 
     await chooseStream("Stream B");
     await waitFor(() =>
       expect(studioProps.current.whipUrl).toBe("https://key-b.node.example/webrtc/key-b")
     );
+    expect(studioProps.current.layoutKey).toBe("relay-b");
     expect(studioProps.current.initialLayout).toEqual(layoutB);
     expect(studioMounts.count).toBe(1);
 
-    (studioProps.current.onLayoutChange as (layout: unknown) => void)({ ...layoutB, edited: 1 });
+    // A report the studio exported for stream A lands under A, not B.
+    report()({ ...layoutA, late: 1 }, "relay-a");
+    expect(stored("relay-a")).toEqual({ ...layoutA, late: 1 });
+    expect(stored("relay-b")).toEqual(layoutB);
+
+    report()({ ...layoutB, edited: 1 }, "relay-b");
     expect(stored("relay-b")).toEqual({ ...layoutB, edited: 1 });
-    expect(stored("relay-a")).toEqual(layoutA);
 
     await chooseStream("Stream A");
-    await waitFor(() => expect(studioProps.current.initialLayout).toEqual(layoutA));
+    await waitFor(() => expect(studioProps.current.initialLayout).toEqual({ ...layoutA, late: 1 }));
+    expect(studioMounts.count).toBe(1);
+  });
+
+  it("moves the studio to a stream selected just before going live once the broadcast ends", async () => {
+    const layoutB = { version: 1, scenes: [{ name: "B" }] };
+    window.localStorage.setItem("fw.goLive.studioLayout.relay-b", JSON.stringify(layoutB));
+    render(GoLivePage);
+    await screen.findByTestId("studio");
+    expect(studioProps.current.layoutKey).toBe("relay-a");
+
+    let finishB: () => void = () => {};
+    resolveFetch.mockImplementationOnce(
+      ({ variables }: { variables: { streamKey: string } }) =>
+        new Promise((done) => {
+          finishB = () => done(destinationFor(variables.streamKey));
+        })
+    );
+    const resolvesBefore = resolveFetch.mock.calls.length;
+    await chooseStream("Stream B");
+    await waitFor(() => expect(resolveFetch.mock.calls.length).toBe(resolvesBefore + 1));
+    const setState = () => studioProps.current.onStateChange as (state: string) => void;
+    // The broadcast starts while the studio still waits for stream B's destination.
+    setState()("connecting");
+    finishB();
+    await waitFor(() =>
+      expect(screen.getByTestId("recording-status").textContent).toContain("Recording off")
+    );
+    await new Promise((done) => setTimeout(done, 0));
+    expect(studioProps.current.layoutKey).toBe("relay-a");
+    expect(studioProps.current.whipUrl).toBe("https://key-a.node.example/webrtc/key-a");
+
+    setState()("streaming");
+    setState()("idle");
+    await waitFor(() => expect(studioProps.current.layoutKey).toBe("relay-b"));
+    expect(studioProps.current.whipUrl).toBe("https://key-b.node.example/webrtc/key-b");
+    expect(studioProps.current.initialLayout).toEqual(layoutB);
     expect(studioMounts.count).toBe(1);
   });
 
