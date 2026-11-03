@@ -470,6 +470,7 @@ accounts:
       - email: admin@northwind.example
         role: owner
         password_ref: { sops: ..., key: NORTHWIND_OWNER_PASSWORD }
+        wallet: "0x0000000000000000000000000000000000000001" # optional
 purser:
   customer_billing:
     - tenant: { ref: quartermaster.tenants[northwind] }
@@ -503,6 +504,29 @@ Commodore reconciler semantics for any user under `accounts[*].users`:
 - Password is rewritten only when the desired-state file declares
   `reset_credentials: true` on the user **and** the bootstrap subcommand is invoked with
   `--reset-credentials`.
+
+### Account user wallet
+
+`wallet` on an account user is an Ethereum address (`0x` followed by 40 hex
+characters) that Commodore links to the user for wallet sign-in, so a QA or
+automation account can sign in headlessly with the matching key. The address is
+public, so it lives in the committed common layer next to `role` and
+`platform_operator`; the private key stays with whoever signs in. Rendering
+refuses a malformed address and an address declared for two users.
+
+Commodore reconciles the link after the user:
+
+- Not linked anywhere → linked to this user. An otherwise unchanged user is
+  reported as updated.
+- Already linked to this user → no-op.
+- Linked to another user → left in place and reported as deferred under
+  `<tenant ref>/<email>/wallet` with a warning. Bootstrap never moves a wallet
+  between users, and the deferral makes the accounts step exit non-zero until
+  the other user's link is removed or the declaration changes.
+- Removing `wallet` from the declaration leaves an existing link in place.
+
+Like the rest of the accounts bootstrap, a link made here emits no service
+event, so it records no `wallet_linked` auth event.
 
 ---
 

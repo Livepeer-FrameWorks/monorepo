@@ -161,6 +161,7 @@ accounts:
         password_ref:
           sops: ../../secrets/staging.env
           key: QA_ACCOUNT_PASSWORD
+        wallet: "0x0000000000000000000000000000000000000001" # optional, for wallet sign-in
 
 purser:
   customer_billing:
@@ -177,6 +178,12 @@ purser:
 ```
 
 - Add the password to the SOPS file with `gitops/scripts/sops-env.sh set <file> <KEY> <VALUE>`.
+- `wallet` is an optional Ethereum address (`0x` and 40 hex characters) linked to the user for
+  wallet sign-in, so automation can sign in as the account with the matching key instead of a
+  password. The address is public; keep the private key in your secrets store. An address
+  declared for two users fails validation. An address already linked to a different user is never
+  moved: bootstrap reports that user's wallet as deferred and exits non-zero, so unlink the wallet
+  from the old user first, signed in as that user. Removing the field leaves an existing link in place.
 - An account entry carries no billing of its own; validation refuses one. Billing is declared once
   per tenant in `purser.customer_billing`.
 - `operator_grant` takes the same fields as `grant set`: `base_fee`, `waive_usage`, `collection`

@@ -149,6 +149,30 @@ Optional path to a bootstrap desired-state overlay. The CLI renders manifest-der
 bootstrap_overlay: gitops/clusters/production/bootstrap.yaml
 ```
 
+#### Account users
+
+`accounts[*].users` in the overlay declares the users of operator and customer accounts. Each user
+takes `email`, `role` and `password_ref`, and optionally `first_name`, `last_name`,
+`platform_operator`, `reset_credentials`, and `wallet`.
+
+```yaml
+accounts:
+  - kind: customer
+    tenant:
+      ref: quartermaster.tenants[frameworks-qa]
+    users:
+      - email: qa@example.com
+        role: owner
+        password_ref: { sops: ../../secrets/staging.env, key: QA_ACCOUNT_PASSWORD }
+        wallet: "0x0000000000000000000000000000000000000001"
+```
+
+`wallet` is an Ethereum address (`0x` and 40 hex characters) that Commodore links to the user for
+wallet sign-in. Validation refuses a malformed address and an address declared for two users.
+Bootstrap never moves a wallet that is already linked to a different user: it reports that
+user's wallet as deferred and exits non-zero. Removing the field leaves an existing link in place.
+See [Test and Trial Accounts](/operators/trial-accounts/#declare-a-test-account-in-bootstrap).
+
 #### Stream source location
 
 Operator-declared `commodore.pull_streams` and `commodore.mist_native_streams` in the overlay
