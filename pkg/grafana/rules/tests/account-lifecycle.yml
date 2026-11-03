@@ -199,7 +199,7 @@ tests:
               cell: unknown
             exp_annotations:
               summary: Account session-stop delivery has not reached a cell
-              description: "A revoked user, tenant or stream has an ingest stop whose last attempt failed before contacting any cell, or that has not been attempted yet. frameworks cluster doctor --deep names the affected tenants and frameworks admin tenants get <tenant> shows each pending stop with its last error; that error comes from Commodore's database, so restore Commodore's database connection and Commodore retries. Tenant closure proceeds independently of stop delivery. The alert fires per cell, so silencing one cell leaves the others visible."
+              description: 'A revoked user, tenant or stream has an ingest stop whose last attempt failed before contacting any cell, or that has not been attempted yet. frameworks cluster doctor --deep names the affected tenants and frameworks admin tenants get <tenant> shows each pending stop with its last error. A last error comes from Commodore''s database: restore Commodore''s database connection and Commodore retries. A stop with no last error has not been attempted: check that Commodore''s media-authority refresh worker is running, and look in Commodore''s logs for "Failed to claim media authority refresh obligations" on lane ingest_revocation. Tenant closure proceeds independently of stop delivery. The alert fires per cell, so silencing one cell leaves the others visible.'
       - eval_time: 15m
         groupname: frameworks.rules
         alertname: CommodoreAccountIngestRevocationStuck
