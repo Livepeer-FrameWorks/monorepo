@@ -164,4 +164,4 @@ releases:
     min_cli_version: v0.3.13-rc1
   - version: v0.3.14
     capabilities: [accounts_bootstrap]
-    min_cli_version: v0.3.14-rc1
+    min_cli_version: v0.3.14-rc2

@@ -218,6 +218,34 @@ if [ -n "$pending_version" ]; then
     done < <("${rc_diff[@]}" -- "${path_args[@]}")
     break
   done < <(git tag --merged HEAD --sort=-v:refname)
+
+  # The CLI embeds the migrations it applies, so a pending release whose
+  # min_cli_version is an existing tag would let that CLI apply the release
+  # without every migration added after the tag.
+  min_cli=$(awk -v want="$pending_version" '
+    /^[[:space:]]*-[[:space:]]+version:[[:space:]]+/ { current = $3; next }
+    current == want && $1 == "min_cli_version:" { print $2; exit }
+  ' "$catalog_path")
+  if [ -n "$min_cli" ] && git rev-parse -q --verify "refs/tags/$min_cli" >/dev/null; then
+    floor_diff=(git diff --no-renames --name-only -z --diff-filter=A)
+    if [ -n "$diff_base" ]; then
+      floor_diff+=("$min_cli" HEAD)
+    elif [ "$worktree" = true ]; then
+      floor_diff+=("$min_cli")
+    else
+      floor_diff+=(--cached "$min_cli")
+    fi
+    while IFS= read -r -d '' file; do
+      if [[ "$file" =~ $migration_re ]]; then
+        violations+=("  $file  (added after $min_cli, the min_cli_version of $pending_version; that CLI cannot apply it, so raise the floor to the next tag)")
+      fi
+    done < <(
+      "${floor_diff[@]}" -- "${path_args[@]}"
+      if [ -z "$diff_base" ] && [ "$worktree" = true ]; then
+        git ls-files --others --exclude-standard -z -- "${path_args[@]}"
+      fi
+    )
+  fi
 fi
 
 if [ -n "$diff_base" ]; then

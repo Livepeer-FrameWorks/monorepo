@@ -69,7 +69,13 @@ git show HEAD:pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.s
 git add pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
 printf '%s\n' 'SELECT 3;' > pkg/database/sql/migrations/commodore/v0.2.96/expand/002_candidate_fix.sql
 expect_pass 'the next RC may append a migration in the same release bucket' --worktree
+printf '%s\n' 'schema_migration_floor: v0.2.95' 'releases:' '  - version: v0.2.96' '    min_cli_version: v0.2.96-rc1' > cli/internal/releases/catalog.yaml
+expect_fail 'a CLI floor at a tag that lacks an appended migration is rejected' --worktree
+printf '%s\n' 'schema_migration_floor: v0.2.95' 'releases:' '  - version: v0.2.96' '    min_cli_version: v0.2.96-rc2' > cli/internal/releases/catalog.yaml
+expect_pass 'a CLI floor at the next tag covers an appended migration' --worktree
 rm pkg/database/sql/migrations/commodore/v0.2.96/expand/002_candidate_fix.sql
+expect_pass 'a CLI floor at an existing tag holds when no migration was appended after it' --worktree
+git show HEAD:cli/internal/releases/catalog.yaml > cli/internal/releases/catalog.yaml
 expect_pass 'a missing diff base falls back to the latest shipped tag' --diff-base deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
 if ! grep -q 'shipped migrations are compared against v0.2.95' "$test_root/output"; then
   echo 'FAIL: missing diff base should report its shipped-tag fallback' >&2
