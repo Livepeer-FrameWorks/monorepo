@@ -11,6 +11,7 @@
   ],
   "exports": {
     ".": {
+      "source": "./src/index.tsx",
       "types": "./dist/types/index.d.ts",
       "default": "./dist/esm/index.js"
     },
