@@ -8,6 +8,8 @@ const controllers = vi.hoisted(
       setEncoderOverrides: ReturnType<typeof vi.fn>;
       importLayout: ReturnType<typeof vi.fn>;
       exportLayout: ReturnType<typeof vi.fn>;
+      setWhipUrl: ReturnType<typeof vi.fn>;
+      destroyed: boolean;
       renderer: ReturnType<typeof vi.fn>;
       liveLayout: { version: number; scenes: { name: string }[] };
       emit: (event: string) => void;
@@ -58,8 +60,15 @@ vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
     }
     disableCompositor = vi.fn(() => this.stopCompositor());
     setEncoderOverrides = vi.fn();
-    importLayout = vi.fn(async () => {});
+    importLayout = vi.fn(async (layout: { version: number; scenes: { name: string }[] }) => {
+      this.liveLayout = layout;
+    });
     exportLayout = vi.fn(async () => (this.sceneManager ? this.liveLayout : this.stoppedLayout));
+    setWhipUrl = vi.fn(async () => {});
+    destroyed = false;
+    isCompositorEnabled() {
+      return this.sceneManager !== null;
+    }
     constructor() {
       controllers.push(this as never);
     }
@@ -87,6 +96,7 @@ vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
       return { getState: () => null };
     }
     destroy() {
+      this.destroyed = true;
       this.stopCompositor();
     }
     getEncoderManager() {
@@ -100,6 +110,7 @@ vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
   return { ...actual, IngestControllerV2: FakeController };
 });
 
+import { createDefaultStudioLayout } from "@livepeer-frameworks/streamcrafter-core";
 import "../src/components/fw-streamcrafter.js";
 import type { FwStreamCrafter } from "../src/components/fw-streamcrafter.js";
 
@@ -145,29 +156,91 @@ describe("fw-streamcrafter compositor", () => {
 
   it("carries the current layout to a new controller for the same stream", async () => {
     const stored = { version: 1, layout: { mode: "solo" }, activeScene: 0, scenes: [] };
-    const el = await studio({ initialLayout: stored as never });
+    const el = await studio({ layoutKey: "stream-a", initialLayout: stored as never });
     await vi.waitFor(() => expect(controllers[0].importLayout).toHaveBeenCalledWith(stored));
     await vi.waitFor(() => expect(el.sceneManager).not.toBeNull());
+    const edited = { ...stored, scenes: [{ name: "Edited" }] };
+    controllers[0].liveLayout = edited as never;
 
+    el.initialLayout = { ...stored } as never;
     el.initialProfile = "conference";
 
-    await vi.waitFor(() =>
-      expect(controllers[1]?.importLayout).toHaveBeenCalledWith(controllers[0].liveLayout)
-    );
-    expect(controllers[1].importLayout).not.toHaveBeenCalledWith(stored);
+    await vi.waitFor(() => expect(controllers[1]?.importLayout).toHaveBeenCalledWith(edited));
+    expect(controllers[1].importLayout).toHaveBeenCalledTimes(1);
   });
 
-  it("starts another stream from the initialLayout given with it", async () => {
-    const first = { version: 1, layout: { mode: "solo" }, activeScene: 0, scenes: [] };
-    const second = { ...first, layout: { mode: "grid" } };
-    const el = await studio({ initialLayout: first as never });
+  it("sends a new endpoint to the running controller, which keeps its sources", async () => {
+    const el = await studio();
     await vi.waitFor(() => expect(el.sceneManager).not.toBeNull());
 
+    el.whipUrl = "https://ingest.example/whip-2";
+    await el.updateComplete;
+
+    expect(controllers[0].setWhipUrl).toHaveBeenCalledWith("https://ingest.example/whip-2");
+    expect(controllers).toHaveLength(1);
+    expect(controllers[0].destroyed).toBe(false);
+    expect(controllers[0].enableCompositor).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows another stream's layout on the running controller", async () => {
+    const first = { version: 1, layout: { mode: "solo" }, activeScene: 0, scenes: [] };
+    const second = { ...first, layout: { mode: "grid" } };
+    const el = await studio({ layoutKey: "stream-a", initialLayout: first as never });
+    await vi.waitFor(() => expect(el.sceneManager).not.toBeNull());
+
+    el.layoutKey = "stream-b";
     el.initialLayout = second as never;
     el.whipUrl = "https://ingest.example/whip-2";
 
-    await vi.waitFor(() => expect(controllers[1]?.importLayout).toHaveBeenCalledWith(second));
-    expect(controllers[1].importLayout).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(controllers[0].importLayout).toHaveBeenLastCalledWith(second));
+    expect(controllers).toHaveLength(1);
+    expect(controllers[0].destroyed).toBe(false);
+  });
+
+  it("shows the default layout for another stream without one, never the previous scenes", async () => {
+    const el = await studio({ layoutKey: "stream-a", initialLayout: null });
+    await vi.waitFor(() => expect(el.sceneManager).not.toBeNull());
+    expect(controllers[0].importLayout).not.toHaveBeenCalled();
+
+    el.layoutKey = "stream-b";
+
+    await vi.waitFor(() =>
+      expect(controllers[0].importLayout).toHaveBeenCalledWith(createDefaultStudioLayout())
+    );
+  });
+
+  it("reports each layout with its key and drops one exported for the previous stream", async () => {
+    const onLayoutChange = vi.fn();
+    const el = await studio({ layoutKey: "stream-a", onLayoutChange });
+    await vi.waitFor(() => expect(el.sceneManager).not.toBeNull());
+    await el.updateComplete;
+    const events: unknown[] = [];
+    el.addEventListener("fw-sc-layout-change", (e) =>
+      events.push((e as CustomEvent<{ layoutKey: unknown }>).detail.layoutKey)
+    );
+
+    let finishExport!: () => void;
+    const exportDone = new Promise<void>((resolve) => (finishExport = resolve));
+    const aLayout = controllers[0].liveLayout;
+    controllers[0].exportLayout.mockImplementationOnce(async () => {
+      await exportDone;
+      return aLayout;
+    });
+    const exports = controllers[0].exportLayout.mock.calls.length;
+    controllers[0].emit("sceneCreated");
+    await vi.waitFor(() =>
+      expect(controllers[0].exportLayout.mock.calls.length).toBeGreaterThan(exports)
+    );
+
+    el.layoutKey = "stream-b";
+    await el.updateComplete;
+    finishExport();
+
+    await vi.waitFor(() =>
+      expect(onLayoutChange).toHaveBeenCalledWith(createDefaultStudioLayout(), "stream-b")
+    );
+    expect(onLayoutChange).not.toHaveBeenCalledWith(expect.anything(), "stream-a");
+    expect(events).not.toContain("stream-a");
   });
 
   it("starts the compositor on a controller built while the last one was starting", async () => {
@@ -175,7 +248,7 @@ describe("fw-streamcrafter compositor", () => {
     enableGate.wait = new Promise<void>((resolve) => (release = resolve));
     const el = await studio();
 
-    el.whipUrl = "https://ingest.example/whip-2";
+    el.initialProfile = "conference";
     await el.updateComplete;
     release();
 
@@ -214,8 +287,8 @@ describe("fw-streamcrafter compositor", () => {
 
     controllers[0].emit("sceneCreated");
 
-    await vi.waitFor(() => expect(onLayoutChange).toHaveBeenCalledWith(controllers[0].liveLayout));
-    expect(events).toContainEqual(controllers[0].liveLayout);
+    await vi.waitFor(() => expect(onLayoutChange).toHaveBeenCalledWith(stored, undefined));
+    expect(events).toContainEqual(stored);
   });
 
   it("offers the encoder settings outside dev mode and hands them to the controller", async () => {
@@ -239,11 +312,11 @@ describe("fw-streamcrafter compositor", () => {
     expect(controllers[0].setEncoderOverrides).toHaveBeenLastCalledWith({});
   });
 
-  it("hands the encoder choices to the controller for a new endpoint", async () => {
+  it("hands the encoder choices to the controller for a new profile", async () => {
     const el = await studio();
     el.setEncoderOverrides({ video: { width: 1280, height: 720 } });
 
-    el.whipUrl = "https://ingest.example/whip-2";
+    el.initialProfile = "conference";
     await el.updateComplete;
 
     expect(controllers[1].setEncoderOverrides).toHaveBeenCalledWith({

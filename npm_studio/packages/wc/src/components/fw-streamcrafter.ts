@@ -31,6 +31,7 @@ import "./fw-sc-audio-controls.js";
 import "./fw-sc-connection-health.js";
 import {
   IngestClient,
+  StudioLayoutKeeper,
   type CompositorConfig,
   detectStudioSupport,
   encoderSettingRows,
@@ -125,10 +126,17 @@ export class FwStreamCrafter extends LitElement {
   @property({ attribute: false }) onError?: ((error: string) => void) | undefined;
   /** A new `renderer` switches the running compositor without a restart. */
   @property({ attribute: false }) compositorConfig: Partial<CompositorConfig> = {};
-  /** Scenes, overlays and layout preset to start from, as reported by fw-sc-layout-change. */
+  /**
+   * What the layout belongs to, such as a stream ID. A new key shows that
+   * key's initialLayout, or the default layout, without restarting sources.
+   */
+  @property({ type: String, attribute: "layout-key" }) layoutKey?: string;
+  /** Scenes, overlays and layout preset for layoutKey, as reported by fw-sc-layout-change. */
   @property({ attribute: false }) initialLayout: StudioLayout | null = null;
-  /** Called with the layout shortly after the scenes, overlays or layout preset change. */
-  @property({ attribute: false }) onLayoutChange?: ((layout: StudioLayout) => void) | undefined;
+  /** Called shortly after the scenes, overlays or layout preset change, with the key they belong to. */
+  @property({ attribute: false }) onLayoutChange?:
+    | ((layout: StudioLayout, layoutKey: string | undefined) => void)
+    | undefined;
   @property({ type: String, attribute: "compositor-worker-url" }) compositorWorkerUrl = "";
   @property({ type: String, attribute: "encoder-worker-url" }) encoderWorkerUrl = "";
   @property({ type: String, attribute: "rtc-transform-worker-url" }) rtcTransformWorkerUrl = "";
@@ -162,12 +170,9 @@ export class FwStreamCrafter extends LitElement {
   private _dismissListenersAttached = false;
   private _showSettingsInitialized = false;
   private _compositorEnabling: Promise<void> | null = null;
-  // The compositor's own layout comes back when it is turned on again, and
-  // moves to a new controller (a new endpoint, profile, debug setting or
-  // worker URL) unless initialLayout changed along with it, which marks
-  // another stream.
-  private _lastStart: { controller: IngestControllerV2; initialLayout: unknown } | null = null;
-  private _layoutReportTimer: ReturnType<typeof setTimeout> | null = null;
+  // One keeper for the element's lifetime, so the layout follows a new
+  // controller (a new profile, debug setting or worker URL) for the same key.
+  private _layoutKeeper = new StudioLayoutKeeper<IngestControllerV2>(LAYOUT_CHANGE_DELAY_MS);
   private _reportedPreset: unknown = null;
   private _handleStateChangeEvent = (event: Event) => {
     const detail = (event as CustomEvent<{ state: IngestState; context?: IngestStateContextV2 }>)
@@ -214,8 +219,7 @@ export class FwStreamCrafter extends LitElement {
     this.removeEventListener("fw-sc-error", this._handleErrorEvent);
     this._teardownDismissListeners();
     this._bindSceneManager(null);
-    if (this._layoutReportTimer) clearTimeout(this._layoutReportTimer);
-    this._layoutReportTimer = null;
+    this._layoutKeeper.cancelReport();
     this._destroyIngestClient();
     super.disconnectedCallback();
   }
@@ -239,6 +243,18 @@ export class FwStreamCrafter extends LitElement {
   willUpdate(changed: Map<string, unknown>) {
     if (changed.has("locale")) {
       this._t = createStudioTranslator({ locale: this.locale });
+    }
+
+    // Before the controller and compositor below, so a compositor that starts
+    // in this update starts with the new key.
+    if (
+      (changed.has("layoutKey") || changed.has("initialLayout")) &&
+      this._layoutKeeper.setLayout(this.layoutKey, this.initialLayout)
+    ) {
+      this._layoutKeeper
+        .apply(this.pc.getController())
+        .then(() => this.requestUpdate())
+        .catch(() => {});
     }
 
     if (changed.has("whipUrl") || changed.has("gatewayUrl") || changed.has("streamKey")) {
@@ -295,28 +311,22 @@ export class FwStreamCrafter extends LitElement {
   }
 
   private _scheduleLayoutReport() {
-    if (this._layoutReportTimer) clearTimeout(this._layoutReportTimer);
-    this._layoutReportTimer = setTimeout(() => {
-      this._layoutReportTimer = null;
-      this.exportLayout().then(
-        (layout) => {
-          if (!layout) return;
-          try {
-            this.onLayoutChange?.(layout);
-          } catch (error) {
-            console.warn("onLayoutChange failed:", error);
-          }
-          this.dispatchEvent(
-            new CustomEvent("fw-sc-layout-change", {
-              detail: { layout },
-              bubbles: true,
-              composed: true,
-            })
-          );
-        },
-        (error) => console.warn("Could not export the studio layout:", error)
+    const controller = this.pc.getController();
+    if (!controller) return;
+    this._layoutKeeper.scheduleReport(controller, (layout, layoutKey) => {
+      try {
+        this.onLayoutChange?.(layout, layoutKey);
+      } catch (error) {
+        console.warn("onLayoutChange failed:", error);
+      }
+      this.dispatchEvent(
+        new CustomEvent("fw-sc-layout-change", {
+          detail: { layout, layoutKey },
+          bubbles: true,
+          composed: true,
+        })
       );
-    }, LAYOUT_CHANGE_DELAY_MS);
+    });
   }
 
   /** Renders again on scene and layer changes made through the scene manager by anyone. */
@@ -382,7 +392,6 @@ export class FwStreamCrafter extends LitElement {
     this._resolvedWhipUrl = "";
     this._endpointStatus = "idle";
     this._endpointError = null;
-    this._lastInitKey = "";
   }
 
   private _destroyIngestClient() {
@@ -467,21 +476,25 @@ export class FwStreamCrafter extends LitElement {
     }
   }
 
+  // A new profile, debug setting or worker URL builds a new controller; a new
+  // endpoint goes to the running one, which keeps its sources.
   private _initController() {
-    if (!this._resolvedWhipUrl) {
-      this._lastInitKey = "";
-      return;
-    }
+    if (!this._resolvedWhipUrl) return;
 
     const initKey = [
-      this._resolvedWhipUrl,
       this.initialProfile,
       String(this.debug),
       this.compositorWorkerUrl,
       this.encoderWorkerUrl,
       this.rtcTransformWorkerUrl,
     ].join("|");
-    if (this._lastInitKey === initKey && this.pc.getController()) return;
+    const running = this.pc.getController();
+    if (this._lastInitKey === initKey && running) {
+      running
+        .setWhipUrl(this._resolvedWhipUrl)
+        .catch((error) => console.warn("Could not change the WHIP endpoint:", error));
+      return;
+    }
 
     this.pc.initialize({
       whipUrl: this._resolvedWhipUrl,
@@ -535,25 +548,10 @@ export class FwStreamCrafter extends LitElement {
         ? this.compositorConfig
         : undefined;
 
-    const requested = this.initialLayout;
-    const last = this._lastStart;
-    const carried =
-      last && (last.controller === controller || last.initialLayout === requested)
-        ? last.controller.exportLayout().catch(() => null)
-        : null;
-    this._lastStart = { controller, initialLayout: requested };
-
     this._compositorFailed = false;
-    this._compositorEnabling = controller
-      .enableCompositor(config)
-      .then(async () => {
-        const layout = (await carried) ?? requested;
-        // A stored layout that no longer applies must not keep the compositor off.
-        if (layout) {
-          await controller.importLayout(layout).catch((error) => {
-            console.warn("Could not apply the studio layout:", error);
-          });
-        }
+    this._compositorEnabling = this._layoutKeeper
+      .start(controller, () => controller.enableCompositor(config))
+      .then(() => {
         this.requestUpdate();
       })
       .catch((error) => {
