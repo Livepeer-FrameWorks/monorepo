@@ -10,18 +10,24 @@ import { ingestProtocolUrl, isSpecificIngest, type ResolvedIngest } from "./inge
  */
 export class IngestResolutionError extends Error {
   readonly code: string;
+  /**
+   * The gateway's `extensions.reason` on a refused ingest, such as
+   * PAYMENT_REQUIRED or ACCOUNT_SUSPENDED; null when the refusal has none.
+   */
+  readonly reason: string | null;
 
-  constructor(message: string, code: string) {
+  constructor(message: string, code: string, reason: string | null = null) {
     super(message);
     this.name = "IngestResolutionError";
     this.code = code;
+    this.reason = reason;
   }
 }
 
 const RESOLUTION_FAILED =
   "Ingest resolution failed. No generic address has been substituted. Check access and capacity, then retry.";
 
-type GraphQLErrorLike = { extensions?: { code?: unknown } };
+type GraphQLErrorLike = { extensions?: { code?: unknown; reason?: unknown } };
 
 export async function resolveIngestDestination(
   streamId: string,
@@ -46,9 +52,11 @@ export async function resolveIngestDestination(
     const graphQLError = (response.errors as GraphQLErrorLike[] | null | undefined)?.[0];
     if (graphQLError) {
       const code = graphQLError.extensions?.code;
+      const reason = graphQLError.extensions?.reason;
       throw new IngestResolutionError(
         RESOLUTION_FAILED,
-        typeof code === "string" && code ? code : "INTERNAL_ERROR"
+        typeof code === "string" && code ? code : "INTERNAL_ERROR",
+        typeof reason === "string" && reason ? reason : null
       );
     }
     const result = response.data?.resolveIngestEndpoint;

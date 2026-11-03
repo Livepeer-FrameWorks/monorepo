@@ -34,6 +34,48 @@ describe("Go Live failure guidance", () => {
     ]);
   });
 
+  it("names the specific refusal from extensions.reason over the shared code", () => {
+    const deactivated = describeResolveFailure("FORBIDDEN", "ACCOUNT_INACTIVE");
+    expect(deactivated.title).toBe("This account is deactivated");
+    expect(deactivated.actions).toEqual([]);
+
+    const suspended = describeResolveFailure("FORBIDDEN", "ACCOUNT_SUSPENDED");
+    expect(suspended.title).toBe("This account is suspended");
+    expect(suspended.actions).toEqual(["billing"]);
+
+    const balance = describeResolveFailure("FAILED_PRECONDITION", "PAYMENT_REQUIRED");
+    expect(balance.title).toBe("Your prepaid balance is spent");
+
+    const key = describeResolveFailure("NOT_FOUND", "INVALID_STREAM_KEY");
+    expect(key.title).toBe("This stream's key was not accepted");
+
+    expect(describeResolveFailure("FORBIDDEN", "CLUSTER_NOT_ENTITLED").title).toMatch(
+      /plan does not include this stream's cluster/
+    );
+    expect(describeResolveFailure("FORBIDDEN", "CLUSTER_CLASS_MISMATCH").title).toMatch(
+      /plan does not allow this kind of cluster/
+    );
+    expect(describeResolveFailure("ALREADY_EXISTS", "DUPLICATE_INGEST").title).toMatch(
+      /already receiving video from another encoder/
+    );
+    expect(describeResolveFailure("INVALID_ARGUMENT", "PROTOCOL_NOT_SUPPORTED").title).toMatch(
+      /does not take browser broadcasts/
+    );
+    expect(describeResolveFailure("UNAVAILABLE", "CLUSTER_UNHEALTHY").actions).toEqual(["retry"]);
+    expect(describeResolveFailure("FAILED_PRECONDITION", "NON_PUSH_MODE_STREAM").title).toMatch(
+      /pulls its video from a source/
+    );
+  });
+
+  it("falls back to the code for a reason without specific guidance", () => {
+    expect(describeResolveFailure("FORBIDDEN", "INGEST_DENIED")).toEqual(
+      describeResolveFailure("FORBIDDEN")
+    );
+    expect(describeResolveFailure("FORBIDDEN", "SOMETHING_NEW")).toEqual(
+      describeResolveFailure("FORBIDDEN")
+    );
+  });
+
   it("offers a retry when no node could be reached", () => {
     expect(describeResolveFailure("UNAVAILABLE").actions).toEqual(["retry"]);
     expect(describeResolveFailure("TIMEOUT").actions).toEqual(["retry"]);

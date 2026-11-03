@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
 import RecommendedIngest from "$lib/components/placement/RecommendedIngest.svelte";
-import { resolveIngestDestination } from "$lib/placement/ingest-api";
+import { IngestResolutionError, resolveIngestDestination } from "$lib/placement/ingest-api";
 import type { ResolvedIngest } from "$lib/placement/ingest";
 
-vi.mock("$lib/placement/ingest-api", () => ({ resolveIngestDestination: vi.fn() }));
+vi.mock("$lib/placement/ingest-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("$lib/placement/ingest-api")>()),
+  resolveIngestDestination: vi.fn(),
+}));
 vi.mock("$lib/stores/auth", async () => {
   const { writable } = await import("svelte/store");
   return { auth: writable({ isAuthenticated: true, user: { id: "actor", tenant_id: "tenant" } }) };
@@ -60,6 +63,16 @@ describe("recommended ingest controls", () => {
     await screen.findByText(/No generic address has been substituted/);
     expect(screen.queryByText(/us.example:8443 · us-east/)).toBeNull();
     expect(screen.getByRole("alert").textContent).not.toContain(streamKey);
+  });
+
+  it("names the refusal from the gateway's denial reason", async () => {
+    vi.mocked(resolveIngestDestination).mockRejectedValue(
+      new IngestResolutionError("refused", "FORBIDDEN", "ACCOUNT_SUSPENDED")
+    );
+    render(RecommendedIngest, { streamId, streamKey });
+    await fireEvent.click(screen.getByRole("button", { name: "Resolve destination" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("This account is suspended");
   });
 
   it("invalidates the old node and requests the selected publisher protocol", async () => {

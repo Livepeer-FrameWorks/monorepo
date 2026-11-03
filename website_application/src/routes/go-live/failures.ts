@@ -1,16 +1,21 @@
 /**
  * What the Go Live page tells a broadcaster when the destination lookup or
- * the studio fails, keyed on the gateway error code or the studio's error
- * text. Every branch names the next step; none repeats raw error text, which
- * can carry the stream key inside a WHIP URL.
+ * the studio fails, keyed on the gateway's denial reason, its error code or
+ * the studio's error text. Every branch names the next step; none repeats raw
+ * error text, which can carry the stream key inside a WHIP URL.
  */
-export type GoLiveFailureAction = "keys" | "billing" | "login" | "settings" | "retry";
+import {
+  BALANCE_REFUSAL,
+  CONFLICT_REFUSAL,
+  KEY_REFUSAL,
+  UNREACHABLE_REFUSAL,
+  describeIngestRefusal,
+  type IngestRefusal,
+  type IngestRefusalAction,
+} from "$lib/placement/ingest-refusals";
 
-export interface GoLiveFailure {
-  title: string;
-  detail: string;
-  actions: GoLiveFailureAction[];
-}
+export type GoLiveFailureAction = IngestRefusalAction;
+export type GoLiveFailure = IngestRefusal;
 
 const KEY_CODES = new Set(["NOT_FOUND", "STREAM_MISMATCH", "NO_STREAM_KEY", "VALIDATION_ERROR"]);
 // Foghorn refuses a negative prepaid balance with gRPC FailedPrecondition,
@@ -26,13 +31,6 @@ const CAPACITY_CODES = new Set([
   "NETWORK",
 ]);
 
-const balanceFailure: GoLiveFailure = {
-  title: "Your prepaid balance is spent",
-  detail:
-    "New broadcasts are refused at €0. Top up your balance, then go live again. Streams already running keep going, and stop if the balance falls below -€10.",
-  actions: ["billing"],
-};
-
 const refusedFailure: GoLiveFailure = {
   title: "The ingest node refused this broadcast",
   detail:
@@ -40,14 +38,21 @@ const refusedFailure: GoLiveFailure = {
   actions: ["keys", "billing"],
 };
 
-const unreachableFailure: GoLiveFailure = {
-  title: "No ingest node could take this broadcast",
+// Go Live publishes over WHIP only, so a protocol refusal names the browser.
+const whipRefusedFailure: GoLiveFailure = {
+  title: "This stream's cluster does not take browser broadcasts",
   detail:
-    "Check your internet connection and try again. Each attempt looks up the best node again.",
-  actions: ["retry"],
+    "The cluster refused WHIP ingest. Broadcast with OBS over RTMP or SRT, or move the stream to another cluster.",
+  actions: ["keys"],
 };
 
-export function describeResolveFailure(code: string | null | undefined): GoLiveFailure {
+export function describeResolveFailure(
+  code: string | null | undefined,
+  reason?: string | null
+): GoLiveFailure {
+  if (reason === "PROTOCOL_NOT_SUPPORTED") return whipRefusedFailure;
+  const refusal = describeIngestRefusal(reason);
+  if (refusal) return refusal;
   if (code === "UNAUTHORIZED") {
     return {
       title: "Your session has ended",
@@ -63,22 +68,10 @@ export function describeResolveFailure(code: string | null | undefined): GoLiveF
       actions: ["keys", "billing"],
     };
   }
-  if (code === "CONFLICT") {
-    return {
-      title: "This stream is already receiving video from another encoder",
-      detail: "Stop the other encoder, then go live again.",
-      actions: ["retry"],
-    };
-  }
-  if (code && KEY_CODES.has(code)) {
-    return {
-      title: "This stream's key was not accepted",
-      detail: "Open the stream, check that it has an active key, then try again.",
-      actions: ["keys", "retry"],
-    };
-  }
-  if (code && BALANCE_CODES.has(code)) return balanceFailure;
-  if (code && CAPACITY_CODES.has(code)) return unreachableFailure;
+  if (code === "CONFLICT") return CONFLICT_REFUSAL;
+  if (code && KEY_CODES.has(code)) return KEY_REFUSAL;
+  if (code && BALANCE_CODES.has(code)) return BALANCE_REFUSAL;
+  if (code && CAPACITY_CODES.has(code)) return UNREACHABLE_REFUSAL;
   return {
     title: "Go Live could not find an ingest node",
     detail: "Try again in a moment. If it keeps failing, contact support from the Messages page.",
@@ -124,14 +117,14 @@ export function describeStudioFailure(message: string): GoLiveFailure {
       actions: ["settings"],
     };
   }
-  if (/WHIP request failed: 402/.test(message)) return balanceFailure;
+  if (/WHIP request failed: 402/.test(message)) return BALANCE_REFUSAL;
   if (/WHIP request failed: 40[13]/.test(message)) return refusedFailure;
   if (
     /WHIP request failed: 5\d\d|Connection (failed|timeout)|reconnection attempts exhausted|resolution/i.test(
       message
     )
   ) {
-    return unreachableFailure;
+    return UNREACHABLE_REFUSAL;
   }
   return {
     title: "The broadcast stopped",

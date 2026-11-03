@@ -61,7 +61,22 @@ describe("protocol-specific ingest requests", () => {
     });
     await expect(
       resolveIngestDestination(streamId, "key", undefined, "WHIP")
-    ).rejects.toMatchObject({ name: "IngestResolutionError", code: "FORBIDDEN" });
+    ).rejects.toMatchObject({ name: "IngestResolutionError", code: "FORBIDDEN", reason: null });
+  });
+
+  it("carries the gateway's extensions.reason beside the code", async () => {
+    fetchDestination.mockResolvedValue({
+      data: null,
+      errors: [
+        {
+          message: "account suspended",
+          extensions: { code: "FORBIDDEN", reason: "ACCOUNT_SUSPENDED" },
+        },
+      ],
+    });
+    await expect(
+      resolveIngestDestination(streamId, "key", undefined, "WHIP")
+    ).rejects.toMatchObject({ code: "FORBIDDEN", reason: "ACCOUNT_SUSPENDED" });
   });
 
   it("codes an unusable response by what was missing", async () => {

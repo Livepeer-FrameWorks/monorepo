@@ -9,7 +9,8 @@
     splitRtmpDestination,
     type ResolvedIngest,
   } from "$lib/placement/ingest";
-  import { resolveIngestDestination } from "$lib/placement/ingest-api";
+  import { IngestResolutionError, resolveIngestDestination } from "$lib/placement/ingest-api";
+  import { describeIngestRefusal } from "$lib/placement/ingest-refusals";
 
   let { streamId, streamKey }: { streamId: string; streamKey: string } = $props();
   let result = $state<ResolvedIngest | null>(null);
@@ -62,10 +63,14 @@
       if (request !== sequence) return;
       result = resolved;
       observedAt = new Date().toLocaleTimeString();
-    } catch {
-      if (request === sequence)
-        error =
-          "Ingest resolution failed. No generic address has been substituted. Check access and capacity, then retry.";
+    } catch (err) {
+      if (request === sequence) {
+        const refusal =
+          err instanceof IngestResolutionError ? describeIngestRefusal(err.reason) : null;
+        error = refusal
+          ? `${refusal.title}. ${refusal.detail}`
+          : "Ingest resolution failed. No generic address has been substituted. Check access and capacity, then retry.";
+      }
     } finally {
       if (request === sequence) resolving = false;
     }
