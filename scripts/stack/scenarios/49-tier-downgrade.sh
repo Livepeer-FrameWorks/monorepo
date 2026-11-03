@@ -22,6 +22,19 @@ cli_json() {
     return 1
   fi
 }
+# Downgrade recovery names the operator in its audit trail, so Purser admits
+# only a platform-operator session. The stack's bootstrap fixture owns this one.
+operator_jar="$STACK_STATE_DIR/downgrade-operator.cookies"
+operator_login() {
+  local code
+  code=$(jq -cn --arg e operator@stack.test --arg p stack-operator-password --argjson b "$(bot_fields)" '{email:$e,password:$p} + $b' |
+    curl -s -m 20 -c "$operator_jar" -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- "$BRIDGE_URL/auth/login") || return 1
+  [ "$code" = 200 ] || { printf 'operator login failed: HTTP %s\n' "$code" >&2; return 1; }
+  operator_jwt=$(awk '$6=="access_token"{print $7}' "$operator_jar" | tail -1)
+  [ -n "$operator_jwt" ]
+}
+operator_cli() { operator_login && FW_USER_TOKEN="$operator_jwt" "$CLI" "$@"; }
+operator_json() { operator_login && FW_USER_TOKEN="$operator_jwt" cli_json "$@"; }
 
 email=$(test_email "downgrade-$(date +%s)-$RANDOM")
 password="Stack-$(openssl rand -hex 8)"
@@ -115,9 +128,9 @@ check 'billingStatus keeps Developer with nothing staged' json_has "$state" \
 staged=$(pg purser "SELECT COALESCE(pending_tier_id::text,'')||'/'||COALESCE(pending_reason,'') FROM purser.tenant_subscriptions WHERE tenant_id='$tenant'")
 check 'Purser cleared the staged downgrade' [ "$staged" = / ]
 
-inventory=$(cli_json admin billing recovery list --tenant-id "$tenant" --output json)
+inventory=$(operator_json admin billing recovery list --tenant-id "$tenant" --output json)
 check 'recovery list holds no downgrade for the tenant' json_has "$inventory" '(.held_downgrades // []) | length == 0'
-if "$CLI" admin billing recovery downgrade --tenant-id "$tenant" --reason 'stack downgrade test' --yes \
+if operator_cli admin billing recovery downgrade --tenant-id "$tenant" --reason 'stack downgrade test' --yes \
   >"$STACK_STATE_DIR/downgrade-recovery.out" 2>&1; then
   fail 'downgrade recovery accepted a tenant with nothing held'
 else
@@ -126,18 +139,19 @@ fi
 
 # A downgrade the provider confirmed, past the applier grace, whose closing
 # invoice sits in manual review: the case PurserTierDowngradeHeld alerts on.
-# The fixture is removed again so the alert does not stay raised on the stack.
+# The fixture is removed again so the alert does not stay raised on the stack;
+# its invoice carries no retention period, which would refuse that delete.
 pg_fixture purser "UPDATE purser.tenant_subscriptions SET pending_tier_id='$free_id', pending_reason='downgrade',
     pending_provider_tier_id='$free_id', pending_effective_at=date_trunc('second', NOW() - INTERVAL '27 hours')
   WHERE tenant_id='$tenant';
-  INSERT INTO purser.billing_invoices (tenant_id, status, currency, amount, period_start, period_end, due_date)
-  SELECT tenant_id, 'manual_review', 'EUR', 0, pending_effective_at - INTERVAL '30 days', pending_effective_at, pending_effective_at
+  INSERT INTO purser.billing_invoices (tenant_id, status, currency, amount, period_start, period_end, due_date, retention_until)
+  SELECT tenant_id, 'manual_review', 'EUR', 0, pending_effective_at - INTERVAL '30 days', pending_effective_at, pending_effective_at, NOW()
   FROM purser.tenant_subscriptions WHERE tenant_id='$tenant'" >/dev/null
-inventory=$(cli_json admin billing recovery list --tenant-id "$tenant" --output json)
+inventory=$(operator_json admin billing recovery list --tenant-id "$tenant" --output json)
 echo "    held inventory: $(printf '%s' "$inventory" | jq -c '.held_downgrades // []')"
 check 'recovery list names the held downgrade and its manual_review invoice' json_has "$inventory" \
   "[(.held_downgrades // [])[] | select(.tenant_id == \"$tenant\" and .target_tier_id == \"$free_id\" and .invoice_status == \"manual_review\")] | length == 1"
-if printf 'no\n' | "$CLI" admin billing recovery downgrade --tenant-id "$tenant" --reason 'stack downgrade test' \
+if printf 'no\n' | operator_cli admin billing recovery downgrade --tenant-id "$tenant" --reason 'stack downgrade test' \
   >"$STACK_STATE_DIR/downgrade-preview.out" 2>&1; then
   fail 'declined downgrade recovery was confirmed'
 else

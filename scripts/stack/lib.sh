@@ -72,7 +72,9 @@ check() { # check <description> <command...>: one strict attempt
   shift
   if "$@"; then pass "$what"; else fail "$what"; fi
 }
-json_has() { printf '%s' "$1" | jq -e "$2" >/dev/null 2>&1; } # json_has <json> <jq filter>
+# json_has <json> <jq filter>: empty input never matches, since jq 1.6 (the
+# runner's) exits 0 under -e when it reads nothing.
+json_has() { [ -n "${1//[[:space:]]/}" ] && printf '%s' "$1" | jq -e "$2" >/dev/null 2>&1; }
 finish() {
   printf '\n%s: PASS=%d FAIL=%d BLOCKED=%d\n' "$STACK_SCENARIO" "$PASS" "$FAIL" "$BLOCKED"
   [ "$FAIL" -gt 0 ] && exit 1

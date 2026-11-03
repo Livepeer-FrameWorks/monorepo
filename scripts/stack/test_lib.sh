@@ -281,6 +281,14 @@ managed_access_cleanup_restores_the_snapshot() (
 )
 expect 'managed playback cleanup restores the prior access row and removes only its new fixture' managed_access_cleanup_restores_the_snapshot
 
+# A failed command leaves its captured output empty. jq 1.6, which the runner
+# image installs, exits 0 under -e on empty input, so an empty capture must
+# never satisfy a filter, however permissive.
+json_has_refuses_empty_input() { ! json_has '' '(.items // []) | length == 0' && ! json_has $'\n ' 'true'; }
+expect 'json_has never matches empty output' json_has_refuses_empty_input
+json_has_matches_json() { json_has '{"items":[]}' '(.items // []) | length == 0' && ! json_has '{"items":[1]}' '.items | length == 0'; }
+expect 'json_has still decides real JSON' json_has_matches_json
+
 if [ "$failures" -gt 0 ]; then
   echo "lib.sh checks: $failures failed"
   exit 1
