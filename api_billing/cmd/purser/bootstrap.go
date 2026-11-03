@@ -16,11 +16,13 @@ import (
 	"frameworks/api_billing/internal/database/purserdb"
 	pursergrpc "frameworks/api_billing/internal/grpc"
 	"frameworks/api_billing/internal/handlers"
+	"frameworks/api_billing/internal/tieraccess"
 	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -259,7 +261,18 @@ func applyPostCommitOp(ctx context.Context, db *sql.DB, client *qmclient.GRPCCli
 		// an operator later adds a tenant/cluster-specific override.
 		return client.BootstrapClusterAccess(ctx, op.TenantID, op.ClusterID, nil, nil)
 	case bootstrap.PostCommitSetPrimaryCluster:
+		tenantResp, err := client.GetTenant(ctx, op.TenantID)
+		if err != nil {
+			return fmt.Errorf("get tenant primary cluster: %w", err)
+		}
+		current := tenantResp.GetTenant().GetPrimaryClusterId()
 		clusterID := op.ClusterID
+		if len(op.PrimaryCandidates) > 0 {
+			clusterID = tieraccess.SelectPrimary(op.PrimaryCandidates, current)
+		}
+		if clusterID == current {
+			return nil
+		}
 		return client.UpdateTenantCluster(ctx, &quartermasterpb.UpdateTenantClusterRequest{
 			TenantId: op.TenantID, PrimaryClusterId: &clusterID,
 		})
@@ -366,14 +379,14 @@ func (q *grpcQMClient) Resolve(ctx context.Context, alias string) (string, error
 	return id, nil
 }
 
-func (q *grpcQMClient) PlatformOfficialClusterIDs(ctx context.Context) ([]string, error) {
+func (q *grpcQMClient) PlatformOfficialClusters(ctx context.Context) (map[string]bool, error) {
 	resp, err := q.client.ListOfficialClusters(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("ListOfficialClusters: %w", err)
 	}
-	out := make([]string, 0, len(resp.GetClusters()))
+	out := make(map[string]bool, len(resp.GetClusters()))
 	for _, c := range resp.GetClusters() {
-		out = append(out, c.GetClusterId())
+		out[c.GetClusterId()] = models.ClusterTypeCanBePreferred(c.GetClusterType())
 	}
 	return out, nil
 }

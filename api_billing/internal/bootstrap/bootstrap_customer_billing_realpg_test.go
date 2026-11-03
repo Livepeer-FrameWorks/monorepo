@@ -36,6 +36,9 @@ func TestBootstrapCustomerBillingRepository_RealPG(t *testing.T) { //nolint:funl
 		required int
 	}{
 		{id: "official-a", required: 1},
+		// A priced, official control cluster ranks above official-a but
+		// Quartermaster refuses it as a primary.
+		{id: "official-control", required: 2},
 		{id: "private-b", required: 1},
 		{id: "official-too-high", required: 3},
 	} {
@@ -49,8 +52,9 @@ func TestBootstrapCustomerBillingRepository_RealPG(t *testing.T) { //nolint:funl
 	}
 
 	qm := &fakeQM{
-		tenantUUIDs: map[string]string{"acme": tenantID},
-		official:    []string{"official-a", "official-too-high"},
+		tenantUUIDs:     map[string]string{"acme": tenantID},
+		official:        []string{"official-a", "official-too-high"},
+		officialControl: []string{"official-control"},
 	}
 	entry := CustomerBilling{
 		Tenant: TenantRef{Ref: "quartermaster.tenants[acme]"},
@@ -145,7 +149,10 @@ func assertBootstrapPostCommitOps(t *testing.T, ops []PostCommitOp) {
 				t.Fatalf("ineligible cluster granted: %+v", op)
 			}
 		case PostCommitSetPrimaryCluster:
-			primary = op.ClusterID == "official-a"
+			if op.ClusterID != "official-a" {
+				t.Fatalf("primary = %+v, want the edge official-a", op)
+			}
+			primary = true
 		case PostCommitSetDeploymentTier:
 			tier = op.Tier == "bootstrap-contract"
 		}
@@ -642,5 +649,62 @@ func assertBootstrapCreationPeriods(t *testing.T, db *sql.DB, tenantID string) {
 	}
 	if !start.Time.Equal(created) || !end.Time.Equal(billing.NextMonthlyAnniversary(created)) || !next.Time.Equal(end.Time) {
 		t.Fatalf("bootstrap billed before creation or lost anniversary: created=%s start=%s end=%s next=%s", created, start.Time, end.Time, next.Time)
+	}
+}
+
+// A fresh derived tenant with a declared grant, as the stack's stack-qa
+// fixture declares it: the primary is the edge, never the priced official
+// control cluster, and the cache invalidation runs after the primary and
+// deployment tier exist, since Commodore resolves its fanout from them.
+func TestBootstrapFreshDerivedGrantSetsAnEdgePrimaryBeforeInvalidation_RealPG(t *testing.T) {
+	db := startBootstrapPricingRealPG(t)
+	ctx := context.Background()
+	tenantID := uuid.NewString()
+	if _, writeErr := db.ExecContext(ctx, `INSERT INTO purser.billing_tiers(id,tier_name,display_name,tier_level,base_price,currency,metering_enabled) VALUES($1,'fresh-grant','Fresh grant',1,100,'EUR',false)`, uuid.NewString()); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	for _, clusterID := range []string{"central-primary", "media-b", "media-a"} {
+		if _, writeErr := db.ExecContext(ctx, `INSERT INTO purser.cluster_pricing(id,cluster_id,pricing_model,required_tier_level,allow_free_tier) VALUES($1,$2,'tier_inherit',0,TRUE)`, uuid.NewString(), clusterID); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}
+	zero := "0"
+	entry := CustomerBilling{Tenant: TenantRef{Ref: "quartermaster.tenants[stack-qa]"}, Model: "postpaid", Tier: "fresh-grant", ClusterAccess: "derived", OperatorGrant: &billing.OperatorGrantSpec{BaseFee: &zero, WaiveUsage: true, Reason: "Stack QA account"}}
+	qm := &fakeQM{tenantUUIDs: map[string]string{"stack-qa": tenantID}, official: []string{"media-a", "media-b"}, officialControl: []string{"central-primary"}}
+	prepared, err := PrepareCustomerGrants(ctx, db, []CustomerBilling{entry}, qm, logging.NewLogger(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, ops, err := ReconcileCustomerBilling(ctx, tx, []CustomerBilling{entry}, qm, prepared)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		t.Fatal(commitErr)
+	}
+	if len(result.Created) != 1 {
+		t.Fatalf("result = %+v, want the subscription created", result)
+	}
+	index := map[PostCommitKind]int{}
+	for i, op := range ops {
+		if _, seen := index[op.Kind]; !seen {
+			index[op.Kind] = i
+		}
+		if op.Kind == PostCommitSetPrimaryCluster && (op.ClusterID != "media-a" || strings.Join(op.PrimaryCandidates, ",") != "media-a,media-b") {
+			t.Fatalf("set-primary op = %+v, want media-a from media-a,media-b", op)
+		}
+	}
+	for _, kind := range []PostCommitKind{PostCommitSetPrimaryCluster, PostCommitSetDeploymentTier, PostCommitInvalidateTenantCache} {
+		if _, ok := index[kind]; !ok {
+			t.Fatalf("post-commit ops %+v lack %s", ops, kind)
+		}
+	}
+	if index[PostCommitInvalidateTenantCache] < index[PostCommitSetPrimaryCluster] || index[PostCommitInvalidateTenantCache] < index[PostCommitSetDeploymentTier] {
+		t.Fatalf("cache invalidation precedes the tenant's routing ops: %+v", ops)
 	}
 }

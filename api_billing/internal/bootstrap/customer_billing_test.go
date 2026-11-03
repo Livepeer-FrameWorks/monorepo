@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -13,7 +14,10 @@ import (
 // the reconciler made and returns canned results.
 type fakeQM struct {
 	tenantUUIDs map[string]string
-	official    []string
+	official    []string // official edge clusters
+	// officialControl are official clusters that cannot be a tenant's
+	// primary, such as a central control cluster.
+	officialControl []string
 }
 
 func (f *fakeQM) Resolve(_ context.Context, alias string) (string, error) {
@@ -24,8 +28,15 @@ func (f *fakeQM) Resolve(_ context.Context, alias string) (string, error) {
 	return id, nil
 }
 
-func (f *fakeQM) PlatformOfficialClusterIDs(_ context.Context) ([]string, error) {
-	return append([]string(nil), f.official...), nil
+func (f *fakeQM) PlatformOfficialClusters(_ context.Context) (map[string]bool, error) {
+	out := make(map[string]bool, len(f.official)+len(f.officialControl))
+	for _, id := range f.official {
+		out[id] = true
+	}
+	for _, id := range f.officialControl {
+		out[id] = false
+	}
+	return out, nil
 }
 
 type qmAliasErr struct{ alias string }
@@ -123,12 +134,85 @@ func TestReconcileCustomerBilling_PlatformOfficialIntersection(t *testing.T) {
 	if gotTier != "starter" {
 		t.Errorf("expected set-deployment-tier op with tier \"starter\", got %q", gotTier)
 	}
-	// The mock returned core-2 first (ORDER BY required_tier_level DESC), so
-	// pickPrimary should pick core-2.
-	if gotPrimary != "core-1" && gotPrimary != "core-2" {
-		t.Errorf("expected a set-primary op among eligible clusters, got %q", gotPrimary)
+	// core-2 has the highest required_tier_level, so it is the primary.
+	if gotPrimary != "core-2" {
+		t.Errorf("expected set-primary core-2, got %q", gotPrimary)
 	}
 
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// TestReconcileCustomerBilling_PrimaryIsAnEdgeCluster covers a platform-
+// official, priced control cluster (the stack's central-primary) ranked ahead
+// of the edge: Quartermaster refuses a non-edge primary, so bootstrap must
+// still grant the control cluster but pick the edge as primary.
+func TestReconcileCustomerBilling_PrimaryIsAnEdgeCluster(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	tenantUUID := "11111111-1111-1111-1111-111111111111"
+	tierUUID := "22222222-2222-2222-2222-222222222222"
+	mock.ExpectBegin()
+	mock.ExpectQuery("LockTenantSubscriptionForProviderChange").WithArgs(tenantUUID).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`SELECT id, COALESCE\(tier_level, 0\)::integer AS tier_level, currency[\s\S]+FROM purser\.billing_tiers[\s\S]+WHERE tier_name = \$1`).
+		WithArgs("developer").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "currency"}).AddRow(tierUUID, int32(1), "EUR"))
+	mock.ExpectQuery(regexp.QuoteMeta("FROM purser.tenant_subscriptions")).
+		WithArgs(tenantUUID).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO purser.tenant_subscriptions")).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("FROM purser.cluster_pricing")).
+		WithArgs(sqlmock.AnyArg(), int32(1)).
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "required_tier_level"}).
+			AddRow("central-primary", int32(0)).
+			AddRow("media-b", int32(0)).
+			AddRow("media-a", int32(0)))
+	mock.ExpectCommit()
+
+	qm := &fakeQM{
+		tenantUUIDs:     map[string]string{"stack-qa": tenantUUID},
+		official:        []string{"media-a", "media-b"},
+		officialControl: []string{"central-primary"},
+	}
+	entries := []CustomerBilling{{
+		Tenant: TenantRef{Ref: "quartermaster.tenants[stack-qa]"},
+		Model:  "postpaid", Tier: "developer", ClusterAccess: "derived",
+	}}
+	_, post, err := ReconcileCustomerBilling(context.Background(), db, entries, qm, nil)
+	if err != nil {
+		t.Fatalf("ReconcileCustomerBilling: %v", err)
+	}
+
+	granted := map[string]bool{}
+	var primaries []PostCommitOp
+	for _, op := range post {
+		switch op.Kind {
+		case PostCommitGrantClusterAccess:
+			granted[op.ClusterID] = true
+		case PostCommitSetPrimaryCluster:
+			primaries = append(primaries, op)
+		}
+	}
+	for _, id := range []string{"central-primary", "media-a", "media-b"} {
+		if !granted[id] {
+			t.Errorf("eligible cluster %q not granted; grants=%v", id, granted)
+		}
+	}
+	if len(primaries) != 1 {
+		t.Fatalf("set-primary ops = %+v, want exactly one", primaries)
+	}
+	if primaries[0].ClusterID != "media-a" {
+		t.Errorf("set-primary cluster = %q, want the first edge media-a", primaries[0].ClusterID)
+	}
+	if got := strings.Join(primaries[0].PrimaryCandidates, ","); got != "media-a,media-b" {
+		t.Errorf("primary candidates = %q, want media-a,media-b", got)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
 	}

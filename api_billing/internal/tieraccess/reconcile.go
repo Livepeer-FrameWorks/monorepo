@@ -10,7 +10,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -205,23 +204,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, tenantID string, tierLevel i
 	}
 	var eligible []eligibleEntry
 	eligibleSet := make(map[string]struct{})
-	var bestLevel int32 = -1
-	var topLevelCandidates []string
+	ranked := make([]EligibleCluster, 0, len(rows))
 	for _, row := range rows {
 		entry := eligibleEntry{clusterID: row.ClusterID, reqLevel: row.RequiredTierLevel.Int32}
 		eligible = append(eligible, entry)
 		eligibleSet[entry.clusterID] = struct{}{}
 		eligibleClusterIDs = append(eligibleClusterIDs, entry.clusterID)
-		if officialIDs[entry.clusterID] {
-			if entry.reqLevel > bestLevel {
-				bestLevel = entry.reqLevel
-				topLevelCandidates = topLevelCandidates[:0]
-			}
-			if entry.reqLevel == bestLevel {
-				topLevelCandidates = append(topLevelCandidates, entry.clusterID)
-			}
-		}
+		ranked = append(ranked, EligibleCluster{ClusterID: entry.clusterID, RequiredLevel: entry.reqLevel})
 	}
+	topLevelCandidates := PrimaryCandidates(ranked, officialIDs)
 	currentPrimary := ""
 	tenantResp, tErr := r.qm.GetTenant(ctx, tenantID)
 	if tErr != nil {
@@ -245,10 +236,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, tenantID string, tierLevel i
 	// existing primary when it is in the top-level subset; otherwise choose
 	// the alphabetically-first cluster at the highest required_tier_level.
 	if len(topLevelCandidates) > 0 {
-		primaryClusterID = topLevelCandidates[0]
-		if slices.Contains(topLevelCandidates, currentPrimary) {
-			primaryClusterID = currentPrimary
-		}
+		primaryClusterID = SelectPrimary(topLevelCandidates, currentPrimary)
 		if primaryClusterID != currentPrimary {
 			if err := r.qm.UpdateTenantCluster(ctx, &quartermasterpb.UpdateTenantClusterRequest{
 				TenantId:         tenantID,

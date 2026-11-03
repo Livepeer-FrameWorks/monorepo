@@ -12,6 +12,7 @@ import (
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/handlers"
 	"frameworks/api_billing/internal/subscriptions"
+	"frameworks/api_billing/internal/tieraccess"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 
@@ -86,19 +87,19 @@ func ReconcileCustomerBilling(ctx context.Context, exec DBTX, entries []Customer
 
 	// Cache the platform-official set once per reconcile run. Bounded (a
 	// handful of clusters) and the same set applies to every entry.
-	var officialIDs map[string]struct{}
-	loadOfficial := func() (map[string]struct{}, error) {
+	var officialIDs map[string]bool
+	loadOfficial := func() (map[string]bool, error) {
 		if officialIDs != nil {
 			return officialIDs, nil
 		}
-		ids, err := qm.PlatformOfficialClusterIDs(ctx)
+		ids, err := qm.PlatformOfficialClusters(ctx)
 		if err != nil {
 			return nil, err
 		}
-		officialIDs = make(map[string]struct{}, len(ids))
-		for _, id := range ids {
-			officialIDs[id] = struct{}{}
+		if ids == nil {
+			ids = map[string]bool{}
 		}
+		officialIDs = ids
 		return officialIDs, nil
 	}
 
@@ -220,9 +221,6 @@ func ReconcileCustomerBilling(ctx context.Context, exec DBTX, entries []Customer
 				return Result{}, nil, fmt.Errorf("customer_billing[%s]: %w", alias, err)
 			}
 		}
-		if grantChanged {
-			post = append(post, PostCommitOp{Kind: PostCommitInvalidateTenantCache, TenantID: tenantID, Alias: alias})
-		}
 		if grantChanged && subAction == "noop" {
 			subAction = "updated"
 		}
@@ -264,18 +262,25 @@ func ReconcileCustomerBilling(ctx context.Context, exec DBTX, entries []Customer
 			}
 			for _, c := range eligible {
 				post = append(post, PostCommitOp{
-					Kind: PostCommitGrantClusterAccess, TenantID: tenantID, ClusterID: c.ID, Alias: alias,
+					Kind: PostCommitGrantClusterAccess, TenantID: tenantID, ClusterID: c.ClusterID, Alias: alias,
 				})
 			}
-			if primary := pickPrimary(eligible); primary != "" {
+			if candidates := tieraccess.PrimaryCandidates(eligible, official); len(candidates) > 0 {
 				post = append(post, PostCommitOp{
-					Kind: PostCommitSetPrimaryCluster, TenantID: tenantID, ClusterID: primary, Alias: alias,
+					Kind: PostCommitSetPrimaryCluster, TenantID: tenantID, ClusterID: candidates[0],
+					PrimaryCandidates: candidates, Alias: alias,
 				})
 			}
 		case "none":
 			// operator-asserted opt-out; no QM calls.
 		default:
 			return Result{}, nil, fmt.Errorf("customer_billing[%s]: cluster_access %q invalid (expected \"\"|\"derived\"|\"none\")", alias, e.ClusterAccess)
+		}
+		// Commodore resolves the invalidation fanout from the tenant's
+		// Quartermaster routing, which a fresh tenant only has once the
+		// primary-cluster and deployment-tier ops above have run.
+		if grantChanged {
+			post = append(post, PostCommitOp{Kind: PostCommitInvalidateTenantCache, TenantID: tenantID, Alias: alias})
 		}
 		if boundary != nil {
 			boundary.applied = true
@@ -330,6 +335,10 @@ type PostCommitOp struct {
 	ClusterID string
 	Tier      string // billing tier_name, for set_deployment_tier
 	Alias     string // for human-readable reporting
+	// PrimaryCandidates, for set_primary_cluster, are the clusters the
+	// primary may be: the dispatcher keeps a current primary among them and
+	// otherwise sets ClusterID, the first candidate.
+	PrimaryCandidates []string
 }
 
 type PostCommitKind string
@@ -341,7 +350,9 @@ const (
 	// BootstrapClusterAccess RPC — the service-token-gated entitlement entry
 	// point a bootstrap caller (no tenant session) is allowed to use.
 	PostCommitGrantClusterAccess PostCommitKind = "grant_cluster_access"
-	// PostCommitSetPrimaryCluster invokes UpdateTenant with primary_cluster_id.
+	// PostCommitSetPrimaryCluster invokes UpdateTenantCluster with
+	// primary_cluster_id unless the tenant's current primary is already one
+	// of the op's PrimaryCandidates.
 	PostCommitSetPrimaryCluster PostCommitKind = "set_primary_cluster"
 	// PostCommitSetDeploymentTier invokes UpdateTenant with deployment_tier =
 	// the entry's billing tier_name. Purser owns that QM column; bootstrap
@@ -358,11 +369,12 @@ type QMBootstrapClient interface {
 	// Resolve maps a bootstrap tenant alias to the tenant UUID. Backed by
 	// ResolveTenantAliases at runtime.
 	Resolve(ctx context.Context, alias string) (string, error)
-	// PlatformOfficialClusterIDs returns the QM-projected set of clusters
-	// flagged is_platform_official. Bootstrap intersects this with priced
-	// clusters to compute customer entitlement; private clusters with pricing
-	// rows must NOT auto-grant.
-	PlatformOfficialClusterIDs(ctx context.Context) ([]string, error)
+	// PlatformOfficialClusters returns the QM-projected set of clusters
+	// flagged is_platform_official; each value reports whether that cluster
+	// can be a tenant's primary (models.ClusterTypeCanBePreferred). Bootstrap
+	// intersects the set with priced clusters to compute customer
+	// entitlement; private clusters with pricing rows must NOT auto-grant.
+	PlatformOfficialClusters(ctx context.Context) (map[string]bool, error)
 }
 
 func validateCustomerBilling(e CustomerBilling) error {
@@ -504,16 +516,11 @@ func ensurePrepaidBalance(ctx context.Context, exec DBTX, tenantID, currency str
 	return nil
 }
 
-// eligibleCluster is one cluster_pricing row a tenant qualifies for at its
-// tier_level. Mirrors the runtime ensureTierClusterAccess SELECT but with
-// official cluster IDs supplied by the caller (QM-owned, not derived from
+// eligibleClusters returns the cluster_pricing rows a tenant qualifies for at
+// its tier_level. Mirrors the runtime tier-access SELECT but with official
+// cluster IDs supplied by the caller (QM-owned, not derived from
 // cluster_pricing).
-type eligibleCluster struct {
-	ID            string
-	RequiredLevel int32
-}
-
-func eligibleClusters(ctx context.Context, exec DBTX, tierLevel int32, official map[string]struct{}) ([]eligibleCluster, error) {
+func eligibleClusters(ctx context.Context, exec DBTX, tierLevel int32, official map[string]bool) ([]tieraccess.EligibleCluster, error) {
 	if len(official) == 0 {
 		return nil, nil
 	}
@@ -527,19 +534,9 @@ func eligibleClusters(ctx context.Context, exec DBTX, tierLevel int32, official 
 	if err != nil {
 		return nil, fmt.Errorf("query eligible clusters: %w", err)
 	}
-	out := make([]eligibleCluster, 0, len(rows))
+	out := make([]tieraccess.EligibleCluster, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, eligibleCluster{ID: row.ClusterID, RequiredLevel: row.RequiredTierLevel})
+		out = append(out, tieraccess.EligibleCluster{ClusterID: row.ClusterID, RequiredLevel: row.RequiredTierLevel})
 	}
 	return out, nil
-}
-
-// pickPrimary picks the highest-tier-level cluster as the tenant's primary,
-// matching ensureTierClusterAccess's selection (rows are pre-sorted by
-// required_tier_level DESC, so out[0] is the best match if any).
-func pickPrimary(eligible []eligibleCluster) string {
-	if len(eligible) == 0 {
-		return ""
-	}
-	return eligible[0].ID
 }

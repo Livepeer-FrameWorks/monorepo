@@ -66,14 +66,3 @@ func TestAliasFromRef(t *testing.T) {
 		t.Fatal("malformed ref should error")
 	}
 }
-
-func TestPickPrimary(t *testing.T) {
-	if pickPrimary(nil) != "" {
-		t.Fatal("no clusters -> empty primary")
-	}
-	// Rows are pre-sorted by required_tier_level DESC, so the first is primary.
-	got := pickPrimary([]eligibleCluster{{ID: "c-best"}, {ID: "c-other"}})
-	if got != "c-best" {
-		t.Fatalf("primary = %q, want c-best", got)
-	}
-}
