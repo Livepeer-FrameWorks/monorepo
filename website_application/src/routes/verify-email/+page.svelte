@@ -4,6 +4,7 @@
   import { resolve } from "$app/paths";
   import { AUTH_URL } from "$lib/authAPI.js";
   import { auth } from "$lib/stores/auth.js";
+  import { browserPlanStorage, signupPlanLoginHref } from "$lib/auth/signupPlan";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { getIconComponent } from "$lib/iconUtils";
@@ -13,6 +14,7 @@
   let verificationStatus = $state<"pending" | "success" | "error">("pending");
   let message = $state("");
   let loading = $state(false);
+  let signInHref = $state(resolve("/login"));
 
   // Resend form state
   let resendEmail = $state("");
@@ -37,6 +39,11 @@
   }
 
   onMount(async () => {
+    signInHref = signupPlanLoginHref(
+      resolve("/login"),
+      resolve("/account/billing"),
+      browserPlanStorage()
+    );
     const fragment = new URLSearchParams(window.location.hash.slice(1));
     const token = fragment.get("token") ?? page.url.searchParams.get("token");
     resendEmail = page.url.searchParams.get("email") ?? "";
@@ -153,9 +160,7 @@
           </p>
         </div>
         <div class="slab-actions">
-          <Button href={resolve("/login")} class="w-full justify-center">
-            Continue to Sign In
-          </Button>
+          <Button href={signInHref} class="w-full justify-center">Continue to Sign In</Button>
         </div>
       </div>
     {:else if verificationStatus === "error"}
@@ -229,9 +234,7 @@
           </div>
         </div>
         <div class="slab-actions">
-          <Button href={resolve("/login")} class="w-full justify-center">
-            Continue to Sign In
-          </Button>
+          <Button href={signInHref} class="w-full justify-center">Continue to Sign In</Button>
         </div>
       </div>
     {:else}

@@ -5,6 +5,7 @@
   import { goto } from "$app/navigation";
   import { asset, resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
+  import { browserPlanStorage, rememberSignupPlan } from "$lib/auth/signupPlan";
   import { getIconComponent } from "$lib/iconUtils";
   import { RadioGroup, RadioGroupItem } from "$lib/components/ui/radio-group";
   import { Label } from "$lib/components/ui/label";
@@ -77,6 +78,7 @@
     };
 
     window.sessionStorage.setItem("signup_attribution", JSON.stringify(attribution));
+    rememberSignupPlan(params, browserPlanStorage());
   };
 
   const resetTurnstileWidget = () => {
