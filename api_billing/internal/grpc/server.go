@@ -2952,7 +2952,9 @@ func applyBillingLifecycle(resp *purserpb.BillingStatusResponse, row purserdb.Ge
 	}
 	if row.DowngradeEffectiveAt.Valid {
 		resp.DowngradeEffectiveAt = timestamppb.New(row.DowngradeEffectiveAt.Time)
-		if p := resp.GetCollectionProvider(); p == "stripe" || p == "mollie" {
+		// Only a provider subscription has a stop that makes a move to Free final;
+		// a saved provider customer without one keeps the downgrade undoable.
+		if p := resp.GetCollectionProvider(); row.HasProviderSubscription && (p == "stripe" || p == "mollie") {
 			resp.FreeMoveFinalAt = timestamppb.New(row.DowngradeEffectiveAt.Time.Add(-handlers.FreeDowngradeStopLead))
 		}
 	}

@@ -249,7 +249,9 @@ SELECT
     COALESCE(pending.display_name, '')::text AS pending_tier_display_name,
     COALESCE(fallback.display_name, '')::text AS fallback_tier_display_name,
     -- ChangeBillingTier stages a downgrade for this time.
-    COALESCE(ts.stripe_current_period_end, ts.billing_period_end::timestamptz) AS downgrade_effective_at
+    COALESCE(ts.stripe_current_period_end, ts.billing_period_end::timestamptz) AS downgrade_effective_at,
+    -- A move to Free has a provider subscription to stop only while one exists.
+    (COALESCE(ts.stripe_subscription_id, '') <> '' OR COALESCE(ts.mollie_subscription_id, '') <> '')::boolean AS has_provider_subscription
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
 LEFT JOIN purser.billing_tiers pending ON pending.id = ts.pending_tier_id
@@ -273,6 +275,7 @@ type GetTenantBillingLifecycleRow struct {
 	PendingTierDisplayName  string       `db:"pending_tier_display_name" json:"pending_tier_display_name"`
 	FallbackTierDisplayName string       `db:"fallback_tier_display_name" json:"fallback_tier_display_name"`
 	DowngradeEffectiveAt    sql.NullTime `db:"downgrade_effective_at" json:"downgrade_effective_at"`
+	HasProviderSubscription bool         `db:"has_provider_subscription" json:"has_provider_subscription"`
 }
 
 // The plan lifecycle a tenant sees on its billing page: the base fee after any
@@ -293,6 +296,7 @@ func (q *Queries) GetTenantBillingLifecycle(ctx context.Context, tenantID string
 		&i.PendingTierDisplayName,
 		&i.FallbackTierDisplayName,
 		&i.DowngradeEffectiveAt,
+		&i.HasProviderSubscription,
 	)
 	return i, err
 }

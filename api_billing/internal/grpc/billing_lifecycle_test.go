@@ -75,6 +75,7 @@ func TestBillingLifecycleStatesWhenADowngradeTakesEffectAndWhenAMoveToFreeIsFina
 	row := purserdb.GetTenantBillingLifecycleRow{
 		DowngradeEffectiveAt:   sql.NullTime{Time: periodEnd, Valid: true},
 		PendingTierDisplayName: "Developer", FallbackTierDisplayName: "Supporter",
+		HasProviderSubscription: true,
 	}
 	for _, provider := range []string{"stripe", "mollie"} {
 		resp := &purserpb.BillingStatusResponse{CollectionProvider: provider, OperatorGrant: &purserpb.OperatorBillingGrant{FallbackTierName: "supporter"}}
@@ -95,6 +96,20 @@ func TestBillingLifecycleStatesWhenADowngradeTakesEffectAndWhenAMoveToFreeIsFina
 		applyBillingLifecycle(resp, row, periodEnd.Add(-10*24*time.Hour))
 		if resp.GetFreeMoveFinalAt() != nil {
 			t.Fatalf("collection %q: free move final at = %v, want unset", provider, resp.GetFreeMoveFinalAt())
+		}
+	}
+	// A saved Stripe or Mollie customer collects without a recurring
+	// subscription, so the move stays undoable until it takes effect.
+	noSubscription := row
+	noSubscription.HasProviderSubscription = false
+	for _, provider := range []string{"stripe", "mollie"} {
+		resp := &purserpb.BillingStatusResponse{CollectionProvider: provider}
+		applyBillingLifecycle(resp, noSubscription, periodEnd.Add(-10*24*time.Hour))
+		if resp.GetFreeMoveFinalAt() != nil {
+			t.Fatalf("%s customer without a subscription: free move final at = %v, want unset", provider, resp.GetFreeMoveFinalAt())
+		}
+		if !resp.GetDowngradeEffectiveAt().AsTime().Equal(periodEnd) {
+			t.Fatalf("%s customer without a subscription: downgrade effective at = %v, want %v", provider, resp.GetDowngradeEffectiveAt(), periodEnd)
 		}
 	}
 }
