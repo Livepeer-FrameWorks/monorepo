@@ -57,6 +57,23 @@ component, use the dashboard playback DNS URL directly.
 <Player contentType="clip" contentId="a1b2c3d4e5f6g7h8" />
 ```
 
+### Controlling Playback from Code
+
+`bind:controller` gives you the `PlayerController` of the current content, the same object a React
+ref gets. It is replaced when the content changes and is `null` once the player is torn down.
+`getController()` on the component instance returns the same object.
+
+```svelte
+<script lang="ts">
+  import { Player, type PlayerController } from "@livepeer-frameworks/player-svelte";
+
+  let controller = $state<PlayerController | null>(null);
+</script>
+
+<Player contentType="live" contentId="<YOUR_PLAYBACK_ID>" bind:controller />
+<button onclick={() => controller?.jumpToLive()} disabled={!controller}>Go live</button>
+```
+
 ## Composable Controls
 
 Pass a `children` snippet to replace the default controls:
@@ -208,3 +225,4 @@ The context object from `getContext("fw-player-controller")` provides:
 | `options.locale`         | `string`                                             | Built-in UI locale                                                                                                                                                    |
 | `options.playbackMode`   | `string`                                             | Protocol selection mode (see [Playback Modes](/builders/playback-advanced/#playback-modes)); change at runtime with the store's `setDevModeOptions({ playbackMode })` |
 | `onStateChange`          | `function`                                           | State transition callback                                                                                                                                             |
+| `controller`             | `PlayerController \| null`                           | Bindable with `bind:controller`; see [Controlling Playback from Code](#controlling-playback-from-code)                                                                |
