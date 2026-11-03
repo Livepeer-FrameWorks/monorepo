@@ -224,3 +224,26 @@ func TestProberRelayForwardsToObserverOverTheMesh(t *testing.T) {
 		t.Fatalf("relay without an observer = %d, want 503", response.Code)
 	}
 }
+
+// A deployment without an observer or a valid scope answers 503 with a code
+// clients branch on instead of matching the message.
+func TestPublicNetworkNotConfiguredHasAMachineReadableCode(t *testing.T) {
+	for name, h := range map[string]*NetworkHandlers{
+		"no observer": {},
+		"bad scope":   {Observer: &networkobserver.Client{}, Analytics: &networkReaderStub{}, TenantIDs: []string{"not-a-uuid"}},
+	} {
+		router := gin.New()
+		router.GET("/network", h.Public)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/network", nil))
+		var body struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s: decode %s: %v", name, response.Body.String(), err)
+		}
+		if response.Code != http.StatusServiceUnavailable || body.Code != "NETWORK_OBSERVATIONS_NOT_CONFIGURED" {
+			t.Fatalf("%s: %d %s, want 503 NETWORK_OBSERVATIONS_NOT_CONFIGURED", name, response.Code, response.Body.String())
+		}
+	}
+}

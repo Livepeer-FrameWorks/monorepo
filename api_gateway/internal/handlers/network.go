@@ -23,6 +23,13 @@ import (
 	"time"
 )
 
+// Machine-readable codes of the network observation 503 bodies. Clients show
+// a not-configured state for the first and a retry for the second.
+const (
+	networkCodeNotConfigured = "NETWORK_OBSERVATIONS_NOT_CONFIGURED"
+	networkCodeUnavailable   = "NETWORK_OBSERVATIONS_UNAVAILABLE"
+)
+
 type NetworkReader interface {
 	GetNetworkObservations(context.Context, *pb.NetworkObservationsRequest) (*pb.NetworkObservationsResponse, error)
 }
@@ -47,7 +54,7 @@ type NetworkHandlers struct {
 func (h *NetworkHandlers) ProberRelay(path string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if h.Observer == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "network observations are not configured"})
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "network observations are not configured", "code": networkCodeNotConfigured})
 			return
 		}
 		authorization := c.GetHeader("Authorization")
@@ -106,12 +113,12 @@ func (h *NetworkHandlers) Diagnostics(c *gin.Context) {
 }
 func (h *NetworkHandlers) serve(c *gin.Context, details bool) {
 	if h.Observer == nil || h.Analytics == nil || len(h.TenantIDs) == 0 {
-		c.JSON(503, gin.H{"error": "network observations are not configured"})
+		c.JSON(503, gin.H{"error": "network observations are not configured", "code": networkCodeNotConfigured})
 		return
 	}
 	for _, id := range h.TenantIDs {
 		if _, err := uuid.Parse(id); err != nil {
-			c.JSON(503, gin.H{"error": "network scope is not configured"})
+			c.JSON(503, gin.H{"error": "network scope is not configured", "code": networkCodeNotConfigured})
 			return
 		}
 	}
@@ -151,12 +158,12 @@ func (h *NetworkHandlers) serve(c *gin.Context, details bool) {
 	req := &pb.NetworkObservationsRequest{TenantIds: h.TenantIDs, Provider: "livepeer", NetworkId: h.Network, Environment: h.Environment, ResourceId: strings.ToLower(c.Query("resource")), ResolvedIp: c.Query("ip"), GatewayRegion: c.Query("region"), Interval: c.DefaultQuery("interval", "5m"), Limit: 5000, IncludeDetails: details, TimeRange: &common.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(end)}}
 	inventory, err := h.Observer.Inventory(ctx, c.Query("include_inactive") == "true")
 	if err != nil {
-		c.JSON(503, gin.H{"error": "network inventory temporarily unavailable"})
+		c.JSON(503, gin.H{"error": "network inventory temporarily unavailable", "code": networkCodeUnavailable})
 		return
 	}
 	// Never expose a namespace from a misconfigured coordinator deployment.
 	if inventory.Network != h.Network || inventory.Environment != h.Environment {
-		c.JSON(503, gin.H{"error": "network inventory namespace mismatch"})
+		c.JSON(503, gin.H{"error": "network inventory namespace mismatch", "code": networkCodeUnavailable})
 		return
 	}
 	// Stable map identities do not reveal internal gateway/prober names.
