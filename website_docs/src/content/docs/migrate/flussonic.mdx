@@ -13,6 +13,11 @@ restreamer. FrameWorks is a live video platform whose media edges run MistServer
 routing, analytics, billing, and playback access control above them. It is built by the MistServer
 team.
 
+Three FrameWorks services come up in this guide. **Foghorn** routes viewers and encoders to an edge
+and relays streams between edges. **Helmsman** runs next to MistServer on every edge and connects it
+to Foghorn. **Chandler** serves a cluster's thumbnails, seek-preview sprites, VOD metadata, and
+assets cached from object storage.
+
 The two overlap on live ingest, HTTP delivery, DVR, and multi-server routing. They differ most on
 broadcast-network work. Event streaming is the closest fit: encoders repoint to RTMP, SRT, or WHIP,
 and DVR, clips, multistreaming, playback policies, analytics, and StreamCrafter work as described
@@ -224,7 +229,7 @@ FrameWorks for reach.
 | [Scheduled Programming](/roadmap#scheduled-programming)                                       | Calendar-driven recordings, and linear channels built from VOD                                                                        |
 | [Device Discovery and Contribution Inputs](/roadmap#device-discovery-and-contribution-inputs) | Cameras, PTZ devices, NDI, USB, and HDMI sources becoming managed streams                                                             |
 | [Stream Replication Orchestration](/roadmap#stream-replication-orchestration)                 | Streams placed in a region ahead of demand                                                                                            |
-| [Live AI Processing](/roadmap#live-ai-processing)                                             | Detection and transcription on media edges, with pilot access by contact                                                              |
+| [Live AI Processing](/roadmap#live-ai-processing)                                             | Object detection and transcription on media edges                                                                                     |
 | [Workload Cost Model](/roadmap#workload-cost-model)                                           | Transcode placement based on predicted CPU and GPU cost                                                                               |
 | [Placement Policy and Storage Tiering](/roadmap#placement-policy-and-storage-tiering)         | Data residency rules for where content may live                                                                                       |
 | [NAT-Aware Routing and Traversal](/roadmap#nat-aware-routing-and-traversal)                   | Self-hosted nodes behind NAT taking full part in the network                                                                          |
