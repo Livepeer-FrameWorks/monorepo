@@ -67,7 +67,9 @@
 
       // From xl every header item sits on one row with no label wrapping.
       const desktopNav = doc.querySelector('nav[aria-label="Primary"] .xl\\:flex');
-      if (width >= 1280 && desktopNav) {
+      if (width >= 1280 && !desktopNav) {
+        check("Desktop header found", false, 'nav[aria-label="Primary"] .xl:flex missing');
+      } else if (width >= 1280) {
         const items = [...desktopNav.children];
         const centers = items.map((item) => {
           const rect = item.getBoundingClientRect();
