@@ -149,42 +149,52 @@ registration, failover when the holding instance and its front are killed,
 and that the connection and a live stream survive. At the end it restores the
 plaintext addresses.
 
-Default scenario 47 signs up and verifies a new Free tenant, then publishes
-RTMP and SRT on platform capacity and on a private cluster created through the
-tenant API. It starts an independent edge from the stack's edge image and
-enrolls it with the returned token. User-facing placement review/apply requests
-restrict publishing and viewing to the tested capacity class. The checks require
-the expected node and cluster in a durable active ingest session, real HLS
-segments, a connected publisher and session cleanup after disconnect. Private
-playback runs through every Foghorn replica in both cells and requires the
-redirect, each HLS manifest and the media bytes to stay on the private edge.
-The RTMP flow on each capacity class enables DVR, decodes twenty seconds of
+Default scenarios 47 and 51 run the same stream lifecycle on two kinds of
+capacity. Each stream flow sets a placement policy through the user-facing
+review/apply requests that restricts publishing and viewing to the tested
+capacity class. The checks require the expected node and cluster in a durable
+active ingest session, real HLS segments, a connected publisher and session
+cleanup after disconnect. The RTMP flow enables DVR, decodes twenty seconds of
 HLS as a viewer, exports a clip, and replays both the clip and the finalized
-DVR chapter through every replica. Its own webhook endpoint must receive
-validly signed stream, recording and clip lifecycle events for these exact
-objects. Final analytics must match the admitted node/cluster and the stream
-start/end events and contain ingest bytes. The accounting end follows publisher
-disconnect because Mist drains its live buffer before `STREAM_END`.
-Tenant GraphQL analytics must report
-nonzero viewer sessions, hours and egress. A separate sweep runs under this
-fresh tenant's credentials, rather than the demo account. All four ended
-streams must also pass runtime accounting after the ledger cursor has
-processed their final sessions; an unprocessed stream cannot count as a pass.
-The scenario allows fifteen minutes for the normal five-minute workers and
-two-minute settlement lag, without forcing ledger refreshes.
-This exercises the unchanged Free entitlements. Scenarios 04 and 05 cover
-additional DVR and clip behavior on the demo tenant, and scenario 27 covers
-billing phase switches. These checks do not establish a complete end-to-end
-matrix of custom entitlement overrides and their expiry across media paths.
-Public webhooks report stream and artifact lifecycle events; periodic stream
-statistics are read through analytics rather than a stats webhook event.
-It uses no billing grant or cluster-health override. The stack's loopback-Mist HTTP
-adapter supplies playback transport; public DNS and Navigator certificate
-issuance remain outside this scenario. As in stack bring-up, the newly enrolled
-Helmsman reconnects after persisting ConfigSeed because the stack cannot probe
-a public edge TLS hostname. Its identity and configuration remain intact.
-Enrollment allows Foghorn's existing five-minute served-cluster assignment
-refresh and the edge's retry backoff to converge before checking readiness.
+DVR chapter through every replica. The tenant's own webhook endpoint must
+receive validly signed stream, recording and clip lifecycle events for these
+exact objects. Final analytics must match the admitted node/cluster and the
+stream start/end events and contain ingest bytes. The accounting end follows
+publisher disconnect because Mist drains its live buffer before `STREAM_END`.
+Tenant GraphQL analytics must report nonzero viewer sessions, hours and egress.
+Both ended streams must also pass runtime accounting after the ledger cursor
+has processed their final sessions; an unprocessed stream cannot count as a
+pass. Each scenario allows fifteen minutes for the normal five-minute workers
+and two-minute settlement lag, without forcing ledger refreshes, and ends with
+a sweep under the tenant's own credentials. Neither uses a billing grant, a
+cluster-health override or a synthetic publisher trigger.
+
+Scenario 47 publishes RTMP and SRT on platform capacity and checks that
+streaming leaves the tenant's plan unchanged. On the stack it runs as the run's
+tenant; on staging (`staging: safe`) it runs as the QA customer
+(`# tenant: qa`, see `scripts/stack/test-tenant.sh`).
+
+Scenario 51 is stack-only (`staging: unsafe`): it signs up and verifies a new
+Free tenant, checks that the signup is admitted on platform capacity, then
+creates a private cluster through the tenant API, starts an independent edge
+from the stack's edge image and enrolls it with the returned token. RTMP and
+SRT then run the full flow on that private edge. Private playback runs through
+every Foghorn replica in both cells and requires the redirect, each HLS
+manifest and the media bytes to stay on the private edge. This exercises the
+unchanged Free entitlements. The stack's loopback-Mist HTTP adapter supplies
+playback transport; public DNS and Navigator certificate issuance remain
+outside this scenario. As in stack bring-up, the newly enrolled Helmsman
+reconnects after persisting ConfigSeed because the stack cannot probe a public
+edge TLS hostname. Its identity and configuration remain intact. Enrollment
+allows Foghorn's existing five-minute served-cluster assignment refresh and the
+edge's retry backoff to converge before checking readiness.
+
+Scenarios 04 and 05 cover additional DVR and clip behavior on the demo tenant,
+and scenario 27 covers billing phase switches. These checks do not establish a
+complete end-to-end matrix of custom entitlement overrides and their expiry
+across media paths. Public webhooks report stream and artifact lifecycle
+events; periodic stream statistics are read through analytics rather than a
+stats webhook event.
 
 ## Requested post-rollout staging smoke
 

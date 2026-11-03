@@ -291,11 +291,16 @@ takes precedence. Registered probers with known coordinates appear individually;
 unknown locations remain in coverage listings. The detail panel lists sibling endpoints
 under the same onchain identity and retains regional discovery and performance history.
 
-`website_marketing/test/browser/network-layout.html` is a local Vite browser fixture for
-the actual marketing routes. Open it through Vite's `/@fs/` path with `?width=390`,
-`?width=768` or `?width=1280`; add `&view=network` for the explorer. It asserts pipeline
-width, flush timeline actions, shared seams and map/inspector placement at the embedded
-viewport. The fixture is outside the public and build directories. DOM regressions in
+`website_marketing/test/browser/network-layout.html` is a Vite browser fixture for the
+actual marketing routes. It asserts pipeline width, flush timeline actions, shared seams
+and map/inspector placement at the embedded viewport. `pnpm --filter frameworks-website
+test:browser` (`website_marketing/scripts/browser-fixtures.mjs`) runs it in headless
+Chromium at widths 390, 768 and 1280 against the dev server; the CI job
+`marketing-browser` and the `verify-marketing-browser` stage of `make verify-prepush` run
+that command. The explorer view (`&view=network`) waits for observation data, so it is
+not in that run: open the fixture through Vite's `/@fs/` path with `?width=<px>&view=network`
+against a stack that serves observations. The fixture is outside the public and build
+directories. DOM regressions in
 the webapp cover shared rendering, regional queries, exact accounting, marker selection
 and the common scroll policy.
 
