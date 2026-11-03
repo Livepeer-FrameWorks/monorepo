@@ -79,8 +79,9 @@ WITH stuck AS (
   SELECT id, headers FROM purser.provider_webhook_inbox
   WHERE status IN ('pending', 'failed', 'processing') AND unresolved_since < NOW() - INTERVAL '%[2]d days'
 )
-SELECT 'recovery_stuck_tenant:' || COALESCE(NULLIF(headers->>'tenant_id', ''), 'unbound') || '=' || count(*) FROM stuck
-  GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT 10;
+SELECT 'recovery_stuck_tenant:' || tenant || '=' || count(*)
+  FROM (SELECT COALESCE(NULLIF(headers->>'tenant_id', ''), 'unbound') AS tenant FROM stuck) stuck_tenant
+  GROUP BY tenant ORDER BY count(*) DESC, tenant LIMIT 10;
 `, purserHeldDowngradeGraceHours, purserRecoveryUnresolvedDays) + purserSpendHoldDoctorSQL + purserBillingLifecycleDoctorSQL
 
 // purserSpendHoldDoctorSQL reports the tenants whose signed authority refuses

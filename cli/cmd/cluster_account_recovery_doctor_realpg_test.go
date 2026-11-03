@@ -156,7 +156,7 @@ func TestAccountRecoveryDoctorRealPG(t *testing.T) {
 	for _, want := range []string{
 		"1 tenant closure(s) failing Quartermaster synchronization (" + closedTenant + ": 3 failures)",
 		"1 session stop(s) pending",
-		"(" + closedTenant + ": 1 stops)",
+		"(" + closedTenant + ": 1 stop)",
 		"1 confirmed downgrade(s) held past their effective time (" + heldTenant,
 		"1 billing recovery item(s) failing repeatedly or unresolved over 14 days (" + heldTenant + ": 1 item)",
 		"1 prepaid tenant(s) below the -€10 suspension threshold but not suspended; their running sessions continue (" + unsuspendedTenant + ": €15.00 owed)",
