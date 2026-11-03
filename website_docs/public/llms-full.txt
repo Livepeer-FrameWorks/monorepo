@@ -271,6 +271,7 @@ Actions the agent can perform.
 | `pay_invoice`                         | Create or resume an invoice payment                        | Owner/Admin + billing:write; API tokens also need mcp:high-risk                       |
 | `start_postpaid_setup`                | Start Stripe or Mollie hosted postpaid setup               | Owner/Admin + billing:write; API tokens also need mcp:high-risk                       |
 | `complete_mollie_postpaid_setup`      | Verify mandate and activate Mollie postpaid                | Owner/Admin + billing:write; API tokens also need mcp:high-risk                       |
+| `change_billing_tier`                 | Change a postpaid plan or cancel a scheduled downgrade     | Owner/Admin + billing:write; API tokens also need mcp:high-risk                       |
 | `create_stream`                       | Create a push or pull stream                               | Auth                                                                                  |
 | `update_stream`                       | Update stream settings or pull-source config               | Auth                                                                                  |
 | `delete_stream`                       | Delete a stream                                            | Auth + Confirm; API tokens also need mcp:high-risk                                    |
@@ -452,6 +453,17 @@ returning from that URL is not proof of activation; provider confirmation is
 authoritative. Stripe completes from its webhook. After a successful Mollie
 first payment, call `complete_mollie_postpaid_setup` with the same `tier_id`; it
 fetches and validates the tenant's mandate before creating the subscription.
+
+**change_billing_tier**
+
+- `tier_id` (required): The target tier of a postpaid account. Prepaid accounts use
+  `start_postpaid_setup` or `activate_free_tier`.
+- A paid upgrade starts a fresh billing month; it can stay pending (`pending_tier_id`)
+  until the provider and usage reconcile.
+- A downgrade takes effect at `effective_at`, the end of the billing period. Choosing the
+  current tier cancels it, without a billing profile or payment setup.
+- A refusal is a tool error ending in `(code: <CODE>)`, the same code `changeBillingTier`
+  returns in `ValidationError.code`, for example `PENDING_CHECKOUT` or `OUTSTANDING_GRANT`.
 
 **create_stream**
 
@@ -25582,11 +25594,11 @@ https://logbook.frameworks.network/
           <path d="M16 9L21 6V14L16 11" />
           <path d="M7 19H13" />
         </svg>
-        <span>Go Live</span>
+        <span>Go live from your browser</span>
       </div>
     </div>
     <div class="slab-body">
-      Go live from your browser with StreamCrafter. No encoder to install.
+      Broadcast with StreamCrafter in the dashboard. No encoder to install.
     </div>
     <div class="slab-actions">
       <span>Open guide</span>
@@ -26714,7 +26726,7 @@ routing, analytics, billing, and playback access control above them. It is built
 team.
 
 Three FrameWorks services come up in this guide. **Foghorn** routes viewers and encoders to an edge
-and relays streams between edges. **Helmsman** runs next to MistServer on every edge and connects it
+and tells an edge which other edge to pull a stream from. **Helmsman** runs next to MistServer on every edge and connects it
 to Foghorn. **Chandler** serves a cluster's thumbnails, seek-preview sprites, VOD metadata, and
 assets cached from object storage.
 
@@ -26878,15 +26890,15 @@ Flussonic's cluster page advises building new clusters on its Catena product rat
 If you are planning a new cluster, weigh that route as well. Existing FMS clusters translate
 as follows.
 
-| Flussonic                                                        | FrameWorks                                                                                                                                                   |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `cluster_key` shared by servers                                  | Enrollment tokens; each node joins a cluster through `frameworks edge deploy`                                                                                |
-| `source` restreamer pulling from an origin                       | Foghorn relays over DTSC on viewer demand. Up next: pre-emptive replication in [Stream Replication Orchestration](/roadmap#stream-replication-orchestration) |
-| `balancer` redirect by bitrate, clients, usage, or streams       | Foghorn scores edges by geography, load, and health, and redirects viewers                                                                                   |
-| Per-peer `countries` GeoIP routing                               | [Viewer placement policy](/builders/media-placement), plus geo-routed DNS for tenant domains                                                                 |
-| `cluster_ingest`: restarts a stream on another peer if one fails | `sourceLocation` limits where a source may run. More than one edge per region per cluster is planned; until then, test node loss on your topology            |
-| `capture_at` soft preference for a server                        | `sourceLocation` with `nodeIds`, which is a hard restriction                                                                                                 |
-| `config_external` configuration backend                          | A polling equivalent is not planned. Use GraphQL, or the GitOps manifest on a full self-host                                                                 |
+| Flussonic                                                        | FrameWorks                                                                                                                                                                                         |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cluster_key` shared by servers                                  | Enrollment tokens; each node joins a cluster through `frameworks edge deploy`                                                                                                                      |
+| `source` restreamer pulling from an origin                       | Edges pull from the origin edge over DTSC on viewer demand, arranged by Foghorn. Up next: pre-emptive replication in [Stream Replication Orchestration](/roadmap#stream-replication-orchestration) |
+| `balancer` redirect by bitrate, clients, usage, or streams       | Foghorn scores edges by geography, load, and health, and redirects viewers                                                                                                                         |
+| Per-peer `countries` GeoIP routing                               | [Viewer placement policy](/builders/media-placement), plus geo-routed DNS for tenant domains                                                                                                       |
+| `cluster_ingest`: restarts a stream on another peer if one fails | `sourceLocation` limits where a source may run. More than one edge per region per cluster is planned; until then, test node loss on your topology                                                  |
+| `capture_at` soft preference for a server                        | `sourceLocation` with `nodeIds`, which is a hard restriction                                                                                                                                       |
+| `config_external` configuration backend                          | A polling equivalent is not planned. Use GraphQL, or the GitOps manifest on a full self-host                                                                                                       |
 
 ### API and events
 
@@ -28782,14 +28794,14 @@ session stop conditions and names up to ten tenants per finding; it does not che
 grant expiry. All commands need a platform-operator session. The procedures behind them are in
 [Test and trial accounts](/operators/trial-accounts/#recovery-and-internals).
 
-| Alert                                   | Identify the tenant                                                              | Resolve                                                                                   |
-| --------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `PurserProviderWebhookInboxStuck`       | `frameworks admin billing recovery list`                                         | `recovery checkout`, `recovery upgrade`, or repair the provider or metering it names      |
-| `PurserTierDowngradeHeld`               | `frameworks admin billing recovery list` (held section)                          | `frameworks admin billing recovery downgrade --tenant-id <tenant> --reason <reason>`      |
-| `PurserFreeFallbackStuck`               | `frameworks admin billing recovery list`                                         | restore provider access or metering, `recovery notice`, or cancel with `set-tier`         |
-| `PurserOperatorGrantExpiryStuck`        | `frameworks admin billing grant list --include-expired`                          | correct the billing or pricing error; retries run every five minutes                      |
-| `CommodoreTenantAccountClosureStuck`    | `frameworks cluster doctor --deep`, then `frameworks admin tenants get <tenant>` | restore Commodore's connection to Quartermaster, or to its database for read failures     |
-| `CommodoreAccountIngestRevocationStuck` | `frameworks cluster doctor --deep`, then `frameworks admin tenants get <tenant>` | restore the cell, upgrade its Foghorn, or `frameworks admin clusters retire <cluster-id>` |
+| Alert                                   | Identify the tenant                                                              | Resolve                                                                                                       |
+| --------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `PurserProviderWebhookInboxStuck`       | `frameworks admin billing recovery list`                                         | `recovery checkout`, `recovery upgrade`, or repair the provider or metering it names                          |
+| `PurserTierDowngradeHeld`               | `frameworks admin billing recovery list` (held section)                          | `frameworks admin billing recovery downgrade --tenant-id <tenant> --reason <reason>`                          |
+| `PurserFreeFallbackStuck`               | `frameworks admin billing recovery list`                                         | restore provider access or metering, `recovery notice`, or cancel with `set-tier`                             |
+| `PurserOperatorGrantExpiryStuck`        | `frameworks admin billing grant list --include-expired`                          | correct the billing or pricing error; retries run every five minutes                                          |
+| `CommodoreTenantAccountClosureStuck`    | `frameworks cluster doctor --deep`, then `frameworks admin tenants get <tenant>` | restore Commodore's connection to Quartermaster, or to its database for read failures                         |
+| `CommodoreAccountIngestRevocationStuck` | `frameworks cluster doctor --deep`, then `frameworks admin tenants get <tenant>` | restore the cell named in the `cell` label, upgrade its Foghorn, or `frameworks admin clusters retire <cell>` |
 
 ### Provider recovery
 
@@ -28849,14 +28861,20 @@ Quartermaster; Commodore retries every minute.
 ### Account session stops
 
 `CommodoreAccountIngestRevocationStuck` fires when a deactivated user's or closed tenant's ingest
-stop has not reached every cell that recorded the account's streams. `cluster doctor --deep` names
-the tenants with stops pending over five minutes. `tenants get <tenant>` lists each pending stop with
-its cells, the retired ones and the last error. `frameworks cluster diagnose media-authority` shows
-the same rows on lane `ingest_revocation`.
+stop has not reached every cell that recorded the account's streams. It reads
+`commodore_account_ingest_stop_oldest_pending_seconds` and fires once per cell: the `cell` label is
+the cell the stop's last attempt failed on, and the summary names it. Silencing one cell leaves the
+others visible.
+
+`cluster doctor --deep` names the tenants with stops pending over five minutes. `tenants get <tenant>`
+lists each pending stop with its cells, the retired ones and the last error.
+`frameworks cluster diagnose media-authority` shows the same rows on lane `ingest_revocation`.
 Restore the cell, or upgrade its Foghorn if the error is `Unimplemented`. For a cell removed for
-good, `frameworks admin clusters retire <cluster-id> --reason <reason>` settles the stops owed to
-it. The alert aggregates all cells, so silencing it also hides stops pending on other cells. See
-[Session stops](/operators/trial-accounts/#session-stops).
+good, `frameworks admin clusters retire <cell> --reason <reason>` settles the stops owed to it.
+
+`cell="unknown"` means the stop has not been attempted yet or its last attempt failed before
+contacting any cell. That error comes from Commodore's database; restore Commodore's database
+connection and Commodore retries. See [Session stops](/operators/trial-accounts/#session-stops).
 
 ## Verify
 
@@ -29604,7 +29622,8 @@ run without a backup:
   `--dry-run`, which runs inside a read-only transaction. A data migration is irreversible when the
   release that declares it lists its service under `rollback_disabled`, when the service binary marks it
   irreversible, or when the binary does not report the field. `frameworks cluster release apply` applies
-  the same gate, `--dry-run` included, before it runs an earlier release's pending data migration.
+  the same gate, `--dry-run` included, before it runs an earlier release's pending data migration or
+  its missing postdeploy migrations.
 
 Without `--backup`, the refusal prints the `backup create` command for exactly the databases the
 operation changes, so the backup covers only what the gate checks.
@@ -29924,8 +29943,11 @@ Rerun the same command after fixing the cause; completed work is skipped.
 | `cluster os update`                                                                                | 10 minutes check, 60 minutes apply  | playbook output and each Yugabyte node that finished its roll            |
 
 A transactional migration statement is bounded by its own 15-minute `statement_timeout`, inside
-the 30-minute window. A `.notx.sql` item and a ClickHouse item, which have no statement timeout,
-run as asynchronous jobs whose poll lines keep reporting progress.
+the 30-minute window. Every migration item runs as an asynchronous job whose poll lines keep
+reporting progress: a transactional PostgreSQL or Yugabyte item every 2 seconds, a `.notx.sql`
+item, which has no statement timeout, every 15 seconds, and a ClickHouse item every 10 seconds. A migrator waiting
+for another one's migration lock on the same database retries every 10 seconds for about a quarter
+of an hour, then fails with an error naming the lock; nothing of its item has run.
 
 ## Detection & Health Commands
 
@@ -31044,7 +31066,11 @@ it first, in catalog order, through the service binary, and confirms it reads `c
 afterwards. An irreversible one needs `--backup`, the same gate as `data-migrate run`; the gate
 also applies under `--dry-run`, which runs the migration read-only. A failure stops the release
 before anything of the new release is applied and names the migration and the
-`data-migrate status` command. A missing postdeploy migration of an earlier release, or a data
+`data-migrate status` command. Postdeploy migrations of earlier releases that are missing from a
+PostgreSQL, YugabyteDB or ClickHouse ledger are also step 0: after those data migrations, the apply
+runs `cluster migrate --phase postdeploy --to-version <release>` through each such release, lowest
+first. They always need `--backup`, `--dry-run` included, which runs them in check mode. A
+postdeploy migration whose ledger checksum differs from the file this CLI embeds, or a data
 migration that is running, paused, unreadable or unknown to its binary, still refuses and names
 what to do first.
 
@@ -31058,7 +31084,7 @@ Long steps are bounded by a [progress watchdog](#progress-watchdog), not a fixed
 - `--skip-validation` - Skip health validation after each service upgrade
 - `--no-rollback` - Skip automatic rollback on a service health-check failure
 - `--complete-interrupted-baselines` - Reapply and verify baselines for inspected populated databases without migration provenance
-- `--backup string` - Backup directory or `s3://` URL taken within the last hour; required when an earlier release's pending required data migration is irreversible
+- `--backup string` - Backup directory or `s3://` URL taken within the last hour; required when an earlier release's postdeploy migrations are missing or its pending required data migration is irreversible
 
 **Examples:**
 
@@ -40382,8 +40408,8 @@ The release catalog embedded in the CLI is the authority for which upgrades are 
 - **Readiness.** Rollouts wait up to 150 seconds for each service to report ready on `/ready` (v0.3.11 and later) or `/health` (earlier releases). See [Health and readiness](/operators/running-upgrades/#health-and-readiness).
 - **Automatic rollback.** A release can disable automatic rollback for specific services when a restored previous binary could not pass the new health contract. The release plan lists these services.
 - **Required data migrations.** A release can require data migrations to finish before a later schema phase. `cluster release apply` checks them and stops at the postdeploy phase until they are complete. Run and verify them with `cluster data-migrate`, then rerun the release apply. See [Data migrations](/operators/running-upgrades/#data-migrations).
-- **Backups before destructive steps.** Contract migrations (`cluster migrate --phase contract`) and irreversible data migrations (`cluster data-migrate run`, or an earlier release's run inside `cluster release apply`) need `--backup` with a [backup](/operators/backup-restore/) that started less than an hour earlier and whose migration ledgers still match. Without one, the refusal prints the `backup create` command for exactly the databases the step changes. `cluster release apply` needs a backup only for such an earlier-release data migration. A data migration counts as irreversible when the release that declares it lists its service under `rollback_disabled`, or when the service binary marks it irreversible or does not say.
-- **Unfinished earlier releases.** Before changing anything, and under `--dry-run` too, `cluster release apply` reads the migration ledgers and data-migration state. An earlier release's required data migration that is pending or failed is run by `release apply` itself, first, behind its backup gate, and the release stops and names it if it fails. A missing postdeploy migration of an earlier release, or a data migration that is running, paused, unreadable or unknown to its binary, refuses the release and names the release to apply first or the migration to resolve. A release with no migrations leaves nothing unfinished, so it can be skipped.
+- **Backups before destructive steps.** Contract migrations (`cluster migrate --phase contract`) and irreversible data migrations (`cluster data-migrate run`, or an earlier release's run inside `cluster release apply`) need `--backup` with a [backup](/operators/backup-restore/) that started less than an hour earlier and whose migration ledgers still match. Without one, the refusal prints the `backup create` command for exactly the databases the step changes. `cluster release apply` needs a backup only for such an earlier-release data migration or for an earlier release's missing postdeploy migrations. A data migration counts as irreversible when the release that declares it lists its service under `rollback_disabled`, or when the service binary marks it irreversible or does not say.
+- **Unfinished earlier releases.** Before changing anything, and under `--dry-run` too, `cluster release apply` reads the migration ledgers and data-migration state. An earlier release's required data migration that is pending or failed is run by `release apply` itself, first, behind its backup gate, and the release stops and names it if it fails. Its missing postdeploy migrations are applied next, through each such release in turn, behind the same backup gate. A postdeploy migration whose ledger checksum differs from the embedded file, or a data migration that is running, paused, unreadable or unknown to its binary, refuses the release and names the release to apply first or the migration to resolve. A release with no migrations leaves nothing unfinished, so it can be skipped.
 
 <Aside type="caution" title="Skipping releases">
   Apply releases through `frameworks cluster release apply`, which checks the source version, the
@@ -40536,10 +40562,9 @@ Before the first change, and under `--dry-run` too, `release apply` refuses to s
 - the CLI is below the release's minimum CLI version;
 - a platform service replica runs a version below a declared minimum source version, or a version
   that is not a release version;
-- an earlier release is unfinished in a way `release apply` cannot finish itself: its postdeploy
-  migrations are missing from a PostgreSQL, YugabyteDB, or ClickHouse ledger, or one of its
-  required data migrations is running, paused, unreadable, or unknown to the installed service
-  binary. The error names the release to apply first or the migration to resolve. Databases this
+- an earlier release is unfinished in a way `release apply` cannot finish itself: a postdeploy
+  migration's ledger checksum differs from the file this CLI embeds, or one of its required data
+  migrations is running, paused, unreadable, or unknown to the installed service binary. The error names the release to apply first or the migration to resolve. Databases this
   release creates are exempt;
 - a planned artifact does not resolve for its host's deploy mode and architecture;
 - a required operator input is missing from a service's rendered environment.
@@ -40558,6 +40583,15 @@ frameworks cluster data-migrate status <service>.<id>
 ```
 
 Fix the cause and rerun `release apply`.
+
+Postdeploy migrations of an earlier release that are missing from a PostgreSQL, YugabyteDB, or
+ClickHouse ledger do not refuse the release either. They are listed in step 0 too, and after the
+earlier data migrations `release apply` runs
+`frameworks cluster migrate --phase postdeploy --to-version <release>` through each such release,
+lowest first, so each release's postdeploy gate reads only the data migrations up to it. They
+always need `--backup` on `release apply`, with the same one-hour backup gate; the dry run applies
+the gate too and runs them in check mode. A failure stops the release before anything of the new
+release is applied and names the release whose postdeploy migrations failed.
 
 Every long step, migrations and data migrations included, runs under a progress watchdog instead of
 a fixed deadline: it is cancelled only after its stall window passes with no output and no
@@ -42776,7 +42810,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#commerce--bill
 | --- | --- | --- | --- |
 | **Billing & prepaid balance** | Available | API, Agents (MCP), CLI, Dashboard, Docs | Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance. |
 | ↳ Usage caps, alerts, retention cost preview | Expanding | — | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. *Storage cost previews per asset ship. Caps and alerts you set per meter are not there yet.* |
-| ↳ Plan changes, payment grace, and Free fallback | Expanding | API, Dashboard, Docs | Self-serve upgrades start a fresh month and offset the unused part of the old fee; downgrades and cancellations keep the paid plan to the end of the period, then move the account to Free. A failed payment keeps the plan for 14 days with email notices, then moves the account to Free with a final invoice for usage up to the move. *Plan changes, the 14-day payment grace, and the move to Free run today, and the billing page shows each of them. Agents cannot change the plan yet.* |
+| ↳ Plan changes, payment grace, and Free fallback | Available | API, Agents (MCP), Dashboard, Docs | Self-serve upgrades start a fresh month and offset the unused part of the old fee; downgrades and cancellations keep the paid plan to the end of the period, then move the account to Free. A failed payment keeps the plan for 14 days with email notices, then moves the account to Free with a final invoice for usage up to the move. *Plan changes, the 14-day payment grace, and the move to Free run today. The billing page shows each of them, and agents change or keep the plan with the change_billing_tier MCP tool.* |
 | ↳ Operator trials and account closure | Expanding | API, CLI, Dashboard, Docs | Platform operators give a tenant a time-boxed billing arrangement — a different base fee, waived usage, or manual invoicing — for trials and custom deals, expiring back to the tenant's fallback plan, and close tenant accounts permanently. Every change is audited. *Trials and custom arrangements are set up by our team. The billing page shows the arrangement, when it ends, and the plan you return to, and we email you a week before it ends.* |
 | **Wallet & on-chain identity** | Expanding | API, Agents (MCP), Dashboard, Docs | Wallet sign-in, linked-wallet account identity, and x402 micropayments. *Wallet sign-in, linked wallets, crypto top-ups, and x402 top-ups for agents are implemented. Each deployment enables them once its payment configuration passes the live readiness checks.* |
 | **Operator settlement and attribution** | [Planned](/roadmap#operator-settlement-and-attribution) | — | Attribute served traffic to the operators whose clusters actually carried it — manipulation-resistant across independent operators — and settle the full loop, from credit accrual through operator-visible reporting to payout execution. |
@@ -42933,7 +42967,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | --- | --- | --- | --- |
 | **Billing & prepaid balance** | Available | API, Agents (MCP), CLI, Dashboard, Docs | Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance. |
 | ↳ Usage caps, alerts, retention cost preview | Expanding | — | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. *Storage cost previews per asset ship. Caps and alerts you set per meter are not there yet.* |
-| ↳ Plan changes, payment grace, and Free fallback | Expanding | API, Dashboard, Docs | Self-serve upgrades start a fresh month and offset the unused part of the old fee; downgrades and cancellations keep the paid plan to the end of the period, then move the account to Free. A failed payment keeps the plan for 14 days with email notices, then moves the account to Free with a final invoice for usage up to the move. *Plan changes, the 14-day payment grace, and the move to Free run today, and the billing page shows each of them. Agents cannot change the plan yet.* |
+| ↳ Plan changes, payment grace, and Free fallback | Available | API, Agents (MCP), Dashboard, Docs | Self-serve upgrades start a fresh month and offset the unused part of the old fee; downgrades and cancellations keep the paid plan to the end of the period, then move the account to Free. A failed payment keeps the plan for 14 days with email notices, then moves the account to Free with a final invoice for usage up to the move. *Plan changes, the 14-day payment grace, and the move to Free run today. The billing page shows each of them, and agents change or keep the plan with the change_billing_tier MCP tool.* |
 | ↳ Operator trials and account closure | Expanding | API, CLI, Dashboard, Docs | Platform operators give a tenant a time-boxed billing arrangement — a different base fee, waived usage, or manual invoicing — for trials and custom deals, expiring back to the tenant's fallback plan, and close tenant accounts permanently. Every change is audited. *Trials and custom arrangements are set up by our team. The billing page shows the arrangement, when it ends, and the plan you return to, and we email you a week before it ends.* |
 | **Wallet & on-chain identity** | Expanding | API, Agents (MCP), Dashboard, Docs | Wallet sign-in, linked-wallet account identity, and x402 micropayments. *Wallet sign-in, linked wallets, crypto top-ups, and x402 top-ups for agents are implemented. Each deployment enables them once its payment configuration passes the live readiness checks.* |
 | **Operator settlement and attribution** | [Planned](/roadmap#operator-settlement-and-attribution) | — | Attribute served traffic to the operators whose clusters actually carried it — manipulation-resistant across independent operators — and settle the full loop, from credit accrual through operator-visible reporting to payout execution. |
