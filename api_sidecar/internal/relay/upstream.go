@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -58,6 +59,11 @@ func newRelayUpstreamClient(b upstreamBounds) *http.Client {
 	tr.DialContext = (&net.Dialer{Timeout: b.dial, KeepAlive: 30 * time.Second}).DialContext
 	tr.TLSHandshakeTimeout = b.tlsHandshake
 	tr.ResponseHeaderTimeout = b.responseHeader
+	// HTTP/1.1 only: a read the stall bound cancels closes its own connection, so
+	// the resume dials a fresh one. Over HTTP/2 the resume would share the
+	// connection that went silent and wait out the response header bound.
+	tr.ForceAttemptHTTP2 = false
+	tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
 	return &http.Client{Transport: &stallBoundTransport{base: tr, readStall: b.readStall}}
 }
 
