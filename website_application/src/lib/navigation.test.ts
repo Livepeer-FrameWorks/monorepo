@@ -99,11 +99,11 @@ describe("navigation route hygiene", () => {
     }
   });
 
-  it("resolves top-level global network route", () => {
-    expect(getRouteInfo("/network")?.name).toBe("Global Network");
+  it("resolves the top-level network explorer route", () => {
+    expect(getRouteInfo("/network")?.name).toBe("Network explorer");
     expect(getBreadcrumbs("/network")).toEqual([
       { name: "Dashboard", href: "/" },
-      { name: "Global Network" },
+      { name: "Network explorer" },
     ]);
   });
 

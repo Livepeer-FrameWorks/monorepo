@@ -204,11 +204,11 @@ export const navigationConfig: Record<string, NavigationItem> = {
     description: "Quick overview with KPIs and contextual hints",
   },
   globalNetwork: {
-    name: "Global Network",
+    name: "Network explorer",
     href: "/network",
     icon: "Globe",
     active: true,
-    description: "Cross-cluster topology, peering, and federation traffic",
+    description: "FrameWorks topology and Livepeer transcoding coverage",
   },
 
   // Content - Streaming & Media
