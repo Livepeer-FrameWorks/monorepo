@@ -12,7 +12,9 @@ expected_email=$1 expected_tenant=$2
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-if ! (cd "$(dirname "$0")/walletsign" && go build -o "$work/walletsign" .) >"$work/build.log" 2>&1; then
+# The runner's root user does not own the mounted checkout, so git refuses the
+# VCS stamp go build would embed.
+if ! (cd "$(dirname "$0")/walletsign" && go build -buildvcs=false -o "$work/walletsign" .) >"$work/build.log" 2>&1; then
   echo "walletsign build failed: $(tail -5 "$work/build.log")" >&2
   exit 1
 fi
