@@ -43,14 +43,14 @@ describe("registerPlayer", () => {
     vi.restoreAllMocks();
   });
 
-  it("calls ensurePlayersRegistered", () => {
+  it("registers the adapter without loading the built-in players", () => {
     const def: SimplePlayerDefinition = {
       name: "TestPlayer",
       mimeTypes: ["application/x-test"],
       build: vi.fn(),
     };
     registerPlayer("test", def);
-    expect(mockEnsurePlayersRegistered).toHaveBeenCalled();
+    expect(mockEnsurePlayersRegistered).not.toHaveBeenCalled();
   });
 
   it("registers adapter with globalPlayerManager", () => {

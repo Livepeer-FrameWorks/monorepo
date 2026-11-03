@@ -13,7 +13,7 @@ import { DEFAULT_GATEWAY_URL, GatewayClient, StreamStartingError } from "./Gatew
 import { canonicalViewerProtocol, type ViewerProtocol } from "./ViewerProtocol";
 import { StreamStateClient } from "./StreamStateClient";
 import type { PlayerManager, PlayerManagerEvents } from "./PlayerManager";
-import { globalPlayerManager, ensurePlayersRegistered } from "./PlayerRegistry";
+import { globalPlayerManager } from "./PlayerRegistry";
 import { ABRController } from "./ABRController";
 import { InteractionController } from "./InteractionController";
 import { MistReporter } from "./MistReporter";
@@ -979,9 +979,6 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     let resolutionEpoch = this.endpointResolutionEpoch;
     try {
-      // Ensure players are registered
-      ensurePlayersRegistered();
-
       // Resolve playback endpoints before creating the stream client.
       const resolution = this.resolveEndpoints();
       resolutionEpoch = this.endpointResolutionEpoch;

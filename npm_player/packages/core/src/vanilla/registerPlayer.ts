@@ -31,7 +31,7 @@ import {
   type StreamInfo,
   type PlayerOptions,
 } from "../core/PlayerInterface";
-import { globalPlayerManager, ensurePlayersRegistered } from "../core/PlayerRegistry";
+import { globalPlayerManager } from "../core/PlayerRegistry";
 
 export interface SimplePlayerDefinition {
   /** Display name */
@@ -116,7 +116,6 @@ class SimplePlayerAdapter extends BasePlayer {
  * @param definition - Player definition
  */
 export function registerPlayer(shortname: string, definition: SimplePlayerDefinition): void {
-  ensurePlayersRegistered();
   const adapter = new SimplePlayerAdapter(shortname, definition);
   globalPlayerManager.registerPlayer(adapter);
 }

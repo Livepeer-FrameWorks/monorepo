@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Player } from "@livepeer-frameworks/player-react";
-import { globalPlayerManager } from "@livepeer-frameworks/player-core";
+import { getAvailablePlayerCapabilities } from "@livepeer-frameworks/player-core";
 import type { FwThemePreset, PlayerController } from "@livepeer-frameworks/player-core";
 import {
   PLAY_PROTOCOLS,
@@ -162,14 +162,11 @@ export function PlayPanel({
     return `${window.location.origin}${window.location.pathname}?${query}`;
   }, [playing]);
 
-  // Players register on the first attach, so the list fills once something played.
-  const playerChoices = useMemo(() => {
-    const choices = new Map<string, string>();
-    for (const p of globalPlayerManager.getRegisteredPlayers()) {
-      choices.set(p.capability.shortname, p.capability.name);
-    }
-    return [...choices];
-  }, [controller]);
+  // The static capability list names every built-in player without loading any of them.
+  const playerChoices = useMemo(
+    () => getAvailablePlayerCapabilities().map((c) => [c.shortname, c.name] as const),
+    []
+  );
 
   const options = useMemo(
     () =>

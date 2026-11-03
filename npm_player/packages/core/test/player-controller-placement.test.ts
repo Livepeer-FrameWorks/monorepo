@@ -1,12 +1,11 @@
 // @vitest-environment jsdom
 
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PlayerController } from "../src/core/PlayerController";
 import { GatewayClient } from "../src/core/GatewayClient";
 import { clearServerInfoProbes } from "@livepeer-frameworks/api/gateway-probe";
 import { StreamStateClient } from "../src/core/StreamStateClient";
 import { PlayerManager } from "../src/core/PlayerManager";
-import { ensurePlayersRegistered } from "../src/core/PlayerRegistry";
 import type { IPlayer } from "../src/core/PlayerInterface";
 
 const selectedURL = "https://us.example/hls/live/index.m3u8?receipt=selected";
@@ -59,10 +58,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   clearServerInfoProbes();
-});
-
-afterAll(async () => {
-  await ensurePlayersRegistered();
 });
 
 describe("controller protocol discovery", () => {
