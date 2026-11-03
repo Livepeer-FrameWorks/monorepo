@@ -545,9 +545,6 @@ importers:
       jsdom:
         specifier: ^29.0.2
         version: 29.0.2(@noble/hashes@1.8.0)
-      lucide-react:
-        specifier: ^1.8.0
-        version: 1.8.0(react@19.2.5)
       react:
         specifier: 19.2.5
         version: 19.2.5
@@ -980,6 +977,9 @@ importers:
       '@livepeer-frameworks/player-react':
         specifier: workspace:^
         version: link:../npm_player/packages/react
+      '@livepeer-frameworks/player-tester':
+        specifier: workspace:^
+        version: link:../npm_player/packages/tester
       '@livepeer-frameworks/streamcrafter-react':
         specifier: workspace:^
         version: link:../npm_studio/packages/react

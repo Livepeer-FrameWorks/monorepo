@@ -37,6 +37,7 @@ COPY npm_player/packages/core/package.json npm_player/packages/core/
 COPY npm_player/packages/react/package.json npm_player/packages/react/
 COPY npm_player/packages/svelte/package.json npm_player/packages/svelte/
 COPY npm_player/packages/wc/package.json npm_player/packages/wc/
+COPY npm_player/packages/tester/package.json npm_player/packages/tester/
 COPY npm_player/playground/package.json npm_player/playground/
 COPY npm_studio/package.json npm_studio/
 COPY npm_studio/packages/core/package.json npm_studio/packages/core/
