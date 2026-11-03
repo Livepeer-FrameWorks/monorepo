@@ -1,5 +1,17 @@
 # @livepeer-frameworks/streamcrafter-core
 
+## 0.8.0
+
+### Minor Changes
+
+- d05e03e: A studio can switch streams without losing its sources or carrying one stream's scenes to another. The drop-ins take a new `layoutKey` prop (`layout-key` attribute on `<fw-streamcrafter>`) that names the stream the layout belongs to. When it changes, the running studio shows that key's `initialLayout`, or the default layout when there is none or it does not apply. Before, a switch between two streams that both had no saved layout kept the previous stream's scenes. `onLayoutChange` now receives `(layout, layoutKey)`, and `fw-sc-layout-change` carries `{ layout, layoutKey }`. A report exported for the previous key is dropped, including one whose export was still running, so it cannot be saved under the next stream's key. A new `whipUrl` now goes to the running controller instead of rebuilding it, so camera, screen and media sources keep running; a broadcast that is live when `whipUrl` changes is stopped, and the next one goes to the new endpoint. Without `layoutKey`, a new `initialLayout` object no longer counts as another stream.
+
+  Core adds `IngestControllerV2.setWhipUrl()` (also on the vanilla studio and `StreamCrafterV2`), `createDefaultStudioLayout()`, and `StudioLayoutKeeper`, which the drop-ins share for these rules. React's `useCompositor` and Svelte's `createCompositorStore` take a `layoutKeeper` in place of `initialLayout`, and return `followLayoutKey()` to apply a key change to the running compositor.
+
+### Patch Changes
+
+- e7c3d61: The advanced panel's Encoder block now shows the effective encoder config read-only: video codec preference, resolution, frame rate, bitrates and audio codec, with each value that differs from the quality profile marked as overridden and a pointer to Settings. The Encoder section in `StudioSettings` is the one place to change these. The Svelte `AdvancedPanel` drops its `onEncoderOverridesChange` prop and `<fw-sc-advanced>` no longer fires `fw-encoder-overrides-change`. Core exports `encoderSummaryRows()` for the read-only rows. The Spanish, French, German and Dutch packs now translate the encoder labels, including the codec's Auto choice. The web component README's `setEncoderOverrides` example now uses the `{ video: { bitrate } }` shape that `EncoderOverrides` takes.
+
 ## 0.7.1
 
 ### Patch Changes
