@@ -31,7 +31,11 @@ export interface UseCompositorOptions {
   /** A change of `renderer` switches the running compositor to it. */
   config?: Partial<CompositorConfig>;
   autoEnable?: boolean;
-  /** Applied each time the compositor starts, before it reports itself enabled. */
+  /**
+   * Applied when the compositor first starts, before it reports itself
+   * enabled. Later starts restore the compositor's own layout, also on a new
+   * controller, unless this changed to another object since the last start.
+   */
   initialLayout?: StudioLayout | null;
 }
 
@@ -116,11 +120,25 @@ export function useCompositor({
   const initialLayoutRef = useRef(initialLayout);
   initialLayoutRef.current = initialLayout;
 
+  // The compositor's own layout comes back when it is turned on again, and
+  // moves to a new controller (a new endpoint, profile or debug setting)
+  // unless initialLayout changed along with it, which marks another stream.
   // A stored layout that no longer applies must not keep the compositor off.
+  const lastStartRef = useRef<{
+    controller: IngestControllerV2;
+    initialLayout: StudioLayout | null | undefined;
+  } | null>(null);
   const startCompositor = useCallback(
     async (target: IngestControllerV2, enableConfig?: Partial<CompositorConfig>) => {
+      const requested = initialLayoutRef.current;
+      const last = lastStartRef.current;
+      const carried =
+        last && (last.controller === target || last.initialLayout === requested)
+          ? last.controller.exportLayout().catch(() => null)
+          : null;
+      lastStartRef.current = { controller: target, initialLayout: requested };
       await target.enableCompositor(enableConfig);
-      const layout = initialLayoutRef.current;
+      const layout = (await carried) ?? requested;
       if (layout) {
         await target.importLayout(layout).catch((err: unknown) => {
           console.warn("Could not apply the studio layout:", err);

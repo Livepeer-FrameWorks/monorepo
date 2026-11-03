@@ -36,11 +36,10 @@ const SettingsIcon = ({ size = 16 }: { size?: number }) => (
 );
 
 /** Resolution, frame rate, bitrates and video codec; they apply when streaming starts. */
-const EncoderSection: React.FC = () => {
+const EncoderSection: React.FC<{ profile: QualityProfile }> = ({ profile }) => {
   const ctx = useStreamCrafterContext();
   const t = useStudioTranslate();
   const codecs = useMemo(() => sendableVideoCodecs(), []);
-  const profile = ctx.qualityProfile;
   const overrides = ctx.encoderOverrides;
   const rows = encoderSettingRows(profile, overrides, codecs, t("codecAuto"));
   const hasOverrides = rows.some((row) => row.overridden);
@@ -177,7 +176,7 @@ export const StudioSettings: React.FC<StudioSettingsProps> = ({
               ))}
             </div>
           </div>
-          <EncoderSection />
+          <EncoderSection profile={profile} />
           {children}
         </div>
       )}

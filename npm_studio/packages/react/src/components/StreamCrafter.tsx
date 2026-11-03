@@ -586,18 +586,13 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
     autoStart: true,
   });
 
-  // Compositor for multi-source composition. The layout saved when it was
-  // turned off belongs to this controller and comes back when it is turned on.
-  const controller = getController();
-  const savedLayoutRef = useRef<{ controller: unknown; layout: StudioLayout } | null>(null);
+  // Compositor for multi-source composition. Its layout survives turning it
+  // off and on and a new controller for the same stream.
   const compositor = useCompositor({
-    controller,
+    controller: getController(),
     autoEnable: enableCompositor,
     config: compositorConfig,
-    initialLayout:
-      savedLayoutRef.current?.controller === controller
-        ? savedLayoutRef.current.layout
-        : initialLayout,
+    initialLayout,
   });
   const {
     isEnabled: compositorOn,
@@ -610,20 +605,8 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
   } = compositor;
 
   useEffect(() => {
-    if (enableCompositor || !compositorOn) return;
-    let cancelled = false;
-    exportLayout()
-      .then((layout) => {
-        savedLayoutRef.current = layout ? { controller, layout } : null;
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (!cancelled) disableCompositor();
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [enableCompositor, compositorOn, exportLayout, disableCompositor, controller]);
+    if (!enableCompositor && compositorOn) disableCompositor();
+  }, [enableCompositor, compositorOn, disableCompositor]);
 
   const onLayoutChangeRef = useRef(onLayoutChange);
   onLayoutChangeRef.current = onLayoutChange;
@@ -631,9 +614,17 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
   useEffect(() => {
     if (!compositorOn || !hasLayoutListener) return;
     const timer = setTimeout(() => {
-      exportLayout()
-        .then((layout) => layout && onLayoutChangeRef.current?.(layout))
-        .catch((err: unknown) => console.warn("Could not export the studio layout:", err));
+      exportLayout().then(
+        (layout) => {
+          if (!layout) return;
+          try {
+            onLayoutChangeRef.current?.(layout);
+          } catch (err) {
+            console.warn("onLayoutChange failed:", err);
+          }
+        },
+        (err: unknown) => console.warn("Could not export the studio layout:", err)
+      );
     }, LAYOUT_CHANGE_DELAY_MS);
     return () => clearTimeout(timer);
   }, [
