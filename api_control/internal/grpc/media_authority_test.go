@@ -529,17 +529,59 @@ func TestBuildTenantAuthorityDeniedCarriesNoPositiveGrants(t *testing.T) {
 		AccessSource: clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_OWNER,
 		ClusterClass: "tenant_private", ControlCellId: "cell-a",
 	}}}
-	billing := &purserpb.GetTenantBillingStatusResponse{BillingModel: "prepaid", IsBalanceNegative: true}
+	billing := &purserpb.GetTenantBillingStatusResponse{BillingModel: "prepaid", IsBalanceNegative: true, IsSuspended: true}
 
 	payload, targets, _, _, err := buildTenantAuthority(tenant, entitlement, billing, &purserpb.GetTenantAdmissionStatusResponse{TierLevel: 4}, issuedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload.GetBillingDecision() != mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_PAYMENT_REQUIRED {
+	if payload.GetBillingDecision() != mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_SUSPENDED {
 		t.Fatalf("decision = %s", payload.GetBillingDecision())
 	}
 	if payload.GetAllowPlatformSharedPlayback() || len(payload.GetEffectiveClusterGrants()) != 0 || len(targets) != 0 {
 		t.Fatalf("denied authority carried positive grants: payload=%+v targets=%v", payload, targets)
+	}
+	if tenantCanServeMediaObjects(payload, []string{"cell-a"}) {
+		t.Fatal("a suspended tenant's media objects compile active")
+	}
+}
+
+// A spent prepaid balance refuses new sessions and keeps running ones: the
+// authority signs no grants, yet stays delivered to the cells the grants name,
+// and the tenant's media objects stay active and sealed to those cells.
+func TestBuildTenantAuthoritySpentPrepaidKeepsRecipientsWithoutGrants(t *testing.T) {
+	issuedAt := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	tenant := &quartermasterpb.Tenant{Id: "tenant-1", IsActive: true}
+	entitlement := &quartermasterpb.GetTenantEntitlementResponse{EffectiveAccess: []*clusterpeerpb.TenantClusterPeer{{
+		ClusterId: "media-a", ClusterType: "edge", AccessActive: true, SubscriptionStatus: "active",
+		AccessSource: clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_OWNER,
+		ClusterClass: "tenant_private", ControlCellId: "cell-a", EligibleServingCellIds: []string{"cell-b"},
+	}}}
+	billing := &purserpb.GetTenantBillingStatusResponse{BillingModel: "prepaid", BalanceCents: 0}
+
+	payload, targets, _, _, err := buildTenantAuthority(tenant, entitlement, billing, &purserpb.GetTenantAdmissionStatusResponse{TierLevel: 4}, issuedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sharedauthority.PrepaidBalanceSpent(payload) {
+		t.Fatalf("decision = %s/%s, want a spent prepaid balance", payload.GetBillingDecision(), payload.GetDecisionReason())
+	}
+	if payload.GetAllowPlatformSharedPlayback() || len(payload.GetEffectiveClusterGrants()) != 0 {
+		t.Fatalf("spent authority carried positive grants: %+v", payload)
+	}
+	if want := []string{"cell-a", "cell-b"}; !equalStrings(targets, want) {
+		t.Fatalf("spent authority targets = %v, want %v: the cells running its sessions would lose the tenant", targets, want)
+	}
+	if !tenantCanServeMediaObjects(payload, targets) {
+		t.Fatal("a spent tenant's media objects compile inactive, which revokes its running sessions")
+	}
+	if tenantCanServeMediaObjects(payload, nil) {
+		t.Fatal("media objects compile active with no cell to seal them to")
+	}
+	expired := proto.CloneOf(payload)
+	expired.DecisionReason = sharedauthority.ReasonOperatorGrantExpired
+	if tenantCanServeMediaObjects(expired, targets) {
+		t.Fatal("an expired operator grant keeps media objects active")
 	}
 }
 

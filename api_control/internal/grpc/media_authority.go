@@ -929,6 +929,12 @@ func (s *CommodoreServer) tenantAuthorityContext(ctx context.Context, tenantID s
 		return nil, nil, nil, time.Time{}, fmt.Errorf("load current tenant authority cells: %w", err)
 	}
 	secretTargets := activeTenantAuthorityCells(tenant)
+	// A spent prepaid balance is signed without grants but keeps the cells its
+	// grants named as recipients (buildTenantAuthority), and running media stays
+	// sealed to them.
+	if sharedauthority.PrepaidBalanceSpent(tenant) {
+		secretTargets = targets
+	}
 	return tenant, targets, secretTargets, current.ValidUntil.UTC(), nil
 }
 
@@ -996,11 +1002,17 @@ func (s *CommodoreServer) lastKnownTenantSuspension(ctx context.Context, tenantI
 	}
 }
 
+// tenantCanServeMediaObjects reports whether the tenant's media objects compile
+// active. A spent prepaid balance keeps them active, with their policy, origin
+// and sealed secrets, so the sessions already running keep playing on them; the
+// tenant's own denial is what refuses new viewers and streams.
 func tenantCanServeMediaObjects(tenant *mediaauthoritypb.TenantAuthority, secretTargets []string) bool {
-	return tenant != nil &&
-		tenant.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE &&
-		tenant.GetBillingDecision() == mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW &&
-		len(secretTargets) > 0
+	if tenant == nil || len(secretTargets) == 0 {
+		return false
+	}
+	return tenant.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE &&
+		tenant.GetBillingDecision() == mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW ||
+		sharedauthority.PrepaidBalanceSpent(tenant)
 }
 
 // liveStreamAuthorityOrigin is a live stream's signed origin and outage ingest
@@ -1181,6 +1193,9 @@ func buildTenantAuthority(tenant *quartermasterpb.Tenant, entitlement *quarterma
 		payload.DecisionReason = sharedauthority.ReasonPrepaidBalanceUnavailable
 	}
 	positive := payload.GetBillingDecision() == mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW
+	// A spent prepaid balance signs no grants, but stays delivered to the cells
+	// its grants name: they hold the sessions and sources that keep running.
+	spent := sharedauthority.PrepaidBalanceSpent(payload)
 	payload.AllowPlatformSharedPlayback = positive
 	if billing.GetTenantResourceLimits() != nil {
 		payload.ResourceLimits = proto.CloneOf(billing.GetTenantResourceLimits())
@@ -1191,7 +1206,7 @@ func buildTenantAuthority(tenant *quartermasterpb.Tenant, entitlement *quarterma
 	payload.Allowances = cloneAndSortAllowances(billing.GetAllowances())
 
 	targetSet := map[string]struct{}{}
-	if positive {
+	if positive || spent {
 		peers := append([]*clusterpeerpb.TenantClusterPeer(nil), entitlement.GetEffectiveAccess()...)
 		sort.Slice(peers, func(i, j int) bool { return peers[i].GetClusterId() < peers[j].GetClusterId() })
 		for _, peer := range peers {
@@ -1202,7 +1217,9 @@ func buildTenantAuthority(tenant *quartermasterpb.Tenant, entitlement *quarterma
 			if grantErr != nil {
 				return nil, nil, time.Time{}, nil, grantErr
 			}
-			payload.EffectiveClusterGrants = append(payload.EffectiveClusterGrants, grant)
+			if positive {
+				payload.EffectiveClusterGrants = append(payload.EffectiveClusterGrants, grant)
+			}
 			for _, cell := range cellTargets {
 				targetSet[cell] = struct{}{}
 			}

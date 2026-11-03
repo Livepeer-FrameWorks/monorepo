@@ -65,7 +65,9 @@ renew without granting access; it does not indicate a negative prepaid balance.
 Expiry is fail-closed even if the tenant has another collection method: the
 fallback tier and billing boundary must settle before access resumes.
 A `PAYMENT_REQUIRED` denial with reason `prepaid_balance_unavailable` refuses
-new streams and viewers and leaves running ones alone: playback grants stay on
+new streams and viewers and leaves running ones alone. The tenant version signs no
+cluster grants but stays delivered to the cells those grants name, and the
+tenant's media objects stay active and sealed to those cells. Playback grants stay on
 edges with `new_sessions_blocked` set, and the managed-stream set holds the
 tenant's rows: a held stream stays where it runs, starts nowhere new and leaves
 the set complete for every other tenant. A held source that restarts boots from
