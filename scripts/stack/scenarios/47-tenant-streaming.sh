@@ -7,8 +7,8 @@
 # and viewing to platform capacity. RTMP also records DVR, decodes as a viewer,
 # exports and replays a clip and the finalized chapter, and checks its signed
 # lifecycle webhooks; both flows check final analytics against the admitted
-# node and cluster. On staging it runs as the QA customer; scenario 51 covers a
-# fresh Free signup and its private cluster on the stack.
+# node and cluster. It runs as the QA customer (stack-qa on the stack);
+# scenario 51 covers a fresh Free signup and its private cluster on the stack.
 . "$(dirname "$0")/../lib.sh"
 
 need ffmpeg jq curl python3 timeout || finish

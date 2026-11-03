@@ -4,7 +4,9 @@
 # so they need no deployment: a scenario declared "tenant: test" runs as the
 # wallet test tenant in its own state directory, every other scenario as the
 # run's tenant, and a test tenant session a sign-out ended is signed in again
-# with the wallet instead of a password.
+# with the wallet instead of a password. On the compose stack a scenario
+# declared "tenant: qa" runs as the fixture's stack-qa customer
+# (stack-qa-tenant.sh), never as the demo tenant.
 set -uo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -35,9 +37,10 @@ cat >"$work/plain.sh" <<'EOF'
 printf '%s|%s|%s|%s\n' "$STACK_TENANT_ID" "$STACK_API_TOKEN" "${STACK_SESSION_JAR:-}" "$STACK_STATE_DIR"
 EOF
 
-run_as() { # run_as <scenario> [test token]: the tenant, token, session jar and state dir it ran with
+run_as() { # run_as <scenario> [test token] [qa token]: the tenant, token, session jar and state dir it ran with
   (
-    export STACK_STATE_DIR="$work/state" STACK_TENANT_ID=operator-tenant STACK_API_TOKEN=operator-token
+    export STACK_STATE_DIR="$work/state" STACK_TENANT_ID=operator-tenant STACK_API_TOKEN=operator-token \
+      STACK_TARGET=${RUN_TARGET:-staging}
     mkdir -p "$STACK_STATE_DIR"
     # shellcheck source=scripts/stack/test-tenant.sh
     . "$here/test-tenant.sh" || exit 1
@@ -72,6 +75,14 @@ qa_unavailable_blocks() {
   [ "$rc" = 2 ] && [[ "$out" == BLOCKED*"no QA_ACCOUNT_PASSWORD"* ]]
 }
 expect "without the QA tenant its scenarios are BLOCKED, never run as the run's tenant" qa_unavailable_blocks
+stack_test_runs_as_run_tenant() {
+  [ "$(RUN_TARGET=stack run_as test.sh '')" = "operator-tenant|operator-token||$work/state" ]
+}
+expect "on the compose stack, which declares no test tenant, a tenant: test scenario runs as the run's tenant" stack_test_runs_as_run_tenant
+stack_qa_runs_as_qa_tenant() {
+  [ "$(RUN_TARGET=stack run_as qa.sh)" = "qa-tenant|qa-token|qa@example.test|qa-password|$work/state/qa-tenant" ]
+}
+expect "on the compose stack a tenant: qa scenario runs as the QA customer too" stack_qa_runs_as_qa_tenant
 safe_scenarios_declare_a_tenant() {
   local f missing=''
   for f in "$here"/scenarios/[0-9][0-9]-*.sh; do
@@ -203,6 +214,12 @@ mint_recovers_then_mints() {
     grep -q '^"id":"old" "id":"hook" $' <<<"$out"
 }
 expect "mint_run_token revokes a killed run's token, deletes its webhook endpoint, then mints" mint_recovers_then_mints
+mint_grants_customer_flow_scopes() {
+  mint 3600 >/dev/null
+  grep createDeveloperToken "$work/mint/calls" | grep -q 'developer:write' &&
+    grep createDeveloperToken "$work/mint/calls" | grep -q 'placement:write'
+}
+expect "the run token may create webhook endpoints and change stream placement policy" mint_grants_customer_flow_scopes
 mint_refuses_busy_run() {
   local out
   out=$(mint 60)
@@ -406,6 +423,69 @@ wallet_login_refuses_new_account() {
     ! bootstrap_wallet_login '{"user":{"email":"qa@stack.test","tenant_id":"other-tenant"}}'
 }
 expect "a wallet sign-in that lands in a new or other tenant fails the stack bring-up" wallet_login_refuses_new_account
+
+# The compose stack's runner signs in as the QA customer its rendered fixture
+# declares (stack-qa, qa@stack.test with the fixture's password), and verify.sh
+# runs every scenario through that path: a tenant: qa scenario never runs as
+# the demo tenant, whose API token lacks developer:write.
+mkdir -p "$work/stackbin"
+cat >"$work/stackbin/curl" <<'EOF'
+#!/usr/bin/env bash
+jar='' out='' data='' prev=''
+for a in "$@"; do
+  [ "$prev" = -c ] && jar=$a
+  [ "$prev" = -o ] && out=$a
+  [ "$prev" = --data ] && data=$a
+  prev=$a
+done
+case " $* " in
+  *"/auth/login"*)
+    echo "$data" >>"$FIXTURE_DIR/stack-logins"
+    printf 'bridge\tFALSE\t/\tFALSE\t0\taccess_token\tqa-jwt\n' >"$jar"
+    echo '{"user":{"tenant_id":"stack-qa-tenant","platform_operator":false}}' >"${out:-/dev/null}"
+    printf 200 ;;
+  *"/graphql"*)
+    case "$data" in
+      *createDeveloperToken*)
+        echo "$data" >>"$FIXTURE_DIR/stack-mints"
+        echo '{"data":{"createDeveloperToken":{"__typename":"DeveloperToken","id":"qa-tok","tokenValue":"qa-secret"}}}' ;;
+      *) echo '{"data":{}}' ;;
+    esac ;;
+esac
+EOF
+chmod +x "$work/stackbin/curl"
+cat >"$work/stack-qa.sh" <<'EOF'
+#!/usr/bin/env bash
+# tenant: qa
+printf '%s|%s|%s|%s|%s\n' "$STACK_TENANT_ID" "$STACK_API_TOKEN" "$STACK_DEMO_EMAIL" "$STACK_DEMO_PASSWORD" "$STACK_STATE_DIR"
+EOF
+stack_runner() { # stack_runner <stack-qa-tenant.sh args...>: as stack-runner runs it in slot 8
+  PATH="$work/stackbin:$PATH" FIXTURE_DIR="$work" STACK_SLOT=8 STACK_STATE_DIR="$work/stackstate" \
+    STACK_BOOTSTRAPDECL="$work/decl/bin/bootstrapdecl" bash "$here/stack-qa-tenant.sh" "$@"
+}
+stack_login_then_run_as_qa() {
+  rm -rf "$work/stackstate" "$work/stack-logins" "$work/stack-mints"
+  stack_runner login >/dev/null 2>&1 &&
+    [ "$(stack_runner run "$work/stack-qa.sh")" = "stack-qa-tenant|qa-secret|qa@stack.test|stack-qa-password|$work/stackstate/qa-tenant" ] &&
+    [ "$(jq -r '.email + " " + .password' "$work/stack-logins")" = "qa@stack.test stack-qa-password" ] &&
+    grep -q 'stack-slot-8-qa-' "$work/stack-mints" && grep -q 'developer:write' "$work/stack-mints"
+}
+expect "the stack runner signs in as the fixture's stack-qa customer and runs tenant: qa scenarios with its token" stack_login_then_run_as_qa
+stack_run_without_login_blocks() {
+  local out rc
+  rm -rf "$work/stackstate"
+  out=$(stack_runner run "$work/stack-qa.sh")
+  rc=$?
+  [ "$rc" = 2 ] && [[ "$out" == BLOCKED*"did not sign in as the QA tenant"* ]]
+}
+expect "a stack tenant: qa scenario without the QA sign-in is BLOCKED, never run as the demo tenant" stack_run_without_login_blocks
+stack_verify_uses_tenant_path() {
+  ! grep -q 'stack-runner bash "$path"' "$here/verify.sh" &&
+    grep -q 'stack-qa-tenant.sh run "$path"' "$here/verify.sh" &&
+    grep -q 'stack-qa-tenant.sh login' "$here/verify.sh" &&
+    grep -q 'stack-qa-tenant.sh sweep' "$here/verify.sh"
+}
+expect "the stack's verify.sh signs in the QA tenant, runs every scenario as its declared tenant and sweeps the QA tenant" stack_verify_uses_tenant_path
 
 key_is_named_for_its_role() {
   grep -q 'STACK_TEST_TENANT_WALLET_KEY' "$here/test-tenant.sh" && ! grep -q 'STACK_PRICED_TENANT_WALLET_KEY' "$here/test-tenant.sh"

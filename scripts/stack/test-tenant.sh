@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# The deployed-target run's declared tenants (sourced by verify-target.sh).
-# A scenario's "# tenant:" line names the tenant it runs as; a scenario without
-# one runs as the run's own (the operator's) tenant. Both tenants are declared
-# in the cluster's gitops bootstrap.yaml, each keeps its own state directory,
-# and its sweep ledger and cleanup use its own token.
+# The runs' declared tenants (sourced by verify-target.sh on a deployed target
+# and by stack-qa-tenant.sh in the compose stack's runner). A scenario's
+# "# tenant:" line names the tenant it runs as; a scenario without one runs as
+# the run's own tenant (the operator's on a target, the demo tenant's on the
+# stack). Each declared tenant keeps its own state directory, and its sweep
+# ledger and cleanup use its own token.
 #
-# "# tenant: qa" is the QA customer (alias frameworks-qa), for customer flows:
-# a normal tenant, not a platform operator, on the tier and operator grant its
-# purser.customer_billing row declares. It signs in with its email and the
-# QA_ACCOUNT_PASSWORD in the cluster's SOPS env.
+# "# tenant: qa" is the QA customer, for customer flows: a normal tenant, not a
+# platform operator, on the tier and operator grant its purser.customer_billing
+# row declares. On a target it is alias frameworks-qa in the cluster's gitops
+# bootstrap.yaml and signs in with the QA_ACCOUNT_PASSWORD in the cluster's
+# SOPS env; on the stack it is alias stack-qa in scripts/stack/bootstrap.yaml,
+# whose rendered fixture carries the password.
 #
 # "# tenant: test" is the wallet test tenant (alias frameworks-stack-test):
 # - it is on a priced tier, for scenarios that measure what a tier charges (22);
@@ -16,9 +19,11 @@
 #   (37 signs out every session of the account it uses).
 # It is on the developer tier with a zero-fee, usage-waived operator grant and
 # signs in with the wallet whose key is STACK_TEST_TENANT_WALLET_KEY in the
-# cluster's SOPS env.
+# cluster's SOPS env. The compose stack declares no test tenant: its demo
+# tenant is on the priced developer tier and its sessions belong to no person,
+# so there these scenarios run as the run's tenant.
 
-QA_TENANT_ALIAS=frameworks-qa
+QA_TENANT_ALIAS=${QA_TENANT_ALIAS:-frameworks-qa}
 TEST_TENANT_ALIAS=frameworks-stack-test
 TEST_TENANT_ID=${TEST_TENANT_ID:-}
 TEST_API_TOKEN=${TEST_API_TOKEN:-}
@@ -39,7 +44,9 @@ RUN_TOKEN_ID='' RUN_TOKEN_VALUE='' RUN_TOKEN_ERROR=''
 # active token named with the prefix and webhook endpoints described "stack
 # scenarios"; those are revoked and deleted first. With busy seconds, a token
 # used within that window belongs to a run still in progress, so nothing is
-# changed and it returns 3. Sets RUN_TOKEN_ID and RUN_TOKEN_VALUE, or
+# changed and it returns 3. The token carries what customer flows use:
+# webhook endpoints (developer:write) and stream placement policy changes
+# (placement:write, scenario 47). Sets RUN_TOKEN_ID and RUN_TOKEN_VALUE, or
 # RUN_TOKEN_ERROR.
 mint_run_token() {
   local jwt=$1 prefix=$2 who=$3 busy=${4:-} stale created id name idle
@@ -68,7 +75,7 @@ mint_run_token() {
     done
   created=$(gql 'mutation($i:CreateDeveloperTokenInput!){createDeveloperToken(input:$i){__typename ... on DeveloperToken{id tokenValue} ... on ValidationError{message} ... on AuthError{message}}}' \
     "$(jq -cn --arg n "$prefix$(date -u +%Y%m%dT%H%M%SZ)" \
-      '{i:{name:$n, expiresIn:1, permissions:"streams:read,streams:write,analytics:read,developer:read,developer:write,account:read,billing:read,infrastructure:read,placement:read"}}')" \
+      '{i:{name:$n, expiresIn:1, permissions:"streams:read,streams:write,analytics:read,developer:read,developer:write,account:read,billing:read,infrastructure:read,placement:read,placement:write"}}')" \
     "$jwt")
   RUN_TOKEN_ID=$(jq -r '.data.createDeveloperToken.id // empty' <<<"$created")
   RUN_TOKEN_VALUE=$(jq -r '.data.createDeveloperToken.tokenValue // empty' <<<"$created")
@@ -150,7 +157,12 @@ test_tenant_login() {
 run_scenario_as_its_tenant() {
   local dir
   case "$(scenario_tenant "$1")" in
-    test) ;;
+    test)
+      if [ "${STACK_TARGET:-stack}" != staging ]; then
+        bash "$1"
+        return
+      fi
+      ;;
     qa)
       if [ -z "$QA_API_TOKEN" ]; then
         printf 'BLOCKED  %s: the QA tenant is unavailable: %s\n' "$(basename "$1" .sh)" "${QA_BLOCKED_REASON:-not signed in}"
@@ -218,17 +230,24 @@ qa_tenant_dir() { printf '%s/qa-tenant' "$STACK_STATE_DIR"; }
 
 # tenant_declaration <bootstrap.yaml> <alias>: the tenant's declared user email,
 # tier, operator grant base fee, usage waiver and user wallet, tab-separated.
-# The gitops overlay is read with the CLI's own bootstrap loader
-# (bootstrapdecl), so a declaration the release apply would reject fails here
-# too.
+# The file is read with the CLI's own bootstrap types (bootstrapdecl), so a
+# declaration the release apply would reject fails here too. With
+# TENANT_DECLARATION_RENDERED=1 the file is the stack's rendered fixture and a
+# sixth field carries the user's password. STACK_BOOTSTRAPDECL names a
+# prebuilt reader (verify.sh builds it on the host for the stack runner).
 tenant_declaration() {
-  local bin="$STACK_STATE_DIR/bin/bootstrapdecl"
+  local bin=${STACK_BOOTSTRAPDECL:-$STACK_STATE_DIR/bin/bootstrapdecl}
   if [ ! -x "$bin" ]; then
-    mkdir -p "$STACK_STATE_DIR/bin" &&
-      (cd "$STACK_REPO/scripts/stack/bootstrapdecl" && go build -o "$bin" .) >"$STACK_STATE_DIR/bootstrapdecl-build.log" 2>&1 ||
+    mkdir -p "$(dirname "$bin")" &&
+      (cd "$STACK_REPO/scripts/stack/bootstrapdecl" && CGO_ENABLED=0 go build -buildvcs=false -o "$bin" .) \
+        >"$STACK_STATE_DIR/bootstrapdecl-build.log" 2>&1 ||
       { echo "bootstrapdecl build failed: $STACK_STATE_DIR/bootstrapdecl-build.log" >&2; return 1; }
   fi
-  "$bin" "$1" "$2"
+  if [ "${TENANT_DECLARATION_RENDERED:-0}" = 1 ]; then
+    "$bin" -rendered "$1" "$2"
+  else
+    "$bin" "$1" "$2"
+  fi
 }
 qa_tenant_declaration() { tenant_declaration "$1" "$QA_TENANT_ALIAS"; }
 
@@ -242,12 +261,21 @@ qa_tenant_session_jwt() {
   awk '$6 == "access_token" { print $7 }' "$jar" | tail -1
 }
 
-# qa_tenant_login <secrets env file> <bootstrap.yaml> <cluster>: sign in as the
-# QA customer, check it is a normal customer and mint the run's token for it.
-# On failure it records why in QA_BLOCKED_REASON; QA scenarios then report
-# BLOCKED.
+# qa_tenant_login <secrets env file> <bootstrap.yaml> <cluster>: a deployed
+# target's QA sign-in, with the password from the cluster's SOPS env
+# (qa_tenant_sign_in).
 qa_tenant_login() {
-  local env_file=$1 declaration=$2 cluster=$3 dir body code jwt
+  local env_file=$1 password
+  password=$(sops --decrypt "$env_file" 2>/dev/null | sed -n 's/^QA_ACCOUNT_PASSWORD=//p')
+  qa_tenant_sign_in "$2" "$3" "$password" "no QA_ACCOUNT_PASSWORD in $env_file"
+}
+
+# qa_tenant_sign_in <bootstrap.yaml> <cluster> <password> <why the password is
+# missing>: sign in as the QA customer the declaration names, check it is a
+# normal customer and mint the run's token for it. On failure it records why
+# in QA_BLOCKED_REASON; QA scenarios then report BLOCKED.
+qa_tenant_sign_in() {
+  local declaration=$1 cluster=$2 dir body code jwt
   dir=$(qa_tenant_dir)
   mkdir -p "$dir" && chmod 700 "$dir"
   QA_EMAIL=$(qa_tenant_declaration "$declaration" | cut -f1)
@@ -255,9 +283,9 @@ qa_tenant_login() {
     QA_BLOCKED_REASON="no account user for $QA_TENANT_ALIAS in $declaration"
     return 1
   fi
-  QA_PASSWORD=$(sops --decrypt "$env_file" 2>/dev/null | sed -n 's/^QA_ACCOUNT_PASSWORD=//p')
+  QA_PASSWORD=$3
   if [ -z "$QA_PASSWORD" ]; then
-    QA_BLOCKED_REASON="no QA_ACCOUNT_PASSWORD in $env_file"
+    QA_BLOCKED_REASON=$4
     return 1
   fi
   body=$(mktemp "$dir/login.XXXXXX")

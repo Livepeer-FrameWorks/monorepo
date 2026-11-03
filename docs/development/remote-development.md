@@ -170,9 +170,14 @@ a sweep under the tenant's own credentials. Neither uses a billing grant, a
 cluster-health override or a synthetic publisher trigger.
 
 Scenario 47 publishes RTMP and SRT on platform capacity and checks that
-streaming leaves the tenant's plan unchanged. On the stack it runs as the run's
-tenant; on staging (`staging: safe`) it runs as the QA customer
-(`# tenant: qa`, see `scripts/stack/test-tenant.sh`).
+streaming leaves the tenant's plan unchanged. It is declared `# tenant: qa`, so
+it runs as the QA customer in both modes: on the stack as `stack-qa`
+(`qa@stack.test` in `scripts/stack/bootstrap.yaml`, signed in by
+`scripts/stack/stack-qa-tenant.sh`), on staging (`staging: safe`) as the
+cluster's declared QA customer (`scripts/stack/test-tenant.sh`). Every
+`# tenant: qa` scenario runs this way; `# tenant: test` scenarios run as the
+wallet test tenant on staging and as the demo tenant on the stack, which
+declares no test tenant.
 
 Scenario 51 is stack-only (`staging: unsafe`): it signs up and verifies a new
 Free tenant, checks that the signup is admitted on platform capacity, then

@@ -13,6 +13,10 @@
 #                           scenarios 04 and 39 record (default 120; 39 needs >=1800)
 #   STACK_SWEEP=0           skip the post-run invariant sweep (sweep.sh)
 #
+# Scenarios declared "# tenant: qa" run as the stack's QA customer (stack-qa in
+# bootstrap.yaml), as they run as the QA customer on a deployed target
+# (stack-qa-tenant.sh, test-tenant.sh); the others as the demo tenant.
+#
 # Exit status: 0 all passed; 1 a scenario or the log check failed; 2 nothing
 # failed but a scenario was BLOCKED (the stack lacked something it needs).
 set -uo pipefail
@@ -99,6 +103,28 @@ dead_containers() {
 
 failed=0 blocked=0
 summary=()
+# shellcheck source=scripts/stack/test-tenant.sh
+. "$here/test-tenant.sh"
+qa_tenant=0
+for path in "${scenarios[@]}"; do
+  scenario_needs_qa_tenant "$stack_repo_root/${path#/repo/}" && qa_tenant=1
+done
+# The runner reads the fixture's declaration with a reader built here, where
+# the Go module cache lives; the slot directory is mounted at the same path.
+qa_decl="$STACK_STATE_DIR/bin/bootstrapdecl"
+if [ "$qa_tenant" = 1 ]; then
+  printf '
+==== QA tenant sign-in ====
+'
+  rm -f "$qa_decl"
+  if ! STACK_REPO="$stack_repo_root" STACK_BOOTSTRAPDECL="$qa_decl" TENANT_DECLARATION_RENDERED=1 \
+    tenant_declaration "$here/bootstrap.yaml" stack-qa >/dev/null; then
+    echo "WARN: the stack fixture's QA declaration is unreadable; QA tenant scenarios will report BLOCKED" >&2
+  fi
+  stack_compose exec -T -e STACK_BOOTSTRAPDECL="/repo/.stack/slot-$STACK_SLOT/bin/bootstrapdecl" stack-runner \
+    bash /repo/scripts/stack/stack-qa-tenant.sh login ||
+    echo 'WARN: QA tenant sign-in failed; QA tenant scenarios will report BLOCKED' >&2
+fi
 # The sweep checks every entity created from here on, attributes each to the
 # scenario whose window it falls in, and counts container restarts against
 # what the containers had before the scenarios.
@@ -122,7 +148,8 @@ for path in "${scenarios[@]}"; do
     printf '\n==== %s ====\n' "$label"
     scenario_since="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
     window_start=$(date +%s)
-    stack_compose exec -T -e STACK_DVR_WINDOW_SECONDS="${STACK_DVR_WINDOW_SECONDS:-120}" stack-runner bash "$path"
+    stack_compose exec -T -e STACK_DVR_WINDOW_SECONDS="${STACK_DVR_WINDOW_SECONDS:-120}" stack-runner \
+      bash /repo/scripts/stack/stack-qa-tenant.sh run "$path"
     rc=$?
     printf '%s\t%s\t%s\n' "$name" "$window_start" "$(date +%s)" >>"$sweep_windows"
     case "$rc" in
@@ -166,6 +193,20 @@ if [ "${STACK_SWEEP:-1}" != 0 ]; then
     2) summary+=("BLOCKED  $label"); blocked=1 ;;
     *) summary+=("FAIL     $label"); failed=1 ;;
   esac
+  if [ "$qa_tenant" = 1 ]; then
+    printf '\n==== sweep (QA tenant) ====\n'
+    sweep_started=$(date +%s)
+    stack_compose exec -T -e STACK_SWEEP_WAIT="${STACK_SWEEP_WAIT:-240}" \
+      -e STACK_BOOTSTRAPDECL="/repo/.stack/slot-$STACK_SLOT/bin/bootstrapdecl" stack-runner \
+      bash /repo/scripts/stack/stack-qa-tenant.sh sweep "$run_since" "/repo/.stack/slot-$STACK_SLOT/sweep-scenarios.tsv"
+    rc=$?
+    label="sweep QA tenant ($(($(date +%s) - sweep_started))s)"
+    case "$rc" in
+      0) summary+=("PASS     $label") ;;
+      2) summary+=("BLOCKED  $label"); blocked=1 ;;
+      *) summary+=("FAIL     $label"); failed=1 ;;
+    esac
+  fi
 fi
 
 printf '\n==== stack slot %s summary ====\n' "$STACK_SLOT"
