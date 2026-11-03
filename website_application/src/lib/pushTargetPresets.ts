@@ -15,7 +15,7 @@ export const PUSH_TARGET_PRESETS: Record<string, PushTargetPreset> = {
     ingestUrl: "rtmp://live.twitch.tv/app/",
     placeholder: "live_xxxxxxxxxxxx",
     keyHelp: {
-      label: "Twitch Creator Dashboard, Settings, Stream",
+      label: "Twitch Creator Dashboard → Settings → Stream",
       url: "https://dashboard.twitch.tv/settings/stream",
     },
   },
@@ -33,7 +33,7 @@ export const PUSH_TARGET_PRESETS: Record<string, PushTargetPreset> = {
     ingestUrl: "rtmps://live-api-s.facebook.com:443/rtmp/",
     placeholder: "FB-xxxx...",
     keyHelp: {
-      label: "Facebook Live Producer, Streaming software",
+      label: "Facebook Live Producer → Streaming software",
       url: "https://www.facebook.com/help/587160588142067",
     },
   },
@@ -42,7 +42,7 @@ export const PUSH_TARGET_PRESETS: Record<string, PushTargetPreset> = {
     ingestUrl: "rtmps://fa723fc1b171.global-contribute.live-video.net/app/",
     placeholder: "sk_xxxxxxxxxxxx",
     keyHelp: {
-      label: "Kick Creator Dashboard, Channel, Stream URL & Key",
+      label: "Kick Creator Dashboard → Channel → Stream URL & Key",
       url: "https://dashboard.kick.com",
     },
   },

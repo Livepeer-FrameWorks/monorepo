@@ -522,7 +522,8 @@
                   rel="noopener noreferrer"
                   class="text-primary hover:underline">stream test page</a
                 >
-                publishes to any WHIP URL and plays any stream URL, without an account.
+                publishes to a WHIP URL and plays a playback ID or an HLS, DASH, MP4, WebM or WHEP URL,
+                without an account.
               </p>
               <p>
                 StreamCrafter is in beta and changes quickly.

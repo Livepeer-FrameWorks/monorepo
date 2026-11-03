@@ -19,6 +19,8 @@ describe("push target presets", () => {
         continue;
       }
       expect(preset.keyHelp?.url, key).toMatch(/^https:\/\//);
+      // Navigation steps read as one path, as in the docs table, not a list.
+      expect(preset.keyHelp?.label, key).not.toContain(",");
     }
   });
 
