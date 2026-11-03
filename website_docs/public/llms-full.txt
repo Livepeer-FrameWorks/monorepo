@@ -2968,6 +2968,7 @@ a spent balance from a suspended account:
 | `ACCOUNT_INACTIVE`       | `FORBIDDEN`           | The stream owner's user is deactivated.                           |
 | `ACCOUNT_SUSPENDED`      | `FORBIDDEN`           | The account is suspended.                                         |
 | `PAYMENT_REQUIRED`       | `FAILED_PRECONDITION` | The prepaid balance is spent; add credit before going live.       |
+| `GRANT_EXPIRED`          | `FAILED_PRECONDITION` | A trial or arranged plan ended; retry once the plan has switched. |
 | `NON_PUSH_MODE_STREAM`   | `FAILED_PRECONDITION` | The stream pulls its source and does not accept a push.           |
 | `CLUSTER_NOT_ENTITLED`   | `FORBIDDEN`           | The account may not ingest on the cluster the stream resolves to. |
 | `CLUSTER_CLASS_MISMATCH` | `FORBIDDEN`           | The cluster's class is not permitted for the account.             |
@@ -15952,9 +15953,15 @@ The **Overlays** section of the panel puts a logo or text above your sources in 
 - **Add logo** takes an image file, such as a PNG with a transparent background or an SVG. Set its size and position with the sliders. The image file stays in your browser; only the finished mix is sent.
 - **Add text** puts a lower third near the bottom left. Type your text, then set its size, color, and position. The picture updates as you edit.
 
+### Saved layouts
+
+The studio saves the scenes, overlays, and layout of each stream in this browser. When you open a stream again, or pick another stream under **Broadcast to**, that stream's saved layout comes back; a stream without one starts from the default layout. The sources you added stay in the studio when you switch streams and join the layout of the stream you switched to.
+
+Sources themselves are not saved: after a reload, add your camera, screen, and media files again. A saved layout stays in this browser only. Another browser or computer starts from the default layout, and clearing this site's data removes it.
+
 ### Studio settings
 
-The gear next to **Broadcast to** opens **Studio settings**. **Compositor** turns scenes, layers, and layouts on or off, and **Renderer** picks how the browser draws the mix. Leave both at their defaults unless the studio reports that the compositor could not start. Applying a change restarts the studio, which clears your sources, so change these before you set up.
+The gear next to **Broadcast to** opens **Studio settings**. **Compositor** turns scenes, layers, and layouts on or off, and **Renderer** picks how the browser draws the mix. Leave both at their defaults unless the studio reports that the compositor could not start. Changes apply right away, and your sources, scenes, and overlays stay in place. Turning the compositor off and on again brings back the scenes and overlays you had.
 
 ## 4. Rehearse
 
@@ -15987,7 +15994,7 @@ To stream to YouTube, Twitch, or anywhere else at the same time, open your strea
 ## If something goes wrong
 
 - **The connection drops.** The studio shows **Reconnecting...** and retries a few times on its own. If it shows an error instead, click **Go Live** again. Your sources stay in place.
-- **The browser blocks your camera or microphone.** Allow camera and microphone access for this site in the browser's site settings, then add the source again. Your other sources and scenes stay in place. Don't reload the page: a reload clears the studio, and you would set up your sources and scenes again.
+- **The browser blocks your camera or microphone.** Allow camera and microphone access for this site in the browser's site settings, then add the source again. Your other sources and scenes stay in place. Don't reload the page: a reload stops your sources, and you would add them again. Your scenes and overlays come back from the stream's saved layout.
 - **The picture freezes when you change tabs.** Your browser is pausing the encoder in the background. Stay on the tab, or switch to a Chromium-based browser.
 - **Video is choppy.** Close other applications, remove sources you don't need, or switch to the Conference setting before your next broadcast.
 - **The stream won't start on a prepaid account.** At €0 new broadcasts are refused, and a broadcast that disconnects can't reconnect until you [top up](/builders/billing). A broadcast that is already running keeps going, and stops if the balance falls below -€10.
