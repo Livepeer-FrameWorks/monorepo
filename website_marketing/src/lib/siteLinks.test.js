@@ -15,7 +15,7 @@ test("header keeps every page and adds Showcase at the top level", () => {
     "About",
     "Showcase",
     "Pricing",
-    "Network",
+    "Network explorer",
     "Docs",
     "Contact",
     "Resources",
@@ -41,7 +41,7 @@ test("footer groups links into product, company, resources and legal", () => {
   );
   assert.deepEqual(
     columns[0].links.map((link) => link.label),
-    ["Showcase", "Stream test", "Analytics", "Network", "Pricing"]
+    ["Showcase", "Stream test", "Analytics", "Network explorer", "Pricing"]
   );
   assert.deepEqual(
     columns[1].links.map((link) => link.label),

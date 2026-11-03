@@ -31,7 +31,7 @@ export function siteLinks({ docsUrl, githubUrl }) {
     about: { id: "about", label: "About", to: "/about" },
     showcase: { id: "showcase", label: "Showcase", to: "/showcase" },
     pricing: { id: "pricing", label: "Pricing", to: "/pricing" },
-    network: { id: "network", label: "Network", to: "/network" },
+    network: { id: "network", label: "Network explorer", to: "/network" },
     analytics: { id: "analytics", label: "Analytics", to: "/analytics" },
     contact: { id: "contact", label: "Contact", to: "/contact" },
     status: {
