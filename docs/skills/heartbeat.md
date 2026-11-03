@@ -18,17 +18,23 @@ Load this file on demand — the summary in [skill.md](https://frameworks.networ
 Read `account://status` (MCP) or query `me` (GraphQL).
 
 - If `blockers` array is non-empty, resolve each:
-  - `BILLING_DETAILS_MISSING` → call `update_billing_details`
   - `INSUFFICIENT_BALANCE` → call `topup_balance` or use x402 `submit_payment`
-- If account is suspended, alert human immediately.
+  - `PAYMENT_SETUP_REQUIRED` → a human completes payment setup on the dashboard's Billing page
+  - `BILLING_STATUS_UNAVAILABLE` → retry later; nothing was charged
+  - `ACCOUNT_SUSPENDED` → alert human immediately
+- If a GraphQL WebSocket closes with code `4403` and reason `account deactivated`, stop
+  reconnecting and alert human: the user was deactivated or the account closed.
 
 ### 2. Balance
 
-Read `billing://balance` (MCP) or query `prepaidBalance` / `billingStatus` (GraphQL).
+Read `billing://balance` (MCP) or query `prepaidBalance` / `billingStatus` (GraphQL). Amounts are
+in euro cents.
 
-- Check `balance_cents` and `drain_rate_cents_per_hour`.
-- Compute `estimated_hours_left = current_balance / drain_rate`.
-- **Alert human** if balance < $5 with active streams.
+- Check `available_balance_cents` (settled minus reserved) and `drain_rate_cents_per_hour`.
+  `estimated_hours_left` is included when a drain rate is known.
+- At €0 available, running streams and their viewers continue, but new streams, new viewers and
+  reconnects are refused. Below -€10 settled the account is suspended and running sessions stop.
+- **Alert human** if `available_balance_cents` < 500 (€5) with active streams.
 - **Alert human** if `estimated_hours_left` < 2 hours.
 - Consider auto-topup via `topup_balance` if configured.
 
@@ -36,14 +42,15 @@ Read `billing://balance` (MCP) or query `prepaidBalance` / `billingStatus` (Grap
 
 Read `streams://list` (MCP) or query `streams` (GraphQL). For each stream where `status = "live"`:
 
-1. Read `streams://{id}/health`.
-2. If `health_status` is `degraded`:
-   - Log it, but no immediate action needed.
-3. If `health_status` is `critical`:
-   - Run `diagnose_rebuffering` — check if origin ingest is dropping frames.
+1. Read `streams://{id}/health` for `is_live`, current viewers and duration.
+2. Run `get_stream_health_summary`. Its `status` is `healthy`, `warning` (issues in the time
+   range) or `no_data`. On `warning`, log it; no immediate action needed.
+3. If the summary keeps reporting issues, or viewers complain:
+   - Run `diagnose_rebuffering` — check whether viewers stall.
    - Run `diagnose_buffer_health` — check edge buffer saturation.
    - Run `diagnose_packet_loss` if rebuffering diagnosis suggests network issues.
-   - **Alert human** with diagnosis summary and suggested action.
+   - Each returns `status` `healthy`, `warning` or `critical`. On `critical`, **alert human**
+     with the diagnosis summary and suggested action.
 4. If stream has been live > 24 hours without activity, consider whether it's intentional.
 
 ### 4. Skill Updates
@@ -63,11 +70,13 @@ Fetch `skill.json` and compare `version` field against last known version.
 
 | Condition                        | Action            |
 | -------------------------------- | ----------------- |
-| Balance < $5 with active streams | Alert human       |
+| Balance < €5 with active streams | Alert human       |
 | Estimated hours left < 2         | Alert human       |
-| Stream health `critical`         | Diagnose + alert  |
+| Diagnosis `critical`             | Alert human       |
 | Account suspended                | Alert immediately |
+| Account deactivated (4403 close) | Alert immediately |
+| Payment setup required           | Alert human       |
 | x402 payment failure             | Alert human       |
 | Wallet signature rejected        | Alert human       |
-| Balance < $20, no active streams | Log (no alert)    |
-| Stream health `degraded`         | Log (no alert)    |
+| Balance < €20, no active streams | Log (no alert)    |
+| Health summary `warning`         | Log (no alert)    |

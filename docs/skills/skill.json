@@ -1,6 +1,6 @@
 {
   "name": "frameworks-network",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Multi-tenant live streaming SaaS with MCP, wallet auth, and x402 payments.",
   "homepage": "https://frameworks.network",
   "metadata": {

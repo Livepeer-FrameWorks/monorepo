@@ -9,7 +9,7 @@ description: >
 compatibility: Requires network access to bridge.frameworks.network
 metadata:
   author: frameworks
-  version: "1.0"
+  version: "1.1"
   homepage: https://frameworks.network
   emoji: "📡"
   category: streaming
@@ -255,8 +255,10 @@ Two management paths: use `set_node_mode` / `get_node_health` MCP tools when you
 
 **Do alert:**
 
-- Balance is critically low (< $5 with active streams)
-- Stream health shows `critical` status
+- Available balance is below €5 with active streams
+- An operation returns `ACCOUNT_SUSPENDED` or `PAYMENT_SETUP_REQUIRED`
+- A GraphQL WebSocket closes with code `4403` and reason `account deactivated`, or sign-in answers "account deactivated": an operator deactivated the user or closed the account, so stop reconnecting
+- A diagnosis tool (`diagnose_rebuffering`, `diagnose_buffer_health`, `diagnose_packet_loss`) reports `critical`
 - A payment specifically returns `BILLING_PROFILE_REQUIRED` and you cannot provide the listed fields
 - x402 payment settlement fails
 - Wallet signature is rejected (may need re-signing)
@@ -269,7 +271,7 @@ Run every 15–30 minutes during active streaming, every few hours otherwise.
 2. **Balance**: Read `billing://balance`. Alert a human if
    `available_balance_cents` is below 500 with active streams; report settled
    and reserved balances as context.
-3. **Active streams**: Read `streams://list`. For each live stream, read `streams://{id}/health`. If `status: critical`, run `diagnose_rebuffering` and `diagnose_buffer_health`.
+3. **Active streams**: Read `streams://list`. For each live stream, read `streams://{id}/health` and run `get_stream_health_summary`. If it keeps reporting `warning`, run `diagnose_rebuffering` and `diagnose_buffer_health`, and alert a human on a `critical` result.
 4. **Skill updates**: Check `skill.json` version periodically (once/day).
 
 If nothing notable: no output needed.
@@ -281,12 +283,14 @@ For the full periodic check routine, load [heartbeat.md](https://frameworks.netw
 
 MCP applies the shared operation class before execution. Rated tools can return these blockers; safe read/control/payment-recovery tools do not require balance:
 
-| Code                       | Trigger                                                                                                    | Resolution                                                                                                                                        |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AUTHENTICATION_REQUIRED`  | No wallet headers or bearer token                                                                          | Send `X-Wallet-Address` + `X-Wallet-Signature` + `X-Wallet-Message`, or `Authorization: Bearer <jwt>`                                             |
-| `BILLING_PROFILE_REQUIRED` | Payment is over €100 or carries a VAT claim and lacks a full profile                                       | Call `update_billing_details` with the response's `required_fields`, then request fresh options                                                   |
-| `INSUFFICIENT_BALANCE`     | Prepaid available balance ≤ €0                                                                             | Pay via x402 (`submit_payment`) or `topup_balance`. Check `billing://balance` for settled, reserved, and available state                          |
-| `ACCOUNT_SUSPENDED`        | Settled prepaid balance below -€10, an ended FrameWorks arrangement not yet processed, or a closed account | Read `account://status`. Top up to lift a balance suspension; an ended arrangement clears once processed. An agent cannot reopen a closed account |
+| Code                         | Trigger                                                                                                    | Resolution                                                                                                                                        |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AUTHENTICATION_REQUIRED`    | No wallet headers or bearer token                                                                          | Send `X-Wallet-Address` + `X-Wallet-Signature` + `X-Wallet-Message`, or `Authorization: Bearer <jwt>`                                             |
+| `BILLING_PROFILE_REQUIRED`   | Payment is over €100 or carries a VAT claim and lacks a full profile                                       | Call `update_billing_details` with the response's `required_fields`, then request fresh options                                                   |
+| `INSUFFICIENT_BALANCE`       | Prepaid available balance ≤ €0                                                                             | Pay via x402 (`submit_payment`) or `topup_balance`. Check `billing://balance` for settled, reserved, and available state                          |
+| `ACCOUNT_SUSPENDED`          | Settled prepaid balance below -€10, an ended FrameWorks arrangement not yet processed, or a closed account | Read `account://status`. Top up to lift a balance suspension; an ended arrangement clears once processed. An agent cannot reopen a closed account |
+| `PAYMENT_SETUP_REQUIRED`     | Postpaid paid plan without a confirmed Stripe or Mollie subscription or mandate                            | A human completes payment setup on the dashboard's Billing page; rated work stays refused until then                                              |
+| `BILLING_STATUS_UNAVAILABLE` | FrameWorks could not read the account's billing status                                                     | Retry the rated operation; nothing was charged                                                                                                    |
 
 Rate limiting is handled at the Gateway layer (HTTP 429) with standard `Retry-After` headers — not as a preflight error.
 Read, configuration, cleanup, billing, and payment-recovery operations skip the balance check. Authentication, permissions, and abuse limits still apply.
