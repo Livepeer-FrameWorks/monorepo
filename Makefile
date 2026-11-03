@@ -440,11 +440,10 @@ verify-frontend-build:
 	pnpm build
 	$(MAKE) --no-print-directory test-logbook-image-health VERSION=ci
 
-# The CI "Marketing browser fixtures" job, step for step. CI installs Chromium
-# with --with-deps, which installs its system libraries through apt as root; here
-# Playwright fetches only the browser, and on a Linux host that lacks those
-# libraries it fails naming them; install them once as root with Playwright's
-# `install-deps chromium`.
+# The CI "Marketing browser fixtures" job, step for step, without --with-deps:
+# that flag installs Chromium's system libraries through apt as root. A Linux
+# host without them fails here and names them. Install them once as root with
+# Playwright's `install-deps chromium`.
 verify-marketing-browser:
 	pnpm --dir website_marketing exec playwright install chromium
 	pnpm --filter frameworks-website test:browser

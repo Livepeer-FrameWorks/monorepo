@@ -23,8 +23,8 @@ const (
 	// WebsocketCloseForbidden rejects an Authorization value that does not
 	// authenticate: graphql-transport-ws names 4403 Forbidden for a rejected
 	// connection_init. The gateway rejects that credential again on every
-	// reconnect, but graphql-ws clients still retry 4403 by default, since
-	// the protocol allows access to change between attempts. A client stops
+	// reconnect, but the graphql-ws client library retries 4403 by default,
+	// since it expects access may be granted on a later attempt. A client stops
 	// only by its own choice: the TypeScript and Python SDKs end with an
 	// authentication error on a 4403 before connection_ack, and the webapp
 	// refreshes its session before each reconnect and signs out when the
