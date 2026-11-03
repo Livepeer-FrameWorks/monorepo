@@ -83,6 +83,7 @@ jobs:
           - mistserver
           - helmsman
           - edge
+          - service_bootstrap
         image:
           - geerlingguy/docker-ubuntu2404-ansible:latest
     steps:
