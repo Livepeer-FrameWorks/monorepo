@@ -389,6 +389,62 @@ func ybRoleMigrate(t *testing.T, repo, container, phase string, items []map[stri
 	if err != nil {
 		t.Fatalf("yugabyte role %s migrations (%d items) failed: %v\n%s", phase, len(items), err, ybRoleTail(output, 20000))
 	}
+	ybRoleRequireUnflooredApply(t, phase, items, output)
+}
+
+// ybRoleRequireUnflooredApply requires the fastest .notx.sql item of a phase to have applied in under 10s. Ansible
+// sleeps one whole poll interval before it first checks an async job, so the poll interval is the least time any item
+// takes, and every platform upgrade applies dozens of index builds that finish at once on small tables.
+func ybRoleRequireUnflooredApply(t *testing.T, phase string, items []map[string]any, output string) {
+	t.Helper()
+	durations := ybRoleTaskDurations(output, "Apply migration (Yugabyte)")
+	if len(durations) != len(items) {
+		t.Fatalf("%s: %d timed Apply migration (Yugabyte) tasks for %d items\n%s", phase, len(durations), len(items), ybRoleTail(output, 8000))
+	}
+	fastest, fastestItem := time.Duration(-1), ""
+	for i, item := range items {
+		if transactional, _ := item["transactional"].(bool); transactional {
+			continue
+		}
+		if fastest < 0 || durations[i] < fastest {
+			fastest, fastestItem = durations[i], fmt.Sprintf("%s/%s", item["db"], item["filename"])
+		}
+	}
+	if fastest >= 10*time.Second {
+		t.Fatalf("%s: the fastest .notx.sql item, %s, took %s to apply: its poll interval, not its build, sets how long each index item takes", phase, fastestItem, fastest)
+	}
+}
+
+// ybRoleProfileLine is the line ansible.posix.profile_tasks prints after each task header and the recap header; the
+// duration in parentheses is that of the task before it.
+var ybRoleProfileLine = regexp.MustCompile(`\((\d+):(\d{2}):(\d{2}\.\d+)\)\s+\d+:\d{2}:\d{2}\.\d+ \*+\s*$`)
+
+// ybRoleTaskDurations returns, in run order, the duration of every run of the task called name in output.
+func ybRoleTaskDurations(output, name string) []time.Duration {
+	var durations []time.Duration
+	last, previous, awaiting := "", "", false
+	for _, line := range strings.Split(output, "\n") {
+		switch {
+		case strings.HasPrefix(line, "TASK ["):
+			previous, last, awaiting = last, strings.TrimSuffix(strings.SplitN(strings.TrimPrefix(line, "TASK ["), "] ", 2)[0], "]"), true
+		case strings.HasPrefix(line, "PLAY RECAP"):
+			previous, last, awaiting = last, "", true
+		case awaiting:
+			match := ybRoleProfileLine.FindStringSubmatch(line)
+			if match == nil {
+				continue
+			}
+			awaiting = false
+			if !strings.HasSuffix(previous, ": "+name) && previous != name {
+				continue
+			}
+			duration, err := time.ParseDuration(match[1] + "h" + match[2] + "m" + match[3] + "s")
+			if err == nil {
+				durations = append(durations, duration)
+			}
+		}
+	}
+	return durations
 }
 
 // ybRoleRequireApplied requires each database's ledger to hold exactly the items applied to it and every index in
@@ -775,9 +831,9 @@ func ybRoleRepo(t *testing.T) string {
 	if _, lookErr := exec.LookPath(ybRolePlaybookBinary()); lookErr != nil {
 		t.Fatalf("%s not found: %v", ybRolePlaybookBinary(), lookErr)
 	}
-	for _, collection := range []string{"postgresql", "docker"} {
-		if _, statErr := os.Stat(filepath.Join(repo, "ansible", ".cache", "collections", "ansible_collections", "community", collection)); statErr != nil {
-			t.Fatalf("community.%s is not installed under ansible/.cache/collections; run make ansible-galaxy-install", collection)
+	for _, collection := range []string{"community/postgresql", "community/docker", "ansible/posix"} {
+		if _, statErr := os.Stat(filepath.Join(repo, "ansible", ".cache", "collections", "ansible_collections", collection)); statErr != nil {
+			t.Fatalf("%s is not installed under ansible/.cache/collections; run make ansible-galaxy-install", strings.ReplaceAll(collection, "/", "."))
 		}
 	}
 	return repo
@@ -830,6 +886,7 @@ func ybRoleRunPlaybook(t *testing.T, repo, container string, vars map[string]any
 		"ANSIBLE_COLLECTIONS_PATH="+filepath.Join(repo, "ansible", "collections")+string(os.PathListSeparator)+
 			filepath.Join(repo, "ansible", ".cache", "collections"),
 		"ANSIBLE_NOCOLOR=1",
+		"ANSIBLE_CALLBACKS_ENABLED=ansible.posix.profile_tasks",
 	)
 	var output bytes.Buffer
 	run.Stdout, run.Stderr = &output, &output

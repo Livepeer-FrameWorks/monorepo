@@ -545,8 +545,10 @@ PostgreSQL and YugabyteDB:
   it. The Yugabyte module tries it with `pg_try_advisory_lock` every 10 s, up to 90 more times.
   Nothing of the item has run when the lock is refused, so both engines retry a `.notx.sql`
   item on it too, and a migrator that runs out of attempts fails with an error naming the lock.
-- Every PostgreSQL and Yugabyte item runs as an Ansible async job. A transactional item is
-  polled every 2 s and a `.notx.sql` item every 15 s; the poll and retry lines are the progress
+- Every PostgreSQL and Yugabyte item runs as an Ansible async job polled every second. Ansible
+  sleeps one poll interval before its first check, so the interval is the least time any item
+  takes, and most items, index builds on small tables included, finish in well under a
+  second. The poll and retry lines are the progress
   the CLI's migration watchdog sees, so a migrator waiting for the lock or a long index build is
   not cancelled as stalled. The job is killed after 24 hours.
 - On YugabyteDB DDL runs outside transaction blocks (`ysql_yb_ddl_transaction_block_enabled`

@@ -56,9 +56,10 @@
 # The module tries the per-database migration lock every 10s for about a quarter of an hour while another migrator
 # holds it, then fails with nothing of the item run, so a queued migrator never waits without bound.
 # Every item runs as an async job: its poll lines are the only output while it runs, and the CLI's migration watchdog
-# cancels a run that prints nothing for its stall window. A transactional item is polled every 2s, because each item
-# takes at least one poll interval; a .notx.sql item every 15s, because an index build can run for hours. The job is
-# killed after 24 hours, and the rerun repairs the index that build left invalid.
+# cancels a run that prints nothing for its stall window. Ansible sleeps a whole poll interval before it first checks
+# the job, so every item takes at least one interval; most items, index builds on small tables included, finish in
+# well under a second, so every item is polled every second, the shortest interval Ansible takes. The job is killed
+# after 24 hours, and the rerun repairs the index that build left invalid.
 - name: Apply migration (Yugabyte)
   frameworks.infra.yugabyte_migration_apply:
     login_host: "{{ yugabyte_ysql_local_host }}"
@@ -80,7 +81,7 @@
     ledger_insert: "{{ migration_ledger_sql }}"
   register: yugabyte_migration_apply
   async: 86400
-  poll: "{{ (item.transactional | default(true)) | ternary(2, 15) }}"
+  poll: 1
   when: not ansible_check_mode
   vars:
     # A query that returns one DROP INDEX per row; the module runs each in its own transaction. Within one

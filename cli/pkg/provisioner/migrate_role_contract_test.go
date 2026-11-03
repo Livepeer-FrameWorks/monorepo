@@ -246,10 +246,11 @@ func TestYugabyteMigrationRoleAppliesStatementByStatement(t *testing.T) {
 // TestMigrationApplyTasksReportWhileRunning pins that every migration apply prints while it runs, so the CLI's
 // migrate stall window sees progress however long it takes: every PostgreSQL/YugabyteDB item, including one waiting
 // for the migration lock or a lock its statement needs, and every ClickHouse item run as async jobs whose poll lines
-// reach the watchdog. A transactional item is polled every 2s, a .notx.sql item every 15s, a ClickHouse item every
-// 10s. Check mode never starts the job.
+// reach the watchdog. A PostgreSQL/YugabyteDB item is polled every second, because Ansible sleeps one poll interval
+// before its first check and most items finish in well under a second; a ClickHouse item every 10s. Check mode never
+// starts the job.
 func TestMigrationApplyTasksReportWhileRunning(t *testing.T) {
-	const itemPoll = "{{ (item.transactional | default(true)) | ternary(2, 15) }}"
+	const itemPoll = "1"
 	for _, tc := range []struct {
 		role, file, task, async, poll string
 	}{

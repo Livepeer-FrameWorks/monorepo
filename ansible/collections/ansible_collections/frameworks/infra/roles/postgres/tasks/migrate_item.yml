@@ -49,9 +49,10 @@
 # conditional block). The timeouts are set before the repair statement, because a statement's timeout is armed when
 # it starts.
 # Every item runs as an async job: its poll lines and retry lines are the only output while it runs, and the CLI's
-# migration watchdog cancels a run that prints nothing for its stall window. A transactional item is polled every 2s,
-# because each item takes at least one poll interval; a .notx.sql item every 15s, because an index build can run for
-# hours. The job is killed after 24 hours, and the rerun repairs the index that build left invalid.
+# migration watchdog cancels a run that prints nothing for its stall window. Ansible sleeps a whole poll interval
+# before it first checks the job, so every item takes at least one interval; most items, index builds on small tables
+# included, finish in well under a second, so every item is polled every second, the shortest interval Ansible
+# takes. The job is killed after 24 hours, and the rerun repairs the index that build left invalid.
 - name: Apply migration
   become: true
   become_user: postgres
@@ -93,7 +94,7 @@
   retries: 45
   delay: 10
   async: 86400
-  poll: "{{ (item.transactional | default(true)) | ternary(2, 15) }}"
+  poll: 1
   when: not ansible_check_mode
   vars:
     invalid_index_repair_sql: >-
