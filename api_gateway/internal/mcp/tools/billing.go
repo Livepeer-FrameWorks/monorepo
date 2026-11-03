@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/mcperrors"
 	"frameworks/api_gateway/internal/mcp/preflight"
@@ -72,6 +73,68 @@ func RegisterBillingTools(server *mcp.Server, clients *clients.ServiceClients, r
 			return handleCompleteMolliePostpaidSetup(ctx, args, clients, checker, logger)
 		},
 	)
+
+	addTool(server,
+		&mcp.Tool{
+			Name:        "change_billing_tier",
+			Description: "Change a postpaid account's plan. A paid upgrade starts a fresh billing month and may stay pending until the provider and usage reconcile; a downgrade takes effect at the end of the billing period; choosing the current tier cancels a scheduled downgrade. Prepaid accounts use start_postpaid_setup or activate_free_tier instead. Refusals carry a code such as PENDING_CHECKOUT, OUTSTANDING_GRANT or COLLECTION_SETUP_REQUIRED.",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, args ChangeBillingTierInput) (*mcp.CallToolResult, any, error) {
+			return handleChangeBillingTier(ctx, args, resolver, logger)
+		},
+	)
+}
+
+type ChangeBillingTierInput struct {
+	TierID string `json:"tier_id" jsonschema:"Target billing tier ID; the current tier ID cancels a scheduled downgrade"`
+}
+
+type ChangeBillingTierResult struct {
+	Success         bool   `json:"success"`
+	Message         string `json:"message"`
+	AppliedTierID   string `json:"applied_tier_id,omitempty"`
+	AppliedTierName string `json:"applied_tier_name,omitempty"`
+	PendingTierID   string `json:"pending_tier_id,omitempty"`
+	PendingTierName string `json:"pending_tier_name,omitempty"`
+	EffectiveAt     string `json:"effective_at,omitempty"`
+}
+
+// handleChangeBillingTier runs the changeBillingTier mutation, so scope,
+// owner/admin policy and typed refusals match GraphQL.
+func handleChangeBillingTier(ctx context.Context, args ChangeBillingTierInput, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+	if ctxkeys.GetTenantID(ctx) == "" {
+		return nil, nil, mcperrors.AuthRequired()
+	}
+	tierID := strings.TrimSpace(args.TierID)
+	if tierID == "" {
+		return toolError("tier_id is required")
+	}
+	result, err := resolver.DoChangeBillingTier(ctx, tierID)
+	if err != nil {
+		logger.WithError(err).Warn("MCP change_billing_tier failed")
+		return toolError(fmt.Sprintf("Failed to change the plan: %v", err))
+	}
+	switch out := result.(type) {
+	case *model.ChangeBillingTierPayload:
+		res := ChangeBillingTierResult{Success: out.Success, Message: out.Message}
+		if out.AppliedTier != nil {
+			res.AppliedTierID, res.AppliedTierName = out.AppliedTier.GetId(), out.AppliedTier.GetDisplayName()
+		}
+		if out.PendingTier != nil {
+			res.PendingTierID, res.PendingTierName = out.PendingTier.GetId(), out.PendingTier.GetDisplayName()
+		}
+		if out.EffectiveAt != nil {
+			res.EffectiveAt = out.EffectiveAt.UTC().Format(time.RFC3339)
+		}
+		return toolSuccess(res)
+	case *model.ValidationError:
+		if out.Code != nil && *out.Code != "" {
+			return toolError(fmt.Sprintf("%s (code: %s)", out.Message, *out.Code))
+		}
+		return toolError(out.Message)
+	default:
+		return toolError("Failed to change the plan")
+	}
 }
 
 type StartPostpaidSetupInput struct {

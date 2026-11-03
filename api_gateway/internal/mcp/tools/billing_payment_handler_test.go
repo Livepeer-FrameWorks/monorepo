@@ -10,11 +10,15 @@ import (
 	"frameworks/api_gateway/internal/clients/clientstest"
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/middleware"
+	"frameworks/api_gateway/internal/resolvers"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	x402pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -511,5 +515,54 @@ func TestToolErrorWithResolution(t *testing.T) {
 	}
 	if _, ok := meta.(preflight.Blocker); !ok {
 		t.Errorf("blocker should be returned as structured meta, got %T", meta)
+	}
+}
+
+// ---- change_billing_tier ----
+
+// The tool runs the changeBillingTier mutation: a scheduled downgrade comes
+// back with its pending tier and date, and a typed refusal keeps its code.
+func TestHandleChangeBillingTier(t *testing.T) {
+	effective := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+	p := &clientstest.FakePurser{
+		ChangeBillingTierFn: func(_ context.Context, tenantID, tierID string) (*purserpb.ChangeBillingTierResponse, error) {
+			if tenantID != "t1" || tierID != "tier-dev" {
+				t.Fatalf("ChangeBillingTier(%q, %q)", tenantID, tierID)
+			}
+			return &purserpb.ChangeBillingTierResponse{Success: true, Message: "Downgrade scheduled", PendingTierId: "tier-dev", EffectiveAt: timestamppb.New(effective)}, nil
+		},
+		GetBillingTierFn: func(_ context.Context, tierID string) (*purserpb.BillingTier, error) {
+			return &purserpb.BillingTier{Id: tierID, DisplayName: "Developer"}, nil
+		},
+	}
+	resolver := &resolvers.Resolver{Clients: clientstest.Clients(clientstest.WithPurser(p)), Logger: clientstest.DiscardLogger()}
+	res, out, err := handleChangeBillingTier(billingOwnerToolsCtx("t1"), ChangeBillingTierInput{TierID: " tier-dev "}, resolver, clientstest.DiscardLogger())
+	if err != nil || res.IsError {
+		t.Fatalf("change_billing_tier = %+v, %v", res, err)
+	}
+	got, ok := out.(ChangeBillingTierResult)
+	if !ok || !got.Success || got.PendingTierID != "tier-dev" || got.PendingTierName != "Developer" || got.EffectiveAt != "2026-12-01T00:00:00Z" {
+		t.Fatalf("result = %+v", out)
+	}
+
+	refusing := &clientstest.FakePurser{
+		ChangeBillingTierFn: func(context.Context, string, string) (*purserpb.ChangeBillingTierResponse, error) {
+			st, stErr := status.New(codes.FailedPrecondition, "plan arranged").WithDetails(&errdetails.ErrorInfo{
+				Reason: "OUTSTANDING_GRANT", Domain: "billing.frameworks.network", Metadata: map[string]string{"public_message": "Your plan is arranged by FrameWorks."},
+			})
+			if stErr != nil {
+				t.Fatal(stErr)
+			}
+			return nil, st.Err()
+		},
+	}
+	resolver = &resolvers.Resolver{Clients: clientstest.Clients(clientstest.WithPurser(refusing)), Logger: clientstest.DiscardLogger()}
+	res, _, err = handleChangeBillingTier(billingOwnerToolsCtx("t1"), ChangeBillingTierInput{TierID: "tier-pro"}, resolver, clientstest.DiscardLogger())
+	if err != nil || !res.IsError || !strings.Contains(extractToolText(res), "Your plan is arranged by FrameWorks. (code: OUTSTANDING_GRANT)") {
+		t.Fatalf("refusal = %+v, %v", res, err)
+	}
+
+	if _, _, err = handleChangeBillingTier(context.Background(), ChangeBillingTierInput{TierID: "tier-pro"}, resolver, clientstest.DiscardLogger()); err == nil {
+		t.Fatal("missing tenant must return a jsonrpc auth error")
 	}
 }

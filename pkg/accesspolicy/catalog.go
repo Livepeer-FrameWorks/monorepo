@@ -239,6 +239,7 @@ var mcpToolClasses = map[string]Class{
 	"execute_query":                       Rated,
 	"list_linked_wallets":                 Read,
 	"activate_free_tier":                  PaymentRecovery,
+	"change_billing_tier":                 PaymentRecovery,
 	"link_email":                          PaymentRecovery,
 	"link_wallet":                         Control,
 	"unlink_wallet":                       Control,

@@ -271,6 +271,7 @@ Actions the agent can perform.
 | `pay_invoice`                         | Create or resume an invoice payment                        | Owner/Admin + billing:write; API tokens also need mcp:high-risk                       |
 | `start_postpaid_setup`                | Start Stripe or Mollie hosted postpaid setup               | Owner/Admin + billing:write; API tokens also need mcp:high-risk                       |
 | `complete_mollie_postpaid_setup`      | Verify mandate and activate Mollie postpaid                | Owner/Admin + billing:write; API tokens also need mcp:high-risk                       |
+| `change_billing_tier`                 | Change a postpaid plan or cancel a scheduled downgrade     | Owner/Admin + billing:write; API tokens also need mcp:high-risk                       |
 | `create_stream`                       | Create a push or pull stream                               | Auth                                                                                  |
 | `update_stream`                       | Update stream settings or pull-source config               | Auth                                                                                  |
 | `delete_stream`                       | Delete a stream                                            | Auth + Confirm; API tokens also need mcp:high-risk                                    |
@@ -452,6 +453,17 @@ returning from that URL is not proof of activation; provider confirmation is
 authoritative. Stripe completes from its webhook. After a successful Mollie
 first payment, call `complete_mollie_postpaid_setup` with the same `tier_id`; it
 fetches and validates the tenant's mandate before creating the subscription.
+
+**change_billing_tier**
+
+- `tier_id` (required): The target tier of a postpaid account. Prepaid accounts use
+  `start_postpaid_setup` or `activate_free_tier`.
+- A paid upgrade starts a fresh billing month; it can stay pending (`pending_tier_id`)
+  until the provider and usage reconcile.
+- A downgrade takes effect at `effective_at`, the end of the billing period. Choosing the
+  current tier cancels it, without a billing profile or payment setup.
+- A refusal is a tool error ending in `(code: <CODE>)`, the same code `changeBillingTier`
+  returns in `ValidationError.code`, for example `PENDING_CHECKOUT` or `OUTSTANDING_GRANT`.
 
 **create_stream**
 
