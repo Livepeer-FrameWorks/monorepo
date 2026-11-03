@@ -244,6 +244,34 @@
   ansible.builtin.pause:
     seconds: 3
 
+# With no lock retries left the module refuses, and it says only that nothing of the item ran.
+- name: Try an item once while another session holds the migration lock
+  frameworks.infra.yugabyte_migration_apply:
+    login_host: "{{ yugabyte_ysql_local_host }}"
+    login_port: "{{ yugabyte_ysql_port }}"
+    login_user: "{{ yugabyte_superuser_role }}"
+    login_password: "{{ yugabyte_superuser_password }}"
+    db: migrate_fixture
+    owner: "{{ yugabyte_superuser_role }}"
+    label: migrate_fixture/lock-refusal
+    statements:
+      - CREATE TABLE IF NOT EXISTS migrate_fixture.lock_refused (id bigint)
+    lock_retries: 0
+    retry_delay: 1
+    ledger_insert: SELECT 1
+  register: migrate_fixture_lock_refusal
+  ignore_errors: true
+
+- name: Assert the lock refusal names only the lock
+  ansible.builtin.assert:
+    that:
+      - migrate_fixture_lock_refusal is failed
+      - "'SQLSTATE 55P03' in migrate_fixture_lock_refusal.msg"
+      - "'nothing of the item ran' in migrate_fixture_lock_refusal.msg"
+      - "'stay applied' not in migrate_fixture_lock_refusal.msg"
+      - migrate_fixture_lock_refusal.retried == 0
+    fail_msg: "lock refusal: {{ migrate_fixture_lock_refusal }}"
+
 - name: Apply an item while another session holds the migration lock
   ansible.builtin.include_tasks: migrate-run.yml
   vars:

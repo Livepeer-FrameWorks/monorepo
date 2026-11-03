@@ -247,6 +247,14 @@ def main():
             (params["db"],),
         )
     except Exception as exc:
+        if stage == "advisory lock":
+            # Nothing of the item ran before the lock was taken, so the rerun note below does not apply.
+            module.fail_json(
+                msg="%s was not recorded: %s failed with SQLSTATE %s: %s" % (label, stage, sqlstate(exc) or "unknown",
+                                                                            to_native(exc).strip()),
+                statements=total,
+                retried=0,
+            )
         module.fail_json(
             msg="%s was not recorded: %s failed with SQLSTATE %s: %s. Statements before it stay applied; rerunning "
             "the migration executes every statement of the item again." % (label, stage, sqlstate(exc) or "unknown",
