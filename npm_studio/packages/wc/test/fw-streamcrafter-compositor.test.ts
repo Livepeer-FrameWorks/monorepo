@@ -9,9 +9,13 @@ const controllers = vi.hoisted(
       importLayout: ReturnType<typeof vi.fn>;
       exportLayout: ReturnType<typeof vi.fn>;
       renderer: ReturnType<typeof vi.fn>;
+      liveLayout: { version: number; scenes: { name: string }[] };
       emit: (event: string) => void;
     }[]
 );
+
+// While set, starting a compositor waits for it.
+const enableGate = vi.hoisted(() => ({ wait: null as Promise<void> | null }));
 
 vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -25,6 +29,7 @@ vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
     });
     emit = (event: string) => this.handlers.get(event)?.forEach((handler) => handler());
     enableCompositor = vi.fn(async () => {
+      if (enableGate.wait) await enableGate.wait;
       if (this.sceneManager) return;
       const scene = { id: "scene-1", name: "Default", layers: [], backgroundColor: "#000000" };
       this.sceneManager = {
@@ -44,12 +49,17 @@ vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
         isInitialized: () => true,
       };
     });
-    disableCompositor = vi.fn(() => {
+    // Like the core controller, it keeps the layout the compositor had when it stopped.
+    liveLayout = { version: 1, scenes: [{ name: `live-${controllers.length}` }] };
+    private stoppedLayout: unknown = null;
+    private stopCompositor() {
+      if (this.sceneManager) this.stoppedLayout = this.liveLayout;
       this.sceneManager = null;
-    });
+    }
+    disableCompositor = vi.fn(() => this.stopCompositor());
     setEncoderOverrides = vi.fn();
     importLayout = vi.fn(async () => {});
-    exportLayout = vi.fn(async () => (this.sceneManager ? { version: 1, scenes: [] } : null));
+    exportLayout = vi.fn(async () => (this.sceneManager ? this.liveLayout : this.stoppedLayout));
     constructor() {
       controllers.push(this as never);
     }
@@ -76,7 +86,9 @@ vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
     getReconnectionManager() {
       return { getState: () => null };
     }
-    destroy() {}
+    destroy() {
+      this.stopCompositor();
+    }
     getEncoderManager() {
       return null;
     }
@@ -106,6 +118,7 @@ async function studio(props: Partial<FwStreamCrafter> = {}) {
 
 beforeEach(() => {
   controllers.length = 0;
+  enableGate.wait = null;
   vi.spyOn(console, "log").mockImplementation(() => {});
 });
 
@@ -121,14 +134,53 @@ describe("fw-streamcrafter compositor", () => {
 
     el.enableCompositor = false;
     await vi.waitFor(() => expect(controller.disableCompositor).toHaveBeenCalledTimes(1));
-    expect(controller.exportLayout).toHaveBeenCalled();
 
     el.enableCompositor = true;
     await vi.waitFor(() => expect(controller.enableCompositor).toHaveBeenCalledTimes(2));
     await vi.waitFor(() =>
-      expect(controller.importLayout).toHaveBeenCalledWith({ version: 1, scenes: [] })
+      expect(controller.importLayout).toHaveBeenCalledWith(controller.liveLayout)
     );
     expect(controllers).toHaveLength(1);
+  });
+
+  it("carries the current layout to a new controller for the same stream", async () => {
+    const stored = { version: 1, layout: { mode: "solo" }, activeScene: 0, scenes: [] };
+    const el = await studio({ initialLayout: stored as never });
+    await vi.waitFor(() => expect(controllers[0].importLayout).toHaveBeenCalledWith(stored));
+    await vi.waitFor(() => expect(el.sceneManager).not.toBeNull());
+
+    el.initialProfile = "conference";
+
+    await vi.waitFor(() =>
+      expect(controllers[1]?.importLayout).toHaveBeenCalledWith(controllers[0].liveLayout)
+    );
+    expect(controllers[1].importLayout).not.toHaveBeenCalledWith(stored);
+  });
+
+  it("starts another stream from the initialLayout given with it", async () => {
+    const first = { version: 1, layout: { mode: "solo" }, activeScene: 0, scenes: [] };
+    const second = { ...first, layout: { mode: "grid" } };
+    const el = await studio({ initialLayout: first as never });
+    await vi.waitFor(() => expect(el.sceneManager).not.toBeNull());
+
+    el.initialLayout = second as never;
+    el.whipUrl = "https://ingest.example/whip-2";
+
+    await vi.waitFor(() => expect(controllers[1]?.importLayout).toHaveBeenCalledWith(second));
+    expect(controllers[1].importLayout).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts the compositor on a controller built while the last one was starting", async () => {
+    let release = () => {};
+    enableGate.wait = new Promise<void>((resolve) => (release = resolve));
+    const el = await studio();
+
+    el.whipUrl = "https://ingest.example/whip-2";
+    await el.updateComplete;
+    release();
+
+    await vi.waitFor(() => expect(controllers[1]?.enableCompositor).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(el.sceneManager).not.toBeNull());
   });
 
   it("switches the renderer of the running compositor", async () => {
@@ -162,8 +214,8 @@ describe("fw-streamcrafter compositor", () => {
 
     controllers[0].emit("sceneCreated");
 
-    await vi.waitFor(() => expect(onLayoutChange).toHaveBeenCalledWith({ version: 1, scenes: [] }));
-    expect(events).toContainEqual({ version: 1, scenes: [] });
+    await vi.waitFor(() => expect(onLayoutChange).toHaveBeenCalledWith(controllers[0].liveLayout));
+    expect(events).toContainEqual(controllers[0].liveLayout);
   });
 
   it("offers the encoder settings outside dev mode and hands them to the controller", async () => {
@@ -185,5 +237,17 @@ describe("fw-streamcrafter compositor", () => {
 
     root.querySelector<HTMLButtonElement>(".fw-sc-encoder-reset")!.click();
     expect(controllers[0].setEncoderOverrides).toHaveBeenLastCalledWith({});
+  });
+
+  it("hands the encoder choices to the controller for a new endpoint", async () => {
+    const el = await studio();
+    el.setEncoderOverrides({ video: { width: 1280, height: 720 } });
+
+    el.whipUrl = "https://ingest.example/whip-2";
+    await el.updateComplete;
+
+    expect(controllers[1].setEncoderOverrides).toHaveBeenCalledWith({
+      video: { width: 1280, height: 720 },
+    });
   });
 });

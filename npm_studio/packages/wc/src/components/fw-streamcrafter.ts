@@ -41,6 +41,7 @@ import {
   handleStudioSceneHotkey,
   isSourceVisibleInScene,
   type EncoderOverrides,
+  type IngestControllerV2,
   type IngestClientStatus,
   type IngestState,
   type IngestStateContextV2,
@@ -161,9 +162,11 @@ export class FwStreamCrafter extends LitElement {
   private _dismissListenersAttached = false;
   private _showSettingsInitialized = false;
   private _compositorEnabling: Promise<void> | null = null;
-  private _compositorDisabling: Promise<void> | null = null;
-  // The layout saved when the compositor was turned off, for the controller it came from.
-  private _savedLayout: { controller: unknown; layout: StudioLayout } | null = null;
+  // The compositor's own layout comes back when it is turned on again, and
+  // moves to a new controller (a new endpoint, profile, debug setting or
+  // worker URL) unless initialLayout changed along with it, which marks
+  // another stream.
+  private _lastStart: { controller: IngestControllerV2; initialLayout: unknown } | null = null;
   private _layoutReportTimer: ReturnType<typeof setTimeout> | null = null;
   private _reportedPreset: unknown = null;
   private _handleStateChangeEvent = (event: Event) => {
@@ -275,9 +278,12 @@ export class FwStreamCrafter extends LitElement {
     this.dispatchEvent(new Event(STUDIO_UPDATE_EVENT, { bubbles: true, composed: true }));
   }
 
-  /** The compositor's scenes, overlays and layout preset; null while it is off. */
+  /**
+   * The compositor's scenes, overlays and layout preset. While the compositor
+   * is off it is the layout from when it was last on; null when it never ran.
+   */
   async exportLayout(): Promise<StudioLayout | null> {
-    return this.sceneManager ? (this.pc.getController()?.exportLayout() ?? null) : null;
+    return (await this.pc.getController()?.exportLayout()) ?? null;
   }
 
   /** Apply a layout from exportLayout; the compositor has to be on. */
@@ -292,10 +298,14 @@ export class FwStreamCrafter extends LitElement {
     if (this._layoutReportTimer) clearTimeout(this._layoutReportTimer);
     this._layoutReportTimer = setTimeout(() => {
       this._layoutReportTimer = null;
-      this.exportLayout()
-        .then((layout) => {
+      this.exportLayout().then(
+        (layout) => {
           if (!layout) return;
-          this.onLayoutChange?.(layout);
+          try {
+            this.onLayoutChange?.(layout);
+          } catch (error) {
+            console.warn("onLayoutChange failed:", error);
+          }
           this.dispatchEvent(
             new CustomEvent("fw-sc-layout-change", {
               detail: { layout },
@@ -303,8 +313,9 @@ export class FwStreamCrafter extends LitElement {
               composed: true,
             })
           );
-        })
-        .catch((error) => console.warn("Could not export the studio layout:", error));
+        },
+        (error) => console.warn("Could not export the studio layout:", error)
+      );
     }, LAYOUT_CHANGE_DELAY_MS);
   }
 
@@ -498,26 +509,15 @@ export class FwStreamCrafter extends LitElement {
     if (!controller) return;
 
     if (!this.enableCompositor) {
-      if (controller.getSceneManager() && !this._compositorDisabling) {
-        // The layout is saved first; turning the compositor on again restores it.
-        this._compositorDisabling = controller
-          .exportLayout()
-          .then((layout) => {
-            this._savedLayout = layout ? { controller, layout } : null;
-          })
-          .catch(() => {})
-          .finally(() => {
-            this._compositorDisabling = null;
-            if (!this.enableCompositor && controller.getSceneManager()) {
-              controller.disableCompositor();
-            }
-            this.requestUpdate();
-          });
+      // A compositor still starting is turned off once it has started.
+      if (controller.getSceneManager() && !this._compositorEnabling) {
+        controller.disableCompositor();
+        this.requestUpdate();
       }
       return;
     }
 
-    if (this._compositorEnabling || this._compositorDisabling) {
+    if (this._compositorEnabling) {
       return;
     }
 
@@ -535,22 +535,24 @@ export class FwStreamCrafter extends LitElement {
         ? this.compositorConfig
         : undefined;
 
+    const requested = this.initialLayout;
+    const last = this._lastStart;
+    const carried =
+      last && (last.controller === controller || last.initialLayout === requested)
+        ? last.controller.exportLayout().catch(() => null)
+        : null;
+    this._lastStart = { controller, initialLayout: requested };
+
     this._compositorFailed = false;
     this._compositorEnabling = controller
       .enableCompositor(config)
       .then(async () => {
-        const layout =
-          this._savedLayout?.controller === controller
-            ? this._savedLayout.layout
-            : this.initialLayout;
+        const layout = (await carried) ?? requested;
         // A stored layout that no longer applies must not keep the compositor off.
         if (layout) {
           await controller.importLayout(layout).catch((error) => {
             console.warn("Could not apply the studio layout:", error);
           });
-        }
-        if (!this.enableCompositor && controller.getSceneManager()) {
-          controller.disableCompositor();
         }
         this.requestUpdate();
       })
@@ -560,6 +562,12 @@ export class FwStreamCrafter extends LitElement {
       })
       .finally(() => {
         this._compositorEnabling = null;
+        // Catch up with what changed while the compositor was starting: it
+        // was turned off, or a new controller was built. A start that failed
+        // on this controller is not tried again.
+        if (!this.enableCompositor || this.pc.getController() !== controller) {
+          this._syncCompositor();
+        }
       });
   }
 
