@@ -66,6 +66,16 @@ var billingEmailMetaByName = map[string]billingEmailMeta{
 		Eyebrow:   "Billing notice",
 		Title:     "Your subscription has ended",
 	},
+	"operator_grant_ending": {
+		Preheader: "Your arrangement with FrameWorks ends in a few days.",
+		Eyebrow:   "Billing notice",
+		Title:     "Your arrangement ends soon",
+	},
+	"operator_grant_ended": {
+		Preheader: "Your account is now on its regular plan.",
+		Eyebrow:   "Billing notice",
+		Title:     "Your arrangement has ended",
+	},
 }
 
 var billingEmailTemplates = map[string]string{
@@ -85,6 +95,18 @@ var billingEmailTemplates = map[string]string{
 <p style="margin:0 0 16px; color:#24283b; font-size:15px; line-height:23px;">{{if .TenantName}}Hello {{.TenantName}},{{else}}Hello,{{end}}</p>
 <p style="margin:0 0 18px; color:#24283b; font-size:15px; line-height:23px;">Your cancellation is complete and your account is now on the Free plan. Your streams keep running within the Free plan's limits.</p>
 <p style="margin:0; color:#24283b; font-size:15px; line-height:23px;">A final invoice covers any usage in your last period. You can return to a paid plan at any time.</p>
+{{template "action" (action .LoginURL "Go to billing")}}`,
+
+	"operator_grant_ending": `
+<p style="margin:0 0 16px; color:#24283b; font-size:15px; line-height:23px;">{{if .TenantName}}Hello {{.TenantName}},{{else}}Hello,{{end}}</p>
+<p style="margin:0 0 18px; color:#24283b; font-size:15px; line-height:23px;">The arrangement FrameWorks set up for your account, such as a trial, ends on {{.DueDate.UTC.Format "January 2, 2006"}}.</p>
+<p style="margin:0; color:#24283b; font-size:15px; line-height:23px;">From then on your account is on the {{.PlanName}} plan at its regular price and limits. Check your plan and billing details before that date so your streams are not interrupted.</p>
+{{template "action" (action .LoginURL "Review billing")}}`,
+
+	"operator_grant_ended": `
+<p style="margin:0 0 16px; color:#24283b; font-size:15px; line-height:23px;">{{if .TenantName}}Hello {{.TenantName}},{{else}}Hello,{{end}}</p>
+<p style="margin:0 0 18px; color:#24283b; font-size:15px; line-height:23px;">The arrangement FrameWorks set up for your account ended on {{.DueDate.UTC.Format "January 2, 2006"}}.</p>
+<p style="margin:0; color:#24283b; font-size:15px; line-height:23px;">Your account is now on the {{.PlanName}} plan at its regular price and limits.</p>
 {{template "action" (action .LoginURL "Go to billing")}}`,
 
 	"invoice_created": `

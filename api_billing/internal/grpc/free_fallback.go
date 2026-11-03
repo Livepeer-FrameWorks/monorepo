@@ -40,12 +40,14 @@ func (s *PurserServer) runFreeFallbackSweep(ctx context.Context) {
 	}
 }
 
-// Notices have their own worker so slow provider reconciliation cannot starve email.
+// Notices have their own worker so slow provider reconciliation cannot starve
+// email. It also sends the operator grant ending and ended notices.
 func (s *PurserServer) runFreeFallbackNotices(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
 		s.sweepFreeFallbackNoticesOnce(ctx)
+		s.sweepOperatorGrantNoticesOnce(ctx)
 		select {
 		case <-ctx.Done():
 			return

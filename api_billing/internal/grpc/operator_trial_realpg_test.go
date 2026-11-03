@@ -29,6 +29,7 @@ func TestOperatorTrialLifecycle_RealPG(t *testing.T) {
 	t.Run("expired grant without an assignment", TestLegacyExpiredGrantKeepsAdmission_RealPG)
 	t.Run("metering hold needs an explicit waiver", TestMeteringHoldNeedsAnExplicitWaiver_RealPG)
 	t.Run("requested upgrade cannot waive metering", TestRecoveryOfARequestedUpgradeCannotWaiveMetering_RealPG)
+	t.Run("expiry notices", testOperatorGrantNotices)
 	db := startOperatorGrantDatabase(t)
 	ctx := context.Background()
 	tenantID, paygID, enterpriseID := uuid.NewString(), uuid.NewString(), uuid.NewString()

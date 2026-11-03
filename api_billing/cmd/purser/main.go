@@ -164,6 +164,8 @@ func main() {
 	serverMetrics := &pursergrpc.ServerMetrics{
 		FreeFallbackFailures:                metricsCollector.NewGauge("free_fallback_repeatedly_failed_items", "Free fallback moves or notifications with repeated failures", []string{"stage"}),
 		FreeFallbackReadFailures:            metricsCollector.NewCounter("free_fallback_read_failures_total", "Failed reads of the Free fallback recovery inventory", nil),
+		OperatorGrantNoticeFailures:         metricsCollector.NewGauge("operator_grant_notice_repeatedly_failed_items", "Operator grant ending or ended emails with repeated delivery failures", nil),
+		OperatorGrantNoticeReadFailures:     metricsCollector.NewCounter("operator_grant_notice_read_failures_total", "Failed reads or writes of the operator grant notice queue", nil),
 		OperatorGrantExpiryFailures:         metricsCollector.NewGauge("operator_grant_expiry_failed_items", "Operator grants whose expiry needs recovery", nil),
 		OperatorGrantExpiryRepeatedFailures: metricsCollector.NewGauge("operator_grant_expiry_repeatedly_failed_items", "Operator grant expiries with more than one failed attempt", nil),
 		OperatorGrantExpiryReadFailures:     metricsCollector.NewCounter("operator_grant_expiry_read_failures_total", "Failed reads of the operator grant expiry queue or failed-item count", nil),
@@ -179,6 +181,8 @@ func main() {
 
 	serverMetrics.OperatorGrantExpiryReadFailures.WithLabelValues().Add(0)
 	serverMetrics.FreeFallbackReadFailures.WithLabelValues().Add(0)
+	serverMetrics.OperatorGrantNoticeReadFailures.WithLabelValues().Add(0)
+	serverMetrics.OperatorGrantNoticeFailures.WithLabelValues().Set(0)
 	serverMetrics.FreeFallbackFailures.WithLabelValues("move").Set(0)
 	serverMetrics.FreeFallbackFailures.WithLabelValues("notice").Set(0)
 	handlerMetrics.ProviderWebhookInboxReadFailures.WithLabelValues().Add(0)

@@ -91,6 +91,11 @@ type Querier interface {
 	ClaimFreeFallbackNotice(ctx context.Context, tenantID string) (ClaimFreeFallbackNoticeRow, error)
 	ClaimInvoiceEmailCandidates(ctx context.Context, arg ClaimInvoiceEmailCandidatesParams) ([]ClaimInvoiceEmailCandidatesRow, error)
 	ClaimMediaAuthorityRefreshBatch(ctx context.Context, arg ClaimMediaAuthorityRefreshBatchParams) ([]ClaimMediaAuthorityRefreshBatchRow, error)
+	// The claim is committed before SMTP; no billing row lock spans external I/O.
+	// plan_name is the plan the account is on after the end: for an ending
+	// notice the grant's fallback when the grant assigned the current tier,
+	// otherwise the current tier.
+	ClaimOperatorGrantNotice(ctx context.Context, id string) (ClaimOperatorGrantNoticeRow, error)
 	ClaimProviderWebhooks(ctx context.Context, arg ClaimProviderWebhooksParams) ([]ClaimProviderWebhooksRow, error)
 	ClaimSubmittingX402Intent(ctx context.Context, id string) (int64, error)
 	ClaimWebhookEvent(ctx context.Context, arg ClaimWebhookEventParams) (ClaimWebhookEventRow, error)
@@ -136,6 +141,8 @@ type Querier interface {
 	CompleteInvoiceEmailWithLease(ctx context.Context, arg CompleteInvoiceEmailWithLeaseParams) (int64, error)
 	CompleteMediaAuthorityRefresh(ctx context.Context, arg CompleteMediaAuthorityRefreshParams) (int64, error)
 	CompleteMollieSubscriptionCheckout(ctx context.Context, arg CompleteMollieSubscriptionCheckoutParams) error
+	// A stale sender cannot acknowledge a newer attempt.
+	CompleteOperatorGrantNotice(ctx context.Context, arg CompleteOperatorGrantNoticeParams) error
 	CompletePendingTopup(ctx context.Context, arg CompletePendingTopupParams) error
 	CompletePendingTopupProviderIntent(ctx context.Context, arg CompletePendingTopupProviderIntentParams) error
 	// Activation and receipt settlement commit in the same subscription transaction.
@@ -179,6 +186,8 @@ type Querier interface {
 	CountRepeatedFreeFallbackFailures(ctx context.Context) (CountRepeatedFreeFallbackFailuresRow, error)
 	// Platform-wide recovery metric; one failed attempt alone is not a stuck grant.
 	CountRepeatedOperatorGrantExpiryFailures(ctx context.Context) (int64, error)
+	// Platform-wide recovery metric; one failed attempt alone is not stuck.
+	CountRepeatedOperatorGrantNoticeFailures(ctx context.Context) (int64, error)
 	CountX402NonceUses(ctx context.Context, arg CountX402NonceUsesParams) (int64, error)
 	// A payment the operator received outside any provider (a bank transfer) and
 	// records against the invoice it pays. Its receipt is issued now, to the
@@ -196,6 +205,9 @@ type Querier interface {
 	DeleteSubscriptionEntitlementOverrides(ctx context.Context, subscriptionID uuid.UUID) error
 	DeleteSubscriptionOperatorGrant(ctx context.Context, subscriptionID string) (int64, error)
 	DeleteSubscriptionPricingOverrides(ctx context.Context, subscriptionID uuid.UUID) error
+	// Platform-wide: an unsent ending notice whose grant no longer ends at that
+	// time (extended, shortened or already ended) has nothing left to announce.
+	DiscardStaleOperatorGrantEndingNotices(ctx context.Context) (int64, error)
 	EndClosedTenantGrantAtCutoff(ctx context.Context, tenantID string) error
 	EnqueueBillingEventOutbox(ctx context.Context, arg EnqueueBillingEventOutboxParams) (uuid.UUID, error)
 	EnqueueBillingEventOutboxNoReturn(ctx context.Context, arg EnqueueBillingEventOutboxNoReturnParams) error
@@ -203,6 +215,11 @@ type Querier interface {
 	EnqueueCheckoutReservationExpiry(ctx context.Context, arg EnqueueCheckoutReservationExpiryParams) error
 	EnqueueInvoiceEmail(ctx context.Context, arg EnqueueInvoiceEmailParams) error
 	EnqueueMediaAuthorityRefresh(ctx context.Context, arg EnqueueMediaAuthorityRefreshParams) (int64, error)
+	// Written in the transaction that removes the grant.
+	EnqueueOperatorGrantEndedNotice(ctx context.Context, arg EnqueueOperatorGrantEndedNoticeParams) error
+	// Platform-wide: every grant in force that ends within the lead time gets one
+	// ending notice for that end time. Closed accounts get none.
+	EnqueueOperatorGrantEndingNotices(ctx context.Context, leadSeconds int64) (int64, error)
 	EnqueuePrepaidStatementEmail(ctx context.Context, arg EnqueuePrepaidStatementEmailParams) error
 	// One row per tenant: the worker reads the latest desired tier, so a re-point
 	// wakes the same step instead of queueing a stale target.
@@ -673,6 +690,8 @@ type Querier interface {
 	// query deliberately spans tenants, including archived grants when requested.
 	ListOperatorBillingGrants(ctx context.Context, arg ListOperatorBillingGrantsParams) ([]ListOperatorBillingGrantsRow, error)
 	ListOperatorClusters(ctx context.Context, tenantID string) ([]ListOperatorClustersRow, error)
+	// Platform-wide queue with the Free fallback notice backoff.
+	ListOperatorGrantNotices(ctx context.Context) ([]string, error)
 	ListOperatorPayouts(ctx context.Context, arg ListOperatorPayoutsParams) ([]ListOperatorPayoutsRow, error)
 	ListPayableInvoices(ctx context.Context, tenantID string) ([]ListPayableInvoicesRow, error)
 	ListPendingCryptoWallets(ctx context.Context) ([]ListPendingCryptoWalletsRow, error)
@@ -858,6 +877,7 @@ type Querier interface {
 	RecordFreeFallbackMoveFailure(ctx context.Context, arg RecordFreeFallbackMoveFailureParams) error
 	RecordFreeFallbackNoticeFailure(ctx context.Context, arg RecordFreeFallbackNoticeFailureParams) error
 	RecordOperatorGrantExpiryFailure(ctx context.Context, arg RecordOperatorGrantExpiryFailureParams) error
+	RecordOperatorGrantNoticeFailure(ctx context.Context, arg RecordOperatorGrantNoticeFailureParams) error
 	RecordSettledCompensationRefund(ctx context.Context, arg RecordSettledCompensationRefundParams) error
 	RecordStripeMeterEventFailure(ctx context.Context, arg RecordStripeMeterEventFailureParams) error
 	RecordTenantBillingClosure(ctx context.Context, arg RecordTenantBillingClosureParams) error

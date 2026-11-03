@@ -63,6 +63,9 @@ type EmailData struct {
 	FX EmailFX
 	// Statement is set for a prepaid statement email.
 	Statement EmailPrepaidStatement
+	// PlanName is the plan an operator grant notice says the account is on
+	// after the grant ends.
+	PlanName string
 }
 
 // EmailPrepaidStatement is a prepaid statement as its email states it.

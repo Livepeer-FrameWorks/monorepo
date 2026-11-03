@@ -107,8 +107,21 @@ func (s *PurserServer) writeOperatorGrantMutationTx(ctx context.Context, tx *sql
 		}
 	}
 	if g.change == nil {
-		if _, err = q.DeleteSubscriptionOperatorGrant(ctx, current.SubscriptionID); err != nil {
-			return txStatusErrorf(err, codes.Internal, "delete operator grant: %v", err)
+		deleted, deleteErr := q.DeleteSubscriptionOperatorGrant(ctx, current.SubscriptionID)
+		if deleteErr != nil {
+			return txStatusErrorf(deleteErr, codes.Internal, "delete operator grant: %v", deleteErr)
+		}
+		// The tenant is told its arrangement ended, unless the account is closed.
+		if deleted > 0 && current.Status != "cancelled" {
+			endedAt := g.at
+			if endedAt.IsZero() {
+				endedAt = time.Now().UTC()
+			}
+			if err = q.EnqueueOperatorGrantEndedNotice(ctx, purserdb.EnqueueOperatorGrantEndedNoticeParams{
+				TenantID: tenantID, SubscriptionID: current.SubscriptionID, EndedAt: endedAt,
+			}); err != nil {
+				return txStatusErrorf(err, codes.Internal, "queue operator grant ended notice: %v", err)
+			}
 		}
 	} else {
 		change := g.change

@@ -221,6 +221,8 @@ type ServerMetrics struct {
 	OperatorGrantExpiryReadFailures     *prometheus.CounterVec
 	FreeFallbackFailures                *prometheus.GaugeVec
 	FreeFallbackReadFailures            *prometheus.CounterVec
+	OperatorGrantNoticeFailures         *prometheus.GaugeVec
+	OperatorGrantNoticeReadFailures     *prometheus.CounterVec
 }
 
 type stripeBillingClient interface {
@@ -281,6 +283,8 @@ type PurserServer struct {
 	invoiceCardCheckout invoiceCardCheckoutFunc
 	// freeFallbackNoticeSender replaces the billing service's mail delivery.
 	freeFallbackNoticeSender func(handlers.FreeFallbackNotice) error
+	// operatorGrantNoticeSender replaces the billing service's mail delivery.
+	operatorGrantNoticeSender func(handlers.OperatorGrantNotice) error
 	// tokenHasher attributes domain events to the calling API token with
 	// Bridge's usage hash, so audit rows join API usage rows.
 	tokenHasher *events.TokenHasher
