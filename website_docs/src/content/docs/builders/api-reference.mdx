@@ -103,6 +103,16 @@ revoked, signed-out, or expired one is refused before acknowledgement as above. 
 gateway instance answers a request with a signed-out session token with `401` within a few
 seconds of the sign-out.
 
+The close reason says which case applies. `credential expired` means the session token reached
+its expiry: refresh it and reconnect. `credential revoked` means the token or session no longer
+authenticates: get a new token before reconnecting. `account deactivated` means an operator
+deactivated the user or closed the account: the gateway closes the user's session connections and
+every connection opened with one of the user's API tokens, and refreshing the session or signing
+in again is refused too, so stop reconnecting. A connection whose instance missed the
+deactivation event closes at its next one-minute re-check with `credential revoked`. Common
+graphql-ws clients retry after `4403` unless you stop them, so check the reason in your close
+handler.
+
 ## Try It Out
 
 The dashboard has a built-in GraphQL explorer. Go to **Developer → Playground** to run queries against your account.
