@@ -260,14 +260,22 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
       controller.destroy();
     };
   }, [
-    options.whipUrl,
     options.iceServers,
     options.profile,
     options.debug,
     options.audioMixing,
     // Note: useWebCodecs intentionally NOT in deps - changing it should not recreate controller
     // The new value is read from useWebCodecsRef when startStreaming() is called
+    // A new whipUrl goes to the running controller below, so its sources stay.
   ]);
+
+  const whipUrls = options.whipUrls?.join("\n");
+  useEffect(() => {
+    controllerRef.current
+      ?.setWhipUrl(options.whipUrl, options.whipUrls)
+      .catch((err: unknown) => console.warn("Could not change the WHIP endpoint:", err));
+    // whipUrls is compared by its contents.
+  }, [options.whipUrl, whipUrls]);
 
   const startCamera = useCallback(async (captureOptions?: CaptureOptions) => {
     if (!controllerRef.current) {

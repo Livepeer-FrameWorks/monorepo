@@ -42,6 +42,7 @@ const mockSetEncoderOverrides = vi.fn();
 const mockIsWebCodecsActive = vi.fn().mockReturnValue(false);
 const mockGetReconnectionManager = vi.fn().mockReturnValue({ getState: () => null });
 const mockGetEncoderManager = vi.fn().mockReturnValue(null);
+const mockSetWhipUrl = vi.fn().mockResolvedValue(undefined);
 
 const mockOn = vi.fn((event: string, handler: Function) => {
   if (!eventHandlers.has(event)) eventHandlers.set(event, []);
@@ -84,6 +85,7 @@ vi.mock("@livepeer-frameworks/streamcrafter-core", () => ({
       isWebCodecsActive: mockIsWebCodecsActive,
       getReconnectionManager: mockGetReconnectionManager,
       getEncoderManager: mockGetEncoderManager,
+      setWhipUrl: mockSetWhipUrl,
       on: mockOn,
     });
   }),
@@ -156,6 +158,21 @@ describe("useStreamCrafterV2", () => {
     for (const eventName of STREAMCRAFTER_WRAPPER_PARITY_EVENT_NAMES) {
       expect(eventNames).toContain(eventName);
     }
+  });
+
+  it("sends a new whipUrl to the running controller instead of building another", async () => {
+    const { IngestControllerV2 } = await import("@livepeer-frameworks/streamcrafter-core");
+    const { result, rerender } = renderHook((props) => useStreamCrafterV2(props), {
+      initialProps: baseConfig,
+    });
+    const controller = result.current.getController();
+
+    rerender({ whipUrl: "https://example.com/whip-b" });
+
+    expect(IngestControllerV2).toHaveBeenCalledTimes(1);
+    expect(mockDestroy).not.toHaveBeenCalled();
+    expect(result.current.getController()).toBe(controller);
+    expect(mockSetWhipUrl).toHaveBeenLastCalledWith("https://example.com/whip-b", undefined);
   });
 
   it("destroys controller on unmount", () => {

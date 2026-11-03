@@ -45,6 +45,8 @@ import {
   resolveStudioTheme,
   studioThemeOverridesToStyle,
   createStudioTranslator,
+  StudioLayoutKeeper,
+  type IngestControllerV2,
   type StudioLocale,
   type StudioTranslateFn,
 } from "@livepeer-frameworks/streamcrafter-core";
@@ -92,10 +94,15 @@ export interface StreamCrafterProps {
     height?: number;
     frameRate?: number;
   };
-  /** Scenes, overlays and layout preset to start from, as passed to onLayoutChange. */
+  /**
+   * What the layout belongs to, such as a stream ID. A new key shows that
+   * key's initialLayout, or the default layout, without restarting sources.
+   */
+  layoutKey?: string;
+  /** Scenes, overlays and layout preset for layoutKey, as passed to onLayoutChange. */
   initialLayout?: StudioLayout | null;
-  /** Called shortly after the scenes, overlays or layout preset change. */
-  onLayoutChange?: (layout: StudioLayout) => void;
+  /** Called shortly after the scenes, overlays or layout preset change, with the key they belong to. */
+  onLayoutChange?: (layout: StudioLayout, layoutKey: string | undefined) => void;
   /** Theme preset or custom overrides */
   theme?: FwThemePreset | StudioThemeOverrides;
   /** Locale for i18n translations */
@@ -482,6 +489,7 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
   debug = false,
   enableCompositor = true,
   compositorConfig,
+  layoutKey,
   initialLayout,
   onLayoutChange,
   theme,
@@ -586,17 +594,20 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
   });
 
   // Compositor for multi-source composition. Its layout survives turning it
-  // off and on and a new controller for the same stream.
+  // off and on and a new controller for the same layoutKey.
+  const [layoutKeeper] = useState(
+    () => new StudioLayoutKeeper<IngestControllerV2>(LAYOUT_CHANGE_DELAY_MS)
+  );
   const compositor = useCompositor({
     controller: getController(),
     autoEnable: enableCompositor,
     config: compositorConfig,
-    initialLayout,
+    layoutKeeper,
   });
   const {
     isEnabled: compositorOn,
     disable: disableCompositor,
-    exportLayout,
+    followLayoutKey,
     scenes: compositorScenes,
     overlays: compositorOverlays,
     currentLayout: compositorLayout,
@@ -607,29 +618,28 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
     if (!enableCompositor && compositorOn) disableCompositor();
   }, [enableCompositor, compositorOn, disableCompositor]);
 
+  // A compositor that starts before this runs takes the new key when it is up.
+  useEffect(() => {
+    if (layoutKeeper.setLayout(layoutKey, initialLayout)) {
+      followLayoutKey().catch(() => {});
+    }
+  });
+
   const onLayoutChangeRef = useRef(onLayoutChange);
   onLayoutChangeRef.current = onLayoutChange;
   const hasLayoutListener = !!onLayoutChange;
+  const layoutController = getController();
   useEffect(() => {
-    if (!compositorOn || !hasLayoutListener) return;
-    const timer = setTimeout(() => {
-      exportLayout().then(
-        (layout) => {
-          if (!layout) return;
-          try {
-            onLayoutChangeRef.current?.(layout);
-          } catch (err) {
-            console.warn("onLayoutChange failed:", err);
-          }
-        },
-        (err: unknown) => console.warn("Could not export the studio layout:", err)
-      );
-    }, LAYOUT_CHANGE_DELAY_MS);
-    return () => clearTimeout(timer);
+    if (!compositorOn || !hasLayoutListener || !layoutController) return;
+    layoutKeeper.scheduleReport(layoutController, (layout, key) =>
+      onLayoutChangeRef.current?.(layout, key)
+    );
+    return () => layoutKeeper.cancelReport();
   }, [
     compositorOn,
     hasLayoutListener,
-    exportLayout,
+    layoutKeeper,
+    layoutController,
     compositorScenes,
     compositorOverlays,
     compositorLayout,

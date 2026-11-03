@@ -18,6 +18,7 @@ vi.mock("@livepeer-frameworks/streamcrafter-core", () => ({
       getReconnectionManager: vi.fn().mockReturnValue({ getState: () => null }),
       getEncoderManager: vi.fn().mockReturnValue(null),
       setEncoderOverrides: vi.fn(),
+      setWhipUrl: vi.fn().mockResolvedValue(undefined),
     });
   }),
   detectCapabilities: vi.fn().mockReturnValue({ recommended: "native" }),

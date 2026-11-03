@@ -24,7 +24,10 @@ import type {
   StudioOverlay,
   TextOverlayConfig,
 } from "@livepeer-frameworks/streamcrafter-core";
-import type { IngestControllerV2 } from "@livepeer-frameworks/streamcrafter-core";
+import type {
+  IngestControllerV2,
+  StudioLayoutKeeper,
+} from "@livepeer-frameworks/streamcrafter-core";
 
 export interface UseCompositorOptions {
   controller: IngestControllerV2 | null;
@@ -32,11 +35,11 @@ export interface UseCompositorOptions {
   config?: Partial<CompositorConfig>;
   autoEnable?: boolean;
   /**
-   * Applied when the compositor first starts, before it reports itself
-   * enabled. Later starts restore the compositor's own layout, also on a new
-   * controller, unless this changed to another object since the last start.
+   * Decides the layout each start applies, before the compositor reports
+   * itself enabled. Keep the same keeper for the component's lifetime so the
+   * layout follows it to a new controller.
    */
-  initialLayout?: StudioLayout | null;
+  layoutKeeper?: StudioLayoutKeeper<IngestControllerV2>;
 }
 
 export interface UseCompositorReturn {
@@ -97,13 +100,15 @@ export interface UseCompositorReturn {
   // Layout as plain data, for storing per stream
   exportLayout: () => Promise<StudioLayout | null>;
   importLayout: (layout: StudioLayout) => Promise<void>;
+  /** Show the layout for the layout keeper's current key; call it after the key changed. */
+  followLayoutKey: () => Promise<void>;
 }
 
 export function useCompositor({
   controller,
   config,
   autoEnable = true,
-  initialLayout,
+  layoutKeeper,
 }: UseCompositorOptions): UseCompositorReturn {
   const [isEnabled, setIsEnabled] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
@@ -117,33 +122,14 @@ export function useCompositor({
 
   const configRef = useRef(config);
   configRef.current = config;
-  const initialLayoutRef = useRef(initialLayout);
-  initialLayoutRef.current = initialLayout;
+  const layoutKeeperRef = useRef(layoutKeeper);
+  layoutKeeperRef.current = layoutKeeper;
 
-  // The compositor's own layout comes back when it is turned on again, and
-  // moves to a new controller (a new endpoint, profile or debug setting)
-  // unless initialLayout changed along with it, which marks another stream.
-  // A stored layout that no longer applies must not keep the compositor off.
-  const lastStartRef = useRef<{
-    controller: IngestControllerV2;
-    initialLayout: StudioLayout | null | undefined;
-  } | null>(null);
   const startCompositor = useCallback(
     async (target: IngestControllerV2, enableConfig?: Partial<CompositorConfig>) => {
-      const requested = initialLayoutRef.current;
-      const last = lastStartRef.current;
-      const carried =
-        last && (last.controller === target || last.initialLayout === requested)
-          ? last.controller.exportLayout().catch(() => null)
-          : null;
-      lastStartRef.current = { controller: target, initialLayout: requested };
-      await target.enableCompositor(enableConfig);
-      const layout = (await carried) ?? requested;
-      if (layout) {
-        await target.importLayout(layout).catch((err: unknown) => {
-          console.warn("Could not apply the studio layout:", err);
-        });
-      }
+      const keeper = layoutKeeperRef.current;
+      const enable = () => target.enableCompositor(enableConfig);
+      await (keeper ? keeper.start(target, enable) : enable());
     },
     []
   );
@@ -472,6 +458,13 @@ export function useCompositor({
     [controller, syncState]
   );
 
+  const followLayoutKey = useCallback(async () => {
+    const keeper = layoutKeeperRef.current;
+    if (!keeper) return;
+    await keeper.apply(controller);
+    syncState();
+  }, [controller, syncState]);
+
   return {
     // State
     isEnabled,
@@ -520,5 +513,6 @@ export function useCompositor({
 
     exportLayout,
     importLayout,
+    followLayoutKey,
   };
 }
