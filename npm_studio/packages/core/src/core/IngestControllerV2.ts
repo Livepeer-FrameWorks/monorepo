@@ -15,6 +15,7 @@ import { AudioMixer, type AudioProcessingConfig } from "./AudioMixer";
 import { ReconnectionManager } from "./ReconnectionManager";
 import { MediaFileSource } from "./MediaFileSource";
 import { SceneManager } from "./SceneManager";
+import type { StudioLayout } from "./studioLayout";
 import { EncoderManager, createMultiCodecEncoderConfig } from "./EncoderManager";
 import type { VideoCodecFamily } from "./CodecProfiles";
 import { BitrateAdaptation } from "./BitrateAdaptation";
@@ -1176,9 +1177,13 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * 'auto' defaults to h264 (will be reconfigured after SDP negotiation).
    */
   private resolveInitialCodecFamily(): VideoCodecFamily {
-    const pref = this.config.videoCodec ?? "auto";
-    if (pref === "auto") return "h264";
-    return pref;
+    return this.preferredVideoCodec() ?? "h264";
+  }
+
+  /** The codec chosen in the encoder overrides or the config; undefined for auto. */
+  private preferredVideoCodec(): VideoCodecFamily | undefined {
+    const pref = this.encoderOverrides.video?.codec ?? this.config.videoCodec ?? "auto";
+    return pref === "auto" ? undefined : pref;
   }
 
   /**
@@ -1192,8 +1197,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     if (!negotiatedFamily) return;
 
     // Skip if user explicitly chose a codec (not 'auto')
-    const pref = this.config.videoCodec ?? "auto";
-    if (pref !== "auto") {
+    const pref = this.preferredVideoCodec();
+    if (pref) {
       this.log("Codec explicitly set, skipping negotiation-based reconfigure", { pref });
       return;
     }
@@ -1252,6 +1257,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
           : this.getCurrentWhipUrl(),
         iceServers: this.config.iceServers,
         debug: this.config.debug,
+        preferredVideoCodec: this.preferredVideoCodec(),
       });
       this.whipClient = client;
 
@@ -1383,6 +1389,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
         whipUrl,
         iceServers: this.config.iceServers,
         debug: this.config.debug,
+        preferredVideoCodec: this.preferredVideoCodec(),
       });
       this.whipClient = client;
 
@@ -1444,6 +1451,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
         whipUrl,
         iceServers: this.config.iceServers,
         debug: this.config.debug,
+        preferredVideoCodec: this.preferredVideoCodec(),
       });
       this.whipClient = client;
 
@@ -1770,6 +1778,19 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    */
   getSceneManager(): SceneManager | null {
     return this.sceneManager;
+  }
+
+  /** The compositor's scenes, overlays and layout preset; null while it is off. */
+  async exportLayout(): Promise<StudioLayout | null> {
+    return this.sceneManager ? this.sceneManager.exportLayout() : null;
+  }
+
+  /** Apply a layout from exportLayout. The compositor has to be on. */
+  async importLayout(layout: StudioLayout): Promise<void> {
+    if (!this.sceneManager) {
+      throw new Error("Enable the compositor before importing a layout");
+    }
+    await this.sceneManager.importLayout(layout);
   }
 
   /**

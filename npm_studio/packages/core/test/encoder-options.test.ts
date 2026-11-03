@@ -1,0 +1,99 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  encoderSettingValues,
+  isEncoderSettingOverridden,
+  withEncoderSetting,
+} from "../src/core/encoderOptions";
+import { sendableVideoCodecs, videoCodecOrder, WhipClient } from "../src/core/WhipClient";
+import { IngestControllerV2 } from "../src/core/IngestControllerV2";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("encoder settings", () => {
+  it("shows the profile's values until a setting is overridden", () => {
+    expect(encoderSettingValues("broadcast", undefined)).toEqual({
+      resolution: "1920x1080",
+      framerate: 30,
+      videoBitrate: 2_500_000,
+      audioBitrate: 128_000,
+      codec: "auto",
+    });
+  });
+
+  it("overrides a setting and drops the override when the profile's value is chosen again", () => {
+    let overrides = withEncoderSetting("broadcast", undefined, "videoBitrate", "6000000");
+    overrides = withEncoderSetting("broadcast", overrides, "resolution", "1280x720");
+    expect(overrides).toEqual({ video: { bitrate: 6_000_000, width: 1280, height: 720 } });
+    expect(isEncoderSettingOverridden(overrides, "resolution")).toBe(true);
+
+    overrides = withEncoderSetting("broadcast", overrides, "resolution", "1920x1080");
+    overrides = withEncoderSetting("broadcast", overrides, "videoBitrate", 2_500_000);
+    expect(overrides).toEqual({});
+    expect(isEncoderSettingOverridden(overrides, "videoBitrate")).toBe(false);
+  });
+
+  it("keeps a codec choice until Auto is chosen", () => {
+    const overrides = withEncoderSetting("broadcast", undefined, "codec", "h264");
+    expect(overrides).toEqual({ video: { codec: "h264" } });
+    expect(encoderSettingValues("broadcast", overrides).codec).toBe("h264");
+    expect(withEncoderSetting("broadcast", overrides, "codec", "auto")).toEqual({});
+  });
+});
+
+describe("video codec preference", () => {
+  it("offers AV1, VP9, then H.264 unless one is preferred", () => {
+    expect(videoCodecOrder()).toEqual(["video/AV1", "video/VP9", "video/H264"]);
+    expect(videoCodecOrder("h264")).toEqual(["video/H264", "video/AV1", "video/VP9"]);
+  });
+
+  it("puts the preferred codec first on the video transceiver", () => {
+    vi.stubGlobal("RTCRtpSender", {
+      getCapabilities: () => ({
+        codecs: [
+          { mimeType: "video/VP8" },
+          { mimeType: "video/H264" },
+          { mimeType: "video/VP9" },
+          { mimeType: "video/AV1" },
+        ],
+      }),
+    });
+    const setCodecPreferences = vi.fn();
+    const pc = {
+      getTransceivers: () => [{ setCodecPreferences, sender: { track: { kind: "video" } } }],
+    };
+    const client = new WhipClient({
+      whipUrl: "https://edge.example/whip",
+      preferredVideoCodec: "h264",
+    });
+    (client as unknown as { preferCodecs(pc: unknown): void }).preferCodecs(pc);
+
+    expect(
+      setCodecPreferences.mock.calls[0][0].map((c: { mimeType: string }) => c.mimeType)
+    ).toEqual(["video/H264", "video/AV1", "video/VP9"]);
+  });
+
+  it("lists only the codecs the browser can send", () => {
+    vi.stubGlobal("RTCRtpSender", {
+      getCapabilities: () => ({ codecs: [{ mimeType: "video/H264" }, { mimeType: "video/VP9" }] }),
+    });
+    expect(sendableVideoCodecs()).toEqual(["vp9", "h264"]);
+  });
+
+  it("takes the codec from the encoder overrides before the config", () => {
+    const controller = new IngestControllerV2({
+      whipUrl: "https://edge.example/whip",
+      videoCodec: "vp9",
+    });
+    const preferred = () =>
+      (
+        controller as unknown as { preferredVideoCodec(): string | undefined }
+      ).preferredVideoCodec();
+    expect(preferred()).toBe("vp9");
+    controller.setEncoderOverrides({ video: { codec: "h264" } });
+    expect(preferred()).toBe("h264");
+    controller.destroy();
+  });
+});

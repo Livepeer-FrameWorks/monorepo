@@ -100,6 +100,8 @@ export interface WhipClientConfig {
   whipUrl: string;
   iceServers?: RTCIceServer[];
   debug?: boolean;
+  /** Offered first; the rest keep the AV1, VP9, H.264 order. */
+  preferredVideoCodec?: "h264" | "vp9" | "av1";
 }
 
 export interface WhipClientEvents {
@@ -255,6 +257,8 @@ export interface EncoderConfig {
  */
 export interface EncoderOverrides {
   video?: {
+    /** Offered first to the server; it takes the place of the `videoCodec` option. */
+    codec?: Exclude<VideoCodecPreference, "auto">;
     width?: number;
     height?: number;
     bitrate?: number;

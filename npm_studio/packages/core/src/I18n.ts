@@ -120,6 +120,7 @@ export interface StudioTranslationStrings {
   encoder: string;
   resetToProfile: string;
   videoCodec: string;
+  codecAuto: string;
   resolution: string;
   actualResolution: string;
   framerate: string;
@@ -392,6 +393,7 @@ export const DEFAULT_STUDIO_TRANSLATIONS: StudioTranslationStrings = {
   encoder: "Encoder",
   resetToProfile: "Reset to Profile",
   videoCodec: "Video Codec",
+  codecAuto: "Auto",
   resolution: "Resolution",
   actualResolution: "Actual Resolution",
   framerate: "Framerate",

@@ -13,6 +13,31 @@ import type {
 } from "./EncoderManager";
 import { type VideoCodecFamily, mimeToCodecFamily } from "./CodecProfiles";
 
+const VIDEO_CODEC_MIME: Record<VideoCodecFamily, string> = {
+  av1: "video/AV1",
+  vp9: "video/VP9",
+  h264: "video/H264",
+};
+
+/** The video codecs offered, best first: AV1, VP9, H.264, or the preferred one ahead of them. */
+export function videoCodecOrder(preferred?: VideoCodecFamily): string[] {
+  const order = ["video/AV1", "video/VP9", "video/H264"];
+  if (!preferred) return order;
+  const mime = VIDEO_CODEC_MIME[preferred];
+  return [mime, ...order.filter((m) => m !== mime)];
+}
+
+/** The video codecs this browser can send over WebRTC, in offer order. */
+export function sendableVideoCodecs(): VideoCodecFamily[] {
+  if (typeof RTCRtpSender === "undefined" || !RTCRtpSender.getCapabilities) return [];
+  const mimes = new Set(
+    (RTCRtpSender.getCapabilities("video")?.codecs ?? []).map((c) => c.mimeType.toLowerCase())
+  );
+  return (Object.keys(VIDEO_CODEC_MIME) as VideoCodecFamily[]).filter((family) =>
+    mimes.has(VIDEO_CODEC_MIME[family].toLowerCase())
+  );
+}
+
 export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
   private config: WhipClientConfig;
   private peerConnection: RTCPeerConnection | null = null;
@@ -102,8 +127,7 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
         const capabilities = RTCRtpSender.getCapabilities("video");
         if (!capabilities?.codecs) continue;
 
-        // Filter to AV1, VP9, and H264 — prefer AV1 > VP9 > H264
-        const codecOrder = ["video/AV1", "video/VP9", "video/H264"];
+        const codecOrder = videoCodecOrder(this.config.preferredVideoCodec);
         const preferred = capabilities.codecs
           .filter((c) => codecOrder.includes(c.mimeType))
           .sort((a, b) => {

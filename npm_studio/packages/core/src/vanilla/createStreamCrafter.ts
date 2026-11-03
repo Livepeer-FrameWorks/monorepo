@@ -39,6 +39,7 @@
 import { IngestControllerV2 } from "../core/IngestControllerV2";
 import type { SceneManager } from "../core/SceneManager";
 import type { AudioProcessingConfig } from "../core/AudioMixer";
+import type { StudioLayout } from "../core/studioLayout";
 import type {
   IngestControllerConfigV2,
   IngestState,
@@ -158,6 +159,11 @@ export interface StreamCrafterInstance {
 
   enableCompositor(config?: Partial<CompositorConfig>): Promise<void>;
   disableCompositor(): void;
+
+  /** Scenes, overlays and layout preset as plain data; null while the compositor is off. */
+  exportLayout(): Promise<StudioLayout | null>;
+  /** Apply a layout from exportLayout; the compositor has to be on. */
+  importLayout(layout: StudioLayout): Promise<void>;
 
   /** Translate a key using the configured locale/translations. */
   t(key: keyof StudioTranslationStrings, vars?: Record<string, string | number>): string;
@@ -404,6 +410,8 @@ export function createStreamCrafter(config: CreateStreamCrafterConfig): StreamCr
 
     enableCompositor: (config?) => ctrl.enableCompositor(config),
     disableCompositor: () => ctrl.disableCompositor(),
+    exportLayout: () => ctrl.exportLayout(),
+    importLayout: (layout) => ctrl.importLayout(layout),
 
     t,
 

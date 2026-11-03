@@ -36,6 +36,14 @@ import type {
 import { DEFAULT_LAYER_TRANSFORM, DEFAULT_COMPOSITOR_CONFIG } from "../types";
 import { applyLayout, createDefaultLayoutConfig } from "./layouts";
 import { createDefaultTransitionConfig, validateTransitionConfig } from "./TransitionEngine";
+import {
+  blobToDataUrl,
+  dataUrlToBlob,
+  parseStudioLayout,
+  STUDIO_LAYOUT_VERSION,
+  type StudioLayout,
+  type StudioLayoutOverlay,
+} from "./studioLayout";
 
 // Capture the IIFE script src at module-load time (only available during synchronous execution).
 // In ESM/bundled contexts this is undefined — the import.meta.url paths handle those.
@@ -64,6 +72,8 @@ interface OverlayRecord {
   aspect: number;
   placement: OverlayPlacement;
   text?: { source: TextOverlaySource; config: TextOverlayConfig };
+  /** What an image overlay was made from, kept so a layout export can carry it. */
+  image?: Blob | string;
 }
 
 export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
@@ -1259,17 +1269,29 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
   ): Promise<{ layerId: string; sourceId: string }> {
     if (!this.scenes.has(sceneId)) throw new Error(`Scene not found: ${sceneId}`);
 
-    const sourceId = `img-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     const bitmap = await this.decodeImage(image);
+    const label = typeof image === "string" ? image : image instanceof File ? image.name : "Image";
+    return this.placeImageOverlay(sceneId, image, bitmap, label, placement);
+  }
+
+  private placeImageOverlay(
+    sceneId: string,
+    image: Blob | string,
+    bitmap: ImageBitmap,
+    label: string,
+    placement?: Partial<OverlayPlacement>
+  ): { layerId: string; sourceId: string } {
+    const sourceId = `img-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     const aspect = bitmap.width / bitmap.height;
 
     this.sendToWorker({ type: "sourceImage", sourceId, bitmap }, [bitmap]);
 
     return this.addOverlayLayer(sceneId, sourceId, {
       kind: "image",
-      label: typeof image === "string" ? image : image instanceof File ? image.name : "Image",
+      label,
       aspect,
       placement: { ...DEFAULT_IMAGE_PLACEMENT, ...placement },
+      image,
     });
   }
 
@@ -1318,6 +1340,124 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
       }
     }
     this.releaseSource(sourceId);
+  }
+
+  // ============================================================================
+  // Layout export and import
+  // ============================================================================
+
+  /**
+   * The scenes, their image and text overlays and the layout preset, as plain
+   * data for importLayout. Camera, screen and media-file layers are left out;
+   * a picked image is carried as a data URL.
+   */
+  async exportLayout(): Promise<StudioLayout> {
+    const scenes = this.getAllScenes();
+    const sceneIndex = new Map(scenes.map((scene, i) => [scene.id, i]));
+    const exported = new Set<string>();
+    const overlays: StudioLayoutOverlay[] = [];
+
+    for (const scene of scenes) {
+      for (const layer of [...scene.layers].sort((a, b) => a.zIndex - b.zIndex)) {
+        const record = this.overlays.get(layer.sourceId);
+        if (!record || exported.has(layer.sourceId)) continue;
+        exported.add(layer.sourceId);
+
+        const inScenes = scenes
+          .filter((s) => s.layers.some((l) => l.sourceId === layer.sourceId))
+          .map((s) => sceneIndex.get(s.id)!);
+        const { x, y, size } = record.placement;
+        if (record.text) {
+          overlays.push({ kind: "text", scenes: inScenes, x, y, text: { ...record.text.config } });
+        } else if (record.image !== undefined) {
+          const image =
+            typeof record.image === "string" ? record.image : await blobToDataUrl(record.image);
+          overlays.push({
+            kind: "image",
+            scenes: inScenes,
+            x,
+            y,
+            size,
+            image,
+            label: record.label,
+          });
+        }
+      }
+    }
+
+    const active = this.activeSceneId ? sceneIndex.get(this.activeSceneId) : undefined;
+    return {
+      version: STUDIO_LAYOUT_VERSION,
+      layout: { ...this.currentLayout },
+      activeScene: active ?? 0,
+      scenes: scenes.map((scene) => ({
+        name: scene.name,
+        backgroundColor: scene.backgroundColor,
+      })),
+      overlays,
+    };
+  }
+
+  /**
+   * Replace the scenes and overlays with a layout from exportLayout. The source
+   * layers of the active scene move to the layout's active scene. The layout is
+   * checked and its images decoded first, so a layout that fails leaves the
+   * studio as it was.
+   */
+  async importLayout(input: StudioLayout): Promise<void> {
+    const layout = parseStudioLayout(input);
+
+    const images = await Promise.all(
+      layout.overlays.map(async (overlay) => {
+        if (overlay.kind !== "image") return null;
+        const image = dataUrlToBlob(overlay.image) ?? overlay.image;
+        return { image, bitmap: await this.decodeImage(image) };
+      })
+    );
+
+    const previousScenes = this.getAllScenes();
+    const sourceLayers = (this.getActiveScene()?.layers ?? [])
+      .filter((layer) => layer.kind !== "overlay")
+      .sort((a, b) => a.zIndex - b.zIndex);
+
+    for (const sourceId of [...this.overlays.keys()]) {
+      this.removeOverlay(sourceId);
+    }
+
+    const created = layout.scenes.map((scene) =>
+      this.createScene(scene.name, scene.backgroundColor)
+    );
+    const active = created[layout.activeScene];
+    for (const layer of sourceLayers) {
+      const added = this.addLayer(active.id, layer.sourceId, layer.transform);
+      if (!layer.visible) added.visible = false;
+    }
+    this.setActiveScene(active.id);
+    for (const scene of previousScenes) {
+      this.deleteScene(scene.id);
+    }
+
+    layout.overlays.forEach((overlay, i) => {
+      const [first, ...rest] = overlay.scenes.map((index) => created[index].id);
+      const image = images[i];
+      const { sourceId } =
+        overlay.kind === "text"
+          ? this.addTextOverlay(first, overlay.text, { x: overlay.x, y: overlay.y })
+          : this.placeImageOverlay(first, image!.image, image!.bitmap, overlay.label, {
+              x: overlay.x,
+              y: overlay.y,
+              size: overlay.size,
+            });
+      const record = this.overlays.get(sourceId)!;
+      for (const sceneId of rest) {
+        this.addLayer(sceneId, sourceId, this.overlayTransform(record), {
+          kind: "overlay",
+          label: record.label,
+        });
+      }
+    });
+
+    this.applyLayout(layout.layout, false);
   }
 
   // ============================================================================

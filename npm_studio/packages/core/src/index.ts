@@ -97,8 +97,33 @@ export {
 // Media file playback
 export { MediaFileSource, type MediaFileSourceEvents } from "./core/MediaFileSource";
 
+// Encoder settings choices
+export {
+  ENCODER_RESOLUTION_OPTIONS,
+  ENCODER_VIDEO_BITRATE_OPTIONS,
+  ENCODER_FRAMERATE_OPTIONS,
+  ENCODER_AUDIO_BITRATE_OPTIONS,
+  ENCODER_CODEC_LABELS,
+  encoderSettingValues,
+  isEncoderSettingOverridden,
+  withEncoderSetting,
+  type EncoderOption,
+  type EncoderSetting,
+  type EncoderSettingValues,
+} from "./core/encoderOptions";
+export { sendableVideoCodecs, videoCodecOrder } from "./core/WhipClient";
+
 // Compositor and scene management
 export { SceneManager } from "./core/SceneManager";
+export {
+  parseStudioLayout,
+  STUDIO_LAYOUT_VERSION,
+  type StudioLayout,
+  type StudioLayoutScene,
+  type StudioLayoutOverlay,
+  type StudioLayoutTextOverlay,
+  type StudioLayoutImageOverlay,
+} from "./core/studioLayout";
 export {
   TextOverlaySource,
   TEXT_OVERLAY_DEFAULTS,
