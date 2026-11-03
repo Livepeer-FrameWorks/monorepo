@@ -214,9 +214,15 @@ Once a confirmed downgrade reaches `pending_effective_at` the provider renews at
 target fee while the local flip waits for that period's invoice. `ChangeBillingTier`
 refuses a cancel or re-point in that window, so nobody gets a term at the old tier
 for the lower fee. While a held invoice keeps the flip waiting the customer stays
-refused, and `PurserTierDowngradeHeld` fires 26 hours after the effective time. The
-exits are resolving the hold, so the daily applier flips the tier, or
-`admin billing set-tier`.
+refused, and `PurserTierDowngradeHeld` fires 26 hours after the effective time.
+`frameworks admin billing recovery list` lists each held downgrade with its target
+tier, effective time, closing invoice and invoice status.
+`frameworks admin billing recovery downgrade --tenant-id <uuid> --reason <text>`
+previews what holds it (`awaiting_provider`, `invoice_held`, `refused` or `due`);
+confirming closes the period again with the daily invoice job's gates and runs the
+applier for that tenant, recording the operator and reason on the billing audit
+event. Resolving the hold lets the daily applier flip the tier on its own;
+`admin billing set-tier` remains the override.
 
 Local and provider state cannot disagree silently:
 

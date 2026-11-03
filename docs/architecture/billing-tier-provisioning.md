@@ -270,6 +270,19 @@ purchase; it never initiates another purchase. The purchase retains the first
 recovery operator and reason. Provider outages retain the pricing fence until
 that existing purchase can be resolved.
 
+A customer cancels a scheduled downgrade by choosing the current tier with
+`ChangeBillingTier` while the downgrade is still `SCHEDULED`. Keeping the
+current tier starts no new paid commitment, so it skips the billing-profile and
+collection-readiness checks a paid target otherwise needs. A downgrade the
+provider confirmed but the daily applier has not flipped 26 hours after its
+effective time is held, usually by its closing invoice, and raises
+`PurserTierDowngradeHeld`. `recovery list` shows it with its target tier,
+effective time and closing invoice;
+`admin billing recovery downgrade --tenant-id <uuid> --reason <text>` previews
+what holds it and, once confirmed, closes the period again with the daily invoice
+job's gates and runs the applier for that tenant. See
+[payment settlement](payment-settlement.md) for the provider side of downgrades.
+
 **Period after a split.** Whichever document closes the last part of a split
 period, the next period is as long as the whole period the switches split,
 not as its last part: `nextBillingPeriodEnd` follows the chain of documents

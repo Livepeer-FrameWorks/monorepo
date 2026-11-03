@@ -619,11 +619,15 @@ Use `frameworks admin billing recovery list` for retry status and errors.
 
 `purser_tier_downgrades_held_items` (gauge, no labels) counts downgrades the provider
 confirmed that are still unapplied 26 hours after their effective time, past the daily
-applier cycle. It shares the 30-second inventory read and its failure counter, and
-retains its last good value on a failed read. `PurserTierDowngradeHeld` takes the maximum
+applier cycle. It is read on the same 30-second cycle as the inventory and retains its
+last good value on a failed read. A failed read increments
+`purser_tier_downgrades_held_read_failures_total` (counter, no labels), not the inbox
+read-failure counter, so it does not raise `PurserProviderWebhookInboxStuck`. `PurserTierDowngradeHeld` takes the maximum
 across replicas. Those customers are refused tier changes, usually because the closing
-invoice is held in manual review. Resolve the hold, or apply the tier with
-`frameworks admin billing set-tier`.
+invoice is held in manual review. `frameworks admin billing recovery list` lists the
+held downgrades, and `frameworks admin billing recovery downgrade --tenant-id <uuid>
+--reason <text>` shows what holds one and, once confirmed, closes the period and applies
+it. `frameworks admin billing set-tier` remains the override.
 
 ### Shared-package metrics
 
