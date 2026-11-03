@@ -1,5 +1,12 @@
 # @livepeer-frameworks/streamcrafter-svelte
 
+## 0.8.1
+
+### Patch Changes
+
+- Updated dependencies [771a743]
+  - @livepeer-frameworks/streamcrafter-core@0.8.1
+
 ## 0.8.0
 
 ### Minor Changes

@@ -1,5 +1,13 @@
 # @livepeer-frameworks/player-svelte
 
+## 0.7.1
+
+### Patch Changes
+
+- Updated dependencies [48c57d0]
+- Updated dependencies [771a743]
+  - @livepeer-frameworks/player-core@0.7.2
+
 ## 0.7.0
 
 ### Minor Changes

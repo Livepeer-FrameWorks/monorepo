@@ -1,5 +1,12 @@
 # @livepeer-frameworks/player-core
 
+## 0.7.2
+
+### Patch Changes
+
+- 48c57d0: `PlayerController.attach()` and `registerPlayer()` no longer start a background load of every built-in player module into the global player manager. Players load only for the stream being initialized, on the controller's own manager, inside `initializePlayer`, so a failed player chunk no longer surfaces as an unhandled promise rejection and no load keeps running after the controller is destroyed.
+- 771a743: The `./player.css`, `./styles.css` and `./themes/*.css` exports and the `style` field point at the shipped `src/styles/` stylesheets, which are byte-identical to the `dist/` copies, so a CSS `@import` of them resolves from a workspace checkout that has not been built.
+
 ## 0.7.1
 
 ### Patch Changes
