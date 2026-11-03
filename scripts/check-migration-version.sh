@@ -220,13 +220,21 @@ if [ -n "$pending_version" ]; then
   done < <(git tag --merged HEAD --sort=-v:refname)
 
   # The CLI embeds the migrations it applies, so a pending release whose
-  # min_cli_version is an existing tag would let that CLI apply the release
-  # without every migration added after the tag.
+  # min_cli_version is an older RC tag would let that CLI apply the release
+  # without every migration added after the tag. The newest RC of the release
+  # is the one a fix is re-tagged onto, so a floor at it is not checked.
   min_cli=$(awk -v want="$pending_version" '
     /^[[:space:]]*-[[:space:]]+version:[[:space:]]+/ { current = $3; next }
     current == want && $1 == "min_cli_version:" { print $2; exit }
   ' "$catalog_path")
-  if [ -n "$min_cli" ] && git rev-parse -q --verify "refs/tags/$min_cli" >/dev/null; then
+  newest_rc=""
+  while IFS= read -r rc_tag; do
+    if [[ "$rc_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+$ ]] && [ "${rc_tag%%-rc*}" = "$pending_version" ]; then
+      newest_rc=$rc_tag
+      break
+    fi
+  done < <(git tag --merged HEAD --sort=-v:refname)
+  if [ -n "$min_cli" ] && [ "$min_cli" != "$newest_rc" ] && git rev-parse -q --verify "refs/tags/$min_cli" >/dev/null; then
     floor_diff=(git diff --no-renames --name-only -z --diff-filter=A)
     if [ -n "$diff_base" ]; then
       floor_diff+=("$min_cli" HEAD)
@@ -237,7 +245,7 @@ if [ -n "$pending_version" ]; then
     fi
     while IFS= read -r -d '' file; do
       if [[ "$file" =~ $migration_re ]]; then
-        violations+=("  $file  (added after $min_cli, the min_cli_version of $pending_version; that CLI cannot apply it, so raise the floor to the next tag)")
+        violations+=("  $file  (added after $min_cli, the min_cli_version of $pending_version; that CLI cannot apply it, so raise the floor to the newest RC)")
       fi
     done < <(
       "${floor_diff[@]}" -- "${path_args[@]}"
