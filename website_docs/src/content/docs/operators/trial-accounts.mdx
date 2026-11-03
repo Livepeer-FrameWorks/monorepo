@@ -88,7 +88,10 @@ Purser emails the tenant's billing email once a grant's end date is seven days o
 again when any grant ends, by expiry or `grant revoke`, naming the plan the account returns to.
 A closed account gets no ended email. Moving the end date drops a queued ending email that no
 longer applies. Failed sends are retried with backoff and abandoned after five attempts;
-`purser_operator_grant_notice_repeatedly_failed_items` counts the ones still failing. Without a
+`purser_operator_grant_notice_repeatedly_failed_items` counts the ones still failing and
+`PurserOperatorGrantNoticeStuck` fires on it (see
+[Grant emails](/operators/alerting/#grant-emails)). Requeue an abandoned one with
+`frameworks admin billing grant notice --tenant-id <uuid> --reason <reason>`. Without a
 billing email nothing is sent, so tell the customer yourself. Customer-facing terms are in
 [Billing](/builders/billing/#trials-and-arrangements).
 

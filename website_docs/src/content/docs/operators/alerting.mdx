@@ -153,6 +153,7 @@ end within seven days. All commands need a platform-operator session. The proced
 | `PurserTierDowngradeHeld`               | `frameworks admin billing recovery list` (held section)                          | `frameworks admin billing recovery downgrade --tenant-id <tenant> --reason <reason>`                          |
 | `PurserFreeFallbackStuck`               | `frameworks admin billing recovery list`                                         | restore provider access or metering, `recovery notice`, or cancel with `set-tier`                             |
 | `PurserOperatorGrantExpiryStuck`        | `frameworks admin billing grant list --include-expired`                          | correct the billing or pricing error; retries run every five minutes                                          |
+| `PurserOperatorGrantNoticeStuck`        | `frameworks cluster doctor --deep`, then `frameworks cluster logs purser`        | fix the tenant's `billing_email` or the mail service, or requeue an abandoned email with `grant notice`       |
 | `CommodoreTenantAccountClosureStuck`    | `frameworks cluster doctor --deep`, then `frameworks admin tenants get <tenant>` | restore Commodore's connection to Quartermaster, or to its database for read failures                         |
 | `CommodoreAccountIngestRevocationStuck` | `frameworks cluster doctor --deep`, then `frameworks admin tenants get <tenant>` | restore the cell named in the `cell` label, upgrade its Foghorn, or `frameworks admin clusters retire <cell>` |
 
@@ -175,8 +176,9 @@ locally past its effective time. The provider already charges the lower tier, an
 tier changes are refused. The held downgrades section of `recovery list` names each tenant, target
 tier, effective time and closing invoice. `recovery downgrade` previews what holds it: provider
 confirmation, a draft invoice whose metering is incomplete, a `manual_review` invoice waiting for
-cluster pricing, or a pricing refusal. Once nothing holds it, confirming applies it. See
-[Held downgrades](/operators/trial-accounts/#held-downgrades).
+cluster pricing, or a pricing refusal. Once nothing holds it, confirming applies it. The alert
+also fires when Purser cannot read its held downgrade count from its database; restore Purser's
+database connection. See [Held downgrades](/operators/trial-accounts/#held-downgrades).
 
 ### Moves to Free
 
@@ -201,6 +203,18 @@ reconciliation more than once. `grant list --include-expired` shows each tenant 
 failures and last error, and `grant show --tenant-id <tenant>` shows one grant in full. Correct the
 reported billing or pricing error; the retry runs automatically and other expiries continue. See
 [Grant expiry](/operators/trial-accounts/#grant-expiry).
+
+### Grant emails
+
+`PurserOperatorGrantNoticeStuck` fires when a grant ending or ended email to a tenant failed more
+than once, or when Purser cannot read or write its grant notice queue. `cluster doctor --deep`
+names each tenant with its failures, and `frameworks cluster logs purser` shows the mail error.
+Fix the tenant's `billing_email` or the mail service; Purser retries with backoff. After five
+failures a notice is abandoned and no longer counted by the alert. `cluster doctor --deep` lists
+abandoned notices, and
+`frameworks admin billing grant notice --tenant-id <tenant> --reason <reason>` sends one again.
+For read failures, restore Purser's database connection. Mail failures never change the grant.
+See [What the customer sees](/operators/trial-accounts/#what-the-customer-sees).
 
 ### Tenant closure
 
