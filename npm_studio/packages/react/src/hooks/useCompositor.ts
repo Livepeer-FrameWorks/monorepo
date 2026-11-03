@@ -20,6 +20,7 @@ import type {
   RendererStats,
   CompositorConfig,
   OverlayPlacement,
+  StudioLayout,
   StudioOverlay,
   TextOverlayConfig,
 } from "@livepeer-frameworks/streamcrafter-core";
@@ -27,8 +28,11 @@ import type { IngestControllerV2 } from "@livepeer-frameworks/streamcrafter-core
 
 export interface UseCompositorOptions {
   controller: IngestControllerV2 | null;
+  /** A change of `renderer` switches the running compositor to it. */
   config?: Partial<CompositorConfig>;
   autoEnable?: boolean;
+  /** Applied each time the compositor starts, before it reports itself enabled. */
+  initialLayout?: StudioLayout | null;
 }
 
 export interface UseCompositorReturn {
@@ -85,12 +89,17 @@ export interface UseCompositorReturn {
 
   // Renderer control
   setRenderer: (renderer: RendererType) => void;
+
+  // Layout as plain data, for storing per stream
+  exportLayout: () => Promise<StudioLayout | null>;
+  importLayout: (layout: StudioLayout) => Promise<void>;
 }
 
 export function useCompositor({
   controller,
   config,
   autoEnable = true,
+  initialLayout,
 }: UseCompositorOptions): UseCompositorReturn {
   const [isEnabled, setIsEnabled] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
@@ -104,6 +113,22 @@ export function useCompositor({
 
   const configRef = useRef(config);
   configRef.current = config;
+  const initialLayoutRef = useRef(initialLayout);
+  initialLayoutRef.current = initialLayout;
+
+  // A stored layout that no longer applies must not keep the compositor off.
+  const startCompositor = useCallback(
+    async (target: IngestControllerV2, enableConfig?: Partial<CompositorConfig>) => {
+      await target.enableCompositor(enableConfig);
+      const layout = initialLayoutRef.current;
+      if (layout) {
+        await target.importLayout(layout).catch((err: unknown) => {
+          console.warn("Could not apply the studio layout:", err);
+        });
+      }
+    },
+    []
+  );
 
   // Get the active scene
   const activeScene = scenes.find((s) => s.id === activeSceneId) || null;
@@ -124,15 +149,25 @@ export function useCompositor({
     setIsInitialized(sceneManager.isInitialized());
   }, [controller]);
 
+  // A new controller (a new endpoint) starts without a compositor.
+  const enabledControllerRef = useRef<IngestControllerV2 | null>(null);
+  useEffect(() => {
+    if (enabledControllerRef.current && enabledControllerRef.current !== controller) {
+      enabledControllerRef.current = null;
+      setIsEnabled(false);
+      setIsInitialized(false);
+    }
+  }, [controller]);
+
   // Auto-enable if requested
   useEffect(() => {
     let mounted = true;
     if (autoEnable && controller && !isEnabled) {
       setError(null);
-      controller
-        .enableCompositor(configRef.current)
+      startCompositor(controller, configRef.current)
         .then(() => {
           if (!mounted) return;
+          enabledControllerRef.current = controller;
           setIsEnabled(true);
           syncState();
         })
@@ -145,11 +180,12 @@ export function useCompositor({
     return () => {
       mounted = false;
     };
-  }, [autoEnable, controller, isEnabled, syncState]);
+  }, [autoEnable, controller, isEnabled, syncState, startCompositor]);
 
-  // Set up event listeners
+  // The scene manager exists only once the compositor is enabled, so the
+  // listeners are attached again whenever that changes.
   useEffect(() => {
-    if (!controller) return;
+    if (!controller || !isEnabled) return;
 
     const sceneManager = controller.getSceneManager();
     if (!sceneManager) return;
@@ -184,23 +220,35 @@ export function useCompositor({
       unsubStatsUpdate();
       unsubRendererChanged();
     };
-  }, [controller, syncState]);
+  }, [controller, isEnabled, syncState]);
+
+  // Switch the running compositor when the requested renderer changes.
+  const requestedRenderer = config?.renderer;
+  useEffect(() => {
+    if (!isEnabled || !requestedRenderer) return;
+    const sceneManager = controller?.getSceneManager();
+    if (sceneManager && sceneManager.getRendererType() !== requestedRenderer) {
+      sceneManager.setRenderer(requestedRenderer);
+    }
+  }, [controller, isEnabled, requestedRenderer]);
 
   // Enable compositor
   const enable = useCallback(
     async (enableConfig?: Partial<CompositorConfig>) => {
       if (!controller) return;
-      await controller.enableCompositor(enableConfig || configRef.current);
+      await startCompositor(controller, enableConfig || configRef.current);
+      enabledControllerRef.current = controller;
       setIsEnabled(true);
       syncState();
     },
-    [controller, syncState]
+    [controller, syncState, startCompositor]
   );
 
   // Disable compositor
   const disable = useCallback(() => {
     if (!controller) return;
     controller.disableCompositor();
+    enabledControllerRef.current = null;
     setIsEnabled(false);
     setIsInitialized(false);
     setScenes([]);
@@ -392,6 +440,20 @@ export function useCompositor({
     [controller]
   );
 
+  const exportLayout = useCallback(
+    async () => (controller ? controller.exportLayout() : null),
+    [controller]
+  );
+
+  const importLayout = useCallback(
+    async (layout: StudioLayout) => {
+      if (!controller) return;
+      await controller.importLayout(layout);
+      syncState();
+    },
+    [controller, syncState]
+  );
+
   return {
     // State
     isEnabled,
@@ -437,5 +499,8 @@ export function useCompositor({
 
     // Renderer control
     setRenderer: setRendererCallback,
+
+    exportLayout,
+    importLayout,
   };
 }

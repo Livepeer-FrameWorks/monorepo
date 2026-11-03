@@ -17,6 +17,7 @@ vi.mock("@livepeer-frameworks/streamcrafter-core", () => ({
       isWebCodecsActive: vi.fn().mockReturnValue(false),
       getReconnectionManager: vi.fn().mockReturnValue({ getState: () => null }),
       getEncoderManager: vi.fn().mockReturnValue(null),
+      setEncoderOverrides: vi.fn(),
     });
   }),
   detectCapabilities: vi.fn().mockReturnValue({ recommended: "native" }),

@@ -32,7 +32,7 @@ import type {
   QualityProfile,
   MediaSource,
   ReconnectionState,
-  EncoderOverrides,
+  StudioLayout,
   FwThemePreset,
   StudioThemeOverrides,
 } from "@livepeer-frameworks/streamcrafter-core";
@@ -83,15 +83,19 @@ export interface StreamCrafterProps {
   showProducerPanel?: boolean;
   /** Enable debug logging */
   debug?: boolean;
-  /** Enable compositor for multi-source composition */
+  /** Enable compositor for multi-source composition. Turning it off and on keeps the layout. */
   enableCompositor?: boolean;
-  /** Compositor configuration (renderer preference, resolution, etc.) */
+  /** Compositor configuration; a new `renderer` takes effect without a restart. */
   compositorConfig?: {
     renderer?: "auto" | "webgpu" | "webgl" | "canvas2d";
     width?: number;
     height?: number;
     frameRate?: number;
   };
+  /** Scenes, overlays and layout preset to start from, as passed to onLayoutChange. */
+  initialLayout?: StudioLayout | null;
+  /** Called shortly after the scenes, overlays or layout preset change. */
+  onLayoutChange?: (layout: StudioLayout) => void;
   /** Theme preset or custom overrides */
   theme?: FwThemePreset | StudioThemeOverrides;
   /** Locale for i18n translations */
@@ -105,6 +109,9 @@ export interface StreamCrafterProps {
   /** Composable children — replaces the default UI when provided. */
   children?: React.ReactNode;
 }
+
+/** Drags and typing settle before onLayoutChange reports the layout. */
+const LAYOUT_CHANGE_DELAY_MS = 300;
 
 // ============================================================================
 // Icons (inline SVG for zero dependencies)
@@ -475,6 +482,8 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
   debug = false,
   enableCompositor = true,
   compositorConfig,
+  initialLayout,
+  onLayoutChange,
   theme,
   locale = "en",
   className,
@@ -503,9 +512,6 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
     noiseSuppression: profileDefaults.noiseSuppression,
     autoGainControl: profileDefaults.autoGainControl,
   });
-
-  // Encoder overrides state - allows overriding profile encoder settings
-  const [encoderOverrides, setEncoderOverrides] = useState<EncoderOverrides>({});
 
   // Gateway-based ingest endpoint resolution (like useViewerEndpoints in player)
   const {
@@ -570,7 +576,8 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
     isWebCodecsAvailable,
     encoderStats,
     setUseWebCodecs,
-    setEncoderOverrides: setEncoderOverridesHook,
+    encoderOverrides,
+    setEncoderOverrides,
   } = hookReturn;
 
   // Audio levels for VU meter
@@ -579,12 +586,65 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
     autoStart: true,
   });
 
-  // Compositor for multi-source composition
+  // Compositor for multi-source composition. The layout saved when it was
+  // turned off belongs to this controller and comes back when it is turned on.
+  const controller = getController();
+  const savedLayoutRef = useRef<{ controller: unknown; layout: StudioLayout } | null>(null);
   const compositor = useCompositor({
-    controller: enableCompositor ? getController() : null,
+    controller,
     autoEnable: enableCompositor,
     config: compositorConfig,
+    initialLayout:
+      savedLayoutRef.current?.controller === controller
+        ? savedLayoutRef.current.layout
+        : initialLayout,
   });
+  const {
+    isEnabled: compositorOn,
+    disable: disableCompositor,
+    exportLayout,
+    scenes: compositorScenes,
+    overlays: compositorOverlays,
+    currentLayout: compositorLayout,
+    activeSceneId: compositorActiveScene,
+  } = compositor;
+
+  useEffect(() => {
+    if (enableCompositor || !compositorOn) return;
+    let cancelled = false;
+    exportLayout()
+      .then((layout) => {
+        savedLayoutRef.current = layout ? { controller, layout } : null;
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) disableCompositor();
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [enableCompositor, compositorOn, exportLayout, disableCompositor, controller]);
+
+  const onLayoutChangeRef = useRef(onLayoutChange);
+  onLayoutChangeRef.current = onLayoutChange;
+  const hasLayoutListener = !!onLayoutChange;
+  useEffect(() => {
+    if (!compositorOn || !hasLayoutListener) return;
+    const timer = setTimeout(() => {
+      exportLayout()
+        .then((layout) => layout && onLayoutChangeRef.current?.(layout))
+        .catch((err: unknown) => console.warn("Could not export the studio layout:", err));
+    }, LAYOUT_CHANGE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [
+    compositorOn,
+    hasLayoutListener,
+    exportLayout,
+    compositorScenes,
+    compositorOverlays,
+    compositorLayout,
+    compositorActiveScene,
+  ]);
   const contextValue = useMemo(
     () => ({ ...hookReturn, compositor: enableCompositor ? compositor : null }),
     [hookReturn, compositor, enableCompositor]
@@ -601,11 +661,6 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
       onError?.(error);
     }
   }, [error, onError]);
-
-  // Sync encoder overrides to controller
-  useEffect(() => {
-    setEncoderOverridesHook(encoderOverrides);
-  }, [encoderOverrides, setEncoderOverridesHook]);
 
   // Update video preview when stream changes
   useEffect(() => {

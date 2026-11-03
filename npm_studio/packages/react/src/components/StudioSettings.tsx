@@ -1,9 +1,12 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useStreamCrafterContext } from "../context/StreamCrafterContext";
 import { useStudioTranslate } from "../context/StudioI18nContext";
-import type {
-  QualityProfile,
-  StudioTranslationStrings,
+import {
+  encoderSettingRows,
+  sendableVideoCodecs,
+  withEncoderSetting,
+  type QualityProfile,
+  type StudioTranslationStrings,
 } from "@livepeer-frameworks/streamcrafter-core";
 
 const QUALITY_PROFILES: {
@@ -32,6 +35,58 @@ const SettingsIcon = ({ size = 16 }: { size?: number }) => (
   </svg>
 );
 
+/** Resolution, frame rate, bitrates and video codec; they apply when streaming starts. */
+const EncoderSection: React.FC = () => {
+  const ctx = useStreamCrafterContext();
+  const t = useStudioTranslate();
+  const codecs = useMemo(() => sendableVideoCodecs(), []);
+  const profile = ctx.qualityProfile;
+  const overrides = ctx.encoderOverrides;
+  const rows = encoderSettingRows(profile, overrides, codecs, t("codecAuto"));
+  const hasOverrides = rows.some((row) => row.overridden);
+
+  return (
+    <div className="fw-sc-dropdown-section">
+      <div className="fw-sc-encoder-header">
+        <div className="fw-sc-dropdown-label">{t("encoder")}</div>
+        {hasOverrides && !ctx.isStreaming && (
+          <button
+            type="button"
+            className="fw-sc-encoder-reset"
+            onClick={() => ctx.setEncoderOverrides({})}
+          >
+            {t("resetToProfile")}
+          </button>
+        )}
+      </div>
+      {rows.map((row) => (
+        <label key={row.setting} className="fw-sc-encoder-row">
+          <span>{t(row.labelKey)}</span>
+          <select
+            className={`fw-sc-select${row.overridden ? " fw-sc-select--overridden" : ""}`}
+            value={row.value}
+            disabled={ctx.isStreaming}
+            onChange={(e) =>
+              ctx.setEncoderOverrides(
+                withEncoderSetting(profile, overrides, row.setting, e.target.value)
+              )
+            }
+          >
+            {row.options.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      ))}
+      {ctx.isStreaming && (
+        <div className="fw-sc-encoder-note">{t("settingsLockedWhileStreaming")}</div>
+      )}
+    </div>
+  );
+};
+
 export interface StudioSettingsProps {
   /** Override quality profile (falls back to context) */
   qualityProfile?: QualityProfile;
@@ -41,7 +96,7 @@ export interface StudioSettingsProps {
   autoClose?: boolean;
   /** Open the popup on mount */
   defaultOpen?: boolean;
-  /** Extra sections below the quality profiles */
+  /** Extra sections below the quality profiles and encoder settings */
   children?: React.ReactNode;
 }
 
@@ -122,6 +177,7 @@ export const StudioSettings: React.FC<StudioSettingsProps> = ({
               ))}
             </div>
           </div>
+          <EncoderSection />
           {children}
         </div>
       )}

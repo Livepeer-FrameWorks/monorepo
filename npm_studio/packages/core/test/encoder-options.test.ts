@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  encoderSettingRows,
   encoderSettingValues,
   isEncoderSettingOverridden,
   withEncoderSetting,
@@ -33,6 +34,34 @@ describe("encoder settings", () => {
     overrides = withEncoderSetting("broadcast", overrides, "videoBitrate", 2_500_000);
     expect(overrides).toEqual({});
     expect(isEncoderSettingOverridden(overrides, "videoBitrate")).toBe(false);
+  });
+
+  it("draws the selects from the profile and marks the overridden ones", () => {
+    const overrides = withEncoderSetting("conference", undefined, "framerate", 60);
+    const rows = encoderSettingRows("conference", overrides, ["vp9", "h264"], "Auto");
+
+    expect(rows.map((r) => [r.setting, r.value, r.overridden])).toEqual([
+      ["codec", "auto", false],
+      ["resolution", "1280x720", false],
+      ["framerate", "60", true],
+      ["videoBitrate", "1500000", false],
+      ["audioBitrate", "128000", false],
+    ]);
+    expect(rows[0].options.map((o) => o.label)).toEqual(["Auto", "VP9", "H.264"]);
+  });
+
+  it("leaves out the codec select when the browser offers one codec, and keeps off-list values", () => {
+    const rows = encoderSettingRows(
+      "broadcast",
+      { video: { bitrate: 3_000_000 } },
+      ["h264"],
+      "Auto"
+    );
+
+    expect(rows.map((r) => r.setting)).not.toContain("codec");
+    const bitrate = rows.find((r) => r.setting === "videoBitrate")!;
+    expect(bitrate.value).toBe("3000000");
+    expect(bitrate.options[0]).toEqual({ value: "3000000", label: "3 Mbps" });
   });
 
   it("keeps a codec choice until Auto is chosen", () => {

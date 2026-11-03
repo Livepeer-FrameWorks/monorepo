@@ -104,11 +104,13 @@ export {
   ENCODER_FRAMERATE_OPTIONS,
   ENCODER_AUDIO_BITRATE_OPTIONS,
   ENCODER_CODEC_LABELS,
+  encoderSettingRows,
   encoderSettingValues,
   isEncoderSettingOverridden,
   withEncoderSetting,
   type EncoderOption,
   type EncoderSetting,
+  type EncoderSettingRow,
   type EncoderSettingValues,
 } from "./core/encoderOptions";
 export { sendableVideoCodecs, videoCodecOrder } from "./core/WhipClient";

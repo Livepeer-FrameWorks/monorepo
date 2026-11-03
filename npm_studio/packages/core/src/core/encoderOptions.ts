@@ -62,6 +62,94 @@ export const ENCODER_CODEC_LABELS: Record<Exclude<VideoCodecPreference, "auto">,
 
 export type EncoderSetting = "resolution" | "framerate" | "videoBitrate" | "audioBitrate" | "codec";
 
+/** One select of the Encoder section, ready for any binding to draw. */
+export interface EncoderSettingRow {
+  setting: EncoderSetting;
+  labelKey: "videoCodec" | "resolution" | "framerate" | "videoBitrate" | "audioBitrate";
+  value: string;
+  options: EncoderOption<string>[];
+  overridden: boolean;
+}
+
+function formatRate(bps: number): string {
+  return bps >= 1_000_000 ? `${bps / 1_000_000} Mbps` : `${Math.round(bps / 1000)} kbps`;
+}
+
+function choices<T extends string | number>(
+  options: EncoderOption<T>[],
+  value: T,
+  label: (value: T) => string
+): EncoderOption<string>[] {
+  const listed = options.map((o) => ({ value: String(o.value), label: o.label }));
+  // A value set through the API may be off the list; the select still shows it.
+  return options.some((o) => o.value === value)
+    ? listed
+    : [{ value: String(value), label: label(value) }, ...listed];
+}
+
+/**
+ * The Encoder section's selects. `codecs` are the video codecs this browser can
+ * send; the codec select is left out when there is nothing to choose between.
+ */
+export function encoderSettingRows(
+  profile: QualityProfile,
+  overrides: EncoderOverrides | undefined,
+  codecs: Exclude<VideoCodecPreference, "auto">[],
+  autoLabel: string
+): EncoderSettingRow[] {
+  const values = encoderSettingValues(profile, overrides);
+  const row = (
+    setting: EncoderSetting,
+    labelKey: EncoderSettingRow["labelKey"],
+    value: string | number,
+    options: EncoderOption<string>[]
+  ): EncoderSettingRow => ({
+    setting,
+    labelKey,
+    value: String(value),
+    options,
+    overridden: isEncoderSettingOverridden(overrides, setting),
+  });
+
+  const rows: EncoderSettingRow[] = [];
+  if (codecs.length > 1 || (values.codec !== "auto" && !codecs.includes(values.codec))) {
+    const offered = [...new Set([...codecs, ...(values.codec === "auto" ? [] : [values.codec])])];
+    rows.push(
+      row("codec", "videoCodec", values.codec, [
+        { value: "auto", label: autoLabel },
+        ...offered.map((c) => ({ value: c, label: ENCODER_CODEC_LABELS[c] })),
+      ])
+    );
+  }
+  rows.push(
+    row(
+      "resolution",
+      "resolution",
+      values.resolution,
+      choices(ENCODER_RESOLUTION_OPTIONS, values.resolution, (v) => v.replace("x", "×"))
+    ),
+    row(
+      "framerate",
+      "framerate",
+      values.framerate,
+      choices(ENCODER_FRAMERATE_OPTIONS, values.framerate, (v) => `${v} fps`)
+    ),
+    row(
+      "videoBitrate",
+      "videoBitrate",
+      values.videoBitrate,
+      choices(ENCODER_VIDEO_BITRATE_OPTIONS, values.videoBitrate, formatRate)
+    ),
+    row(
+      "audioBitrate",
+      "audioBitrate",
+      values.audioBitrate,
+      choices(ENCODER_AUDIO_BITRATE_OPTIONS, values.audioBitrate, formatRate)
+    )
+  );
+  return rows;
+}
+
 /** What each Encoder setting shows: the override, or else the profile's value. */
 export interface EncoderSettingValues {
   resolution: string;

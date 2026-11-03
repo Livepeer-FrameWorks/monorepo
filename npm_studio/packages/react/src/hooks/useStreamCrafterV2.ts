@@ -106,6 +106,8 @@ export interface UseStreamCrafterV2Return {
   isWebCodecsAvailable: boolean;
   encoderStats: EncoderStats | null;
   setUseWebCodecs: (enabled: boolean) => void;
+  /** Encoder choices that differ from the quality profile; applied when streaming starts. */
+  encoderOverrides: EncoderOverrides;
   setEncoderOverrides: (overrides: EncoderOverrides) => void;
 
   // Controller access (advanced)
@@ -131,6 +133,8 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
   );
   const [isWebCodecsActive, setIsWebCodecsActive] = useState<boolean>(false);
   const [encoderStats, setEncoderStats] = useState<EncoderStats | null>(null);
+  const [encoderOverrides, setEncoderOverridesState] = useState<EncoderOverrides>({});
+  const encoderOverridesRef = useRef<EncoderOverrides>(encoderOverrides);
 
   const controllerRef = useRef<IngestControllerV2 | null>(null);
   const [, setControllerGeneration] = useState(0);
@@ -144,6 +148,8 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
       ...options,
       useWebCodecs: initialUseWebCodecsRef.current,
     });
+    // A controller built for a new endpoint keeps the encoder choices made so far.
+    controller.setEncoderOverrides(encoderOverridesRef.current);
     controllerRef.current = controller;
     // getController() reads a ref, so anything built on it needs this render.
     setControllerGeneration((generation) => generation + 1);
@@ -406,6 +412,8 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
   // Set encoder overrides (resolution, bitrate, framerate, etc.)
   // Takes effect on next startStreaming() call (cannot change mid-stream)
   const setEncoderOverrides = useCallback((overrides: EncoderOverrides) => {
+    encoderOverridesRef.current = overrides;
+    setEncoderOverridesState(overrides);
     if (controllerRef.current) {
       controllerRef.current.setEncoderOverrides(overrides);
     }
@@ -472,6 +480,7 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
     isWebCodecsAvailable: isWebCodecsEncodingPathSupported(),
     encoderStats,
     setUseWebCodecs,
+    encoderOverrides,
     setEncoderOverrides,
 
     // Controller access
