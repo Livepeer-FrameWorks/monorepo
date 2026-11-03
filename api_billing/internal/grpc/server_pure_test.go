@@ -143,6 +143,7 @@ func TestPricingLabelFor(t *testing.T) {
 		{"self_hosted", "", "Self-hosted (no charge)"},
 		{"included_subscription", "", "Included in subscription"},
 		{"beta_free", "", "Usage charges waived"},
+		{"grant_waived", "", "Usage waived under your FrameWorks arrangement"},
 		{"unknown_source", "", ""},
 	}
 	for _, c := range cases {

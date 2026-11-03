@@ -5465,7 +5465,7 @@ type LineItem {
   clusterName: String
   "platform_official | tenant_private | third_party_marketplace; null when clusterId is null."
   clusterKind: String
-  "Why the line was priced as it was: tier, cluster_metered, cluster_monthly, cluster_custom, free_unmetered, self_hosted, included_subscription."
+  "Why the line was priced as it was: tier, cluster_metered, cluster_monthly, cluster_custom, free_unmetered, self_hosted, included_subscription, beta_free (usage waived to zero by the platform waiver) or grant_waived (usage waived to zero by the tenant's FrameWorks arrangement)."
   pricingSource: String!
   "Human-readable label of pricingSource (e.g. 'Self-hosted (no charge)', 'Marketplace metered'). Empty when not populated by the gateway."
   pricingLabel: String!

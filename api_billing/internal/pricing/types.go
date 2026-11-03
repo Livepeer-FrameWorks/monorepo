@@ -46,11 +46,23 @@ const (
 	// during the billing beta (WAIVE_USAGE_CHARGES). Distinct from free_unmetered
 	// (a permanently-free cluster) so the two never conflate when the beta ends.
 	SourceBetaFree PricingSource = "beta_free"
+	// SourceGrantWaived marks usage that rated to a real amount but was waived
+	// to €0 by the tenant's operator grant (waive_usage).
+	SourceGrantWaived PricingSource = "grant_waived"
 )
 
-// WaivedLineLabel is the stored label of a beta_free line. Both the platform
-// waiver and an operator grant with waive_usage stamp beta_free, so a stored
-// line does not record which of them waived it.
+// WaivedSource is the source stamped on a line waived to €0. The platform
+// waiver applies to every tenant, so it names the waiver when both apply.
+func WaivedSource(platformWaiver bool) PricingSource {
+	if platformWaiver {
+		return SourceBetaFree
+	}
+	return SourceGrantWaived
+}
+
+// WaivedLineLabel is the stored label of a beta_free line. Lines rated
+// before grant_waived existed carry beta_free for a grant waiver too, so the
+// label does not name the beta.
 const WaivedLineLabel = "Usage charges waived"
 
 // WaiverLabel names who waived usage at rating time: the platform-wide

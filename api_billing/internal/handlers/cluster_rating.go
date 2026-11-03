@@ -329,6 +329,7 @@ func (jm *JobManager) rateInvoiceForTenant(
 	sort.Strings(clusterIDs)
 
 	periodSuffix := periodStart.Format("200601")
+	platformWaiver := appconfig.Runtime().WaiveUsageCharges
 
 	for _, cid := range clusterIDs {
 		usageData := perClusterUsage[cid]
@@ -395,7 +396,7 @@ func (jm *JobManager) rateInvoiceForTenant(
 			Quantities:        perClusterDimensioned[cid],
 			PeriodStart:       periodStart,
 			PeriodEnd:         periodEnd,
-			WaiveUsageCharges: tier.WaivesUsage(appconfig.Runtime().WaiveUsageCharges),
+			WaiveUsageCharges: tier.WaivesUsage(platformWaiver),
 		}
 		res, err := rating.Rate(input)
 		if err != nil {
@@ -436,12 +437,12 @@ func (jm *JobManager) rateInvoiceForTenant(
 				PlatformFeeCents:     platformFeeCents,
 				PriceVersionID:       versionCopy,
 			}
-			// A line that rated to a real amount but was waived to €0, by the
-			// platform waiver or a grant, is stamped beta_free. Lines that were
-			// already €0 (within the included allowance, or
-			// included_subscription) keep their real source.
+			// A line that rated to a real amount but was waived to €0 is
+			// stamped beta_free (platform waiver) or grant_waived (operator
+			// grant). Lines that were already €0 (within the included
+			// allowance, or included_subscription) keep their real source.
 			if pl.GrossAmount.IsPositive() && pl.Amount.IsZero() {
-				pl.PricingSource = pricing.SourceBetaFree
+				pl.PricingSource = pricing.WaivedSource(platformWaiver)
 			}
 			if cid != "" {
 				pl.ClusterID = &clusterIDCopy
@@ -823,6 +824,8 @@ func emailPricingLabel(pricingSource, clusterKind string) string {
 		return "Included in subscription"
 	case "beta_free":
 		return pricing.WaivedLineLabel
+	case "grant_waived":
+		return pricing.WaiverLabel(false)
 	default:
 		return ""
 	}

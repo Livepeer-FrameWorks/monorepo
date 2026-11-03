@@ -291,3 +291,29 @@ func TestRenderBillingTemplateUsesEmailBranding(t *testing.T) {
 		}
 	}
 }
+
+// A grant-waived line shows its €0 total with the waiver label, not
+// "Included": the usage was priced, then waived by the arrangement.
+func TestInvoiceCreatedShowsGrantWaivedLineAsWaived(t *testing.T) {
+	es := &EmailService{}
+	lines := []EmailInvoiceLineItem{{
+		Description: "Delivered minutes", ClusterID: "central-primary", ClusterName: "Platform EU",
+		ClusterKind: "platform_official", Quantity: "120", Unit: "minute", UnitPrice: "0.05", Total: "0.00", Currency: "EUR",
+		PricingSource: "grant_waived", PricingLabel: emailPricingLabel("grant_waived", "platform_official"), IsZeroPrice: true,
+	}}
+	body, err := es.renderTemplate("invoice_created", EmailData{
+		TenantName: "Acme", InvoiceID: "INV-GRANT", Currency: "EUR", DueDate: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		LoginURL: "https://app.example.com/login", LineItems: lines, LineItemGroups: groupEmailLineItems(lines),
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if strings.Contains(body, ">Included<") {
+		t.Fatal("grant-waived line rendered as Included")
+	}
+	for _, want := range []string{"0.00 EUR", "Usage waived under your FrameWorks arrangement"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q", want)
+		}
+	}
+}

@@ -107,7 +107,7 @@ var billingEmailTemplates = map[string]string{
     <td style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">{{.Description}}{{if .DimensionLabel}}<div style="color:#667085; font-size:11px; line-height:16px;">{{.DimensionLabel}}</div>{{end}}{{if .PricingLabel}}<div style="color:#667085; font-size:11px; line-height:16px;">{{.PricingLabel}}</div>{{end}}</td>
     <td align="right" style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">{{.Quantity}}{{if .Unit}} {{.Unit}}{{end}}</td>
     <td align="right" style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">{{.UnitPrice}} {{.Currency}}</td>
-    <td align="right" style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">{{if and .IsZeroPrice (ne .PricingSource "beta_free")}}<span style="color:#2f7d69; font-weight:bold;">Included</span>{{else}}{{.Total}} {{.Currency}}{{end}}</td>
+    <td align="right" style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">{{if and .IsZeroPrice (ne .PricingSource "beta_free") (ne .PricingSource "grant_waived")}}<span style="color:#2f7d69; font-weight:bold;">Included</span>{{else}}{{.Total}} {{.Currency}}{{end}}</td>
   </tr>{{end}}
 </table>
 {{end}}{{end}}

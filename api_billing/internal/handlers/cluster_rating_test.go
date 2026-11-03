@@ -180,7 +180,45 @@ func TestOperatorGrantRatesBaseFeeAndUsageToZero(t *testing.T) {
 	if result.BaseLine.Description != "Base subscription (operator arrangement)" {
 		t.Fatalf("base line description = %q", result.BaseLine.Description)
 	}
+	if len(result.UsageLines) != 1 || result.UsageLines[0].PricingSource != pricing.SourceGrantWaived {
+		t.Fatalf("grant-waived usage lines = %+v, want one line stamped %s", result.UsageLines, pricing.SourceGrantWaived)
+	}
 	if meteringCompletenessRequired(tier.MeteringEnabled, tier.UsageWaived) {
 		t.Fatal("waived usage must not hold the invoice for complete metering")
+	}
+}
+
+// The platform waiver applies to every tenant, so it names the waiver even
+// when the tenant's grant waives usage too.
+func TestPlatformWaiverStampsBetaFree(t *testing.T) {
+	appconfigtest.Set(t, "WAIVE_USAGE_CHARGES", "true")
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+	expectNoPurserInvoicedClusters(mock)
+
+	tier := &billingpkg.EffectiveTier{
+		TierID: "supporter-tier", TierName: "supporter", Currency: "EUR",
+		BasePrice: dec("0"), BasePriceGranted: true, UsageWaived: true, MeteringEnabled: true,
+		Rules: []rating.Rule{{
+			Meter: rating.MeterDeliveredMinutes, Model: rating.ModelAllUsage,
+			Currency: "EUR", UnitPrice: dec("0.05"),
+		}},
+	}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
+	periodStart := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	result, err := jm.rateInvoiceForTenant(
+		context.Background(), "tenant-beta", usagePhase{start: periodStart, end: periodStart.AddDate(0, 1, 0)}, tier,
+		true, false,
+		map[string]map[string]float64{"": {string(rating.MeterDeliveredMinutes): 120}},
+		map[string][]rating.DimensionedQuantity{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.UsageLines) != 1 || result.UsageLines[0].PricingSource != pricing.SourceBetaFree {
+		t.Fatalf("platform-waived usage lines = %+v, want one line stamped %s", result.UsageLines, pricing.SourceBetaFree)
 	}
 }
