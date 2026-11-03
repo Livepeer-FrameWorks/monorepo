@@ -13,44 +13,9 @@
   } from "$lib/components/ui/dialog";
   import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
   import { getIconComponent } from "$lib/iconUtils";
+  import { PUSH_TARGET_PRESETS } from "$lib/pushTargetPresets";
 
   let { open = $bindable(false), loading = false, liveVideoAbr = "INHERIT", onCreate } = $props();
-
-  const PLATFORM_PRESETS: Record<
-    string,
-    { label: string; ingestUrl: string; placeholder: string }
-  > = {
-    twitch: {
-      label: "Twitch",
-      ingestUrl: "rtmp://live.twitch.tv/app/",
-      placeholder: "live_xxxxxxxxxxxx",
-    },
-    youtube: {
-      label: "YouTube",
-      ingestUrl: "rtmp://a.rtmp.youtube.com/live2/",
-      placeholder: "xxxx-xxxx-xxxx-xxxx",
-    },
-    facebook: {
-      label: "Facebook",
-      ingestUrl: "rtmps://live-api-s.facebook.com:443/rtmp/",
-      placeholder: "FB-xxxx...",
-    },
-    kick: {
-      label: "Kick",
-      ingestUrl: "rtmps://fa723fc1b171.global-contribute.live-video.net/app/",
-      placeholder: "sk_xxxxxxxxxxxx",
-    },
-    x: {
-      label: "X (Twitter)",
-      ingestUrl: "rtmps://prod-ec-us-west-2.compose.broadcast.live-video.net:443/rtmp/",
-      placeholder: "xxxxxxxxxxxx",
-    },
-    custom: {
-      label: "Custom RTMP/SRT",
-      ingestUrl: "",
-      placeholder: "rtmp://your-server.com/live/stream-key",
-    },
-  };
 
   let platform = $state("twitch");
   let name = $state("");
@@ -58,7 +23,7 @@
   let customUri = $state("");
   let videoChoice = $state("AUTO");
 
-  let preset = $derived(PLATFORM_PRESETS[platform]);
+  let preset = $derived(PUSH_TARGET_PRESETS[platform]);
   let isCustom = $derived(platform === "custom");
   let targetUri = $derived(isCustom ? customUri : `${preset.ingestUrl}${streamKey}`);
   let isSrt = $derived(targetUri.trim().toLowerCase().startsWith("srt://"));
@@ -118,7 +83,7 @@
             {preset.label}
           </SelectTrigger>
           <SelectContent>
-            {#each Object.entries(PLATFORM_PRESETS) as [key, p] (key)}
+            {#each Object.entries(PUSH_TARGET_PRESETS) as [key, p] (key)}
               <SelectItem value={key}>{p.label}</SelectItem>
             {/each}
           </SelectContent>
@@ -166,6 +131,19 @@
           <p class="text-xs text-muted-foreground/70">
             {preset.ingestUrl}<span class="text-info">&lbrace;your key&rbrace;</span>
           </p>
+          {#if preset.keyHelp}
+            <p class="text-xs text-muted-foreground">
+              Find your key in
+              <!-- eslint-disable svelte/no-navigation-without-resolve -->
+              <a
+                href={preset.keyHelp.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-primary hover:underline">{preset.keyHelp.label}</a
+              >.
+              <!-- eslint-enable svelte/no-navigation-without-resolve -->
+            </p>
+          {/if}
         </div>
       {/if}
       {#if !isSrt}
