@@ -28,6 +28,7 @@
     resolveTheme,
     type PlaybackMode,
     type ContentEndpoints,
+    type PlayerController,
     type PlayerState,
     type PlayerStateContext,
     type ContentType,
@@ -80,6 +81,8 @@
     };
     onStateChange?: (state: PlayerState, context?: PlayerStateContext) => void;
     onMetadata?: (metadata: PlayerMetadata) => void;
+    /** The PlayerController of the current content, for `bind:controller`; what a React ref gets. */
+    controller?: PlayerController | null;
     children?: Snippet;
   }
 
@@ -91,8 +94,14 @@
     options = {},
     onStateChange = undefined,
     onMetadata = undefined,
+    controller = $bindable(null),
     children = undefined,
   }: Props = $props();
+
+  /** The PlayerController of the current content, or null before it attaches. */
+  export function getController(): PlayerController | null {
+    return playerStore?.getController() ?? null;
+  }
 
   // ============================================================================
   // UI-only State (stays in wrapper)
@@ -338,10 +347,13 @@
       void nextStore.attach(container).catch((err) => {
         if (playerStore === nextStore) console.error("[Player.svelte] attach failed:", err);
       });
+      // attach() builds the controller before its first await.
+      controller = nextStore.getController();
 
       cleanupPlayer = () => {
         debug("cleanup - destroying playerStore");
         unsubscribe();
+        if (controller === nextStore.getController()) controller = null;
         nextStore.destroy();
         if (playerStore === nextStore) playerStore = null;
       };
