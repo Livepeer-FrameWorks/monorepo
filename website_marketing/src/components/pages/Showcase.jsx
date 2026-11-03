@@ -24,22 +24,11 @@ import { contactPath } from "@/lib/contactTopics";
 const LEAD_ID = "streamcrafter";
 const CLOUD_PRODUCTION_ID = "composition";
 
-// Group intros keyed by horizon; the group labels come from status.json.
-const TIER_COPY = {
-  now: {
-    title: "On the platform today",
-    subtitle:
-      "Available on the hosted platform and in the self-hosted release. A badge or note marks work that is in beta or still expanding.",
-  },
-  next: {
-    title: "Coming next",
-    subtitle:
-      "Next on the roadmap, in no fixed order and with no dates. Each entry links to its roadmap section.",
-  },
-  later: {
-    title: "Further down the road",
-    subtitle: "Planned work that follows the items above.",
-  },
+// Group intros keyed by horizon. The group titles are the status.json labels.
+const TIER_INTRO = {
+  now: "Available on the hosted platform and in the self-hosted release. A badge or note marks work that is in beta or still expanding.",
+  next: "Next on the roadmap, in no fixed order and with no dates. Each entry links to its roadmap section.",
+  later: "Planned work that follows the items above.",
 };
 
 // Renders the figures-kit drawing a status.json row names; an unknown name is
@@ -129,9 +118,8 @@ const PlannedCard = ({ feature }) => {
 
 const TierHeader = ({ tier }) => (
   <HeadlineStack
-    eyebrow={tier.label}
-    title={TIER_COPY[tier.horizon]?.title}
-    subtitle={TIER_COPY[tier.horizon]?.subtitle}
+    title={tier.label}
+    subtitle={TIER_INTRO[tier.horizon]}
     align="left"
     underlineAlign="start"
   />

@@ -45,7 +45,7 @@ const About = () => {
       description:
         "Livepeer provides decentralized processing capacity and ecosystem backing, helping FrameWorks offer accessible transcoding, burst capacity, and a generous free tier.",
       avatar: "/livepeer-light.svg",
-      href: "https://livepeer.org/",
+      to: "/network?view=livepeer",
     },
   ];
 

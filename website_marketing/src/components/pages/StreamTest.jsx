@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import config from "../../config";
-import { docsLink } from "../../lib/siteLinks";
+import { docsLink, signupUrl } from "../../lib/siteLinks";
+import { contactPath } from "../../lib/contactTopics";
 import { Section, SectionContainer } from "@/components/ui/section";
 import { MarketingHero, MarketingFinalCTA, SectionDivider } from "@/components/marketing";
 
@@ -108,8 +109,12 @@ const StreamTest = () => (
         title="Run your streams on FrameWorks"
         description="Start free, or ask the engineers about your setup."
         variant="band"
-        primaryAction={{ label: "Start Free", href: config.appUrl, external: true }}
-        secondaryAction={[{ label: "Talk to the engineers", href: "/contact" }]}
+        primaryAction={{
+          label: "Start Free",
+          href: signupUrl(config.appUrl, "stream-test-final"),
+          external: true,
+        }}
+        secondaryAction={[{ label: "Talk to the engineers", to: contactPath("engineering") }]}
       />
     </Section>
   </div>

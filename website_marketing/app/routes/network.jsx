@@ -11,17 +11,11 @@ import {
 import "../../../packages/map-core/network-explorer.css";
 import config from "../../src/config";
 import { signupUrl } from "../../src/lib/siteLinks";
+import { baseMeta } from "../seo";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 export function meta() {
-  return [
-    { title: "Network explorer | FrameWorks" },
-    {
-      name: "description",
-      content:
-        "Explore FrameWorks topology and Livepeer discovery coverage, regional transcoding performance and pricing.",
-    },
-  ];
+  return baseMeta("network");
 }
 
 function LivepeerView({ viewport, onQueryChange }) {

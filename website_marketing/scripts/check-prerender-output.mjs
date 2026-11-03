@@ -19,18 +19,31 @@ const routes = [
   // Snippet stops before "QoE & Geo" because the built title HTML-encodes the ampersand.
   ["analytics/index.html", "FrameWorks Analytics - Real-Time Streaming Telemetry"],
   ["pricing/index.html", "FrameWorks Pricing - Hosted, Hybrid, and Self-Hosted Video Cloud"],
-  ["about/index.html", "About FrameWorks - Built by the Team Behind MistServer"],
+  [
+    "about/index.html",
+    "About FrameWorks - Built by the Team Behind MistServer",
+    'href="/network?view=livepeer"',
+  ],
   [
     "showcase/index.html",
     "FrameWorks Showcase - What Ships Today and What Comes Next",
     statusData.features.streamcrafter.showcase.title,
     'href="/stream-test"',
-    ...showcaseTierLabels,
+    // Each group is titled with its status.json label, not a page-local name.
+    ...showcaseTierLabels.map((label) => `<h2 class="headline-stack__title">${label}</h2>`),
   ],
-  ["stream-test/index.html", "Stream Test - Try the FrameWorks Player and StreamCrafter"],
+  [
+    "stream-test/index.html",
+    "Stream Test - Try the FrameWorks Player and StreamCrafter",
+    "utm_content=stream-test-final",
+    'href="/contact?topic=engineering"',
+  ],
   ["contact/index.html", "Contact FrameWorks - Talk to the Video Engineers"],
   [
     "network/index.html",
+    "FrameWorks Network Explorer - Infrastructure and Livepeer Transcoding Map",
+    '<link rel="canonical" href="https://frameworks.network/network"/>',
+    'property="og:url" content="https://frameworks.network/network"',
     "Network explorer",
     'role="tablist"',
     'id="network-tab-frameworks"',
