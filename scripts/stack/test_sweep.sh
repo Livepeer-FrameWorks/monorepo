@@ -273,6 +273,9 @@ purser_free_fallback_repeatedly_failed_items{stage="move"} 0
 purser_free_fallback_repeatedly_failed_items{stage="notice"} 0
 purser_free_fallback_read_failures_total 3
 purser_operator_grant_expiry_repeatedly_failed_items 0
+purser_operator_grant_notice_repeatedly_failed_items 0
+purser_operator_grant_notice_read_failures_total 0
+purser_tier_downgrades_held_read_failures_total 0
 purser_provider_webhook_inbox_repeatedly_failed_items 0
 PROM
 cat >"$work/commodore-quiet.prom" <<'PROM'
@@ -290,6 +293,14 @@ sed 's/stage="notice"} 0/stage="notice"} 2/' "$work/purser-quiet.prom" >"$work/p
 lifecycle "$work/lifecycle-notice.json" "$work/purser-quiet.prom" "$work/commodore-quiet.prom" "$work/purser-notice.prom" "$work/commodore-quiet.prom"
 expect "a failing move-to-Free notice fails by stage" fails lifecycle "$work/lifecycle-notice.json"
 expect "  ...naming the stage" said 'PurserFreeFallbackStuck: purser_free_fallback_repeatedly_failed_items\{stage=notice\} = 2'
+sed 's/^purser_operator_grant_notice_repeatedly_failed_items 0/purser_operator_grant_notice_repeatedly_failed_items 1/' "$work/purser-quiet.prom" >"$work/purser-grant-notice.prom"
+lifecycle "$work/lifecycle-grant-notice.json" "$work/purser-quiet.prom" "$work/commodore-quiet.prom" "$work/purser-grant-notice.prom" "$work/commodore-quiet.prom"
+expect "a repeatedly failing grant notice fails" fails lifecycle "$work/lifecycle-grant-notice.json"
+expect "  ...naming the alert" said '^PurserOperatorGrantNoticeStuck: purser_operator_grant_notice_repeatedly_failed_items = 1'
+sed 's/^purser_tier_downgrades_held_read_failures_total 0/purser_tier_downgrades_held_read_failures_total 3/' "$work/purser-quiet.prom" >"$work/purser-held-reads.prom"
+lifecycle "$work/lifecycle-held-reads.json" "$work/purser-quiet.prom" "$work/commodore-quiet.prom" "$work/purser-held-reads.prom" "$work/commodore-quiet.prom"
+expect "held downgrade reads failing during the run fail" fails lifecycle "$work/lifecycle-held-reads.json"
+expect "  ...naming the counter" said 'PurserTierDowngradeHeld: purser_tier_downgrades_held_read_failures_total rose by 3'
 printf '%s\n' 'commodore_account_ingest_stop_oldest_pending_seconds{cell="eu"} 120' \
   'commodore_account_ingest_stop_oldest_pending_seconds{cell="us"} 900' >>"$work/commodore-stops.prom"
 cat "$work/commodore-quiet.prom" >>"$work/commodore-stops.prom"

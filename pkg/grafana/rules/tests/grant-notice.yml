@@ -1,0 +1,74 @@
+# Repeatedly failing grant ending or ended emails, and unreadable notice
+# queues, fire after five minutes and resolve once delivered or abandoned.
+rule_files:
+  - ../frameworks.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: purser_operator_grant_notice_repeatedly_failed_items{instance="a"}
+        values: "0 1x7 0x5"
+      - series: purser_operator_grant_notice_repeatedly_failed_items{instance="b"}
+        values: "0 1x7 0x5"
+      - series: purser_operator_grant_notice_read_failures_total{instance="a"}
+        values: "0x13"
+    alert_rule_test:
+      - eval_time: 4m
+        groupname: frameworks.rules
+        alertname: PurserOperatorGrantNoticeStuck
+        exp_alerts: []
+      - eval_time: 7m
+        groupname: frameworks.rules
+        alertname: PurserOperatorGrantNoticeStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Operator grant ending or ended email keeps failing
+              description: "A grant ending or ended email to a tenant failed more than once, or Purser cannot read or write its grant notice queue. frameworks cluster doctor --deep names each tenant with its failures, and frameworks cluster logs purser shows the mail error. Fix the tenant's billing_email or the mail service; Purser retries with backoff. After five failures a notice is abandoned and no longer counted here: doctor --deep lists it, and frameworks admin billing grant notice --tenant-id <tenant> --reason <reason> sends it again. For read failures, restore Purser's database connection. Mail failures never change the grant."
+      - eval_time: 10m
+        groupname: frameworks.rules
+        alertname: PurserOperatorGrantNoticeStuck
+        exp_alerts: []
+  # The gauge keeps its last good value while reads fail, so only the
+  # counter shows an unreadable notice queue.
+  - interval: 1m
+    input_series:
+      - series: purser_operator_grant_notice_repeatedly_failed_items{instance="a"}
+        values: "0x20"
+      - series: purser_operator_grant_notice_read_failures_total{instance="a"}
+        values: "0+1x8 8x7"
+      - series: purser_operator_grant_notice_read_failures_total{instance="b"}
+        values: "0+1x8 8x7"
+    alert_rule_test:
+      - eval_time: 4m
+        groupname: frameworks.rules
+        alertname: PurserOperatorGrantNoticeStuck
+        exp_alerts: []
+      - eval_time: 7m
+        groupname: frameworks.rules
+        alertname: PurserOperatorGrantNoticeStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Operator grant ending or ended email keeps failing
+              description: "A grant ending or ended email to a tenant failed more than once, or Purser cannot read or write its grant notice queue. frameworks cluster doctor --deep names each tenant with its failures, and frameworks cluster logs purser shows the mail error. Fix the tenant's billing_email or the mail service; Purser retries with backoff. After five failures a notice is abandoned and no longer counted here: doctor --deep lists it, and frameworks admin billing grant notice --tenant-id <tenant> --reason <reason> sends it again. For read failures, restore Purser's database connection. Mail failures never change the grant."
+      - eval_time: 12m
+        groupname: frameworks.rules
+        alertname: PurserOperatorGrantNoticeStuck
+        exp_alerts: []
+  # A single failed read is retried on the next sweep and does not fire.
+  - interval: 1m
+    input_series:
+      - series: purser_operator_grant_notice_repeatedly_failed_items{instance="a"}
+        values: "0x15"
+      - series: purser_operator_grant_notice_read_failures_total{instance="a"}
+        values: "0x2 1x12"
+    alert_rule_test:
+      - eval_time: 12m
+        groupname: frameworks.rules
+        alertname: PurserOperatorGrantNoticeStuck
+        exp_alerts: []

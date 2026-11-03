@@ -178,13 +178,13 @@ groups:
           description: "Purser is retrying provider activation, a paid tier upgrade, a scheduled downgrade's provider price, suspended-stream stop, tenant billing closure or expired-checkout compensation, or cannot read that recovery queue. Run frameworks admin billing recovery list to inspect retry status and errors. Normal provider settlement waits are not failures; waits over fourteen days need investigation. Missing metering holds activation or an upgrade at its recorded billing boundary."
 
       - alert: PurserTierDowngradeHeld
-        expr: max(purser_tier_downgrades_held_items) > 0
+        expr: max(purser_tier_downgrades_held_items) > 0 or max(increase(purser_tier_downgrades_held_read_failures_total[2m])) > 1
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "A confirmed downgrade is held past its effective time"
-          description: "The provider already charges the lower tier, but the local tier has not flipped and the customer's tier changes are refused. Run frameworks admin billing recovery list: its held downgrades section names each tenant, target tier and closing invoice. frameworks admin billing recovery downgrade --tenant-id <tenant> --reason <reason> shows what holds it (provider confirmation, a draft or manual_review invoice, or a pricing refusal) and, once nothing does, applies it."
+          description: "The provider already charges the lower tier, but the local tier has not flipped and the customer's tier changes are refused, or Purser cannot read its held downgrade count from its database. Run frameworks admin billing recovery list: its held downgrades section names each tenant, target tier and closing invoice. frameworks admin billing recovery downgrade --tenant-id <tenant> --reason <reason> shows what holds it (provider confirmation, a draft or manual_review invoice, or a pricing refusal) and, once nothing does, applies it. frameworks cluster doctor --deep also names the tenants of held downgrades. For read failures, restore Purser's database connection."
 
       - alert: PurserFreeFallbackStuck
         expr: max by (stage) (purser_free_fallback_repeatedly_failed_items) > 0 or max(increase(purser_free_fallback_read_failures_total[2m])) > 1
@@ -203,6 +203,15 @@ groups:
         annotations:
           summary: "Operator grant expiry needs recovery"
           description: "An operator grant past its deadline failed billing-boundary reconciliation more than once, or Purser cannot read its expiry queue. Run frameworks admin billing grant list --include-expired: it names each tenant with its failed attempts and last error, and grant show --tenant-id <tenant> shows one in full. Correct the billing or pricing error; retries run every five minutes. Other expiries continue."
+
+      - alert: PurserOperatorGrantNoticeStuck
+        expr: max(purser_operator_grant_notice_repeatedly_failed_items) > 0 or max(increase(purser_operator_grant_notice_read_failures_total[2m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Operator grant ending or ended email keeps failing"
+          description: "A grant ending or ended email to a tenant failed more than once, or Purser cannot read or write its grant notice queue. frameworks cluster doctor --deep names each tenant with its failures, and frameworks cluster logs purser shows the mail error. Fix the tenant's billing_email or the mail service; Purser retries with backoff. After five failures a notice is abandoned and no longer counted here: doctor --deep lists it, and frameworks admin billing grant notice --tenant-id <tenant> --reason <reason> sends it again. For read failures, restore Purser's database connection. Mail failures never change the grant."
 
       - alert: PurserMediaAuthorityRefreshWorkerDisabled
         expr: purser_media_authority_refresh_worker_ready == 0

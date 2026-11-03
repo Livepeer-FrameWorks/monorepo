@@ -275,11 +275,14 @@ LIFECYCLE_ALERTS = [
      "commodore_tenant_account_closure_read_failures_total"),
     ("PurserProviderWebhookInboxStuck", "purser_provider_webhook_inbox_repeatedly_failed_items", 0, None,
      "purser_provider_webhook_inbox_read_failures_total"),
-    ("PurserTierDowngradeHeld", "purser_tier_downgrades_held_items", 0, None, None),
+    ("PurserTierDowngradeHeld", "purser_tier_downgrades_held_items", 0, None,
+     "purser_tier_downgrades_held_read_failures_total"),
     ("PurserFreeFallbackStuck", "purser_free_fallback_repeatedly_failed_items", 0, "stage",
      "purser_free_fallback_read_failures_total"),
     ("PurserOperatorGrantExpiryStuck", "purser_operator_grant_expiry_repeatedly_failed_items", 0, None,
      "purser_operator_grant_expiry_read_failures_total"),
+    ("PurserOperatorGrantNoticeStuck", "purser_operator_grant_notice_repeatedly_failed_items", 0, None,
+     "purser_operator_grant_notice_read_failures_total"),
 ]
 
 METRIC_LINE_RE = re.compile(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(.*)\})?\s+(\S+)")
