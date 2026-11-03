@@ -272,6 +272,88 @@ its last frame, and playing it again starts it over.
   is in the mix. A browser that cannot capture from a media element refuses the file with an error.
 </Aside>
 
+## Saving and Restoring the Layout
+
+A studio layout is plain JSON data: the scenes with their names and background colors, the active
+scene, the image and text overlays with their positions and the scenes that show them, and the
+layout preset. It holds no camera, screen or media-file layers, because those belong to one
+session's captures. Sources added after a layout is applied join the active scene and the preset
+places them. An image picked from disk is carried as a data URL, stored at no more than the
+frame size, so the layout stays small enough for page storage.
+
+The drop-in components take the layout to start from and report changes:
+
+| Prop / property  | Type                             | Description                                                                          |
+| ---------------- | -------------------------------- | ------------------------------------------------------------------------------------ |
+| `initialLayout`  | `StudioLayout \| null`           | Layout to apply when the compositor starts                                           |
+| `onLayoutChange` | `(layout: StudioLayout) => void` | Called about 300 ms after the scenes, overlays, active scene or layout preset change |
+
+`<fw-streamcrafter>` takes both as JS properties and also dispatches a `fw-sc-layout-change` event
+with `event.detail.layout`.
+
+**React:**
+
+```tsx
+const key = `studio-layout:${streamId}`;
+const saved = useMemo(() => {
+  try {
+    return JSON.parse(localStorage.getItem(key) ?? "null");
+  } catch {
+    return null;
+  }
+}, [key]);
+
+<StreamCrafter
+  whipUrl="..."
+  initialLayout={saved}
+  onLayoutChange={(layout) => localStorage.setItem(key, JSON.stringify(layout))}
+/>;
+```
+
+**Svelte:**
+
+```svelte
+<StreamCrafter
+  {whipUrl}
+  initialLayout={saved}
+  onLayoutChange={(layout) => localStorage.setItem(key, JSON.stringify(layout))}
+/>
+```
+
+**Web Components:**
+
+```html
+<fw-streamcrafter id="studio" whip-url="..."></fw-streamcrafter>
+<script>
+  const studio = document.getElementById("studio");
+  studio.initialLayout = JSON.parse(localStorage.getItem("studio-layout") ?? "null");
+  studio.addEventListener("fw-sc-layout-change", (e) => {
+    localStorage.setItem("studio-layout", JSON.stringify(e.detail.layout));
+  });
+</script>
+```
+
+The compositor keeps its own layout when it is turned off and on again, and when the studio gets a
+new controller for the same stream, for example after a new WHIP endpoint or quality profile.
+Change `initialLayout` together with the stream to start the new stream from its own layout. A
+stored layout that no longer applies is logged and skipped; it never keeps the compositor off.
+
+You can also read and apply a layout directly. `exportLayout()` returns the layout; while the
+compositor is off it returns the layout from when it was last on, and `null` when it never ran.
+`importLayout(layout)` replaces the scenes and overlays and needs the compositor to be on. It
+checks the layout and decodes its images first, so a layout that fails leaves the studio as it was.
+
+| Binding     | Where                                                           |
+| ----------- | --------------------------------------------------------------- |
+| React       | `exportLayout` and `importLayout` on the `useCompositor` result |
+| Svelte      | `exportLayout` and `importLayout` on the compositor store       |
+| Web Element | `studio.exportLayout()` and `studio.importLayout(layout)`       |
+| Vanilla     | `studio.exportLayout()` and `studio.importLayout(layout)`       |
+
+Layouts from storage or another page can be checked before use with `parseStudioLayout(value)` from
+`@livepeer-frameworks/streamcrafter-core`. It returns the layout or throws with the first problem,
+such as an unsupported `version` or an unknown layout mode.
+
 ## Renderer
 
 The compositor automatically selects the best available renderer:

@@ -41,18 +41,36 @@ studio.setEncoderOverrides({
 });
 ```
 
-| Override                 | Type     | Description                 |
-| ------------------------ | -------- | --------------------------- |
-| `video.width`            | `number` | Output width in pixels      |
-| `video.height`           | `number` | Output height in pixels     |
-| `video.bitrate`          | `number` | Target video bitrate in bps |
-| `video.framerate`        | `number` | Target frame rate           |
-| `audio.bitrate`          | `number` | Target audio bitrate in bps |
-| `audio.sampleRate`       | `number` | Audio sample rate in Hz     |
-| `audio.numberOfChannels` | `number` | Audio channel count         |
+| Override                 | Type                       | Description                                                                         |
+| ------------------------ | -------------------------- | ----------------------------------------------------------------------------------- |
+| `video.codec`            | `"h264" \| "vp9" \| "av1"` | Video codec offered first to the server; takes the place of the `videoCodec` option |
+| `video.width`            | `number`                   | Output width in pixels                                                              |
+| `video.height`           | `number`                   | Output height in pixels                                                             |
+| `video.bitrate`          | `number`                   | Target video bitrate in bps                                                         |
+| `video.framerate`        | `number`                   | Target frame rate                                                                   |
+| `audio.bitrate`          | `number`                   | Target audio bitrate in bps                                                         |
+| `audio.sampleRate`       | `number`                   | Audio sample rate in Hz                                                             |
+| `audio.numberOfChannels` | `number`                   | Audio channel count                                                                 |
 
 Every field is optional; unset fields keep the quality profile's value. There is no keyframe-interval
 override.
+
+### Encoder Settings
+
+The settings popup of the React, Svelte and Web Component studios has an **Encoder** section below
+the quality profiles, outside dev mode too. It sets the same overrides through selects for video
+codec, resolution, frame rate, video bitrate and audio bitrate. Each select shows the override, or
+the quality profile's value when there is none. Choosing the profile's own value clears that
+override, so the profile keeps deciding it. An overridden select is marked, and **Reset to
+profile** clears every override. The codec select lists Auto and the codecs this browser can send
+over WebRTC, and is left out when there is nothing to choose between. The settings apply when
+streaming starts, so the selects are locked while streaming.
+
+The same rows are available to a custom UI from `@livepeer-frameworks/streamcrafter-core`:
+`encoderSettingRows(profile, overrides, codecs, autoLabel)` returns each select's value, options
+and whether it is overridden, `withEncoderSetting(profile, overrides, setting, value)` returns the
+overrides to pass to `setEncoderOverrides`, and `sendableVideoCodecs()` lists the codecs this
+browser can send.
 
 ## Audio Mixing
 

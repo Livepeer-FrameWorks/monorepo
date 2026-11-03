@@ -52,26 +52,28 @@ the dashboard DNS ingest URL or Foghorn's `/ingest/{streamKey}` front door inste
 
 ### Props
 
-| Prop                | Type                                       | Default       | Description                                                                |
-| ------------------- | ------------------------------------------ | ------------- | -------------------------------------------------------------------------- |
-| `whipUrl`           | `string`                                   | —             | Direct WHIP endpoint; takes priority over `gatewayUrl`                     |
-| `resolveWhipUrl`    | `(signal: AbortSignal) => Promise<string>` | —             | Refresh the destination right before each connection                       |
-| `gatewayUrl`        | `string`                                   | —             | Gateway GraphQL endpoint, used with `streamKey`                            |
-| `streamKey`         | `string`                                   | —             | Stream key for gateway resolution                                          |
-| `initialProfile`    | `QualityProfile`                           | `"broadcast"` | Starting quality preset                                                    |
-| `autoStartCamera`   | `boolean`                                  | `false`       | Start the camera once an endpoint is known                                 |
-| `enableCompositor`  | `boolean`                                  | `true`        | Run the compositor for layouts, scenes and overlays                        |
-| `compositorConfig`  | `Partial<CompositorConfig>`                | `{}`          | Compositor renderer and output size                                        |
-| `showProducerPanel` | `boolean`                                  | `true`        | Scene, layer, overlay and media controls while the compositor runs         |
-| `showSettings`      | `boolean`                                  | `false`       | Open the quality popup on mount                                            |
-| `devMode`           | `boolean`                                  | `false`       | Debug rows in the quality popup and the Advanced panel in the context menu |
-| `debug`             | `boolean`                                  | `false`       | Debug logging                                                              |
-| `theme`             | `FwThemePreset \| StudioThemeOverrides`    | —             | Theme preset or token overrides                                            |
-| `locale`            | `StudioLocale`                             | `"en"`        | UI language                                                                |
-| `class`             | `string`                                   | `""`          | Extra class on the root                                                    |
-| `onStateChange`     | `(state, context?) => void`                | —             | Lifecycle state changes                                                    |
-| `onError`           | `(error: string) => void`                  | —             | Errors                                                                     |
-| `children`          | `Snippet`                                  | —             | Replaces the built-in UI with your own layout                              |
+| Prop                | Type                                       | Default       | Description                                                                                                                              |
+| ------------------- | ------------------------------------------ | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `whipUrl`           | `string`                                   | —             | Direct WHIP endpoint; takes priority over `gatewayUrl`                                                                                   |
+| `resolveWhipUrl`    | `(signal: AbortSignal) => Promise<string>` | —             | Refresh the destination right before each connection                                                                                     |
+| `gatewayUrl`        | `string`                                   | —             | Gateway GraphQL endpoint, used with `streamKey`                                                                                          |
+| `streamKey`         | `string`                                   | —             | Stream key for gateway resolution                                                                                                        |
+| `initialProfile`    | `QualityProfile`                           | `"broadcast"` | Starting quality preset                                                                                                                  |
+| `autoStartCamera`   | `boolean`                                  | `false`       | Start the camera once an endpoint is known                                                                                               |
+| `enableCompositor`  | `boolean`                                  | `true`        | Run the compositor for layouts, scenes and overlays                                                                                      |
+| `compositorConfig`  | `Partial<CompositorConfig>`                | `{}`          | Compositor renderer and output size                                                                                                      |
+| `initialLayout`     | `StudioLayout \| null`                     | —             | Layout to start the compositor from; see [Saving and Restoring the Layout](/builders/ingest-compositor/#saving-and-restoring-the-layout) |
+| `onLayoutChange`    | `(layout: StudioLayout) => void`           | —             | Called shortly after the scenes, overlays or layout preset change                                                                        |
+| `showProducerPanel` | `boolean`                                  | `true`        | Scene, layer, overlay and media controls while the compositor runs                                                                       |
+| `showSettings`      | `boolean`                                  | `false`       | Open the quality popup on mount                                                                                                          |
+| `devMode`           | `boolean`                                  | `false`       | Debug rows in the quality popup and the Advanced panel in the context menu                                                               |
+| `debug`             | `boolean`                                  | `false`       | Debug logging                                                                                                                            |
+| `theme`             | `FwThemePreset \| StudioThemeOverrides`    | —             | Theme preset or token overrides                                                                                                          |
+| `locale`            | `StudioLocale`                             | `"en"`        | UI language                                                                                                                              |
+| `class`             | `string`                                   | `""`          | Extra class on the root                                                                                                                  |
+| `onStateChange`     | `(state, context?) => void`                | —             | Lifecycle state changes                                                                                                                  |
+| `onError`           | `(error: string) => void`                  | —             | Errors                                                                                                                                   |
+| `children`          | `Snippet`                                  | —             | Replaces the built-in UI with your own layout                                                                                            |
 
 ## Producer Controls
 
@@ -133,7 +135,7 @@ compositor, so `<StudioProducerPanel />` and `<StudioAudioControls />` need no p
 | `StudioPreview`          | Video preview with optional compositor overlay and live badge                  |
 | `StudioMixer`            | Source list with volume sliders, mute, and remove buttons                      |
 | `StudioActionBar`        | Add Camera, Share Screen, Add Media File, Settings, and Go Live                |
-| `StudioSettings`         | Quality profile selector popup                                                 |
+| `StudioSettings`         | Quality profile and encoder settings popup                                     |
 | `StudioStatusBadge`      | State badge (Idle, Capturing, Live, etc.)                                      |
 | `StudioConnectionHealth` | Good, unstable or poor while live, with bitrate, loss and round trip           |
 | `StudioProducerPanel`    | Scenes, layers, overlays and media; renders nothing until the compositor runs  |

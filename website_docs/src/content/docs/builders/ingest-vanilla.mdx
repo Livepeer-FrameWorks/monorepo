@@ -119,10 +119,17 @@ All queries are synchronous getters on the instance.
 | `setAudioDucking(on)`         | `(enabled: boolean) => void`              | Duck under the camera mic |
 | `enableCompositor(config?)`   | `(config?) => Promise<void>`              | Start the compositor      |
 | `disableCompositor()`         | `() => void`                              | Stop the compositor       |
+| `exportLayout()`              | `() => Promise<StudioLayout \| null>`     | Read the studio layout    |
+| `importLayout(layout)`        | `(layout) => Promise<void>`               | Apply a studio layout     |
 | `destroy()`                   | `() => void`                              | Cleanup and tear down     |
 
 `masterVolume`, `setAudioProcessing()` and `setAudioDucking()` work through the audio mixer, which
 is on by default. With `audioMixing: false` they do nothing and `masterVolume` reads `1`.
+
+`exportLayout()` returns the compositor's scenes, overlays and layout preset as plain data, or the
+layout from when the compositor was last on, or `null` when it never ran. `importLayout()` needs
+the compositor to be on. See
+[Saving and Restoring the Layout](/builders/ingest-compositor/#saving-and-restoring-the-layout).
 
 ## Subscriptions — Events
 

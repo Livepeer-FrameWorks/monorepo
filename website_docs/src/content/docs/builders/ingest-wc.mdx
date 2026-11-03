@@ -253,7 +253,10 @@ or callback properties:
 | `rtc-transform-worker-url` | `string`  | —             | RTC transform worker script, when not next to the IIFE bundle    |
 | `debug`                    | `boolean` | `false`       | Enable debug logging                                             |
 
-`compositorConfig`, `resolveWhipUrl`, `onStateChange` and `onError` are JS properties.
+`compositorConfig`, `initialLayout`, `onLayoutChange`, `resolveWhipUrl`, `onStateChange` and
+`onError` are JS properties. `initialLayout` and `onLayoutChange` work as described in
+[Saving and Restoring the Layout](/builders/ingest-compositor/#saving-and-restoring-the-layout); the
+element also has `exportLayout()` and `importLayout(layout)` methods.
 `resolveWhipUrl(signal)` returns the destination right before each connection. The `theme`
 property also takes an object of token overrides, as in the React and Svelte packages.
 
@@ -266,6 +269,16 @@ const studio = document.querySelector("fw-streamcrafter");
 
 studio.addEventListener("fw-sc-state-change", (e) => {
   console.log("State:", e.detail.state);
+});
+```
+
+`fw-sc-layout-change` fires about 300 ms after the compositor's scenes, overlays, active scene or
+layout preset change, with the layout in `e.detail.layout`. Store it and pass it back as
+`initialLayout`:
+
+```js
+studio.addEventListener("fw-sc-layout-change", (e) => {
+  localStorage.setItem("studio-layout", JSON.stringify(e.detail.layout));
 });
 ```
 
