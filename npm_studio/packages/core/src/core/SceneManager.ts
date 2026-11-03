@@ -42,6 +42,7 @@ import {
   parseStudioLayout,
   STUDIO_LAYOUT_VERSION,
   type StudioLayout,
+  type StudioLayoutImageOverlay,
   type StudioLayoutOverlay,
 } from "./studioLayout";
 
@@ -74,6 +75,8 @@ interface OverlayRecord {
   text?: { source: TextOverlaySource; config: TextOverlayConfig };
   /** What an image overlay was made from, kept so a layout export can carry it. */
   image?: Blob | string;
+  /** A picked image as a layout carries it, encoded on the first export. */
+  layoutImage?: Promise<string>;
 }
 
 export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
@@ -1350,12 +1353,17 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
    * The scenes, their image and text overlays and the layout preset, as plain
    * data for importLayout. Camera, screen and media-file layers are left out;
    * a picked image is carried as a data URL.
+   *
+   * Everything but the image encoding is read during the call, so the layout
+   * is the one at the time of the call even when the compositor is destroyed
+   * before the returned promise settles.
    */
   async exportLayout(): Promise<StudioLayout> {
     const scenes = this.getAllScenes();
     const sceneIndex = new Map(scenes.map((scene, i) => [scene.id, i]));
     const exported = new Set<string>();
     const overlays: StudioLayoutOverlay[] = [];
+    const images: Promise<void>[] = [];
 
     for (const scene of scenes) {
       for (const layer of [...scene.layers].sort((a, b) => a.zIndex - b.zIndex)) {
@@ -1370,23 +1378,27 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
         if (record.text) {
           overlays.push({ kind: "text", scenes: inScenes, x, y, text: { ...record.text.config } });
         } else if (record.image !== undefined) {
-          const image =
-            typeof record.image === "string" ? record.image : await blobToDataUrl(record.image);
-          overlays.push({
+          const overlay: StudioLayoutImageOverlay = {
             kind: "image",
             scenes: inScenes,
             x,
             y,
             size,
-            image,
+            image: "",
             label: record.label,
-          });
+          };
+          overlays.push(overlay);
+          images.push(
+            this.layoutImage(record).then((image) => {
+              overlay.image = image;
+            })
+          );
         }
       }
     }
 
     const active = this.activeSceneId ? sceneIndex.get(this.activeSceneId) : undefined;
-    return {
+    const layout: StudioLayout = {
       version: STUDIO_LAYOUT_VERSION,
       layout: { ...this.currentLayout },
       activeScene: active ?? 0,
@@ -1396,6 +1408,50 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
       })),
       overlays,
     };
+    await Promise.all(images);
+    return layout;
+  }
+
+  /**
+   * Layout changes are reported often, so a picked image is encoded once per
+   * overlay. A failed encoding is tried again on the next export.
+   */
+  private layoutImage(record: OverlayRecord): Promise<string> {
+    const image = record.image!;
+    if (typeof image === "string") return Promise.resolve(image);
+    record.layoutImage ??= this.encodeLayoutImage(image).catch((err: unknown) => {
+      record.layoutImage = undefined;
+      throw err;
+    });
+    return record.layoutImage;
+  }
+
+  /**
+   * An image larger than the frame is stored at frame size, which is all the
+   * compositor draws of it, so a layout holding a photo stays small enough
+   * for page storage. The original is kept when it is the smaller of the two,
+   * and an image without a bitmap decoder (SVG) is kept as it is.
+   */
+  private async encodeLayoutImage(image: Blob): Promise<string> {
+    const bitmap = await createImageBitmap(image).catch(() => null);
+    if (!bitmap) return blobToDataUrl(image);
+
+    const scale = Math.min(this.config.width / bitmap.width, this.config.height / bitmap.height);
+    if (scale >= 1) {
+      bitmap.close();
+      return blobToDataUrl(image);
+    }
+
+    const canvas = new OffscreenCanvas(
+      Math.max(1, Math.round(bitmap.width * scale)),
+      Math.max(1, Math.round(bitmap.height * scale))
+    );
+    canvas.getContext("2d")!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    // A browser that cannot write WebP writes PNG; both keep transparency.
+    const type = image.type === "image/jpeg" ? "image/jpeg" : "image/webp";
+    const resized = await canvas.convertToBlob({ type, quality: 0.9 });
+    return blobToDataUrl(resized.size < image.size ? resized : image);
   }
 
   /**

@@ -72,6 +72,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
   // Compositor
   private sceneManager: SceneManager | null = null;
+  /** The compositor's layout when it was last turned off or destroyed. */
+  private stoppedLayout: Promise<StudioLayout> | null = null;
   private compositorBaseConfig: CompositorConfig | null = null;
 
   // WebCodecs encoder
@@ -1766,6 +1768,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   disableCompositor(): void {
     if (this.sceneManager) {
       this.disableDirectFrameOutput();
+      this.keepStoppedLayout(this.sceneManager);
       this.sceneManager.destroy();
       this.sceneManager = null;
       this.log("Compositor disabled");
@@ -1780,9 +1783,20 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     return this.sceneManager;
   }
 
-  /** The compositor's scenes, overlays and layout preset; null while it is off. */
+  /**
+   * The compositor's scenes, overlays and layout preset. While the compositor
+   * is off, or after destroy(), it is the layout the compositor had when it
+   * stopped, so a studio can carry it to its next start or to a new controller;
+   * null when the compositor never ran.
+   */
   async exportLayout(): Promise<StudioLayout | null> {
-    return this.sceneManager ? this.sceneManager.exportLayout() : null;
+    return this.sceneManager ? this.sceneManager.exportLayout() : this.stoppedLayout;
+  }
+
+  private keepStoppedLayout(sceneManager: SceneManager): void {
+    const layout = sceneManager.exportLayout();
+    layout.catch(() => {});
+    this.stoppedLayout = layout;
   }
 
   /** Apply a layout from exportLayout. The compositor has to be on. */
@@ -2156,6 +2170,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
     // Destroy compositor
     if (this.sceneManager) {
+      this.keepStoppedLayout(this.sceneManager);
       this.sceneManager.destroy();
       this.sceneManager = null;
     }

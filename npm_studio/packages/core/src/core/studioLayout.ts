@@ -5,7 +5,7 @@
  * join the active scene and the preset places them.
  */
 
-import type { LayoutConfig } from "../types";
+import type { LayoutConfig, LayoutMode } from "../types";
 import type { TextOverlayConfig } from "./TextOverlaySource";
 
 export const STUDIO_LAYOUT_VERSION = 1;
@@ -57,6 +57,69 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+const LAYOUT_MODES = new Set<string>(
+  Object.keys({
+    solo: true,
+    "pip-br": true,
+    "pip-bl": true,
+    "pip-tr": true,
+    "pip-tl": true,
+    "split-h": true,
+    "split-v": true,
+    "focus-l": true,
+    "focus-r": true,
+    grid: true,
+    stack: true,
+    "pip-dual-br": true,
+    "pip-dual-bl": true,
+    "split-pip-l": true,
+    "split-pip-r": true,
+    featured: true,
+    "featured-r": true,
+    fullscreen: true,
+    pip: true,
+    "side-by-side": true,
+  } satisfies Record<LayoutMode, true>)
+);
+
+/** Optional fields of the layout preset and their checks. */
+const LAYOUT_FIELDS: Record<string, (value: unknown) => boolean> = {
+  scalingMode: (v) => v === "stretch" || v === "letterbox" || v === "crop",
+  pipScale: (v) => isFiniteNumber(v) && v > 0 && v <= 1,
+  splitRatio: (v) => isFiniteNumber(v) && v > 0 && v < 1,
+  pipPosition: (v) =>
+    v === "top-left" || v === "top-right" || v === "bottom-left" || v === "bottom-right",
+  splitDirection: (v) => v === "horizontal" || v === "vertical",
+};
+
+/** Optional fields of a text overlay and their checks. */
+const TEXT_FIELDS: Record<string, (value: unknown) => boolean> = {
+  fontFamily: (v) => typeof v === "string",
+  fontSize: (v) => isFiniteNumber(v) && v > 0,
+  fontWeight: (v) => typeof v === "string",
+  color: (v) => typeof v === "string",
+  backgroundColor: (v) => typeof v === "string",
+  padding: (v) => isFiniteNumber(v) && v >= 0,
+  textAlign: (v) => v === "left" || v === "center" || v === "right",
+  borderRadius: (v) => isFiniteNumber(v) && v >= 0,
+  style: (v) => v === "plain" || v === "lower-third" || v === "banner",
+};
+
+/** The known fields of `value`, each checked; undefined ones are left out. */
+function checkedFields(
+  value: Record<string, unknown>,
+  fields: Record<string, (value: unknown) => boolean>,
+  problem: string
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [name, valid] of Object.entries(fields)) {
+    if (value[name] === undefined) continue;
+    if (!valid(value[name])) throw new Error(`${problem} has an invalid ${name}`);
+    result[name] = value[name];
+  }
+  return result;
+}
+
 function sceneIndexes(value: unknown, sceneCount: number): number[] | null {
   if (!Array.isArray(value) || value.length === 0) return null;
   const valid = value.every((i) => Number.isInteger(i) && i >= 0 && i < sceneCount);
@@ -75,6 +138,13 @@ export function parseStudioLayout(value: unknown): StudioLayout {
   if (!isRecord(value.layout) || typeof value.layout.mode !== "string") {
     throw new Error("Studio layout has no layout mode");
   }
+  if (!LAYOUT_MODES.has(value.layout.mode)) {
+    throw new Error(`Studio layout has an unknown layout mode: ${value.layout.mode}`);
+  }
+  const layout = {
+    mode: value.layout.mode,
+    ...checkedFields(value.layout, LAYOUT_FIELDS, "Studio layout preset"),
+  } as LayoutConfig;
   if (!Array.isArray(value.scenes) || value.scenes.length === 0) {
     throw new Error("Studio layout has no scenes");
   }
@@ -114,7 +184,10 @@ export function parseStudioLayout(value: unknown): StudioLayout {
           scenes: inScenes,
           x: overlay.x,
           y: overlay.y,
-          text: overlay.text as unknown as TextOverlayConfig,
+          text: {
+            text: overlay.text.text,
+            ...checkedFields(overlay.text, TEXT_FIELDS, `${problem} text`),
+          } as TextOverlayConfig,
         };
       }
       if (overlay.kind === "image") {
@@ -140,7 +213,7 @@ export function parseStudioLayout(value: unknown): StudioLayout {
 
   return {
     version: STUDIO_LAYOUT_VERSION,
-    layout: { ...(value.layout as unknown as LayoutConfig) },
+    layout,
     activeScene: activeScene as number,
     scenes,
     overlays,

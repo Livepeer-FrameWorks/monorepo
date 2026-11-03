@@ -160,7 +160,10 @@ export interface StreamCrafterInstance {
   enableCompositor(config?: Partial<CompositorConfig>): Promise<void>;
   disableCompositor(): void;
 
-  /** Scenes, overlays and layout preset as plain data; null while the compositor is off. */
+  /**
+   * Scenes, overlays and layout preset as plain data. While the compositor is
+   * off it is the layout from when it was last on; null when it never ran.
+   */
   exportLayout(): Promise<StudioLayout | null>;
   /** Apply a layout from exportLayout; the compositor has to be on. */
   importLayout(layout: StudioLayout): Promise<void>;
