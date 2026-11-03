@@ -259,6 +259,20 @@ cat >"$work/leftovers-dvr.json" <<JSON
 JSON
 expect "a deleted recording's tree left on an edge fails" fails leftovers "$work/leftovers-dvr.json"
 
+# ---- trigger tenant conflicts ---------------------------------------------------------
+# Helmsman named its node tenant on transcode billing events, so Foghorn dropped
+# every non-seed tenant's Livepeer and AV segment usage (slot 7, 714 drops).
+cat >"$work/foghorn-drops.log" <<'LOG'
+{"level":"warning","msg":"Dropping process_billing trigger: asserted tenant conflicts with resolved stream owner","asserted_tenant":"5eed517e-0000-0000-0000-000000000001"}
+{"level":"warning","msg":"Dropping process_billing trigger: asserted tenant conflicts with resolved stream owner","asserted_tenant":"5eed517e-0000-0000-0000-000000000001"}
+{"level":"warning","msg":"Dropping DVR lifecycle trigger: asserted tenant conflicts with resolved resource owner"}
+LOG
+expect "Foghorn dropping triggers on a tenant conflict fails" fails trigger-drops "$work/foghorn-drops.log"
+expect "  ...counting the process_billing drops" said 'dropped 2 process_billing trigger event'
+expect "  ...and the DVR lifecycle drop" said 'dropped 1 DVR lifecycle trigger event'
+printf '%s\n' '{"level":"info","msg":"Process billing recorded"}' >"$work/foghorn-quiet.log"
+expect "a Foghorn log without tenant-conflict drops passes" passes trigger-drops "$work/foghorn-quiet.log"
+
 # ---- lifecycle alerts ---------------------------------------------------------------
 # lifecycle <file> <first purser> <first commodore> <last purser> <last commodore>:
 # a two-replica scrape pair, each argument a file of exposition lines.

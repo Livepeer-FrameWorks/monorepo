@@ -355,6 +355,21 @@ def lifecycle_rule_drift(rules_text):
     return drift
 
 
+TENANT_CONFLICT_DROP = re.compile(r"Dropping (.+?): asserted tenant conflicts with resolved (?:stream|resource) owner")
+
+
+def tenant_conflict_drops(log_text):
+    """Foghorn's tenant-conflict trigger drops in a log, counted per trigger
+    kind. Every node and edge on the stack is the stack's own, so a drop means
+    a trigger named the wrong tenant, and the usage or lifecycle it carried is
+    lost."""
+    counts = {}
+    for m in TENANT_CONFLICT_DROP.finditer(log_text):
+        counts[m.group(1)] = counts.get(m.group(1), 0) + 1
+    return [f"dropped {n} {kind} event(s): asserted tenant conflicts with the resolved owner"
+            for kind, n in sorted(counts.items())]
+
+
 def parse_proc_net(text, proto):
     """Listening sockets of a /proc/net/{tcp,tcp6,udp,udp6} table as
     (proto, address, port, inode). TCP listens in state 0A; a bound UDP socket
@@ -1152,6 +1167,12 @@ def host_checks(report, args):
         if oom == "true":
             problems.append("OOM-killed")
         report.check("host", f"container {svc}", problems, scenario="run")
+        if svc.startswith("foghorn"):
+            log_text = docker("compose", "-p", project, "logs", "--no-color", "--no-log-prefix", "--since", str(args.since), svc)
+            if log_text is None:
+                report.block("host", f"container {svc}: logs unreadable")
+            else:
+                report.check("host", f"container {svc}", tenant_conflict_drops(log_text), scenario="run")
     for svc in ("edge", "edge-b"):
         cid = (docker("compose", "-p", project, "ps", "-q", svc) or "").strip()
         if not cid:
@@ -1245,6 +1266,8 @@ def main(argv):
     lc.add_argument("file")
     lr = sub.add_parser("lifecycle-rules")
     lr.add_argument("file")
+    td = sub.add_parser("trigger-drops")
+    td.add_argument("file")
     o = p.parse_args(argv)
 
     if o.cmd == "run":
@@ -1301,6 +1324,8 @@ def main(argv):
         problems = [f"{k}: {p}" for k, ps in sorted(lifecycle_alert_problems(doc["first"], doc["last"]).items()) for p in ps]
     elif o.cmd == "lifecycle-rules":
         problems = lifecycle_rule_drift(open(o.file).read())
+    elif o.cmd == "trigger-drops":
+        problems = tenant_conflict_drops(open(o.file).read())
     for line in problems:
         print(line)
     return 1 if problems else 0
