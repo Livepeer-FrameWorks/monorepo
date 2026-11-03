@@ -1233,6 +1233,9 @@ service PrepaidService {
   rpc AdminRecoverTierDowngrade(AdminRecoverTierDowngradeRequest) returns (AdminRecoverTierDowngradeResponse);
   // Requeues an abandoned fallback email without changing billing or recovering a purchase.
   rpc AdminResendFreeFallbackNotice(AdminResendFreeFallbackNoticeRequest) returns (AdminResendFreeFallbackNoticeResponse);
+  // Requeues an abandoned operator grant ending or ended email without
+  // changing billing. Platform operators only.
+  rpc AdminResendOperatorGrantNotice(AdminResendOperatorGrantNoticeRequest) returns (AdminResendOperatorGrantNoticeResponse);
 
   // Operator billing arrangement for one tenant: a base fee in place of the
   // tier's, usage rated at zero, invoices the operator collects by hand, and
@@ -2254,6 +2257,24 @@ message AdminResendFreeFallbackNoticeResponse {
   google.protobuf.Timestamp scheduled_at = 3; // Deadline that identifies this fallback lifecycle.
   bool moved = 4; // True for a completed-move notification.
   string detail = 5; // Last delivery failure on preview, durable queue state on confirmation.
+}
+
+// AdminResendOperatorGrantNoticeRequest fences confirmation to the previewed notice.
+message AdminResendOperatorGrantNoticeRequest {
+  string tenant_id = 1; // Owning tenant UUID; platform operator authentication is required.
+  string reason = 2; // Required on confirmation and recorded on the billing audit event.
+  bool confirmed = 3; // False previews the tenant's newest abandoned notice; true requeues the one named below.
+  string kind = 4; // ending or ended, exactly as previewed; required on confirmation.
+  google.protobuf.Timestamp ends_at = 5; // Grant end exactly as previewed; required on confirmation.
+}
+
+// AdminResendOperatorGrantNoticeResponse describes notification work only.
+message AdminResendOperatorGrantNoticeResponse {
+  string status = 1; // notice_abandoned on preview; queued or already_queued after confirmation.
+  string recipient = 2; // Current billing email; repair it before requesting a retry.
+  string kind = 3; // ending (seven days before the end) or ended.
+  google.protobuf.Timestamp ends_at = 4; // Grant end the notice announces.
+  string detail = 5; // Last delivery failure on preview, queue state on confirmation.
 }
 
 // AdminRecoverCheckoutResponse reports a preview or the reservation's durable recovery state.

@@ -832,6 +832,11 @@ func (c *GRPCClient) AdminResendFreeFallbackNotice(ctx context.Context, r *purse
 	return c.prepaid.AdminResendFreeFallbackNotice(ctx, r)
 }
 
+// AdminResendOperatorGrantNotice previews or requeues an abandoned grant ending or ended email.
+func (c *GRPCClient) AdminResendOperatorGrantNotice(ctx context.Context, r *purserpb.AdminResendOperatorGrantNoticeRequest) (*purserpb.AdminResendOperatorGrantNoticeResponse, error) {
+	return c.prepaid.AdminResendOperatorGrantNotice(ctx, r)
+}
+
 // AdminRetainDeliveredCheckout attests historical delivery without refunding.
 func (c *GRPCClient) AdminRetainDeliveredCheckout(ctx context.Context, r *purserpb.AdminRecoverCheckoutRequest) (*purserpb.AdminRecoverCheckoutResponse, error) {
 	return c.prepaid.AdminRetainDeliveredCheckout(ctx, r)

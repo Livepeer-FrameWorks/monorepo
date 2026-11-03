@@ -74,6 +74,41 @@ WHERE id = sqlc.arg(id)::text::uuid
   AND attempted_at = sqlc.arg(attempted_at)::timestamptz;
 
 -- name: CountRepeatedOperatorGrantNoticeFailures :one
--- Platform-wide recovery metric; one failed attempt alone is not stuck.
+-- Platform-wide recovery metric; one failed attempt alone is not stuck. An
+-- abandoned notice waits for an operator requeue and is not retried, so it
+-- is not counted here; cluster doctor --deep lists it.
 SELECT COUNT(*) FROM purser.operator_grant_notices
-WHERE notified_at IS NULL AND error IS NOT NULL AND failures > 1;
+WHERE notified_at IS NULL AND error IS NOT NULL AND failures > 1 AND abandoned_at IS NULL;
+
+-- name: GetAbandonedOperatorGrantNotice :one
+-- The tenant's newest abandoned notice; its kind and end identify it when the
+-- operator confirms the requeue.
+SELECT n.kind, n.ends_at, COALESCE(n.error, '')::text AS last_error,
+       COALESCE(ts.billing_email, '')::text AS recipient
+FROM purser.operator_grant_notices n
+JOIN purser.tenant_subscriptions ts ON ts.id = n.subscription_id
+WHERE n.tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND n.notified_at IS NULL AND n.abandoned_at IS NOT NULL
+ORDER BY n.ends_at DESC, n.kind ASC
+LIMIT 1;
+
+-- name: GetOperatorGrantNoticeRecovery :one
+SELECT n.subscription_id::text AS subscription_id,
+       (n.notified_at IS NOT NULL)::boolean AS notified,
+       (n.abandoned_at IS NOT NULL)::boolean AS abandoned,
+       ts.status,
+       COALESCE(ts.billing_email, '')::text AS recipient
+FROM purser.operator_grant_notices n
+JOIN purser.tenant_subscriptions ts ON ts.id = n.subscription_id
+WHERE n.tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND n.kind = sqlc.arg(kind)::text
+  AND n.ends_at = sqlc.arg(ends_at)::timestamptz;
+
+-- name: RequeueAbandonedOperatorGrantNotice :execrows
+-- Only one of several concurrent confirmations finds the notice abandoned.
+UPDATE purser.operator_grant_notices
+SET abandoned_at = NULL, attempted_at = NULL, failures = 0, error = NULL
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND kind = sqlc.arg(kind)::text
+  AND ends_at = sqlc.arg(ends_at)::timestamptz
+  AND notified_at IS NULL AND abandoned_at IS NOT NULL;

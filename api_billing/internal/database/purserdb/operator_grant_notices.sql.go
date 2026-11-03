@@ -80,10 +80,12 @@ func (q *Queries) CompleteOperatorGrantNotice(ctx context.Context, arg CompleteO
 
 const countRepeatedOperatorGrantNoticeFailures = `-- name: CountRepeatedOperatorGrantNoticeFailures :one
 SELECT COUNT(*) FROM purser.operator_grant_notices
-WHERE notified_at IS NULL AND error IS NOT NULL AND failures > 1
+WHERE notified_at IS NULL AND error IS NOT NULL AND failures > 1 AND abandoned_at IS NULL
 `
 
-// Platform-wide recovery metric; one failed attempt alone is not stuck.
+// Platform-wide recovery metric; one failed attempt alone is not stuck. An
+// abandoned notice waits for an operator requeue and is not retried, so it
+// is not counted here; cluster doctor --deep lists it.
 func (q *Queries) CountRepeatedOperatorGrantNoticeFailures(ctx context.Context) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countRepeatedOperatorGrantNoticeFailures)
 	var count int64
@@ -149,6 +151,78 @@ func (q *Queries) EnqueueOperatorGrantEndingNotices(ctx context.Context, leadSec
 	return result.RowsAffected()
 }
 
+const getAbandonedOperatorGrantNotice = `-- name: GetAbandonedOperatorGrantNotice :one
+SELECT n.kind, n.ends_at, COALESCE(n.error, '')::text AS last_error,
+       COALESCE(ts.billing_email, '')::text AS recipient
+FROM purser.operator_grant_notices n
+JOIN purser.tenant_subscriptions ts ON ts.id = n.subscription_id
+WHERE n.tenant_id = $1::text::uuid
+  AND n.notified_at IS NULL AND n.abandoned_at IS NOT NULL
+ORDER BY n.ends_at DESC, n.kind ASC
+LIMIT 1
+`
+
+type GetAbandonedOperatorGrantNoticeRow struct {
+	Kind      string    `db:"kind" json:"kind"`
+	EndsAt    time.Time `db:"ends_at" json:"ends_at"`
+	LastError string    `db:"last_error" json:"last_error"`
+	Recipient string    `db:"recipient" json:"recipient"`
+}
+
+// The tenant's newest abandoned notice; its kind and end identify it when the
+// operator confirms the requeue.
+func (q *Queries) GetAbandonedOperatorGrantNotice(ctx context.Context, tenantID string) (GetAbandonedOperatorGrantNoticeRow, error) {
+	row := q.db.QueryRowContext(ctx, getAbandonedOperatorGrantNotice, tenantID)
+	var i GetAbandonedOperatorGrantNoticeRow
+	err := row.Scan(
+		&i.Kind,
+		&i.EndsAt,
+		&i.LastError,
+		&i.Recipient,
+	)
+	return i, err
+}
+
+const getOperatorGrantNoticeRecovery = `-- name: GetOperatorGrantNoticeRecovery :one
+SELECT n.subscription_id::text AS subscription_id,
+       (n.notified_at IS NOT NULL)::boolean AS notified,
+       (n.abandoned_at IS NOT NULL)::boolean AS abandoned,
+       ts.status,
+       COALESCE(ts.billing_email, '')::text AS recipient
+FROM purser.operator_grant_notices n
+JOIN purser.tenant_subscriptions ts ON ts.id = n.subscription_id
+WHERE n.tenant_id = $1::text::uuid
+  AND n.kind = $2::text
+  AND n.ends_at = $3::timestamptz
+`
+
+type GetOperatorGrantNoticeRecoveryParams struct {
+	TenantID string    `db:"tenant_id" json:"tenant_id"`
+	Kind     string    `db:"kind" json:"kind"`
+	EndsAt   time.Time `db:"ends_at" json:"ends_at"`
+}
+
+type GetOperatorGrantNoticeRecoveryRow struct {
+	SubscriptionID string `db:"subscription_id" json:"subscription_id"`
+	Notified       bool   `db:"notified" json:"notified"`
+	Abandoned      bool   `db:"abandoned" json:"abandoned"`
+	Status         string `db:"status" json:"status"`
+	Recipient      string `db:"recipient" json:"recipient"`
+}
+
+func (q *Queries) GetOperatorGrantNoticeRecovery(ctx context.Context, arg GetOperatorGrantNoticeRecoveryParams) (GetOperatorGrantNoticeRecoveryRow, error) {
+	row := q.db.QueryRowContext(ctx, getOperatorGrantNoticeRecovery, arg.TenantID, arg.Kind, arg.EndsAt)
+	var i GetOperatorGrantNoticeRecoveryRow
+	err := row.Scan(
+		&i.SubscriptionID,
+		&i.Notified,
+		&i.Abandoned,
+		&i.Status,
+		&i.Recipient,
+	)
+	return i, err
+}
+
 const listOperatorGrantNotices = `-- name: ListOperatorGrantNotices :many
 SELECT n.id::text AS id
 FROM purser.operator_grant_notices n
@@ -199,4 +273,28 @@ type RecordOperatorGrantNoticeFailureParams struct {
 func (q *Queries) RecordOperatorGrantNoticeFailure(ctx context.Context, arg RecordOperatorGrantNoticeFailureParams) error {
 	_, err := q.db.ExecContext(ctx, recordOperatorGrantNoticeFailure, arg.Failure, arg.ID, arg.AttemptedAt)
 	return err
+}
+
+const requeueAbandonedOperatorGrantNotice = `-- name: RequeueAbandonedOperatorGrantNotice :execrows
+UPDATE purser.operator_grant_notices
+SET abandoned_at = NULL, attempted_at = NULL, failures = 0, error = NULL
+WHERE tenant_id = $1::text::uuid
+  AND kind = $2::text
+  AND ends_at = $3::timestamptz
+  AND notified_at IS NULL AND abandoned_at IS NOT NULL
+`
+
+type RequeueAbandonedOperatorGrantNoticeParams struct {
+	TenantID string    `db:"tenant_id" json:"tenant_id"`
+	Kind     string    `db:"kind" json:"kind"`
+	EndsAt   time.Time `db:"ends_at" json:"ends_at"`
+}
+
+// Only one of several concurrent confirmations finds the notice abandoned.
+func (q *Queries) RequeueAbandonedOperatorGrantNotice(ctx context.Context, arg RequeueAbandonedOperatorGrantNoticeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, requeueAbandonedOperatorGrantNotice, arg.TenantID, arg.Kind, arg.EndsAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

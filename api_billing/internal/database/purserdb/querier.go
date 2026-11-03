@@ -186,7 +186,9 @@ type Querier interface {
 	CountRepeatedFreeFallbackFailures(ctx context.Context) (CountRepeatedFreeFallbackFailuresRow, error)
 	// Platform-wide recovery metric; one failed attempt alone is not a stuck grant.
 	CountRepeatedOperatorGrantExpiryFailures(ctx context.Context) (int64, error)
-	// Platform-wide recovery metric; one failed attempt alone is not stuck.
+	// Platform-wide recovery metric; one failed attempt alone is not stuck. An
+	// abandoned notice waits for an operator requeue and is not retried, so it
+	// is not counted here; cluster doctor --deep lists it.
 	CountRepeatedOperatorGrantNoticeFailures(ctx context.Context) (int64, error)
 	CountX402NonceUses(ctx context.Context, arg CountX402NonceUsesParams) (int64, error)
 	// A payment the operator received outside any provider (a bank transfer) and
@@ -273,6 +275,9 @@ type Querier interface {
 	FinishCheckoutRecoveryAudit(ctx context.Context, arg FinishCheckoutRecoveryAuditParams) error
 	// Keep the subscription-before-intent lock order used by checkout reservations.
 	FinishProviderCheckoutIntent(ctx context.Context, arg FinishProviderCheckoutIntentParams) error
+	// The tenant's newest abandoned notice; its kind and end identify it when the
+	// operator confirms the requeue.
+	GetAbandonedOperatorGrantNotice(ctx context.Context, tenantID string) (GetAbandonedOperatorGrantNoticeRow, error)
 	GetActiveInvoiceCryptoPaymentQuote(ctx context.Context, arg GetActiveInvoiceCryptoPaymentQuoteParams) (GetActiveInvoiceCryptoPaymentQuoteRow, error)
 	GetActiveInvoicePayment(ctx context.Context, arg GetActiveInvoicePaymentParams) (GetActiveInvoicePaymentRow, error)
 	GetActiveMeterDefinition(ctx context.Context, meter string) (GetActiveMeterDefinitionRow, error)
@@ -384,6 +389,7 @@ type Querier interface {
 	// document: the one starting at the phase, else the latest one whose period
 	// overlaps it, such as a draft written for a provider-anchored period start.
 	GetOpenUsageDraftForPhase(ctx context.Context, arg GetOpenUsageDraftForPhaseParams) (GetOpenUsageDraftForPhaseRow, error)
+	GetOperatorGrantNoticeRecovery(ctx context.Context, arg GetOperatorGrantNoticeRecoveryParams) (GetOperatorGrantNoticeRecoveryRow, error)
 	GetOperatorPlatformFeeBps(ctx context.Context, arg GetOperatorPlatformFeeBpsParams) (int32, error)
 	GetOperatorRevenue(ctx context.Context, arg GetOperatorRevenueParams) ([]GetOperatorRevenueRow, error)
 	// The amount due is in the currency the invoice was presented in, net of the
@@ -899,6 +905,8 @@ type Querier interface {
 	RequestCheckoutRecovery(ctx context.Context, arg RequestCheckoutRecoveryParams) error
 	RequestTierUpgradeRecovery(ctx context.Context, arg RequestTierUpgradeRecoveryParams) (int64, error)
 	RequeueAbandonedFreeFallbackNotice(ctx context.Context, arg RequeueAbandonedFreeFallbackNoticeParams) (int64, error)
+	// Only one of several concurrent confirmations finds the notice abandoned.
+	RequeueAbandonedOperatorGrantNotice(ctx context.Context, arg RequeueAbandonedOperatorGrantNoticeParams) (int64, error)
 	// A late callback can reveal a provider object after an earlier empty recovery.
 	RequeueExpiredCheckoutReservation(ctx context.Context, arg RequeueExpiredCheckoutReservationParams) error
 	RequeueTenantBillingClosure(ctx context.Context, tenantID string) error

@@ -2015,35 +2015,36 @@ var ClusterPricingService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	PrepaidService_GetPrepaidBalance_FullMethodName             = "/purser.PrepaidService/GetPrepaidBalance"
-	PrepaidService_TopupBalance_FullMethodName                  = "/purser.PrepaidService/TopupBalance"
-	PrepaidService_DeductBalance_FullMethodName                 = "/purser.PrepaidService/DeductBalance"
-	PrepaidService_AdjustBalance_FullMethodName                 = "/purser.PrepaidService/AdjustBalance"
-	PrepaidService_ListBalanceTransactions_FullMethodName       = "/purser.PrepaidService/ListBalanceTransactions"
-	PrepaidService_InitializePrepaidBalance_FullMethodName      = "/purser.PrepaidService/InitializePrepaidBalance"
-	PrepaidService_InitializePrepaidAccount_FullMethodName      = "/purser.PrepaidService/InitializePrepaidAccount"
-	PrepaidService_InitializePostpaidAccount_FullMethodName     = "/purser.PrepaidService/InitializePostpaidAccount"
-	PrepaidService_EnsureFreeAccount_FullMethodName             = "/purser.PrepaidService/EnsureFreeAccount"
-	PrepaidService_CreateCardTopup_FullMethodName               = "/purser.PrepaidService/CreateCardTopup"
-	PrepaidService_GetPendingTopup_FullMethodName               = "/purser.PrepaidService/GetPendingTopup"
-	PrepaidService_ListPendingTopups_FullMethodName             = "/purser.PrepaidService/ListPendingTopups"
-	PrepaidService_CreateCryptoTopup_FullMethodName             = "/purser.PrepaidService/CreateCryptoTopup"
-	PrepaidService_GetCryptoTopup_FullMethodName                = "/purser.PrepaidService/GetCryptoTopup"
-	PrepaidService_PromoteToPaid_FullMethodName                 = "/purser.PrepaidService/PromoteToPaid"
-	PrepaidService_ChangeBillingTier_FullMethodName             = "/purser.PrepaidService/ChangeBillingTier"
-	PrepaidService_AdminAssignTier_FullMethodName               = "/purser.PrepaidService/AdminAssignTier"
-	PrepaidService_AdminListCheckoutRecovery_FullMethodName     = "/purser.PrepaidService/AdminListCheckoutRecovery"
-	PrepaidService_AdminRecoverCheckout_FullMethodName          = "/purser.PrepaidService/AdminRecoverCheckout"
-	PrepaidService_AdminRetainDeliveredCheckout_FullMethodName  = "/purser.PrepaidService/AdminRetainDeliveredCheckout"
-	PrepaidService_AdminRecoverTierUpgrade_FullMethodName       = "/purser.PrepaidService/AdminRecoverTierUpgrade"
-	PrepaidService_AdminRecoverTierDowngrade_FullMethodName     = "/purser.PrepaidService/AdminRecoverTierDowngrade"
-	PrepaidService_AdminResendFreeFallbackNotice_FullMethodName = "/purser.PrepaidService/AdminResendFreeFallbackNotice"
-	PrepaidService_AdminSetBillingGrant_FullMethodName          = "/purser.PrepaidService/AdminSetBillingGrant"
-	PrepaidService_AdminGetBillingGrant_FullMethodName          = "/purser.PrepaidService/AdminGetBillingGrant"
-	PrepaidService_AdminListBillingGrants_FullMethodName        = "/purser.PrepaidService/AdminListBillingGrants"
-	PrepaidService_AdminRevokeBillingGrant_FullMethodName       = "/purser.PrepaidService/AdminRevokeBillingGrant"
-	PrepaidService_AdminRecordInvoicePayment_FullMethodName     = "/purser.PrepaidService/AdminRecordInvoicePayment"
-	PrepaidService_AdminListPrepaidDoubleCharges_FullMethodName = "/purser.PrepaidService/AdminListPrepaidDoubleCharges"
+	PrepaidService_GetPrepaidBalance_FullMethodName              = "/purser.PrepaidService/GetPrepaidBalance"
+	PrepaidService_TopupBalance_FullMethodName                   = "/purser.PrepaidService/TopupBalance"
+	PrepaidService_DeductBalance_FullMethodName                  = "/purser.PrepaidService/DeductBalance"
+	PrepaidService_AdjustBalance_FullMethodName                  = "/purser.PrepaidService/AdjustBalance"
+	PrepaidService_ListBalanceTransactions_FullMethodName        = "/purser.PrepaidService/ListBalanceTransactions"
+	PrepaidService_InitializePrepaidBalance_FullMethodName       = "/purser.PrepaidService/InitializePrepaidBalance"
+	PrepaidService_InitializePrepaidAccount_FullMethodName       = "/purser.PrepaidService/InitializePrepaidAccount"
+	PrepaidService_InitializePostpaidAccount_FullMethodName      = "/purser.PrepaidService/InitializePostpaidAccount"
+	PrepaidService_EnsureFreeAccount_FullMethodName              = "/purser.PrepaidService/EnsureFreeAccount"
+	PrepaidService_CreateCardTopup_FullMethodName                = "/purser.PrepaidService/CreateCardTopup"
+	PrepaidService_GetPendingTopup_FullMethodName                = "/purser.PrepaidService/GetPendingTopup"
+	PrepaidService_ListPendingTopups_FullMethodName              = "/purser.PrepaidService/ListPendingTopups"
+	PrepaidService_CreateCryptoTopup_FullMethodName              = "/purser.PrepaidService/CreateCryptoTopup"
+	PrepaidService_GetCryptoTopup_FullMethodName                 = "/purser.PrepaidService/GetCryptoTopup"
+	PrepaidService_PromoteToPaid_FullMethodName                  = "/purser.PrepaidService/PromoteToPaid"
+	PrepaidService_ChangeBillingTier_FullMethodName              = "/purser.PrepaidService/ChangeBillingTier"
+	PrepaidService_AdminAssignTier_FullMethodName                = "/purser.PrepaidService/AdminAssignTier"
+	PrepaidService_AdminListCheckoutRecovery_FullMethodName      = "/purser.PrepaidService/AdminListCheckoutRecovery"
+	PrepaidService_AdminRecoverCheckout_FullMethodName           = "/purser.PrepaidService/AdminRecoverCheckout"
+	PrepaidService_AdminRetainDeliveredCheckout_FullMethodName   = "/purser.PrepaidService/AdminRetainDeliveredCheckout"
+	PrepaidService_AdminRecoverTierUpgrade_FullMethodName        = "/purser.PrepaidService/AdminRecoverTierUpgrade"
+	PrepaidService_AdminRecoverTierDowngrade_FullMethodName      = "/purser.PrepaidService/AdminRecoverTierDowngrade"
+	PrepaidService_AdminResendFreeFallbackNotice_FullMethodName  = "/purser.PrepaidService/AdminResendFreeFallbackNotice"
+	PrepaidService_AdminResendOperatorGrantNotice_FullMethodName = "/purser.PrepaidService/AdminResendOperatorGrantNotice"
+	PrepaidService_AdminSetBillingGrant_FullMethodName           = "/purser.PrepaidService/AdminSetBillingGrant"
+	PrepaidService_AdminGetBillingGrant_FullMethodName           = "/purser.PrepaidService/AdminGetBillingGrant"
+	PrepaidService_AdminListBillingGrants_FullMethodName         = "/purser.PrepaidService/AdminListBillingGrants"
+	PrepaidService_AdminRevokeBillingGrant_FullMethodName        = "/purser.PrepaidService/AdminRevokeBillingGrant"
+	PrepaidService_AdminRecordInvoicePayment_FullMethodName      = "/purser.PrepaidService/AdminRecordInvoicePayment"
+	PrepaidService_AdminListPrepaidDoubleCharges_FullMethodName  = "/purser.PrepaidService/AdminListPrepaidDoubleCharges"
 )
 
 // PrepaidServiceClient is the client API for PrepaidService service.
@@ -2117,6 +2118,9 @@ type PrepaidServiceClient interface {
 	AdminRecoverTierDowngrade(ctx context.Context, in *AdminRecoverTierDowngradeRequest, opts ...grpc.CallOption) (*AdminRecoverTierDowngradeResponse, error)
 	// Requeues an abandoned fallback email without changing billing or recovering a purchase.
 	AdminResendFreeFallbackNotice(ctx context.Context, in *AdminResendFreeFallbackNoticeRequest, opts ...grpc.CallOption) (*AdminResendFreeFallbackNoticeResponse, error)
+	// Requeues an abandoned operator grant ending or ended email without
+	// changing billing. Platform operators only.
+	AdminResendOperatorGrantNotice(ctx context.Context, in *AdminResendOperatorGrantNoticeRequest, opts ...grpc.CallOption) (*AdminResendOperatorGrantNoticeResponse, error)
 	// Operator billing arrangement for one tenant: a base fee in place of the
 	// tier's, usage rated at zero, invoices the operator collects by hand, and
 	// an optional expiry. It replaces the self-serve requirement that a paid
@@ -2374,6 +2378,16 @@ func (c *prepaidServiceClient) AdminResendFreeFallbackNotice(ctx context.Context
 	return out, nil
 }
 
+func (c *prepaidServiceClient) AdminResendOperatorGrantNotice(ctx context.Context, in *AdminResendOperatorGrantNoticeRequest, opts ...grpc.CallOption) (*AdminResendOperatorGrantNoticeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminResendOperatorGrantNoticeResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_AdminResendOperatorGrantNotice_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *prepaidServiceClient) AdminSetBillingGrant(ctx context.Context, in *AdminSetBillingGrantRequest, opts ...grpc.CallOption) (*AdminBillingGrantResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AdminBillingGrantResponse)
@@ -2505,6 +2519,9 @@ type PrepaidServiceServer interface {
 	AdminRecoverTierDowngrade(context.Context, *AdminRecoverTierDowngradeRequest) (*AdminRecoverTierDowngradeResponse, error)
 	// Requeues an abandoned fallback email without changing billing or recovering a purchase.
 	AdminResendFreeFallbackNotice(context.Context, *AdminResendFreeFallbackNoticeRequest) (*AdminResendFreeFallbackNoticeResponse, error)
+	// Requeues an abandoned operator grant ending or ended email without
+	// changing billing. Platform operators only.
+	AdminResendOperatorGrantNotice(context.Context, *AdminResendOperatorGrantNoticeRequest) (*AdminResendOperatorGrantNoticeResponse, error)
 	// Operator billing arrangement for one tenant: a base fee in place of the
 	// tier's, usage rated at zero, invoices the operator collects by hand, and
 	// an optional expiry. It replaces the self-serve requirement that a paid
@@ -2600,6 +2617,9 @@ func (UnimplementedPrepaidServiceServer) AdminRecoverTierDowngrade(context.Conte
 }
 func (UnimplementedPrepaidServiceServer) AdminResendFreeFallbackNotice(context.Context, *AdminResendFreeFallbackNoticeRequest) (*AdminResendFreeFallbackNoticeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminResendFreeFallbackNotice not implemented")
+}
+func (UnimplementedPrepaidServiceServer) AdminResendOperatorGrantNotice(context.Context, *AdminResendOperatorGrantNoticeRequest) (*AdminResendOperatorGrantNoticeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminResendOperatorGrantNotice not implemented")
 }
 func (UnimplementedPrepaidServiceServer) AdminSetBillingGrant(context.Context, *AdminSetBillingGrantRequest) (*AdminBillingGrantResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminSetBillingGrant not implemented")
@@ -3054,6 +3074,24 @@ func _PrepaidService_AdminResendFreeFallbackNotice_Handler(srv interface{}, ctx 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PrepaidService_AdminResendOperatorGrantNotice_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminResendOperatorGrantNoticeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).AdminResendOperatorGrantNotice(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_AdminResendOperatorGrantNotice_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).AdminResendOperatorGrantNotice(ctx, req.(*AdminResendOperatorGrantNoticeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PrepaidService_AdminSetBillingGrant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AdminSetBillingGrantRequest)
 	if err := dec(in); err != nil {
@@ -3260,6 +3298,10 @@ var PrepaidService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AdminResendFreeFallbackNotice",
 			Handler:    _PrepaidService_AdminResendFreeFallbackNotice_Handler,
+		},
+		{
+			MethodName: "AdminResendOperatorGrantNotice",
+			Handler:    _PrepaidService_AdminResendOperatorGrantNotice_Handler,
 		},
 		{
 			MethodName: "AdminSetBillingGrant",
