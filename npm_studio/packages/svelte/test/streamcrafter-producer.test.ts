@@ -9,6 +9,8 @@ const controllers = vi.hoisted(
       setEncoderOverrides: ReturnType<typeof vi.fn>;
       importLayout: ReturnType<typeof vi.fn>;
       exportLayout: ReturnType<typeof vi.fn>;
+      setWhipUrl: ReturnType<typeof vi.fn>;
+      destroyed: boolean;
       renderer: ReturnType<typeof vi.fn>;
       liveLayout: { version: number; scenes: { name: string }[] };
       emit: (event: string) => void;
@@ -57,7 +59,11 @@ vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
     }
     disableCompositor = vi.fn(() => this.stopCompositor());
     setEncoderOverrides = vi.fn();
-    importLayout = vi.fn(async () => {});
+    importLayout = vi.fn(async (layout: { version: number; scenes: { name: string }[] }) => {
+      this.liveLayout = layout;
+    });
+    setWhipUrl = vi.fn(async () => {});
+    destroyed = false;
     exportLayout = vi.fn(async () => (this.sceneManager ? this.liveLayout : this.stoppedLayout));
     constructor() {
       controllers.push(this);
@@ -82,6 +88,7 @@ vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
       return [];
     }
     destroy() {
+      this.destroyed = true;
       this.stopCompositor();
     }
     getEncoderManager() {
@@ -98,6 +105,7 @@ vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
   return { ...actual, IngestControllerV2: FakeController };
 });
 
+import { createDefaultStudioLayout } from "@livepeer-frameworks/streamcrafter-core";
 import StreamCrafter from "../src/StreamCrafter.svelte";
 import ProducerPanelHost from "./fixtures/ProducerPanelHost.svelte";
 import PreviewHost from "./fixtures/PreviewHost.svelte";
@@ -177,16 +185,20 @@ describe("StreamCrafter producer panel", () => {
     await waitFor(() => expect(container.querySelector(".fw-sc-layout-overlay")).toBeTruthy());
   });
 
-  it("moves the compositor onto the new controller when the endpoint changes", async () => {
+  it("sends a new endpoint to the running controller, which keeps its sources", async () => {
     const { rerender } = render(StreamCrafter, {
       whipUrl: "https://ingest.example/first",
     });
-    await waitFor(() => expect(controllers[0]?.enableCompositor).toHaveBeenCalled());
+    await screen.findByText("Scenes");
 
     await rerender({ whipUrl: "https://ingest.example/second" });
 
-    await waitFor(() => expect(controllers).toHaveLength(2));
-    await waitFor(() => expect(controllers[1].enableCompositor).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(controllers[0].setWhipUrl).toHaveBeenCalledWith("https://ingest.example/second")
+    );
+    expect(controllers).toHaveLength(1);
+    expect(controllers[0].destroyed).toBe(false);
+    expect(controllers[0].enableCompositor).toHaveBeenCalledTimes(1);
   });
 
   it("turns the compositor off and on again without a remount, and keeps the layout", async () => {
@@ -242,42 +254,99 @@ describe("StreamCrafter producer panel", () => {
 
     controllers[0].emit("sceneCreated");
 
-    await waitFor(() => expect(onLayoutChange).toHaveBeenCalledWith(controllers[0].liveLayout));
+    await waitFor(() => expect(onLayoutChange).toHaveBeenCalledWith(stored, undefined));
   });
 
   it("carries the current layout to a new controller for the same stream", async () => {
     const stored = { version: 1, layout: { mode: "solo" }, activeScene: 0, scenes: [] };
     const { rerender } = render(StreamCrafter, {
       whipUrl: "https://ingest.example/whip",
+      layoutKey: "stream-a",
       initialLayout: stored as never,
     });
     await screen.findByText("Scenes");
     expect(controllers[0].importLayout).toHaveBeenCalledWith(stored);
+    const edited = { ...stored, scenes: [{ name: "Edited" }] };
+    controllers[0].liveLayout = edited as never;
 
-    await rerender({ initialProfile: "conference" });
+    await rerender({ initialProfile: "conference", initialLayout: { ...stored } as never });
 
-    await waitFor(() =>
-      expect(controllers[1]?.importLayout).toHaveBeenCalledWith(controllers[0].liveLayout)
-    );
-    expect(controllers[1].importLayout).not.toHaveBeenCalledWith(stored);
+    await waitFor(() => expect(controllers[1]?.importLayout).toHaveBeenCalledWith(edited));
+    expect(controllers[1].importLayout).toHaveBeenCalledTimes(1);
   });
 
-  it("starts another stream from the initialLayout given with it", async () => {
+  it("shows another stream's layout on the running controller", async () => {
     const first = { version: 1, layout: { mode: "solo" }, activeScene: 0, scenes: [] };
     const second = { ...first, layout: { mode: "grid" } };
     const { rerender } = render(StreamCrafter, {
       whipUrl: "https://ingest.example/whip",
+      layoutKey: "stream-a",
       initialLayout: first as never,
     });
     await screen.findByText("Scenes");
 
-    await rerender({ whipUrl: "https://ingest.example/whip-2", initialLayout: second as never });
+    await rerender({
+      whipUrl: "https://ingest.example/whip-2",
+      layoutKey: "stream-b",
+      initialLayout: second as never,
+    });
 
-    await waitFor(() => expect(controllers[1]?.importLayout).toHaveBeenCalledWith(second));
-    expect(controllers[1].importLayout).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(controllers[0].importLayout).toHaveBeenLastCalledWith(second));
+    expect(controllers).toHaveLength(1);
+    expect(controllers[0].destroyed).toBe(false);
   });
 
-  it("hands the encoder choices to the controller for a new endpoint", async () => {
+  it("shows the default layout for another stream without one, never the previous scenes", async () => {
+    const { rerender } = render(StreamCrafter, {
+      whipUrl: "https://ingest.example/whip",
+      layoutKey: "stream-a",
+      initialLayout: null,
+    });
+    await screen.findByText("Scenes");
+    expect(controllers[0].importLayout).not.toHaveBeenCalled();
+
+    await rerender({ layoutKey: "stream-b", initialLayout: null });
+
+    await waitFor(() =>
+      expect(controllers[0].importLayout).toHaveBeenCalledWith(createDefaultStudioLayout())
+    );
+  });
+
+  it("reports each layout with its key and drops one exported for the previous stream", async () => {
+    const onLayoutChange = vi.fn();
+    const { rerender } = render(StreamCrafter, {
+      whipUrl: "https://ingest.example/whip",
+      layoutKey: "stream-a",
+      initialLayout: null,
+      onLayoutChange,
+    });
+    await screen.findByText("Scenes");
+    await waitFor(() => expect(onLayoutChange).toHaveBeenCalled());
+    onLayoutChange.mockClear();
+
+    let finishExport!: () => void;
+    const exportDone = new Promise<void>((resolve) => (finishExport = resolve));
+    const aLayout = controllers[0].liveLayout;
+    controllers[0].exportLayout.mockImplementationOnce(async () => {
+      await exportDone;
+      return aLayout;
+    });
+    const exports = controllers[0].exportLayout.mock.calls.length;
+    controllers[0].emit("sceneCreated");
+    await waitFor(() =>
+      expect(controllers[0].exportLayout.mock.calls.length).toBeGreaterThan(exports)
+    );
+
+    await rerender({ layoutKey: "stream-b", initialLayout: null });
+    finishExport();
+
+    await waitFor(() =>
+      expect(onLayoutChange).toHaveBeenCalledWith(createDefaultStudioLayout(), "stream-b")
+    );
+    expect(onLayoutChange).not.toHaveBeenCalledWith(expect.anything(), "stream-a");
+  });
+
+  it("hands the encoder choices to the controller for a new profile", async () => {
     const { rerender } = render(StreamCrafter, { whipUrl: "https://ingest.example/whip" });
     await screen.findByText("Scenes");
     await fireEvent.click(screen.getByTitle("Settings"));
@@ -285,7 +354,7 @@ describe("StreamCrafter producer panel", () => {
       target: { value: "1280x720" },
     });
 
-    await rerender({ whipUrl: "https://ingest.example/whip-2" });
+    await rerender({ initialProfile: "conference" });
 
     await waitFor(() => expect(controllers).toHaveLength(2));
     expect(controllers[1].setEncoderOverrides).toHaveBeenCalledWith({

@@ -19,7 +19,10 @@ import type {
   StudioOverlay,
   TextOverlayConfig,
 } from "@livepeer-frameworks/streamcrafter-core";
-import type { IngestControllerV2 } from "@livepeer-frameworks/streamcrafter-core";
+import type {
+  IngestControllerV2,
+  StudioLayoutKeeper,
+} from "@livepeer-frameworks/streamcrafter-core";
 
 export interface CompositorState {
   isEnabled: boolean;
@@ -81,6 +84,8 @@ export interface CompositorStore extends Readable<CompositorState> {
   // Layout as plain data, for storing per stream
   exportLayout: () => Promise<StudioLayout | null>;
   importLayout: (layout: StudioLayout) => Promise<void>;
+  /** Show the layout for the layout keeper's current key; call it after the key changed. */
+  followLayoutKey: () => Promise<void>;
 
   // Lifecycle
   destroy: () => void;
@@ -106,28 +111,22 @@ export interface CreateCompositorStoreOptions {
   config?: Partial<CompositorConfig>;
   autoEnable?: boolean;
   /**
-   * Read each time the compositor starts, before it is turned on, and applied
-   * before it reports itself enabled.
+   * Decides the layout each start applies, before the compositor reports
+   * itself enabled. Keep one keeper across the stores of a studio so the
+   * layout follows it to a new controller.
    */
-  initialLayout?: () => StudioLayout | Promise<StudioLayout | null | undefined> | null | undefined;
+  layoutKeeper?: StudioLayoutKeeper<IngestControllerV2>;
 }
 
 export function createCompositorStore(options: CreateCompositorStoreOptions): CompositorStore {
-  const { controller, config, autoEnable = true, initialLayout } = options;
+  const { controller, config, autoEnable = true, layoutKeeper } = options;
 
-  // A stored layout that no longer applies must not keep the compositor off.
   async function startCompositor(
     target: IngestControllerV2,
     enableConfig?: Partial<CompositorConfig>
   ): Promise<void> {
-    const requested = initialLayout?.();
-    await target.enableCompositor(enableConfig);
-    const layout = await requested;
-    if (layout) {
-      await target.importLayout(layout).catch((error: unknown) => {
-        console.warn("[CompositorStore] Could not apply the studio layout:", error);
-      });
-    }
+    const enable = () => target.enableCompositor(enableConfig);
+    await (layoutKeeper ? layoutKeeper.start(target, enable) : enable());
   }
 
   const store: Writable<CompositorState> = writable({
@@ -402,6 +401,12 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
     syncState();
   }
 
+  async function followLayoutKey(): Promise<void> {
+    if (!layoutKeeper) return;
+    await layoutKeeper.apply(controller);
+    syncState();
+  }
+
   // Destroy
   function destroy(): void {
     unsubscribers.forEach((unsub) => unsub());
@@ -437,6 +442,7 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
     setRenderer,
     exportLayout,
     importLayout,
+    followLayoutKey,
     destroy,
   };
 }

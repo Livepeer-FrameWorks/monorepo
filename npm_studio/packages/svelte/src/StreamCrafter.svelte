@@ -57,6 +57,7 @@
   } from "@livepeer-frameworks/streamcrafter-core";
   import {
     isWebCodecsEncodingPathSupported,
+    StudioLayoutKeeper,
     detectCapabilities,
     detectStudioSupport,
     FULL_STUDIO_SUPPORT,
@@ -95,10 +96,15 @@
     enableCompositor?: boolean;
     /** Configuration for the compositor; a new `renderer` takes effect without a restart. */
     compositorConfig?: Partial<CompositorConfig>;
-    /** Scenes, overlays and layout preset to start from, as passed to onLayoutChange. */
+    /**
+     * What the layout belongs to, such as a stream ID. A new key shows that
+     * key's initialLayout, or the default layout, without restarting sources.
+     */
+    layoutKey?: string;
+    /** Scenes, overlays and layout preset for layoutKey, as passed to onLayoutChange. */
     initialLayout?: StudioLayout | null;
-    /** Called shortly after the scenes, overlays or layout preset change. */
-    onLayoutChange?: (layout: StudioLayout) => void;
+    /** Called shortly after the scenes, overlays or layout preset change, with the key they belong to. */
+    onLayoutChange?: (layout: StudioLayout, layoutKey: string | undefined) => void;
     /** Theme preset or custom overrides */
     theme?: FwThemePreset | StudioThemeOverrides;
     /** Locale for i18n */
@@ -126,6 +132,7 @@
     debug = false,
     enableCompositor = true,
     compositorConfig = {},
+    layoutKey,
     initialLayout,
     onLayoutChange,
     theme,
@@ -343,7 +350,19 @@
   let unsubscribe: (() => void) | undefined;
   let unsubscribeAudioLevels: (() => void) | undefined;
 
-  // Track controller init inputs so we reinitialize when endpoint/profile/debug change.
+  // One keeper for the studio's lifetime, so the layout follows a new
+  // controller for the same key. It is told the key before any compositor
+  // starts below.
+  const layoutKeeper = new StudioLayoutKeeper<IngestControllerV2>(LAYOUT_CHANGE_DELAY_MS);
+  $effect(() => {
+    if (!layoutKeeper.setLayout(layoutKey, initialLayout)) return;
+    untrack(() => compositorStore)
+      ?.followLayoutKey()
+      .catch(() => {});
+  });
+
+  // A new profile or debug setting builds a new controller; a new endpoint
+  // goes to the running one, which keeps its sources.
   let controllerInitKey = "";
 
   $effect(() => {
@@ -351,10 +370,15 @@
       // Use untrack to read compositorStore without creating a dependency
       // This prevents the effect from re-running when compositorStore changes
       let existingCompositorStore = untrack(() => compositorStore);
-      const currentInitKey = `${resolvedWhipUrl}|${initialProfile}|${debug}`;
+      const currentInitKey = `${initialProfile}|${debug}`;
       const lastInitKey = untrack(() => controllerInitKey);
 
-      if (lastInitKey !== currentInitKey) {
+      if (lastInitKey === currentInitKey) {
+        crafter
+          .getController()
+          ?.setWhipUrl(resolvedWhipUrl)
+          .catch((err: unknown) => console.warn("Could not change the WHIP endpoint:", err));
+      } else {
         // The store is bound to the controller that is about to be replaced.
         unsubscribeCompositor?.();
         existingCompositorStore?.destroy();
@@ -381,7 +405,7 @@
             controller,
             config: compositorConfig,
             autoEnable: false,
-            initialLayout: () => startLayout(controller),
+            layoutKeeper,
           });
           compositorStore = store;
           unsubscribeCompositor = store.subscribe((state) => {
@@ -390,31 +414,8 @@
           store.enable().catch(() => {});
         }
       }
-      return;
     }
-
-    controllerInitKey = "";
   });
-
-  // The compositor's own layout comes back when it is turned on again, and
-  // moves to a new controller (a new endpoint, profile or debug setting)
-  // unless initialLayout changed along with it, which marks another stream.
-  let lastStart: { controller: IngestControllerV2; initialLayout: unknown } | null = null;
-
-  function startLayout(
-    controller: IngestControllerV2
-  ): StudioLayout | Promise<StudioLayout | null> | null | undefined {
-    const requested = untrack(() => initialLayout);
-    const last = lastStart;
-    lastStart = { controller, initialLayout: requested };
-    if (!last || (last.controller !== controller && last.initialLayout !== requested)) {
-      return requested;
-    }
-    return last.controller
-      .exportLayout()
-      .catch(() => null)
-      .then((layout) => layout ?? requested ?? null);
-  }
 
   $effect(() => {
     if (enableCompositor) return;
@@ -451,21 +452,10 @@
     void layoutPreset;
     void layoutActiveScene;
     const store = compositorStore;
-    if (!compositorOn || !store || !onLayoutChange) return;
-    const timer = setTimeout(() => {
-      store.exportLayout().then(
-        (layout) => {
-          if (!layout) return;
-          try {
-            onLayoutChange?.(layout);
-          } catch (err) {
-            console.warn("onLayoutChange failed:", err);
-          }
-        },
-        (err: unknown) => console.warn("Could not export the studio layout:", err)
-      );
-    }, LAYOUT_CHANGE_DELAY_MS);
-    return () => clearTimeout(timer);
+    const controller = crafter.getController();
+    if (!compositorOn || !store || !controller || !onLayoutChange) return;
+    layoutKeeper.scheduleReport(controller, (layout, key) => onLayoutChange?.(layout, key));
+    return () => layoutKeeper.cancelReport();
   });
 
   // Update video preview when stream changes
