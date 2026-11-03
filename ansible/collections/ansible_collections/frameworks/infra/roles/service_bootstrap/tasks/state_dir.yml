@@ -1,0 +1,26 @@
+---
+# The state root stays traversable for the service group; the state dir that
+# holds rendered desired-state files is the service user's own.
+- name: Service_bootstrap | ensure state root is traversable
+  ansible.builtin.file:
+    path: "{{ service_bootstrap_state_dir | dirname }}"
+    state: directory
+    owner: root
+    group: "{{ service_bootstrap_group }}"
+    mode: "0755"
+
+- name: Service_bootstrap | ensure state dir exists
+  ansible.builtin.file:
+    path: "{{ service_bootstrap_state_dir }}"
+    state: directory
+    owner: "{{ service_bootstrap_user }}"
+    group: "{{ service_bootstrap_group }}"
+    mode: "0750"
+
+- name: Service_bootstrap | ensure Ansible temp dir exists
+  ansible.builtin.file:
+    path: "{{ service_bootstrap_state_dir }}/.ansible/tmp"
+    state: directory
+    owner: "{{ service_bootstrap_user }}"
+    group: "{{ service_bootstrap_group }}"
+    mode: "0700"

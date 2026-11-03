@@ -39,16 +39,10 @@
     - service_bootstrap_mode == "dry_run"
     - (service_bootstrap_installed_version.stdout | default('') | trim) == service_bootstrap_target_version
   vars:
-    ansible_remote_tmp: "{{ service_bootstrap_state_dir }}/.ansible/tmp"
     service_bootstrap_plan_file: "{{ service_bootstrap_state_dir }}/bootstrap-dry-run.yaml"
   block:
-    - name: Service_bootstrap | dry run | ensure Ansible temp dir exists
-      ansible.builtin.file:
-        path: "{{ service_bootstrap_state_dir }}/.ansible/tmp"
-        state: directory
-        owner: "{{ service_bootstrap_user }}"
-        group: "{{ service_bootstrap_group }}"
-        mode: "0700"
+    - name: Service_bootstrap | dry run | ensure state dirs exist
+      ansible.builtin.include_tasks: state_dir.yml
 
     - name: Service_bootstrap | dry run | write rendered desired-state file
       ansible.builtin.copy:
@@ -62,6 +56,8 @@
     # --dry-run runs the full reconcile in a transaction the service rolls
     # back, and prints what it would change.
     - name: Service_bootstrap | dry run | run subcommand
+      vars:
+        ansible_remote_tmp: "{{ service_bootstrap_state_dir }}/.ansible/tmp"
       ansible.builtin.command:
         argv: >-
           {{
@@ -100,29 +96,8 @@
 - name: Service_bootstrap | apply
   when: service_bootstrap_mode == "apply"
   block:
-    - name: Service_bootstrap | apply | ensure state root is traversable
-      ansible.builtin.file:
-        path: "{{ service_bootstrap_state_dir | dirname }}"
-        state: directory
-        owner: root
-        group: "{{ service_bootstrap_group }}"
-        mode: "0755"
-
-    - name: Service_bootstrap | apply | ensure state dir exists
-      ansible.builtin.file:
-        path: "{{ service_bootstrap_state_dir }}"
-        state: directory
-        owner: "{{ service_bootstrap_user }}"
-        group: "{{ service_bootstrap_group }}"
-        mode: "0750"
-
-    - name: Service_bootstrap | apply | ensure Ansible temp dir exists
-      ansible.builtin.file:
-        path: "{{ service_bootstrap_state_dir }}/.ansible/tmp"
-        state: directory
-        owner: "{{ service_bootstrap_user }}"
-        group: "{{ service_bootstrap_group }}"
-        mode: "0700"
+    - name: Service_bootstrap | apply | ensure state dirs exist
+      ansible.builtin.include_tasks: state_dir.yml
 
     - name: Service_bootstrap | apply | write rendered desired-state file
       ansible.builtin.copy:

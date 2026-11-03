@@ -36,6 +36,27 @@
         path: "{{ plan_file }}"
       register: plan_file_after
 
+    - name: Stat the state root and state dir the plan created
+      ansible.builtin.stat:
+        path: "{{ path }}"
+      loop: [/var/lib/frameworks, /var/lib/frameworks/commodore]
+      loop_control:
+        loop_var: path
+      register: plan_state_dirs
+
+    # The host never ran a bootstrap apply, so the dry run created both, with
+    # the owners and modes the apply gives them.
+    - name: Assert the plan created the state dirs as the apply does
+      ansible.builtin.assert:
+        that:
+          - plan_state_dirs.results[0].stat.pw_name == 'root'
+          - plan_state_dirs.results[0].stat.gr_name == 'frameworks'
+          - plan_state_dirs.results[0].stat.mode == '0755'
+          - plan_state_dirs.results[1].stat.pw_name == 'frameworks'
+          - plan_state_dirs.results[1].stat.gr_name == 'frameworks'
+          - plan_state_dirs.results[1].stat.mode == '0750'
+        fail_msg: "{{ plan_state_dirs.results | map(attribute='stat') | list }}"
+
     - name: Assert the binary planned with the rendered file, the extra args and its env, and the file is gone
       ansible.builtin.assert:
         that:
