@@ -230,7 +230,14 @@
   }
 
   function handleStateChange(state: string) {
+    const wasBusy = connectionBusy;
     connectionBusy = ["connecting", "streaming", "reconnecting"].includes(state);
+    // A broadcast that started before the selected stream's destination
+    // resolved kept the studio on the previous stream; it follows the
+    // selection once the connection ends.
+    if (wasBusy && !connectionBusy && selectedStream && studioStreamId !== selectedStream.id) {
+      void checkDestination();
+    }
     const wasStreaming = isStreaming;
     const nextStreaming = state === "streaming";
     isStreaming = nextStreaming;
