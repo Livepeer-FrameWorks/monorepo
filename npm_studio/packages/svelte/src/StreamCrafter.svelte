@@ -53,6 +53,7 @@
     StudioThemeOverrides,
     StudioLocale,
     StudioLayout,
+    IngestControllerV2,
   } from "@livepeer-frameworks/streamcrafter-core";
   import {
     isWebCodecsEncodingPathSupported,
@@ -380,19 +381,13 @@
             controller,
             config: compositorConfig,
             autoEnable: false,
-            initialLayout: () =>
-              savedLayout?.controller === controller
-                ? savedLayout.layout
-                : untrack(() => initialLayout),
+            initialLayout: () => startLayout(controller),
           });
           compositorStore = store;
           unsubscribeCompositor = store.subscribe((state) => {
             compositorState = state;
           });
-          // Turning the compositor back on waits until turning it off has finished.
-          compositorTurnedOff.then(() => {
-            if (untrack(() => compositorStore) === store) store.enable().catch(() => {});
-          });
+          store.enable().catch(() => {});
         }
       }
       return;
@@ -401,30 +396,36 @@
     controllerInitKey = "";
   });
 
-  // The layout saved when the compositor was turned off, for the controller it
-  // came from; turning the compositor on again restores it.
-  let savedLayout: { controller: unknown; layout: StudioLayout } | null = null;
-  let compositorTurnedOff: Promise<void> = Promise.resolve();
+  // The compositor's own layout comes back when it is turned on again, and
+  // moves to a new controller (a new endpoint, profile or debug setting)
+  // unless initialLayout changed along with it, which marks another stream.
+  let lastStart: { controller: IngestControllerV2; initialLayout: unknown } | null = null;
+
+  function startLayout(
+    controller: IngestControllerV2
+  ): StudioLayout | Promise<StudioLayout | null> | null | undefined {
+    const requested = untrack(() => initialLayout);
+    const last = lastStart;
+    lastStart = { controller, initialLayout: requested };
+    if (!last || (last.controller !== controller && last.initialLayout !== requested)) {
+      return requested;
+    }
+    return last.controller
+      .exportLayout()
+      .catch(() => null)
+      .then((layout) => layout ?? requested ?? null);
+  }
 
   $effect(() => {
     if (enableCompositor) return;
     const store = untrack(() => compositorStore);
     if (!store) return;
-    const controller = crafter.getController();
     unsubscribeCompositor?.();
     unsubscribeCompositor = undefined;
     compositorStore = null;
     compositorState = COMPOSITOR_OFF;
-    compositorTurnedOff = store
-      .exportLayout()
-      .then((layout) => {
-        savedLayout = layout ? { controller, layout } : null;
-      })
-      .catch(() => {})
-      .finally(() => {
-        store.disable();
-        store.destroy();
-      });
+    store.disable();
+    store.destroy();
   });
 
   // Switch the running compositor when the requested renderer changes.
@@ -452,10 +453,17 @@
     const store = compositorStore;
     if (!compositorOn || !store || !onLayoutChange) return;
     const timer = setTimeout(() => {
-      store
-        .exportLayout()
-        .then((layout) => layout && onLayoutChange?.(layout))
-        .catch((err: unknown) => console.warn("Could not export the studio layout:", err));
+      store.exportLayout().then(
+        (layout) => {
+          if (!layout) return;
+          try {
+            onLayoutChange?.(layout);
+          } catch (err) {
+            console.warn("onLayoutChange failed:", err);
+          }
+        },
+        (err: unknown) => console.warn("Could not export the studio layout:", err)
+      );
     }, LAYOUT_CHANGE_DELAY_MS);
     return () => clearTimeout(timer);
   });

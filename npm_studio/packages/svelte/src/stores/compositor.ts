@@ -105,8 +105,11 @@ export interface CreateCompositorStoreOptions {
   controller: IngestControllerV2 | null;
   config?: Partial<CompositorConfig>;
   autoEnable?: boolean;
-  /** Read each time the compositor starts and applied before it reports itself enabled. */
-  initialLayout?: () => StudioLayout | null | undefined;
+  /**
+   * Read each time the compositor starts, before it is turned on, and applied
+   * before it reports itself enabled.
+   */
+  initialLayout?: () => StudioLayout | Promise<StudioLayout | null | undefined> | null | undefined;
 }
 
 export function createCompositorStore(options: CreateCompositorStoreOptions): CompositorStore {
@@ -117,8 +120,9 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
     target: IngestControllerV2,
     enableConfig?: Partial<CompositorConfig>
   ): Promise<void> {
+    const requested = initialLayout?.();
     await target.enableCompositor(enableConfig);
-    const layout = initialLayout?.();
+    const layout = await requested;
     if (layout) {
       await target.importLayout(layout).catch((error: unknown) => {
         console.warn("[CompositorStore] Could not apply the studio layout:", error);
