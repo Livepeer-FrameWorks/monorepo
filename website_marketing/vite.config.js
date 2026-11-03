@@ -74,6 +74,10 @@ export default defineConfig(({ mode, command }) => {
     },
     server: devServer,
     optimizeDeps: {
+      // React Router hands Vite no scan entries and the app has no index.html, so without
+      // these the dev server finds dependencies one page load at a time and reloads the
+      // page each time it re-optimizes them.
+      entries: ["app/entry.client.jsx", "app/root.jsx", "app/routes/**/*.{js,jsx}"],
       exclude: ["maplibre-gl"],
     },
     build: {
