@@ -66,11 +66,17 @@ profile** clears every override. The codec select lists Auto and the codecs this
 over WebRTC, and is left out when there is nothing to choose between. The settings apply when
 streaming starts, so the selects are locked while streaming.
 
-The same rows are available to a custom UI from `@livepeer-frameworks/streamcrafter-core`:
+In dev mode, the Encoder block of the Advanced panel shows the config the next stream starts with,
+read-only: video codec, resolution, frame rate, video bitrate, audio codec and audio bitrate, with
+each value that differs from the quality profile marked as overridden. Change them in the Encoder
+section of the settings popup.
+
+The Encoder section's rows are available to a custom UI from `@livepeer-frameworks/streamcrafter-core`:
 `encoderSettingRows(profile, overrides, codecs, autoLabel)` returns each select's value, options
 and whether it is overridden, `withEncoderSetting(profile, overrides, setting, value)` returns the
 overrides to pass to `setEncoderOverrides`, and `sendableVideoCodecs()` lists the codecs this
-browser can send.
+browser can send. `encoderSummaryRows(profile, overrides, autoLabel)` returns the read-only rows
+of the Advanced panel.
 
 ## Audio Mixing
 
