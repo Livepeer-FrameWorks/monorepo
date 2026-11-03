@@ -175,6 +175,17 @@ describe("useStreamCrafterV2", () => {
     expect(mockSetWhipUrl).toHaveBeenLastCalledWith("https://example.com/whip-b", undefined);
   });
 
+  it("keeps the endpoint while a gateway endpoint is resolved again", () => {
+    const { rerender } = renderHook((props) => useStreamCrafterV2(props), {
+      initialProps: baseConfig,
+    });
+    mockSetWhipUrl.mockClear();
+
+    rerender({ ...baseConfig, whipUrl: "" });
+
+    expect(mockSetWhipUrl).not.toHaveBeenCalled();
+  });
+
   it("destroys controller on unmount", () => {
     const { unmount } = renderHook(() => useStreamCrafterV2(baseConfig));
 

@@ -271,6 +271,9 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
 
   const whipUrls = options.whipUrls?.join("\n");
   useEffect(() => {
+    // The URL is empty while a gateway endpoint resolves again; the
+    // controller keeps its endpoint, so a live broadcast is not stopped.
+    if (!options.whipUrl) return;
     controllerRef.current
       ?.setWhipUrl(options.whipUrl, options.whipUrls)
       .catch((err: unknown) => console.warn("Could not change the WHIP endpoint:", err));
