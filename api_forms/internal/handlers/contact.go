@@ -140,12 +140,15 @@ func (h *ContactHandler) Handle(c *gin.Context) {
 		return
 	}
 
-	emailSubject := fmt.Sprintf("%s: %s", h.emailSubjectPrefix, req.Name)
+	topic := validation.ContactTopicLabel(req.Topic)
+	emailSubject := fmt.Sprintf("%s [%s]: %s", h.emailSubjectPrefix, topic, req.Name)
 	branding := h.branding
 	if h.BrandingSource != nil {
 		branding = h.BrandingSource()
 	}
-	emailBody, err := renderContactEmail(branding, req.Name, req.Email, req.Company, req.Message, remoteIP)
+	emailBody, err := renderContactEmail(branding, contactEmailData{
+		Name: req.Name, Email: req.Email, Company: req.Company, Topic: topic,
+	}, req.Message, remoteIP)
 	if err != nil {
 		h.metrics.IncContact("email_error")
 		h.logger.WithError(err).Error("Failed to render contact email")
@@ -179,6 +182,7 @@ func (h *ContactHandler) Handle(c *gin.Context) {
 		"name":    redactName(req.Name),
 		"email":   redactEmail(req.Email),
 		"company": req.Company,
+		"topic":   topic,
 	}).Info("Email sent successfully")
 	if h.activityEmitter != nil {
 		if err := h.activityEmitter.EmitActivity(c.Request.Context(), serviceevents.MarketingContactDelivered); err != nil {
@@ -206,26 +210,24 @@ func getRemoteIP(c *gin.Context) string {
 }
 
 func buildEmailHTML(name, email, company, message, ip string) string {
-	body, err := renderContactEmail(config.EmailBranding{}, name, email, company, message, ip)
+	body, err := renderContactEmail(config.EmailBranding{}, contactEmailData{
+		Name: name, Email: email, Company: company, Topic: validation.ContactTopicLabel(""),
+	}, message, ip)
 	if err != nil {
 		return ""
 	}
 	return body
 }
 
-func renderContactEmail(branding config.EmailBranding, name, email, company, message, ip string) (string, error) {
-	companyText := "Not provided"
-	if company != "" {
-		companyText = company
+// renderContactEmail fills data's message, time and IP and renders the
+// notification. data carries the submitter fields and the topic label.
+func renderContactEmail(branding config.EmailBranding, data contactEmailData, message, ip string) (string, error) {
+	if data.Company == "" {
+		data.Company = "Not provided"
 	}
-	data := contactEmailData{
-		Name:         name,
-		Email:        email,
-		Company:      companyText,
-		MessageLines: strings.Split(strings.ReplaceAll(message, "\r\n", "\n"), "\n"),
-		SubmittedAt:  time.Now().UTC().Format(time.RFC3339),
-		IP:           ip,
-	}
+	data.MessageLines = strings.Split(strings.ReplaceAll(message, "\r\n", "\n"), "\n")
+	data.SubmittedAt = time.Now().UTC().Format(time.RFC3339)
+	data.IP = ip
 	return emailpkg.RenderLayout(emailpkg.LayoutData{
 		LogoURL:      branding.Logo(),
 		Preheader:    "A new website contact request was submitted.",
@@ -240,6 +242,7 @@ type contactEmailData struct {
 	Name         string
 	Email        string
 	Company      string
+	Topic        string
 	MessageLines []string
 	SubmittedAt  string
 	IP           string
@@ -249,6 +252,7 @@ const contactEmailTemplate = `<table width="100%" cellspacing="0" cellpadding="0
   <tr><th style="padding:9px 10px; text-align:left; color:#3d4a68; border-bottom:1px solid #e7edf0; background:#f7fafb;">Name</th><td style="padding:9px 10px; color:#24283b; border-bottom:1px solid #e7edf0;">{{.Name}}</td></tr>
   <tr><th style="padding:9px 10px; text-align:left; color:#3d4a68; border-bottom:1px solid #e7edf0; background:#f7fafb;">Email</th><td style="padding:9px 10px; color:#24283b; border-bottom:1px solid #e7edf0;"><a href="mailto:{{.Email}}" style="color:#0f4b6e;">{{.Email}}</a></td></tr>
   <tr><th style="padding:9px 10px; text-align:left; color:#3d4a68; border-bottom:1px solid #e7edf0; background:#f7fafb;">Company</th><td style="padding:9px 10px; color:#24283b; border-bottom:1px solid #e7edf0;">{{.Company}}</td></tr>
+  <tr><th style="padding:9px 10px; text-align:left; color:#3d4a68; border-bottom:1px solid #e7edf0; background:#f7fafb;">Topic</th><td style="padding:9px 10px; color:#24283b; border-bottom:1px solid #e7edf0;">{{.Topic}}</td></tr>
 </table>
 <h2 style="color:#24283b; margin:24px 0 10px; font-size:18px; line-height:24px;">Message</h2>
 <div style="background:#f7fafb; border-left:3px solid #0f4b6e; padding:15px; margin:10px 0 20px; color:#24283b; font-size:14px; line-height:21px;">{{range $index, $line := .MessageLines}}{{if $index}}<br>{{end}}{{$line}}{{end}}</div>

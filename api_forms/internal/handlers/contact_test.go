@@ -195,6 +195,34 @@ func TestContactHandlerAcceptsValidSubmission(t *testing.T) {
 	if len(harness.sender.calls) != 1 {
 		t.Fatalf("expected one email send")
 	}
+	if call := harness.sender.calls[0]; call.subject != "Contact Form [Not specified]: Jane Doe" || !strings.Contains(call.body, "Not specified") {
+		t.Fatalf("submission without a topic: subject %q", call.subject)
+	}
+}
+
+// The form's topic reaches the notification's subject and body, so a trial
+// or custom-pricing request is routed without reading the message.
+func TestContactHandlerCarriesTheTopic(t *testing.T) {
+	harness := setupContactHandler(false)
+	body, _ := json.Marshal(map[string]any{
+		"name": "Jane Doe", "email": "jane@example.com", "topic": "trial",
+		"message": "We want to test 200 concurrent viewers next week.", "human_check": "human",
+		"behavior": map[string]any{
+			"formShownAt": float64(time.Now().Add(-10 * time.Second).UnixMilli()),
+			"submittedAt": float64(time.Now().UnixMilli()), "mouse": true, "typed": true,
+		},
+	})
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/contact", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	harness.router.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK || len(harness.sender.calls) != 1 {
+		t.Fatalf("status %d, %d emails", resp.Code, len(harness.sender.calls))
+	}
+	call := harness.sender.calls[0]
+	if call.subject != "Contact Form [Trial usage]: Jane Doe" || !strings.Contains(call.body, ">Topic</th>") || !strings.Contains(call.body, "Trial usage") {
+		t.Fatalf("topic missing from the notification: subject %q", call.subject)
+	}
 }
 
 func TestContactHandlerEmitsOnlyAfterEmailDelivery(t *testing.T) {

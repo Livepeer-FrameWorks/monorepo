@@ -24,6 +24,27 @@ type ContactRequest struct {
 	HumanCheck     string                 `json:"human_check"`
 	Behavior       map[string]interface{} `json:"behavior"`
 	TurnstileToken string                 `json:"turnstileToken"`
+	// Topic is the contact form's topic id (website_marketing contactTopics.js).
+	Topic string `json:"topic"`
+}
+
+// contactTopicLabels names the contact form topics in the notification. The
+// ids match website_marketing/src/lib/contactTopics.js.
+var contactTopicLabels = map[string]string{
+	"engineering": "A project or technical question",
+	"trial":       "Trial usage",
+	"pricing":     "Custom pricing",
+	"channel":     "A shared Slack or WhatsApp channel",
+	"other":       "Something else",
+}
+
+// ContactTopicLabel names a submitted topic. A missing or unknown id reads
+// "Not specified": the topic routes the request, it never refuses it.
+func ContactTopicLabel(topic string) string {
+	if label, ok := contactTopicLabels[strings.TrimSpace(topic)]; ok {
+		return label
+	}
+	return "Not specified"
 }
 
 type BotCheckParams struct {
