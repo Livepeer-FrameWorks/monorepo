@@ -26,8 +26,19 @@ import (
 
 // splitTiers seeds a prepaid pay-as-you-go tier that rates egress at 0.01
 // EUR per GiB and a postpaid tier with a 79.00 base fee that rates it at 0.02.
+// Tier names are unique, so a second call on the same database returns the
+// tiers the first one seeded.
 func splitTiers(t *testing.T, db *sql.DB) (paygID, supporterID string) {
 	t.Helper()
+	var existingPayg, existingSupporter sql.NullString
+	if err := db.QueryRowContext(context.Background(), `
+		SELECT (SELECT id::text FROM purser.billing_tiers WHERE tier_name = 'payg'),
+		       (SELECT id::text FROM purser.billing_tiers WHERE tier_name = 'supporter')`).Scan(&existingPayg, &existingSupporter); err != nil {
+		t.Fatalf("read seeded tiers: %v", err)
+	}
+	if existingPayg.Valid && existingSupporter.Valid {
+		return existingPayg.String, existingSupporter.String
+	}
 	paygID, supporterID = uuid.NewString(), uuid.NewString()
 	for _, statement := range []string{
 		`INSERT INTO purser.billing_tiers (id, tier_name, display_name, base_price, currency, tier_level, is_default_prepaid, metering_enabled)

@@ -1020,8 +1020,8 @@ func TestHeldDowngradeRecoveryKeepsAnUnresolvedManualReviewHold_RealPG(t *testin
 	// Usage on a marketplace cluster with no pricing is what routes the period
 	// to manual review.
 	mustExec(t, db, `INSERT INTO purser.usage_records (tenant_id,cluster_id,usage_type,unit,dimensions,dimension_key,source_id,report_id,usage_value,usage_details,period_start,period_end,granularity,value_kind,created_at)
-		VALUES ($1,$2,'egress_gb','gibibyte','{}',$3,'periscope-default',$4,1,'{}',$5,$6,'minute_5','delta',$6)`,
-		tenant.id, cluster, strings.Repeat("d", 64), strings.Repeat("e", 64), start.Add(time.Hour), start.Add(time.Hour+5*time.Minute))
+		VALUES ($1,$2,'egress_gb','gibibyte','{}',$3,'periscope-default',$4,1,'{}',$5,$6,'minute_5','delta',$7)`,
+		tenant.id, cluster, strings.Repeat("d", 64), strings.Repeat("e", 64), start.Add(time.Hour), start.Add(time.Hour+5*time.Minute), start.Add(time.Hour+5*time.Minute))
 	invoiceStatus := func() string {
 		t.Helper()
 		var status string
