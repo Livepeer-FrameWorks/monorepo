@@ -18,6 +18,8 @@ import "google/protobuf/timestamp.proto";
 
 // Read-only management observations, separate from media admission and preparation.
 service MediaPlacementControlService {
+  // Local stream evidence; requires a platform-operator JWT.
+  rpc DiagnoseStream(DiagnoseStreamRequest) returns (DiagnoseStreamResponse);
   rpc ObserveMediaPlacementCapacity(media_placement.CapacityPreviewQuery) returns (media_placement.CapacityPreviewObservation);
   rpc ObserveMediaPlacementPushSource(media_placement.PushSourcePreviewQuery) returns (media_placement.PushSourcePreviewObservation);
 }
@@ -377,4 +379,38 @@ message OverrideArtifactRetentionRequest {
 message OverrideArtifactRetentionResponse {
   bool applied = 1;
   google.protobuf.Timestamp retention_until = 2;
+}
+
+message DiagnoseStreamRequest {
+  string tenant_id = 1;
+  string stream_id = 2;
+  string internal_name = 3;
+}
+message DiagnoseStreamResponse {
+  string tenant_id = 1;
+  string stream_id = 2;
+  repeated StreamIngestDiagnosis sessions = 3;
+  repeated StreamHeldAuthorityDiagnosis authorities = 4;
+  int64 session_count = 5;
+}
+message StreamIngestDiagnosis {
+  string id = 1;
+  string node_id = 2;
+  string cluster_id = 3;
+  string claim_id = 4;
+  string projection_state = 5;
+  string started_at = 6;
+  string ended_at = 7;
+  string ended_reason = 8;
+}
+message StreamHeldAuthorityDiagnosis {
+  string kind = 1;
+  string authority_id = 2;
+  int64 version = 3;
+  string issued_at = 4;
+  string refresh_after = 5;
+  string valid_until = 6;
+  string lifecycle = 7;
+  string billing_decision = 8;
+  string decision_reason = 9;
 }

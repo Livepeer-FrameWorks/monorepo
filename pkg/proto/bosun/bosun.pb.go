@@ -1861,6 +1861,162 @@ func (x *ReplayWebhookDeliveriesResponse) GetHasMore() bool {
 	return false
 }
 
+type DiagnoseWebhooksRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiagnoseWebhooksRequest) Reset() {
+	*x = DiagnoseWebhooksRequest{}
+	mi := &file_bosun_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiagnoseWebhooksRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiagnoseWebhooksRequest) ProtoMessage() {}
+
+func (x *DiagnoseWebhooksRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_bosun_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiagnoseWebhooksRequest.ProtoReflect.Descriptor instead.
+func (*DiagnoseWebhooksRequest) Descriptor() ([]byte, []int) {
+	return file_bosun_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *DiagnoseWebhooksRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+type DiagnoseWebhooksResponse struct {
+	state         protoimpl.MessageState      `protogen:"open.v1"`
+	TenantId      string                      `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Endpoints     []*WebhookEndpointDiagnosis `protobuf:"bytes,2,rep,name=endpoints,proto3" json:"endpoints,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiagnoseWebhooksResponse) Reset() {
+	*x = DiagnoseWebhooksResponse{}
+	mi := &file_bosun_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiagnoseWebhooksResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiagnoseWebhooksResponse) ProtoMessage() {}
+
+func (x *DiagnoseWebhooksResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_bosun_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiagnoseWebhooksResponse.ProtoReflect.Descriptor instead.
+func (*DiagnoseWebhooksResponse) Descriptor() ([]byte, []int) {
+	return file_bosun_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *DiagnoseWebhooksResponse) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *DiagnoseWebhooksResponse) GetEndpoints() []*WebhookEndpointDiagnosis {
+	if x != nil {
+		return x.Endpoints
+	}
+	return nil
+}
+
+type WebhookEndpointDiagnosis struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Endpoint      *WebhookEndpoint       `protobuf:"bytes,1,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
+	Deliveries    []*WebhookDelivery     `protobuf:"bytes,2,rep,name=deliveries,proto3" json:"deliveries,omitempty"`
+	DeliveryCount int32                  `protobuf:"varint,3,opt,name=delivery_count,json=deliveryCount,proto3" json:"delivery_count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WebhookEndpointDiagnosis) Reset() {
+	*x = WebhookEndpointDiagnosis{}
+	mi := &file_bosun_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WebhookEndpointDiagnosis) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WebhookEndpointDiagnosis) ProtoMessage() {}
+
+func (x *WebhookEndpointDiagnosis) ProtoReflect() protoreflect.Message {
+	mi := &file_bosun_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WebhookEndpointDiagnosis.ProtoReflect.Descriptor instead.
+func (*WebhookEndpointDiagnosis) Descriptor() ([]byte, []int) {
+	return file_bosun_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *WebhookEndpointDiagnosis) GetEndpoint() *WebhookEndpoint {
+	if x != nil {
+		return x.Endpoint
+	}
+	return nil
+}
+
+func (x *WebhookEndpointDiagnosis) GetDeliveries() []*WebhookDelivery {
+	if x != nil {
+		return x.Deliveries
+	}
+	return nil
+}
+
+func (x *WebhookEndpointDiagnosis) GetDeliveryCount() int32 {
+	if x != nil {
+		return x.DeliveryCount
+	}
+	return 0
+}
+
 var File_bosun_proto protoreflect.FileDescriptor
 
 const file_bosun_proto_rawDesc = "" +
@@ -2019,7 +2175,18 @@ const file_bosun_proto_rawDesc = "" +
 	"\x0ecreated_before\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\rcreatedBefore\"c\n" +
 	"\x1fReplayWebhookDeliveriesResponse\x12%\n" +
 	"\x0ereplayed_count\x18\x01 \x01(\x05R\rreplayedCount\x12\x19\n" +
-	"\bhas_more\x18\x02 \x01(\bR\ahasMore*\x8b\x01\n" +
+	"\bhas_more\x18\x02 \x01(\bR\ahasMore\"6\n" +
+	"\x17DiagnoseWebhooksRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"v\n" +
+	"\x18DiagnoseWebhooksResponse\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12=\n" +
+	"\tendpoints\x18\x02 \x03(\v2\x1f.bosun.WebhookEndpointDiagnosisR\tendpoints\"\xad\x01\n" +
+	"\x18WebhookEndpointDiagnosis\x122\n" +
+	"\bendpoint\x18\x01 \x01(\v2\x16.bosun.WebhookEndpointR\bendpoint\x126\n" +
+	"\n" +
+	"deliveries\x18\x02 \x03(\v2\x16.bosun.WebhookDeliveryR\n" +
+	"deliveries\x12%\n" +
+	"\x0edelivery_count\x18\x03 \x01(\x05R\rdeliveryCount*\x8b\x01\n" +
 	"\x15WebhookEndpointStatus\x12'\n" +
 	"#WEBHOOK_ENDPOINT_STATUS_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fWEBHOOK_ENDPOINT_STATUS_ENABLED\x10\x01\x12$\n" +
@@ -2037,9 +2204,9 @@ const file_bosun_proto_rawDesc = "" +
 	"\x13WebhookDeliveryKind\x12%\n" +
 	"!WEBHOOK_DELIVERY_KIND_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bWEBHOOK_DELIVERY_KIND_EVENT\x10\x01\x12\x1e\n" +
-	"\x1aWEBHOOK_DELIVERY_KIND_TEST\x10\x022\xc0\n" +
-	"\n" +
-	"\fBosunService\x12_\n" +
+	"\x1aWEBHOOK_DELIVERY_KIND_TEST\x10\x022\x95\v\n" +
+	"\fBosunService\x12S\n" +
+	"\x10DiagnoseWebhooks\x12\x1e.bosun.DiagnoseWebhooksRequest\x1a\x1f.bosun.DiagnoseWebhooksResponse\x12_\n" +
 	"\x14ListWebhookEndpoints\x12\".bosun.ListWebhookEndpointsRequest\x1a#.bosun.ListWebhookEndpointsResponse\x12N\n" +
 	"\x12GetWebhookEndpoint\x12 .bosun.GetWebhookEndpointRequest\x1a\x16.bosun.WebhookEndpoint\x12^\n" +
 	"\x15CreateWebhookEndpoint\x12#.bosun.CreateWebhookEndpointRequest\x1a .bosun.WebhookEndpointWithSecret\x12T\n" +
@@ -2068,7 +2235,7 @@ func file_bosun_proto_rawDescGZIP() []byte {
 }
 
 var file_bosun_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_bosun_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_bosun_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
 var file_bosun_proto_goTypes = []any{
 	(WebhookEndpointStatus)(0),                 // 0: bosun.WebhookEndpointStatus
 	(WebhookEndpointDisabledReason)(0),         // 1: bosun.WebhookEndpointDisabledReason
@@ -2100,79 +2267,87 @@ var file_bosun_proto_goTypes = []any{
 	(*ReplayWebhookDeliveryRequest)(nil),       // 27: bosun.ReplayWebhookDeliveryRequest
 	(*ReplayWebhookDeliveriesRequest)(nil),     // 28: bosun.ReplayWebhookDeliveriesRequest
 	(*ReplayWebhookDeliveriesResponse)(nil),    // 29: bosun.ReplayWebhookDeliveriesResponse
-	(*timestamppb.Timestamp)(nil),              // 30: google.protobuf.Timestamp
-	(*common.CursorPaginationRequest)(nil),     // 31: common.CursorPaginationRequest
-	(*common.CursorPaginationResponse)(nil),    // 32: common.CursorPaginationResponse
+	(*DiagnoseWebhooksRequest)(nil),            // 30: bosun.DiagnoseWebhooksRequest
+	(*DiagnoseWebhooksResponse)(nil),           // 31: bosun.DiagnoseWebhooksResponse
+	(*WebhookEndpointDiagnosis)(nil),           // 32: bosun.WebhookEndpointDiagnosis
+	(*timestamppb.Timestamp)(nil),              // 33: google.protobuf.Timestamp
+	(*common.CursorPaginationRequest)(nil),     // 34: common.CursorPaginationRequest
+	(*common.CursorPaginationResponse)(nil),    // 35: common.CursorPaginationResponse
 }
 var file_bosun_proto_depIdxs = []int32{
 	0,  // 0: bosun.WebhookEndpoint.status:type_name -> bosun.WebhookEndpointStatus
 	1,  // 1: bosun.WebhookEndpoint.disabled_reason:type_name -> bosun.WebhookEndpointDisabledReason
-	30, // 2: bosun.WebhookEndpoint.disabled_at:type_name -> google.protobuf.Timestamp
-	30, // 3: bosun.WebhookEndpoint.failing_since:type_name -> google.protobuf.Timestamp
-	30, // 4: bosun.WebhookEndpoint.last_success_at:type_name -> google.protobuf.Timestamp
-	30, // 5: bosun.WebhookEndpoint.last_failure_at:type_name -> google.protobuf.Timestamp
-	30, // 6: bosun.WebhookEndpoint.previous_secret_expires_at:type_name -> google.protobuf.Timestamp
-	30, // 7: bosun.WebhookEndpoint.created_at:type_name -> google.protobuf.Timestamp
-	30, // 8: bosun.WebhookEndpoint.updated_at:type_name -> google.protobuf.Timestamp
+	33, // 2: bosun.WebhookEndpoint.disabled_at:type_name -> google.protobuf.Timestamp
+	33, // 3: bosun.WebhookEndpoint.failing_since:type_name -> google.protobuf.Timestamp
+	33, // 4: bosun.WebhookEndpoint.last_success_at:type_name -> google.protobuf.Timestamp
+	33, // 5: bosun.WebhookEndpoint.last_failure_at:type_name -> google.protobuf.Timestamp
+	33, // 6: bosun.WebhookEndpoint.previous_secret_expires_at:type_name -> google.protobuf.Timestamp
+	33, // 7: bosun.WebhookEndpoint.created_at:type_name -> google.protobuf.Timestamp
+	33, // 8: bosun.WebhookEndpoint.updated_at:type_name -> google.protobuf.Timestamp
 	4,  // 9: bosun.WebhookEndpointWithSecret.endpoint:type_name -> bosun.WebhookEndpoint
-	31, // 10: bosun.ListWebhookEndpointsRequest.pagination:type_name -> common.CursorPaginationRequest
+	34, // 10: bosun.ListWebhookEndpointsRequest.pagination:type_name -> common.CursorPaginationRequest
 	4,  // 11: bosun.ListWebhookEndpointsResponse.endpoints:type_name -> bosun.WebhookEndpoint
-	32, // 12: bosun.ListWebhookEndpointsResponse.pagination:type_name -> common.CursorPaginationResponse
+	35, // 12: bosun.ListWebhookEndpointsResponse.pagination:type_name -> common.CursorPaginationResponse
 	18, // 13: bosun.TestWebhookEndpointResponse.delivery:type_name -> bosun.WebhookDelivery
 	19, // 14: bosun.TestWebhookEndpointResponse.attempt:type_name -> bosun.WebhookDeliveryAttempt
 	3,  // 15: bosun.WebhookDelivery.kind:type_name -> bosun.WebhookDeliveryKind
 	2,  // 16: bosun.WebhookDelivery.status:type_name -> bosun.WebhookDeliveryStatus
-	30, // 17: bosun.WebhookDelivery.next_attempt_at:type_name -> google.protobuf.Timestamp
-	30, // 18: bosun.WebhookDelivery.delivered_at:type_name -> google.protobuf.Timestamp
-	30, // 19: bosun.WebhookDelivery.last_replayed_at:type_name -> google.protobuf.Timestamp
-	30, // 20: bosun.WebhookDelivery.created_at:type_name -> google.protobuf.Timestamp
-	30, // 21: bosun.WebhookDelivery.updated_at:type_name -> google.protobuf.Timestamp
-	30, // 22: bosun.WebhookDeliveryAttempt.attempted_at:type_name -> google.protobuf.Timestamp
+	33, // 17: bosun.WebhookDelivery.next_attempt_at:type_name -> google.protobuf.Timestamp
+	33, // 18: bosun.WebhookDelivery.delivered_at:type_name -> google.protobuf.Timestamp
+	33, // 19: bosun.WebhookDelivery.last_replayed_at:type_name -> google.protobuf.Timestamp
+	33, // 20: bosun.WebhookDelivery.created_at:type_name -> google.protobuf.Timestamp
+	33, // 21: bosun.WebhookDelivery.updated_at:type_name -> google.protobuf.Timestamp
+	33, // 22: bosun.WebhookDeliveryAttempt.attempted_at:type_name -> google.protobuf.Timestamp
 	2,  // 23: bosun.ListWebhookDeliveriesRequest.statuses:type_name -> bosun.WebhookDeliveryStatus
-	30, // 24: bosun.ListWebhookDeliveriesRequest.created_after:type_name -> google.protobuf.Timestamp
-	30, // 25: bosun.ListWebhookDeliveriesRequest.created_before:type_name -> google.protobuf.Timestamp
-	31, // 26: bosun.ListWebhookDeliveriesRequest.pagination:type_name -> common.CursorPaginationRequest
+	33, // 24: bosun.ListWebhookDeliveriesRequest.created_after:type_name -> google.protobuf.Timestamp
+	33, // 25: bosun.ListWebhookDeliveriesRequest.created_before:type_name -> google.protobuf.Timestamp
+	34, // 26: bosun.ListWebhookDeliveriesRequest.pagination:type_name -> common.CursorPaginationRequest
 	18, // 27: bosun.ListWebhookDeliveriesResponse.deliveries:type_name -> bosun.WebhookDelivery
-	32, // 28: bosun.ListWebhookDeliveriesResponse.pagination:type_name -> common.CursorPaginationResponse
+	35, // 28: bosun.ListWebhookDeliveriesResponse.pagination:type_name -> common.CursorPaginationResponse
 	18, // 29: bosun.GetWebhookDeliveryResponse.delivery:type_name -> bosun.WebhookDelivery
 	19, // 30: bosun.GetWebhookDeliveryResponse.attempts:type_name -> bosun.WebhookDeliveryAttempt
 	19, // 31: bosun.DeliveryAttempts.attempts:type_name -> bosun.WebhookDeliveryAttempt
 	25, // 32: bosun.ListAttemptsForDeliveriesResponse.deliveries:type_name -> bosun.DeliveryAttempts
-	30, // 33: bosun.ReplayWebhookDeliveriesRequest.created_after:type_name -> google.protobuf.Timestamp
-	30, // 34: bosun.ReplayWebhookDeliveriesRequest.created_before:type_name -> google.protobuf.Timestamp
-	6,  // 35: bosun.BosunService.ListWebhookEndpoints:input_type -> bosun.ListWebhookEndpointsRequest
-	8,  // 36: bosun.BosunService.GetWebhookEndpoint:input_type -> bosun.GetWebhookEndpointRequest
-	9,  // 37: bosun.BosunService.CreateWebhookEndpoint:input_type -> bosun.CreateWebhookEndpointRequest
-	10, // 38: bosun.BosunService.UpdateWebhookEndpoint:input_type -> bosun.UpdateWebhookEndpointRequest
-	11, // 39: bosun.BosunService.DeleteWebhookEndpoint:input_type -> bosun.DeleteWebhookEndpointRequest
-	13, // 40: bosun.BosunService.EnableWebhookEndpoint:input_type -> bosun.EnableWebhookEndpointRequest
-	14, // 41: bosun.BosunService.DisableWebhookEndpoint:input_type -> bosun.DisableWebhookEndpointRequest
-	15, // 42: bosun.BosunService.RotateWebhookEndpointSecret:input_type -> bosun.RotateWebhookEndpointSecretRequest
-	16, // 43: bosun.BosunService.TestWebhookEndpoint:input_type -> bosun.TestWebhookEndpointRequest
-	20, // 44: bosun.BosunService.ListWebhookDeliveries:input_type -> bosun.ListWebhookDeliveriesRequest
-	22, // 45: bosun.BosunService.GetWebhookDelivery:input_type -> bosun.GetWebhookDeliveryRequest
-	24, // 46: bosun.BosunService.ListAttemptsForDeliveries:input_type -> bosun.ListAttemptsForDeliveriesRequest
-	27, // 47: bosun.BosunService.ReplayWebhookDelivery:input_type -> bosun.ReplayWebhookDeliveryRequest
-	28, // 48: bosun.BosunService.ReplayWebhookDeliveries:input_type -> bosun.ReplayWebhookDeliveriesRequest
-	7,  // 49: bosun.BosunService.ListWebhookEndpoints:output_type -> bosun.ListWebhookEndpointsResponse
-	4,  // 50: bosun.BosunService.GetWebhookEndpoint:output_type -> bosun.WebhookEndpoint
-	5,  // 51: bosun.BosunService.CreateWebhookEndpoint:output_type -> bosun.WebhookEndpointWithSecret
-	4,  // 52: bosun.BosunService.UpdateWebhookEndpoint:output_type -> bosun.WebhookEndpoint
-	12, // 53: bosun.BosunService.DeleteWebhookEndpoint:output_type -> bosun.DeleteWebhookEndpointResponse
-	4,  // 54: bosun.BosunService.EnableWebhookEndpoint:output_type -> bosun.WebhookEndpoint
-	4,  // 55: bosun.BosunService.DisableWebhookEndpoint:output_type -> bosun.WebhookEndpoint
-	5,  // 56: bosun.BosunService.RotateWebhookEndpointSecret:output_type -> bosun.WebhookEndpointWithSecret
-	17, // 57: bosun.BosunService.TestWebhookEndpoint:output_type -> bosun.TestWebhookEndpointResponse
-	21, // 58: bosun.BosunService.ListWebhookDeliveries:output_type -> bosun.ListWebhookDeliveriesResponse
-	23, // 59: bosun.BosunService.GetWebhookDelivery:output_type -> bosun.GetWebhookDeliveryResponse
-	26, // 60: bosun.BosunService.ListAttemptsForDeliveries:output_type -> bosun.ListAttemptsForDeliveriesResponse
-	18, // 61: bosun.BosunService.ReplayWebhookDelivery:output_type -> bosun.WebhookDelivery
-	29, // 62: bosun.BosunService.ReplayWebhookDeliveries:output_type -> bosun.ReplayWebhookDeliveriesResponse
-	49, // [49:63] is the sub-list for method output_type
-	35, // [35:49] is the sub-list for method input_type
-	35, // [35:35] is the sub-list for extension type_name
-	35, // [35:35] is the sub-list for extension extendee
-	0,  // [0:35] is the sub-list for field type_name
+	33, // 33: bosun.ReplayWebhookDeliveriesRequest.created_after:type_name -> google.protobuf.Timestamp
+	33, // 34: bosun.ReplayWebhookDeliveriesRequest.created_before:type_name -> google.protobuf.Timestamp
+	32, // 35: bosun.DiagnoseWebhooksResponse.endpoints:type_name -> bosun.WebhookEndpointDiagnosis
+	4,  // 36: bosun.WebhookEndpointDiagnosis.endpoint:type_name -> bosun.WebhookEndpoint
+	18, // 37: bosun.WebhookEndpointDiagnosis.deliveries:type_name -> bosun.WebhookDelivery
+	30, // 38: bosun.BosunService.DiagnoseWebhooks:input_type -> bosun.DiagnoseWebhooksRequest
+	6,  // 39: bosun.BosunService.ListWebhookEndpoints:input_type -> bosun.ListWebhookEndpointsRequest
+	8,  // 40: bosun.BosunService.GetWebhookEndpoint:input_type -> bosun.GetWebhookEndpointRequest
+	9,  // 41: bosun.BosunService.CreateWebhookEndpoint:input_type -> bosun.CreateWebhookEndpointRequest
+	10, // 42: bosun.BosunService.UpdateWebhookEndpoint:input_type -> bosun.UpdateWebhookEndpointRequest
+	11, // 43: bosun.BosunService.DeleteWebhookEndpoint:input_type -> bosun.DeleteWebhookEndpointRequest
+	13, // 44: bosun.BosunService.EnableWebhookEndpoint:input_type -> bosun.EnableWebhookEndpointRequest
+	14, // 45: bosun.BosunService.DisableWebhookEndpoint:input_type -> bosun.DisableWebhookEndpointRequest
+	15, // 46: bosun.BosunService.RotateWebhookEndpointSecret:input_type -> bosun.RotateWebhookEndpointSecretRequest
+	16, // 47: bosun.BosunService.TestWebhookEndpoint:input_type -> bosun.TestWebhookEndpointRequest
+	20, // 48: bosun.BosunService.ListWebhookDeliveries:input_type -> bosun.ListWebhookDeliveriesRequest
+	22, // 49: bosun.BosunService.GetWebhookDelivery:input_type -> bosun.GetWebhookDeliveryRequest
+	24, // 50: bosun.BosunService.ListAttemptsForDeliveries:input_type -> bosun.ListAttemptsForDeliveriesRequest
+	27, // 51: bosun.BosunService.ReplayWebhookDelivery:input_type -> bosun.ReplayWebhookDeliveryRequest
+	28, // 52: bosun.BosunService.ReplayWebhookDeliveries:input_type -> bosun.ReplayWebhookDeliveriesRequest
+	31, // 53: bosun.BosunService.DiagnoseWebhooks:output_type -> bosun.DiagnoseWebhooksResponse
+	7,  // 54: bosun.BosunService.ListWebhookEndpoints:output_type -> bosun.ListWebhookEndpointsResponse
+	4,  // 55: bosun.BosunService.GetWebhookEndpoint:output_type -> bosun.WebhookEndpoint
+	5,  // 56: bosun.BosunService.CreateWebhookEndpoint:output_type -> bosun.WebhookEndpointWithSecret
+	4,  // 57: bosun.BosunService.UpdateWebhookEndpoint:output_type -> bosun.WebhookEndpoint
+	12, // 58: bosun.BosunService.DeleteWebhookEndpoint:output_type -> bosun.DeleteWebhookEndpointResponse
+	4,  // 59: bosun.BosunService.EnableWebhookEndpoint:output_type -> bosun.WebhookEndpoint
+	4,  // 60: bosun.BosunService.DisableWebhookEndpoint:output_type -> bosun.WebhookEndpoint
+	5,  // 61: bosun.BosunService.RotateWebhookEndpointSecret:output_type -> bosun.WebhookEndpointWithSecret
+	17, // 62: bosun.BosunService.TestWebhookEndpoint:output_type -> bosun.TestWebhookEndpointResponse
+	21, // 63: bosun.BosunService.ListWebhookDeliveries:output_type -> bosun.ListWebhookDeliveriesResponse
+	23, // 64: bosun.BosunService.GetWebhookDelivery:output_type -> bosun.GetWebhookDeliveryResponse
+	26, // 65: bosun.BosunService.ListAttemptsForDeliveries:output_type -> bosun.ListAttemptsForDeliveriesResponse
+	18, // 66: bosun.BosunService.ReplayWebhookDelivery:output_type -> bosun.WebhookDelivery
+	29, // 67: bosun.BosunService.ReplayWebhookDeliveries:output_type -> bosun.ReplayWebhookDeliveriesResponse
+	53, // [53:68] is the sub-list for method output_type
+	38, // [38:53] is the sub-list for method input_type
+	38, // [38:38] is the sub-list for extension type_name
+	38, // [38:38] is the sub-list for extension extendee
+	0,  // [0:38] is the sub-list for field type_name
 }
 
 func init() { file_bosun_proto_init() }
@@ -2187,7 +2362,7 @@ func file_bosun_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bosun_proto_rawDesc), len(file_bosun_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   26,
+			NumMessages:   29,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

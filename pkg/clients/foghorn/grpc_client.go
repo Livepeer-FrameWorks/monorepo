@@ -657,3 +657,7 @@ func (c *GRPCClient) ListNodeUpdateStatus(ctx context.Context, clusterID string)
 	defer cancel()
 	return c.nodeMgmt.ListNodeUpdateStatus(ctx, &foghorncontrolpb.ListNodeUpdateStatusRequest{ClusterId: clusterID})
 }
+
+func (c *GRPCClient) DiagnoseStream(ctx context.Context, req *foghornpb.DiagnoseStreamRequest) (*foghornpb.DiagnoseStreamResponse, error) {
+	return c.placement.DiagnoseStream(ctx, req)
+}

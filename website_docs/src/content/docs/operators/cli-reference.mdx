@@ -1234,6 +1234,16 @@ or dial the control plane. `cluster release apply --dry-run` is the live preflig
 runs database, artifact, required operator input, host convergence, health, and reconciliation
 checks against the cluster.
 
+For v0.3.14, the live dry-run also runs Purser's target artifact in isolation to
+preview constraint violations, the first due free-fallback batch, provider tier
+sync discovery, and payment intents receiving or retaining an unknown submission
+state. It prints tenant IDs, row IDs, totals, and up to 100 rows per check. The
+preview uses a read-only transaction and starts no application workers. Native
+hosts use a checksum-verified temporary binary; Docker hosts use the pinned
+image with the running service's environment and network. Nothing is installed
+or restarted. An unavailable artifact or check fails the dry-run explicitly.
+This report does not add gates to a real apply.
+
 A reconciliation transition is a constrained **Check → Apply → Verify** node registered by
 a compiled handler id (never a shell command); an unknown handler or an outdated CLI fails
 the release closed. Each converges a declared invariant against natural authoritative
@@ -1542,6 +1552,40 @@ The host-level diagnostics (`network`, `resources`, `ports`, `crashes`, and
 manifest: `--edge-manifest <path>`, or `edge.yaml` beside the cluster manifest.
 An edge manifest that cannot be loaded is reported and the cluster hosts are
 still probed. Each exits non-zero when any finding is a failure.
+
+### Service diagnostics
+
+These commands require a platform-operator login. They use the owning service's
+RPCs, and append an access attempt to the operator account's private history
+before reading diagnostic data. A history-write failure stops the command.
+
+```bash
+frameworks cluster diagnose billing --tenant-id <uuid>
+frameworks cluster diagnose webhooks --tenant-id <uuid>
+frameworks cluster diagnose stream <stream-or-playback-id>
+frameworks cluster diagnose node <node-id>
+```
+
+Each supports `--output json`. Stream and node diagnosis select the manifest's
+Foghorn entry from the recorded cluster/cell; `--service foghorn-us` selects one
+explicitly. Unreachable cells retain the available results and return a nonzero
+exit status. Older servers that lack a diagnostic RPC return an error.
+
+Billing shows the subscription, provider identifiers, pending tier/fallback state,
+latest 20 payment intents and invoices, balances, and unresolved provider work.
+The Stripe price shown is the catalog tier's monthly price, not a live provider
+observation. Webhooks shows endpoint disable reasons and up to 20 recent
+deliveries per endpoint, including failures and next retries. Counts identify
+truncated lists. Neither command triggers recovery, synchronization, or delivery.
+
+Stream diagnosis shows claim timestamps, authority targets/acknowledgments, held
+cell versions and current lifecycle/billing decisions, push-target metadata, and recent ingest sessions. A delivery
+acknowledgment is distinct from application on an edge. Historical placement
+reasons are unavailable when they were not recorded. Node diagnosis combines
+Quartermaster enrollment/fingerprint-binding metadata with Foghorn's heartbeat,
+capabilities, session counts, components, and reported config digests; per-node
+authority versions are unavailable in the current node reports. Secrets, full
+edge configurations, raw fingerprints, and webhook payloads are omitted.
 
 ### frameworks cluster diagnose network
 

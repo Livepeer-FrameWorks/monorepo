@@ -44,6 +44,9 @@ func main() {
 	if version.HandleCLI() {
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "release-preflight" {
+		os.Exit(runReleasePreflight(os.Args[2:]))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "data-migrations" {
 		logger := logging.NewLoggerWithService("purser")
 		config.LoadEnv(logger)

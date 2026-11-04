@@ -1,6 +1,7 @@
 package config
 
 type Endpoints struct {
+	BosunGRPCAddr         string `yaml:"bosun_grpc_addr" json:"bosun_grpc_addr"`
 	BridgeURL             string `yaml:"bridge_url" json:"bridge_url"`
 	QuartermasterGRPCAddr string `yaml:"quartermaster_grpc_addr" json:"quartermaster_grpc_addr"`
 	CommodoreGRPCAddr     string `yaml:"commodore_grpc_addr" json:"commodore_grpc_addr"`

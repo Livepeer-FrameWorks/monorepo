@@ -1587,6 +1587,8 @@ message CreateUserInTenantResponse {
 // ============================================================================
 
 service UserService {
+  // Appends a CLI diagnostic access attempt to the authenticated operator account.
+  rpc AdminRecordDiagnosticRead(AdminRecordDiagnosticReadRequest) returns (google.protobuf.Empty);
   // Authentication
   rpc Login(LoginRequest) returns (AuthResponse);
   rpc Register(RegisterRequest) returns (RegisterResponse);
@@ -1880,6 +1882,8 @@ message User {
 // ============================================================================
 
 service StreamService {
+  // Support metadata only; requires a platform-operator JWT.
+  rpc DiagnoseStream(DiagnoseStreamRequest) returns (DiagnoseStreamResponse);
   rpc CreateStream(CreateStreamRequest) returns (CreateStreamResponse);
   rpc GetStream(GetStreamRequest) returns (Stream);
   rpc GetStreamsBatch(GetStreamsBatchRequest) returns (GetStreamsBatchResponse);
@@ -2813,7 +2817,7 @@ message OperatorAccountAuditEntry {
   string id = 1; // Audit entry UUID.
   string actor_user_id = 2; // Platform operator user UUID.
   string target_id = 3; // Affected user or tenant UUID.
-  string action = 4; // user_active:true, user_active:false, or tenant_closed.
+  string action = 4; // user_active:true, user_active:false, tenant_closed, or diagnose.<kind>.
   string reason = 5; // Private operator reason, never exposed to tenant credentials.
   // Time the operator action was recorded.
   google.protobuf.Timestamp created_at = 6;
@@ -2898,4 +2902,44 @@ message AdminUnretireIngestCellResponse {
   google.protobuf.Timestamp retired_at = 3; // The removed record; unset when was_retired is false.
   string retired_by = 4;
   string retirement_reason = 5;
+}
+
+message AdminRecordDiagnosticReadRequest {
+  string kind = 1; // billing, webhooks, stream, node, or dvr.
+  string target_id = 2;
+  string service = 3; // Optional manifest service entry.
+}
+
+message DiagnoseStreamRequest { string identifier = 1; }
+message DiagnoseStreamResponse {
+  string tenant_id = 1;
+  string stream_id = 2;
+  string playback_id = 3;
+  string internal_name = 4;
+  string ingest_mode = 5;
+  string active_cluster_id = 6;
+  string last_cluster_id = 7;
+  string claim_id = 8;
+  string claim_updated_at = 9;
+  string node_id = 10;
+  string control_cell_id = 11;
+  repeated StreamAuthorityDiagnosis authorities = 12;
+  repeated StreamPushDiagnosis push_targets = 13;
+  int64 push_target_count = 14;
+}
+message StreamAuthorityDiagnosis {
+  string kind = 1;
+  string authority_id = 2;
+  int64 current_version = 3;
+  string cell_id = 4;
+  int64 targeted_version = 5;
+  int64 acknowledged_version = 6;
+  string acknowledged_at = 7;
+}
+message StreamPushDiagnosis {
+  string id = 1;
+  string platform = 2;
+  bool enabled = 3;
+  string status = 4;
+  string reason_code = 5;
 }

@@ -23,6 +23,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	MediaPlacementControlService_DiagnoseStream_FullMethodName                  = "/foghorn.MediaPlacementControlService/DiagnoseStream"
 	MediaPlacementControlService_ObserveMediaPlacementCapacity_FullMethodName   = "/foghorn.MediaPlacementControlService/ObserveMediaPlacementCapacity"
 	MediaPlacementControlService_ObserveMediaPlacementPushSource_FullMethodName = "/foghorn.MediaPlacementControlService/ObserveMediaPlacementPushSource"
 )
@@ -33,6 +34,8 @@ const (
 //
 // Read-only management observations, separate from media admission and preparation.
 type MediaPlacementControlServiceClient interface {
+	// Local stream evidence; requires a platform-operator JWT.
+	DiagnoseStream(ctx context.Context, in *DiagnoseStreamRequest, opts ...grpc.CallOption) (*DiagnoseStreamResponse, error)
 	ObserveMediaPlacementCapacity(ctx context.Context, in *media_placement.CapacityPreviewQuery, opts ...grpc.CallOption) (*media_placement.CapacityPreviewObservation, error)
 	ObserveMediaPlacementPushSource(ctx context.Context, in *media_placement.PushSourcePreviewQuery, opts ...grpc.CallOption) (*media_placement.PushSourcePreviewObservation, error)
 }
@@ -43,6 +46,16 @@ type mediaPlacementControlServiceClient struct {
 
 func NewMediaPlacementControlServiceClient(cc grpc.ClientConnInterface) MediaPlacementControlServiceClient {
 	return &mediaPlacementControlServiceClient{cc}
+}
+
+func (c *mediaPlacementControlServiceClient) DiagnoseStream(ctx context.Context, in *DiagnoseStreamRequest, opts ...grpc.CallOption) (*DiagnoseStreamResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DiagnoseStreamResponse)
+	err := c.cc.Invoke(ctx, MediaPlacementControlService_DiagnoseStream_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *mediaPlacementControlServiceClient) ObserveMediaPlacementCapacity(ctx context.Context, in *media_placement.CapacityPreviewQuery, opts ...grpc.CallOption) (*media_placement.CapacityPreviewObservation, error) {
@@ -71,6 +84,8 @@ func (c *mediaPlacementControlServiceClient) ObserveMediaPlacementPushSource(ctx
 //
 // Read-only management observations, separate from media admission and preparation.
 type MediaPlacementControlServiceServer interface {
+	// Local stream evidence; requires a platform-operator JWT.
+	DiagnoseStream(context.Context, *DiagnoseStreamRequest) (*DiagnoseStreamResponse, error)
 	ObserveMediaPlacementCapacity(context.Context, *media_placement.CapacityPreviewQuery) (*media_placement.CapacityPreviewObservation, error)
 	ObserveMediaPlacementPushSource(context.Context, *media_placement.PushSourcePreviewQuery) (*media_placement.PushSourcePreviewObservation, error)
 	mustEmbedUnimplementedMediaPlacementControlServiceServer()
@@ -83,6 +98,9 @@ type MediaPlacementControlServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedMediaPlacementControlServiceServer struct{}
 
+func (UnimplementedMediaPlacementControlServiceServer) DiagnoseStream(context.Context, *DiagnoseStreamRequest) (*DiagnoseStreamResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DiagnoseStream not implemented")
+}
 func (UnimplementedMediaPlacementControlServiceServer) ObserveMediaPlacementCapacity(context.Context, *media_placement.CapacityPreviewQuery) (*media_placement.CapacityPreviewObservation, error) {
 	return nil, status.Error(codes.Unimplemented, "method ObserveMediaPlacementCapacity not implemented")
 }
@@ -109,6 +127,24 @@ func RegisterMediaPlacementControlServiceServer(s grpc.ServiceRegistrar, srv Med
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&MediaPlacementControlService_ServiceDesc, srv)
+}
+
+func _MediaPlacementControlService_DiagnoseStream_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DiagnoseStreamRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MediaPlacementControlServiceServer).DiagnoseStream(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MediaPlacementControlService_DiagnoseStream_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MediaPlacementControlServiceServer).DiagnoseStream(ctx, req.(*DiagnoseStreamRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _MediaPlacementControlService_ObserveMediaPlacementCapacity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -154,6 +190,10 @@ var MediaPlacementControlService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "foghorn.MediaPlacementControlService",
 	HandlerType: (*MediaPlacementControlServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "DiagnoseStream",
+			Handler:    _MediaPlacementControlService_DiagnoseStream_Handler,
+		},
 		{
 			MethodName: "ObserveMediaPlacementCapacity",
 			Handler:    _MediaPlacementControlService_ObserveMediaPlacementCapacity_Handler,

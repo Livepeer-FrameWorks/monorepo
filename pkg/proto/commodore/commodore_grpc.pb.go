@@ -2951,6 +2951,7 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	UserService_AdminRecordDiagnosticRead_FullMethodName  = "/commodore.UserService/AdminRecordDiagnosticRead"
 	UserService_Login_FullMethodName                      = "/commodore.UserService/Login"
 	UserService_Register_FullMethodName                   = "/commodore.UserService/Register"
 	UserService_Logout_FullMethodName                     = "/commodore.UserService/Logout"
@@ -2988,6 +2989,8 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type UserServiceClient interface {
+	// Appends a CLI diagnostic access attempt to the authenticated operator account.
+	AdminRecordDiagnosticRead(ctx context.Context, in *AdminRecordDiagnosticReadRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Authentication
 	Login(ctx context.Context, in *LoginRequest, opts ...grpc.CallOption) (*AuthResponse, error)
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
@@ -3051,6 +3054,16 @@ type userServiceClient struct {
 
 func NewUserServiceClient(cc grpc.ClientConnInterface) UserServiceClient {
 	return &userServiceClient{cc}
+}
+
+func (c *userServiceClient) AdminRecordDiagnosticRead(ctx context.Context, in *AdminRecordDiagnosticReadRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, UserService_AdminRecordDiagnosticRead_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *userServiceClient) Login(ctx context.Context, in *LoginRequest, opts ...grpc.CallOption) (*AuthResponse, error) {
@@ -3367,6 +3380,8 @@ func (c *userServiceClient) AdminUnretireIngestCell(ctx context.Context, in *Adm
 // All implementations must embed UnimplementedUserServiceServer
 // for forward compatibility.
 type UserServiceServer interface {
+	// Appends a CLI diagnostic access attempt to the authenticated operator account.
+	AdminRecordDiagnosticRead(context.Context, *AdminRecordDiagnosticReadRequest) (*emptypb.Empty, error)
 	// Authentication
 	Login(context.Context, *LoginRequest) (*AuthResponse, error)
 	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
@@ -3432,6 +3447,9 @@ type UserServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedUserServiceServer struct{}
 
+func (UnimplementedUserServiceServer) AdminRecordDiagnosticRead(context.Context, *AdminRecordDiagnosticReadRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminRecordDiagnosticRead not implemented")
+}
 func (UnimplementedUserServiceServer) Login(context.Context, *LoginRequest) (*AuthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Login not implemented")
 }
@@ -3544,6 +3562,24 @@ func RegisterUserServiceServer(s grpc.ServiceRegistrar, srv UserServiceServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&UserService_ServiceDesc, srv)
+}
+
+func _UserService_AdminRecordDiagnosticRead_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminRecordDiagnosticReadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).AdminRecordDiagnosticRead(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_AdminRecordDiagnosticRead_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).AdminRecordDiagnosticRead(ctx, req.(*AdminRecordDiagnosticReadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _UserService_Login_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -4112,6 +4148,10 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*UserServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
+			MethodName: "AdminRecordDiagnosticRead",
+			Handler:    _UserService_AdminRecordDiagnosticRead_Handler,
+		},
+		{
 			MethodName: "Login",
 			Handler:    _UserService_Login_Handler,
 		},
@@ -4241,6 +4281,7 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	StreamService_DiagnoseStream_FullMethodName   = "/commodore.StreamService/DiagnoseStream"
 	StreamService_CreateStream_FullMethodName     = "/commodore.StreamService/CreateStream"
 	StreamService_GetStream_FullMethodName        = "/commodore.StreamService/GetStream"
 	StreamService_GetStreamsBatch_FullMethodName  = "/commodore.StreamService/GetStreamsBatch"
@@ -4254,6 +4295,8 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type StreamServiceClient interface {
+	// Support metadata only; requires a platform-operator JWT.
+	DiagnoseStream(ctx context.Context, in *DiagnoseStreamRequest, opts ...grpc.CallOption) (*DiagnoseStreamResponse, error)
 	CreateStream(ctx context.Context, in *CreateStreamRequest, opts ...grpc.CallOption) (*CreateStreamResponse, error)
 	GetStream(ctx context.Context, in *GetStreamRequest, opts ...grpc.CallOption) (*Stream, error)
 	GetStreamsBatch(ctx context.Context, in *GetStreamsBatchRequest, opts ...grpc.CallOption) (*GetStreamsBatchResponse, error)
@@ -4269,6 +4312,16 @@ type streamServiceClient struct {
 
 func NewStreamServiceClient(cc grpc.ClientConnInterface) StreamServiceClient {
 	return &streamServiceClient{cc}
+}
+
+func (c *streamServiceClient) DiagnoseStream(ctx context.Context, in *DiagnoseStreamRequest, opts ...grpc.CallOption) (*DiagnoseStreamResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DiagnoseStreamResponse)
+	err := c.cc.Invoke(ctx, StreamService_DiagnoseStream_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *streamServiceClient) CreateStream(ctx context.Context, in *CreateStreamRequest, opts ...grpc.CallOption) (*CreateStreamResponse, error) {
@@ -4345,6 +4398,8 @@ func (c *streamServiceClient) RefreshStreamKey(ctx context.Context, in *RefreshS
 // All implementations must embed UnimplementedStreamServiceServer
 // for forward compatibility.
 type StreamServiceServer interface {
+	// Support metadata only; requires a platform-operator JWT.
+	DiagnoseStream(context.Context, *DiagnoseStreamRequest) (*DiagnoseStreamResponse, error)
 	CreateStream(context.Context, *CreateStreamRequest) (*CreateStreamResponse, error)
 	GetStream(context.Context, *GetStreamRequest) (*Stream, error)
 	GetStreamsBatch(context.Context, *GetStreamsBatchRequest) (*GetStreamsBatchResponse, error)
@@ -4362,6 +4417,9 @@ type StreamServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedStreamServiceServer struct{}
 
+func (UnimplementedStreamServiceServer) DiagnoseStream(context.Context, *DiagnoseStreamRequest) (*DiagnoseStreamResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DiagnoseStream not implemented")
+}
 func (UnimplementedStreamServiceServer) CreateStream(context.Context, *CreateStreamRequest) (*CreateStreamResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateStream not implemented")
 }
@@ -4402,6 +4460,24 @@ func RegisterStreamServiceServer(s grpc.ServiceRegistrar, srv StreamServiceServe
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&StreamService_ServiceDesc, srv)
+}
+
+func _StreamService_DiagnoseStream_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DiagnoseStreamRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StreamServiceServer).DiagnoseStream(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StreamService_DiagnoseStream_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StreamServiceServer).DiagnoseStream(ctx, req.(*DiagnoseStreamRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _StreamService_CreateStream_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -4537,6 +4613,10 @@ var StreamService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "commodore.StreamService",
 	HandlerType: (*StreamServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "DiagnoseStream",
+			Handler:    _StreamService_DiagnoseStream_Handler,
+		},
 		{
 			MethodName: "CreateStream",
 			Handler:    _StreamService_CreateStream_Handler,

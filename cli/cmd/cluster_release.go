@@ -622,6 +622,11 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 		}
 	}
 
+	if opts.dryRun {
+		if previewErr := releaseDataPreflightFn(cmd.Context(), cmd, rc, sshPool, gm); previewErr != nil {
+			return previewErr
+		}
+	}
 	if len(priorDataMigrations) > 0 {
 		ux.Subheading(out, "Required data migrations of earlier releases")
 		if runErr := runPriorDataMigrations(cmd.Context(), cmd, rc, sshPool, priorDataMigrations, opts.dryRun); runErr != nil {

@@ -51,6 +51,7 @@ func TestCommonInterceptorsAdmitOperatorJWTForDiagnoseDVROnly(t *testing.T) {
 		MetadataPolicy: middleware.MetadataPolicyDeny,
 	})...)
 	foghornpb.RegisterDVRControlServiceServer(srv, operatorDiagnoseDVRServer{})
+	foghornpb.RegisterMediaPlacementControlServiceServer(srv, operatorDiagnoseStreamServer{})
 	go func() { _ = srv.Serve(listener) }()
 	t.Cleanup(srv.Stop)
 
@@ -72,7 +73,25 @@ func TestCommonInterceptorsAdmitOperatorJWTForDiagnoseDVROnly(t *testing.T) {
 	if _, err := client.DiagnoseDVR(call("service-token"), &foghornpb.DiagnoseDVRRequest{DvrHash: "h"}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("service token on DiagnoseDVR: got %v, want PermissionDenied", err)
 	}
+	streamClient := foghornpb.NewMediaPlacementControlServiceClient(conn)
+	if _, err := streamClient.DiagnoseStream(call(operatorJWT), &foghornpb.DiagnoseStreamRequest{}); err != nil {
+		t.Fatalf("operator JWT refused on DiagnoseStream: %v", err)
+	}
+	if _, err := streamClient.DiagnoseStream(call("service-token"), &foghornpb.DiagnoseStreamRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("service token admitted to DiagnoseStream: %v", err)
+	}
 	if _, err := client.StopDVR(call(operatorJWT), &sharedpb.StopDVRRequest{DvrHash: "h"}); status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("operator JWT on StopDVR: got %v, want Unauthenticated", err)
 	}
+}
+
+type operatorDiagnoseStreamServer struct {
+	foghornpb.UnimplementedMediaPlacementControlServiceServer
+}
+
+func (operatorDiagnoseStreamServer) DiagnoseStream(ctx context.Context, _ *foghornpb.DiagnoseStreamRequest) (*foghornpb.DiagnoseStreamResponse, error) {
+	if err := middleware.RequirePlatformOperatorJWT(ctx); err != nil {
+		return nil, err
+	}
+	return &foghornpb.DiagnoseStreamResponse{}, nil
 }

@@ -7,6 +7,7 @@ package commodoredb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 )
 
@@ -256,6 +257,7 @@ type Querier interface {
 	GetStreamConfig(ctx context.Context, arg GetStreamConfigParams) (GetStreamConfigRow, error)
 	GetStreamDVRChapterConfig(ctx context.Context, arg GetStreamDVRChapterConfigParams) (GetStreamDVRChapterConfigRow, error)
 	GetStreamDVRChapterInterval(ctx context.Context, arg GetStreamDVRChapterIntervalParams) (sql.NullInt32, error)
+	GetStreamDiagnosis(ctx context.Context, arg GetStreamDiagnosisParams) (json.RawMessage, error)
 	GetStreamDisplayMetadata(ctx context.Context, arg GetStreamDisplayMetadataParams) (GetStreamDisplayMetadataRow, error)
 	GetStreamFinalizationUser(ctx context.Context, arg GetStreamFinalizationUserParams) (string, error)
 	GetStreamForDeletion(ctx context.Context, arg GetStreamForDeletionParams) (GetStreamForDeletionRow, error)
@@ -590,6 +592,8 @@ type Querier interface {
 	ResolveDVRByInternalName(ctx context.Context, internalName string) (ResolveDVRByInternalNameRow, error)
 	ResolveDVRByPlaybackID(ctx context.Context, dollar_1 string) (ResolveDVRByPlaybackIDRow, error)
 	ResolveDVRTenantArtifact(ctx context.Context, arg ResolveDVRTenantArtifactParams) (ResolveDVRTenantArtifactRow, error)
+	// Operator-only identity resolution; subsequent diagnostic reads are tenant-filtered.
+	ResolveDiagnosticStreamTenant(ctx context.Context, arg ResolveDiagnosticStreamTenantParams) (string, error)
 	ResolveIdentifierCatalog(ctx context.Context, arg ResolveIdentifierCatalogParams) (ResolveIdentifierCatalogRow, error)
 	ResolveMediaAuthorityIdentityByInternalName(ctx context.Context, internalName string) (ResolveMediaAuthorityIdentityByInternalNameRow, error)
 	// Names the authority a cell asked for by playback id. object_id is the stream

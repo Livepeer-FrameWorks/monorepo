@@ -40,6 +40,7 @@ type GRPCConfig struct {
 	Logger        logging.Logger
 	ServiceToken  string
 	AllowInsecure bool
+	CACertPEM     string
 	CACertFile    string
 	ServerName    string
 }
@@ -82,6 +83,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	}
 	transport, err := grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
 		CACertFile:        config.CACertFile,
+		CACertPEM:         config.CACertPEM,
 		ServerName:        config.ServerName,
 		DefaultServerName: DefaultServerName,
 		AllowInsecure:     config.AllowInsecure,
@@ -197,4 +199,10 @@ func (c *GRPCClient) ReplayWebhookDelivery(ctx context.Context, deliveryID strin
 // ReplayWebhookDeliveries replays failed and skipped deliveries of one endpoint in a range.
 func (c *GRPCClient) ReplayWebhookDeliveries(ctx context.Context, req *bosunpb.ReplayWebhookDeliveriesRequest) (*bosunpb.ReplayWebhookDeliveriesResponse, error) {
 	return call(c, ctx, c.timeout, c.client.ReplayWebhookDeliveries, req)
+}
+
+func (c *GRPCClient) DiagnoseWebhooks(ctx context.Context, tenantID string) (*bosunpb.DiagnoseWebhooksResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.client.DiagnoseWebhooks(ctx, &bosunpb.DiagnoseWebhooksRequest{TenantId: tenantID})
 }

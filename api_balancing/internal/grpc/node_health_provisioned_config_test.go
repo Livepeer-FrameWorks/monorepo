@@ -2,6 +2,8 @@ package grpc
 
 import (
 	"context"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -27,5 +29,18 @@ func TestGetNodeHealth_ReportsProvisionedConfigRenderDigest(t *testing.T) {
 	}
 	if resp.GetProvisionedConfigRenderDigest() != "sha256:def" {
 		t.Fatalf("provisioned config render digest = %q, want sha256:def", resp.GetProvisionedConfigRenderDigest())
+	}
+}
+
+func TestOperatorCanDiagnoseAnotherTenantsNodeWithoutMutationAccess(t *testing.T) {
+	srv, mock := newLifecycleServer(t)
+	seedHealthyNode(t, "operator-diagnosis-node", "tenant-owner", "cluster-one")
+	mock.ExpectQuery(`SELECT component, COALESCE\(current_version`).WithArgs("operator-diagnosis-node").WillReturnRows(sqlmock.NewRows([]string{"component", "version"}))
+	ctx := context.WithValue(context.WithValue(context.WithValue(context.WithValue(t.Context(), ctxkeys.KeyAuthType, "jwt"), ctxkeys.KeyUserID, "operator"), ctxkeys.KeyTenantID, "operator-account"), ctxkeys.KeyPlatformOperator, true)
+	if _, err := srv.GetNodeHealth(ctx, &foghorncontrolpb.GetNodeHealthRequest{NodeId: "operator-diagnosis-node"}); err != nil {
+		t.Fatalf("operator support read denied: %v", err)
+	}
+	if _, err := srv.SetNodeOperationalMode(ctx, &foghorncontrolpb.SetNodeModeRequest{NodeId: "operator-diagnosis-node", Mode: "maintenance"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("diagnostic privilege broadened mutation access: %v", err)
 	}
 }

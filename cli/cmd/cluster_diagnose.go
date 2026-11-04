@@ -64,7 +64,7 @@ cause outages.`,
 	cmd.Flags().StringVar(&opts.Since, "since", opts.Since, "Journal time window for media, kafka, and crashes diagnostics")
 	cmd.Flags().IntVar(&opts.WindowHours, "window-hours", opts.WindowHours, "Database lookback in hours for media-authority diagnostics")
 	cmd.Flags().StringVar(&opts.EdgeManifest, "edge-manifest", "", "Edge manifest whose nodes host-level diagnostics also probe (default: edge.yaml beside the cluster manifest)")
-	cmd.AddCommand(newClusterDiagnoseDVRCmd())
+	cmd.AddCommand(newClusterDiagnoseDVRCmd(), newClusterDiagnoseBillingCmd(), newClusterDiagnoseWebhooksCmd(), newClusterDiagnoseStreamCmd(), newClusterDiagnoseNodeCmd())
 
 	return cmd
 }

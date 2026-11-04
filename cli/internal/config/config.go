@@ -20,6 +20,7 @@ func defaultEndpoints() Endpoints {
 		DecklogGRPCAddr:       "localhost:18006",
 		PeriscopeGRPCAddr:     "localhost:19004",
 		PurserGRPCAddr:        "localhost:19003",
+		BosunGRPCAddr:         "localhost:19009",
 		SignalmanWSURL:        "ws://localhost:18009",
 		SignalmanGRPCAddr:     "localhost:19005",
 		NavigatorGRPCAddr:     "localhost:18011",
