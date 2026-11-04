@@ -30,6 +30,13 @@ for bin in MistProcAV MistProcThumbs; do
 done
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root" || exit 1
+# DVR segment upload, VOD multipart upload and cross-cell clip/VOD playback all go
+# through the cell's S3 backend; without one Foghorn refuses to mint upload authority
+# and those steps can only time out.
+if [ -z "$(grep '^STORAGE_S3_BUCKET=' .env 2>/dev/null | cut -d= -f2- | tr -d '"')" ]; then
+  echo "ERROR: STORAGE_S3_BUCKET is empty in .env; the lifecycle proof needs the dev cell's S3 backend (STORAGE_S3_* in config/env/secrets.env, then make env)" >&2
+  exit 1
+fi
 
 if [ "${MEDIA_LIFECYCLE_BOOTSTRAP:-}" = 1 ]; then
   bash scripts/verify-two-cell-media.sh || exit 1
@@ -89,7 +96,10 @@ if [ "${MEDIA_LIFECYCLE_SKIP_BUILD:-}" != 1 ]; then
   compose up -d --no-deps --build periscope-ingest periscope-metering periscope-query >/dev/null 2>&1 || bad "analytics services did not come up"
 fi
 docker exec frameworks-postgres pg_isready -q || { bad "PostgreSQL is unavailable"; exit 1; }
-NETWORK="$(docker network ls --format '{{.Name}}' | grep -E '_frameworks$' | head -1)"
+# This project's network, not any *_frameworks one: stack slots and other compose
+# projects on the same engine own networks with that suffix too.
+pg_container="$(compose ps -q postgres </dev/null 2>/dev/null)"
+NETWORK="$([ -n "$pg_container" ] && docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$pg_container" | grep -E '_frameworks$' | head -1)"
 [ -n "$NETWORK" ] || { bad "compose network not found"; echo "PASS=$PASS FAIL=$FAIL"; exit 1; }
 if ! docker ps --format '{{.Names}}' | grep -qx "$PUBLISHER"; then
   # Same publisher as the two-cell proof's start_publisher (test pattern, looped, no FLV metadata track).
@@ -242,7 +252,9 @@ else bad "no DVR started"; fi
 log "4/6 VOD: multipart upload -> complete -> processing -> playback"
 # The MP4 muxer needs a seekable output for +faststart, so render to a file and stream it out.
 in_stack "ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=320x180:rate=15 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 6 -c:v libx264 -g 15 -pix_fmt yuv420p -c:a aac -movflags +faststart /tmp/vod.mp4 && cat /tmp/vod.mp4" > "$WORK/vod.mp4" 2>/dev/null
-SZ=$(stat -f %z "$WORK/vod.mp4" 2>/dev/null || stat -c %s "$WORK/vod.mp4")
+# wc, not stat: GNU stat -f reports the filesystem and succeeds, so a BSD-first
+# stat fallback yields text instead of a size on Linux.
+SZ=$(wc -c <"$WORK/vod.mp4" 2>/dev/null | tr -d ' ')
 [ "${SZ:-0}" -gt 10000 ] && ok "VOD source rendered ($SZ bytes)" || bad "VOD source not rendered"
 R=$(gql 'mutation($i:CreateVodUploadInput!){ createVodUpload(input:$i){ __typename ... on VodUploadSession{ id artifactHash playbackId partSize parts{ partNumber presignedUrl } } ... on ValidationError{ message } ... on AuthError{ message } } }' \
      "$(jq -cn --argjson sz "$SZ" '{i:{filename:"lifecycle.mp4",sizeBytes:$sz,contentType:"video/mp4",title:"lifecycle vod"}}')")

@@ -60,6 +60,14 @@ export EDGE_ENROLLMENT_TOKEN=${EDGE_ENROLLMENT_TOKEN:-demo_bootstrap_token_for_l
 # Cross-cell placement discovery and origin pull run over Foghorn federation (off in .env).
 export FEDERATION_ENABLED=true FEDERATION_ALLOW_INSECURE_DEV=true
 compose() { docker compose --profile edge --profile two-cell --profile selfhosted "$@"; }
+# The network this project's postgres is attached to. Other compose projects on the
+# same engine (stack slots, leftover test projects) also own a *_frameworks network,
+# so matching network names would put the proof's containers into someone else's stack.
+compose_network() {
+  local id; id="$(compose ps -q postgres </dev/null 2>/dev/null)"
+  [ -n "$id" ] || return 0
+  docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$id" | grep -E '_frameworks$' | head -1
+}
 log() { printf '\n[two-cell] %s\n' "$*"; }
 fail() { printf '\n[two-cell] FAIL: %s\n' "$*" >&2; exit 1; }
 psql_db() { compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$1" -d "$1" -Atc "$2"; }
@@ -100,21 +108,23 @@ pull_location_is() { # pull_location_is <foghorn> <edge-host>
 PULL_UPSTREAM=fw-two-cell-upstream
 PULL_UPSTREAM_HOST="$PULL_UPSTREAM:80"
 # Mist's HTTP-reachable inputs are the playlist ones, so the upstream is an HLS
-# rendition of a seeded recording rather than the recording itself.
+# rendition rather than a single media file. It is encoded from a test pattern: the
+# demo recordings' long VOD fixtures are git-ignored and absent from a fresh clone.
 PULL_UPSTREAM_FILE=index.m3u8
 start_pull_upstream() { # serves a small HLS rendition for the configured pull input to dial
-  local network; network="$(docker network ls --format '{{.Name}}' | grep -E '_frameworks$' | head -1)"
+  local network; network="$(compose_network)"
   [ -n "$network" ] || fail "compose network not found"
   local dir="$repo_root/.two-cell-pull-upstream"
   # A previous run's upstream (left behind by a failed proof) still has this
   # directory bind-mounted; remove it before recreating the playlist.
   docker rm -f "$PULL_UPSTREAM" >/dev/null 2>&1 || true
   rm -rf "$dir" && mkdir -p "$dir"
-  docker run --rm -v "$repo_root/infrastructure/demo-recordings:/srv:ro" -v "$dir:/out" \
-    --entrypoint ffmpeg "$MEDIA_TOOLS_IMAGE" -hide_banner -loglevel error \
-    -i /srv/vod/202605181545117110e4095d14f6b6.mkv -t 30 -c copy -f hls -hls_time 2 -hls_list_size 0 \
-    -hls_segment_filename /out/seg%03d.ts /out/index.m3u8 >/dev/null 2>&1 || true
-  [ -s "$dir/index.m3u8" ] || fail "could not build the pull upstream playlist"
+  local encode_err
+  encode_err="$(docker run --rm -v "$dir:/out" --entrypoint ffmpeg "$MEDIA_TOOLS_IMAGE" -hide_banner -loglevel error \
+    -f lavfi -i testsrc2=size=320x180:rate=15 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 30 \
+    -c:v libx264 -g 30 -pix_fmt yuv420p -c:a aac -f hls -hls_time 2 -hls_list_size 0 \
+    -hls_segment_filename /out/seg%03d.ts /out/index.m3u8 2>&1 >/dev/null)" || true
+  [ -s "$dir/index.m3u8" ] || fail "could not build the pull upstream playlist: $encode_err"
   docker rm -f "$PULL_UPSTREAM" >/dev/null 2>&1 || true
   docker run -d --name "$PULL_UPSTREAM" --network "$network" \
     -v "$dir:/usr/share/nginx/html:ro" nginx:1.30.1-alpine >/dev/null
@@ -123,7 +133,7 @@ start_pull_upstream() { # serves a small HLS rendition for the configured pull i
 }
 media_flows() { # media_flows <playlist-url>: true when a video frame can be read
   # Runs inside the compose network: the playlist URL names an edge by its service name.
-  local network; network="$(docker network ls --format '{{.Name}}' | grep -E '_frameworks$' | head -1)"
+  local network; network="$(compose_network)"
   docker run --rm --network "$network" --entrypoint ffmpeg "$MEDIA_TOOLS_IMAGE" \
     -hide_banner -loglevel error -rw_timeout 10000000 -i "$1" -map 0:v:0 -frames:v 1 -f null -
 }
@@ -236,7 +246,7 @@ fast_reconnect_publisher() {
 }
 start_publisher() {
   stop_publisher
-  local network resolved resolved_a resolved_b publish_url; network="$(docker network ls --format '{{.Name}}' | grep -E '_frameworks$' | head -1)"
+  local network resolved resolved_a resolved_b publish_url; network="$(compose_network)"
   [ -n "$network" ] || fail "compose network not found"
   resolved_a="$(curl -fsS -m 20 "$FOGHORN_A/ingest/$STREAM_KEY?protocol=rtmp")"
   resolved_b="$(curl -fsS -m 20 "$FOGHORN_B/ingest/$STREAM_KEY?protocol=rtmp")"
@@ -313,9 +323,11 @@ wait_for 120 "foghorn A" http_any "$FOGHORN_A/play/$PLAYBACK_ID/hls"
 wait_for 120 "foghorn B" http_any "$FOGHORN_B/play/$PLAYBACK_ID/hls"
 wait_for 120 "bridge" http_ok "$BRIDGE/health"
 
-log "3/9 wait for both cells to attest placement enforcement and for the tenant to receive schema-2 authority"
+log "3/9 wait for both cells to attest placement enforcement and for the tenant to receive placement-bearing authority"
+# Commodore issues the highest placement schema every target cell attests (2, or 3 with
+# node selectors), so any schema from 2 up carries the tenant's placement policy.
 wait_for 240 "cell attestations" bash -c "[ \"\$(docker compose --profile edge --profile two-cell --profile selfhosted exec -T postgres psql -U commodore -d commodore -Atc \"SELECT count(*) FROM commodore.media_cell_placement_capabilities WHERE enforcement_ready AND cell_id IN ('central-primary','us-primary')\")\" = 2 ]"
-wait_for 240 "schema-2 tenant authority" bash -c "[ \"\$(docker compose --profile edge --profile two-cell --profile selfhosted exec -T postgres psql -U commodore -d commodore -Atc \"SELECT v.payload_schema_version FROM commodore.media_authority_current c JOIN commodore.media_authority_versions v ON v.authority_kind=c.authority_kind AND v.authority_id=c.authority_id AND v.authority_version=c.authority_version WHERE c.authority_kind='tenant' AND c.authority_id='$TENANT_ID'\")\" = 2 ]"
+wait_for 240 "placement-bearing tenant authority" bash -c "[ \"\$(docker compose --profile edge --profile two-cell --profile selfhosted exec -T postgres psql -U commodore -d commodore -Atc \"SELECT v.payload_schema_version >= 2 FROM commodore.media_authority_current c JOIN commodore.media_authority_versions v ON v.authority_kind=c.authority_kind AND v.authority_id=c.authority_id AND v.authority_version=c.authority_version WHERE c.authority_kind='tenant' AND c.authority_id='$TENANT_ID'\")\" = t ]"
 psql_db commodore "SELECT cell_id, enforcement_ready, live_replicas, attested_at FROM commodore.media_cell_placement_capabilities ORDER BY cell_id"
 fi
 # A dev stack started with the edge,two-cell preset runs cell B's platform edge;
