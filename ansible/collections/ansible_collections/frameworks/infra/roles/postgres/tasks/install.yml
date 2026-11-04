@@ -21,6 +21,9 @@
   ansible.builtin.get_url:
     url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
     dest: /usr/share/keyrings/postgresql-pgdg.asc
+    # A key already on disk that matches is not fetched again, so a converge
+    # does not depend on postgresql.org once the key is installed.
+    checksum: sha256:0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e8e76
     owner: root
     group: root
     mode: "0644"
