@@ -30,6 +30,13 @@ volumes:
   edge_b_caddy_data:
   edge_b_storage:
   edge_b_state:
+  # The demo tenant's private edge in the second cell (profile: selfhosted).
+  edge_private_opt:
+  edge_private_etc:
+  edge_private_caddy_etc:
+  edge_private_caddy_data:
+  edge_private_storage:
+  edge_private_state:
 
 x-default-env: &default-env
   env_file:
@@ -1954,11 +1961,13 @@ services:
 
   # ---------------------------------------------------------------------------
   # Second media cell (profile: two-cell). foghorn-b is a platform Foghorn whose
-  # identity is the platform-official us-primary cluster; it serves the tenant's
-  # virtual private cluster (demo-selfhosted) the way the central pair serves
-  # demo-media. Own Redis and edge bundle, shared control plane, both
-  # cells federating. Driven by scripts/verify-two-cell-media.sh; needs a fresh
-  # postgres volume because foghorn_b is created on first boot.
+  # identity is the platform-official us-primary cluster; it serves the cell's
+  # platform media cluster (demo-media-us, edge-b's cluster) the way the central
+  # pair serves demo-media, and the demo tenant's private cluster
+  # (demo-selfhosted, edge-private under profile selfhosted). Own Redis and edge
+  # bundle, shared control plane, both cells federating. Used by scripts/stack
+  # and scripts/verify-two-cell-media.sh; needs a fresh postgres volume because
+  # foghorn_b is created on first boot.
   # ---------------------------------------------------------------------------
   foghorn-redis-b:
     image: valkey/valkey:9.0-alpine@sha256:d1cc70645bbcef743615463a2fa4616e841407545e18f560aed0c49671a90147
@@ -2124,7 +2133,7 @@ services:
     environment:
       EDGE_DOMAIN: localhost
       NODE_ID: edge-node-b
-      # Bound to demo-selfhosted by the two-cell seed.
+      # Bound to the platform media cluster demo-media-us by the two-cell seed.
       EDGE_ENROLLMENT_TOKEN: demo_bootstrap_token_for_local_two_cell_testing_only
       FOGHORN_CONTROL_ADDR: foghorn-b:18029
       # In-network address: peers pull DTSC from the host this URL names, and
@@ -2163,3 +2172,69 @@ services:
         hard: 65536
     mem_limit: 1536m
     cpus: 2.0
+
+  # The demo tenant's private (self-hosted) edge in the second cell, enrolled into
+  # demo-selfhosted. Only the private-cluster proof (scripts/verify-two-cell-media.sh)
+  # runs it; the stack's cell B has only its platform edge, as staging's does.
+  edge-private:
+    <<: *default-env
+    image: frameworks-edge:dev
+    pull_policy: never
+    container_name: frameworks-edge-private
+    hostname: edge-private
+    profiles: ["selfhosted"]
+    shm_size: "1gb"
+    environment:
+      EDGE_DOMAIN: localhost
+      NODE_ID: edge-node-private
+      # Bound to demo-selfhosted by the two-cell seed.
+      EDGE_ENROLLMENT_TOKEN: demo_bootstrap_token_for_local_private_edge_testing_only
+      FOGHORN_CONTROL_ADDR: foghorn-b:18029
+      EDGE_PUBLIC_URL: http://edge-private:8082
+      MIST_API_USERNAME: ${MIST_API_USERNAME}
+      MIST_API_PASSWORD: ${MIST_API_PASSWORD}
+      PORT: 18007
+      LOG_LEVEL: ${LOG_LEVEL}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      MISTSERVER_URL: http://localhost:4242
+      MISTSERVER_HTTP_URL: http://localhost:8080
+      HELMSMAN_WEBHOOK_URL: http://localhost:18007
+    volumes:
+      - edge_private_opt:/opt/frameworks
+      - edge_private_etc:/etc/frameworks
+      - edge_private_caddy_etc:/etc/caddy
+      - edge_private_caddy_data:/var/lib/caddy
+      - edge_private_storage:/data/storage
+      - edge_private_state:/data/state
+    depends_on:
+      commodore:
+        condition: service_started
+      foghorn-b:
+        condition: service_started
+      decklog:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - frameworks
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    mem_limit: 1536m
+    cpus: 2.0
+
+  edge-proxy-private:
+    image: nginx:1.30.1-alpine@sha256:c819f83c54b0361f5557601bf5eb4943d09360e7a7fdf426afc466570f45874d
+    profiles: ["selfhosted"]
+    network_mode: service:edge-private
+    volumes:
+      - ./infrastructure/two-cell/edge-b.conf:/etc/nginx/conf.d/default.conf:ro
+    environment:
+      NGINX_ENTRYPOINT_WORKER_PROCESSES_AUTOTUNE: "1"
+    cpus: 2
+    depends_on:
+      edge-private:
+        condition: service_started
+        restart: true
+    mem_limit: 256m
+    restart: unless-stopped

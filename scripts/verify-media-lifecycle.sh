@@ -58,7 +58,7 @@ log()  { printf '\n[lifecycle %s] %s\n' "$(ts)" "$*"; }
 ok()   { PASS=$((PASS+1)); printf '  PASS  %s  (%s)\n' "$*" "$(ts)"; }
 bad()  { FAIL=$((FAIL+1)); printf '  FAIL  %s  (%s)\n' "$*" "$(ts)"; }
 skip() { SKIP=$((SKIP+1)); printf '  SKIP  %s  (%s)\n' "$*" "$(ts)"; }
-compose() { docker compose --profile edge --profile two-cell "$@"; }
+compose() { docker compose --profile edge --profile two-cell --profile selfhosted "$@"; }
 gql()  { curl -s -m 30 "$BRIDGE/graphql" -H "Authorization: Bearer $API_TOKEN" -H 'Content-Type: application/json' \
            --data "$(jq -cn --arg q "$1" --argjson v "${2:-{\}}" '{query:$q, variables:$v}')"; }
 ch()   { curl -s -m 20 "$CH" --data-binary "$1"; }

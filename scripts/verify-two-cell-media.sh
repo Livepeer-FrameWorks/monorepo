@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Two-cell media proof on the local dev stack (docker compose profiles edge and two-cell).
+# Two-cell media proof on the local dev stack (docker compose profiles edge, two-cell and
+# selfhosted).
 #
 # Cell A: the ordinary dev cell (control cell central-primary, media cluster demo-media,
 # edge-node-1 on the edge bundle, Mist on localhost:18090). Cell B: a second platform cell
 # (us-primary) whose Foghorn (foghorn-b) serves the tenant's virtual private cluster
-# demo-selfhosted (edge-node-b on edge-b, Mist behind edge-b:8082). Every Foghorn is platform-run; the two cells
+# demo-selfhosted (edge-node-private on edge-private, Mist behind edge-private:8082). The
+# cell's platform media cluster and its edge (demo-media-us, edge-b) stay down: the proof
+# needs the private edge to be cell B's only edge. Every Foghorn is platform-run; the two cells
 # federate. One Commodore and one Quartermaster serve both. The script resolves RTMP through
 # both cells under an ingest policy, publishes to the exact node they agree on, resolves
 # viewers through both cells onto the private edge and asserts real media there,
@@ -44,7 +47,7 @@ BRIDGE=http://127.0.0.1:18000
 # redirects point into the compose network and media checks run there too.
 export EDGE_PUBLIC_URL=${EDGE_PUBLIC_URL:-http://edge:8082}
 EDGE_A_HOST=edge:8082
-EDGE_B_HOST=edge-b:8082
+EDGE_B_HOST=edge-private:8082
 PUBLISHER=fw-two-cell-publisher
 # Cell A's Mist host ports move off the defaults so the proof coexists with a Mist
 # running natively on this host; nothing in the proof depends on those host ports.
@@ -52,11 +55,11 @@ export MIST_RTMP_HOST_PORT=${MIST_RTMP_HOST_PORT:-11935} MIST_RTSP_HOST_PORT=${M
   MIST_DTSC_HOST_PORT=${MIST_DTSC_HOST_PORT:-14200} MIST_SRT_HOST_PORT=${MIST_SRT_HOST_PORT:-18889} \
   MIST_WEBRTC_HOST_PORT=${MIST_WEBRTC_HOST_PORT:-28203}
 # Both edges enroll with bootstrap tokens: edge-node-1 with the demo token (the .env
-# default; the demo seed does not pre-provision it), edge-node-b with its own token in compose.
+# default; the demo seed does not pre-provision it), edge-node-private with its own token in compose.
 export EDGE_ENROLLMENT_TOKEN=${EDGE_ENROLLMENT_TOKEN:-demo_bootstrap_token_for_local_development_testing_only}
 # Cross-cell placement discovery and origin pull run over Foghorn federation (off in .env).
 export FEDERATION_ENABLED=true FEDERATION_ALLOW_INSECURE_DEV=true
-compose() { docker compose --profile edge --profile two-cell "$@"; }
+compose() { docker compose --profile edge --profile two-cell --profile selfhosted "$@"; }
 log() { printf '\n[two-cell] %s\n' "$*"; }
 fail() { printf '\n[two-cell] FAIL: %s\n' "$*" >&2; exit 1; }
 psql_db() { compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$1" -d "$1" -Atc "$2"; }
@@ -264,13 +267,13 @@ reenroll_edges() { # drop both edge registrations so recreated edge containers c
   # Helmsman withholds its enrollment token once a receipt exists in its state dir; the
   # registration would otherwise be refused with ENROLLMENT_REQUIRED after the rows are gone.
   compose exec -T edge sh -c 'rm -rf /data/state/enrollment' >/dev/null
-  compose exec -T edge-b sh -c 'rm -rf /data/state/enrollment' >/dev/null
-  psql_db quartermaster "DELETE FROM quartermaster.ingress_sites WHERE node_id IN ('edge-node-1','edge-node-b'); DELETE FROM quartermaster.service_instances WHERE node_id IN ('edge-node-1','edge-node-b'); DELETE FROM quartermaster.node_fingerprints WHERE node_id IN ('edge-node-1','edge-node-b'); DELETE FROM quartermaster.infrastructure_nodes WHERE node_id IN ('edge-node-1','edge-node-b')" >/dev/null
-  restart_helmsman edge edge-b
+  compose exec -T edge-private sh -c 'rm -rf /data/state/enrollment' >/dev/null
+  psql_db quartermaster "DELETE FROM quartermaster.ingress_sites WHERE node_id IN ('edge-node-1','edge-node-private'); DELETE FROM quartermaster.service_instances WHERE node_id IN ('edge-node-1','edge-node-private'); DELETE FROM quartermaster.node_fingerprints WHERE node_id IN ('edge-node-1','edge-node-private'); DELETE FROM quartermaster.infrastructure_nodes WHERE node_id IN ('edge-node-1','edge-node-private')" >/dev/null
+  restart_helmsman edge edge-private
   sleep 20
   compose restart foghorn foghorn-2 foghorn-b >/dev/null
   sleep 15
-  restart_helmsman edge edge-b
+  restart_helmsman edge edge-private
   wait_for 120 "foghorn A" http_any "$FOGHORN_A/play/$PLAYBACK_ID/hls"
   wait_for 120 "foghorn B" http_any "$FOGHORN_B/play/$PLAYBACK_ID/hls"
 }
@@ -278,7 +281,7 @@ reenroll_edges() { # drop both edge registrations so recreated edge containers c
 if [ "${TWO_CELL_RESUME:-}" = 1 ]; then
   log "resuming on the running, activated stack (TWO_CELL_RESUME=1)"
   if [ "${TWO_CELL_REENROLL:-}" = 1 ]; then
-    log "re-enrolling edge-node-1 and edge-node-b (TWO_CELL_REENROLL=1)"
+    log "re-enrolling edge-node-1 and edge-node-private (TWO_CELL_REENROLL=1)"
     reenroll_edges
   fi
 else
@@ -287,7 +290,7 @@ log "1/9 bring up both cells (edge dist: $(tr '\n' ' ' < edge/dist/versions.env)
 # Only the services this proof needs (compose starts their dependencies); the
 # website/tray images are irrelevant here and take minutes to build.
 compose up -d --build --remove-orphans postgres foghorn-redis foghorn-redis-b quartermaster purser commodore bridge decklog storage-init \
-  foghorn foghorn-2 foghorn-b edge edge-b edge-proxy-a edge-proxy-b nginx
+  foghorn foghorn-2 foghorn-b edge edge-private edge-proxy-a edge-proxy-private nginx
 wait_for 120 "postgres" compose exec -T postgres pg_isready -q
 if ! compose exec -T postgres psql -U "$(grep '^POSTGRES_USER=' .env | cut -d'"' -f2)" -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname='foghorn_b'" | grep -q 1; then
   fail "database foghorn_b is missing: the two-cell profile needs a fresh dev volume (docker compose down -v, then rerun)"
@@ -305,16 +308,19 @@ compose up -d --no-deps storage-init >/dev/null
 sleep 20
 compose restart foghorn foghorn-2 foghorn-b >/dev/null
 sleep 15
-restart_helmsman edge edge-b
+restart_helmsman edge edge-private
 wait_for 120 "foghorn A" http_any "$FOGHORN_A/play/$PLAYBACK_ID/hls"
 wait_for 120 "foghorn B" http_any "$FOGHORN_B/play/$PLAYBACK_ID/hls"
 wait_for 120 "bridge" http_ok "$BRIDGE/health"
 
 log "3/9 wait for both cells to attest placement enforcement and for the tenant to receive schema-2 authority"
-wait_for 240 "cell attestations" bash -c "[ \"\$(docker compose --profile edge --profile two-cell exec -T postgres psql -U commodore -d commodore -Atc \"SELECT count(*) FROM commodore.media_cell_placement_capabilities WHERE enforcement_ready AND cell_id IN ('central-primary','us-primary')\")\" = 2 ]"
-wait_for 240 "schema-2 tenant authority" bash -c "[ \"\$(docker compose --profile edge --profile two-cell exec -T postgres psql -U commodore -d commodore -Atc \"SELECT v.payload_schema_version FROM commodore.media_authority_current c JOIN commodore.media_authority_versions v ON v.authority_kind=c.authority_kind AND v.authority_id=c.authority_id AND v.authority_version=c.authority_version WHERE c.authority_kind='tenant' AND c.authority_id='$TENANT_ID'\")\" = 2 ]"
+wait_for 240 "cell attestations" bash -c "[ \"\$(docker compose --profile edge --profile two-cell --profile selfhosted exec -T postgres psql -U commodore -d commodore -Atc \"SELECT count(*) FROM commodore.media_cell_placement_capabilities WHERE enforcement_ready AND cell_id IN ('central-primary','us-primary')\")\" = 2 ]"
+wait_for 240 "schema-2 tenant authority" bash -c "[ \"\$(docker compose --profile edge --profile two-cell --profile selfhosted exec -T postgres psql -U commodore -d commodore -Atc \"SELECT v.payload_schema_version FROM commodore.media_authority_current c JOIN commodore.media_authority_versions v ON v.authority_kind=c.authority_kind AND v.authority_id=c.authority_id AND v.authority_version=c.authority_version WHERE c.authority_kind='tenant' AND c.authority_id='$TENANT_ID'\")\" = 2 ]"
 psql_db commodore "SELECT cell_id, enforcement_ready, live_replicas, attested_at FROM commodore.media_cell_placement_capabilities ORDER BY cell_id"
 fi
+# A dev stack started with the edge,two-cell preset runs cell B's platform edge;
+# the private-only and fallback steps need the private edge to be cell B's only one.
+compose stop edge-proxy-b edge-b >/dev/null 2>&1 || true
 
 # Cross-cell placement needs each cell's Foghorn leader to have published its Quartermaster
 # peer snapshot with the other cell's control-cell address. The leader refreshes that snapshot
@@ -341,7 +347,7 @@ location_b="$(resolve_location "$FOGHORN_B")"
 log "viewer via A -> $(resolve_location "$FOGHORN_A")"
 log "viewer via B -> $location_b"
 wait_for 180 "media segments at cell B" media_flows "$location_b"
-if compose logs --since 5m foghorn-b 2>/dev/null | grep -qiE 'origin pull|prepared|dtsc'; then log "foghorn-b arranged the source pull for edge-node-b"; fi
+if compose logs --since 5m foghorn-b 2>/dev/null | grep -qiE 'origin pull|prepared|dtsc'; then log "foghorn-b arranged the source pull for edge-node-private"; fi
 
 log "6/9 a configured pull input is placed and served like a pushed stream"
 # The upstream is a plain file server, not another Mist: a media cell's own output
@@ -368,7 +374,7 @@ wait_for 180 "media segments for the configured pull input" media_flows "$pull_v
 
 log "7/9 private-only policy with the private cell down refuses instead of silently spilling"
 apply_serve_policy "$PRIVATE_ONLY"
-compose stop edge-proxy-b edge-b >/dev/null
+compose stop edge-proxy-private edge-private >/dev/null
 wait_for 180 "cell B to be refused" resolve_refused "$FOGHORN_B"
 resolve_refused "$FOGHORN_A" || fail "cell A did not refuse a private-only viewer with a placement refusal: $(resolve_status "$FOGHORN_A") $(resolve_body "$FOGHORN_A")"
 # Stored media obeys the same policy. The seeded VOD's bytes are warm on cell A's
@@ -391,7 +397,7 @@ wait_for 120 "stored media to be permitted again" bash -c "[ \"\$(curl -s -m 10 
 stored_media_location="$(stored_location "$FOGHORN_A")"
 [[ "$stored_media_location" == *"$EDGE_A_HOST"* ]] || fail "stored media left the edge holding its bytes: $stored_media_location"
 wait_for 60 "media segments for stored media" media_flows "$stored_media_location"
-compose start edge-b edge-proxy-b >/dev/null
+compose start edge-private edge-proxy-private >/dev/null
 apply_serve_policy "$PREFER_B_FALLBACK_A"
 wait_for 180 "cell B back in service with the private edge preferred again" edge_location_is "$FOGHORN_B" "$EDGE_B_HOST"
 

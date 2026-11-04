@@ -68,6 +68,24 @@ scripts/remote-dev.sh sync stack-1
 scripts/remote-dev.sh run stack-1 bash -lc 'STACK_SLOT=1 MIST_SOURCE_DIR=/srv/frameworks-dev/workspaces/$USER/mist-next make verify-stack'
 ```
 
+The two cells have staging's topology. Each is a platform cell with its own
+Foghorn pair and one platform-official media cluster that every customer the
+platform tier admits may ingest to and play from:
+
+| Cell              | Foghorns                   | Platform media cluster | Edge (node)            |
+| ----------------- | -------------------------- | ---------------------- | ---------------------- |
+| `central-primary` | `foghorn`, `foghorn-2`     | `demo-media`           | `edge` (edge-node-1)   |
+| `us-primary`      | `foghorn-b`, `foghorn-b-2` | `demo-media-us`        | `edge-b` (edge-node-b) |
+
+Scenarios address them as `CELL_A_CLUSTER` and `CELL_B_CLUSTER`
+(`scripts/stack/endpoints.sh`). Bring-up fails when a cell has no platform
+media cluster with an enrolled edge that the `stack-qa` customer is entitled
+to. The demo tenant's private cluster `demo-selfhosted` is also seeded in
+`us-primary` and served by its Foghorns, but has no edge in the stack: scenario
+51 exercises private clusters on a cluster and edge it creates itself, and
+`make verify-two-cell-media` runs `demo-selfhosted`'s own edge (`edge-private`,
+compose profile `selfhosted`).
+
 - `STACK_SCENARIOS` selects `default`, `manual` (long outage and load scenarios), `all`, or numbers
   such as `01,04`.
 - `STACK_REPEAT=N` runs each selected scenario N times, recording every attempt and its own log

@@ -194,7 +194,8 @@ ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
 -- Cluster pricing for demo clusters. Every platform-official cluster needs a
 -- row: tier access reconciliation suspends a tenant's access to an official
 -- cluster that no row makes eligible for its tier. The media clusters use the
--- production media-cluster pricing; us-primary exists in the two-cell stack.
+-- production media-cluster pricing; us-primary and demo-media-us exist in the
+-- two-cell stack.
 INSERT INTO purser.cluster_pricing (
     cluster_id, pricing_model,
     allow_free_tier, required_tier_level,
@@ -212,6 +213,11 @@ INSERT INTO purser.cluster_pricing (
     ),
     (
         'us-primary', 'tier_inherit',
+        TRUE, 0,
+        '{}'
+    ),
+    (
+        'demo-media-us', 'tier_inherit',
         TRUE, 0,
         '{}'
     ),

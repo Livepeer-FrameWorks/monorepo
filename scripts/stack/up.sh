@@ -238,6 +238,32 @@ psql_db commodore -q -c "UPDATE commodore.users SET password_hash = crypt('$STAC
 # The QA customer's declared wallet signs in headlessly as that user.
 qa_tenant_id="$(psql_db quartermaster -Atc "SELECT tenant_id FROM quartermaster.bootstrap_tenant_aliases WHERE alias = 'stack-qa'")"
 [ -n "$qa_tenant_id" ] || fail "the stack-qa tenant alias is not in Quartermaster"
+# Every cell a Foghorn runs in must have a platform-official media cluster that
+# the cell's Foghorn serves, an enrolled edge reports into and the QA customer
+# is entitled to, as each staging cell has. A cell whose only edge sits in a
+# tenant's private cluster refuses every customer's ingest there.
+uncovered_cells="$(psql_db quartermaster -Atc "
+  SELECT cell FROM (
+    SELECT DISTINCT COALESCE(NULLIF(c.cell_id, ''), c.cluster_id) AS cell
+    FROM quartermaster.service_instances si
+    JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = si.cluster_id
+    WHERE si.service_id = 'foghorn' AND si.status = 'running'
+  ) cells
+  WHERE NOT EXISTS (
+    SELECT 1 FROM quartermaster.infrastructure_clusters m
+    WHERE COALESCE(NULLIF(m.cell_id, ''), m.cluster_id) = cells.cell
+      AND m.is_platform_official AND m.is_active
+      AND EXISTS (SELECT 1 FROM quartermaster.service_cluster_assignments a
+                  JOIN quartermaster.service_instances f ON f.id = a.service_instance_id
+                  WHERE a.cluster_id = m.cluster_id AND a.is_active AND f.service_id = 'foghorn')
+      AND EXISTS (SELECT 1 FROM quartermaster.infrastructure_nodes n
+                  WHERE n.cluster_id = m.cluster_id AND n.node_type = 'edge' AND n.status = 'active')
+      AND EXISTS (SELECT 1 FROM quartermaster.tenant_cluster_access t
+                  WHERE t.cluster_id = m.cluster_id AND t.tenant_id = '$qa_tenant_id'
+                    AND t.is_active AND t.subscription_status = 'active')
+  ) ORDER BY cell")" || fail "could not read the cells' customer media clusters"
+[ -z "$uncovered_cells" ] ||
+  fail "cells without a platform media cluster with an enrolled edge the QA customer may ingest to: ${uncovered_cells//$'\n'/ }"
 stack_compose run --rm --no-deps -T --entrypoint bash stack-runner /repo/scripts/stack/bootstrap-wallet-login.sh \
   qa@stack.test "$qa_tenant_id" || fail "the bootstrap-declared wallet did not sign in as qa@stack.test"
 

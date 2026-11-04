@@ -45,8 +45,9 @@ INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, clus
     ('5eedf0e1-00a1-da7a-f0e1-00a1da7a00a1', 'central-primary'),
     ('5eedf0e1-00a1-da7a-f0e1-00a1da7a00a1', 'demo-media'),
     ('5eedf0e1-00b1-da7a-f0e1-00b1da7a00b1', 'us-primary'),
-    ('5eedf0e1-00b1-da7a-f0e1-00b1da7a00b1', 'demo-selfhosted'),
+    ('5eedf0e1-00b1-da7a-f0e1-00b1da7a00b1', 'demo-media-us'),
     ('5eedf0e1-000c-da7a-f0e1-000cda7a000c', 'us-primary'),
+    ('5eedf0e1-000c-da7a-f0e1-000cda7a000c', 'demo-media-us'),
     ('5eedf0e1-000c-da7a-f0e1-000cda7a000c', 'demo-selfhosted')
 ON CONFLICT (service_instance_id, cluster_id) DO UPDATE SET is_active = TRUE, updated_at = NOW();
 

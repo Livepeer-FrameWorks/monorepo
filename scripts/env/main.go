@@ -68,6 +68,7 @@ const composeProfilePresets = `
 #   COMPOSE_PROFILES=edge            control plane and the media edge
 #   COMPOSE_PROFILES=edge,support    plus Chatwoot and Listmonk
 #   COMPOSE_PROFILES=edge,two-cell   plus a second media cell
+#   COMPOSE_PROFILES=edge,two-cell,selfhosted  plus the demo tenant's private edge in it
 #   COMPOSE_PROFILES=llm             control plane and local Ollama
 #   COMPOSE_PROFILES=network-observations  control plane, network observer and prober
 `

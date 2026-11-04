@@ -1,7 +1,7 @@
 # Local two-cell media fixture
 
 `MEDIA_TOOLS_IMAGE=<image> make verify-two-cell-media` exercises publication and
-cross-cell playback on the `edge` and `two-cell` compose profiles.
+cross-cell playback on the `edge`, `two-cell` and `selfhosted` compose profiles.
 `MEDIA_LIFECYCLE_SKIP_BUILD=1 MEDIA_TOOLS_IMAGE=<image> make verify-media-lifecycle`
 extends the running fixture with clipping, DVR, VOD and analytics checks.
 `MEDIA_TOOLS_IMAGE` supplies ffmpeg (libx264), python3 and pkill for publishers and
@@ -9,7 +9,15 @@ in-network media checks. Both cells run `frameworks-edge:dev`, staged by
 `make edge-dev-dist` (`EDGE_DEV_MIST_TAR=<install tree>` for a local Mist build);
 its Mist must include `MistProcAV` and `MistProcThumbs`.
 
-Each edge proxy shares its edge bundle's network namespace (`edge`, `edge-b`) and
+Cell B (`us-primary`, served by `foghorn-b`) mirrors cell A: its platform media
+cluster `demo-media-us` holds `edge-b`, as `demo-media` holds `edge`. The demo
+tenant's private cluster `demo-selfhosted` sits in the same cell; its edge,
+`edge-private`, runs under the `selfhosted` profile. The two-cell media proof
+runs `edge` and `edge-private` and keeps `edge-b` down, so cell B's only edge is
+private; the production-shaped stack (`scripts/stack`) runs `edge` and `edge-b`
+and no private edge.
+
+Each edge proxy shares its edge bundle's network namespace (`edge`, `edge-b`, `edge-private`) and
 listens on port 8082. Advertise that origin as `EDGE_PUBLIC_URL`: media goes to
 Mist's 8080 listener, while `/internal/artifact/` goes to Helmsman's authenticated
 relay on 18007. Advertising Mist's media-only listener breaks peer artifact reads.
@@ -20,7 +28,8 @@ otherwise retains the old network namespace and port 8082 is absent from the
 restarted edge. To restart only Helmsman, run
 `docker compose exec edge /command/s6-svc -r /run/service/helmsman`.
 
-Cell B's edge keeps recordings on the `edge_b_storage` volume at `/data/storage`;
+Cell B's edges keep recordings on their own volumes (`edge_b_storage`,
+`edge_private_storage`) at `/data/storage`;
 cell A's edge serves `infrastructure/demo-recordings` from the same path.
 
 Allow sufficient Docker disk headroom for image builds, recording writes and

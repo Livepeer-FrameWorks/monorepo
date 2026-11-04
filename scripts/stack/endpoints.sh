@@ -24,7 +24,7 @@ export EDGE_B_HOST="edge-b"
 export EDGE_A_RTMP="rtmp://edge:1935/live"
 export EDGE_B_RTMP="rtmp://edge-b:1935/live"
 export CELL_A_CLUSTER="demo-media"
-export CELL_B_CLUSTER="demo-selfhosted"
+export CELL_B_CLUSTER="demo-media-us"
 # Cell A's control name over TLS: resolves to the TLS front of every cell-A
 # Foghorn instance (foghorn-tls-a-*), verified with the slot's stack CA.
 export FOGHORN_A_CONTROL_TLS_ADDR="foghorn.demo-media.stack.frameworks.network:18029"
