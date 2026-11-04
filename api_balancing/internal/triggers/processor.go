@@ -2,6 +2,7 @@ package triggers
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -150,6 +151,7 @@ type Processor struct {
 	ownerTenantID             string
 	viewerClusterAccess       func(clusterID, tenantID, officialClusterID string, peers []*clusterpeerpb.TenantClusterPeer) bool
 	mediaAuthorityStore       *localauthority.Store
+	publisherAdmissions       *control.PublisherAdmissionRepository
 	viewerPlacementRequired   bool
 	viewerPlacementAdmission  ViewerPlacementAdmission
 	ingestPlacementRequired   bool
@@ -226,6 +228,12 @@ type Processor struct {
 func (p *Processor) SetMediaAuthorityStore(store *localauthority.Store) {
 	if p != nil {
 		p.mediaAuthorityStore = store
+	}
+}
+
+func (p *Processor) SetPublisherAdmissionRepository(repository *control.PublisherAdmissionRepository) {
+	if p != nil {
+		p.publisherAdmissions = repository
 	}
 }
 
@@ -1755,7 +1763,33 @@ func admissionReserveContext(ctx context.Context, reserve time.Duration) (contex
 	return context.WithDeadline(ctx, deadline.Add(-reserve))
 }
 
-func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ bool, retErr error) {
+func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (string, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), mist.PublisherResponseTimeout)
+	defer cancel()
+	return p.ProcessPublisher(ctx, trigger)
+}
+
+// PublisherAdmissionEnabled gates the node-session capability until the cell
+// database supports atomic prepare and confirm.
+func (p *Processor) PublisherAdmissionEnabled() bool { return p.publisherAdmissions != nil }
+
+// Atomic generations require schema-4 cell readiness and an edge that durably
+// settles definitive post-lease denials. Older edges require synchronous cleanup.
+func (p *Processor) publisherRepositoryFor(ctx context.Context, local localIngestAuthority) *control.PublisherAdmissionRepository {
+	if control.PublisherSettlementRequiresCompatibility(ctx) {
+		return nil
+	}
+	if !local.object.IngestReady || !local.tenant.IngestReady || local.object.Authority.GetSchemaVersion() < sharedauthority.PublisherAdmissionSchemaVersion || local.tenant.Authority.GetSchemaVersion() < sharedauthority.PublisherAdmissionSchemaVersion || local.object.Authority.GetLiveStream().GetPublisherConfigurationVersion() < 1 {
+		return nil
+	}
+	return p.publisherAdmissions
+}
+
+// ProcessPublisher uses the caller's useful response lifetime for all work
+// specific to this publisher. Shared authority fills own their bounded lifetime.
+func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTrigger) (_ string, _ bool, retErr error) {
+	started := time.Now()
+	defer func() { control.ObservePublisherAdmissionPhase("total", started, retErr) }()
 	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_PushRewrite)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for PushRewrite: %T", trigger.GetTriggerPayload())
@@ -1791,11 +1825,15 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 			Error("PUSH_REWRITE has no Mist trigger UUID; denying before placement is claimed")
 		return "", true, ingesterrors.NewTerminal(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "push rewrite missing trigger identity")
 	}
+	if claimToken != pushRewrite.GetTriggerUuid() {
+		return "", true, ingesterrors.NewTerminal(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "push rewrite trigger identity must be canonical")
+	}
 	// Cold-authority fetch and admission share the trigger's overall budget,
 	// not the shorter individual capacity-operation budget.
-	admissionCtx, cancelAdmission := context.WithTimeout(control.MediaRequestContext(context.Background(), "mist_push_rewrite"), 3*time.Second)
-	defer cancelAdmission()
-	localValidation, localAuthority, localFound, localErr := p.resolveReadyLocalIngest(admissionCtx, pushRewrite.GetStreamName())
+	admissionCtx := control.MediaRequestContext(ctx, "mist_push_rewrite")
+	authorityStarted := time.Now()
+	localValidation, localAuthority, localFound, localErr := p.resolveReadyLocalIngest(admissionCtx, pushRewrite.GetStreamName(), trigger.GetNodeId(), claimToken)
+	control.ObservePublisherAdmissionPhase("authority_preflight", authorityStarted, localErr)
 	if localErr != nil {
 		if IsLocalAuthorityDenied(localErr) || IsLocalAuthorityExpired(localErr) {
 			return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "local ingest authority unavailable")
@@ -1805,6 +1843,8 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 		localAuthority = localIngestAuthority{}
 		localFound = false
 	}
+
+	admissionRepository := p.publisherRepositoryFor(admissionCtx, localAuthority)
 
 	// Admission runs in three steps, in this order for two reasons that pull
 	// against each other: the cluster to claim depends on the connection's
@@ -1821,15 +1861,15 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 	var identity *commodorepb.ValidateStreamKeyResponse
 	var err error
 	usedLocalIdentity := false
-	// A marked signed denial is terminal. Positive authority still uses the
-	// connected identity/claim path while Commodore is available and becomes
-	// the fallback only for an actual central failure.
+	usedOutageIdentity := false
+	// Signed identity and mutable ownership have different authorities. A ready
+	// pair resolves identity locally; it still needs a global placement claim.
 	//
 	// Each Commodore call here is one attempt of at most 1 s behind the
 	// process-wide outage backoff, so an unreachable Commodore leaves most of
 	// the admission budget to the signed outage owner path below.
 	commodoreOutage := p.CommodoreOutageBackoff()
-	if localFound && localValidation != nil && !localValidation.GetValid() {
+	if localFound && localValidation != nil && (!localValidation.GetValid() || admissionRepository != nil) {
 		identity = localValidation
 		usedLocalIdentity = true
 	} else if p.commodoreClient != nil {
@@ -1843,6 +1883,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 		if localValidation != nil && localValidation.GetValid() {
 			identity = localValidation
 			usedLocalIdentity = true
+			usedOutageIdentity = true
 		} else {
 			p.logger.WithFields(logging.Fields{
 				"stream_key": logging.RedactSecret(pushRewrite.GetStreamName()),
@@ -1879,8 +1920,11 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 	// lookup is not evidence of absence — falling back would claim the node's
 	// current cluster for a connection bound to another. Retryable; the next
 	// PUSH_REWRITE re-asks.
-	sessionClusterID, sessionErr := control.OpenIngestSessionCluster(
-		admissionCtx, identity.GetTenantId(), trigger.GetNodeId(), claimToken)
+	sessionClusterID := localAuthority.sessionClusterID
+	var sessionErr error
+	if !localAuthority.sessionChecked {
+		sessionClusterID, sessionErr = control.OpenIngestSessionCluster(admissionCtx, identity.GetTenantId(), trigger.GetNodeId(), claimToken)
+	}
 	if sessionErr != nil {
 		p.logger.WithError(sessionErr).WithField("node_id", trigger.GetNodeId()).
 			Error("PUSH_REWRITE: open-session cluster lookup failed; denying (retryable) rather than claiming a possibly-wrong cluster")
@@ -1911,18 +1955,53 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 		defer releaseAdmissionSlot()
 	}
 
+	if admissionRepository != nil && localValidation.GetValid() {
+		// Cluster-specific limits and resource attribution follow the lease's
+		// actual destination, which may differ from the signed outage owner.
+		localValidation.TenantResourceLimits = localTenantResourceLimits(localAuthority.tenant.Authority, ingestClusterID)
+		localValidation.OriginClusterId = proto.String(ingestClusterID)
+	}
 	var streamValidation *commodorepb.ValidateStreamKeyResponse
-	usedLocalAdmission := usedLocalIdentity
-	if !usedLocalIdentity && p.commodoreClient != nil {
+	publishedLease := false
+	usedLocalAdmission := usedOutageIdentity
+	if !usedOutageIdentity && p.commodoreClient != nil {
+		leaseStarted := time.Now()
 		err = commodoreOutage.Call(admissionCtx, func(callCtx context.Context) error {
 			var callErr error
-			streamValidation, callErr = control.ClaimIngestPlacement(callCtx, p.commodoreClient, pushRewrite.GetStreamName(),
-				identity.GetTenantId(), identity.GetInternalName(), trigger.GetNodeId(), ingestClusterID, claimToken, p.logger)
+			if admissionRepository != nil && localValidation.GetValid() {
+				tenantBytes, encodeErr := proto.MarshalOptions{Deterministic: true}.Marshal(localAuthority.tenant.Authority)
+				if encodeErr != nil {
+					return encodeErr
+				}
+				objectBytes, encodeErr := proto.MarshalOptions{Deterministic: true}.Marshal(localAuthority.object.Authority)
+				if encodeErr != nil {
+					return encodeErr
+				}
+				tenantDigest, objectDigest := sha256.Sum256(tenantBytes), sha256.Sum256(objectBytes)
+				leaseRequest := &commodorepb.PublisherLeaseRequest{TenantId: identity.GetTenantId(), StreamId: identity.GetStreamId(), InternalName: identity.GetInternalName(),
+					ClusterId: ingestClusterID, ControlCellId: p.mediaAuthorityStore.CellID(), ExecutionToken: claimToken, NodeId: trigger.GetNodeId(),
+					TenantAuthorityVersion: localAuthority.tenant.Version, ObjectAuthorityVersion: localAuthority.object.Version,
+					TenantPayloadSha256: tenantDigest[:], ObjectPayloadSha256: objectDigest[:]}
+				streamValidation, callErr = control.ClaimPublishedIngestPlacement(callCtx, p.commodoreClient, leaseRequest, localValidation, trigger.GetNodeId(), p.logger)
+				publishedLease = callErr == nil
+				return callErr
+			}
+			if p.publisherAdmissions != nil && !control.PublisherSettlementRequiresCompatibility(admissionCtx) {
+				streamValidation, callErr = control.ClaimExecutedIngestPlacement(callCtx, p.commodoreClient, pushRewrite.GetStreamName(), identity.GetTenantId(), identity.GetInternalName(), trigger.GetNodeId(), ingestClusterID, claimToken, trigger.GetControlCellId(), p.logger)
+			} else {
+				streamValidation, callErr = control.ClaimIngestPlacement(callCtx, p.commodoreClient, pushRewrite.GetStreamName(),
+					identity.GetTenantId(), identity.GetInternalName(), trigger.GetNodeId(), ingestClusterID, claimToken, p.logger)
+			}
 			return callErr
 		})
+		control.ObservePublisherAdmissionPhase("lease", leaseStarted, err)
+	}
+	if errors.Is(err, control.ErrPublisherAuthorityStale) {
+		p.mediaAuthorityStore.RefreshAuthorityAsync(localauthority.AuthorityLookup{InternalName: identity.GetInternalName()})
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT, "publisher authority is refreshing")
 	}
 	if err != nil || streamValidation == nil {
-		if localValidation == nil || !localValidation.GetValid() {
+		if localValidation == nil || !localValidation.GetValid() || (err != nil && !federation.CentralUnreachable(err)) {
 			p.logger.WithFields(logging.Fields{
 				"stream_key": logging.RedactSecret(pushRewrite.GetStreamName()),
 				"error":      err,
@@ -1941,19 +2020,13 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY, "stream is not authorized for outage ingest on this cluster")
 	}
 
-	// Installed immediately after the claiming call, so EVERY later return —
-	// including ones added in future — gives the claim back. The gates below can
-	// each reject, and a rejected publisher holding the claim blocks any other
-	// entitled cluster from accepting them for the rest of the lease window.
-	//
-	// Only a claim Commodore reported this connection RESERVED is released, and
-	// the release carries its token: an attempt that took none — a different
-	// node in this cluster, or an admission answered from the validation cache
-	// while Commodore was unreachable — cannot clear a live publisher's
-	// placement.
+	// Compatibility admissions return their own newly acquired lease on denial.
+	// Atomic admissions settle through the edge WAL and durable recovery, so an
+	// unknown acquisition or confirmation cannot delay the edge response.
+
 	admitted := false
 	defer func() {
-		if admitted || retErr == nil || !streamValidation.GetClaimAcquired() {
+		if admissionRepository != nil || admitted || retErr == nil || !streamValidation.GetClaimAcquired() {
 			return
 		}
 		p.releaseActiveIngestPlacement(ingestClusterID, streamValidation.GetTenantId(), streamValidation.GetInternalName(), claimToken)
@@ -1968,7 +2041,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 		}
 		return "", true, ingesterrors.New(ingestErrorCodeForStreamKeyRejection(streamValidation.GetRejectionReason()), message)
 	}
-	if !usedLocalAdmission {
+	if !usedLocalAdmission && !usedLocalIdentity {
 		p.promoteLocalIngestIfMatching(admissionCtx, pushRewrite.GetStreamName(), ingestClusterID, streamValidation)
 	}
 	// Final publisher admission runs after the claim so a policy denial releases
@@ -1983,11 +2056,12 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 	switch {
 	case usedLocalAdmission:
 		ownership = federation.PlacementIngestOwnership{Cluster: ingestClusterID, Source: federation.PlacementIngestOwnershipOutageOwner}
-	case streamValidation.GetClaimAcquired():
+	case streamValidation.GetClaimAcquired() || (publishedLease && streamValidation.GetValid()):
 		ownership = federation.PlacementIngestOwnership{Cluster: ingestClusterID, Source: federation.PlacementIngestOwnershipClaim}
 	}
-	if _, placementErr := p.checkIngestPlacement(admissionCtx, streamValidation.GetTenantId(), streamValidation.GetInternalName(), ingestClusterID, trigger.GetNodeId(),
-		pushRewrite.GetObservedConnector(), pushRewrite.GetHostname(), ownership); placementErr != nil {
+	placementDecision, placementErr := p.checkIngestPlacement(admissionCtx, streamValidation.GetTenantId(), streamValidation.GetInternalName(), ingestClusterID, trigger.GetNodeId(),
+		pushRewrite.GetObservedConnector(), pushRewrite.GetHostname(), ownership)
+	if placementErr != nil {
 		code := ingestPlacementErrorCode(placementErr)
 		p.logger.WithError(placementErr).WithFields(logging.Fields{"node_id": trigger.GetNodeId(), "ingest_cluster_id": ingestClusterID, "error_code": code.String()}).Warn("PUSH_REWRITE refused by ingest placement")
 		if errors.Is(placementErr, federation.ErrProtocolNotOffered) {
@@ -2000,6 +2074,9 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 			return "", true, ingesterrors.New(code, "stream authority has not reached this cell yet; retry")
 		}
 		return "", true, ingesterrors.New(code, "ingest placement is temporarily unavailable; retry")
+	}
+	if admissionRepository != nil && localValidation.GetValid() && (placementDecision.TenantAuthorityVersion != localAuthority.tenant.Version || placementDecision.ObjectAuthorityVersion != localAuthority.object.Version || placementDecision.ObjectID != localAuthority.object.AuthorityID) {
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "publisher authority changed while checking placement; retry")
 	}
 	liveProcessesJSON := streamValidation.GetProcessesJson()
 	if liveProcessesJSON != "" {
@@ -2087,6 +2164,8 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 	}
 	recording := streamValidation.IsRecordingEnabled
 	var ingestGeneration string
+	var preparedPublisher control.PreparedPublisherAdmission
+	var publisherRequest control.IngestSessionRequest
 	var dvrReq *sharedpb.StartDVRRequest
 
 	// resumedProjection: this trigger's generation was already projected and confirmed — a
@@ -2259,24 +2338,35 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 					Error("Local outage admission has no complete signed authority snapshot; denying")
 				return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "local ingest authority snapshot unavailable")
 			}
-			mintCtx, mintCancel := context.WithTimeout(admissionCtx, 3*time.Second)
+			mintCtx := admissionCtx
 			mintReq := control.IngestSessionRequest{
 				TenantID: streamValidation.TenantId, NodeID: trigger.GetNodeId(), InternalName: streamValidation.InternalName,
 				StreamID: streamValidation.StreamId, PlaybackID: streamValidation.GetPlaybackId(), Protocol: domainevents.IngestProtocol(protocol),
 				ConnectorPID: connectorPID, TriggerUUID: pushRewrite.GetTriggerUuid(), StartedAtMillis: pushRewrite.GetTriggerUnixMillis(),
-				DVRIntent: dvrIntent, IngestClusterID: ingestClusterID,
+				DVRIntent: dvrIntent, IngestClusterID: ingestClusterID, StrictLeaseOwner: publishedLease, DecisionExpiresAt: placementDecision.ExpiresAt,
 			}
 			if len(authoritySnapshot) > 0 {
 				mintReq.Authority = &authoritySnapshot[0]
 			}
-			sid, outcome, sErr := control.MintIngestSession(mintCtx, mintReq, p.logger)
-			mintCancel()
+			var sid string
+			var outcome control.IngestSessionOutcome
+			var sErr error
+			if admissionRepository != nil {
+				publisherRequest = mintReq
+				preparedPublisher, sErr = admissionRepository.Prepare(mintCtx, mintReq, p.logger)
+				sid, outcome = preparedPublisher.Generation, preparedPublisher.Outcome
+			} else {
+				sid, outcome, sErr = control.MintIngestSession(mintCtx, mintReq, p.logger)
+			}
 			if sErr != nil {
 				p.logger.WithError(sErr).WithFields(logging.Fields{
 					"internal_name": streamValidation.InternalName,
 					"connector_pid": connectorPID,
 				}).Error("Cannot persist ingest session; denying push (fail closed)")
 				return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "ingest session could not be persisted")
+			}
+			if outcome == control.IngestSessionAuthorityChanged {
+				return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "publisher configuration changed during admission; reconnect")
 			}
 			if outcome == control.IngestSessionAlreadyEnded {
 				// This exact trigger's session already CLOSED (its own PUSH_INPUT_CLOSE won the race).
@@ -2315,7 +2405,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 			// a future pre-projection gate) strands the stream behind an open session until the reaper.
 			projectionConfirmed := false
 			defer func() {
-				if projectionConfirmed || retErr == nil || ingestGeneration == "" {
+				if admissionRepository != nil || projectionConfirmed || retErr == nil || ingestGeneration == "" {
 					return
 				}
 				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -2403,7 +2493,13 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 						intent.PushTargets = raw
 					}
 				}
-				applied, resumed, projErr := control.ProjectSourceIfCurrent(admissionCtx, registry, streamValidation.TenantId, trigger.GetNodeId(), streamValidation.InternalName, connectorPID, pushRewrite.GetTriggerUuid(), ingestGeneration, intent)
+				var applied, resumed bool
+				var projErr error
+				if admissionRepository != nil {
+					applied, resumed, projErr = admissionRepository.Project(admissionCtx, registry, publisherRequest, preparedPublisher, intent)
+				} else {
+					applied, resumed, projErr = control.ProjectSourceIfCurrent(admissionCtx, registry, streamValidation.TenantId, trigger.GetNodeId(), streamValidation.InternalName, connectorPID, pushRewrite.GetTriggerUuid(), ingestGeneration, intent)
+				}
 				if resumed {
 					// The DB generation was already active before any repair attempt.
 					// Never run pending-session cleanup against established authority,
@@ -4375,7 +4471,7 @@ func (p *Processor) handlePushInputClose(trigger *ipcpb.MistTrigger) (string, bo
 			// replacement's; gating it on a local cache flip would strand the claim on a replica whose
 			// projection was missed. The cluster/owner come from the ended session, not the node's
 			// present registration, so a node reassigned mid-session still gives back the right claim.
-			p.releaseActiveIngestPlacement(fin.ClusterID, trigger.GetTenantId(), internalName, fin.ClaimToken)
+			p.releaseActiveIngestPlacement(fin.ClusterID, trigger.GetTenantId(), internalName, fin.ClaimToken, trigger.GetNodeId(), trigger.GetControlCellId())
 		}
 	}
 
@@ -4664,7 +4760,7 @@ func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, err
 // correctness, and the close must still ack. Commodore fences the release on
 // this cluster still holding the claim, so a late close cannot unpin a
 // publisher who has already moved to a peer.
-func (p *Processor) releaseActiveIngestPlacement(ingestClusterID, tenantID, internalName, claimToken string) {
+func (p *Processor) releaseActiveIngestPlacement(ingestClusterID, tenantID, internalName, claimToken string, execution ...string) {
 	if p.commodoreClient == nil || tenantID == "" || internalName == "" || claimToken == "" {
 		return
 	}
@@ -4675,6 +4771,9 @@ func (p *Processor) releaseActiveIngestPlacement(ingestClusterID, tenantID, inte
 	defer cancel()
 
 	released := []*commodorepb.ActiveIngestStream{{TenantId: tenantID, InternalName: internalName, ClaimToken: claimToken}}
+	if p.publisherAdmissions != nil && len(execution) == 2 {
+		released[0].NodeId, released[0].ControlCellId = execution[0], execution[1]
+	}
 	if _, err := p.commodoreClient.SyncActiveIngestPlacement(ctx, ingestClusterID, nil, released); err != nil {
 		p.logger.WithError(err).WithField("internal_name", internalName).
 			Warn("Failed to release active ingest placement; it will lapse with the lease")

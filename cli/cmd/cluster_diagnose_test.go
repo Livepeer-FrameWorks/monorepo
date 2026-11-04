@@ -142,3 +142,26 @@ func TestMediaDiagnosticScriptRunsDatabaseProbesForExactServices(t *testing.T) {
 		t.Fatal("diagnostic script must retain boundary-aware NaN/Inf detection")
 	}
 }
+
+func TestPublisherDiagnosticsRequireTenantAndExcludeCredentials(t *testing.T) {
+	const tenant = "11111111-1111-1111-1111-111111111111"
+	const stream = "22222222-2222-2222-2222-222222222222"
+	if foghornPublisherDiagnosticSQL(stream, "") != "" || foghornPublisherDiagnosticSQL("", tenant) != "" || foghornPublisherDiagnosticSQL(stream, "tenant'; DROP TABLE") != "" {
+		t.Fatal("publisher diagnostic accepted an unscoped or unsafe query")
+	}
+	sql := foghornPublisherDiagnosticSQL(stream, tenant)
+	for _, scope := range []string{"object.tenant_id='" + tenant + "'", "session.tenant_id='" + tenant + "'", "session.stream_id='" + stream + "'", "source_revision", "lease_release_pending", "valid_until", "default_transaction_read_only"} {
+		if !strings.Contains(sql, scope) {
+			t.Fatalf("missing publisher diagnostic scope/fact: %s", scope)
+		}
+	}
+	for _, secret := range []string{"publishing_credential_sha256", "push_targets", "decklog_trigger", ".payload"} {
+		if strings.Contains(sql, secret) {
+			t.Fatalf("publisher diagnostic exposed protected field %s", secret)
+		}
+	}
+	script := mediaDiagnosticScript([]string{"foghorn"}, []int{18029}, diagnoseOptions{StreamID: stream, TenantID: tenant})
+	if !strings.Contains(script, "FOGHORN_SQL=") || !strings.Contains(script, "tenant-scoped publisher authority and executions") {
+		t.Fatal("media diagnostic did not execute the publisher probe")
+	}
+}

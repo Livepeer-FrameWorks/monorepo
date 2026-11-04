@@ -36,6 +36,16 @@ service InternalService {
   // other sealed admission material.
   rpc CheckStreamKey(ValidateStreamKeyRequest) returns (ValidateStreamKeyResponse);
 
+  // Exclusive ownership under an already published authority pair. These
+  // operations perform no billing, routing or process-configuration RPCs.
+  rpc AcquirePublisherLease(PublisherLeaseRequest) returns (PublisherLeaseResponse);
+  rpc GetPublisherLease(PublisherLeaseRequest) returns (PublisherLeaseResponse);
+  // Renewal of published leases cannot acquire an absent/released owner.
+  rpc RenewPublisherLeases(SyncActiveIngestPlacementRequest) returns (SyncActiveIngestPlacementResponse);
+  // Definitive node-execution abandonment fences even a delayed acquisition
+  // whose reply was lost before the cell persisted a publisher generation.
+  rpc AbandonPublisherLease(AbandonPublisherLeaseRequest) returns (google.protobuf.Empty);
+
   // Stream-key-less admission/materialization authority. Returns the same
   // fact set as ValidateStreamKey (tenant, user, stream IDs, processes JSON,
   // DVR policy, is_recording_enabled, billing flags) but keyed by stream_id
@@ -460,6 +470,43 @@ message ReportMediaAuthorityUseRequest {
 // Source: pkg/api/commodore/types.go lines 12-19
 // ============================================================================
 
+enum PublisherLeaseOutcome {
+  PUBLISHER_LEASE_OUTCOME_UNSPECIFIED = 0;
+  PUBLISHER_LEASE_OUTCOME_ACQUIRED = 1;
+  PUBLISHER_LEASE_OUTCOME_SAME_EXECUTION = 2;
+  PUBLISHER_LEASE_OUTCOME_HELD_BY_OTHER = 3;
+  PUBLISHER_LEASE_OUTCOME_AUTHORITY_STALE = 4;
+  PUBLISHER_LEASE_OUTCOME_DENIED = 5;
+}
+
+message PublisherLeaseRequest {
+  string tenant_id = 1;
+  string stream_id = 2;
+  string internal_name = 3;
+  string cluster_id = 4;
+  string control_cell_id = 5;
+  string execution_token = 6;
+  int64 tenant_authority_version = 7;
+  int64 object_authority_version = 8;
+  bytes tenant_payload_sha256 = 9;
+  bytes object_payload_sha256 = 10;
+  string node_id = 11;
+}
+
+message AbandonPublisherLeaseRequest {
+  string control_cell_id = 1;
+  string node_id = 2;
+  string execution_token = 3;
+}
+
+message PublisherLeaseResponse {
+  PublisherLeaseOutcome outcome = 1;
+  google.protobuf.Timestamp expires_at = 2;
+  // Returned only when the owner belongs to the requesting cluster.
+  string held_execution_token = 3;
+  string reason = 4;
+}
+
 message ValidateStreamKeyRequest {
   string stream_key = 1;
   string cluster_id = 2;  // Cluster where Foghorn is processing this ingest (for stream→cluster tracking)
@@ -473,6 +520,10 @@ message ValidateStreamKeyRequest {
   // never be released (release is owner-fenced) and would hold the stream's placement until it
   // expires. Callers that name no cluster take no claim and need no token.
   string claim_token = 3;
+  // New publisher coordinators bind cold claims to the same execution fence
+  // used by published leases and definitive abandonment.
+  string node_id = 4;
+  string control_cell_id = 5;
 }
 
 // StreamKeyRejectionReason categorizes ValidateStreamKey rejections so
@@ -506,6 +557,8 @@ message ValidateStreamKeyResponse {
   // owner, and — critically — on any response the caller did not receive from Commodore, such as a
   // client-cached admission served during an outage, which took no claim at all.
   bool claim_acquired = 32;
+  // Confirms that node/cell execution abandonment fenced this claiming call.
+  bool publisher_execution_fenced = 38;
   string user_id = 2;                   // json:"user_id,omitempty"
   string tenant_id = 3;                 // json:"tenant_id,omitempty"
   string internal_name = 4;             // json:"internal_name,omitempty"
@@ -774,6 +827,12 @@ message ActiveIngestStream {
   // opaque token, not a connection identity). renew stamps it so a claim it acquires is owned by the
   // live session; release matches on it and clears nothing otherwise.
   string claim_token = 3;
+  // A lease acquired through AcquirePublisherLease only refreshes its exact
+  // recorded owner. Outage admission uses the separate re-assertion contract.
+  bool require_existing_owner = 5;
+  // Present together on execution-aware renewals, including outage adoption.
+  string node_id = 6;
+  string control_cell_id = 7;
 }
 
 message SyncActiveIngestPlacementRequest {
@@ -799,6 +858,8 @@ message SyncActiveIngestPlacementResponse {
   // aggregate count cannot identify the loser after a lease lapse or cross-cell contention.
   repeated ActiveIngestStream renew_refused = 3;
   repeated ActiveIngestStream release_refused = 4;
+  // Distinguishes an execution-aware server from one ignoring additive fields.
+  bool execution_fences_applied = 5;
 }
 
 // ============================================================================

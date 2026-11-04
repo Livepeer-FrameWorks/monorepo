@@ -78,9 +78,8 @@ func withServiceAuth(ctx context.Context) context.Context {
 // timeoutInterceptor bounds every call at the configured timeout.
 //
 // Calls dial with WaitForReady(true), so without a deadline an unreachable
-// Commodore parks the caller indefinitely — including PUSH_REWRITE, which
-// invokes validation on a background context. Applying it here rather than
-// per method means a new call site cannot forget it.
+// Commodore parks a caller without a deadline indefinitely. The SDK maximum
+// bounds such callers; publisher admission supplies its own shorter lifetime.
 //
 // The effective deadline is the sooner of the caller's and the configured
 // maximum: a caller may ask for less time, never more.
@@ -482,11 +481,37 @@ func (c *GRPCClient) ClearStreamActiveCluster(ctx context.Context, streamID, exp
 // one. Release only clears a claim this cluster still holds, so a late close
 // cannot unpin a publisher who has moved on.
 func (c *GRPCClient) SyncActiveIngestPlacement(ctx context.Context, clusterID string, renew, release []*commodorepb.ActiveIngestStream) (*commodorepb.SyncActiveIngestPlacementResponse, error) {
-	return c.internal.SyncActiveIngestPlacement(ctx, &commodorepb.SyncActiveIngestPlacementRequest{
+	response, err := c.internal.SyncActiveIngestPlacement(ctx, &commodorepb.SyncActiveIngestPlacementRequest{
 		ClusterId: clusterID,
 		Renew:     renew,
 		Release:   release,
 	})
+	if err == nil {
+		err = requirePublisherExecutionFences(response, renew)
+	}
+	if err == nil {
+		err = requirePublisherExecutionFences(response, release)
+	}
+	return response, err
+}
+
+// ValidateStreamKeyForPublisherClaim is the cold configuration path for a
+// node-bound execution. An older server must not silently accept unfenced work.
+func (c *GRPCClient) ValidateStreamKeyForPublisherClaim(ctx context.Context, streamKey, clusterID, claimToken, nodeID, cellID string) (*commodorepb.ValidateStreamKeyResponse, error) {
+	response, err := c.internal.ValidateStreamKey(withServiceAuth(ctx), &commodorepb.ValidateStreamKeyRequest{StreamKey: streamKey, ClusterId: clusterID, ClaimToken: claimToken, NodeId: nodeID, ControlCellId: cellID})
+	if err == nil && response.GetValid() && !response.GetPublisherExecutionFenced() {
+		return nil, status.Error(codes.Unimplemented, "publisher execution fencing unavailable")
+	}
+	return response, err
+}
+
+func requirePublisherExecutionFences(response *commodorepb.SyncActiveIngestPlacementResponse, entries []*commodorepb.ActiveIngestStream) error {
+	for _, entry := range entries {
+		if entry.GetNodeId() != "" && !response.GetExecutionFencesApplied() {
+			return status.Error(codes.Unimplemented, "publisher execution renewal fencing unavailable")
+		}
+	}
+	return nil
 }
 
 // ResolveStreamContext returns the admission/materialization fact set for a
@@ -1630,4 +1655,26 @@ func (c *GRPCClient) AdminRetireIngestCell(ctx context.Context, req *commodorepb
 // AdminUnretireIngestCell removes a cell's retirement record. Requires a platform-operator JWT.
 func (c *GRPCClient) AdminUnretireIngestCell(ctx context.Context, req *commodorepb.AdminUnretireIngestCellRequest) (*commodorepb.AdminUnretireIngestCellResponse, error) {
 	return c.user.AdminUnretireIngestCell(ctx, req)
+}
+
+// AcquirePublisherLease takes mutable ownership under an existing signed pair.
+// Lease results are never cached: configuration authority cannot prove exclusivity.
+func (c *GRPCClient) AcquirePublisherLease(ctx context.Context, request *commodorepb.PublisherLeaseRequest) (*commodorepb.PublisherLeaseResponse, error) {
+	return c.internal.AcquirePublisherLease(withServiceAuth(ctx), request)
+}
+
+// RenewPublisherLeases never falls back to the claim-establishing legacy RPC.
+func (c *GRPCClient) RenewPublisherLeases(ctx context.Context, streams []*commodorepb.ActiveIngestStream) (*commodorepb.SyncActiveIngestPlacementResponse, error) {
+	response, err := c.internal.RenewPublisherLeases(withServiceAuth(ctx), &commodorepb.SyncActiveIngestPlacementRequest{Renew: streams})
+	if err == nil {
+		err = requirePublisherExecutionFences(response, streams)
+	}
+	return response, err
+}
+
+// AbandonPublisherLease durably fences a definitive edge refusal, including
+// executions whose acquire reply never reached the cell.
+func (c *GRPCClient) AbandonPublisherLease(ctx context.Context, cellID, nodeID, executionToken string) error {
+	_, err := c.internal.AbandonPublisherLease(withServiceAuth(ctx), &commodorepb.AbandonPublisherLeaseRequest{ControlCellId: cellID, NodeId: nodeID, ExecutionToken: executionToken})
+	return err
 }

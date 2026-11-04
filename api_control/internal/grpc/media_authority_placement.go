@@ -65,7 +65,7 @@ func (s *CommodoreServer) compileObjectPlacement(ctx context.Context, tenant *me
 	if scope.Kind == "stream" {
 		own = proto.CloneOf(snapshot.Own)
 	}
-	if tenant.GetSchemaVersion() != sharedauthority.NodePlacementSchemaVersion && placement.PolicySetHasNodeSelectors(own) {
+	if tenant.GetSchemaVersion() < sharedauthority.NodePlacementSchemaVersion && placement.PolicySetHasNodeSelectors(own) {
 		return fmt.Errorf("%w: stream placement names nodes but the tenant authority has not reached node placement schema", errTenantAuthorityMissing)
 	}
 	object.SchemaVersion = tenant.GetSchemaVersion()

@@ -17,6 +17,8 @@ UPDATE commodore.streams
 SET active_ingest_cluster_id = NULL,
     active_ingest_cluster_updated_at = NOW(),
     active_ingest_claim_id = NULL,
+    active_ingest_node_id = NULL,
+    active_ingest_control_cell_id = NULL,
     updated_at = NOW()
 WHERE id = $1::uuid
   AND tenant_id = $2::uuid
@@ -75,6 +77,8 @@ UPDATE commodore.streams
 SET active_ingest_cluster_id = $1,
     active_ingest_cluster_updated_at = NOW(),
     active_ingest_claim_id = $2,
+    active_ingest_node_id = CASE WHEN active_ingest_cluster_id=$1 AND active_ingest_claim_id=$2 THEN active_ingest_node_id ELSE NULL END,
+    active_ingest_control_cell_id = CASE WHEN active_ingest_cluster_id=$1 AND active_ingest_claim_id=$2 THEN active_ingest_control_cell_id ELSE NULL END,
     updated_at = NOW()
 WHERE id = $3::uuid
   AND tenant_id = $4::uuid

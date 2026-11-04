@@ -25,6 +25,10 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	InternalService_ValidateStreamKey_FullMethodName                  = "/commodore.InternalService/ValidateStreamKey"
 	InternalService_CheckStreamKey_FullMethodName                     = "/commodore.InternalService/CheckStreamKey"
+	InternalService_AcquirePublisherLease_FullMethodName              = "/commodore.InternalService/AcquirePublisherLease"
+	InternalService_GetPublisherLease_FullMethodName                  = "/commodore.InternalService/GetPublisherLease"
+	InternalService_RenewPublisherLeases_FullMethodName               = "/commodore.InternalService/RenewPublisherLeases"
+	InternalService_AbandonPublisherLease_FullMethodName              = "/commodore.InternalService/AbandonPublisherLease"
 	InternalService_ResolveStreamContext_FullMethodName               = "/commodore.InternalService/ResolveStreamContext"
 	InternalService_ListManagedStreams_FullMethodName                 = "/commodore.InternalService/ListManagedStreams"
 	InternalService_ListStreamMonitoring_FullMethodName               = "/commodore.InternalService/ListStreamMonitoring"
@@ -99,6 +103,15 @@ type InternalServiceClient interface {
 	// placement and never returns pull sources, push targets, process config, or
 	// other sealed admission material.
 	CheckStreamKey(ctx context.Context, in *ValidateStreamKeyRequest, opts ...grpc.CallOption) (*ValidateStreamKeyResponse, error)
+	// Exclusive ownership under an already published authority pair. These
+	// operations perform no billing, routing or process-configuration RPCs.
+	AcquirePublisherLease(ctx context.Context, in *PublisherLeaseRequest, opts ...grpc.CallOption) (*PublisherLeaseResponse, error)
+	GetPublisherLease(ctx context.Context, in *PublisherLeaseRequest, opts ...grpc.CallOption) (*PublisherLeaseResponse, error)
+	// Renewal of published leases cannot acquire an absent/released owner.
+	RenewPublisherLeases(ctx context.Context, in *SyncActiveIngestPlacementRequest, opts ...grpc.CallOption) (*SyncActiveIngestPlacementResponse, error)
+	// Definitive node-execution abandonment fences even a delayed acquisition
+	// whose reply was lost before the cell persisted a publisher generation.
+	AbandonPublisherLease(ctx context.Context, in *AbandonPublisherLeaseRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Stream-key-less admission/materialization authority. Returns the same
 	// fact set as ValidateStreamKey (tenant, user, stream IDs, processes JSON,
 	// DVR policy, is_recording_enabled, billing flags) but keyed by stream_id
@@ -367,6 +380,46 @@ func (c *internalServiceClient) CheckStreamKey(ctx context.Context, in *Validate
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ValidateStreamKeyResponse)
 	err := c.cc.Invoke(ctx, InternalService_CheckStreamKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) AcquirePublisherLease(ctx context.Context, in *PublisherLeaseRequest, opts ...grpc.CallOption) (*PublisherLeaseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PublisherLeaseResponse)
+	err := c.cc.Invoke(ctx, InternalService_AcquirePublisherLease_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) GetPublisherLease(ctx context.Context, in *PublisherLeaseRequest, opts ...grpc.CallOption) (*PublisherLeaseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PublisherLeaseResponse)
+	err := c.cc.Invoke(ctx, InternalService_GetPublisherLease_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) RenewPublisherLeases(ctx context.Context, in *SyncActiveIngestPlacementRequest, opts ...grpc.CallOption) (*SyncActiveIngestPlacementResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SyncActiveIngestPlacementResponse)
+	err := c.cc.Invoke(ctx, InternalService_RenewPublisherLeases_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) AbandonPublisherLease(ctx context.Context, in *AbandonPublisherLeaseRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, InternalService_AbandonPublisherLease_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -976,6 +1029,15 @@ type InternalServiceServer interface {
 	// placement and never returns pull sources, push targets, process config, or
 	// other sealed admission material.
 	CheckStreamKey(context.Context, *ValidateStreamKeyRequest) (*ValidateStreamKeyResponse, error)
+	// Exclusive ownership under an already published authority pair. These
+	// operations perform no billing, routing or process-configuration RPCs.
+	AcquirePublisherLease(context.Context, *PublisherLeaseRequest) (*PublisherLeaseResponse, error)
+	GetPublisherLease(context.Context, *PublisherLeaseRequest) (*PublisherLeaseResponse, error)
+	// Renewal of published leases cannot acquire an absent/released owner.
+	RenewPublisherLeases(context.Context, *SyncActiveIngestPlacementRequest) (*SyncActiveIngestPlacementResponse, error)
+	// Definitive node-execution abandonment fences even a delayed acquisition
+	// whose reply was lost before the cell persisted a publisher generation.
+	AbandonPublisherLease(context.Context, *AbandonPublisherLeaseRequest) (*emptypb.Empty, error)
 	// Stream-key-less admission/materialization authority. Returns the same
 	// fact set as ValidateStreamKey (tenant, user, stream IDs, processes JSON,
 	// DVR policy, is_recording_enabled, billing flags) but keyed by stream_id
@@ -1236,6 +1298,18 @@ func (UnimplementedInternalServiceServer) ValidateStreamKey(context.Context, *Va
 func (UnimplementedInternalServiceServer) CheckStreamKey(context.Context, *ValidateStreamKeyRequest) (*ValidateStreamKeyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CheckStreamKey not implemented")
 }
+func (UnimplementedInternalServiceServer) AcquirePublisherLease(context.Context, *PublisherLeaseRequest) (*PublisherLeaseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AcquirePublisherLease not implemented")
+}
+func (UnimplementedInternalServiceServer) GetPublisherLease(context.Context, *PublisherLeaseRequest) (*PublisherLeaseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPublisherLease not implemented")
+}
+func (UnimplementedInternalServiceServer) RenewPublisherLeases(context.Context, *SyncActiveIngestPlacementRequest) (*SyncActiveIngestPlacementResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RenewPublisherLeases not implemented")
+}
+func (UnimplementedInternalServiceServer) AbandonPublisherLease(context.Context, *AbandonPublisherLeaseRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method AbandonPublisherLease not implemented")
+}
 func (UnimplementedInternalServiceServer) ResolveStreamContext(context.Context, *ResolveStreamContextRequest) (*ResolveStreamContextResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveStreamContext not implemented")
 }
@@ -1466,6 +1540,78 @@ func _InternalService_CheckStreamKey_Handler(srv interface{}, ctx context.Contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InternalServiceServer).CheckStreamKey(ctx, req.(*ValidateStreamKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_AcquirePublisherLease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PublisherLeaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).AcquirePublisherLease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_AcquirePublisherLease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).AcquirePublisherLease(ctx, req.(*PublisherLeaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_GetPublisherLease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PublisherLeaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).GetPublisherLease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_GetPublisherLease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).GetPublisherLease(ctx, req.(*PublisherLeaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_RenewPublisherLeases_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SyncActiveIngestPlacementRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).RenewPublisherLeases(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_RenewPublisherLeases_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).RenewPublisherLeases(ctx, req.(*SyncActiveIngestPlacementRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_AbandonPublisherLease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AbandonPublisherLeaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).AbandonPublisherLease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_AbandonPublisherLease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).AbandonPublisherLease(ctx, req.(*AbandonPublisherLeaseRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2546,6 +2692,22 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CheckStreamKey",
 			Handler:    _InternalService_CheckStreamKey_Handler,
+		},
+		{
+			MethodName: "AcquirePublisherLease",
+			Handler:    _InternalService_AcquirePublisherLease_Handler,
+		},
+		{
+			MethodName: "GetPublisherLease",
+			Handler:    _InternalService_GetPublisherLease_Handler,
+		},
+		{
+			MethodName: "RenewPublisherLeases",
+			Handler:    _InternalService_RenewPublisherLeases_Handler,
+		},
+		{
+			MethodName: "AbandonPublisherLease",
+			Handler:    _InternalService_AbandonPublisherLease_Handler,
 		},
 		{
 			MethodName: "ResolveStreamContext",

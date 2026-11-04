@@ -17,13 +17,13 @@ func supportedSchema(version uint32) bool {
 // IsPlacementSchema reports whether a payload schema carries placement policy.
 // Schema 3 differs from schema 2 only in admitting node selectors.
 func IsPlacementSchema(version uint32) bool {
-	return version == PlacementSchemaVersion || version == NodePlacementSchemaVersion
+	return version == PlacementSchemaVersion || version == NodePlacementSchemaVersion || version == PublisherAdmissionSchemaVersion
 }
 
 // validateNodeSelectorSchema keeps node IDs out of schema-2 payloads: a reader
 // that attested only schema 2 rejects the unknown selector field outright.
 func validateNodeSelectorSchema(version uint32, set *placementpb.PolicySet) error {
-	if version != NodePlacementSchemaVersion && placement.PolicySetHasNodeSelectors(set) {
+	if version < NodePlacementSchemaVersion && placement.PolicySetHasNodeSelectors(set) {
 		return fmt.Errorf("%w: node placement selectors require schema %d", ErrUnknownSchema, NodePlacementSchemaVersion)
 	}
 	return nil

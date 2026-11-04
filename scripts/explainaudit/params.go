@@ -176,6 +176,11 @@ func (b *binder) bind(text string, names []string, types []string) []paramBindin
 	for i, typ := range types {
 		n := i + 1
 		pb := paramBinding{Index: n, Type: typ}
+		if fixture := publisherFixtureFor(b.queryID, b.now); fixture != nil && n == 1 && typ == "jsonb" {
+			pb.Source, pb.Value = "publisher admission fixture", fixture.request()
+			out[i] = pb
+			continue
+		}
 		if name := nameAt(names, i); name == "claim_bucket" || name == "claim_buckets" {
 			pb.Source, pb.Value = "name "+name, "0"
 			if name == "claim_buckets" {

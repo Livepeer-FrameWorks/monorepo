@@ -328,6 +328,9 @@ message MediaCellPlacementCapability {
   // renewing an unused object only when every cell it is delivered to reports
   // use; a cell that does not would let an object in use go cold.
   bool use_reports_ready = 6;
+  // Every live enforcing replica reads schema 4 and implements complete local
+  // publisher configuration with atomic durable admission.
+  bool publisher_admission_ready = 7;
 }
 
 message InvalidatePlaybackAuthRequest {

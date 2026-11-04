@@ -16,6 +16,7 @@ import (
 	"frameworks/cli/pkg/ssh"
 	"frameworks/cli/pkg/system"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 
 	"github.com/spf13/cobra"
 )
@@ -578,6 +579,7 @@ func mediaDiagnosticScript(services []string, ports []int, opts diagnoseOptions)
 	streamID := safeDiagnosticValue(opts.StreamID)
 	tenantID := safeDiagnosticValue(opts.TenantID)
 	streamSQL := commodoreStreamDiagnosticSQL(streamID, tenantID)
+	foghornSQL := foghornPublisherDiagnosticSQL(streamID, tenantID)
 	quartermasterSQL := quartermasterMediaDiagnosticSQL()
 
 	return fmt.Sprintf(`set +e
@@ -585,6 +587,7 @@ SINCE=%s
 STREAM_ID=%s
 TENANT_ID=%s
 STREAM_SQL=%s
+FOGHORN_SQL=%s
 QMASTER_SQL=%s
 %s
 echo "== host =="
@@ -614,6 +617,21 @@ for svc in %s; do
     journalctl -u "${unit}" --since "${SINCE}" --no-pager 2>/dev/null \
       | grep -F "${STREAM_ID}" \
       | tail -n 20 || true
+  fi
+  if [ "${svc}" = foghorn ] && [ -n "${FOGHORN_SQL}" ]; then
+    echo "== tenant-scoped publisher authority and executions =="
+    if [ -r /etc/frameworks/foghorn.env ]; then
+      set -a
+      . /etc/frameworks/foghorn.env
+      set +a
+      if [ -n "${DATABASE_URL}" ] && command -v psql >/dev/null 2>&1; then
+        psql "$(fw_libpq_url "${DATABASE_URL}")" -X -P pager=off -A -F ' | ' -c "${FOGHORN_SQL}" 2>&1 || true
+      else
+        echo "psql or DATABASE_URL unavailable"
+      fi
+    else
+      echo "/etc/frameworks/foghorn.env unavailable"
+    fi
   fi
 done
 echo "== decklog certificate SANs =="
@@ -652,7 +670,7 @@ if printf '%%s\n' %s | grep -qx commodore && [ -n "${STREAM_SQL}" ]; then
     echo "/etc/frameworks/commodore.env unavailable"
   fi
 fi
-`, ssh.ShellQuote(since), ssh.ShellQuote(streamID), ssh.ShellQuote(tenantID), ssh.ShellQuote(streamSQL), ssh.ShellQuote(quartermasterSQL), diagnosticLibpqURLShellFunc, ssh.ShellQuote(portRegex), strings.Join(quotedServices, " "), strings.Join(quotedServices, " "), strings.Join(quotedServices, " "))
+`, ssh.ShellQuote(since), ssh.ShellQuote(streamID), ssh.ShellQuote(tenantID), ssh.ShellQuote(streamSQL), ssh.ShellQuote(foghornSQL), ssh.ShellQuote(quartermasterSQL), diagnosticLibpqURLShellFunc, ssh.ShellQuote(portRegex), strings.Join(quotedServices, " "), strings.Join(quotedServices, " "), strings.Join(quotedServices, " "))
 }
 
 // diagnosticLibpqURLShellFunc defines fw_libpq_url for host-side probes that
@@ -683,9 +701,42 @@ func commodoreStreamDiagnosticSQL(streamID, tenantID string) string {
 	if tenantID != "" {
 		where += fmt.Sprintf(" AND s.tenant_id = '%s'", tenantID)
 	}
-	return fmt.Sprintf(`SELECT s.id, s.tenant_id, s.user_id, s.internal_name, s.playback_id, s.ingest_mode, s.active_ingest_cluster_id, s.active_ingest_cluster_updated_at, s.created_at, s.updated_at
+	return fmt.Sprintf(`SELECT s.id, s.tenant_id, s.user_id, s.internal_name, s.playback_id, s.ingest_mode, s.active_ingest_cluster_id, s.active_ingest_cluster_updated_at, s.active_ingest_claim_id AS publisher_execution,
+       s.active_ingest_cluster_updated_at + INTERVAL '%d seconds' AS publisher_lease_expires_at, s.created_at, s.updated_at
 FROM commodore.streams s
-WHERE %s;`, where)
+WHERE %s;`, int64(streamident.ActiveIngestLease.Seconds()), where)
+}
+
+// foghornPublisherDiagnosticSQL requires both resource and tenant identity.
+// Payloads, publishing credentials and protected output configuration are excluded.
+func foghornPublisherDiagnosticSQL(streamID, tenantID string) string {
+	streamID, tenantID = safeDiagnosticValue(streamID), safeDiagnosticValue(tenantID)
+	if streamID == "" || tenantID == "" {
+		return ""
+	}
+	return fmt.Sprintf(`SET default_transaction_read_only=on;
+SET statement_timeout='20s';
+SELECT object.authority_id, object.authority_version AS object_version,
+       tenant.authority_version AS tenant_version, object.local_ingest_ready AS object_ready,
+       tenant.local_ingest_ready AS tenant_ready, object_authority.refresh_after AS object_refresh_after,
+       object_authority.valid_until AS object_valid_until, tenant_authority.valid_until AS tenant_valid_until
+FROM foghorn.media_object_authority_projection object
+JOIN foghorn.tenant_authority_projection tenant ON tenant.tenant_id=object.tenant_id
+JOIN foghorn.media_authorities object_authority ON object_authority.authority_kind='media_object'
+ AND object_authority.authority_id=object.authority_id AND object_authority.authority_version=object.authority_version
+JOIN foghorn.media_authorities tenant_authority ON tenant_authority.authority_kind='tenant'
+ AND tenant_authority.authority_id=tenant.tenant_id::text AND tenant_authority.authority_version=tenant.authority_version
+WHERE object.tenant_id='%[1]s'::uuid AND object.authority_id='live_stream:%[2]s';
+SELECT session.id AS generation, session.node_id, session.start_trigger_uuid AS execution,
+       session.ingest_cluster_id, session.source_revision, session.projection_state, session.ended_reason,
+       session.started_at, session.ended_at, session.media_authority_version, session.tenant_authority_version,
+       session.publisher_admission_version, session.publisher_lease_strict_owner,
+       (abandoned.node_id IS NOT NULL) AS abandoned,
+       (session.publisher_admission_version=1 AND session.ended_at IS NOT NULL AND session.publisher_lease_released_at IS NULL) AS lease_release_pending
+FROM foghorn.ingest_sessions session
+LEFT JOIN foghorn.ingest_admission_abandonments abandoned ON abandoned.node_id=session.node_id AND abandoned.start_trigger_uuid=session.start_trigger_uuid
+WHERE session.tenant_id='%[1]s'::uuid AND session.stream_id='%[2]s'::uuid
+ORDER BY session.started_at DESC LIMIT 20;`, tenantID, streamID)
 }
 
 func quartermasterMediaDiagnosticSQL() string {

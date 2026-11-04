@@ -1300,8 +1300,11 @@ type MediaCellPlacementCapability struct {
 	// renewing an unused object only when every cell it is delivered to reports
 	// use; a cell that does not would let an object in use go cold.
 	UseReportsReady bool `protobuf:"varint,6,opt,name=use_reports_ready,json=useReportsReady,proto3" json:"use_reports_ready,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Every live enforcing replica reads schema 4 and implements complete local
+	// publisher configuration with atomic durable admission.
+	PublisherAdmissionReady bool `protobuf:"varint,7,opt,name=publisher_admission_ready,json=publisherAdmissionReady,proto3" json:"publisher_admission_ready,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *MediaCellPlacementCapability) Reset() {
@@ -1372,6 +1375,13 @@ func (x *MediaCellPlacementCapability) GetLongValidityReady() bool {
 func (x *MediaCellPlacementCapability) GetUseReportsReady() bool {
 	if x != nil {
 		return x.UseReportsReady
+	}
+	return false
+}
+
+func (x *MediaCellPlacementCapability) GetPublisherAdmissionReady() bool {
+	if x != nil {
+		return x.PublisherAdmissionReady
 	}
 	return false
 }
@@ -1828,14 +1838,15 @@ const file_foghorn_proto_rawDesc = "" +
 	"\x11authority_version\x18\x04 \x01(\x04R\x10authorityVersion\x12\x1f\n" +
 	"\vrefresh_due\x18\x05 \x01(\bR\n" +
 	"refreshDue\x12X\n" +
-	"\x14placement_capability\x18\x06 \x01(\v2%.foghorn.MediaCellPlacementCapabilityR\x13placementCapability\"\xba\x02\n" +
+	"\x14placement_capability\x18\x06 \x01(\v2%.foghorn.MediaCellPlacementCapabilityR\x13placementCapability\"\xf6\x02\n" +
 	"\x1cMediaCellPlacementCapability\x12:\n" +
 	"\x19supported_schema_versions\x18\x01 \x03(\rR\x17supportedSchemaVersions\x12+\n" +
 	"\x11enforcement_ready\x18\x02 \x01(\bR\x10enforcementReady\x12#\n" +
 	"\rlive_replicas\x18\x03 \x01(\rR\fliveReplicas\x120\n" +
 	"\x14node_placement_ready\x18\x04 \x01(\bR\x12nodePlacementReady\x12.\n" +
 	"\x13long_validity_ready\x18\x05 \x01(\bR\x11longValidityReady\x12*\n" +
-	"\x11use_reports_ready\x18\x06 \x01(\bR\x0fuseReportsReady\"\xc6\x01\n" +
+	"\x11use_reports_ready\x18\x06 \x01(\bR\x0fuseReportsReady\x12:\n" +
+	"\x19publisher_admission_ready\x18\a \x01(\bR\x17publisherAdmissionReady\"\xc6\x01\n" +
 	"\x1dInvalidatePlaybackAuthRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12%\n" +
 	"\x0einternal_names\x18\x02 \x03(\tR\rinternalNames\x12\x16\n" +

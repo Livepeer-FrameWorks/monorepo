@@ -19,6 +19,11 @@ const (
 	// A decision waits this long for an authority the cell does not hold. It is
 	// spent inside a blocking trigger, whose whole budget is four seconds.
 	authorityFetchTimeout = 2 * time.Second
+	// One fill includes Commodore's twenty-second compilation lifetime and
+	// application of the signed pair over the supported WAN database link.
+	// Waiters keep their own shorter deadline.
+	authorityFillLifetime    = 30 * time.Second
+	authorityFillConcurrency = 64
 	// How long "no such object" is remembered, so a scanner guessing names costs
 	// one request per name per window.
 	authorityFetchNotFoundTTL = 30 * time.Second
@@ -121,6 +126,7 @@ type fetchCoordinator struct {
 	remembered  map[string]time.Time
 	group       singleflight.Group
 	asyncActive int
+	fillSlots   chan struct{}
 }
 
 // SetAuthorityFetcher installs how this cell asks for an authority it does not
@@ -233,9 +239,21 @@ func (s *Store) fetch(ctx context.Context, lookup AuthorityLookup) (applied bool
 	case remembered:
 		return false, errAuthorityFetchRemembered
 	}
+	s.fetcher.mu.Lock()
+	if s.fetcher.fillSlots == nil {
+		s.fetcher.fillSlots = make(chan struct{}, authorityFillConcurrency)
+	}
+	fillSlots := s.fetcher.fillSlots
+	s.fetcher.mu.Unlock()
 	shared := s.fetcher.group.DoChan(key, func() (any, error) {
+		select {
+		case fillSlots <- struct{}{}:
+			defer func() { <-fillSlots }()
+		default:
+			return false, errors.Join(ErrAuthorityFetchUnavailable, errors.New("authority fill concurrency exhausted"))
+		}
 		// The fetch belongs to every caller waiting on it, not to the first one.
-		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), authorityFetchTimeout)
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), authorityFillLifetime)
 		defer cancel()
 		generation := s.fence.confirmationGeneration()
 		startedAt := s.now().UTC()
@@ -287,9 +305,11 @@ func (s *Store) fetch(ctx context.Context, lookup AuthorityLookup) (applied bool
 	})
 	// A caller whose own deadline ends first stops waiting; the fetch carries on
 	// for the others waiting on it, and what it applies is there for the next read.
+	waitCtx, stopWait := context.WithTimeout(ctx, authorityFetchTimeout)
+	defer stopWait()
 	select {
-	case <-ctx.Done():
-		return false, errors.Join(ErrAuthorityFetchUnavailable, ErrAuthorityFetchFailed, ctx.Err())
+	case <-waitCtx.Done():
+		return false, errors.Join(ErrAuthorityFetchUnavailable, ErrAuthorityFetchFailed, waitCtx.Err())
 	case outcome := <-shared:
 		advanced, _ := outcome.Val.(bool) //nolint:errcheck // the group only ever returns a bool
 		if outcome.Err != nil {

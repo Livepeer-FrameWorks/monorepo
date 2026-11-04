@@ -526,6 +526,33 @@ func (q *Queries) IngestAdmissionAbandoned(ctx context.Context, arg IngestAdmiss
 	return exists, err
 }
 
+const ingestAdmissionExecutionPIDMismatch = `-- name: IngestAdmissionExecutionPIDMismatch :one
+SELECT EXISTS (
+    SELECT 1 FROM foghorn.ingest_sessions session
+    WHERE session.node_id = $1 AND session.start_trigger_uuid = $2
+      AND session.connector_pid <> $3
+    UNION ALL
+    SELECT 1 FROM foghorn.ingest_admission_abandonments marker
+    WHERE marker.node_id = $1 AND marker.start_trigger_uuid = $2
+      AND marker.connector_pid <> $3
+)
+`
+
+type IngestAdmissionExecutionPIDMismatchParams struct {
+	NodeID           string `db:"node_id" json:"node_id"`
+	StartTriggerUuid string `db:"start_trigger_uuid" json:"start_trigger_uuid"`
+	ConnectorPid     int64  `db:"connector_pid" json:"connector_pid"`
+}
+
+// Node-scoped execution identity is resolved before tenant discovery. A report
+// for another connector must not retire an execution that this node accepted.
+func (q *Queries) IngestAdmissionExecutionPIDMismatch(ctx context.Context, arg IngestAdmissionExecutionPIDMismatchParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, ingestAdmissionExecutionPIDMismatch, arg.NodeID, arg.StartTriggerUuid, arg.ConnectorPid)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const ingestCloseTombstoneExists = `-- name: IngestCloseTombstoneExists :one
 SELECT EXISTS (SELECT 1 FROM foghorn.ingest_close_tombstones WHERE tenant_id  =  $1::uuid AND node_id  =  $2 AND connector_pid  =  $3 AND stream_internal_name  =  $4 AND close_unix_millis >= $5)
 `

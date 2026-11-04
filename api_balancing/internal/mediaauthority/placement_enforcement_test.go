@@ -96,7 +96,7 @@ func TestRecordReplicaHeartbeatWritesCurrentEnforcementState(t *testing.T) {
 		withPlacementEnforced(t, enforced)
 		store, mock, closeDB := newFixtureStore(t, "cell-a")
 		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO foghorn.control_replicas")).
-			WithArgs("replica-1", "v0.3.0", int32(sharedauthority.NodePlacementSchemaVersion), enforced, int32(replicaAuthorityFeatureLevel)).WillReturnResult(sqlmock.NewResult(1, 1))
+			WithArgs("replica-1", "v0.3.0", int32(sharedauthority.PublisherAdmissionSchemaVersion), enforced, int32(replicaAuthorityFeatureLevel)).WillReturnResult(sqlmock.NewResult(1, 1))
 		if err := store.RecordReplicaHeartbeat(context.Background(), " replica-1 ", "v0.3.0"); err != nil {
 			t.Fatal(err)
 		}
@@ -154,5 +154,24 @@ func TestPromotePlacementReadinessOnlyForSchema2OnEnforcingReplica(t *testing.T)
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestPublisherAdmissionCapabilityRequiresEveryLiveReplica(t *testing.T) {
+	withPlacementEnforced(t, true)
+	for _, schema := range []int32{3, 4} {
+		store, mock, closeDB := newFixtureStore(t, "cell-a")
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)::bigint AS live_replicas")).WithArgs(int32(ReplicaLivenessWindow.Seconds())).WillReturnRows(sqlmock.NewRows([]string{"live_replicas", "min_schema_version", "all_enforced", "min_authority_feature_level"}).AddRow(2, schema, true, 1))
+		capability, err := store.CellPlacementCapability(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if capability.PublisherAdmissionReady != (schema == 4) || capability.Proto().GetPublisherAdmissionReady() != (schema == 4) {
+			t.Fatalf("mixed replica cohort advertised publisher admission: %+v", capability)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+		closeDB()
 	}
 }

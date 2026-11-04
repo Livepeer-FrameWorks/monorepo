@@ -70,3 +70,32 @@ func TestPlacementCellsReadyRequiresEveryTargetCell(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPublisherAdmissionSchemaRequiresEveryTargetCell(t *testing.T) {
+	rows := map[string]commodoredb.ListMediaCellPlacementCapabilitiesRow{
+		"new": {CellID: "new", MaxSchemaVersion: 4, EnforcementReady: true},
+		"old": {CellID: "old", MaxSchemaVersion: 3, EnforcementReady: true},
+	}
+	attestations := placementCellAttestations{cells: []string{"new", "old"}, rows: rows}
+	if schema := attestations.schema(); schema != 3 {
+		t.Fatalf("publisher fields escaped to an old cell: schema=%d", schema)
+	}
+	rows["old"] = commodoredb.ListMediaCellPlacementCapabilitiesRow{CellID: "old", MaxSchemaVersion: 4, EnforcementReady: true}
+	if schema := attestations.schema(); schema != 4 {
+		t.Fatalf("all-new cells did not activate complete publisher authority: %d", schema)
+	}
+	rows["old"] = commodoredb.ListMediaCellPlacementCapabilitiesRow{CellID: "old", MaxSchemaVersion: 4, EnforcementReady: false}
+	if schema := attestations.schema(); schema != 0 {
+		t.Fatalf("non-enforcing cell enabled publisher authority: %d", schema)
+	}
+	for _, publisherReady := range []bool{false, true} {
+		schema, ready, _ := attestedCellPlacementCapability(&foghornpb.MediaCellPlacementCapability{SupportedSchemaVersions: []uint32{1, 2}, EnforcementReady: true, LiveReplicas: 2, NodePlacementReady: true, PublisherAdmissionReady: publisherReady})
+		want := int32(3)
+		if publisherReady {
+			want = 4
+		}
+		if !ready || schema != want {
+			t.Fatalf("publisher attestation=%t schema=%d ready=%t", publisherReady, schema, ready)
+		}
+	}
+}

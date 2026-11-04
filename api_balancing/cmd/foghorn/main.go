@@ -557,6 +557,7 @@ func main() {
 		artifactDeletionOutcomes.WithLabelValues(outcome).Add(0)
 	}
 	control.SetMetrics(&control.ControlMetrics{
+		PublisherAdmissionDuration: metricsCollector.NewHistogram("publisher_admission_duration_seconds", "Publisher admission phase duration including pool and lock waits", []string{"phase", "outcome"}, []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 3, 4, 8}),
 		MistTriggers: metricsCollector.NewCounter(
 			"control_mist_triggers_total",
 			"MistTrigger messages received/processed over the HelmsmanControl stream",
@@ -1170,6 +1171,7 @@ func main() {
 		[]string{"reason", "service"},
 	)
 	triggerProcessor := triggers.NewProcessor(logger, commodoreClient, decklogClient, lb, geoipReader)
+	triggerProcessor.SetPublisherAdmissionRepository(control.NewPublisherAdmissionRepository(db))
 	control.SetTerminalPushTargetActivationHandler(triggerProcessor.HandleTerminalPushTargetActivation)
 	control.SetPushTargetActivationResultHandler(triggerProcessor.HandlePushTargetActivationResult)
 	control.SetPushTargetDeactivationHandler(triggerProcessor.HandlePushTargetDeactivation)
@@ -2260,6 +2262,13 @@ func main() {
 	ingestSessionReaperJob := jobs.NewIngestSessionReaperJob(jobs.IngestSessionReaperConfig{
 		Logger: logger,
 	})
+	var publisherRecoveryLeader func() bool
+	if peerManager != nil {
+		publisherRecoveryLeader = peerManager.IsLeader
+	}
+	publisherAdmissionRecovery := jobs.NewPublisherAdmissionRecoveryJob(commodoreClient, logger, publisherRecoveryLeader)
+	publisherAdmissionRecovery.Start()
+	defer publisherAdmissionRecovery.Stop()
 	ingestSessionReaperJob.Start()
 	defer ingestSessionReaperJob.Stop()
 
@@ -2300,10 +2309,12 @@ func main() {
 			out := make([]jobs.LiveIngest, 0, len(live))
 			for _, s := range live {
 				out = append(out, jobs.LiveIngest{
-					TenantID:     s.TenantID,
-					InternalName: s.InternalName,
-					ClusterID:    s.ClusterID,
-					ClaimToken:   s.ClaimToken,
+					TenantID:         s.TenantID,
+					InternalName:     s.InternalName,
+					ClusterID:        s.ClusterID,
+					ClaimToken:       s.ClaimToken,
+					StrictLeaseOwner: s.StrictLeaseOwner,
+					NodeID:           s.OwnerNodeID, ControlCellID: controlCellID,
 				})
 			}
 			return out, nil

@@ -12,25 +12,26 @@ import (
 const listActiveIngestSessionClaims = `-- name: ListActiveIngestSessionClaims :many
 SELECT tenant_id::text AS tenant_id, stream_internal_name, node_id,
        COALESCE(ingest_cluster_id, '')::text AS ingest_cluster_id,
-       start_trigger_uuid, id::text AS generation
+       start_trigger_uuid, id::text AS generation, publisher_lease_strict_owner
 FROM foghorn.ingest_sessions
 WHERE ended_at IS NULL AND projection_state = 'active'
 UNION ALL
 SELECT tenant_id::text AS tenant_id, stream_internal_name, node_id,
        COALESCE(ingest_cluster_id, '')::text AS ingest_cluster_id,
-       start_trigger_uuid, id::text AS generation
+       start_trigger_uuid, id::text AS generation, publisher_lease_strict_owner
 FROM foghorn.ingest_sessions
 WHERE ended_at IS NULL AND projection_state = 'pending'
   AND started_at >= NOW() - ($1::bigint * INTERVAL '1 millisecond')
 `
 
 type ListActiveIngestSessionClaimsRow struct {
-	TenantID           string `db:"tenant_id" json:"tenant_id"`
-	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
-	NodeID             string `db:"node_id" json:"node_id"`
-	IngestClusterID    string `db:"ingest_cluster_id" json:"ingest_cluster_id"`
-	StartTriggerUuid   string `db:"start_trigger_uuid" json:"start_trigger_uuid"`
-	Generation         string `db:"generation" json:"generation"`
+	TenantID                  string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName        string `db:"stream_internal_name" json:"stream_internal_name"`
+	NodeID                    string `db:"node_id" json:"node_id"`
+	IngestClusterID           string `db:"ingest_cluster_id" json:"ingest_cluster_id"`
+	StartTriggerUuid          string `db:"start_trigger_uuid" json:"start_trigger_uuid"`
+	Generation                string `db:"generation" json:"generation"`
+	PublisherLeaseStrictOwner bool   `db:"publisher_lease_strict_owner" json:"publisher_lease_strict_owner"`
 }
 
 // A pending session holds its claim only while its admission can still be answered; past the
@@ -53,6 +54,7 @@ func (q *Queries) ListActiveIngestSessionClaims(ctx context.Context, admissionWi
 			&i.IngestClusterID,
 			&i.StartTriggerUuid,
 			&i.Generation,
+			&i.PublisherLeaseStrictOwner,
 		); err != nil {
 			return nil, err
 		}

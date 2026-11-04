@@ -21,6 +21,85 @@ type PlacementPair struct {
 	Object MediaObjectSnapshot
 }
 
+// PublishingPair resolves the credential and its tenant in one database snapshot.
+// It seeds the existing placement cache so downstream policy reads use the same
+// pair, with the same invalidation and restore-fence rules.
+func (s *Store) PublishingPair(ctx context.Context, credential string) (PlacementPair, error) {
+	if credential == "" {
+		return PlacementPair{}, errors.New("publishing credential is required")
+	}
+	pair, _, err := s.PublishingAdmission(ctx, credential, "", "")
+	return pair, err
+}
+
+// PublishingAdmission also reads the execution's original cluster under the
+// signed object's tenant, avoiding an extra WAN exchange before taking a lease.
+func (s *Store) PublishingAdmission(ctx context.Context, credential, nodeID, triggerUUID string) (PlacementPair, string, error) {
+	started, epoch := s.now(), s.fence.changeEpoch()
+	var changes uint64
+	if c := s.pairs; c != nil {
+		c.mu.Lock()
+		changes = c.changes
+		c.mu.Unlock()
+	}
+	preflight, err := foghorndb.New(s.db).GetPublisherAuthorityPreflight(ctx, foghorndb.GetPublisherAuthorityPreflightParams{
+		CredentialDigest: sharedauthority.PublishingCredentialDigest(credential), NodeID: nodeID, TriggerUuid: triggerUUID,
+	})
+	if err != nil {
+		return PlacementPair{}, "", err
+	}
+	row := foghorndb.GetLocalPlacementAuthorityPairRow{
+		ObjectPayload:                 preflight.ObjectPayload,
+		ObjectPayloadSha256:           preflight.ObjectPayloadSha256,
+		ObjectRefreshAfter:            preflight.ObjectRefreshAfter,
+		ObjectValidUntil:              preflight.ObjectValidUntil,
+		ObjectAuthorityID:             preflight.ObjectAuthorityID,
+		ObjectAuthorityVersion:        preflight.ObjectAuthorityVersion,
+		ObjectReadReady:               preflight.ObjectReadReady,
+		ObjectIngestReady:             preflight.ObjectIngestReady,
+		ObjectSourceReady:             preflight.ObjectSourceReady,
+		TenantPayload:                 preflight.TenantPayload,
+		TenantPayloadSha256:           preflight.TenantPayloadSha256,
+		TenantRefreshAfter:            preflight.TenantRefreshAfter,
+		TenantValidUntil:              preflight.TenantValidUntil,
+		TenantAuthorityVersion:        preflight.TenantAuthorityVersion,
+		TenantReadReady:               preflight.TenantReadReady,
+		TenantIngestReady:             preflight.TenantIngestReady,
+		TenantSourceReady:             preflight.TenantSourceReady,
+		TenantPreviousPlacementPolicy: preflight.TenantPreviousPlacementPolicy,
+		TenantPlacementSupersededAt:   preflight.TenantPlacementSupersededAt,
+		ObjectWithheldByTenantRevival: preflight.ObjectWithheldByTenantRevival,
+	}
+	object := &mediaauthoritypb.MediaObjectAuthority{}
+	if decodeErr := proto.Unmarshal(row.ObjectPayload, object); decodeErr != nil {
+		return PlacementPair{}, "", decodeErr
+	}
+	stored, err := decodePlacementPair(row, object.GetTenantId(), row.ObjectAuthorityID, object.GetInternalName())
+	if err != nil {
+		return PlacementPair{}, "", err
+	}
+	if !sharedauthority.VerifyPublishingCredential(credential, object.GetLiveStream().GetPublishingCredentialSha256()) {
+		return PlacementPair{}, "", errors.New("publishing authority credential mismatch")
+	}
+	if c := s.pairs; c != nil && s.usablePlacement(stored, s.now().UTC()) {
+		c.mu.Lock()
+		c.sweepLocked(s.now())
+		if epoch == s.fence.changeEpoch() && changes == c.changes && s.now().Sub(started) < placementPairCacheTTL {
+			tenant := c.tenantLocked(object.GetTenantId())
+			_, replacing := tenant.entries[object.GetInternalName()]
+			if replacing || c.entries < placementPairCacheMaxEntries {
+				if !replacing {
+					c.entries++
+				}
+				tenant.entries[object.GetInternalName()] = &pairCacheEntry{stored: stored, loadedAt: started, fenceEpoch: epoch}
+			}
+			c.pruneTenantLocked(object.GetTenantId(), tenant)
+		}
+		c.mu.Unlock()
+	}
+	return s.placementAtUse(stored, s.now().UTC(), false), preflight.SessionClusterID, nil
+}
+
 // PlacementParentLagWindow is how long after a tenant authority raised its
 // placement revision an object still compiled against the previous revision is
 // evaluated against that previous policy. Commodore recompiles the tenant's

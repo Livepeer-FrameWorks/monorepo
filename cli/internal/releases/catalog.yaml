@@ -163,5 +163,8 @@ releases:
   - version: v0.3.13
     min_cli_version: v0.3.13-rc1
   - version: v0.3.14
+    rollback_disabled:
+      - commodore
+      - foghorn
     capabilities: [accounts_bootstrap]
     min_cli_version: v0.3.14-rc3

@@ -3,6 +3,8 @@ UPDATE commodore.streams
 SET active_ingest_cluster_id = sqlc.arg(cluster_id),
     active_ingest_cluster_updated_at = NOW(),
     active_ingest_claim_id = sqlc.arg(claim_token),
+    active_ingest_node_id = CASE WHEN active_ingest_cluster_id=sqlc.arg(cluster_id) AND active_ingest_claim_id=sqlc.arg(claim_token) THEN active_ingest_node_id ELSE NULL END,
+    active_ingest_control_cell_id = CASE WHEN active_ingest_cluster_id=sqlc.arg(cluster_id) AND active_ingest_claim_id=sqlc.arg(claim_token) THEN active_ingest_control_cell_id ELSE NULL END,
     updated_at = NOW()
 WHERE id = sqlc.arg(stream_id)::uuid
   AND tenant_id = sqlc.arg(tenant_id)::uuid
@@ -31,6 +33,8 @@ UPDATE commodore.streams
 SET active_ingest_cluster_id = NULL,
     active_ingest_cluster_updated_at = NOW(),
     active_ingest_claim_id = NULL,
+    active_ingest_node_id = NULL,
+    active_ingest_control_cell_id = NULL,
     updated_at = NOW()
 WHERE id = sqlc.arg(stream_id)::uuid
   AND tenant_id = sqlc.arg(tenant_id)::uuid

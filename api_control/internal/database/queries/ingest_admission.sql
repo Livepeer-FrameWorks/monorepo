@@ -12,6 +12,7 @@ WITH held AS (
     SELECT current_stream.id,
            current_stream.active_ingest_cluster_id AS prev_cluster,
            current_stream.active_ingest_claim_id AS prev_token,
+           current_stream.active_ingest_node_id AS prev_node, current_stream.active_ingest_control_cell_id AS prev_cell,
            COALESCE(
                current_stream.active_ingest_cluster_id IS NOT NULL
                AND current_stream.active_ingest_cluster_id <> ''
@@ -28,12 +29,16 @@ UPDATE commodore.streams s
 SET active_ingest_cluster_id = sqlc.arg(cluster_id),
     active_ingest_cluster_updated_at = NOW(),
     active_ingest_claim_id = sqlc.arg(claim_token),
+    active_ingest_node_id = CASE WHEN sqlc.narg(node_id)::text IS NOT NULL THEN sqlc.narg(node_id)::text WHEN active_ingest_cluster_id=sqlc.arg(cluster_id) AND active_ingest_claim_id=sqlc.arg(claim_token) THEN active_ingest_node_id ELSE NULL END,
+    active_ingest_control_cell_id = CASE WHEN sqlc.narg(control_cell_id)::text IS NOT NULL THEN sqlc.narg(control_cell_id)::text WHEN active_ingest_cluster_id=sqlc.arg(cluster_id) AND active_ingest_claim_id=sqlc.arg(claim_token) THEN active_ingest_control_cell_id ELSE NULL END,
     updated_at = NOW()
 FROM held
 WHERE s.id = held.id
   AND (
       NOT held.prev_fresh
-      OR (held.prev_cluster = sqlc.arg(cluster_id) AND held.prev_token = sqlc.arg(claim_token))
+      OR (held.prev_cluster = sqlc.arg(cluster_id) AND held.prev_token = sqlc.arg(claim_token)
+          AND (sqlc.narg(node_id)::text IS NULL OR (held.prev_node IS NULL AND held.prev_cell IS NULL)
+            OR (held.prev_node=sqlc.narg(node_id)::text AND held.prev_cell=sqlc.narg(control_cell_id)::text)))
   )
 RETURNING held.prev_cluster, held.prev_token, held.prev_fresh;
 

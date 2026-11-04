@@ -23,6 +23,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	HelmsmanControl_Connect_FullMethodName         = "/helmsmancontrol.HelmsmanControl/Connect"
 	HelmsmanControl_ResolveClipHash_FullMethodName = "/helmsmancontrol.HelmsmanControl/ResolveClipHash"
+	HelmsmanControl_AdmitPublisher_FullMethodName  = "/helmsmancontrol.HelmsmanControl/AdmitPublisher"
 )
 
 // HelmsmanControlClient is the client API for HelmsmanControl service.
@@ -31,6 +32,8 @@ const (
 type HelmsmanControlClient interface {
 	Connect(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ControlMessage, ControlMessage], error)
 	ResolveClipHash(ctx context.Context, in *ClipHashRequest, opts ...grpc.CallOption) (*ClipHashResponse, error)
+	// Bound to the live node session issued after authenticated registration.
+	AdmitPublisher(ctx context.Context, in *AdmitPublisherRequest, opts ...grpc.CallOption) (*MistTriggerResponse, error)
 }
 
 type helmsmanControlClient struct {
@@ -64,12 +67,24 @@ func (c *helmsmanControlClient) ResolveClipHash(ctx context.Context, in *ClipHas
 	return out, nil
 }
 
+func (c *helmsmanControlClient) AdmitPublisher(ctx context.Context, in *AdmitPublisherRequest, opts ...grpc.CallOption) (*MistTriggerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MistTriggerResponse)
+	err := c.cc.Invoke(ctx, HelmsmanControl_AdmitPublisher_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // HelmsmanControlServer is the server API for HelmsmanControl service.
 // All implementations must embed UnimplementedHelmsmanControlServer
 // for forward compatibility.
 type HelmsmanControlServer interface {
 	Connect(grpc.BidiStreamingServer[ControlMessage, ControlMessage]) error
 	ResolveClipHash(context.Context, *ClipHashRequest) (*ClipHashResponse, error)
+	// Bound to the live node session issued after authenticated registration.
+	AdmitPublisher(context.Context, *AdmitPublisherRequest) (*MistTriggerResponse, error)
 	mustEmbedUnimplementedHelmsmanControlServer()
 }
 
@@ -85,6 +100,9 @@ func (UnimplementedHelmsmanControlServer) Connect(grpc.BidiStreamingServer[Contr
 }
 func (UnimplementedHelmsmanControlServer) ResolveClipHash(context.Context, *ClipHashRequest) (*ClipHashResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveClipHash not implemented")
+}
+func (UnimplementedHelmsmanControlServer) AdmitPublisher(context.Context, *AdmitPublisherRequest) (*MistTriggerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdmitPublisher not implemented")
 }
 func (UnimplementedHelmsmanControlServer) mustEmbedUnimplementedHelmsmanControlServer() {}
 func (UnimplementedHelmsmanControlServer) testEmbeddedByValue()                         {}
@@ -132,6 +150,24 @@ func _HelmsmanControl_ResolveClipHash_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _HelmsmanControl_AdmitPublisher_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdmitPublisherRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HelmsmanControlServer).AdmitPublisher(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HelmsmanControl_AdmitPublisher_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HelmsmanControlServer).AdmitPublisher(ctx, req.(*AdmitPublisherRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // HelmsmanControl_ServiceDesc is the grpc.ServiceDesc for HelmsmanControl service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -142,6 +178,10 @@ var HelmsmanControl_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResolveClipHash",
 			Handler:    _HelmsmanControl_ResolveClipHash_Handler,
+		},
+		{
+			MethodName: "AdmitPublisher",
+			Handler:    _HelmsmanControl_AdmitPublisher_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

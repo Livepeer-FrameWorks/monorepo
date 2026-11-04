@@ -640,3 +640,12 @@ Redis Cluster is designed for single-region deployments (<10ms inter-node latenc
 - **Marshal-under-lock**: State mutations hold the write lock through JSON marshaling and Redis SET to prevent concurrent reads from seeing partial state.
 - **Merge-not-replace rehydration**: On startup, Redis data is merged with any state already received from Helmsman heartbeats. This prevents a slow Redis SCAN from overwriting fresher data.
 - **Score recomputation after deserialization**: Rehydrated NodeState objects need their composite scores recomputed (scores aren't persisted; they're derived from CPU/RAM/BW/GEO).
+
+## Atomic publisher admission
+
+[Publisher admission](publisher-admission.md) specifies the signed snapshot,
+separate global lease, and ordered database preparation/confirmation protocol.
+Source projection remains outside SQL and confirmation rechecks the exact
+unended generation. Durable recovery handles unknown replies and forwards edge
+abandonment even when no session was committed in this cell. All close, reaper,
+node-loss and takeover paths retain the same stream/generation fences.

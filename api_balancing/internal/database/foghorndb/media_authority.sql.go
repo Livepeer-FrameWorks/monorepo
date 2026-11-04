@@ -866,6 +866,105 @@ func (q *Queries) GetMediaObjectAuthorityByPlaybackID(ctx context.Context, playb
 	return i, err
 }
 
+const getPublisherAuthorityPreflight = `-- name: GetPublisherAuthorityPreflight :one
+SELECT COALESCE((SELECT session.ingest_cluster_id FROM foghorn.ingest_sessions session
+           WHERE session.tenant_id=object_projection.tenant_id AND session.node_id=$1
+             AND session.start_trigger_uuid=$2 AND session.ended_at IS NULL), '')::text AS session_cluster_id,
+       object_authority.payload AS object_payload,
+       object_authority.payload_sha256 AS object_payload_sha256,
+       object_authority.refresh_after AS object_refresh_after,
+       object_authority.valid_until AS object_valid_until,
+       object_projection.authority_id AS object_authority_id,
+       object_projection.authority_version AS object_authority_version,
+       object_projection.local_read_ready AS object_read_ready,
+       object_projection.local_ingest_ready AS object_ingest_ready,
+       object_projection.local_source_ready AS object_source_ready,
+       tenant_authority.payload AS tenant_payload,
+       tenant_authority.payload_sha256 AS tenant_payload_sha256,
+       tenant_authority.refresh_after AS tenant_refresh_after,
+       tenant_authority.valid_until AS tenant_valid_until,
+       tenant_projection.authority_version AS tenant_authority_version,
+       tenant_projection.local_read_ready AS tenant_read_ready,
+       tenant_projection.local_ingest_ready AS tenant_ingest_ready,
+       tenant_projection.local_source_ready AS tenant_source_ready,
+       tenant_projection.previous_placement_policy AS tenant_previous_placement_policy,
+       tenant_projection.placement_superseded_at AS tenant_placement_superseded_at,
+       COALESCE(tenant_projection.objects_trusted_from > object_authority.confirmed_at, FALSE)::boolean AS object_withheld_by_tenant_revival
+FROM foghorn.media_object_authority_projection AS object_projection
+JOIN foghorn.media_authorities AS object_authority
+  ON object_authority.authority_kind = 'media_object'
+ AND object_authority.authority_id = object_projection.authority_id
+ AND object_authority.authority_version = object_projection.authority_version
+JOIN foghorn.tenant_authority_projection AS tenant_projection
+  ON tenant_projection.tenant_id = object_projection.tenant_id
+JOIN foghorn.media_authorities AS tenant_authority
+  ON tenant_authority.authority_kind = 'tenant'
+ AND tenant_authority.authority_id = tenant_projection.tenant_id::text
+ AND tenant_authority.authority_version = tenant_projection.authority_version
+WHERE object_projection.publishing_credential_sha256 = $3
+ORDER BY (object_projection.lifecycle = 'active') DESC, object_projection.authority_version DESC
+LIMIT 1
+`
+
+type GetPublisherAuthorityPreflightParams struct {
+	NodeID           string `db:"node_id" json:"node_id"`
+	TriggerUuid      string `db:"trigger_uuid" json:"trigger_uuid"`
+	CredentialDigest []byte `db:"credential_digest" json:"credential_digest"`
+}
+
+type GetPublisherAuthorityPreflightRow struct {
+	SessionClusterID              string       `db:"session_cluster_id" json:"session_cluster_id"`
+	ObjectPayload                 []byte       `db:"object_payload" json:"object_payload"`
+	ObjectPayloadSha256           []byte       `db:"object_payload_sha256" json:"object_payload_sha256"`
+	ObjectRefreshAfter            time.Time    `db:"object_refresh_after" json:"object_refresh_after"`
+	ObjectValidUntil              time.Time    `db:"object_valid_until" json:"object_valid_until"`
+	ObjectAuthorityID             string       `db:"object_authority_id" json:"object_authority_id"`
+	ObjectAuthorityVersion        int64        `db:"object_authority_version" json:"object_authority_version"`
+	ObjectReadReady               bool         `db:"object_read_ready" json:"object_read_ready"`
+	ObjectIngestReady             bool         `db:"object_ingest_ready" json:"object_ingest_ready"`
+	ObjectSourceReady             bool         `db:"object_source_ready" json:"object_source_ready"`
+	TenantPayload                 []byte       `db:"tenant_payload" json:"tenant_payload"`
+	TenantPayloadSha256           []byte       `db:"tenant_payload_sha256" json:"tenant_payload_sha256"`
+	TenantRefreshAfter            time.Time    `db:"tenant_refresh_after" json:"tenant_refresh_after"`
+	TenantValidUntil              time.Time    `db:"tenant_valid_until" json:"tenant_valid_until"`
+	TenantAuthorityVersion        int64        `db:"tenant_authority_version" json:"tenant_authority_version"`
+	TenantReadReady               bool         `db:"tenant_read_ready" json:"tenant_read_ready"`
+	TenantIngestReady             bool         `db:"tenant_ingest_ready" json:"tenant_ingest_ready"`
+	TenantSourceReady             bool         `db:"tenant_source_ready" json:"tenant_source_ready"`
+	TenantPreviousPlacementPolicy []byte       `db:"tenant_previous_placement_policy" json:"tenant_previous_placement_policy"`
+	TenantPlacementSupersededAt   sql.NullTime `db:"tenant_placement_superseded_at" json:"tenant_placement_superseded_at"`
+	ObjectWithheldByTenantRevival bool         `db:"object_withheld_by_tenant_revival" json:"object_withheld_by_tenant_revival"`
+}
+
+func (q *Queries) GetPublisherAuthorityPreflight(ctx context.Context, arg GetPublisherAuthorityPreflightParams) (GetPublisherAuthorityPreflightRow, error) {
+	row := q.db.QueryRowContext(ctx, getPublisherAuthorityPreflight, arg.NodeID, arg.TriggerUuid, arg.CredentialDigest)
+	var i GetPublisherAuthorityPreflightRow
+	err := row.Scan(
+		&i.SessionClusterID,
+		&i.ObjectPayload,
+		&i.ObjectPayloadSha256,
+		&i.ObjectRefreshAfter,
+		&i.ObjectValidUntil,
+		&i.ObjectAuthorityID,
+		&i.ObjectAuthorityVersion,
+		&i.ObjectReadReady,
+		&i.ObjectIngestReady,
+		&i.ObjectSourceReady,
+		&i.TenantPayload,
+		&i.TenantPayloadSha256,
+		&i.TenantRefreshAfter,
+		&i.TenantValidUntil,
+		&i.TenantAuthorityVersion,
+		&i.TenantReadReady,
+		&i.TenantIngestReady,
+		&i.TenantSourceReady,
+		&i.TenantPreviousPlacementPolicy,
+		&i.TenantPlacementSupersededAt,
+		&i.ObjectWithheldByTenantRevival,
+	)
+	return i, err
+}
+
 const getTenantAuthorityProjection = `-- name: GetTenantAuthorityProjection :one
 SELECT tenant_id::text AS tenant_id, authority_version, lifecycle, billing_decision,
        billing_model, COALESCE(official_cluster_id, '')::text AS official_cluster_id,

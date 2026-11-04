@@ -815,3 +815,6 @@ func cloneTrust(input sharedauthority.TrustSet) sharedauthority.TrustSet {
 	}
 	return out
 }
+
+// CellID is the audience this store verifies before applying signed authority.
+func (s *Store) CellID() string { return s.cellID }

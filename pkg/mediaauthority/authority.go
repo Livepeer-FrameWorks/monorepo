@@ -29,9 +29,12 @@ const (
 	// NodePlacementSchemaVersion is placement schema 2 plus selectors that name
 	// nodes. Commodore issues it only to cells whose every replica attests it.
 	NodePlacementSchemaVersion = 3
-	SignatureDomain            = "frameworks-media-authority-v1\x00"
-	maxClockSkewFuture         = 30 * time.Second
-	maxTenantValidity          = 24 * time.Hour
+	// PublisherAdmissionSchemaVersion includes complete publisher configuration
+	// and is issued only after every target cell attests support.
+	PublisherAdmissionSchemaVersion = 4
+	SignatureDomain                 = "frameworks-media-authority-v1\x00"
+	maxClockSkewFuture              = 30 * time.Second
+	maxTenantValidity               = 24 * time.Hour
 	// MaxMediaObjectValidity bounds how long any signed media-object authority
 	// can verify. A cell relies on it being a hard bound: once an expired
 	// authority was issued longer ago than this, no older version of it can

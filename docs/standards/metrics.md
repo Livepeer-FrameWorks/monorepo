@@ -639,3 +639,15 @@ A metric registered by a shared package carries the service as a `service` label
 | Metric                                  | Type    | Labels    | Meaning                                                                                                                                                                  |
 | --------------------------------------- | ------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `config_reload_failures_total{service}` | Counter | `service` | SIGHUP reloads that failed (`pkg/server`). The previous configuration stays in effect; the Error log names the keys and `/debug/config` shows the last failure and time. |
+
+## Publisher admission latency
+
+`foghorn_publisher_admission_duration_seconds{phase,outcome}` is a histogram in
+seconds. Its bounded phases are `queue`, `total`, `authority_preflight`, `lease`,
+`prepare`, `redis_cas`, `confirm`, and `settle`; outcomes are `success`, `error`,
+`deadline`, and `cancelled`. No tenant, stream, node or execution identifiers are
+labels. Compare total/phase tails with the edge's remaining response lifetime.
+Database phases include pool and lock waiting; use the existing pool metrics
+and database diagnostics to separate those causes. The lease phase includes the
+central call and exceptional ended-owner recovery. SQL call-count bounds are
+checked by the WAN regression rather than inferred from histogram samples.

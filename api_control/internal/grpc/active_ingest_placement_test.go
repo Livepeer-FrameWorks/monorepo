@@ -45,7 +45,7 @@ func expectPlacementSync(mock sqlmock.Sqlmock, renew bool, updatePattern string,
 	exec := mock.ExpectExec(updatePattern)
 	query := mock.ExpectQuery(`FROM unnest`)
 	if renew {
-		exec.WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), int64(activeIngestLease.Seconds()))
+		exec.WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), int64(activeIngestLease.Seconds()), sqlmock.AnyArg())
 		query.WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), int64(activeIngestLease.Seconds()))
 	} else {
 		exec.WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg())
@@ -373,7 +373,7 @@ func TestValidateStreamKey_ReportsClaimAcquisition(t *testing.T) {
 	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
 	expectNoEnabledPushTargets(mock, "stream-id", "tenant-id")
 	mock.ExpectQuery("UPDATE commodore.streams").
-		WithArgs("cluster-us", "trigger-uuid-1", int64(activeIngestLease.Seconds()), "good-key").
+		WithArgs("cluster-us", "trigger-uuid-1", nil, nil, int64(activeIngestLease.Seconds()), "good-key").
 		WillReturnRows(claimReserved())
 
 	server := &CommodoreServer{

@@ -168,6 +168,8 @@ func (j *DVRStartingRecoveryJob) run() {
 		select {
 		case <-ticker.C:
 			j.reconcile()
+		case hint := <-control.DVRStopDispatchHints():
+			j.dispatchStopHint(hint)
 		case <-j.stopCh:
 			return
 		}
@@ -217,6 +219,33 @@ func (j *DVRStartingRecoveryJob) reconcile() {
 		default:
 		}
 		j.reconcileOne(ctx, r)
+	}
+}
+
+// Hints bypass the stale-start grace because their stop already committed.
+// Failed sends remain stop_pending and are retried by the periodic scan.
+func (j *DVRStartingRecoveryJob) dispatchStopHint(hint control.DVRStopDispatchHint) {
+	ctx, cancel := stoppable(j.stopCh, 60*time.Second)
+	defer cancel()
+	claims := hint.Claims
+	if hint.Generation != "" && j.db != nil {
+		rows, err := foghorndb.New(j.db).ListDVRStopClaimsByGeneration(ctx, foghorndb.ListDVRStopClaimsByGenerationParams{TenantID: hint.TenantID, Generation: hint.Generation})
+		if err != nil {
+			j.logger.WithError(err).Warn("DVR starting-recovery: failed to resolve committed stops")
+			return
+		}
+		for _, row := range rows {
+			claims = append(claims, control.DVRStopClaim{DVRHash: row.ArtifactHash, StorageNodeID: row.StorageNodeID})
+		}
+	}
+	for _, claim := range claims {
+		if ctx.Err() != nil {
+			return
+		}
+		if claim.StorageNodeID == "" {
+			continue
+		}
+		j.reconcileOne(ctx, startingDVRRow{artifactHash: claim.DVRHash, tenantID: hint.TenantID, dispatch: DVRStartDispatch{State: DVRDispatchStateStopPending, NodeID: claim.StorageNodeID}})
 	}
 }
 

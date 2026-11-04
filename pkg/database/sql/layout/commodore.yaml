@@ -29,6 +29,7 @@ colocated_tables:
   - commodore.retired_ingest_cells
   - public._schema_baseline
 distributed_tables:
+  - commodore.publisher_lease_abandonments
   # Append-only history grows with lifecycle actions and supports tenant-time keyset reads.
   - commodore.operator_account_audit
   # Every API-token request touches last_used_at, so writes follow request traffic.

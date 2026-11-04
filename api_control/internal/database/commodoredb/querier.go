@@ -16,6 +16,7 @@ type Querier interface {
 	// same address cannot succeed.
 	AbandonRejectedAccountEmail(ctx context.Context, arg AbandonRejectedAccountEmailParams) error
 	AcquireIngestClaim(ctx context.Context, arg AcquireIngestClaimParams) (AcquireIngestClaimRow, error)
+	AcquirePublisherLease(ctx context.Context, arg AcquirePublisherLeaseParams) (AcquirePublisherLeaseRow, error)
 	ActivateMediaPlacementPolicy(ctx context.Context, arg ActivateMediaPlacementPolicyParams) (int64, error)
 	AdminGetUserByEmail(ctx context.Context, email string) (AdminGetUserByEmailRow, error)
 	// Settles unfinished rows of the pre-obligation inbox so their targets can be
@@ -242,6 +243,7 @@ type Querier interface {
 	GetNewsletterUser(ctx context.Context, arg GetNewsletterUserParams) (GetNewsletterUserRow, error)
 	GetOwnedPullSourceState(ctx context.Context, arg GetOwnedPullSourceStateParams) (GetOwnedPullSourceStateRow, error)
 	GetPlacementPreviewStream(ctx context.Context, arg GetPlacementPreviewStreamParams) (GetPlacementPreviewStreamRow, error)
+	GetPublisherLease(ctx context.Context, arg GetPublisherLeaseParams) (GetPublisherLeaseRow, error)
 	GetPullMediaAuthoritySecret(ctx context.Context, streamID string) (GetPullMediaAuthoritySecretRow, error)
 	GetPushTargetStreamOwner(ctx context.Context, arg GetPushTargetStreamOwnerParams) (string, error)
 	GetRefreshTokenSuccessorState(ctx context.Context, id string) (bool, error)
@@ -482,6 +484,11 @@ type Querier interface {
 	LockMediaPlacementPolicy(ctx context.Context, arg LockMediaPlacementPolicyParams) (CommodoreMediaPlacementPolicy, error)
 	LockMediaPlacementStream(ctx context.Context, arg LockMediaPlacementStreamParams) (string, error)
 	LockPolicyBundleStream(ctx context.Context, arg LockPolicyBundleStreamParams) error
+	LockPublisherLeaseAuthority(ctx context.Context, arg LockPublisherLeaseAuthorityParams) (LockPublisherLeaseAuthorityRow, error)
+	LockPublisherLeaseExecution(ctx context.Context, executionLockKey string) error
+	// Sort actual lock IDs before invoking the volatile lock function, so batches
+	// with overlapping executions cannot invert their acquisition order.
+	LockPublisherLeaseExecutions(ctx context.Context, executionKeys []string) error
 	LockPushTargetStatus(ctx context.Context, arg LockPushTargetStatusParams) (sql.NullString, error)
 	LockRefreshTokenByHash(ctx context.Context, tokenHash string) (LockRefreshTokenByHashRow, error)
 	LockSigningKeyTenant(ctx context.Context, tenantID string) error
@@ -519,7 +526,9 @@ type Querier interface {
 	NormalizeArtifactPlaybackID(ctx context.Context, clipHash string) (string, error)
 	NoteArtifactCreationIntentAttempt(ctx context.Context, arg NoteArtifactCreationIntentAttemptParams) error
 	ParkMediaAuthorityObligation(ctx context.Context, arg ParkMediaAuthorityObligationParams) (int64, error)
+	PublisherLeaseAbandoned(ctx context.Context, arg PublisherLeaseAbandonedParams) (bool, error)
 	PurgeCompletedServiceEventOutbox(ctx context.Context, arg PurgeCompletedServiceEventOutboxParams) (int64, error)
+	PurgePublisherLeaseAbandonments(ctx context.Context) (int64, error)
 	RearmMediaAuthorityObligationsAwaitingTenant(ctx context.Context, tenantID string) (int64, error)
 	// Puts parked targets back in the queue, up to batch_size per statement. A
 	// target parked after exhausting its transient attempts comes back with
@@ -542,10 +551,14 @@ type Querier interface {
 	RecordMediaAuthorityUse(ctx context.Context, arg RecordMediaAuthorityUseParams) (int64, error)
 	// Private operator audit; never projected into tenant-visible domain events.
 	RecordOperatorAccountAudit(ctx context.Context, arg RecordOperatorAccountAuditParams) error
+	RecordPublisherLeaseAbandonment(ctx context.Context, arg RecordPublisherLeaseAbandonmentParams) error
 	RecordSigningKeyUse(ctx context.Context, arg RecordSigningKeyUseParams) error
 	RecordTenantAccountClosureFailure(ctx context.Context, arg RecordTenantAccountClosureFailureParams) error
 	RefreshPrimaryStreamKey(ctx context.Context, arg RefreshPrimaryStreamKeyParams) (int64, error)
 	RegisterStreamThumbnailServingCell(ctx context.Context, arg RegisterStreamThumbnailServingCellParams) (int64, error)
+	// Execution identity resolves its tenant at the global owner. Only that exact
+	// node/cell/token tuple may release it, including before a cell-side row exists.
+	ReleaseAbandonedPublisherLease(ctx context.Context, arg ReleaseAbandonedPublisherLeaseParams) (int64, error)
 	// A lane's compile of a target has settled, whatever its outcome; another lane
 	// may claim the target now instead of when the lease would have lapsed. Only
 	// the claim that compiled may release it.

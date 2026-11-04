@@ -2048,6 +2048,7 @@ func (s *CommodoreServer) CheckStreamKey(ctx context.Context, req *commodorepb.V
 	safe := proto.CloneOf(req)
 	safe.ClusterId = ""
 	safe.ClaimToken = ""
+	safe.NodeId, safe.ControlCellId = "", ""
 	result, err := s.validateStreamKey(ctx, safe)
 	if err != nil || result == nil {
 		return result, err
@@ -2077,6 +2078,14 @@ func (s *CommodoreServer) validateStreamKey(ctx context.Context, req *commodorep
 		return nil, status.Error(codes.InvalidArgument, "claim_token is required when cluster_id is set")
 	}
 
+	if req.GetNodeId() != "" || req.GetControlCellId() != "" {
+		if err := validatePublisherExecutionIdentity(req.GetNodeId(), req.GetControlCellId()); err != nil {
+			return nil, err
+		}
+		if len(req.GetClaimToken()) > 64 || strings.TrimSpace(req.GetClaimToken()) != req.GetClaimToken() || strings.TrimSpace(req.GetClusterId()) == "" {
+			return nil, status.Error(codes.InvalidArgument, "publisher execution requires a bounded claim and cluster")
+		}
+	}
 	queries := commodoredb.New(s.db)
 	admission, err := queries.GetStreamAdmissionByKey(ctx, streamKey)
 
@@ -2307,15 +2316,19 @@ func (s *CommodoreServer) validateStreamKey(ctx context.Context, req *commodorep
 		// rejection: giving back a refresh would unpin the live session that
 		// re-fired PUSH_REWRITE.
 		claimToken := strings.TrimSpace(req.GetClaimToken())
-		claim, claimErr := queries.AcquireIngestClaim(ctx, commodoredb.AcquireIngestClaimParams{
-			ClusterID:    sql.NullString{String: activeIngestClusterID, Valid: true},
-			ClaimToken:   sql.NullString{String: claimToken, Valid: true},
-			LeaseSeconds: int64(activeIngestLease.Seconds()), LookupStreamKey: streamKey,
-		})
+		boundExecution := req.GetNodeId() != ""
+		claim, claimErr := s.acquireCompatiblePublisherClaim(ctx, req, activeIngestClusterID)
+		if errors.Is(claimErr, errPublisherExecutionAbandoned) {
+			return &commodorepb.ValidateStreamKeyResponse{Valid: false, Error: "publisher execution abandoned"}, nil
+		}
+		if boundExecution && claimErr != nil && !errors.Is(claimErr, sql.ErrNoRows) {
+			return nil, status.Errorf(codes.Unavailable, "publisher claim unavailable: %v", claimErr)
+		}
 		switch {
 		case claimErr != nil && !errors.Is(claimErr, sql.ErrNoRows):
 			s.logger.WithError(claimErr).WithField("stream_key", logging.RedactSecret(streamKey)).Warn("Failed to record ingest cluster")
 		case claimErr == nil:
+			resp.PublisherExecutionFenced = boundExecution
 			// Reserved rather than refreshed when nothing live held it, or when
 			// the live claim was in another cluster's name or ownerless.
 			reserved := !claim.PrevFresh ||
@@ -2341,7 +2354,7 @@ func (s *CommodoreServer) validateStreamKey(ctx context.Context, req *commodorep
 					RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_DUPLICATE_INGEST,
 				}, nil
 			}
-			if held.ActiveIngestClusterID.Valid && held.ActiveIngestClusterID.String != "" && held.ActiveIngestClaimID.String != claimToken {
+			if held.ActiveIngestClusterID.Valid && held.ActiveIngestClusterID.String != "" && (boundExecution || held.ActiveIngestClaimID.String != claimToken) {
 				where := "cluster " + held.ActiveIngestClusterID.String
 				// The owner's token goes back only to its own cluster, the one
 				// whose records can prove that owner's session has ended.
@@ -2923,10 +2936,11 @@ func (s *CommodoreServer) SyncActiveIngestPlacement(ctx context.Context, req *co
 	}
 
 	return &commodorepb.SyncActiveIngestPlacementResponse{
-		Renewed:        int32(renewed),
-		Released:       int32(released),
-		RenewRefused:   renewRefused,
-		ReleaseRefused: releaseRefused,
+		Renewed:                int32(renewed),
+		Released:               int32(released),
+		RenewRefused:           renewRefused,
+		ReleaseRefused:         releaseRefused,
+		ExecutionFencesApplied: true,
 	}, nil
 }
 
@@ -2942,6 +2956,9 @@ func (s *CommodoreServer) applyActiveIngestPlacement(ctx context.Context, defaul
 	internalNames := make([]string, 0, len(streams))
 	claimTokens := make([]string, 0, len(streams))
 	clusterIDs := make([]string, 0, len(streams))
+	strictOwners := make([]bool, 0, len(streams))
+	nodeIDs, cellIDs := make([]string, 0, len(streams)), make([]string, 0, len(streams))
+	var executionKeys []string
 	for _, stream := range streams {
 		tenantID := strings.TrimSpace(stream.GetTenantId())
 		internalName := strings.TrimSpace(stream.GetInternalName())
@@ -2962,10 +2979,22 @@ func (s *CommodoreServer) applyActiveIngestPlacement(ctx context.Context, defaul
 		if clusterID == "" {
 			return 0, nil, status.Error(codes.InvalidArgument, "each stream requires cluster_id (or a request-level default)")
 		}
+		if stream.GetNodeId() != "" || stream.GetControlCellId() != "" {
+			if err := validatePublisherExecutionIdentity(stream.GetNodeId(), stream.GetControlCellId()); err != nil {
+				return 0, nil, err
+			}
+			if len(claimToken) > 64 {
+				return 0, nil, status.Error(codes.InvalidArgument, "publisher execution token too long")
+			}
+			executionKeys = append(executionKeys, publisherLeaseExecutionKey(stream.GetControlCellId(), stream.GetNodeId(), claimToken))
+		}
+		nodeIDs = append(nodeIDs, stream.GetNodeId())
+		cellIDs = append(cellIDs, stream.GetControlCellId())
 		tenantIDs = append(tenantIDs, tenantID)
 		internalNames = append(internalNames, internalName)
 		claimTokens = append(claimTokens, claimToken)
 		clusterIDs = append(clusterIDs, clusterID)
+		strictOwners = append(strictOwners, stream.GetRequireExistingOwner())
 	}
 	if len(tenantIDs) == 0 {
 		return 0, nil, nil
@@ -2983,13 +3012,20 @@ func (s *CommodoreServer) applyActiveIngestPlacement(ctx context.Context, defaul
 				refusedRows []commodoredb.ActiveIngestPlacementRefusal
 				err         error
 			)
+			if len(executionKeys) > 0 {
+				if lockErr := commodoredb.New(tx).LockPublisherLeaseExecutions(ctx, executionKeys); lockErr != nil {
+					return lockErr
+				}
+			}
 			rows, refusedRows, err = commodoredb.New(tx).ApplyActiveIngestPlacementBatch(ctx, commodoredb.ActiveIngestPlacementBatchParams{
 				TenantIDs:     tenantIDs,
 				InternalNames: internalNames,
 				ClaimTokens:   claimTokens,
 				ClusterIDs:    clusterIDs,
-				LeaseSeconds:  int64(activeIngestLease.Seconds()),
-				Renew:         renew,
+				StrictOwners:  strictOwners,
+				NodeIDs:       nodeIDs, ControlCellIDs: cellIDs,
+				LeaseSeconds: int64(activeIngestLease.Seconds()),
+				Renew:        renew,
 			})
 			if err != nil {
 				s.logger.WithError(err).WithFields(logging.Fields{

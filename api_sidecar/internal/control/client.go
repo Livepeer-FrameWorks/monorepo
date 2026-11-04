@@ -71,9 +71,10 @@ type DeleteDVRFunc func(dvrHash string) (uint64, error)
 type DeleteVodFunc func(vodHash string) (uint64, error)
 
 type streamConn struct {
-	stream ipcpb.HelmsmanControl_ConnectClient
-	nodeID string
-	epoch  string
+	publisher *publisherAdmissionConnection
+	stream    ipcpb.HelmsmanControl_ConnectClient
+	nodeID    string
+	epoch     string
 	// ended is closed once this connection's stream has ended; a wait for a reply to something
 	// sent on it ends with it.
 	ended chan struct{}
@@ -483,7 +484,7 @@ func storeConn(stream ipcpb.HelmsmanControl_ConnectClient, nodeID string) *strea
 }
 
 func newStreamConn(stream ipcpb.HelmsmanControl_ConnectClient, nodeID string) *streamConn {
-	return &streamConn{stream: stream, nodeID: nodeID, epoch: uuid.NewString(), ended: make(chan struct{}), delivery: newDurableDeliveryContract()}
+	return &streamConn{stream: stream, nodeID: nodeID, epoch: uuid.NewString(), ended: make(chan struct{}), delivery: newDurableDeliveryContract(), publisher: &publisherAdmissionConnection{}}
 }
 
 func publishConn(conn *streamConn) {
@@ -494,7 +495,7 @@ func updateConnNodeID(conn *streamConn, nodeID string) {
 	if conn == nil || strings.TrimSpace(nodeID) == "" {
 		return
 	}
-	updated := &streamConn{stream: conn.stream, nodeID: nodeID, epoch: conn.epoch, ended: conn.ended, delivery: conn.delivery}
+	updated := &streamConn{stream: conn.stream, nodeID: nodeID, epoch: conn.epoch, ended: conn.ended, delivery: conn.delivery, publisher: conn.publisher}
 	activeConn.CompareAndSwap(conn, updated)
 }
 
@@ -542,7 +543,7 @@ var (
 )
 
 const (
-	blockingTriggerTimeout            = 4 * time.Second
+	blockingTriggerTimeout            = mist.PublisherResponseTimeout
 	lifecycleReconciliationTimeout    = 30 * time.Second
 	mistTriggerTransportSendTimeout   = 5 * time.Second
 	desiredStateComponentApplyTimeout = 30 * time.Minute
@@ -733,10 +734,20 @@ func SendMistTriggerContext(ctx context.Context, mistTrigger *ipcpb.MistTrigger,
 	}
 	var admissionKey string
 	if triggerType == string(mist.TriggerPushRewrite) {
+		mistTrigger.PublisherDeadline = timestamppb.New(deadline)
 		admissionKey = pushAdmissionKey(mistTrigger.GetPushRewrite().GetStreamName())
 		if err := awaitPushRewriteCausalOrder(ctx, deadline, mistTrigger, logger); err != nil {
 			TriggersSent.WithLabelValues(triggerType, "prior_end_undelivered").Inc()
 			return &MistTriggerResult{Abort: true, ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT}, err
+		}
+	}
+
+	if triggerType == string(mist.TriggerPushRewrite) {
+		if connection := getConnection(); connection != nil && connection.publisher != nil {
+			if session := connection.publisher.session.Load(); session != nil {
+				forwarded = true
+				return sendPublisherAdmission(ctx, deadline, connection, session, mistTrigger, admissionKey)
+			}
 		}
 	}
 
@@ -2000,6 +2011,7 @@ func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 	if err != nil {
 		return err
 	}
+	connection.publisher.client = client
 	defer close(connection.ended)
 
 	// The node's telemetry reaches Foghorn before anything published on this
@@ -2049,6 +2061,8 @@ func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 			}
 			connection.delivery.observe(msg)
 			switch x := msg.GetPayload().(type) {
+			case *ipcpb.ControlMessage_PublisherAdmissionSession:
+				connection.publisher.session.Store(proto.CloneOf(x.PublisherAdmissionSession))
 			case *ipcpb.ControlMessage_DurableDeliveryAck:
 				go handleDurableDeliveryAck(connection, x.DurableDeliveryAck)
 			case *ipcpb.ControlMessage_DvrStartRequest:

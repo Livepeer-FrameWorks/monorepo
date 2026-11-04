@@ -215,3 +215,16 @@ WHERE tenant_id = sqlc.arg(tenant_id)::uuid
   AND stream_internal_name = sqlc.arg(stream_internal_name)
   AND node_id = sqlc.arg(node_id)
   AND ended_at IS NULL;
+
+-- name: IngestAdmissionExecutionPIDMismatch :one
+-- Node-scoped execution identity is resolved before tenant discovery. A report
+-- for another connector must not retire an execution that this node accepted.
+SELECT EXISTS (
+    SELECT 1 FROM foghorn.ingest_sessions session
+    WHERE session.node_id = sqlc.arg(node_id) AND session.start_trigger_uuid = sqlc.arg(start_trigger_uuid)
+      AND session.connector_pid <> sqlc.arg(connector_pid)
+    UNION ALL
+    SELECT 1 FROM foghorn.ingest_admission_abandonments marker
+    WHERE marker.node_id = sqlc.arg(node_id) AND marker.start_trigger_uuid = sqlc.arg(start_trigger_uuid)
+      AND marker.connector_pid <> sqlc.arg(connector_pid)
+);

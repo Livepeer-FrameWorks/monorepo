@@ -9,8 +9,10 @@ import (
 	"strings"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"frameworks/api_balancing/internal/ingesterrors"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // IngestEndedAdmissionAbandoned: the node answered the PUSH_REWRITE execution that minted the session
@@ -50,6 +52,13 @@ func AbandonIngestAdmission(ctx context.Context, nodeID, triggerUUID string, con
 		if lockErr := q.LockIngestStream(ctx, ingestAdmissionTriggerLockKey(nodeID, triggerUUID)); lockErr != nil {
 			return fmt.Errorf("lock abandoned ingest admission: %w", lockErr)
 		}
+		mismatch, identityErr := q.IngestAdmissionExecutionPIDMismatch(ctx, foghorndb.IngestAdmissionExecutionPIDMismatchParams{NodeID: nodeID, StartTriggerUuid: triggerUUID, ConnectorPid: connectorPID})
+		if identityErr != nil {
+			return fmt.Errorf("verify abandoned execution identity: %w", identityErr)
+		}
+		if mismatch {
+			return ingesterrors.NewTerminal(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "abandoned execution connector PID does not match its durable identity")
+		}
 		if recordErr := q.RecordIngestAdmissionAbandonment(ctx, foghorndb.RecordIngestAdmissionAbandonmentParams{
 			NodeID: nodeID, StartTriggerUuid: triggerUUID, ConnectorPid: connectorPID,
 		}); recordErr != nil {
@@ -70,7 +79,18 @@ func AbandonIngestAdmission(ctx context.Context, nodeID, triggerUUID string, con
 	ended := 0
 	var endErr error
 	for _, session := range open {
-		retired, retireErr := RetireIngestSession(ctx, session.SessionID, session.TenantID, session.StreamInternalName, IngestEndedAdmissionAbandoned, logger)
+		state, readErr := foghorndb.New(db).GetPublisherAdmission(ctx, foghorndb.GetPublisherAdmissionParams{TenantID: session.TenantID, NodeID: nodeID, TriggerUuid: triggerUUID})
+		if readErr != nil {
+			endErr = errors.Join(endErr, readErr)
+			continue
+		}
+		var retired bool
+		var retireErr error
+		if state.PublisherAdmissionVersion == 1 {
+			retired, retireErr = NewPublisherAdmissionRepository(db).Settle(ctx, IngestSessionRequest{TenantID: session.TenantID, InternalName: session.StreamInternalName, NodeID: nodeID, TriggerUUID: triggerUUID, StreamID: state.StreamID, PlaybackID: streamEventPlaybackID(ctx, session.StreamInternalName)}, session.SessionID, IngestEndedAdmissionAbandoned)
+		} else {
+			retired, retireErr = RetireIngestSession(ctx, session.SessionID, session.TenantID, session.StreamInternalName, IngestEndedAdmissionAbandoned, logger)
+		}
 		if retireErr != nil {
 			endErr = errors.Join(endErr, fmt.Errorf("end session %s of abandoned ingest admission: %w", session.SessionID, retireErr))
 			continue

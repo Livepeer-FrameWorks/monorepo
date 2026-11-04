@@ -1592,13 +1592,17 @@ type LiveStreamAuthority struct {
 	PublishingCredentialSha256 []byte `protobuf:"bytes,3,opt,name=publishing_credential_sha256,json=publishingCredentialSha256,proto3" json:"publishing_credential_sha256,omitempty"`
 	// The only virtual media cluster allowed to admit a new publisher when the
 	// central placement authority cannot be reached.
-	OutageIngestClusterId string              `protobuf:"bytes,4,opt,name=outage_ingest_cluster_id,json=outageIngestClusterId,proto3" json:"outage_ingest_cluster_id,omitempty"`
-	RecordingEnabled      bool                `protobuf:"varint,5,opt,name=recording_enabled,json=recordingEnabled,proto3" json:"recording_enabled,omitempty"`
-	ProcessesJson         string              `protobuf:"bytes,6,opt,name=processes_json,json=processesJson,proto3" json:"processes_json,omitempty"`
-	DvrProcessesJson      string              `protobuf:"bytes,7,opt,name=dvr_processes_json,json=dvrProcessesJson,proto3" json:"dvr_processes_json,omitempty"`
-	SealedCellSecrets     []*SealedCellSecret `protobuf:"bytes,8,rep,name=sealed_cell_secrets,json=sealedCellSecrets,proto3" json:"sealed_cell_secrets,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	OutageIngestClusterId     string              `protobuf:"bytes,4,opt,name=outage_ingest_cluster_id,json=outageIngestClusterId,proto3" json:"outage_ingest_cluster_id,omitempty"`
+	RecordingEnabled          bool                `protobuf:"varint,5,opt,name=recording_enabled,json=recordingEnabled,proto3" json:"recording_enabled,omitempty"`
+	ProcessesJson             string              `protobuf:"bytes,6,opt,name=processes_json,json=processesJson,proto3" json:"processes_json,omitempty"`
+	DvrProcessesJson          string              `protobuf:"bytes,7,opt,name=dvr_processes_json,json=dvrProcessesJson,proto3" json:"dvr_processes_json,omitempty"`
+	SealedCellSecrets         []*SealedCellSecret `protobuf:"bytes,8,rep,name=sealed_cell_secrets,json=sealedCellSecrets,proto3" json:"sealed_cell_secrets,omitempty"`
+	DvrChapterMode            string              `protobuf:"bytes,9,opt,name=dvr_chapter_mode,json=dvrChapterMode,proto3" json:"dvr_chapter_mode,omitempty"`
+	DvrChapterIntervalSeconds int32               `protobuf:"varint,10,opt,name=dvr_chapter_interval_seconds,json=dvrChapterIntervalSeconds,proto3" json:"dvr_chapter_interval_seconds,omitempty"`
+	// Version 1 includes all publisher configuration used by local admission.
+	PublisherConfigurationVersion uint32 `protobuf:"varint,11,opt,name=publisher_configuration_version,json=publisherConfigurationVersion,proto3" json:"publisher_configuration_version,omitempty"`
+	unknownFields                 protoimpl.UnknownFields
+	sizeCache                     protoimpl.SizeCache
 }
 
 func (x *LiveStreamAuthority) Reset() {
@@ -1685,6 +1689,27 @@ func (x *LiveStreamAuthority) GetSealedCellSecrets() []*SealedCellSecret {
 		return x.SealedCellSecrets
 	}
 	return nil
+}
+
+func (x *LiveStreamAuthority) GetDvrChapterMode() string {
+	if x != nil {
+		return x.DvrChapterMode
+	}
+	return ""
+}
+
+func (x *LiveStreamAuthority) GetDvrChapterIntervalSeconds() int32 {
+	if x != nil {
+		return x.DvrChapterIntervalSeconds
+	}
+	return 0
+}
+
+func (x *LiveStreamAuthority) GetPublisherConfigurationVersion() uint32 {
+	if x != nil {
+		return x.PublisherConfigurationVersion
+	}
+	return 0
 }
 
 type ArtifactAuthority struct {
@@ -2083,7 +2108,7 @@ const file_media_authority_proto_rawDesc = "" +
 	"\x11MediaObjectSecret\x12!\n" +
 	"\fauthority_id\x18\x01 \x01(\tR\vauthorityId\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12Q\n" +
-	"\x10playback_webhook\x18\x03 \x01(\v2&.media_authority.PlaybackWebhookSecretR\x0fplaybackWebhook\"\xa3\x03\n" +
+	"\x10playback_webhook\x18\x03 \x01(\v2&.media_authority.PlaybackWebhookSecretR\x0fplaybackWebhook\"\xd6\x04\n" +
 	"\x13LiveStreamAuthority\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12\x1f\n" +
 	"\vingest_mode\x18\x02 \x01(\tR\n" +
@@ -2093,7 +2118,11 @@ const file_media_authority_proto_rawDesc = "" +
 	"\x11recording_enabled\x18\x05 \x01(\bR\x10recordingEnabled\x12%\n" +
 	"\x0eprocesses_json\x18\x06 \x01(\tR\rprocessesJson\x12,\n" +
 	"\x12dvr_processes_json\x18\a \x01(\tR\x10dvrProcessesJson\x12Q\n" +
-	"\x13sealed_cell_secrets\x18\b \x03(\v2!.media_authority.SealedCellSecretR\x11sealedCellSecrets\"\x86\x02\n" +
+	"\x13sealed_cell_secrets\x18\b \x03(\v2!.media_authority.SealedCellSecretR\x11sealedCellSecrets\x12(\n" +
+	"\x10dvr_chapter_mode\x18\t \x01(\tR\x0edvrChapterMode\x12?\n" +
+	"\x1cdvr_chapter_interval_seconds\x18\n" +
+	" \x01(\x05R\x19dvrChapterIntervalSeconds\x12F\n" +
+	"\x1fpublisher_configuration_version\x18\v \x01(\rR\x1dpublisherConfigurationVersion\"\x86\x02\n" +
 	"\x11ArtifactAuthority\x12\x1f\n" +
 	"\vartifact_id\x18\x01 \x01(\tR\n" +
 	"artifactId\x12#\n" +
