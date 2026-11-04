@@ -493,6 +493,8 @@ CREATE TABLE IF NOT EXISTS commodore.push_targets (
 
 CREATE INDEX IF NOT EXISTS idx_commodore_push_targets_tenant ON commodore.push_targets(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_push_targets_stream ON commodore.push_targets(tenant_id, stream_id);
+-- FK cascades look up stream_id without the tenant-leading application predicate.
+CREATE INDEX IF NOT EXISTS idx_commodore_push_targets_stream_fk ON commodore.push_targets(stream_id);
 
 ALTER TABLE commodore.push_targets
     DROP CONSTRAINT IF EXISTS ck_commodore_push_targets_platform;
@@ -1449,6 +1451,8 @@ CREATE TABLE IF NOT EXISTS commodore.policy_bundle_versions (
 CREATE INDEX IF NOT EXISTS idx_commodore_policy_bundle_versions_active
     ON commodore.policy_bundle_versions(tenant_id, stream_id, bundle_version DESC)
     WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_commodore_policy_bundle_versions_stream_fk
+    ON commodore.policy_bundle_versions(stream_id);
 
 -- ============================================================================
 -- DURABLE MEDIA AUTHORITY

@@ -1280,6 +1280,8 @@ FOGHORN_QUERY_CATALOG_REALPG_TESTS := $(FOGHORN_QUERY_CATALOG_REALPG_TESTS)|Test
 FOGHORN_QUERY_CATALOG_REALYB_TESTS_B := $(FOGHORN_QUERY_CATALOG_REALYB_TESTS_B)|TestPlacementAuthorityPairTenantAndVersionFences_RealYugabyte|TestControlReplicaCapabilityLedger_RealYugabyte|TestPlacementMembershipSnapshotStore_RealYugabyte|TestDVRDiagnosis_RealYugabyte|TestMediaAuthorityLookupIndexes_RealYugabyte
 FOGHORN_QUERY_CATALOG_REALYB_TESTS := $(FOGHORN_QUERY_CATALOG_REALYB_TESTS_A)|$(FOGHORN_QUERY_CATALOG_REALYB_TESTS_B)
 COMMODORE_QUERY_CATALOG_REALYB_TESTS := TestGeneratedQueryCatalogPrepares_RealYugabyte|TestArtifactCreationCommandAckLease_RealYugabyte|TestServiceEventOutboxPrunesDelivered_RealYugabyte
+COMMODORE_QUERY_CATALOG_REALPG_TESTS := $(COMMODORE_QUERY_CATALOG_REALPG_TESTS)|TestStreamFinalizationCascadeBounded_RealPG
+COMMODORE_QUERY_CATALOG_REALYB_TESTS := $(COMMODORE_QUERY_CATALOG_REALYB_TESTS)|TestStreamFinalizationCascadeBounded_RealYugabyte
 COMMODORE_PLACEMENT_REALYB_TESTS_A := TestMediaPlacementRepository_RealYugabyte|TestMediaPlacementManagement_RealYugabyte|TestMediaPlacementOptions_RealYugabyte|TestMediaPlacementPreview_RealYugabyte
 COMMODORE_PLACEMENT_REALYB_TESTS_B := TestMediaPlacementObjectPolicy_RealYugabyte|TestMediaPlacementObjectPolicyRetainedDefault_RealYugabyte|TestMediaPlacementDeliveryClaims_RealYugabyte|TestMediaPlacementDeadlineDelivery_RealYugabyte
 COMMODORE_MEDIA_AUTHORITY_REALPG_TESTS := TestMediaAuthorityObligationQueue_RealPG|TestMediaAuthorityPublishesOnlyOnChange_RealPG|TestMediaAuthorityFollowsUse_RealPG|TestMediaAuthorityInUseDecision_RealPG|TestMediaAuthorityReconcileReissuesOncePerCompilerChange_RealPG|TestMediaAuthorityDeliveryQueue_RealPG|TestMediaAuthorityConvergenceInvariants_RealPG|TestMediaAuthorityRetention_RealPG
@@ -1587,6 +1589,11 @@ verify-quartermaster-yugabyte-db:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-quartermaster-yugabyte-db requires a running Docker daemon"; exit 1; }
 	@echo "Verifying Quartermaster's converted repositories on Yugabyte (Docker)..."
 	@$(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory -k -j1 verify-yugabyte-quartermaster-contracts verify-yugabyte-distributed-quartermaster
+
+.PHONY: verify-stream-finalization-cascade
+verify-stream-finalization-cascade:
+	@$(CONTRACT_GO_TEST) api_control postgres/stream-finalization-cascade -tags schema_verify -run '^TestStreamFinalizationCascadeBounded_RealPG$$' -v -count=1 -timeout 180s ./internal/database/commodoredb/
+	@$(YUGABYTE_FIXTURE) $(CONTRACT_GO_TEST) api_control yugabyte/stream-finalization-cascade -tags schema_verify -run '^TestStreamFinalizationCascadeBounded_RealYugabyte$$' -v -count=1 -timeout 300s ./internal/database/commodoredb/
 
 verify-foghorn-db: verify-foghorn-test-selection
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-foghorn-db requires a running Docker daemon"; exit 1; }
