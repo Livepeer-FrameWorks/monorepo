@@ -74,6 +74,10 @@ expect "a 403 for another stream than the refused one still fails" \
   fails "0 foghorn ${refusal//abcDEF123/otherStream9}
 0 edge $mist_403"
 
+inconsistent='{"level":"warning","msg":"Ingest front door: resolution failed","code":"INGEST_RESOLUTION_FAILED","error":"placement authority is inconsistent"}'
+expect "a resolution refused on an inconsistent placement pair fails the check" \
+  fails "0 foghorn $inconsistent"
+
 # A deployed target runs only scenarios that inject no faults, so a service
 # logging at error level during the run is a finding there; on the stack the
 # fault scenarios cause error lines on purpose and only signatures count.

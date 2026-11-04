@@ -37,7 +37,10 @@ since_args=()
 analytics_signatures='Unknown event type|Dropping analytics event|Dropping (malformed )?push_rewrite|Failed to process event'
 # "is not a remote cluster": a Foghorn asked its own cluster for an artifact
 # through federation, which can never succeed and answers the reader 404.
-signatures="core dumped|dumped core|SIGSEGV|SIGABRT|terminate called|^panic:|goroutine [0-9]+ \\[running\\]|SQLSTATE|exhausted retries|Could not map process-controlled|unrecoverable error|Address already in use|is not a remote cluster|$analytics_signatures"
+# "placement authority is inconsistent": a Foghorn refused an ingest or viewer
+# resolution because the tenant and object authorities it holds disagree on the
+# placement revision, which a placement change in flight must never cause.
+signatures="core dumped|dumped core|SIGSEGV|SIGABRT|terminate called|^panic:|goroutine [0-9]+ \\[running\\]|SQLSTATE|exhausted retries|Could not map process-controlled|unrecoverable error|Address already in use|is not a remote cluster|placement authority is inconsistent|$analytics_signatures"
 case "$scenario" in
   # Thumbs giving up on a processing feed's data ends its sprite early and pins the recording.
   03-* | 04-* | 05-* | 24-* | 29-* | 39-*) scenario_signatures='PROCESS_TRACKS_CHANGED|Failed to load page|header.*not declared|Failed to claim thumbnail attempt|Thumbnail upload denied|freeze failed|MistProcThumbs.*EOP: data wait timeout' ;;
