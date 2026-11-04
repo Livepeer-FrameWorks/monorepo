@@ -10,6 +10,8 @@ import {
   loadMapLibre,
   readRuntimePublicConfig,
 } from "@frameworks/map-core";
+import timezoneCoordinates from "../../../data/timezone-coordinates.json";
+import { browserTimeZone, frameClusters, timezoneOrigin } from "../../../lib/mapFraming";
 import { useNetworkStatus } from "./useNetworkStatus";
 import { spreadOverlappingMarkers } from "./spreadOverlap";
 import { pointOnPath, samplePath } from "./arc";
@@ -43,6 +45,8 @@ const MEMBERSHIP_COLORS = {
   "livepeer-gateway": "rgba(34, 197, 94, 0.3)",
 };
 const UNKNOWN_GEO_ANCHOR = [-42, -145];
+const WORLD_CAMERA = { center: [10, 25], zoom: 2 };
+const FRAME_OPTIONS = { padding: 56, maxZoom: 4 };
 
 const ICON_MAXIMIZE = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`;
 const ICON_MINIMIZE = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`;
@@ -675,6 +679,7 @@ function NetworkMapInner({ data, viewport }) {
   const pulsePathsRef = useRef([]);
   const animationRef = useRef(null);
   const dataRef = useRef(data);
+  const frameRef = useRef(null);
   const showOrchestratorsRef = useRef(true);
   const selectFeatureRef = useRef(() => {});
   const [mapReady, setMapReady] = useState(false);
@@ -703,15 +708,23 @@ function NetworkMapInner({ data, viewport }) {
           import("maplibre-gl/dist/maplibre-gl.css"),
         ]);
         if (cancelled || !containerRef.current) return;
+        // The map opens on the clusters nearest the visitor's timezone; a
+        // camera the explorer kept from an earlier view takes precedence.
+        const frame = frameClusters(
+          dataRef.current?.clusters,
+          timezoneOrigin(browserTimeZone(), timezoneCoordinates)
+        );
+        frameRef.current = frame;
+        const opening =
+          viewport?.camera ??
+          (frame ? { bounds: frame, fitBoundsOptions: FRAME_OPTIONS } : WORLD_CAMERA);
         const map = new maplibre.Map({
           container: containerRef.current,
-          center: [10, 25],
-          zoom: 2,
           minZoom: 2,
           maxZoom: 8,
           scrollZoom: false,
           ...basemapMapOptions(runtime.basemap),
-          ...viewport?.camera,
+          ...opening,
         });
         unbindViewport = bindExplorerViewport(map, viewport);
         mapRef.current = map;
@@ -804,10 +817,12 @@ function NetworkMapInner({ data, viewport }) {
     setIsFullscreen((value) => !value);
     setTimeout(() => mapRef.current?.resize(), 310);
   }, []);
-  const resetView = useCallback(
-    () => mapRef.current?.easeTo({ center: [10, 25], zoom: 2, duration: 500 }),
-    []
-  );
+  const resetView = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (frameRef.current) map.fitBounds(frameRef.current, { ...FRAME_OPTIONS, duration: 500 });
+    else map.easeTo({ ...WORLD_CAMERA, duration: 500 });
+  }, []);
 
   return (
     <div
