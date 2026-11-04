@@ -27,6 +27,6 @@ case $? in
   2) blocked "the long-window run of scenario 04 was blocked" ;;
   *) fail "the long-window run of scenario 04 failed" ;;
 esac
-no_thumbs_data_timeout() { ! log_has "$LONG_SINCE" "MistProcThumbs.*EOP: data wait timeout" edge; }
+no_thumbs_data_timeout() { log_absent "$LONG_SINCE" "MistProcThumbs.*EOP: data wait timeout" edge; }
 check "Thumbs never gave up on data a paused finalize feed withheld" no_thumbs_data_timeout
 finish

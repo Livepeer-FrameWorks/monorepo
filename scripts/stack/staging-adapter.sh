@@ -53,7 +53,7 @@ stack_logs() {
 logs_since() {
   local since=$1 service
   shift
-  for service in "$@"; do stack_logs --since "$since" "$service"; done
+  for service in "$@"; do stack_logs --since "$since" "$service" || return 1; done
 }
 
 stack_ctl() {
@@ -142,7 +142,7 @@ log_json_at() {
     ($stamp | tonumber) as $micros |
     .at = (($micros / 1000000 | floor | strftime("%Y-%m-%dT%H:%M:%S")) + "." +
       (("000000" + (($micros % 1000000) | tostring))[-6:]) + "Z")' |
-    jq -c "$filter"
+    jq -rc "$filter"
 }
 
 mail_fault_start() {

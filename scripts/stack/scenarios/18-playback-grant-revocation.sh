@@ -120,8 +120,10 @@ done
 # whole seconds, which would count a new session's call made after the refusal
 # within the same second.
 foghorn_calls() {
+  local lines
   # shellcheck disable=SC2046 # one word per distinct edge service
-  log_json_at "$1" "select(.at < \"$2\" and (.msg == \"PLAY_REWRITE resolved by Foghorn\" or .msg == \"USER_NEW approved by Foghorn\" or .msg == \"USER_NEW denied by Foghorn\")) | .msg" $(printf '%s\n' "${EDGE[@]}" | sort -u) | grep -c .
+  lines=$(log_json_at "$1" "select(.at < \"$2\" and (.msg == \"PLAY_REWRITE resolved by Foghorn\" or .msg == \"USER_NEW approved by Foghorn\" or .msg == \"USER_NEW denied by Foghorn\")) | .msg" $(printf '%s\n' "${EDGE[@]}" | sort -u)) || return 1
+  printf '%s\n' "$lines" | awk 'NF { n++ } END { print n+0 }'
 }
 for n in 1 2; do
   kid=$(echo "${KEY[$n]}" | jq -r .kid)
@@ -139,8 +141,11 @@ for n in 1 2; do
   eventually 60 "$SERVING (viewer $n's edge) refused key $n's session on the updated grant" refused_on_edge || break
   rerun_refused() { log_has "$SINCE" 'USER_NEW refused: session failed' "$SERVING"; }
   eventually 20 "Mist's re-run USER_NEW for it was answered on $SERVING" rerun_refused
-  calls=$(foghorn_calls "$SINCE" "$REFUSED_AT")
-  check "the re-check sent no per-viewer trigger to Foghorn until the refusal (got $calls)" [ "$calls" = 0 ]
+  if calls=$(foghorn_calls "$SINCE" "$REFUSED_AT"); then
+    check "the re-check sent no per-viewer trigger to Foghorn until the refusal (got $calls)" [ "$calls" = 0 ]
+  else
+    fail "could not read per-viewer trigger calls before the refusal"
+  fi
   gone() { stopped "$n" "$SINCE_S"; }
   eventually 30 "viewer $n (revoked key) no longer gets media" gone
   kill "${POLLER[$n]}" 2>/dev/null

@@ -105,11 +105,8 @@ check "a cold block read of $VHASH stalled mid-body" json_has "$STALL" '.stalled
 check "the relay resumed the stalled read from inside its range" json_has "$STALL" '.resumes | length >= 1'
 # Mist's downloader gives a source read up after 5 s without data and logs it;
 # the relay resumes a stalled upstream before that, so Mist's read never stops.
-if log_has "$SINCE" "Timeout while retrieving .*$VHASH" "$STACK_EDGE_B_SERVICE"; then
-  fail "Mist on edge-b timed out reading $VHASH through the relay"
-else
-  pass "Mist on edge-b never timed out reading $VHASH through the relay"
-fi
+check "Mist on edge-b never timed out reading $VHASH through the relay" log_absent \
+  "$SINCE" "Timeout while retrieving .*$VHASH" "$STACK_EDGE_B_SERVICE"
 check "every segment of the full ${SECONDS_LONG}s plays through cell B" gapless_segments "$B" "$VPB"
 
 check "every read of $WHASH from its block start stalls and every resume answers 4 s late" \

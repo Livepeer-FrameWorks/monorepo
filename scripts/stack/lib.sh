@@ -178,8 +178,16 @@ utc_now() { date -u +%Y-%m-%dT%H:%M:%S.%NZ; }
 log_has() {
   local since=$1 pattern=$2 out
   shift 2
-  out=$(logs_since "$since" "$@")
+  out=$(logs_since "$since" "$@") || return 2
   printf '%s\n' "$out" | grep -E "$pattern" >/dev/null
+}
+# log_absent proves absence only after reading every requested service's log.
+log_absent() {
+  local since=$1 pattern=$2 out status=0
+  shift 2
+  out=$(logs_since "$since" "$@") || return 1
+  printf '%s\n' "$out" | grep -E "$pattern" >/dev/null || status=$?
+  [ "$status" = 1 ]
 }
 # log_json <since> <jq filter> <service...>: the service's JSON log lines through
 # a filter; lines that are not JSON are skipped.
