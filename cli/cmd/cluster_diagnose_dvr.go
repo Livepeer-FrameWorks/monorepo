@@ -52,6 +52,9 @@ instead. Requires a platform-operator login.`,
   frameworks cluster diagnose dvr 5f0c2a9e8b7d4c1e9a3b6d2f7e8c1a4b --service foghorn-eu --output json`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := recordDiagnosticRead(cmd.Context(), "dvr", args[0], service); err != nil {
+				return err
+			}
 			ctxCfg, err := activeContextWithAuth(cmd.Context())
 			if err != nil {
 				return err
@@ -138,7 +141,7 @@ func foghornEntryForDVR(manifest *inventory.Manifest, originClusterID, service s
 		switch {
 		case svc.Cluster == "" && len(svc.Clusters) == 0:
 			unassigned = append(unassigned, name)
-		case originClusterID != "" && (svc.Cluster == originClusterID || slices.Contains(svc.Clusters, originClusterID)):
+		case originClusterID != "" && diagnosticServiceServesTarget(manifest, svc, originClusterID):
 			serving = append(serving, name)
 		}
 	}
@@ -159,7 +162,7 @@ func foghornEntryForDVR(manifest *inventory.Manifest, originClusterID, service s
 	case len(entries) == 1 && len(unassigned) == 1:
 		return unassigned[0], nil
 	case originClusterID == "":
-		return "", fmt.Errorf("commodore records no origin cluster for this DVR; pass --service (entries: %s)", strings.Join(entries, ", "))
+		return "", fmt.Errorf("commodore records no origin cluster for this resource; pass --service (entries: %s)", strings.Join(entries, ", "))
 	default:
 		return "", fmt.Errorf("no manifest Foghorn entry lists cluster %q in its clusters; pass --service (entries: %s)", originClusterID, strings.Join(entries, ", "))
 	}
@@ -287,6 +290,15 @@ func (s *liveDVRDiagnosisSource) Manifest(ctx context.Context) (*inventory.Manif
 }
 
 func (s *liveDVRDiagnosisSource) DiagnoseDVR(ctx context.Context, entry, dvrHash string) (*foghornpb.DiagnoseDVRResponse, error) {
+	fh, err := s.foghornClient(ctx, entry)
+	if err != nil {
+		return nil, err
+	}
+	defer fh.Close()
+	return fh.DiagnoseDVR(ctx, dvrHash)
+}
+
+func (s *liveDVRDiagnosisSource) foghornClient(ctx context.Context, entry string) (*fhclient.GRPCClient, error) {
 	var ep controlplane.Endpoint
 	var err error
 	if entry == "" {
@@ -297,10 +309,31 @@ func (s *liveDVRDiagnosisSource) DiagnoseDVR(ctx context.Context, entry, dvrHash
 	if err != nil {
 		return nil, err
 	}
-	fh, err := fhclient.NewGRPCClient(adminFoghornGRPCConfig(ep, s.ctxCfg))
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to Foghorn gRPC: %w", err)
+	return fhclient.NewGRPCClient(adminFoghornGRPCConfig(ep, s.ctxCfg))
+}
+
+// A signed authority names a cell; stream and node claims name a virtual
+// cluster. Both identify the same Foghorn entry through the manifest topology.
+func diagnosticServiceServesTarget(manifest *inventory.Manifest, svc inventory.ServiceConfig, target string) bool {
+	clusters := append([]string{svc.Cluster}, svc.Clusters...)
+	for _, id := range clusters {
+		if id == target {
+			return true
+		}
+		cluster, ok := manifest.Clusters[id]
+		if !ok {
+			continue
+		}
+		cell := cluster.ControlCell
+		if cell == "" {
+			cell = cluster.Cell
+		}
+		if cell == "" {
+			cell = id
+		}
+		if cell == target {
+			return true
+		}
 	}
-	defer func() { _ = fh.Close() }()
-	return fh.DiagnoseDVR(ctx, dvrHash)
+	return false
 }

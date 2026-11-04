@@ -27,6 +27,8 @@ import "x402.proto";
 
 // BillingService handles billing tiers, subscriptions, and invoices
 service BillingService {
+  // Read-only support snapshot; requires a platform-operator JWT.
+  rpc DiagnoseBilling(DiagnoseBillingRequest) returns (DiagnoseBillingResponse);
   // Billing tiers
   rpc GetBillingTiers(GetBillingTiersRequest) returns (GetBillingTiersResponse);
   rpc GetBillingTier(GetBillingTierRequest) returns (BillingTier);
@@ -2335,4 +2337,53 @@ message AdminRecoverTierUpgradeResponse {
   string detail = 7;
   // Operator who waived complete metering, empty without a waiver.
   string metering_waived_by = 8;
+}
+
+message DiagnoseBillingRequest { string tenant_id = 1; }
+
+// Provider identifiers and bookkeeping only; no payment credentials or payloads.
+message DiagnoseBillingResponse {
+  string tenant_id = 1;
+  string status = 2;
+  string tier = 3;
+  string billing_model = 4;
+  string period_start = 5;
+  string period_end = 6;
+  string provider = 7;
+  string stripe_customer_id = 8;
+  string stripe_subscription_id = 9;
+  string stripe_price_id = 10;
+  string mollie_subscription_id = 11;
+  string pending_tier_id = 12;
+  string pending_effective_at = 13;
+  string pending_provider_tier_id = 14;
+  string free_fallback_at = 15;
+  string free_fallback_reason = 16;
+  repeated BillingDiagnosticIntent intents = 17;
+  repeated BillingDiagnosticInvoice invoices = 18;
+  repeated PrepaidBalance balances = 19;
+  repeated CheckoutRecoveryItem pending_webhooks = 20;
+  int64 intent_count = 21;
+  int64 invoice_count = 22;
+  bool pending_webhooks_has_more = 23;
+}
+message BillingDiagnosticIntent {
+  string id = 1;
+  string provider = 2;
+  string purpose = 3;
+  string status = 4;
+  string submission_state = 5;
+  int64 amount_cents = 6;
+  string currency = 7;
+  int32 attempts = 8;
+  bool has_error = 9;
+  string created_at = 10;
+}
+message BillingDiagnosticInvoice {
+  string id = 1;
+  string number = 2;
+  string status = 3;
+  string amount = 4;
+  string currency = 5;
+  string due_at = 6;
 }

@@ -4800,6 +4800,7 @@ func jwtCapableMethods() []string {
 		foghornpb.NodeControlService_GetNodeHealth_FullMethodName,
 		foghornpb.NodeControlService_ListNodeUpdateStatus_FullMethodName,
 		foghornpb.DVRControlService_DiagnoseDVR_FullMethodName,
+		foghornpb.MediaPlacementControlService_DiagnoseStream_FullMethodName,
 	}
 }
 

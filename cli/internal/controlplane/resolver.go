@@ -42,6 +42,7 @@ type serviceSpec struct {
 }
 
 var grpcServices = map[string]serviceSpec{
+	"bosun": {configName: "bosun_grpc_addr", manifestID: "bosun", localAddr: func(ep fwcfg.Endpoints) string { return ep.BosunGRPCAddr }},
 	"commodore": {
 		configName:   "commodore_grpc_addr",
 		manifestID:   "commodore",

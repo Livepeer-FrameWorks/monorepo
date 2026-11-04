@@ -793,9 +793,10 @@ type GetNodeHealthResponse struct {
 	ComponentVersions []*NodeComponentVersion `protobuf:"bytes,20,rep,name=component_versions,json=componentVersions,proto3" json:"component_versions,omitempty"`
 	// Edge config last applied by the provisioner, as the node reports it.
 	// Empty when the node has not reported a provisioned-config marker.
-	ProvisionedConfigCliVersion   string `protobuf:"bytes,21,opt,name=provisioned_config_cli_version,json=provisionedConfigCliVersion,proto3" json:"provisioned_config_cli_version,omitempty"`
-	ProvisionedConfigDigest       string `protobuf:"bytes,22,opt,name=provisioned_config_digest,json=provisionedConfigDigest,proto3" json:"provisioned_config_digest,omitempty"`
-	ProvisionedConfigRenderDigest string `protobuf:"bytes,23,opt,name=provisioned_config_render_digest,json=provisionedConfigRenderDigest,proto3" json:"provisioned_config_render_digest,omitempty"`
+	ProvisionedConfigCliVersion   string   `protobuf:"bytes,21,opt,name=provisioned_config_cli_version,json=provisionedConfigCliVersion,proto3" json:"provisioned_config_cli_version,omitempty"`
+	ProvisionedConfigDigest       string   `protobuf:"bytes,22,opt,name=provisioned_config_digest,json=provisionedConfigDigest,proto3" json:"provisioned_config_digest,omitempty"`
+	ProvisionedConfigRenderDigest string   `protobuf:"bytes,23,opt,name=provisioned_config_render_digest,json=provisionedConfigRenderDigest,proto3" json:"provisioned_config_render_digest,omitempty"`
+	Capabilities                  []string `protobuf:"bytes,24,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	unknownFields                 protoimpl.UnknownFields
 	sizeCache                     protoimpl.SizeCache
 }
@@ -989,6 +990,13 @@ func (x *GetNodeHealthResponse) GetProvisionedConfigRenderDigest() string {
 		return x.ProvisionedConfigRenderDigest
 	}
 	return ""
+}
+
+func (x *GetNodeHealthResponse) GetCapabilities() []string {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
 }
 
 type NodeComponentVersion struct {
@@ -1859,7 +1867,7 @@ const file_foghorn_control_proto_rawDesc = "" +
 	"\amessage\x18\x03 \x01(\tR\amessage\x12:\n" +
 	"\x06status\x18\x04 \x01(\x0e2\".foghorn_control.SetNodeModeStatusR\x06status\"/\n" +
 	"\x14GetNodeHealthRequest\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\xf7\a\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\x9b\b\n" +
 	"\x15GetNodeHealthResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12)\n" +
 	"\x10operational_mode\x18\x02 \x01(\tR\x0foperationalMode\x12\x1d\n" +
@@ -1888,7 +1896,8 @@ const file_foghorn_control_proto_rawDesc = "" +
 	"\x12component_versions\x18\x14 \x03(\v2%.foghorn_control.NodeComponentVersionR\x11componentVersions\x12C\n" +
 	"\x1eprovisioned_config_cli_version\x18\x15 \x01(\tR\x1bprovisionedConfigCliVersion\x12:\n" +
 	"\x19provisioned_config_digest\x18\x16 \x01(\tR\x17provisionedConfigDigest\x12G\n" +
-	" provisioned_config_render_digest\x18\x17 \x01(\tR\x1dprovisionedConfigRenderDigestB\v\n" +
+	" provisioned_config_render_digest\x18\x17 \x01(\tR\x1dprovisionedConfigRenderDigest\x12\"\n" +
+	"\fcapabilities\x18\x18 \x03(\tR\fcapabilitiesB\v\n" +
 	"\t_latitudeB\f\n" +
 	"\n" +
 	"_longitude\"N\n" +

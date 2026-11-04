@@ -22,6 +22,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	BillingService_DiagnoseBilling_FullMethodName            = "/purser.BillingService/DiagnoseBilling"
 	BillingService_GetBillingTiers_FullMethodName            = "/purser.BillingService/GetBillingTiers"
 	BillingService_GetBillingTier_FullMethodName             = "/purser.BillingService/GetBillingTier"
 	BillingService_ListMeterDefinitions_FullMethodName       = "/purser.BillingService/ListMeterDefinitions"
@@ -38,6 +39,8 @@ const (
 //
 // BillingService handles billing tiers, subscriptions, and invoices
 type BillingServiceClient interface {
+	// Read-only support snapshot; requires a platform-operator JWT.
+	DiagnoseBilling(ctx context.Context, in *DiagnoseBillingRequest, opts ...grpc.CallOption) (*DiagnoseBillingResponse, error)
 	// Billing tiers
 	GetBillingTiers(ctx context.Context, in *GetBillingTiersRequest, opts ...grpc.CallOption) (*GetBillingTiersResponse, error)
 	GetBillingTier(ctx context.Context, in *GetBillingTierRequest, opts ...grpc.CallOption) (*BillingTier, error)
@@ -62,6 +65,16 @@ type billingServiceClient struct {
 
 func NewBillingServiceClient(cc grpc.ClientConnInterface) BillingServiceClient {
 	return &billingServiceClient{cc}
+}
+
+func (c *billingServiceClient) DiagnoseBilling(ctx context.Context, in *DiagnoseBillingRequest, opts ...grpc.CallOption) (*DiagnoseBillingResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DiagnoseBillingResponse)
+	err := c.cc.Invoke(ctx, BillingService_DiagnoseBilling_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *billingServiceClient) GetBillingTiers(ctx context.Context, in *GetBillingTiersRequest, opts ...grpc.CallOption) (*GetBillingTiersResponse, error) {
@@ -150,6 +163,8 @@ func (c *billingServiceClient) ListTenantBillingSnapshots(ctx context.Context, i
 //
 // BillingService handles billing tiers, subscriptions, and invoices
 type BillingServiceServer interface {
+	// Read-only support snapshot; requires a platform-operator JWT.
+	DiagnoseBilling(context.Context, *DiagnoseBillingRequest) (*DiagnoseBillingResponse, error)
 	// Billing tiers
 	GetBillingTiers(context.Context, *GetBillingTiersRequest) (*GetBillingTiersResponse, error)
 	GetBillingTier(context.Context, *GetBillingTierRequest) (*BillingTier, error)
@@ -176,6 +191,9 @@ type BillingServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedBillingServiceServer struct{}
 
+func (UnimplementedBillingServiceServer) DiagnoseBilling(context.Context, *DiagnoseBillingRequest) (*DiagnoseBillingResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DiagnoseBilling not implemented")
+}
 func (UnimplementedBillingServiceServer) GetBillingTiers(context.Context, *GetBillingTiersRequest) (*GetBillingTiersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBillingTiers not implemented")
 }
@@ -219,6 +237,24 @@ func RegisterBillingServiceServer(s grpc.ServiceRegistrar, srv BillingServiceSer
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&BillingService_ServiceDesc, srv)
+}
+
+func _BillingService_DiagnoseBilling_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DiagnoseBillingRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BillingServiceServer).DiagnoseBilling(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BillingService_DiagnoseBilling_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BillingServiceServer).DiagnoseBilling(ctx, req.(*DiagnoseBillingRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _BillingService_GetBillingTiers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -372,6 +408,10 @@ var BillingService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "purser.BillingService",
 	HandlerType: (*BillingServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "DiagnoseBilling",
+			Handler:    _BillingService_DiagnoseBilling_Handler,
+		},
 		{
 			MethodName: "GetBillingTiers",
 			Handler:    _BillingService_GetBillingTiers_Handler,

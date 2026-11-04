@@ -321,6 +321,8 @@ func setEndpointURL(ep *fwcfg.Endpoints, svc, url string) error {
 		ep.CommodoreGRPCAddr = url
 	case "quartermaster-grpc":
 		ep.QuartermasterGRPCAddr = url
+	case "bosun-grpc":
+		ep.BosunGRPCAddr = url
 	case "purser-grpc":
 		ep.PurserGRPCAddr = url
 	case "periscope-grpc":

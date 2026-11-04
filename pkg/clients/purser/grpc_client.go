@@ -851,3 +851,7 @@ func (c *GRPCClient) AdminRecoverTierUpgrade(ctx context.Context, r *purserpb.Ad
 func (c *GRPCClient) AdminRecoverTierDowngrade(ctx context.Context, r *purserpb.AdminRecoverTierDowngradeRequest) (*purserpb.AdminRecoverTierDowngradeResponse, error) {
 	return c.prepaid.AdminRecoverTierDowngrade(ctx, r)
 }
+
+func (c *GRPCClient) DiagnoseBilling(ctx context.Context, tenantID string) (*purserpb.DiagnoseBillingResponse, error) {
+	return c.billing.DiagnoseBilling(ctx, &purserpb.DiagnoseBillingRequest{TenantId: tenantID})
+}

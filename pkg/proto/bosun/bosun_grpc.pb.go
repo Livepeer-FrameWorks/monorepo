@@ -19,6 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	BosunService_DiagnoseWebhooks_FullMethodName            = "/bosun.BosunService/DiagnoseWebhooks"
 	BosunService_ListWebhookEndpoints_FullMethodName        = "/bosun.BosunService/ListWebhookEndpoints"
 	BosunService_GetWebhookEndpoint_FullMethodName          = "/bosun.BosunService/GetWebhookEndpoint"
 	BosunService_CreateWebhookEndpoint_FullMethodName       = "/bosun.BosunService/CreateWebhookEndpoint"
@@ -47,6 +48,8 @@ const (
 // tenant, and an ID of another tenant's endpoint or delivery is NOT_FOUND. A
 // call without a tenant context is PERMISSION_DENIED.
 type BosunServiceClient interface {
+	// Explicit cross-tenant support read; requires a platform-operator JWT.
+	DiagnoseWebhooks(ctx context.Context, in *DiagnoseWebhooksRequest, opts ...grpc.CallOption) (*DiagnoseWebhooksResponse, error)
 	ListWebhookEndpoints(ctx context.Context, in *ListWebhookEndpointsRequest, opts ...grpc.CallOption) (*ListWebhookEndpointsResponse, error)
 	GetWebhookEndpoint(ctx context.Context, in *GetWebhookEndpointRequest, opts ...grpc.CallOption) (*WebhookEndpoint, error)
 	// Returns the endpoint and its signing secret. The secret is returned only
@@ -88,6 +91,16 @@ type bosunServiceClient struct {
 
 func NewBosunServiceClient(cc grpc.ClientConnInterface) BosunServiceClient {
 	return &bosunServiceClient{cc}
+}
+
+func (c *bosunServiceClient) DiagnoseWebhooks(ctx context.Context, in *DiagnoseWebhooksRequest, opts ...grpc.CallOption) (*DiagnoseWebhooksResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DiagnoseWebhooksResponse)
+	err := c.cc.Invoke(ctx, BosunService_DiagnoseWebhooks_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *bosunServiceClient) ListWebhookEndpoints(ctx context.Context, in *ListWebhookEndpointsRequest, opts ...grpc.CallOption) (*ListWebhookEndpointsResponse, error) {
@@ -242,6 +255,8 @@ func (c *bosunServiceClient) ReplayWebhookDeliveries(ctx context.Context, in *Re
 // tenant, and an ID of another tenant's endpoint or delivery is NOT_FOUND. A
 // call without a tenant context is PERMISSION_DENIED.
 type BosunServiceServer interface {
+	// Explicit cross-tenant support read; requires a platform-operator JWT.
+	DiagnoseWebhooks(context.Context, *DiagnoseWebhooksRequest) (*DiagnoseWebhooksResponse, error)
 	ListWebhookEndpoints(context.Context, *ListWebhookEndpointsRequest) (*ListWebhookEndpointsResponse, error)
 	GetWebhookEndpoint(context.Context, *GetWebhookEndpointRequest) (*WebhookEndpoint, error)
 	// Returns the endpoint and its signing secret. The secret is returned only
@@ -285,6 +300,9 @@ type BosunServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedBosunServiceServer struct{}
 
+func (UnimplementedBosunServiceServer) DiagnoseWebhooks(context.Context, *DiagnoseWebhooksRequest) (*DiagnoseWebhooksResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DiagnoseWebhooks not implemented")
+}
 func (UnimplementedBosunServiceServer) ListWebhookEndpoints(context.Context, *ListWebhookEndpointsRequest) (*ListWebhookEndpointsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListWebhookEndpoints not implemented")
 }
@@ -346,6 +364,24 @@ func RegisterBosunServiceServer(s grpc.ServiceRegistrar, srv BosunServiceServer)
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&BosunService_ServiceDesc, srv)
+}
+
+func _BosunService_DiagnoseWebhooks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DiagnoseWebhooksRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BosunServiceServer).DiagnoseWebhooks(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BosunService_DiagnoseWebhooks_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BosunServiceServer).DiagnoseWebhooks(ctx, req.(*DiagnoseWebhooksRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _BosunService_ListWebhookEndpoints_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -607,6 +643,10 @@ var BosunService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "bosun.BosunService",
 	HandlerType: (*BosunServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "DiagnoseWebhooks",
+			Handler:    _BosunService_DiagnoseWebhooks_Handler,
+		},
 		{
 			MethodName: "ListWebhookEndpoints",
 			Handler:    _BosunService_ListWebhookEndpoints_Handler,

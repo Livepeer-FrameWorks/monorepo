@@ -7,6 +7,7 @@ package purserdb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -294,6 +295,7 @@ type Querier interface {
 	GetAllowancePricing(ctx context.Context, arg GetAllowancePricingParams) (GetAllowancePricingRow, error)
 	GetBalanceTransactionAmountByReference(ctx context.Context, arg GetBalanceTransactionAmountByReferenceParams) (int64, error)
 	GetBalanceTransactionByReference(ctx context.Context, arg GetBalanceTransactionByReferenceParams) (GetBalanceTransactionByReferenceRow, error)
+	GetBillingDiagnosis(ctx context.Context, tenantID uuid.UUID) (json.RawMessage, error)
 	GetBillingInvoiceAmountCents(ctx context.Context, invoiceID string) (int64, error)
 	GetBillingInvoiceTenant(ctx context.Context, invoiceID string) (string, error)
 	GetBillingPaymentByProviderTransaction(ctx context.Context, arg GetBillingPaymentByProviderTransactionParams) (GetBillingPaymentByProviderTransactionRow, error)

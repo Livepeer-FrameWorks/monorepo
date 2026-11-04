@@ -294,3 +294,15 @@ An operator's confirmed abandoned-fallback email retry emits
 `changed_fields`, the authenticated actor in the envelope and the operator
 reason in the payload. It requeues only the displayed notification lifecycle;
 it never emits a checkout-recovery action or changes payment objects.
+
+## CLI diagnostic access history
+
+The operator CLI records `diagnose.billing`, `diagnose.webhooks`,
+`diagnose.stream`, `diagnose.node`, and `diagnose.dvr` access attempts through
+Commodore's operator-only `AdminRecordDiagnosticRead`. The verified JWT supplies
+the actor and account tenant; the requested resource is the target. These entries
+reuse `commodore.operator_account_audit` and its private account-history read.
+They describe requested access, including attempts whose diagnostic read later
+fails. They are not tenant domain events and are not projected to customer
+webhooks. Direct service RPC calls do not automatically append these CLI entries.
+The release data preview is read-only and does not append account-history rows.

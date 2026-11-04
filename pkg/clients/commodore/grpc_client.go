@@ -1678,3 +1678,12 @@ func (c *GRPCClient) AbandonPublisherLease(ctx context.Context, cellID, nodeID, 
 	_, err := c.internal.AbandonPublisherLease(withServiceAuth(ctx), &commodorepb.AbandonPublisherLeaseRequest{ControlCellId: cellID, NodeId: nodeID, ExecutionToken: executionToken})
 	return err
 }
+
+func (c *GRPCClient) AdminRecordDiagnosticRead(ctx context.Context, req *commodorepb.AdminRecordDiagnosticReadRequest) error {
+	_, err := c.user.AdminRecordDiagnosticRead(ctx, req)
+	return err
+}
+
+func (c *GRPCClient) DiagnoseStream(ctx context.Context, identifier string) (*commodorepb.DiagnoseStreamResponse, error) {
+	return c.stream.DiagnoseStream(ctx, &commodorepb.DiagnoseStreamRequest{Identifier: identifier})
+}

@@ -48,6 +48,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
@@ -5284,8 +5285,10 @@ func (s *FoghornGRPCServer) GetNodeHealth(ctx context.Context, req *foghorncontr
 	if ns == nil {
 		return nil, status.Error(codes.NotFound, "node not found")
 	}
-	if err := authorizeNodeLifecycle(ctx, ns); err != nil {
-		return nil, err
+	if operatorErr := middleware.RequirePlatformOperatorJWT(ctx); operatorErr != nil {
+		if err := authorizeNodeLifecycle(ctx, ns); err != nil {
+			return nil, err
+		}
 	}
 
 	lastHB := ""
@@ -5315,6 +5318,14 @@ func (s *FoghornGRPCServer) GetNodeHealth(ctx context.Context, req *foghorncontr
 		ProvisionedConfigCliVersion:   ns.ProvisionedConfigCLIVersion,
 		ProvisionedConfigDigest:       ns.ProvisionedConfigDigest,
 		ProvisionedConfigRenderDigest: ns.ProvisionedConfigRenderDigest,
+	}
+	for _, capability := range []struct {
+		name    string
+		enabled bool
+	}{{"ingest", ns.CapIngest}, {"edge", ns.CapEdge}, {"storage", ns.CapStorage}, {"processing", ns.CapProcessing}} {
+		if capability.enabled {
+			resp.Capabilities = append(resp.Capabilities, capability.name)
+		}
 	}
 	if ns.Latitude != nil {
 		resp.Latitude = ns.Latitude
