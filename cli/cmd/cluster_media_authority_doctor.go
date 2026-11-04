@@ -68,12 +68,12 @@ SELECT 'invalid_indexes=' || count(*) FROM pg_index AS i
   WHERE ns.nspname = 'commodore' AND tbl.relname LIKE 'media_authority%' AND NOT (i.indisvalid AND i.indisready);
 ` + legacySchemaTenantsOnReadyCellsSQL
 
-// legacySchemaTenantsOnReadyCellsSQL counts, per cell that attests placement
-// enforcement, the tenants whose current authority is still on the policy-free
-// schema 1. That cell's replicas refuse such a tenant's live, managed and
-// pulled streams until its schema-2 authority is published.
+// The raw schema-1 counts include billing denials. Their identity-bound payloads
+// let the probe reader exclude explicit denials while retaining every permissive
+// or unreadable authority in the placement convergence gate.
 const legacySchemaTenantsOnReadyCellsSQL = `WITH stranded AS (
-  SELECT target.cell_id, target.authority_id
+  SELECT target.cell_id, target.authority_id, version.payload, version.payload_sha256,
+         version.issued_at, version.refresh_after, version.valid_until
   FROM commodore.media_authority_targets AS target
   JOIN commodore.media_cell_placement_capabilities AS capability
     ON capability.cell_id = target.cell_id AND capability.enforcement_ready AND capability.max_schema_version >= 2
@@ -86,7 +86,13 @@ const legacySchemaTenantsOnReadyCellsSQL = `WITH stranded AS (
 )
 SELECT 'legacy_schema_tenants_on_ready_cells=' || count(*) FROM stranded
 UNION ALL
-SELECT 'legacy_schema_tenants_cell:' || cell_id || '=' || count(*) FROM stranded GROUP BY cell_id;
+SELECT 'legacy_schema_tenants_cell:' || cell_id || '=' || count(*) FROM stranded GROUP BY cell_id
+UNION ALL
+SELECT 'legacy_schema_tenant_payload=' || json_build_object(
+  'cell_id', cell_id, 'tenant_id', authority_id,
+  'payload_hex', encode(payload, 'hex'), 'payload_sha256_hex', encode(payload_sha256, 'hex'),
+  'issued_at', issued_at, 'refresh_after', refresh_after, 'valid_until', valid_until)::text
+FROM stranded;
 `
 
 // A cell holding an authority past its validity is not by itself a problem: an
@@ -182,22 +188,31 @@ func doctorMediaAuthorityConvergence(ctx context.Context, rc *resolvedCluster, p
 // "######## database <name>" sections of the probe output.
 func parseMediaAuthorityDoctorOutput(stdout string) map[string]map[string]int64 {
 	values := map[string]map[string]int64{}
+	var legacyPayloads []string
 	database := ""
 	for _, line := range strings.Split(stdout, "\n") {
 		line = strings.TrimSpace(line)
 		if name, ok := strings.CutPrefix(line, "######## database "); ok {
 			database = strings.TrimSpace(name)
 			values[database] = map[string]int64{}
+			if database == "commodore" {
+				legacyPayloads = nil
+			}
 			continue
 		}
 		key, raw, ok := strings.Cut(line, "=")
 		if !ok || database == "" {
 			continue
 		}
+		if database == "commodore" && strings.TrimSpace(key) == "legacy_schema_tenant_payload" {
+			legacyPayloads = append(legacyPayloads, raw)
+			continue
+		}
 		if value, parseErr := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); parseErr == nil {
 			values[database][strings.TrimSpace(key)] = value
 		}
 	}
+	excludeLegacySchemaDenials(values["commodore"], legacyPayloads)
 	return values
 }
 

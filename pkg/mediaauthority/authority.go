@@ -262,7 +262,7 @@ func decodePayload(envelope *mediaauthoritypb.AuthorityEnvelope) (*Verified, err
 		if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(envelope.GetPayload(), payload); err != nil {
 			return nil, fmt.Errorf("%w: tenant payload: %w", ErrMalformed, err)
 		}
-		if err := validateTenant(envelope, payload); err != nil {
+		if err := ValidateTenantPayload(envelope, payload); err != nil {
 			return nil, err
 		}
 		verified.Tenant = payload
@@ -281,7 +281,12 @@ func decodePayload(envelope *mediaauthoritypb.AuthorityEnvelope) (*Verified, err
 	return verified, nil
 }
 
-func validateTenant(envelope *mediaauthoritypb.AuthorityEnvelope, payload *mediaauthoritypb.TenantAuthority) error {
+// ValidateTenantPayload checks tenant payload semantics against envelope metadata.
+// Callers must verify the envelope's signature, digest, and applicability separately.
+func ValidateTenantPayload(envelope *mediaauthoritypb.AuthorityEnvelope, payload *mediaauthoritypb.TenantAuthority) error {
+	if envelope == nil || payload == nil {
+		return fmt.Errorf("%w: tenant payload and envelope required", ErrMalformed)
+	}
 	if err := rejectUnknownFields(payload.ProtoReflect()); err != nil {
 		return err
 	}

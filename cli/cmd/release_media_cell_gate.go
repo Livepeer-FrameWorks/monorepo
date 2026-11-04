@@ -16,7 +16,8 @@ import (
 
 // A cell whose Foghorn replicas all enforce signed placement attests that to
 // Commodore, and from then on refuses every stream of a tenant whose current
-// authority is still on the policy-free schema 1. Commodore publishes schema-2
+// permissive authority is still on the policy-free schema 1. Signed billing
+// denials grant no new placement permission and are excluded. Commodore publishes schema-2
 // authority for the tenants targeting the cell once it attests. A Foghorn
 // upgrade therefore takes the cells one at a time, and before the next cell
 // starts, waits until the cell it just upgraded holds no schema-1 tenant, so a
@@ -40,8 +41,8 @@ type mediaCellAuthority struct {
 	Tracked bool
 	// Ready reports that the cell attests schema-2 placement enforcement.
 	Ready bool
-	// LegacyTenants counts the tenants targeting the cell whose current
-	// authority is on schema 1 while the cell enforces.
+	// LegacyTenants counts permissive or unreadable schema-1 authorities
+	// targeting a cell that enforces placement.
 	LegacyTenants int64
 }
 

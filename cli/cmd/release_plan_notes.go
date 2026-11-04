@@ -28,6 +28,6 @@ func writeFoghornCellGatePlan(out io.Writer, manifest *inventory.Manifest, servi
 	if len(foghorns) == 0 {
 		return
 	}
-	fmt.Fprintf(out, "     · %s: one cell at a time; after each cell, wait until it holds no tenant on the legacy (schema 1) authority before the next cell (stops after %s without a tenant converging)\n",
+	fmt.Fprintf(out, "     · %s: one cell at a time; after each cell, wait until it holds no permissive tenant on legacy (schema 1) authority before the next cell; explicit billing denials do not block (stops after %s without a tenant converging)\n",
 		strings.Join(foghorns, ", "), mediaCellGateStallWindow)
 }
