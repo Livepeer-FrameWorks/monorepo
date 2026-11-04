@@ -26,8 +26,8 @@ func ViewerLifecyclesCTE(where string) string {
 		  AND (tenant_id, node_id, session_id) IN (SELECT tenant_id, node_id, session_id FROM viewer_current)
 		GROUP BY tenant_id, node_id, session_id
 	), viewer_lifecycles AS (
-		SELECT tenant_id, stream_id, node_id, session_id, cluster_id, country_code, city,
-		       connected_at, disconnected_at, session_duration, last_updated,
+		SELECT tenant_id, stream_id, node_id, session_id, cluster_id, connector, country_code, city, latitude, longitude,
+		       connected_at, disconnected_at, session_duration, bytes_transferred, last_updated,
 		       ifNull(c.last_connected_at, c.connected_at) AS lifecycle_connected_at,
 		       toInt64(toUnixTimestamp(ifNull(c.last_connected_at, c.connected_at))) * 1000 AS lifecycle_connected_at_ms,
 		       (lifecycle_connected_at IS NOT NULL

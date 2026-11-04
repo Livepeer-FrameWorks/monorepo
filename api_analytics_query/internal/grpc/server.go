@@ -1239,32 +1239,34 @@ func (s *PeriscopeServer) GetViewerMetrics(ctx context.Context, req *periscopepb
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
+	// A session lists its current lifecycle (dbqueries.ViewerLifecyclesCTE): a
+	// resumed session that is live again lists from that lifecycle's connect
+	// with no disconnect, not as ended at an earlier lifecycle's disconnect.
 	streamID := req.GetStreamId()
-	sessionStartExpr := "ifNull(connected_at, disconnected_at)"
-	sessionEndExpr := "ifNull(disconnected_at, ?)"
-	overlapWhere := fmt.Sprintf("tenant_id = ? AND %s <= ? AND %s >= ?", sessionStartExpr, sessionEndExpr)
-	countQuery := fmt.Sprintf(`SELECT count(*) FROM periscope.viewer_sessions_current FINAL WHERE %s`, overlapWhere)
-	countArgs := []any{tenantID, endTime, endTime, startTime}
+	sessionFilter := "tenant_id = ?"
+	filterArgs := []any{tenantID}
 	if streamID != "" {
-		countQuery += " AND stream_id = ?"
-		countArgs = append(countArgs, streamID)
+		sessionFilter += " AND stream_id = ?"
+		filterArgs = append(filterArgs, streamID)
 	}
+	sessionStartExpr := "lifecycle_started_at"
+	withLifecycles := "WITH " + dbqueries.ViewerLifecyclesCTE(sessionFilter) + " "
+	overlapWhere := "lifecycle_started_at <= ? AND lifecycle_ended_at >= ?"
+	countQuery := withLifecycles + `SELECT count(*) FROM viewer_lifecycles WHERE ` + overlapWhere
+	countArgs := append(append([]any{}, filterArgs...), endTime, startTime)
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
-	// Query viewer_sessions_current with correct column names
-	query := `
-		SELECT session_id, ifNull(connected_at, disconnected_at) AS session_start, connected_at, disconnected_at, stream_id, node_id,
-			connector, country_code, city,
-			latitude, longitude, session_duration, bytes_transferred
-		FROM periscope.viewer_sessions_current FINAL
+	query := withLifecycles + `
+		SELECT session_id, lifecycle_started_at AS session_start,
+			if(lifecycle_open, lifecycle_connected_at, connected_at) AS listed_connected_at,
+			if(lifecycle_open, CAST(NULL AS Nullable(DateTime)), toNullable(lifecycle_ended_at)) AS listed_disconnected_at,
+			stream_id, node_id, connector, country_code, city, latitude, longitude,
+			if(lifecycle_open, toUInt32(greatest(0, dateDiff('second', lifecycle_connected_at, now()))), session_duration) AS listed_duration,
+			bytes_transferred
+		FROM viewer_lifecycles
 		WHERE ` + overlapWhere + `
 	`
-	args := []any{tenantID, endTime, endTime, startTime}
-
-	if streamID != "" {
-		query += " AND stream_id = ?"
-		args = append(args, streamID)
-	}
+	args := append(append([]any{}, filterArgs...), endTime, startTime)
 
 	keysetCond, keysetArgs := buildKeysetCondition(params, sessionStartExpr, "session_id")
 	if keysetCond != "" {
@@ -1413,24 +1415,27 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pe
 		topN = 10
 	}
 
-	sessionStartExpr := "ifNull(connected_at, disconnected_at)"
-	sessionEndExpr := "ifNull(disconnected_at, ?)"
-	whereClause := fmt.Sprintf("WHERE tenant_id = ? AND %s <= ? AND %s >= ?", sessionStartExpr, sessionEndExpr)
-	args := []any{tenantID, endTime, endTime, startTime}
-
+	// Sessions count once each; each is placed by its current lifecycle
+	// (dbqueries.ViewerLifecyclesCTE), so a resumed live session is current.
+	sessionFilter := "tenant_id = ?"
+	args := []any{tenantID}
 	if streamID := req.GetStreamId(); streamID != "" {
-		whereClause += " AND stream_id = ?"
+		sessionFilter += " AND stream_id = ?"
 		args = append(args, streamID)
 	}
+	args = append(args, endTime, startTime)
+	withLifecycles := "WITH " + dbqueries.ViewerLifecyclesCTE(sessionFilter)
+	whereClause := "WHERE lifecycle_started_at <= ? AND lifecycle_ended_at >= ?"
 
 	countryQuery := fmt.Sprintf(`
+		%s
 		SELECT country_code, uniqExact(node_id, session_id) as cnt
-		FROM periscope.viewer_sessions_current FINAL
+		FROM viewer_lifecycles
 		%s AND country_code != ''
 		GROUP BY country_code
 		ORDER BY cnt DESC
 		LIMIT %d
-	`, whereClause, topN)
+	`, withLifecycles, whereClause, topN)
 
 	countryRows, err := periscopequerydb.Query(ctx, s.clickhouse, countryQuery, args...)
 	if err != nil {
@@ -1456,10 +1461,11 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pe
 	}
 
 	totalQuery := fmt.Sprintf(`
+		%s
 		SELECT uniqExact(node_id, session_id)
-		FROM periscope.viewer_sessions_current FINAL
+		FROM viewer_lifecycles
 		%s AND country_code != ''
-	`, whereClause)
+	`, withLifecycles, whereClause)
 	if queryErr := periscopequerydb.QueryRow(ctx, s.clickhouse, totalQuery, args...).Scan(&totalViewersForPercent); queryErr != nil {
 		return nil, wrapClickhouseError(queryErr, "database error (countries)")
 	}
@@ -1472,14 +1478,15 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pe
 	}
 
 	cityQuery := fmt.Sprintf(`
+		%s
 		SELECT city, country_code, uniqExact(node_id, session_id) as cnt,
 		       ifNull(any(latitude), 0) as lat, ifNull(any(longitude), 0) as lon
-		FROM periscope.viewer_sessions_current FINAL
+		FROM viewer_lifecycles
 		%s AND city != ''
 		GROUP BY city, country_code
 		ORDER BY cnt DESC
 		LIMIT %d
-	`, whereClause, topN)
+	`, withLifecycles, whereClause, topN)
 
 	cityRows, err := periscopequerydb.Query(ctx, s.clickhouse, cityQuery, args...)
 	if err != nil {
@@ -1514,19 +1521,21 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pe
 
 	var uniqueCities uint64
 	uniqueCityQuery := fmt.Sprintf(`
+		%s
 		SELECT uniqExact(city, country_code)
-		FROM periscope.viewer_sessions_current FINAL
+		FROM viewer_lifecycles
 		%s AND city != ''
-	`, whereClause)
+	`, withLifecycles, whereClause)
 	if err := periscopequerydb.QueryRow(ctx, s.clickhouse, uniqueCityQuery, args...).Scan(&uniqueCities); err != nil {
 		s.logger.WithError(err).Warn("Failed to get unique city counts")
 	}
 
 	uniqueQuery := fmt.Sprintf(`
+		%s
 		SELECT uniqExact(country_code), uniqExact(node_id, session_id)
-		FROM periscope.viewer_sessions_current FINAL
+		FROM viewer_lifecycles
 		%s AND country_code != ''
-	`, whereClause)
+	`, withLifecycles, whereClause)
 
 	var uniqueCountries uint64
 	var totalViewersAll uint64

@@ -200,6 +200,74 @@ func TestStreamDailyAudienceUsesSessionEndDayAndExcludesEmptyGeo_RealClickHouse(
 	if tenantFormer != 0 || streamFormer != 0 || tenantShifted != 2<<30 || streamShifted != 2<<30 {
 		t.Fatalf("day-shift reprojection left stale facts: former=%d/%d shifted=%d/%d", tenantFormer, streamFormer, tenantShifted, streamShifted)
 	}
+
+	t.Run("a resumed session lists its live lifecycle", func(t *testing.T) {
+		testResumedViewerSessionListsLive(t, db)
+	})
+}
+
+// Mist reuses a viewer session id when a viewer resumes a playback after Mist
+// ended its session. While the second lifecycle is live, the session lists as
+// live from that lifecycle's connect and counts in the current geography,
+// rather than as ended at the first lifecycle's disconnect.
+func testResumedViewerSessionListsLive(t *testing.T, db *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	const tenantID = "7eed517e-ba5e-4a7a-817e-ba5eda7a0009"
+	const streamID = "7eedfeed-11fe-4a57-8eed-11feca570009"
+	now := time.Now().UTC().Truncate(time.Second)
+	event := func(kind string, at time.Time, duration uint32) {
+		t.Helper()
+		if _, err := db.ExecContext(ctx, `INSERT INTO periscope.viewer_connection_events
+			(event_id, timestamp, tenant_id, stream_id, internal_name, session_id, connection_addr, connector, node_id, cluster_id,
+			 country_code, city, latitude, longitude, event_type, session_duration, bytes_transferred)
+			VALUES (generateUUIDv4(), ?, ?, ?, 'live+resumed', 'session-resumed', '203.0.113.9', 'HLS', 'node-a', 'cluster-a',
+			 'NL', 'Amsterdam', 52.4, 4.9, ?, ?, 0)`, at, tenantID, streamID, kind, duration); err != nil {
+			t.Fatal(err)
+		}
+	}
+	event("connect", now.Add(-10*time.Minute), 0)
+	event("disconnect", now.Add(-9*time.Minute), 60)
+	if _, err := db.ExecContext(ctx, `INSERT INTO periscope.viewer_sessions_final
+		(tenant_id, node_id, session_id, source_event_id, cluster_id, stream_id, duration_seconds,
+		 source_started_at_ms, source_ended_at_ms, edge_received_at_ms, projection_version_ms, closed_reason, payload_raw)
+		VALUES (?, 'node-a', 'session-resumed', 'resumed-first', 'cluster-a', ?, 60, ?, ?, ?, ?, 'final', '{}')`,
+		tenantID, streamID, now.Add(-10*time.Minute).UnixMilli(), now.Add(-9*time.Minute).UnixMilli(),
+		now.Add(-9*time.Minute).UnixMilli(), time.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	resumed := now.Add(-2 * time.Minute)
+	event("connect", resumed, 0)
+
+	server := NewPeriscopeServer(db, logging.NewLogger())
+	svcCtx := context.WithValue(ctx, ctxkeys.KeyAuthType, "service")
+	listed, err := server.GetViewerMetrics(svcCtx, &periscopepb.GetViewerMetricsRequest{
+		TenantId:  tenantID,
+		TimeRange: &commonpb.TimeRange{Start: timestamppb.New(now.Add(-time.Hour)), End: timestamppb.New(now)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.GetSessions()) != 1 {
+		t.Fatalf("listed sessions %+v, want the one resumed session", listed.GetSessions())
+	}
+	session := listed.GetSessions()[0]
+	if session.GetDisconnectedAt() != nil || !session.GetConnectedAt().AsTime().Equal(resumed) ||
+		session.GetDurationSeconds() < 100 || session.GetDurationSeconds() > 300 {
+		t.Fatalf("resumed session listed connected=%v disconnected=%v duration=%ds, want live since %v for about 120s",
+			session.GetConnectedAt().AsTime(), session.GetDisconnectedAt(), session.GetDurationSeconds(), resumed)
+	}
+
+	geo, err := server.GetGeographicDistribution(svcCtx, &periscopepb.GetGeographicDistributionRequest{
+		TenantId:  tenantID,
+		TimeRange: &commonpb.TimeRange{Start: timestamppb.New(now.Add(-3 * time.Minute)), End: timestamppb.New(now)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if geo.GetTotalViewers() != 1 || len(geo.GetTopCountries()) != 1 || geo.GetTopCountries()[0].GetCountryCode() != "NL" {
+		t.Fatalf("current geography %+v, want the resumed viewer counted once in NL", geo)
+	}
 }
 
 func TestTenantDailyStatsIncludesRestreamEgressWithoutInventingViewers_RealClickHouse(t *testing.T) {

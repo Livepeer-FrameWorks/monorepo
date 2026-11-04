@@ -361,15 +361,15 @@ func TestGetGeographicDistributionEmptyKnownGeo(t *testing.T) {
 	db, server, mock := newLiveUsageSummaryServer(t)
 	defer db.Close()
 
-	mock.ExpectQuery(`SELECT country_code, uniqExact\(node_id, session_id\) as cnt[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
+	mock.ExpectQuery(`SELECT country_code, uniqExact\(node_id, session_id\) as cnt[\s\S]*FROM viewer_lifecycles`).
 		WillReturnRows(sqlmock.NewRows([]string{"country_code", "cnt"}))
-	mock.ExpectQuery(`SELECT uniqExact\(node_id, session_id\)[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
+	mock.ExpectQuery(`SELECT uniqExact\(node_id, session_id\)[\s\S]*FROM viewer_lifecycles`).
 		WillReturnRows(sqlmock.NewRows([]string{"total"}).AddRow(uint64(0)))
-	mock.ExpectQuery(`SELECT city, country_code, uniqExact\(node_id, session_id\) as cnt,[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
+	mock.ExpectQuery(`SELECT city, country_code, uniqExact\(node_id, session_id\) as cnt,[\s\S]*FROM viewer_lifecycles`).
 		WillReturnRows(sqlmock.NewRows([]string{"city", "country_code", "cnt", "lat", "lon"}))
-	mock.ExpectQuery(`SELECT uniqExact\(city, country_code\)[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
+	mock.ExpectQuery(`SELECT uniqExact\(city, country_code\)[\s\S]*FROM viewer_lifecycles`).
 		WillReturnRows(sqlmock.NewRows([]string{"unique_cities"}).AddRow(uint64(0)))
-	mock.ExpectQuery(`SELECT uniqExact\(country_code\), uniqExact\(node_id, session_id\)[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
+	mock.ExpectQuery(`SELECT uniqExact\(country_code\), uniqExact\(node_id, session_id\)[\s\S]*FROM viewer_lifecycles`).
 		WillReturnRows(sqlmock.NewRows([]string{"unique_countries", "total_viewers"}).AddRow(uint64(0), uint64(0)))
 
 	resp, err := server.GetGeographicDistribution(context.Background(), &periscopepb.GetGeographicDistributionRequest{
@@ -399,18 +399,18 @@ func TestGetGeographicDistributionUsesCurrentSessionOverlap(t *testing.T) {
 	db, server, mock := newLiveUsageSummaryServer(t)
 	defer db.Close()
 
-	mock.ExpectQuery(`SELECT country_code, uniqExact\(node_id, session_id\) as cnt[\s\S]*FROM periscope\.viewer_sessions_current FINAL[\s\S]*ifNull\(connected_at, disconnected_at\) <= \? AND ifNull\(disconnected_at, \?\) >= \?`).
+	mock.ExpectQuery(`SELECT country_code, uniqExact\(node_id, session_id\) as cnt[\s\S]*FROM viewer_lifecycles[\s\S]*lifecycle_started_at <= \? AND lifecycle_ended_at >= \?`).
 		WillReturnRows(sqlmock.NewRows([]string{"country_code", "cnt"}).
 			AddRow("NL", uint64(3)).
 			AddRow("DE", uint64(1)))
-	mock.ExpectQuery(`SELECT uniqExact\(node_id, session_id\)[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
+	mock.ExpectQuery(`SELECT uniqExact\(node_id, session_id\)[\s\S]*FROM viewer_lifecycles`).
 		WillReturnRows(sqlmock.NewRows([]string{"total"}).AddRow(uint64(4)))
-	mock.ExpectQuery(`SELECT city, country_code, uniqExact\(node_id, session_id\) as cnt,[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
+	mock.ExpectQuery(`SELECT city, country_code, uniqExact\(node_id, session_id\) as cnt,[\s\S]*FROM viewer_lifecycles`).
 		WillReturnRows(sqlmock.NewRows([]string{"city", "country_code", "cnt", "lat", "lon"}).
 			AddRow("The Hague", "NL", uint64(3), float64(52.0705), float64(4.3007)))
-	mock.ExpectQuery(`SELECT uniqExact\(city, country_code\)[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
+	mock.ExpectQuery(`SELECT uniqExact\(city, country_code\)[\s\S]*FROM viewer_lifecycles`).
 		WillReturnRows(sqlmock.NewRows([]string{"unique_cities"}).AddRow(uint64(1)))
-	mock.ExpectQuery(`SELECT uniqExact\(country_code\), uniqExact\(node_id, session_id\)[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
+	mock.ExpectQuery(`SELECT uniqExact\(country_code\), uniqExact\(node_id, session_id\)[\s\S]*FROM viewer_lifecycles`).
 		WillReturnRows(sqlmock.NewRows([]string{"unique_countries", "total_viewers"}).AddRow(uint64(2), uint64(4)))
 
 	resp, err := server.GetGeographicDistribution(context.Background(), &periscopepb.GetGeographicDistributionRequest{
