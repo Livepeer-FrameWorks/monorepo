@@ -30,7 +30,7 @@ func TestReleasePlanDescribesTheFoghornCellGate(t *testing.T) {
 	}}
 	var out bytes.Buffer
 	writeFoghornCellGatePlan(&out, manifest, []string{"commodore", "foghorn-eu"})
-	for _, want := range []string{"foghorn-eu", "one cell at a time", "no tenant on the legacy (schema 1) authority", "15m"} {
+	for _, want := range []string{"foghorn-eu", "one cell at a time", "no permissive tenant on legacy (schema 1) authority", "explicit billing denials do not block", "15m"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("plan lacks %q:\n%s", want, out.String())
 		}

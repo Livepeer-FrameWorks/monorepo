@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
 	"os"
@@ -17,8 +18,10 @@ import (
 	"frameworks/cli/pkg/ssh"
 
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
+	mediapb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockerpg"
 	_ "github.com/lib/pq"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestMediaAuthorityDoctorLegacySchemaTenantsRealPG runs the doctor's real
@@ -133,5 +136,48 @@ func TestMediaAuthorityDoctorLegacySchemaTenantsRealPG(t *testing.T) {
 	result = doctorMediaAuthorityConvergence(ctx, &resolvedCluster{Manifest: manifest}, pool, "")
 	if strings.Contains(result.Error, "still on schema 1") || strings.Contains(result.Error, "could not be checked") {
 		t.Fatalf("activated tenant still reported: status=%s error=%q", result.Status, result.Error)
+	}
+
+	const deniedTenant = "60000000-0000-4000-8000-000000000001"
+	payload := &mediapb.TenantAuthority{SchemaVersion: 1, TenantId: deniedTenant, Lifecycle: mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE, BillingDecision: mediapb.TenantBillingDecision_TENANT_BILLING_DECISION_PAYMENT_REQUIRED, BillingModel: mediapb.TenantBillingModel_TENANT_BILLING_MODEL_PREPAID, DecisionReason: "prepaid_balance_unavailable"}
+	writeVersion := func(version int, payload *mediapb.TenantAuthority) {
+		t.Helper()
+		wire, err := proto.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(wire)
+		if _, err := db.ExecContext(ctx, `INSERT INTO commodore.media_authority_versions
+            (authority_kind, authority_id, authority_version, payload_schema_version, payload, payload_sha256, tombstone, issued_at, refresh_after, valid_until)
+            VALUES ('tenant',$1,$2,1,$3,$4,FALSE,NOW(),NOW()+INTERVAL '1 hour',NOW()+INTERVAL '1 day')`, deniedTenant, version, wire, digest[:]); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `INSERT INTO commodore.media_authority_current(authority_kind,authority_id,authority_version)
+            VALUES ('tenant',$1,$2) ON CONFLICT(authority_kind,authority_id) DO UPDATE SET authority_version=EXCLUDED.authority_version`, deniedTenant, version); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeVersion(1, payload)
+	if _, err := db.ExecContext(ctx, `INSERT INTO commodore.media_authority_targets(authority_kind,authority_id,cell_id,highest_targeted_version)
+        VALUES ('tenant',$1,'cell-ready',1),('tenant',$1,'cell-legacy',1)`, deniedTenant); err != nil {
+		t.Fatal(err)
+	}
+	result = doctorMediaAuthorityConvergence(ctx, &resolvedCluster{Manifest: manifest}, pool, "")
+	if strings.Contains(result.Error, "still on schema 1") || strings.Contains(result.Error, "could not be checked") {
+		t.Fatalf("signed prepaid denial stranded rollout: status=%s error=%q", result.Status, result.Error)
+	}
+	state, err := readMediaCellAuthority(ctx, &resolvedCluster{Manifest: manifest}, pool, "", "cell-ready")
+	if err != nil || !state.Ready || state.LegacyTenants != 0 {
+		t.Fatalf("signed denial held release gate: state=%+v err=%v", state, err)
+	}
+	payload.BillingDecision = mediapb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW
+	writeVersion(2, payload)
+	result = doctorMediaAuthorityConvergence(ctx, &resolvedCluster{Manifest: manifest}, pool, "")
+	if result.Status != "unhealthy" || !strings.Contains(result.Error, want) {
+		t.Fatalf("restored permission bypassed placement activation: status=%s error=%q", result.Status, result.Error)
+	}
+	state, err = readMediaCellAuthority(ctx, &resolvedCluster{Manifest: manifest}, pool, "", "cell-ready")
+	if err != nil || state.LegacyTenants != 1 {
+		t.Fatalf("restored permission cleared release gate: state=%+v err=%v", state, err)
 	}
 }

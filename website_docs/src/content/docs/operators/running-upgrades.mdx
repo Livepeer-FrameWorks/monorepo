@@ -227,7 +227,9 @@ plan` and `release apply --dry-run` list every step and, per host, the role task
    [post-expand report](#post-expand-report) follows.
 3. **Service upgrades and reconciliations.** Platform services upgrade in dependency order, with
    any reconciliation transitions the release declares run at their declared points. A platform
-   service the manifest adds or moves to a new host is installed there. Once the services are
+   service the manifest adds or moves to a new host is installed there. Foghorn cells roll one
+   at a time: the next waits until the previous cell has no permissive schema-1 tenant authority.
+   Explicit signed billing denials do not block; unreadable authority still does. Once the services are
    upgraded, the Quartermaster bootstrap runs with this release's rendered desired state, as
    `cluster provision` runs it: the service registry, including each instance's health endpoint,
    the service catalog, and clusters. The desired state renders before the first mutation, so a
