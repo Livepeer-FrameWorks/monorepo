@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"frameworks/api_analytics_query/internal/database/meteringdb"
+	"frameworks/api_analytics_query/internal/database/periscopequerydb"
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
@@ -176,6 +177,69 @@ func TestCrossEngineMeteringReplayLateCorrectionAndFencing_RealEngines(t *testin
 	t.Run("a reused Mist session id bills each lifecycle", func(t *testing.T) {
 		testReusedViewerSessionBillsEachLifecycle(t, ctx, ch, bs)
 	})
+	t.Run("a resumed lifecycle without a final is reserved", func(t *testing.T) {
+		testResumedViewerLifecycleIsReserved(t, ctx, ch)
+	})
+}
+
+// A viewer resumed a playback after Mist ended its first session: the second
+// lifecycle, under the same session id, is live until its USER_END lands and
+// is held against the prepaid balance from its own connect. A session whose
+// final landed is not held, even when its disconnect event was lost.
+func testResumedViewerLifecycleIsReserved(t *testing.T, ctx context.Context, ch *sql.DB) {
+	t.Helper()
+	tenantID, streamID := uuid.NewString(), uuid.NewString()
+	now := time.Now().UTC().Truncate(time.Second)
+	event := func(sessionID, clusterID, kind string, at time.Time) {
+		t.Helper()
+		if _, err := ch.ExecContext(ctx, `INSERT INTO periscope.viewer_connection_events
+			(event_id,timestamp,tenant_id,stream_id,internal_name,session_id,connection_addr,connector,node_id,cluster_id,country_code,city,latitude,longitude,event_type,session_duration,bytes_transferred)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			uuid.NewString(), at, tenantID, streamID, "live+chain", sessionID, "203.0.113.9", "hls", "edge-chain-1", clusterID,
+			"US", "Test", 0.0, 0.0, kind, uint32(0), uint64(0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	final := func(sessionID, sourceEventID, clusterID string, startedAt, endedAt time.Time) {
+		t.Helper()
+		if _, err := ch.ExecContext(ctx, `INSERT INTO periscope.viewer_sessions_final
+			(tenant_id,node_id,session_id,source_event_id,cluster_id,stream_id,duration_seconds,uploaded_bytes,downloaded_bytes,source_started_at_ms,source_ended_at_ms,edge_received_at_ms,projection_version_ms,closed_reason,payload_raw)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			tenantID, "edge-chain-1", sessionID, sourceEventID, clusterID, streamID, uint32(endedAt.Sub(startedAt)/time.Second),
+			uint64(0), uint64(0), startedAt.UnixMilli(), endedAt.UnixMilli(), endedAt.UnixMilli(), time.Now().UnixMilli(), "final", "{}"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	event("session-resumed", "cluster-resumed", "connect", now.Add(-10*time.Minute))
+	event("session-resumed", "cluster-resumed", "disconnect", now.Add(-9*time.Minute))
+	final("session-resumed", "resumed-first", "cluster-resumed", now.Add(-10*time.Minute), now.Add(-9*time.Minute))
+	event("session-resumed", "cluster-resumed", "connect", now.Add(-2*time.Minute))
+	event("session-ended", "cluster-ended", "connect", now.Add(-5*time.Minute))
+	final("session-ended", "ended-only", "cluster-ended", now.Add(-5*time.Minute), now.Add(-4*time.Minute))
+
+	rows, err := periscopequerydb.ActiveViewerReservations.Query(ctx, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	held := map[string]float64{}
+	for rows.Next() {
+		var tenant, clusterID string
+		var minutes, egressGB float64
+		if err := rows.Scan(&tenant, &clusterID, &minutes, &egressGB); err != nil {
+			t.Fatal(err)
+		}
+		if tenant == tenantID {
+			held[clusterID] = minutes
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	minutes, resumedHeld := held["cluster-resumed"]
+	if !resumedHeld || minutes < 1.9 || minutes > 3 || len(held) != 1 {
+		t.Fatalf("reservations %v, want only the resumed lifecycle held for about 2 minutes on cluster-resumed", held)
+	}
 }
 
 // Mist ends a viewer session that made no request for 15 seconds and starts a

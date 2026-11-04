@@ -26,8 +26,8 @@ func TestStreamAnalyticsSummaryIncludesOverlappingBucket(t *testing.T) {
 	mock.ExpectQuery(`(?s)FROM periscope.client_qoe_5m.*timestamp_5m >= \? AND timestamp_5m < \?`).
 		WithArgs("tenant-1", "stream-1", bucket, end).
 		WillReturnRows(sqlmock.NewRows([]string{"loss", "connection"}).AddRow(0, 1))
-	mock.ExpectQuery(`(?s)SELECT.*sum\(seconds_observed\).*UNION ALL.*viewer_sessions_current`).
-		WithArgs("tenant-1", "stream-1", bucket, end, start, end, "tenant-1", "stream-1", end, start, "tenant-1", "stream-1", bucket, end).
+	mock.ExpectQuery(`(?s)SELECT.*sum\(seconds_observed\).*UNION ALL.*FROM viewer_lifecycles`).
+		WithArgs("tenant-1", "stream-1", "tenant-1", "stream-1", bucket, end, start, end, end, start, "tenant-1", "stream-1", bucket, end).
 		WillReturnRows(sqlmock.NewRows([]string{"seconds", "bytes", "egress", "unique", "sessions"}).AddRow(60, 1000, 1000, 6, 6))
 	mock.ExpectQuery(`(?s)FROM periscope.delivery_usage_5m_v`).
 		WithArgs("tenant-1", "stream-1", bucket, end).

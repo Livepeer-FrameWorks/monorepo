@@ -15,6 +15,7 @@ import (
 	"frameworks/api_analytics_query/internal/database/periscopequerydb"
 	"frameworks/api_analytics_query/internal/metrics"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	dbqueries "github.com/Livepeer-FrameWorks/monorepo/pkg/database/queries"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
@@ -4360,6 +4361,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pe
 	{
 		var totalSessionSeconds, totalBytes, egressBytes, uniqueViewers, totalSessions sql.NullInt64
 		err := periscopequerydb.QueryRow(ctx, s.clickhouse, `
+			WITH `+dbqueries.ViewerLifecyclesCTE("tenant_id = ? AND stream_id = ?")+`
 			SELECT
 				toInt64(COALESCE(sum(seconds_observed), 0)),
 				toInt64(COALESCE(sum(total_bytes_observed), 0)),
@@ -4376,21 +4378,20 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pe
 				WHERE tenant_id = ? AND stream_id = ? AND window_start >= ? AND window_start < ?
 				UNION ALL
 				SELECT
-					toUInt64(greatest(0, dateDiff('second', greatest(ifNull(connected_at, disconnected_at), ?), least(ifNull(disconnected_at, now()), ?)))) AS seconds_observed,
+					toUInt64(greatest(0, dateDiff('second', greatest(lifecycle_started_at, ?), least(lifecycle_ended_at, ?)))) AS seconds_observed,
 					toUInt64(0) AS total_bytes_observed,
 					toUInt64(0) AS down_bytes_observed,
 					concat(toString(node_id), '|', session_id) AS session_key
-				FROM periscope.viewer_sessions_current FINAL
-				WHERE tenant_id = ? AND stream_id = ?
-				  AND ifNull(connected_at, disconnected_at) < ?
-				  AND ifNull(disconnected_at, now()) >= ?
-				  AND (tenant_id, node_id, session_id) NOT IN (
+				FROM viewer_lifecycles
+				WHERE lifecycle_started_at < ?
+				  AND lifecycle_ended_at >= ?
+				  AND (lifecycle_open OR (tenant_id, node_id, session_id) NOT IN (
 				      SELECT tenant_id, node_id, session_id
 				      FROM periscope.viewer_usage_5m_v
 				      WHERE tenant_id = ? AND stream_id = ? AND window_start >= ? AND window_start < ?
-				  )
+				  ))
 			)
-		`, tenantID, streamID, bucketStart, endTime, startTime, endTime, tenantID, streamID, endTime, startTime, tenantID, streamID, bucketStart, endTime).Scan(&totalSessionSeconds, &totalBytes, &egressBytes, &uniqueViewers, &totalSessions)
+		`, tenantID, streamID, tenantID, streamID, bucketStart, endTime, startTime, endTime, endTime, startTime, tenantID, streamID, bucketStart, endTime).Scan(&totalSessionSeconds, &totalBytes, &egressBytes, &uniqueViewers, &totalSessions)
 		if err == nil {
 			if totalSessionSeconds.Valid {
 				summary.RangeViewerHours = float32(totalSessionSeconds.Int64) / 3600.0
@@ -4427,11 +4428,11 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pe
 	{
 		var uniqueCountries sql.NullInt64
 		err := periscopequerydb.QueryRow(ctx, s.clickhouse, `
+			WITH `+dbqueries.ViewerLifecyclesCTE("tenant_id = ? AND stream_id = ?")+`
 			SELECT uniqExact(country_code)
-			FROM periscope.viewer_sessions_current FINAL
-			WHERE tenant_id = ? AND stream_id = ?
-			  AND ifNull(connected_at, disconnected_at) <= ?
-			  AND ifNull(disconnected_at, now()) >= ?
+			FROM viewer_lifecycles
+			WHERE lifecycle_started_at <= ?
+			  AND lifecycle_ended_at >= ?
 			  AND country_code != ''
 		`, tenantID, streamID, endTime, startTime).Scan(&uniqueCountries)
 		if err == nil && uniqueCountries.Valid {
@@ -6010,16 +6011,17 @@ func (s *PeriscopeServer) GetClusterWorkload(ctx context.Context, req *periscope
 			args = append(args, id)
 		}
 	}
+	appendClusters()                                                   // active viewer lifecycles
 	appendRangeAndClusters(startTime.UnixMilli(), endTime.UnixMilli()) // viewer
 	appendRangeAndClusters(startTime.UnixMilli(), endTime.UnixMilli()) // ingest
 	appendRangeAndClusters(startTime.UnixMilli(), endTime.UnixMilli()) // processing
 	appendRangeAndClusters(startTime, endTime)                         // storage
 	appendRangeAndClusters(startTime, endTime)                         // federation
-	appendClusters()                                                   // active viewers
 	appendClusters()                                                   // active ingests
 	appendClusters()                                                   // current storage
 
 	query := fmt.Sprintf(`
+		WITH `+dbqueries.ViewerLifecyclesCTE("cluster_id IN (%[1]s) AND last_updated >= now() - INTERVAL 5 MINUTE")+`
 		SELECT cluster_id, node_id, work_kind, measurement_kind, storage_scope,
 		       toInt64(sum(event_count)), toInt64(sum(active_count)),
 		       toUInt64(sum(byte_count)), sum(media_seconds), toInt64(sum(error_count)),
@@ -6060,11 +6062,9 @@ func (s *PeriscopeServer) GetClusterWorkload(ctx context.Context, req *periscope
 			WHERE timestamp >= ? AND timestamp <= ? AND local_cluster IN (%[1]s)
 			GROUP BY local_cluster, ifNull(dest_node, ifNull(source_node, ''))
 			UNION ALL
-			SELECT v.cluster_id, v.node_id, 'viewer', 'current', '', toInt64(0), toInt64(countIf(isNull(v.disconnected_at))),
+			SELECT v.cluster_id, v.node_id, 'viewer', 'current', '', toInt64(0), toInt64(countIf(v.lifecycle_open)),
 			       toUInt64(0), toFloat64(0), toInt64(0), toInt64(toUnixTimestamp(max(v.last_updated))) * 1000
-			FROM viewer_sessions_current AS v FINAL
-			WHERE v.cluster_id IN (%[1]s)
-			  AND v.last_updated >= now() - INTERVAL 5 MINUTE
+			FROM viewer_lifecycles AS v
 			GROUP BY v.cluster_id, v.node_id
 			UNION ALL
 			SELECT s.cluster_id, s.node_id, 'ingest', 'current', '', toInt64(0), toInt64(countIf(s.status = 'live')),
@@ -7201,6 +7201,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 	queryCount++
 	queryCtx, cancel = withClickhouseTimeout(ctx)
 	err = periscopequerydb.QueryRow(queryCtx, s.clickhouse, `
+		WITH `+dbqueries.ViewerLifecyclesCTE("tenant_id = ?")+`
 		SELECT
 			toUInt64(COALESCE(sum(seconds_observed), 0)) AS total_session_seconds,
 			toUInt32(uniqExact(session_key)) AS total_viewers,
@@ -7218,23 +7219,22 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 			  AND u.window_start <  ?
 			UNION ALL
 			SELECT
-				toUInt64(greatest(0, dateDiff('second', greatest(ifNull(connected_at, disconnected_at), ?), least(ifNull(disconnected_at, now()), ?)))) AS seconds_observed,
+				toUInt64(greatest(0, dateDiff('second', greatest(lifecycle_started_at, ?), least(lifecycle_ended_at, ?)))) AS seconds_observed,
 				toUInt64(0) AS down_bytes_observed,
 				concat(toString(node_id), '|', session_id) AS session_key,
 				concat(toString(node_id), '|', session_id) AS viewer_key
-			FROM viewer_sessions_current FINAL
-			WHERE tenant_id = ?
-			  AND ifNull(connected_at, disconnected_at) < ?
-			  AND ifNull(disconnected_at, now()) >= ?
-			  AND (tenant_id, node_id, session_id) NOT IN (
+			FROM viewer_lifecycles
+			WHERE lifecycle_started_at < ?
+			  AND lifecycle_ended_at >= ?
+			  AND (lifecycle_open OR (tenant_id, node_id, session_id) NOT IN (
 			      SELECT tenant_id, node_id, session_id
 			      FROM viewer_usage_5m_v
 			      WHERE tenant_id = ?
 			        AND window_start >= ?
 			        AND window_start <  ?
-			  )
+			  ))
 		)
-	`, tenantID, startTime, endTime, startTime, endTime, tenantID, endTime, startTime, tenantID, startTime, endTime).Scan(&totalSessionSeconds, &totalViewers, &uniqueViewers)
+	`, tenantID, tenantID, startTime, endTime, startTime, endTime, endTime, startTime, tenantID, startTime, endTime).Scan(&totalSessionSeconds, &totalViewers, &uniqueViewers)
 	cancel()
 	recordQueryError(err, "Failed to query viewer usage facts for live usage")
 	var egressBytes uint64
@@ -7344,6 +7344,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 	queryCount++
 	queryCtx, cancel = withClickhouseTimeout(ctx)
 	err = periscopequerydb.QueryRow(queryCtx, s.clickhouse, `
+		WITH `+dbqueries.ViewerLifecyclesCTE("tenant_id = ?")+`
 		SELECT
 			toInt32(uniqExactIf(country_code, country_code != '')) AS unique_countries,
 			toInt32(uniqExactIf(city, city != '')) AS unique_cities
@@ -7355,19 +7356,18 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 			  AND hour <= ?
 			UNION ALL
 			SELECT country_code, city
-			FROM viewer_sessions_current FINAL
-			WHERE tenant_id = ?
-			  AND ifNull(connected_at, disconnected_at) <= ?
-			  AND ifNull(disconnected_at, now()) >= ?
-			  AND (tenant_id, node_id, session_id) NOT IN (
+			FROM viewer_lifecycles
+			WHERE lifecycle_started_at <= ?
+			  AND lifecycle_ended_at >= ?
+			  AND (lifecycle_open OR (tenant_id, node_id, session_id) NOT IN (
 			      SELECT tenant_id, node_id, session_id
 			      FROM viewer_usage_5m_v
 			      WHERE tenant_id = ?
 			        AND window_start >= ?
 			        AND window_start <  ?
-			  )
+			  ))
 		)
-	`, tenantID, startTime, endTime, tenantID, endTime, startTime, tenantID, startTime, endTime).Scan(&uniqueCountries, &uniqueCities)
+	`, tenantID, tenantID, startTime, endTime, endTime, startTime, tenantID, startTime, endTime).Scan(&uniqueCountries, &uniqueCities)
 	cancel()
 	recordQueryError(err, "Failed to query current viewer geography")
 	summary.UniqueCountries = uniqueCountries
@@ -7377,6 +7377,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 	queryCount++
 	queryCtx, cancel = withClickhouseTimeout(ctx)
 	rows, err := periscopequerydb.Query(queryCtx, s.clickhouse, `
+		WITH `+dbqueries.ViewerLifecyclesCTE("tenant_id = ?")+`
 		SELECT
 			country_code,
 			toInt32(sum(viewer_count)) AS viewer_count,
@@ -7396,26 +7397,25 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 			SELECT
 				country_code,
 				toUInt64(uniqExact(node_id, session_id)) AS viewer_count,
-				sum(greatest(0, dateDiff('second', greatest(ifNull(connected_at, disconnected_at), ?), least(ifNull(disconnected_at, now()), ?)))) / 3600.0 AS viewer_hours,
+				sum(greatest(0, dateDiff('second', greatest(lifecycle_started_at, ?), least(lifecycle_ended_at, ?)))) / 3600.0 AS viewer_hours,
 				toFloat64(0) AS egress_gb
-			FROM viewer_sessions_current FINAL
-			WHERE tenant_id = ?
-			  AND ifNull(connected_at, disconnected_at) <= ?
-			  AND ifNull(disconnected_at, now()) >= ?
+			FROM viewer_lifecycles
+			WHERE lifecycle_started_at <= ?
+			  AND lifecycle_ended_at >= ?
 			  AND country_code != ''
-			  AND (tenant_id, node_id, session_id) NOT IN (
+			  AND (lifecycle_open OR (tenant_id, node_id, session_id) NOT IN (
 			      SELECT tenant_id, node_id, session_id
 			      FROM viewer_usage_5m_v
 			      WHERE tenant_id = ?
 			        AND window_start >= ?
 			        AND window_start <  ?
-			  )
+			  ))
 			GROUP BY country_code
 		)
 		GROUP BY country_code
 		ORDER BY viewer_hours DESC
 		LIMIT 20
-	`, tenantID, startTime, endTime, startTime, endTime, tenantID, endTime, startTime, tenantID, startTime, endTime)
+	`, tenantID, tenantID, startTime, endTime, startTime, endTime, endTime, startTime, tenantID, startTime, endTime)
 	if err != nil {
 		cancel()
 		recordQueryError(err, "Failed to query current geo breakdown")

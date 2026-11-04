@@ -454,10 +454,10 @@ func newLiveUsageSummaryServer(t *testing.T) (*sql.DB, *PeriscopeServer, sqlmock
 
 const (
 	liveRuntimeSummaryPattern = `sum\(active_seconds\)[\s\S]*FROM periscope\.stream_runtime_5m_v`
-	liveViewerUsagePattern    = `FROM viewer_usage_5m_v[\s\S]*UNION ALL[\s\S]*FROM viewer_sessions_current FINAL`
+	liveViewerUsagePattern    = `FROM viewer_usage_5m_v[\s\S]*UNION ALL[\s\S]*FROM viewer_lifecycles`
 	liveDeliveryUsagePattern  = `FROM delivery_usage_5m_v`
-	liveGeoSummaryPattern     = `uniqExactIf\(country_code[\s\S]*FROM viewer_sessions_current FINAL`
-	liveGeoBreakdownPattern   = `SELECT[\s\S]*country_code[\s\S]*viewer_count[\s\S]*FROM viewer_sessions_current FINAL`
+	liveGeoSummaryPattern     = `uniqExactIf\(country_code[\s\S]*FROM viewer_lifecycles`
+	liveGeoBreakdownPattern   = `SELECT[\s\S]*country_code[\s\S]*viewer_count[\s\S]*FROM viewer_lifecycles`
 	liveSyncedArtifactPattern = `ifNull\(sumIf\(size_bytes, is_synced = true\), toUInt64\(0\)\)[\s\S]*FROM artifact_state_current FINAL`
 )
 
@@ -1431,7 +1431,7 @@ func TestGetClusterWorkloadReturnsRedactedAggregate(t *testing.T) {
 	end := time.Now().UTC()
 	any := sqlmock.AnyArg()
 	mock.ExpectQuery(`(?s)SELECT cluster_id, node_id, work_kind, measurement_kind, storage_scope,.*'storage', 'window'.*'storage', 'current', storage_scope.*timestamp >= now\(\) - INTERVAL 2 HOUR`).
-		WithArgs(any, any, "cluster-a", any, any, "cluster-a", any, any, "cluster-a", any, any, "cluster-a", any, any, "cluster-a", "cluster-a", "cluster-a", "cluster-a").
+		WithArgs("cluster-a", any, any, "cluster-a", any, any, "cluster-a", any, any, "cluster-a", any, any, "cluster-a", any, any, "cluster-a", "cluster-a", "cluster-a").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "node_id", "work_kind", "measurement_kind", "storage_scope", "event_count", "active_count", "bytes", "media_seconds", "error_count", "observed_at_ms"}).
 			AddRow("cluster-a", "edge-1", "storage", "window", "", int64(12), int64(0), uint64(4096), 0.0, int64(0), int64(0)).
 			AddRow("cluster-a", "edge-1", "storage", "current", "hot", int64(0), int64(3), uint64(8192), 0.0, int64(0), end.UnixMilli()))

@@ -58,7 +58,7 @@ func TestStaleCloseViewerSessionsEmitsAnomalyRow(t *testing.T) {
 	streamID := uuid.MustParse("22222222-2222-4222-8222-222222222222")
 
 	// Scan columns: tenant, stream, session, node, cluster, observedFirstMs, observedLastMs, duration.
-	conn.addQueryRow("periscope.client_qoe_samples",
+	conn.addQueryRow("periscope.viewer_sessions_current",
 		tenantID.String(), streamID.String(), "session-1", "node-1", "cluster-a",
 		int64(1_700_000_000_000), int64(1_700_000_300_000), uint32(300))
 

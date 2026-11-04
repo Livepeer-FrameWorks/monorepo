@@ -2,16 +2,15 @@
 // runtime code and real-engine contract tests.
 package queries
 
-// ActiveViewerReservations returns absolute usage holds for sessions that do
-// not yet have a disconnect fact. The serving cluster comes only from the
-// trusted server-side connect event; origin attribution is deliberately not a
-// billing fallback.
-const ActiveViewerReservations = `
-	WITH active AS (
-		SELECT tenant_id, node_id, session_id, connected_at, last_updated
-		FROM periscope.viewer_sessions_current FINAL
-		WHERE connected_at IS NOT NULL
-		  AND (disconnected_at IS NULL OR disconnected_at = toDateTime(0))
+// ActiveViewerReservations returns absolute usage holds for viewer session
+// lifecycles that are open (ViewerLifecyclesCTE), held from the lifecycle's
+// own connect. The serving cluster comes only from the trusted server-side
+// connect event; origin attribution is deliberately not a billing fallback.
+var ActiveViewerReservations = `
+	WITH ` + ViewerLifecyclesCTE("connected_at IS NOT NULL") + `, active AS (
+		SELECT tenant_id, node_id, session_id, lifecycle_connected_at AS connected_at, last_updated
+		FROM viewer_lifecycles
+		WHERE lifecycle_open
 	), latest_qoe AS (
 		SELECT tenant_id, node_id, session_id,
 		       max(timestamp) AS last_sample_at,
