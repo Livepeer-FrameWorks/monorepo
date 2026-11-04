@@ -639,7 +639,7 @@ func TestApplyProjectionTombstonesFederatedPointerAndSettlesCatalogRevision(t *t
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE foghorn.artifacts\nSET catalog_synced_rev = catalog_revision")).
 		WithArgs(artifactHash, tenantID).WillReturnResult(sqlmock.NewResult(0, 1))
 
-	if err := applyProjection(context.Background(), foghorndb.New(testDB), verified, readinessPreservation{}); err != nil {
+	if err := applyProjection(context.Background(), foghorndb.New(testDB), verified, readinessPreservation{}, previousPlacement{mode: previousPlacementClear}); err != nil {
 		t.Fatalf("applyProjection: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

@@ -20,7 +20,7 @@ import (
 
 const pairCacheTenantID = "10000000-0000-0000-0000-000000000001"
 
-var pairCacheColumns = []string{"object_payload", "object_payload_sha256", "object_refresh_after", "object_valid_until", "object_authority_id", "object_authority_version", "object_read_ready", "object_ingest_ready", "object_source_ready", "tenant_payload", "tenant_payload_sha256", "tenant_refresh_after", "tenant_valid_until", "tenant_authority_version", "tenant_read_ready", "tenant_ingest_ready", "tenant_source_ready", "object_withheld_by_tenant_revival"}
+var pairCacheColumns = []string{"object_payload", "object_payload_sha256", "object_refresh_after", "object_valid_until", "object_authority_id", "object_authority_version", "object_read_ready", "object_ingest_ready", "object_source_ready", "tenant_payload", "tenant_payload_sha256", "tenant_refresh_after", "tenant_valid_until", "tenant_authority_version", "tenant_read_ready", "tenant_ingest_ready", "tenant_source_ready", "tenant_previous_placement_policy", "tenant_placement_superseded_at", "object_withheld_by_tenant_revival"}
 
 type pairCacheFixture struct {
 	store *Store
@@ -83,7 +83,7 @@ func pairRow(t *testing.T, spec pairRowSpec) *sqlmock.Rows {
 	tenantExpiry := storeFixtureNow.Add(24 * time.Hour)
 	values := []driver.Value{objectBytes, testPayloadDigest(objectBytes), spec.objectRefresh, spec.objectExpiry,
 		sharedauthority.LiveStreamAuthorityID(spec.streamID), spec.objectVersion, true, true, true,
-		tenantBytes, testPayloadDigest(tenantBytes), tenantExpiry.Add(-time.Hour), tenantExpiry, spec.tenantVersion, true, true, true, false}
+		tenantBytes, testPayloadDigest(tenantBytes), tenantExpiry.Add(-time.Hour), tenantExpiry, spec.tenantVersion, true, true, true, nil, nil, false}
 	return sqlmock.NewRows(pairCacheColumns).AddRow(values...)
 }
 

@@ -350,6 +350,8 @@ SELECT object_authority.payload AS object_payload,
        tenant_projection.local_read_ready AS tenant_read_ready,
        tenant_projection.local_ingest_ready AS tenant_ingest_ready,
        tenant_projection.local_source_ready AS tenant_source_ready,
+       tenant_projection.previous_placement_policy AS tenant_previous_placement_policy,
+       tenant_projection.placement_superseded_at AS tenant_placement_superseded_at,
        COALESCE(tenant_projection.objects_trusted_from > object_authority.confirmed_at, FALSE)::boolean AS object_withheld_by_tenant_revival
 FROM foghorn.media_object_authority_projection AS object_projection
 JOIN foghorn.media_authorities AS object_authority
@@ -374,24 +376,26 @@ type GetLocalPlacementAuthorityPairParams struct {
 }
 
 type GetLocalPlacementAuthorityPairRow struct {
-	ObjectPayload                 []byte    `db:"object_payload" json:"object_payload"`
-	ObjectPayloadSha256           []byte    `db:"object_payload_sha256" json:"object_payload_sha256"`
-	ObjectRefreshAfter            time.Time `db:"object_refresh_after" json:"object_refresh_after"`
-	ObjectValidUntil              time.Time `db:"object_valid_until" json:"object_valid_until"`
-	ObjectAuthorityID             string    `db:"object_authority_id" json:"object_authority_id"`
-	ObjectAuthorityVersion        int64     `db:"object_authority_version" json:"object_authority_version"`
-	ObjectReadReady               bool      `db:"object_read_ready" json:"object_read_ready"`
-	ObjectIngestReady             bool      `db:"object_ingest_ready" json:"object_ingest_ready"`
-	ObjectSourceReady             bool      `db:"object_source_ready" json:"object_source_ready"`
-	TenantPayload                 []byte    `db:"tenant_payload" json:"tenant_payload"`
-	TenantPayloadSha256           []byte    `db:"tenant_payload_sha256" json:"tenant_payload_sha256"`
-	TenantRefreshAfter            time.Time `db:"tenant_refresh_after" json:"tenant_refresh_after"`
-	TenantValidUntil              time.Time `db:"tenant_valid_until" json:"tenant_valid_until"`
-	TenantAuthorityVersion        int64     `db:"tenant_authority_version" json:"tenant_authority_version"`
-	TenantReadReady               bool      `db:"tenant_read_ready" json:"tenant_read_ready"`
-	TenantIngestReady             bool      `db:"tenant_ingest_ready" json:"tenant_ingest_ready"`
-	TenantSourceReady             bool      `db:"tenant_source_ready" json:"tenant_source_ready"`
-	ObjectWithheldByTenantRevival bool      `db:"object_withheld_by_tenant_revival" json:"object_withheld_by_tenant_revival"`
+	ObjectPayload                 []byte       `db:"object_payload" json:"object_payload"`
+	ObjectPayloadSha256           []byte       `db:"object_payload_sha256" json:"object_payload_sha256"`
+	ObjectRefreshAfter            time.Time    `db:"object_refresh_after" json:"object_refresh_after"`
+	ObjectValidUntil              time.Time    `db:"object_valid_until" json:"object_valid_until"`
+	ObjectAuthorityID             string       `db:"object_authority_id" json:"object_authority_id"`
+	ObjectAuthorityVersion        int64        `db:"object_authority_version" json:"object_authority_version"`
+	ObjectReadReady               bool         `db:"object_read_ready" json:"object_read_ready"`
+	ObjectIngestReady             bool         `db:"object_ingest_ready" json:"object_ingest_ready"`
+	ObjectSourceReady             bool         `db:"object_source_ready" json:"object_source_ready"`
+	TenantPayload                 []byte       `db:"tenant_payload" json:"tenant_payload"`
+	TenantPayloadSha256           []byte       `db:"tenant_payload_sha256" json:"tenant_payload_sha256"`
+	TenantRefreshAfter            time.Time    `db:"tenant_refresh_after" json:"tenant_refresh_after"`
+	TenantValidUntil              time.Time    `db:"tenant_valid_until" json:"tenant_valid_until"`
+	TenantAuthorityVersion        int64        `db:"tenant_authority_version" json:"tenant_authority_version"`
+	TenantReadReady               bool         `db:"tenant_read_ready" json:"tenant_read_ready"`
+	TenantIngestReady             bool         `db:"tenant_ingest_ready" json:"tenant_ingest_ready"`
+	TenantSourceReady             bool         `db:"tenant_source_ready" json:"tenant_source_ready"`
+	TenantPreviousPlacementPolicy []byte       `db:"tenant_previous_placement_policy" json:"tenant_previous_placement_policy"`
+	TenantPlacementSupersededAt   sql.NullTime `db:"tenant_placement_superseded_at" json:"tenant_placement_superseded_at"`
+	ObjectWithheldByTenantRevival bool         `db:"object_withheld_by_tenant_revival" json:"object_withheld_by_tenant_revival"`
 }
 
 func (q *Queries) GetLocalPlacementAuthorityPair(ctx context.Context, arg GetLocalPlacementAuthorityPairParams) (GetLocalPlacementAuthorityPairRow, error) {
@@ -415,6 +419,8 @@ func (q *Queries) GetLocalPlacementAuthorityPair(ctx context.Context, arg GetLoc
 		&i.TenantReadReady,
 		&i.TenantIngestReady,
 		&i.TenantSourceReady,
+		&i.TenantPreviousPlacementPolicy,
+		&i.TenantPlacementSupersededAt,
 		&i.ObjectWithheldByTenantRevival,
 	)
 	return i, err
@@ -438,6 +444,8 @@ SELECT object_authority.payload AS object_payload,
        tenant_projection.local_read_ready AS tenant_read_ready,
        tenant_projection.local_ingest_ready AS tenant_ingest_ready,
        tenant_projection.local_source_ready AS tenant_source_ready,
+       tenant_projection.previous_placement_policy AS tenant_previous_placement_policy,
+       tenant_projection.placement_superseded_at AS tenant_placement_superseded_at,
        COALESCE(tenant_projection.objects_trusted_from > object_authority.confirmed_at, FALSE)::boolean AS object_withheld_by_tenant_revival
 FROM foghorn.media_object_authority_projection AS object_projection
 JOIN foghorn.media_authorities AS object_authority
@@ -460,24 +468,26 @@ type GetLocalPlacementAuthorityPairByInternalNameParams struct {
 }
 
 type GetLocalPlacementAuthorityPairByInternalNameRow struct {
-	ObjectPayload                 []byte    `db:"object_payload" json:"object_payload"`
-	ObjectPayloadSha256           []byte    `db:"object_payload_sha256" json:"object_payload_sha256"`
-	ObjectRefreshAfter            time.Time `db:"object_refresh_after" json:"object_refresh_after"`
-	ObjectValidUntil              time.Time `db:"object_valid_until" json:"object_valid_until"`
-	ObjectAuthorityID             string    `db:"object_authority_id" json:"object_authority_id"`
-	ObjectAuthorityVersion        int64     `db:"object_authority_version" json:"object_authority_version"`
-	ObjectReadReady               bool      `db:"object_read_ready" json:"object_read_ready"`
-	ObjectIngestReady             bool      `db:"object_ingest_ready" json:"object_ingest_ready"`
-	ObjectSourceReady             bool      `db:"object_source_ready" json:"object_source_ready"`
-	TenantPayload                 []byte    `db:"tenant_payload" json:"tenant_payload"`
-	TenantPayloadSha256           []byte    `db:"tenant_payload_sha256" json:"tenant_payload_sha256"`
-	TenantRefreshAfter            time.Time `db:"tenant_refresh_after" json:"tenant_refresh_after"`
-	TenantValidUntil              time.Time `db:"tenant_valid_until" json:"tenant_valid_until"`
-	TenantAuthorityVersion        int64     `db:"tenant_authority_version" json:"tenant_authority_version"`
-	TenantReadReady               bool      `db:"tenant_read_ready" json:"tenant_read_ready"`
-	TenantIngestReady             bool      `db:"tenant_ingest_ready" json:"tenant_ingest_ready"`
-	TenantSourceReady             bool      `db:"tenant_source_ready" json:"tenant_source_ready"`
-	ObjectWithheldByTenantRevival bool      `db:"object_withheld_by_tenant_revival" json:"object_withheld_by_tenant_revival"`
+	ObjectPayload                 []byte       `db:"object_payload" json:"object_payload"`
+	ObjectPayloadSha256           []byte       `db:"object_payload_sha256" json:"object_payload_sha256"`
+	ObjectRefreshAfter            time.Time    `db:"object_refresh_after" json:"object_refresh_after"`
+	ObjectValidUntil              time.Time    `db:"object_valid_until" json:"object_valid_until"`
+	ObjectAuthorityID             string       `db:"object_authority_id" json:"object_authority_id"`
+	ObjectAuthorityVersion        int64        `db:"object_authority_version" json:"object_authority_version"`
+	ObjectReadReady               bool         `db:"object_read_ready" json:"object_read_ready"`
+	ObjectIngestReady             bool         `db:"object_ingest_ready" json:"object_ingest_ready"`
+	ObjectSourceReady             bool         `db:"object_source_ready" json:"object_source_ready"`
+	TenantPayload                 []byte       `db:"tenant_payload" json:"tenant_payload"`
+	TenantPayloadSha256           []byte       `db:"tenant_payload_sha256" json:"tenant_payload_sha256"`
+	TenantRefreshAfter            time.Time    `db:"tenant_refresh_after" json:"tenant_refresh_after"`
+	TenantValidUntil              time.Time    `db:"tenant_valid_until" json:"tenant_valid_until"`
+	TenantAuthorityVersion        int64        `db:"tenant_authority_version" json:"tenant_authority_version"`
+	TenantReadReady               bool         `db:"tenant_read_ready" json:"tenant_read_ready"`
+	TenantIngestReady             bool         `db:"tenant_ingest_ready" json:"tenant_ingest_ready"`
+	TenantSourceReady             bool         `db:"tenant_source_ready" json:"tenant_source_ready"`
+	TenantPreviousPlacementPolicy []byte       `db:"tenant_previous_placement_policy" json:"tenant_previous_placement_policy"`
+	TenantPlacementSupersededAt   sql.NullTime `db:"tenant_placement_superseded_at" json:"tenant_placement_superseded_at"`
+	ObjectWithheldByTenantRevival bool         `db:"object_withheld_by_tenant_revival" json:"object_withheld_by_tenant_revival"`
 }
 
 func (q *Queries) GetLocalPlacementAuthorityPairByInternalName(ctx context.Context, arg GetLocalPlacementAuthorityPairByInternalNameParams) (GetLocalPlacementAuthorityPairByInternalNameRow, error) {
@@ -501,6 +511,8 @@ func (q *Queries) GetLocalPlacementAuthorityPairByInternalName(ctx context.Conte
 		&i.TenantReadReady,
 		&i.TenantIngestReady,
 		&i.TenantSourceReady,
+		&i.TenantPreviousPlacementPolicy,
+		&i.TenantPlacementSupersededAt,
 		&i.ObjectWithheldByTenantRevival,
 	)
 	return i, err
@@ -1687,13 +1699,15 @@ INSERT INTO foghorn.tenant_authority_projection (
     tenant_id, authority_version, lifecycle, billing_decision, billing_model,
     official_cluster_id, allow_platform_shared_playback, max_streams, max_viewers,
     allowances, decision_reason, local_read_ready, local_ingest_ready, local_source_ready,
-    valid_until, updated_at
+    valid_until, updated_at, previous_placement_policy, placement_superseded_at
 ) VALUES (
     $1::uuid, $2, $3,
     $4, $5, NULLIF($6::text, ''),
     $7, $8, $9,
     $10, $11, FALSE, FALSE, FALSE,
-    $12, NOW()
+    $12, NOW(),
+    CASE WHEN $13::text = 'record' THEN $14::bytea END,
+    CASE WHEN $13::text = 'record' THEN NOW() END
 )
 ON CONFLICT (tenant_id) DO UPDATE
 SET authority_version = EXCLUDED.authority_version,
@@ -1707,22 +1721,33 @@ SET authority_version = EXCLUDED.authority_version,
     allowances = EXCLUDED.allowances,
     decision_reason = EXCLUDED.decision_reason,
     local_read_ready = CASE
-        WHEN $13::boolean
+        WHEN $15::boolean
         THEN foghorn.tenant_authority_projection.local_read_ready
         ELSE FALSE
     END,
     local_ingest_ready = CASE
-        WHEN $14::boolean
+        WHEN $16::boolean
         THEN foghorn.tenant_authority_projection.local_ingest_ready
         ELSE FALSE
     END,
     local_source_ready = CASE
-        WHEN $15::boolean
+        WHEN $17::boolean
         THEN foghorn.tenant_authority_projection.local_source_ready
         ELSE FALSE
     END,
     valid_until = EXCLUDED.valid_until,
-    updated_at = NOW()
+    updated_at = NOW(),
+    -- record: this authority raised the placement revision, so the policy set
+    -- it replaced is kept; keep: the revision is unchanged; anything else: no
+    -- earlier revision of the same schema is held.
+    previous_placement_policy = CASE $13::text
+        WHEN 'record' THEN EXCLUDED.previous_placement_policy
+        WHEN 'keep' THEN foghorn.tenant_authority_projection.previous_placement_policy
+    END,
+    placement_superseded_at = CASE $13::text
+        WHEN 'record' THEN EXCLUDED.placement_superseded_at
+        WHEN 'keep' THEN foghorn.tenant_authority_projection.placement_superseded_at
+    END
 `
 
 type UpsertTenantAuthorityProjectionParams struct {
@@ -1738,6 +1763,8 @@ type UpsertTenantAuthorityProjectionParams struct {
 	Allowances                  json.RawMessage `db:"allowances" json:"allowances"`
 	DecisionReason              string          `db:"decision_reason" json:"decision_reason"`
 	ValidUntil                  time.Time       `db:"valid_until" json:"valid_until"`
+	PreviousPlacementMode       string          `db:"previous_placement_mode" json:"previous_placement_mode"`
+	PreviousPlacementPolicy     []byte          `db:"previous_placement_policy" json:"previous_placement_policy"`
 	PreserveLocalReadReady      bool            `db:"preserve_local_read_ready" json:"preserve_local_read_ready"`
 	PreserveLocalIngestReady    bool            `db:"preserve_local_ingest_ready" json:"preserve_local_ingest_ready"`
 	PreserveLocalSourceReady    bool            `db:"preserve_local_source_ready" json:"preserve_local_source_ready"`
@@ -1757,6 +1784,8 @@ func (q *Queries) UpsertTenantAuthorityProjection(ctx context.Context, arg Upser
 		arg.Allowances,
 		arg.DecisionReason,
 		arg.ValidUntil,
+		arg.PreviousPlacementMode,
+		arg.PreviousPlacementPolicy,
 		arg.PreserveLocalReadReady,
 		arg.PreserveLocalIngestReady,
 		arg.PreserveLocalSourceReady,

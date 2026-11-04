@@ -85,8 +85,16 @@ func CompileSourceDialAuthority(pair localauthority.PlacementPair, now time.Time
 	return compilePlacementAuthority(pair, placement.Ingest, now, pair.Tenant.SourceReady && pair.Object.SourceReady)
 }
 
+// compilePlacementAuthority evaluates the object against the tenant placement
+// policy it was compiled for. While the object's recompiled authority is still
+// on its way after a tenant placement change, that is the previous revision
+// this cell held (PlacementPair.PolicyTenant), bounded by
+// PlacementParentLagWindow; every other tenant fact is the held authority's.
+// Any other mismatch between the object's parent revision and the tenant's is
+// refused as inconsistent.
 func compilePlacementAuthority(pair localauthority.PlacementPair, verb placement.Verb, now time.Time, ready bool) (PlacementAuthority, error) {
-	tenant, object := pair.Tenant.Authority, pair.Object.Authority
+	tenant, lagUntil := pair.PolicyTenant(now)
+	object := pair.Object.Authority
 	if tenant == nil || object == nil || !sharedauthority.IsPlacementSchema(tenant.GetSchemaVersion()) || tenant.GetSchemaVersion() != object.GetSchemaVersion() {
 		return PlacementAuthority{}, ErrPlacementAuthorityNotReady
 	}
@@ -124,6 +132,9 @@ func compilePlacementAuthority(pair localauthority.PlacementPair, verb placement
 	}
 	if pair.Object.ValidUntil.Before(result.ExpiresAt) {
 		result.ExpiresAt = pair.Object.ValidUntil
+	}
+	if !lagUntil.IsZero() && lagUntil.Before(result.ExpiresAt) {
+		result.ExpiresAt = lagUntil
 	}
 	quote, quoteErr := sharedauthority.PlacementCommercialQuote(tenant, object, verb, now)
 	if quoteErr != nil {

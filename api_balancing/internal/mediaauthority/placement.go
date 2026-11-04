@@ -10,6 +10,7 @@ import (
 	"frameworks/api_balancing/internal/database/foghorndb"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
+	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -18,6 +19,43 @@ import (
 type PlacementPair struct {
 	Tenant TenantSnapshot
 	Object MediaObjectSnapshot
+}
+
+// PlacementParentLagWindow is how long after a tenant authority raised its
+// placement revision an object still compiled against the previous revision is
+// evaluated against that previous policy. Commodore recompiles the tenant's
+// objects after it publishes the tenant: one object compile is bounded to
+// 90 seconds and one delivery attempt's lease to 55, so an object that has not
+// arrived within both is not merely in flight. Past the window the pair is
+// inconsistent again and resolution refuses it.
+const PlacementParentLagWindow = 90*time.Second + 55*time.Second
+
+// PolicyTenant is the tenant authority the object's placement is evaluated
+// against. It is the held tenant authority, except while the object still names
+// the placement revision that authority replaced on this cell, within
+// PlacementParentLagWindow of the replacement: then it is the held tenant with
+// the previous placement policy set, so the object is evaluated against the
+// policy it was compiled for while every other tenant fact (lifecycle, billing,
+// grants, validity) stays the held one. until is when that substitution stops
+// answering, and the zero time when there is none. An object that names any
+// other revision gets the held tenant, which the exact-revision fence refuses.
+func (pair PlacementPair) PolicyTenant(now time.Time) (tenant *mediaauthoritypb.TenantAuthority, until time.Time) {
+	tenant = pair.Tenant.Authority
+	previous := pair.Tenant.PreviousPlacement
+	if tenant == nil || pair.Object.Authority == nil || previous == nil || pair.Tenant.PlacementSupersededAt.IsZero() {
+		return tenant, time.Time{}
+	}
+	parent := pair.Object.Authority.GetPlacementTenantRevision()
+	if parent >= tenant.GetMediaPlacement().GetRevision() || parent != previous.GetRevision() {
+		return tenant, time.Time{}
+	}
+	until = pair.Tenant.PlacementSupersededAt.Add(PlacementParentLagWindow)
+	if !now.Before(until) {
+		return tenant, time.Time{}
+	}
+	lagging := proto.CloneOf(tenant)
+	lagging.MediaPlacement = proto.CloneOf(previous)
+	return lagging, until
 }
 
 // Placement reads by tenant, authority identity and internal name together.
@@ -158,12 +196,22 @@ func decodePlacementPair(row foghorndb.GetLocalPlacementAuthorityPairRow, tenant
 	if tenant.GetTenantId() != tenantID {
 		return storedPlacementPair{}, errors.New("placement tenant authority identity mismatch")
 	}
+	snapshot := TenantSnapshot{
+		Authority: tenant, Version: row.TenantAuthorityVersion,
+		Ready: row.TenantReadReady, IngestReady: row.TenantIngestReady, SourceReady: row.TenantSourceReady,
+		RefreshAfter: row.TenantRefreshAfter, ValidUntil: row.TenantValidUntil,
+	}
+	// The previous policy set was taken from a verified tenant payload. One that
+	// no longer decodes is left out: a lagging object then meets the exact
+	// revision fence, as it would on a cell that never held that revision.
+	if len(row.TenantPreviousPlacementPolicy) > 0 && row.TenantPlacementSupersededAt.Valid {
+		previous := &placementpb.PolicySet{}
+		if (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(row.TenantPreviousPlacementPolicy, previous) == nil {
+			snapshot.PreviousPlacement, snapshot.PlacementSupersededAt = previous, row.TenantPlacementSupersededAt.Time
+		}
+	}
 	return storedPlacementPair{
-		pair: PlacementPair{Object: object, Tenant: TenantSnapshot{
-			Authority: tenant, Version: row.TenantAuthorityVersion,
-			Ready: row.TenantReadReady, IngestReady: row.TenantIngestReady, SourceReady: row.TenantSourceReady,
-			RefreshAfter: row.TenantRefreshAfter, ValidUntil: row.TenantValidUntil,
-		}},
+		pair:           PlacementPair{Object: object, Tenant: snapshot},
 		objectWithheld: row.ObjectWithheldByTenantRevival,
 	}, nil
 }

@@ -1865,6 +1865,13 @@ CREATE TABLE IF NOT EXISTS foghorn.tenant_authority_projection (
     -- corrected while the tenant was out, and nothing orders their corrections
     -- before the tenant's return.
     objects_trusted_from TIMESTAMPTZ,
+    -- The tenant placement policy set this cell held before the current
+    -- authority raised its placement revision, and when that happened. An
+    -- object compiled against that previous revision is evaluated against it
+    -- for a bounded window while its recompiled authority is still on its way.
+    -- NULL when the cell held no earlier revision of the same schema.
+    previous_placement_policy BYTEA,
+    placement_superseded_at TIMESTAMPTZ,
     CONSTRAINT chk_tenant_authority_projection_lifecycle
         CHECK (lifecycle IN ('active', 'inactive', 'tombstone')),
     CONSTRAINT chk_tenant_authority_projection_billing

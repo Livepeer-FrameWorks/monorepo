@@ -43,13 +43,15 @@ INSERT INTO foghorn.tenant_authority_projection (
     tenant_id, authority_version, lifecycle, billing_decision, billing_model,
     official_cluster_id, allow_platform_shared_playback, max_streams, max_viewers,
     allowances, decision_reason, local_read_ready, local_ingest_ready, local_source_ready,
-    valid_until, updated_at
+    valid_until, updated_at, previous_placement_policy, placement_superseded_at
 ) VALUES (
     sqlc.arg(tenant_id)::uuid, sqlc.arg(authority_version), sqlc.arg(lifecycle),
     sqlc.arg(billing_decision), sqlc.arg(billing_model), NULLIF(sqlc.arg(official_cluster_id)::text, ''),
     sqlc.arg(allow_platform_shared_playback), sqlc.arg(max_streams), sqlc.arg(max_viewers),
     sqlc.arg(allowances), sqlc.arg(decision_reason), FALSE, FALSE, FALSE,
-    sqlc.arg(valid_until), NOW()
+    sqlc.arg(valid_until), NOW(),
+    CASE WHEN sqlc.arg(previous_placement_mode)::text = 'record' THEN sqlc.narg(previous_placement_policy)::bytea END,
+    CASE WHEN sqlc.arg(previous_placement_mode)::text = 'record' THEN NOW() END
 )
 ON CONFLICT (tenant_id) DO UPDATE
 SET authority_version = EXCLUDED.authority_version,
@@ -78,7 +80,18 @@ SET authority_version = EXCLUDED.authority_version,
         ELSE FALSE
     END,
     valid_until = EXCLUDED.valid_until,
-    updated_at = NOW();
+    updated_at = NOW(),
+    -- record: this authority raised the placement revision, so the policy set
+    -- it replaced is kept; keep: the revision is unchanged; anything else: no
+    -- earlier revision of the same schema is held.
+    previous_placement_policy = CASE sqlc.arg(previous_placement_mode)::text
+        WHEN 'record' THEN EXCLUDED.previous_placement_policy
+        WHEN 'keep' THEN foghorn.tenant_authority_projection.previous_placement_policy
+    END,
+    placement_superseded_at = CASE sqlc.arg(previous_placement_mode)::text
+        WHEN 'record' THEN EXCLUDED.placement_superseded_at
+        WHEN 'keep' THEN foghorn.tenant_authority_projection.placement_superseded_at
+    END;
 
 -- name: DeleteTenantAuthorityGrants :exec
 DELETE FROM foghorn.tenant_authority_grants
@@ -363,6 +376,8 @@ SELECT object_authority.payload AS object_payload,
        tenant_projection.local_read_ready AS tenant_read_ready,
        tenant_projection.local_ingest_ready AS tenant_ingest_ready,
        tenant_projection.local_source_ready AS tenant_source_ready,
+       tenant_projection.previous_placement_policy AS tenant_previous_placement_policy,
+       tenant_projection.placement_superseded_at AS tenant_placement_superseded_at,
        COALESCE(tenant_projection.objects_trusted_from > object_authority.confirmed_at, FALSE)::boolean AS object_withheld_by_tenant_revival
 FROM foghorn.media_object_authority_projection AS object_projection
 JOIN foghorn.media_authorities AS object_authority
@@ -397,6 +412,8 @@ SELECT object_authority.payload AS object_payload,
        tenant_projection.local_read_ready AS tenant_read_ready,
        tenant_projection.local_ingest_ready AS tenant_ingest_ready,
        tenant_projection.local_source_ready AS tenant_source_ready,
+       tenant_projection.previous_placement_policy AS tenant_previous_placement_policy,
+       tenant_projection.placement_superseded_at AS tenant_placement_superseded_at,
        COALESCE(tenant_projection.objects_trusted_from > object_authority.confirmed_at, FALSE)::boolean AS object_withheld_by_tenant_revival
 FROM foghorn.media_object_authority_projection AS object_projection
 JOIN foghorn.media_authorities AS object_authority

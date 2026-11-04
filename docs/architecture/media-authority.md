@@ -501,6 +501,28 @@ cell attested enforcement in its `ApplyMediaAuthority` acknowledgements (see the
 barrier in `media-placement-policy.md`). Even an empty schema-2 placement policy is not a legacy
 default; a non-enforcing replica never promotes it.
 
+A placement decision evaluates an object against the tenant placement revision
+its own authority names (`placement_tenant_revision`). Commodore delivers a
+tenant placement change in two steps: the tenant authority first, then each of
+the tenant's objects recompiled against the new revision, so a cell holds the
+new tenant authority before it holds every object that names it. A newer tenant
+revision the objects have not caught up with is not unknown policy, so the cell
+keeps serving on the last consistent pair. When a tenant authority raises the
+placement revision, the cell keeps the policy set it replaced
+(`foghorn.tenant_authority_projection.previous_placement_policy` and
+`placement_superseded_at`, recorded in the apply transaction; a renewal at the
+same revision keeps the record, a first authority, a schema change or the
+revival of a lapsed tenant clears it). An object that still names that replaced
+revision is evaluated against it, while every other tenant fact (lifecycle,
+billing decision, grants, validity) comes from the authority the cell holds, so
+a withdrawn grant or a billing denial in the newer authority still applies. The
+substitution answers for `PlacementParentLagWindow`, 145 seconds after the cell
+applied the newer tenant authority: one object compile (90 seconds) plus one
+delivery attempt's lease (55 seconds). A decision made on it expires when the
+window ends. Every other mismatch still refuses as an inconsistent pair: an
+object naming a revision the cell never held, an object ahead of the tenant, and
+a lag that outlives the window.
+
 Shadow comparison uses a canonical authority projection, not whole transport
 messages. Connected responses expose health-filtered `cluster_peers` for
 routing and separate `authority_cluster_peers` for the stable tenant grants.

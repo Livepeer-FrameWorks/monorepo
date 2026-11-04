@@ -358,7 +358,11 @@ func (s *Store) apply(ctx context.Context, encoded []byte, confirmedAt time.Time
 			return fmt.Errorf("persist verified media authority: %w", err)
 		}
 		preserve := s.readinessPreservation(current, currentErr, verified)
-		if err := applyProjection(ctx, queries, verified, preserve); err != nil {
+		previous, previousErr := previousTenantPlacement(current, currentErr == nil, verified, s.now().UTC())
+		if previousErr != nil {
+			return previousErr
+		}
+		if err := applyProjection(ctx, queries, verified, preserve, previous); err != nil {
 			return err
 		}
 		// Reviving a tenant must not make stale object copies usable. A current
@@ -445,7 +449,55 @@ func rejectsObjectTombstoneResurrection(current foghorndb.GetMediaAuthorityForUp
 		verified.MediaObject.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_TOMBSTONE, nil
 }
 
-func applyProjection(ctx context.Context, queries *foghorndb.Queries, verified *sharedauthority.Verified, preserve readinessPreservation) error {
+// previousPlacement is what a tenant apply does with the placement policy set
+// the cell held before it: record the replaced set, keep the one already
+// recorded, or clear it.
+type previousPlacement struct {
+	mode   string
+	policy []byte
+}
+
+const (
+	previousPlacementRecord = "record"
+	previousPlacementKeep   = "keep"
+	previousPlacementClear  = "clear"
+)
+
+// previousTenantPlacement decides what the tenant projection keeps of the
+// placement policy set the held authority carried. A tenant authority that
+// raises the placement revision records the replaced set, so objects still
+// compiled against it are evaluated against it while their own replacements
+// arrive (PlacementPair.PolicyTenant). One at the same revision keeps what was
+// recorded. A first authority, a schema change, or a held authority already
+// past its validity (the tenant is being revived and its objects are withheld
+// anyway) records nothing.
+func previousTenantPlacement(current foghorndb.GetMediaAuthorityForUpdateRow, hasCurrent bool, verified *sharedauthority.Verified, now time.Time) (previousPlacement, error) {
+	tenant := verified.Tenant
+	if tenant == nil || !hasCurrent || !current.ValidUntil.After(now) || !sharedauthority.IsPlacementSchema(tenant.GetSchemaVersion()) {
+		return previousPlacement{mode: previousPlacementClear}, nil
+	}
+	held := &mediaauthoritypb.TenantAuthority{}
+	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(current.Payload, held); err != nil {
+		return previousPlacement{}, fmt.Errorf("decode held tenant placement: %w", err)
+	}
+	if held.GetSchemaVersion() != tenant.GetSchemaVersion() || held.GetMediaPlacement() == nil {
+		return previousPlacement{mode: previousPlacementClear}, nil
+	}
+	switch revision := tenant.GetMediaPlacement().GetRevision(); {
+	case held.GetMediaPlacement().GetRevision() == revision:
+		return previousPlacement{mode: previousPlacementKeep}, nil
+	case held.GetMediaPlacement().GetRevision() < revision:
+		encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(held.GetMediaPlacement())
+		if err != nil {
+			return previousPlacement{}, fmt.Errorf("encode replaced tenant placement: %w", err)
+		}
+		return previousPlacement{mode: previousPlacementRecord, policy: encoded}, nil
+	default:
+		return previousPlacement{mode: previousPlacementClear}, nil
+	}
+}
+
+func applyProjection(ctx context.Context, queries *foghorndb.Queries, verified *sharedauthority.Verified, preserve readinessPreservation, previous previousPlacement) error {
 	envelope := verified.Envelope
 	if tenant := verified.Tenant; tenant != nil {
 		if tenant.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE ||
@@ -465,6 +517,7 @@ func applyProjection(ctx context.Context, queries *foghorndb.Queries, verified *
 			DecisionReason: tenant.GetDecisionReason(), ValidUntil: envelope.GetValidUntil().AsTime(),
 			PreserveLocalReadReady: preserve.read, PreserveLocalIngestReady: preserve.ingest,
 			PreserveLocalSourceReady: preserve.source,
+			PreviousPlacementMode:    previous.mode, PreviousPlacementPolicy: previous.policy,
 		}
 		if limits != nil {
 			params.MaxStreams = limits.GetMaxStreams()

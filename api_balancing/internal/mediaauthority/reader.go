@@ -15,6 +15,7 @@ import (
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
+	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -35,6 +36,12 @@ type TenantSnapshot struct {
 	Freshness    Freshness
 	RefreshAfter time.Time
 	ValidUntil   time.Time
+	// PreviousPlacement is the tenant placement policy set this cell held
+	// before Authority raised the placement revision, and PlacementSupersededAt
+	// when Authority was applied. Only placement pair reads fill them; nil when
+	// the cell held no earlier revision of the same schema.
+	PreviousPlacement     *placementpb.PolicySet
+	PlacementSupersededAt time.Time
 }
 
 func TenantClusterPeers(tenant *mediaauthoritypb.TenantAuthority) []*clusterpeerpb.TenantClusterPeer {
