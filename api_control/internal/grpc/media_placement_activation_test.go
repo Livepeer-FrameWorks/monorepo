@@ -31,6 +31,26 @@ func rolloutRows(t *testing.T, payload proto.Message, schema int32, cells ...str
 	return rows
 }
 
+// placementDependent is one row of ListTenantPlacementDependents: an object's
+// current payload and how many of the cells its version targets acknowledged it.
+type placementDependent struct {
+	object                 *mediapb.MediaObjectAuthority
+	targeted, acknowledged int64
+}
+
+func expectPlacementDependents(t *testing.T, mock sqlmock.Sqlmock, tenantID string, dependents ...placementDependent) {
+	t.Helper()
+	rows := sqlmock.NewRows([]string{"authority_id", "authority_version", "payload", "targeted", "acknowledged"})
+	for _, dependent := range dependents {
+		encoded, err := proto.Marshal(dependent.object)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows.AddRow("live_stream:"+dependent.object.GetLiveStream().GetStreamId(), int64(4), encoded, dependent.targeted, dependent.acknowledged)
+	}
+	mock.ExpectQuery(regexp.QuoteMeta("FROM commodore.media_authority_refresh_obligations AS renewal")).WithArgs(tenantID).WillReturnRows(rows)
+}
+
 type rolloutCell = struct {
 	id, status string
 	ready      bool
@@ -39,6 +59,7 @@ type rolloutCell = struct {
 func TestReconcilePlacementActivationFollowsAcknowledgementsAndAttestation(t *testing.T) {
 	tenant := &mediapb.TenantAuthority{SchemaVersion: 2, TenantId: "5eed517e-ba5e-da7a-517e-ba5eda7a0001", MediaPlacement: &placementpb.PolicySet{Revision: 3}}
 	object := &mediapb.MediaObjectAuthority{SchemaVersion: 2, TenantId: tenant.TenantId, ObjectKind: mediapb.MediaObjectKind_MEDIA_OBJECT_KIND_LIVE_STREAM,
+		Lifecycle:      mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE,
 		MediaPlacement: &placementpb.PolicySet{Revision: 2}, PlacementTenantRevision: 3,
 		Object: &mediapb.MediaObjectAuthority_LiveStream{LiveStream: &mediapb.LiveStreamAuthority{StreamId: "5eedfeed-11fe-ca57-feed-11feca570001", IngestMode: "push"}}}
 	for _, test := range []struct {
@@ -55,8 +76,23 @@ func TestReconcilePlacementActivationFollowsAcknowledgementsAndAttestation(t *te
 		{"every cell acknowledged and attested activates the tenant revision", "tenant", tenant, 2,
 			[]rolloutCell{{"cell-a", "acknowledged", true}, {"cell-b", "acknowledged", true}},
 			func(mock sqlmock.Sqlmock) {
+				expectPlacementDependents(t, mock, tenant.TenantId, placementDependent{object, 2, 2})
 				mock.ExpectExec(regexp.QuoteMeta("UPDATE commodore.media_placement_policies")).WithArgs(int64(3), int64(0), sqlmock.AnyArg(), tenant.TenantId, "tenant", tenant.TenantId).WillReturnResult(sqlmock.NewResult(0, 1))
 				mock.ExpectExec(regexp.QuoteMeta("SET rollout_status = 'effective'")).WithArgs(tenant.TenantId, "tenant", tenant.TenantId, int64(3)).WillReturnResult(sqlmock.NewResult(0, 1))
+			}, placementpb.RolloutStatus_ROLLOUT_STATUS_EFFECTIVE, 2, 2},
+		{"a stream authority still on its way to a cell keeps the tenant change pending", "tenant", tenant, 2,
+			[]rolloutCell{{"cell-a", "acknowledged", true}, {"cell-b", "acknowledged", true}},
+			func(mock sqlmock.Sqlmock) {
+				expectPlacementDependents(t, mock, tenant.TenantId, placementDependent{object, 2, 1})
+				mock.ExpectExec(regexp.QuoteMeta("UPDATE commodore.media_placement_changes")).WithArgs("pending", placementRolloutReasonDependents, tenant.TenantId, "tenant", tenant.TenantId, int64(3)).WillReturnResult(sqlmock.NewResult(0, 1))
+			}, placementpb.RolloutStatus_ROLLOUT_STATUS_EFFECTIVE, 2, 2},
+		{"a stream authority still naming the previous tenant revision keeps the tenant change pending", "tenant", tenant, 2,
+			[]rolloutCell{{"cell-a", "acknowledged", true}, {"cell-b", "acknowledged", true}},
+			func(mock sqlmock.Sqlmock) {
+				lagging := proto.CloneOf(object)
+				lagging.PlacementTenantRevision = 2
+				expectPlacementDependents(t, mock, tenant.TenantId, placementDependent{lagging, 2, 2})
+				mock.ExpectExec(regexp.QuoteMeta("UPDATE commodore.media_placement_changes")).WithArgs("pending", placementRolloutReasonDependents, tenant.TenantId, "tenant", tenant.TenantId, int64(3)).WillReturnResult(sqlmock.NewResult(0, 1))
 			}, placementpb.RolloutStatus_ROLLOUT_STATUS_EFFECTIVE, 2, 2},
 		{"a pending delivery keeps the change pending", "tenant", tenant, 2,
 			[]rolloutCell{{"cell-a", "acknowledged", true}, {"cell-b", "pending", true}},

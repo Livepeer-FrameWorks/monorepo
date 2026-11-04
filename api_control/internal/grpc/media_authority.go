@@ -2461,7 +2461,7 @@ func (s *CommodoreServer) acknowledgeMediaAuthorityDelivery(ctx context.Context,
 	// delivery rows, which only observes the previous holder's committed
 	// acknowledgement because a new snapshot is taken per statement. Raising the
 	// isolation here would restore the lost-update bug the lock exists to close.
-	return database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		queries := commodoredb.New(tx)
 		affected, err := queries.MarkMediaAuthorityDeliveryAcknowledged(ctx, commodoredb.MarkMediaAuthorityDeliveryAcknowledgedParams{
 			AuthorityKind: row.AuthorityKind, AuthorityID: row.AuthorityID, AuthorityVersion: row.AuthorityVersion, CellID: row.CellID,
@@ -2481,6 +2481,16 @@ func (s *CommodoreServer) acknowledgeMediaAuthorityDelivery(ctx context.Context,
 		}
 		return nil
 	})
+	if err != nil || row.AuthorityKind != "media_object" {
+		return err
+	}
+	// The acknowledgement stands on its own; a tenant rollout this one completes
+	// and that is not re-derived here is converged by the activation backlog
+	// sweep.
+	if followErr := s.reconcileDependentTenantRollout(ctx, row.AuthorityID); followErr != nil && s.logger != nil {
+		s.logger.WithError(followErr).WithField("authority_id", row.AuthorityID).Warn("Failed to re-derive the tenant placement rollout an object acknowledgement may complete")
+	}
+	return nil
 }
 
 // failMediaAuthorityDelivery records a failed attempt and returns when the

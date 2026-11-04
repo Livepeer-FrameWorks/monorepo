@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -22,6 +23,9 @@ const (
 	placementRolloutReasonUnattested = "cell has not attested placement enforcement"
 	placementRolloutReasonLegacy     = "placement authority has not been issued to this cell yet"
 	placementRolloutReasonPending    = "signed authority not yet acknowledged by this cell"
+	// The tenant authority reached every cell, but some stream or artifact
+	// authority compiled against this revision has not.
+	placementRolloutReasonDependents = "media object authorities naming this revision not yet acknowledged by every cell"
 )
 
 // placementRolloutView is the activation evidence for one authority: every cell
@@ -150,6 +154,21 @@ func (s *CommodoreServer) reconcilePlacementActivation(ctx context.Context, quer
 		return nil
 	}
 	revision := policy.GetRevision()
+	if view.Complete && view.Tenant != nil && revision != 0 {
+		// A cell evaluates a stream against the tenant revision its own object
+		// authority names, so the tenant's revision is in force only once the
+		// recompiled objects naming it are acknowledged too.
+		converged, dependentsErr := tenantPlacementDependentsConverged(ctx, queries, tenantID, revision)
+		if dependentsErr != nil {
+			return dependentsErr
+		}
+		if !converged {
+			_, rolloutErr := queries.SetMediaPlacementChangeRollout(ctx, commodoredb.SetMediaPlacementChangeRolloutParams{
+				RolloutStatus: "pending", RolloutReason: placementRolloutReasonDependents, TenantID: tenantID, ScopeKind: scopeKind, ScopeID: scopeID, Revision: int64(revision),
+			})
+			return rolloutErr
+		}
+	}
 	if !view.Complete {
 		if revision == 0 {
 			return nil
@@ -182,6 +201,50 @@ func (s *CommodoreServer) reconcilePlacementActivation(ctx context.Context, quer
 		return fmt.Errorf("mark placement changes effective: %w", err)
 	}
 	return nil
+}
+
+// tenantPlacementDependentsConverged reports whether every active media-object
+// authority of the tenant that a cell may hold names the tenant placement
+// revision and is acknowledged by every cell its current version targets. It
+// stops at the first object that does not.
+func tenantPlacementDependentsConverged(ctx context.Context, queries *commodoredb.Queries, tenantID string, revision uint64) (bool, error) {
+	rows, err := queries.ListTenantPlacementDependents(ctx, tenantID)
+	if err != nil {
+		return false, fmt.Errorf("read tenant placement dependents: %w", err)
+	}
+	for _, row := range rows {
+		if row.Acknowledged < row.Targeted {
+			return false, nil
+		}
+		object := &mediapb.MediaObjectAuthority{}
+		if err := proto.Unmarshal(row.Payload, object); err != nil {
+			return false, fmt.Errorf("decode placement dependent %s: %w", row.AuthorityID, err)
+		}
+		if object.GetLifecycle() != mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE {
+			continue
+		}
+		if !sharedauthority.IsPlacementSchema(object.GetSchemaVersion()) || object.GetPlacementTenantRevision() != revision {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// reconcileDependentTenantRollout re-derives the tenant-scope rollout an
+// acknowledged media-object authority may complete. It runs after the
+// acknowledgement committed, in its own transaction, so the derivation sees it.
+// Without a waiting tenant-scope change it reads one row and does nothing.
+func (s *CommodoreServer) reconcileDependentTenantRollout(ctx context.Context, authorityID string) error {
+	tenantID, err := commodoredb.New(s.db).GetTenantAwaitingPlacementDependent(ctx, authorityID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read tenant awaiting placement dependent: %w", err)
+	}
+	return database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		return s.reconcilePlacementActivation(ctx, commodoredb.New(tx), "tenant", tenantID)
+	})
 }
 
 // attachPlacementRollout fills recipient evidence into a rollout built from the

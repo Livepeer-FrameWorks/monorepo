@@ -1635,6 +1635,59 @@ WHERE current.authority_kind = sqlc.arg(authority_kind)
   AND current.authority_id = sqlc.arg(authority_id)
 ORDER BY delivery.cell_id;
 
+-- name: ListTenantPlacementDependents :many
+-- The tenant's media-object authorities a cell decides on together with the
+-- tenant authority: the set a tenant change fans out over
+-- (ListTenantMediaObjectRefreshTargets). Each carries its current payload and
+-- how many cells its current version targets and how many acknowledged it.
+-- Objects still awaiting an acknowledgement come first, then the ones whose
+-- current version is oldest, so a caller looking for any unconverged object
+-- usually stops at the first row.
+SELECT current.authority_id, current.authority_version, versions.payload,
+       counts.targeted, counts.acknowledged
+FROM commodore.media_authority_refresh_obligations AS renewal
+JOIN commodore.media_authority_current AS current
+  ON current.authority_kind = split_part(renewal.target_key, ':', 1)
+ AND current.authority_id = substr(renewal.target_key, strpos(renewal.target_key, ':') + 1)
+JOIN commodore.media_authority_versions AS versions
+  ON versions.authority_kind = current.authority_kind
+ AND versions.authority_id = current.authority_id
+ AND versions.authority_version = current.authority_version
+CROSS JOIN LATERAL (
+    SELECT COUNT(*)::bigint AS targeted,
+           COUNT(*) FILTER (WHERE delivery.status = 'acknowledged')::bigint AS acknowledged
+    FROM commodore.media_authority_deliveries AS delivery
+    WHERE delivery.authority_kind = current.authority_kind
+      AND delivery.authority_id = current.authority_id
+      AND delivery.authority_version = current.authority_version
+) AS counts
+WHERE renewal.tenant_id = sqlc.arg(tenant_id)::uuid
+  AND renewal.lane = 'object_deadline'
+  AND NOT versions.tombstone
+  AND EXISTS (
+      SELECT 1 FROM commodore.media_authority_versions AS held
+      WHERE held.authority_kind = current.authority_kind
+        AND held.authority_id = current.authority_id
+        AND held.valid_until > NOW()
+  )
+ORDER BY (counts.acknowledged < counts.targeted) DESC, current.updated_at ASC, current.authority_id ASC;
+
+-- name: GetTenantAwaitingPlacementDependent :one
+-- The tenant of a media-object authority, when that tenant has a tenant-scope
+-- placement change not yet effective: an acknowledgement of the object may be
+-- the last one that change waits for.
+SELECT renewal.tenant_id::text AS tenant_id
+FROM commodore.media_authority_refresh_obligations AS renewal
+WHERE renewal.target_key = 'media_object:' || sqlc.arg(authority_id)::text
+  AND renewal.lane = 'object_deadline'
+  AND EXISTS (
+      SELECT 1 FROM commodore.media_placement_changes AS changes
+      WHERE changes.tenant_id = renewal.tenant_id
+        AND changes.scope_kind = 'tenant'
+        AND changes.scope_id = renewal.tenant_id
+        AND changes.rollout_status IN ('pending', 'blocked')
+  );
+
 -- name: LockMediaAuthorityActivation :exec
 -- Serializes activation derivation for one authority. Acknowledgements for the
 -- same authority version are delivered concurrently, each in its own READ

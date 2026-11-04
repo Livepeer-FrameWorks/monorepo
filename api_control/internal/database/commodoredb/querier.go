@@ -274,6 +274,10 @@ type Querier interface {
 	GetStreamUpdateState(ctx context.Context, arg GetStreamUpdateStateParams) (GetStreamUpdateStateRow, error)
 	GetStreamWebhookSecret(ctx context.Context, arg GetStreamWebhookSecretParams) (sql.NullString, error)
 	GetStreamsConfigBatch(ctx context.Context, arg GetStreamsConfigBatchParams) ([]GetStreamsConfigBatchRow, error)
+	// The tenant of a media-object authority, when that tenant has a tenant-scope
+	// placement change not yet effective: an acknowledgement of the object may be
+	// the last one that change waits for.
+	GetTenantAwaitingPlacementDependent(ctx context.Context, authorityID string) (string, error)
 	GetTenantMediaRetentionPolicy(ctx context.Context, tenantID string) (GetTenantMediaRetentionPolicyRow, error)
 	GetTenantPrimaryUser(ctx context.Context, tenantID string) (GetTenantPrimaryUserRow, error)
 	GetTenantProcessingOverrides(ctx context.Context, tenantID string) (GetTenantProcessingOverridesRow, error)
@@ -442,6 +446,14 @@ type Querier interface {
 	// enqueues that follow are bounded statements without rereading the tenant's
 	// rows for each of them.
 	ListTenantMediaObjectRefreshTargets(ctx context.Context, tenantID string) ([]string, error)
+	// The tenant's media-object authorities a cell decides on together with the
+	// tenant authority: the set a tenant change fans out over
+	// (ListTenantMediaObjectRefreshTargets). Each carries its current payload and
+	// how many cells its current version targets and how many acknowledged it.
+	// Objects still awaiting an acknowledgement come first, then the ones whose
+	// current version is oldest, so a caller looking for any unconverged object
+	// usually stops at the first row.
+	ListTenantPlacementDependents(ctx context.Context, tenantID string) ([]ListTenantPlacementDependentsRow, error)
 	ListUserLiveStreamAuthorityTargets(ctx context.Context, arg ListUserLiveStreamAuthorityTargetsParams) ([]string, error)
 	ListUserWallets(ctx context.Context, userID string) ([]ListUserWalletsRow, error)
 	// Tenants whose authority is still being renewed. Reconciliation covers these;

@@ -69,7 +69,14 @@ Schema-2 issuance and schema-2 readiness are gated by one attestation chain, not
   becomes the scope's active revision and its change is `effective`; an unattested target cell
   marks the change `blocked` with that reason; anything else stays `pending`. Tenant scope follows
   the tenant authority, stream scope follows the live-stream object authority (own revision plus
-  the parent revision it was compiled against). The policy/change API reports required, applied
+  the parent revision it was compiled against). A tenant-scope change additionally waits for its
+  dependents: every active media-object authority of the tenant that some cell may hold (the set a
+  tenant change fans out over) must name the tenant's revision and be acknowledged by every cell
+  its current version targets, because a cell evaluates each object against the tenant revision
+  the object names. Until then the change stays `pending` with the reason "media object
+  authorities naming this revision not yet acknowledged by every cell". An object
+  acknowledgement re-derives a tenant-scope change that is still waiting, after the
+  acknowledgement commits, and the activation backlog sweep covers one that was missed. The policy/change API reports required, applied
   and pending recipients from the same evidence, and a stored `effective` is demoted to
   pending/blocked while a newly targeted cell has not acknowledged, so "effective" never widens
   silently. Saved intent alone never sets these fields.
@@ -819,7 +826,9 @@ The latter derives the object identity from the same snapshot, without an unscop
 lookup. Both validate payload hashes and bound identities and retain separate tenant/object
 versions, readiness
 markers and expiry timestamps. The census compiler requires schema 2, matching policy
-parent revisions, active billing/object authority and readiness for the requested verb;
+parent revisions (an object still naming the tenant revision the cell held just before is
+evaluated against that revision for a bounded window; see the lag rule in
+`media-authority.md`), active billing/object authority and readiness for the requested verb;
 managed inputs additionally require source readiness. Soft-expired authority remains usable
 only until its signed hard expiry. A missing or mixed projection is not default policy.
 
