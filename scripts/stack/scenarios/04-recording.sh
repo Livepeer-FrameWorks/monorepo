@@ -117,7 +117,7 @@ eventually 300 "first chapter frozen with its .dtsh synced" frozen
 # The chapter's origin edge builds its .dtsh from its own canonical file. A
 # resolve that names the edge itself as the chapter's peer-relay origin makes
 # its relay fetch the sidecar from itself and stall to its fetch deadline.
-no_self_sidecar_fetch() { ! log_has "$LOG_SINCE" "relay dtsh fetch failed.*//$EDGE_A_HOST:8082/internal/artifact/" edge; }
+no_self_sidecar_fetch() { log_absent "$LOG_SINCE" "relay dtsh fetch failed.*//$EDGE_A_HOST:8082/internal/artifact/" edge; }
 check "the origin edge never fetched a chapter .dtsh from its own relay" no_self_sidecar_fetch
 
 chapter_thumbnails() {

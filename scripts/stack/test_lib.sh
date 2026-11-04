@@ -22,6 +22,48 @@ expect() { # expect <description> <command...>
   if "$@"; then printf 'ok    %s\n' "$what"; else printf 'FAIL  %s\n' "$what"; failures=$((failures + 1)); fi
 }
 
+revocation_log_failure_is_red() (
+  FAIL=0 PASS=0
+  SINCE=now REFUSED_AT=later
+  foghorn_calls() { printf '0\n'; return 2; }
+  sed -n '/^  .*calls=$(foghorn_calls/,/^  gone()/p' "$here/scenarios/18-playback-grant-revocation.sh" |
+    sed '$d' >"$work/revocation-log-check.sh"
+  [ -s "$work/revocation-log-check.sh" ] || return 1
+  . "$work/revocation-log-check.sh"
+  [ "$FAIL" = 1 ] && [ "$PASS" = 0 ]
+)
+expect "an unreadable revocation log never passes as zero Foghorn calls" revocation_log_failure_is_red
+
+absence_requires_readable_logs() (
+  LOG_SINCE=now EDGE_A_HOST=edge
+  logs_since() { return 1; }
+  sed -n '/^no_self_sidecar_fetch()/p' "$here/scenarios/04-recording.sh" >"$work/recording-log-check.sh"
+  . "$work/recording-log-check.sh"
+  ! no_self_sidecar_fetch
+)
+expect "a failed journal read cannot prove an event absent" absence_requires_readable_logs
+absence_checks_log_content() (
+  logs_since() { printf 'ordinary event\n'; }
+  log_absent now 'must not happen' edge || return 1
+  logs_since() { printf 'must not happen\n'; }
+  ! log_absent now 'must not happen' edge || return 1
+  ! log_absent now '[' edge 2>/dev/null
+)
+expect "log absence accepts readable logs only when the event is absent" absence_checks_log_content
+
+ended_requires_readable_session() (
+  cell=cell-a internal=internal
+  sed -n '/^  ended()/p' "$here/scenarios/26-fresh-ingests.sh" >"$work/ended-check.sh"
+  . "$work/ended-check.sh"
+  open_generation() { return 1; }
+  ! ended || return 1
+  open_generation() { printf 'generation\n'; }
+  ! ended || return 1
+  open_generation() { :; }
+  ended
+)
+expect "a failed session read cannot prove a fresh publisher ended" ended_requires_readable_session
+
 # Stubs. The scenario's clock is the number of admission polls: each poll of
 # the ingest sessions is one second of the stubbed publish.
 sleep() { :; }

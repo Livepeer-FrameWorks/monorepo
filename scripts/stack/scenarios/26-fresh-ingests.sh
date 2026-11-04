@@ -46,18 +46,17 @@ for n in $(seq 1 20); do
     AND stream_internal_name IN ('$internal','live+$internal') AND ended_at IS NULL AND projection_state='active'")
   check "ingest $n has exactly one active session (got $count)" [ "$count" = 1 ]
   kill "$pid" 2>/dev/null
-  ended() { [ -z "$(open_generation "$cell" "$internal")" ]; }
+  ended() { local generation; generation=$(open_generation "$cell" "$internal") || return 1; [ -z "$generation" ]; }
   eventually 90 "ingest $n session ends after the publisher disconnects" ended
   mist_inactive() { log_has "$stream_since" "Stream live\\+$internal became inactive" "$edge_service"; }
   eventually 90 "ingest $n is inactive in Mist after disconnect" mist_inactive
   delete_stream "$id"
 done
 
-if log_has "$since" 'DUPLICATE_INGEST|duplicate ingest' edge edge-b foghorn foghorn-2 foghorn-b foghorn-b-2; then
-  fail "a fresh ingest was refused as a duplicate"
-else
-  pass "no duplicate-ingest refusal across 20 fresh publishers"
-fi
+read -r -a A_SERVICES <<<"${STACK_FOGHORN_A_SERVICES:-foghorn foghorn-2}"
+read -r -a B_SERVICES <<<"${STACK_FOGHORN_B_SERVICES:-foghorn-b foghorn-b-2}"
+check "no duplicate-ingest refusal across 20 fresh publishers" log_absent "$since" \
+  'DUPLICATE_INGEST|duplicate ingest' edge edge-b "${A_SERVICES[@]}" "${B_SERVICES[@]}"
 for cell in "$FOGHORN_A_DB" "$FOGHORN_B_DB"; do
   if [ "$cell" = "$FOGHORN_A_DB" ]; then names=("${INTERNALS_A[@]}"); else names=("${INTERNALS_B[@]}"); fi
   for internal in "${names[@]}"; do

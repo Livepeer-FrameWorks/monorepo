@@ -19,6 +19,8 @@ trap cleanup EXIT
 
 read -r -a A_BASES <<<"$FOGHORN_A_URLS"
 read -r -a B_BASES <<<"$FOGHORN_B_URLS"
+read -r -a A_SERVICES <<<"${STACK_FOGHORN_A_SERVICES:-foghorn foghorn-2}"
+read -r -a B_SERVICES <<<"${STACK_FOGHORN_B_SERVICES:-foghorn-b foghorn-b-2}"
 
 for n in $(seq 1 20); do
   for direction in a-to-b b-to-a; do
@@ -62,19 +64,22 @@ for n in $(seq 1 20); do
     esac
     sleep 0.25
     if [ "$direction" = a-to-b ]; then
-      destination_services=(foghorn-b foghorn-b-2)
+      destination_services=("${B_SERVICES[@]}")
     else
-      destination_services=(foghorn foghorn-2)
+      destination_services=("${A_SERVICES[@]}")
     fi
-    cleared=$(log_json "$stream_since" \
+    if cleared=$(log_json "$stream_since" \
       "select(.msg == \"Node lifecycle cleared stale replicated stream\" and .internal_name == \"$internal\") | .time" \
-      "${destination_services[@]}")
-    check "$direction $n: no lifecycle eviction of the arranged live pull" [ -z "$cleared" ]
+      "${destination_services[@]}"); then
+      check "$direction $n: no lifecycle eviction of the arranged live pull" [ -z "$cleared" ]
+    else
+      fail "$direction $n: could not read destination lifecycle logs"
+    fi
     kill "$pid" 2>/dev/null
     delete_stream "$id"
     # The exit cleanup deletes only streams still standing.
     unset 'STREAMS[-1]'
   done
 done
-check "cross-cell origin pull arrangements were logged" log_has "$since" 'Origin-pull arranged' foghorn foghorn-2 foghorn-b foghorn-b-2
+check "cross-cell origin pull arrangements were logged" log_has "$since" 'Origin-pull arranged' "${A_SERVICES[@]}" "${B_SERVICES[@]}"
 finish

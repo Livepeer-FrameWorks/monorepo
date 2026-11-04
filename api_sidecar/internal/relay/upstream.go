@@ -64,6 +64,12 @@ func newRelayUpstreamClient(b upstreamBounds) *http.Client {
 	// connection that went silent and wait out the response header bound.
 	tr.ForceAttemptHTTP2 = false
 	tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	if tr.TLSClientConfig == nil {
+		tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	// Clone retains the default transport's ALPN offer even when its HTTP/2
+	// handler is disabled. Advertise only the protocol this transport speaks.
+	tr.TLSClientConfig.NextProtos = []string{"http/1.1"}
 	return &http.Client{Transport: &stallBoundTransport{base: tr, readStall: b.readStall}}
 }
 
