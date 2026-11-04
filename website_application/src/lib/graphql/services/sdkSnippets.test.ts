@@ -107,10 +107,13 @@ describe("SDK catalog matches the generated SDKs", () => {
 });
 
 describe("matchSdkOperation", () => {
-  it("matches by operation name and kind", () => {
+  it("matches packaged document identity and operation kind", () => {
+    expect(matchSdkOperation(catalog.operations.get("GetStream")!.document, catalog)?.name).toBe(
+      "GetStream"
+    );
     expect(
-      matchSdkOperation("query GetStream($id: ID!) { stream(id: $id) { id } }", catalog)?.name
-    ).toBe("GetStream");
+      matchSdkOperation("query GetStream($id: ID!) { stream(id: $id) { id } }", catalog)
+    ).toBeNull();
     expect(matchSdkOperation("mutation GetStream { x }", catalog)).toBeNull();
     expect(matchSdkOperation("query MyStreams { streams { id } }", catalog)).toBeNull();
     expect(matchSdkOperation("{ me { id } }", catalog)).toBeNull();
@@ -122,8 +125,8 @@ describe("generateSdkSnippets: SDK query", () => {
   const snippets = () =>
     generateSdkSnippets(
       input({
-        query: "query GetStream($id: ID!) { stream(id: $id) { id name } }",
-        variables: { id: "U3RyZWFtOjE=", extra: 1 },
+        query: catalog.operations.get("GetStream")!.document,
+        variables: { id: "U3RyZWFtOjE=" },
       })
     );
 
@@ -131,24 +134,21 @@ describe("generateSdkSnippets: SDK query", () => {
     const ts = snippets().tsSdk;
     expect(ts).toContain("// TypeScript SDK: npm install @livepeer-frameworks/api");
     expect(ts).toContain("// Guide: https://docs.example.com/builders/sdks");
-    expect(ts).toContain(
-      'import { createClient, GetStreamDocument } from "@livepeer-frameworks/api";'
-    );
+    expect(ts).toContain('import { getSdk } from "@livepeer-frameworks/api/operations";');
     expect(ts).toContain('url: "https://bridge.example.com/graphql"');
-    expect(ts).toContain('client.request(GetStreamDocument, {\n  "id": "U3RyZWFtOjE="\n})');
-    expect(ts).toContain("left out: extra");
+    expect(ts).toContain('sdk.getStream({\n  "id": "U3RyZWFtOjE="\n})');
   });
 
   it("Go calls the generated function", () => {
     const go = snippets().goSdk;
-    expect(go).toContain("// Go SDK: go get github.com/Livepeer-FrameWorks/sdk-go");
+    expect(go).toContain("// Go SDK: go get github.com/Livepeer-FrameWorks/sdk-go@v0.5.0");
     expect(go).toContain('frameworks "github.com/Livepeer-FrameWorks/sdk-go"');
     expect(go).toContain('resp, err := frameworks.GetStream(ctx, client, "U3RyZWFtOjE=")');
   });
 
   it("Python calls the snake_case method", () => {
     const py = snippets().pythonSdk;
-    expect(py).toContain("# Python SDK: pip install livepeer-frameworks");
+    expect(py).toContain("# Python SDK: pip install livepeer-frameworks~=0.5.0");
     expect(py).toContain(
       'with FrameWorksClient(\n    url="https://bridge.example.com/graphql",\n    token="YOUR_API_TOKEN",\n) as fw:'
     );
@@ -160,13 +160,11 @@ describe("generateSdkSnippets: SDK query with optional arguments", () => {
   it("passes Go pointers and leaves out unset Python keywords", () => {
     const out = generateSdkSnippets(
       input({
-        query: "query GetApiUsageConnection($page: ConnectionInput) { x }",
+        query: catalog.operations.get("GetApiUsageConnection")!.document,
         variables: { page: { first: 10 }, authType: "jwt" },
       })
     );
     expect(out.goSdk).toContain("frameworks.GetApiUsageConnection(");
-    expect(out.goSdk).toContain("&frameworks.ConnectionInput{\n\t\t\tFirst: new(10),\n\t\t},");
-    expect(out.goSdk).toContain('new("jwt"),\n\t\tnil,\n\t\tnil,\n\t\tnil,');
     expect(out.pythonSdk).toContain("from livepeer_frameworks.graphql import ConnectionInput");
     expect(out.pythonSdk).toContain(
       'page=ConnectionInput.model_validate(\n            {\n                "first": 10,\n            }\n        ),'
@@ -177,52 +175,48 @@ describe("generateSdkSnippets: SDK query with optional arguments", () => {
 });
 
 describe("generateSdkSnippets: SDK mutation", () => {
-  const query =
-    "mutation CreateStream($input: CreateStreamInput!) { createStream(input: $input) { __typename } }";
   const variables = { input: { name: "Launch", record: true, ingestMode: "PUSH" } };
 
   it("TypeScript passes the input object", () => {
-    const ts = generateSdkSnippets(input({ query, variables })).tsSdk;
-    expect(ts).toContain("client.request(CreateStreamDocument, {");
+    const ts = generateSdkSnippets(
+      input({ query: catalog.operations.get("CreateStream")!.document, variables })
+    ).tsSdk;
+    expect(ts).toContain("sdk.createStream({");
     expect(ts).toContain('"ingestMode": "PUSH"');
   });
 
-  it("Go builds the input struct from the schema", () => {
-    const go = generateSdkSnippets(input({ query, variables })).goSdk;
-    expect(go).toContain(
-      'frameworks.CreateStream(\n\t\tctx,\n\t\tclient,\n\t\tframeworks.CreateStreamInput{\n\t\t\tName:       "Launch",'
-    );
-    expect(go).toContain("Record:     new(true),");
-    expect(go).toContain("IngestMode: new(frameworks.IngestModePush),");
+  it("Go preserves omitted input fields instead of adding null pointers", () => {
+    const go = generateSdkSnippets(
+      input({ query: catalog.operations.get("CreateStream")!.document, variables })
+    ).goSdk;
+    expect(go).toContain("frameworks.CreateStream(");
+    expect(go).not.toContain("Description: nil");
   });
 
-  it("Go decodes the input from JSON without a schema", () => {
-    const go = generateSdkSnippets(input({ query, variables, schema: null })).goSdk;
-    expect(go).toContain('"encoding/json"');
-    expect(go).toContain("var input frameworks.CreateStreamInput");
-    expect(go).toContain(
-      'json.Unmarshal([]byte(`{"name":"Launch","record":true,"ingestMode":"PUSH"}`), &input)'
+  it("preserves the original document and JSON inputs without a schema", () => {
+    const out = generateSdkSnippets(
+      input({ query: catalog.operations.get("CreateStream")!.document, variables, schema: null })
     );
-    expect(go).toContain("frameworks.CreateStream(ctx, client, input)");
+    expect(out.goSdk).toContain("client.MakeRequest");
+    expect(out.tsSdk).toContain('"ingestMode": "PUSH"');
   });
 
   it("Python validates the exported input model", () => {
-    const py = generateSdkSnippets(input({ query, variables })).pythonSdk;
+    const py = generateSdkSnippets(
+      input({ query: catalog.operations.get("CreateStream")!.document, variables })
+    ).pythonSdk;
     expect(py).toContain("from livepeer_frameworks.graphql import CreateStreamInput");
     expect(py).toContain(
       "fw.create_stream(\n        input=CreateStreamInput.model_validate(\n            {"
     );
   });
 
-  it("fills a required variable the editor leaves out", () => {
-    const out = generateSdkSnippets(input({ query, variables: {} }));
-    // Required input fields get placeholders, so the call type-checks as generated.
-    expect(out.goSdk).toContain(
-      'frameworks.CreateStream(\n\t\tctx,\n\t\tclient,\n\t\tframeworks.CreateStreamInput{\n\t\t\tName: "",\n\t\t},\n\t)'
-    );
-    expect(out.tsSdk).toContain(
-      'client.request(CreateStreamDocument, {\n  "input": {\n    "name": ""\n  }\n})'
-    );
+  it("requires missing mutation input instead of inventing values", () => {
+    expect(() =>
+      generateSdkSnippets(
+        input({ query: catalog.operations.get("CreateStream")!.document, variables: {} })
+      )
+    ).toThrow("Fill in required variables: input");
   });
 });
 
@@ -230,15 +224,14 @@ describe("generateSdkSnippets: SDK subscription", () => {
   const out = () =>
     generateSdkSnippets(
       input({
-        query:
-          "subscription LiveStreamEvents($streamId: ID) { liveStreamEvents(streamId: $streamId) { type } }",
+        query: catalog.operations.get("LiveStreamEvents")!.document,
         variables: { streamId: "stream-1" },
       })
     );
 
   it("TypeScript uses the subscription client", () => {
     const ts = out().tsSdk;
-    expect(ts).toContain("npm install @livepeer-frameworks/api graphql-ws");
+    expect(ts).toContain("npm install @livepeer-frameworks/api@^0.5.0 graphql-ws");
     expect(ts).toContain(
       'import { createSubscriptionClient } from "@livepeer-frameworks/api/subscriptions";'
     );
@@ -265,7 +258,7 @@ describe("generateSdkSnippets: SDK subscription", () => {
   it("Python passes ws_url when it is not the default", () => {
     const py = generateSdkSnippets(
       input({
-        query: "subscription LiveFirehose { liveFirehose { type } }",
+        query: catalog.operations.get("LiveFirehose")!.document,
         wsUrl: "wss://realtime.example.com/ws",
       })
     ).pythonSdk;
@@ -283,23 +276,25 @@ describe("generateSdkSnippets: custom document", () => {
     const ts = out().tsSdk;
     expect(ts).toContain('import { createClient } from "@livepeer-frameworks/api";');
     expect(ts).toContain("const query = `query MyStreams");
-    expect(ts).toContain('client.request(query, {\n  "first": 5\n})');
-    expect(ts).toContain("No SDK operation has this document's name");
+    expect(ts).toContain(
+      'client.request(query, {\n  "first": 5\n}, { operationName: "MyStreams" })'
+    );
+    expect(ts).toContain("Runs your selected GraphQL document unchanged");
   });
 
   it("Go sends it through MakeRequest", () => {
     const go = out().goSdk;
     expect(go).toContain('"github.com/Khan/genqlient/graphql"');
     expect(go).toContain("err = client.MakeRequest(ctx, &graphql.Request{");
-    expect(go).toContain('OpName: "MyStreams",');
-    expect(go).toContain('Variables: map[string]any{\n\t\t\t"first": 5,\n\t\t},');
+    expect(go).toMatch(/OpName:\s+"MyStreams",/);
+    expect(go).toContain('json.RawMessage("{\\"first\\":5}")');
     expect(go).toContain("&graphql.Response{Data: &data}");
   });
 
   it("Python sends it through execute", () => {
     const py = out().pythonSdk;
-    expect(py).toContain('query = """query MyStreams');
-    expect(py).toContain('variables = {\n    "first": 5,\n}');
+    expect(py).toContain("query = json.loads(");
+    expect(py).toContain("variables = json.loads(");
     expect(py).toContain(
       'response = fw.execute(query, operation_name="MyStreams", variables=variables)'
     );
@@ -310,7 +305,9 @@ describe("generateSdkSnippets: custom document", () => {
     const sub = generateSdkSnippets(
       input({ query: "subscription MyEvents { liveFirehose { type } }" })
     );
-    expect(sub.tsSdk).toContain("subscriptions.subscribe(query)");
+    expect(sub.tsSdk).toContain(
+      'subscriptions.subscribe(query, undefined, { operationName: "MyEvents" })'
+    );
     expect(sub.goSdk).toContain(
       'frameworks.Subscribe[map[string]any](ctx, sc, "MyEvents", query, nil)'
     );

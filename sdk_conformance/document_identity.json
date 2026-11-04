@@ -1,0 +1,64 @@
+{
+  "cases": [
+    {
+      "name": "unicode",
+      "document": "query Q { stream(id: \"café😀;\\u0000\") { id name } }",
+      "operationName": null,
+      "identity": "sha256:d0d791f6f24f72bb39a06fdd104bb7c878afdd9de9cd7b7687f4b3743794ec77"
+    },
+    {
+      "name": "fragments",
+      "document": "query Q { stream(id: \"x\") { ...B ...A } } fragment B on Stream { name ...A } fragment A on Stream { id }",
+      "operationName": null,
+      "identity": "sha256:bbe1fdbb5c2ee786152f547d536a69d03c5da3de08d1acbc4479f6b006b31935"
+    },
+    {
+      "name": "block-string",
+      "document": "query Q { stream(id: \"\"\"\n  hello\n  world\n\"\"\") { id } }",
+      "operationName": null,
+      "identity": "sha256:db1f2a1099b0a10a887870b4960a2ac77dc976b74cc6d3bf4eaad7151348224f"
+    },
+    {
+      "name": "selected-operation",
+      "document": "query Other { tenant { id } } query Q { tenant { name } }",
+      "operationName": "Q",
+      "identity": "sha256:02096091163e50e6c1c504cf45866ca5b459eec4ea0d22d5bffa549aadc8f84d"
+    },
+    {
+      "name": "anonymous",
+      "document": "{ tenant { id } }",
+      "operationName": null,
+      "identity": "sha256:9cdd3e3cd060ccf4c65b18e65f19b4f09a748ccea2709cc08625247db2b8a430"
+    },
+    {
+      "name": "escaped-surrogate-pair",
+      "document": "query Q { stream(id: \"\\ud83d\\ude00\") { id } }",
+      "operationName": null,
+      "identity": "sha256:5d86bd8f555d679fdb919b43f186edac6d88ae3b9e2ebd9f2450813088f513a3"
+    },
+    {
+      "name": "variable-width-unicode",
+      "document": "query Q { stream(id: \"\\u{1F600}\") { id } }",
+      "operationName": null,
+      "identity": "sha256:5d86bd8f555d679fdb919b43f186edac6d88ae3b9e2ebd9f2450813088f513a3"
+    },
+    {
+      "name": "block-first-line",
+      "document": "query Q { stream(id: \"\"\"first\n  second\n  third\"\"\") { id } }",
+      "operationName": null,
+      "identity": "sha256:1d39f4a2cf6c5328a6c57e18e0469d2f4b9fea41706b81b5b740c11d996c07ae"
+    },
+    {
+      "name": "block-first-indent",
+      "document": "query Q { stream(id: \"\"\"  first\n    second\n    third\n\"\"\") { id } }",
+      "operationName": null,
+      "identity": "sha256:211951cabfc16adc0a0758aa060750a9048fcf19616ee66775d98b8b07cd0530"
+    },
+    {
+      "name": "selected-after-emoji",
+      "document": "query Other { stream(id: \"😀\") { id } } query Q { tenant { name } }",
+      "operationName": "Q",
+      "identity": "sha256:02096091163e50e6c1c504cf45866ca5b459eec4ea0d22d5bffa549aadc8f84d"
+    }
+  ]
+}

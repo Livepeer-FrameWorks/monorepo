@@ -3,6 +3,7 @@ package frameworks
 import (
 	"context"
 	"encoding/json"
+	"github.com/Livepeer-FrameWorks/sdk-go/identity"
 	"io"
 	"iter"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 type operationsFixture struct {
 	Operations []struct {
 		Name      string                     `json:"name"`
+		Identity  string                     `json:"identity"`
 		Kind      string                     `json:"kind"`
 		Variables map[string]json.RawMessage `json:"variables"`
 		Response  struct {
@@ -120,6 +122,9 @@ func TestGeneratedOperations(t *testing.T) {
 			resp, err := entry.call(context.Background(), c, op.Variables)
 			if err != nil {
 				t.Fatalf("%s: %v", op.Name, err)
+			}
+			if hash, err := identity.Sum(sent.Query, sent.OperationName); err != nil || hash != op.Identity {
+				t.Errorf("emitted document identity %s, %v; want %s", hash, err, op.Identity)
 			}
 			if sent.OperationName != op.Name || sent.Query != entry.query {
 				t.Errorf("sent operation %q with a different document", sent.OperationName)

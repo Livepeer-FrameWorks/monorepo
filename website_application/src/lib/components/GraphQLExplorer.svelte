@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { parse, Kind, getOperationAST } from "graphql";
+  import { ListStreamsDocument } from "../../../../npm_api/src/generated/graphql";
   import { SvelteSet } from "svelte/reactivity";
   import {
     explorerService,
@@ -9,7 +11,6 @@
     type SdkCatalog,
   } from "$lib/graphql/services/explorer.js";
   import {
-    extractOperationType,
     extractDescription,
     extractVariableDefinitions,
     extractFragmentSpreads,
@@ -49,46 +50,43 @@
     } | null;
   }
 
+  let selectedOperationName = $state("");
+  const documentOperations = $derived.by(() => {
+    try {
+      return parse(query).definitions.filter(
+        (definition) => definition.kind === Kind.OPERATION_DEFINITION
+      );
+    } catch {
+      return [];
+    }
+  });
+  const operationName = $derived(
+    documentOperations.length === 1
+      ? documentOperations[0].name?.value
+      : selectedOperationName || undefined
+  );
+  const selectedOperation = $derived.by(() => {
+    try {
+      return getOperationAST(parse(query), operationName);
+    } catch {
+      return null;
+    }
+  });
+
   let { initialQuery = "", authToken = null }: Props = $props();
 
-  const DEFAULT_QUERY = `query GetStreamsConnection {
-  streamsConnection(page: { first: 10 }) {
-    edges {
-      node {
-        id
-        streamId
-        name
-        description
-        streamKey
-        playbackId
-        record
-        createdAt
-        updatedAt
-        metrics {
-          status
-          isLive
-          currentViewers
-        }
-      }
-    }
-    pageInfo {
-      hasNextPage
-      endCursor
-    }
-    totalCount
-  }
-}`;
+  const DEFAULT_QUERY = String(ListStreamsDocument).trim();
 
-  // Component state
   let query = $state(DEFAULT_QUERY);
+  let variables = $state(JSON.stringify({ page: { first: 10 } }, null, 2));
 
   // Sync from prop when provided
   $effect.pre(() => {
     if (initialQuery) {
       query = initialQuery;
+      variables = "{}";
     }
   });
-  let variables = $state("{}");
   let response = $state<FormattedResponse | null>(null);
   let loading = $state(false);
   let schemaLoading = $state(false);
@@ -233,7 +231,12 @@
     }
 
     // Determine operation type (handles comment-prefixed queries)
-    const operationType = extractOperationType(query);
+    const operation = selectedOperation;
+    if (!operation) {
+      toast.warning("Select an operation to run");
+      return;
+    }
+    const operationType = operation.operation;
 
     try {
       loading = true;
@@ -241,7 +244,8 @@
         query,
         parsedVariables,
         operationType,
-        demoMode
+        demoMode,
+        operationName
       );
       response = explorerService.formatResponse(result);
 
@@ -327,12 +331,23 @@
   function generateCodeExamples() {
     if (!query.trim()) return {};
 
-    const vars = variables.trim() ? JSON.parse(variables) : {};
-    return explorerService.generateCodeExamples(query, vars, authToken, {
-      catalog: sdkCatalog,
-      schema,
-      docsUrl: getDocsSiteUrl(),
-    });
+    try {
+      const vars = variables.trim() ? JSON.parse(variables) : {};
+      return explorerService.generateCodeExamples(query, vars, authToken, {
+        catalog: sdkCatalog,
+        schema,
+        docsUrl: getDocsSiteUrl(),
+        operationName,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return Object.fromEntries(
+        languages.map(({ key }) => [
+          key,
+          `${["python", "pythonSdk", "curl"].includes(key) ? "#" : "//"} ${message}`,
+        ])
+      );
+    }
   }
 
   function handleKeyPress(event: KeyboardEvent) {
@@ -450,8 +465,8 @@
   }
 
   let rootFieldHints = $derived.by(() => {
-    if (!schema) return [];
-    const operationType = extractOperationType(query);
+    if (!schema || !selectedOperation) return [];
+    const operationType = selectedOperation.operation;
     const rootFields = extractRootFieldNames(query);
     if (!rootFields.length) return [];
 
@@ -499,6 +514,21 @@
     onExecute={executeQuery}
     onDemoModeChange={(checked) => (demoMode = checked)}
   />
+
+  {#if documentOperations.length > 1}
+    <label class="flex items-center gap-2 border-b border-border px-4 py-2 text-sm">
+      Operation
+      <select
+        bind:value={selectedOperationName}
+        class="rounded border border-border bg-background px-2 py-1"
+      >
+        <option value="">Select an operation</option>
+        {#each documentOperations as operation, index (index)}
+          <option value={operation.name?.value}>{operation.name?.value}</option>
+        {/each}
+      </select>
+    </label>
+  {/if}
 
   <!-- 3-Panel Layout: Sidebar | Query Editor | Response -->
   <div class="flex flex-1 min-h-0 relative">

@@ -46,7 +46,8 @@ export interface SubscriptionClient {
    */
   subscribe<TResult, TVariables>(
     document: DocumentTypeDecoration<TResult, TVariables> | string,
-    variables?: TVariables
+    variables?: TVariables,
+    options?: { operationName?: string }
   ): AsyncGenerator<TResult, void, undefined>;
   /** Closes the connection and ends every subscription. */
   close(): Promise<void>;
@@ -129,10 +130,11 @@ export function createSubscriptionClient(options: SubscriptionClientOptions): Su
   return {
     async *subscribe<TResult, TVariables>(
       document: DocumentTypeDecoration<TResult, TVariables> | string,
-      variables?: TVariables
+      variables?: TVariables,
+      options?: { operationName?: string }
     ): AsyncGenerator<TResult, void, undefined> {
       const query = String(document);
-      const op = parseOperation(query);
+      const op = parseOperation(query, options?.operationName);
       const connection = connect();
       const results = connection.client.iterate<TResult>({
         query,

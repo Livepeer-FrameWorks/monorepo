@@ -22,6 +22,8 @@ type operationsFixture struct {
 
 type operationFixture struct {
 	Name      string         `json:"name"`
+	Document  string         `json:"document"`
+	Identity  string         `json:"identity"`
 	Kind      string         `json:"kind"`
 	Variables map[string]any `json:"variables"`
 	Response  map[string]any `json:"response"`
@@ -69,6 +71,8 @@ func renderOperationsFixture(schema *ast.Schema, ops []operation) (string, error
 		delete(data, "__typename")
 		fixture.Operations = append(fixture.Operations, operationFixture{
 			Name:      op.Name,
+			Document:  op.Document,
+			Identity:  operationIdentity(manifestOperation{Name: op.Name, Document: op.Document}),
 			Kind:      op.Kind,
 			Variables: vars,
 			Response:  map[string]any{"data": data},

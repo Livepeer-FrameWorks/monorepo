@@ -10,6 +10,9 @@ import (
 	"strings"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
+	"github.com/Livepeer-FrameWorks/sdk-go/identity"
+	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/parser"
 )
 
 // The SDK version is the npm package version; changesets bump it and emit
@@ -29,6 +32,8 @@ type emitInput struct {
 	MinServer string
 	Ops       []manifestOperation
 	Events    []publicEvent
+	Targets   map[string]string
+	Schema    *ast.Schema
 }
 
 // publicEvent is one registered public event type and the proto message
@@ -78,7 +83,7 @@ func (in emitInput) render(lang string) (map[string]string, error) {
 	paths := emitTargets[lang]
 	switch lang {
 	case "ts":
-		return map[string]string{paths[0]: in.tsManifest(), paths[1]: in.tsEvents()}, nil
+		return map[string]string{paths[0]: in.tsManifest(), paths[1]: in.tsEvents(), "npm_api/src/generated/methods.ts": in.tsMethods(), "pkg/graphql/public/catalog.json": in.catalog()}, nil
 	case "go":
 		return map[string]string{paths[0]: in.goManifest(), paths[1]: in.goEvents()}, nil
 	case "py":
@@ -93,14 +98,14 @@ func (in emitInput) tsManifest() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "// %s\n\n", generatedNote)
 	b.WriteString("export type OperationKind = \"query\" | \"mutation\" | \"subscription\";\n\n")
-	b.WriteString("export interface OperationInfo {\n  readonly kind: OperationKind;\n  readonly since: string;\n  readonly hash: string;\n}\n\n")
+	b.WriteString("export interface OperationInfo {\n  readonly kind: OperationKind;\n  readonly since: string;\n  readonly hash: string;\n  readonly identity: string;\n}\n\n")
 	fmt.Fprintf(&b, "/** The SDK package version. */\nexport const sdkVersion = %q;\n\n", in.Version)
 	fmt.Fprintf(&b, "/** The SDK compatibility line; under 0.x each minor version is its own line. */\nexport const sdkLine = %q;\n\n", in.Line)
 	fmt.Fprintf(&b, "/** The oldest FrameWorks release this SDK line supports. */\nexport const minServerVersion = %q;\n\n", in.MinServer)
 	b.WriteString("/** Every operation this SDK ships, with the first release that serves it. */\n")
 	b.WriteString("export const operations = {\n")
 	for _, op := range in.Ops {
-		fmt.Fprintf(&b, "  %s: { kind: %q, since: %q, hash: %q },\n", op.Name, op.Kind, op.Since, op.Hash)
+		fmt.Fprintf(&b, "  %s: { kind: %q, since: %q, hash: %q, identity: %q },\n", op.Name, op.Kind, op.Since, op.Hash, operationIdentity(op))
 	}
 	b.WriteString("} as const satisfies Record<string, OperationInfo>;\n\n")
 	b.WriteString("export type OperationName = keyof typeof operations;\n")
@@ -155,7 +160,7 @@ func (in emitInput) goManifest() string {
 	}
 	for _, op := range in.Ops {
 		key := fmt.Sprintf("%q:", op.Name)
-		fmt.Fprintf(&b, "\t%-*s {Kind: %q, Since: %q},\n", width, key, op.Kind, op.Since)
+		fmt.Fprintf(&b, "\t%-*s {Kind: %q, Since: %q, Identity: %q},\n", width, key, op.Kind, op.Since, operationIdentity(op))
 	}
 	b.WriteString("}\n")
 	return b.String()
@@ -185,13 +190,13 @@ func (in emitInput) pyManifest() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", generatedNote)
 	b.WriteString("from typing import Final, Literal, TypedDict\n\n\n")
-	b.WriteString("class OperationInfo(TypedDict):\n    kind: Literal[\"query\", \"mutation\", \"subscription\"]\n    since: str\n\n\n")
+	b.WriteString("class OperationInfo(TypedDict):\n    kind: Literal[\"query\", \"mutation\", \"subscription\"]\n    since: str\n    identity: str\n\n\n")
 	fmt.Fprintf(&b, "SDK_VERSION: Final = %q\n", in.Version)
 	fmt.Fprintf(&b, "SDK_LINE: Final = %q\n", in.Line)
 	fmt.Fprintf(&b, "MIN_SERVER_VERSION: Final = %q\n\n", in.MinServer)
 	b.WriteString("OPERATIONS: Final[dict[str, OperationInfo]] = {\n")
 	for _, op := range in.Ops {
-		fmt.Fprintf(&b, "    %q: {\"kind\": %q, \"since\": %q},\n", op.Name, op.Kind, op.Since)
+		fmt.Fprintf(&b, "    %q: {\"kind\": %q, \"since\": %q, \"identity\": %q},\n", op.Name, op.Kind, op.Since, operationIdentity(op))
 	}
 	b.WriteString("}\n")
 	return b.String()
@@ -245,4 +250,123 @@ func writeOrCheck(repo string, files map[string]string, check bool) ([]string, e
 		}
 	}
 	return stale, nil
+}
+
+func operationIdentity(op manifestOperation) string {
+	hash, err := identity.Sum(op.Document, op.Name)
+	if err != nil {
+		panic(fmt.Sprintf("operation identity for %s: %v", op.Name, err))
+	}
+	return hash
+}
+
+func (in emitInput) tsMethods() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "// %s\n", generatedNote)
+	b.WriteString("import type { FrameWorksClient, OperationArguments } from \"../client.js\";\nimport type { SubscriptionClient } from \"../subscriptions.js\";\nimport * as documents from \"./graphql.js\";\n\n")
+	b.WriteString("type SubscriptionArguments<V> = Record<string, never> extends V ? [variables?: V] : [variables: V];\n\n")
+	b.WriteString("/** Named operations over the existing SDK transport. Subscriptions require the optional subscription client. */\nexport function getSdk(client: FrameWorksClient, options: { subscriptions?: SubscriptionClient } = {}) {\n return {\n")
+	for _, op := range in.Ops {
+		suffix := strings.ToUpper(op.Kind[:1]) + op.Kind[1:]
+		method := strings.ToLower(op.Name[:1]) + op.Name[1:]
+		if op.Kind == "subscription" {
+			fmt.Fprintf(&b, "  %s: (...args: SubscriptionArguments<documents.%s%sVariables>) => {\n   if (!options.subscriptions) throw new TypeError(\"getSdk: provide a subscription client\");\n   return options.subscriptions.subscribe(documents.%sDocument, args[0]);\n  },\n", method, op.Name, suffix, op.Name)
+		} else {
+			fmt.Fprintf(&b, "  %s: (...args: OperationArguments<documents.%s%sVariables>) => client.request(documents.%sDocument, ...args),\n", method, op.Name, suffix, op.Name)
+		}
+	}
+	b.WriteString(" };\n}\n\nexport type FrameWorksSdk = ReturnType<typeof getSdk>;\n")
+	return b.String()
+}
+
+func (in emitInput) catalog() string {
+	type entry struct {
+		Name      string            `json:"name"`
+		Kind      string            `json:"kind"`
+		Target    string            `json:"target"`
+		Since     string            `json:"since"`
+		Hash      string            `json:"hash"`
+		Identity  string            `json:"identity"`
+		Document  string            `json:"document"`
+		Variables []catalogVariable `json:"variables"`
+		Result    catalogResult     `json:"result"`
+	}
+	entries := make([]entry, 0, len(in.Ops))
+	for _, op := range in.Ops {
+		doc, err := parser.ParseQuery(&ast.Source{Input: op.Document})
+		if err != nil {
+			panic(err)
+		}
+		operation := doc.Operations[0]
+		variables := make([]catalogVariable, 0, len(operation.VariableDefinitions))
+		for _, v := range operation.VariableDefinitions {
+			variable := catalogVariable{Name: v.Variable, Type: catalogTypeRef(v.Type), TypeString: v.Type.String(), Required: v.Type.NonNull && v.DefaultValue == nil, HasDefault: v.DefaultValue != nil}
+			if v.DefaultValue != nil {
+				value, err := v.DefaultValue.Value(nil)
+				if err != nil {
+					panic(err)
+				}
+				variable.DefaultValue, err = json.Marshal(value)
+				if err != nil {
+					panic(err)
+				}
+			}
+			variables = append(variables, variable)
+		}
+		field, ok := operation.SelectionSet[0].(*ast.Field)
+		if !ok {
+			panic(fmt.Sprintf("operation %s must select a root field", op.Name))
+		}
+		result := catalogResult{Field: field.Name, ResponseKey: field.Alias}
+		if result.ResponseKey == "" {
+			result.ResponseKey = field.Name
+		}
+		if in.Schema != nil {
+			root := in.Schema.Query
+			if op.Kind == "mutation" {
+				root = in.Schema.Mutation
+			}
+			if op.Kind == "subscription" {
+				root = in.Schema.Subscription
+			}
+			result.Type = root.Fields.ForName(field.Name).Type.String()
+		}
+		entries = append(entries, entry{op.Name, op.Kind, in.Targets[op.Name], op.Since, op.Hash, operationIdentity(op), op.Document, variables, result})
+	}
+	data, err := json.MarshalIndent(struct {
+		Version    string  `json:"version"`
+		Line       string  `json:"line"`
+		MinServer  string  `json:"minServer"`
+		Operations []entry `json:"operations"`
+	}{in.Version, in.Line, in.MinServer, entries}, "", "  ")
+	if err != nil {
+		panic(err)
+	}
+	return string(data) + "\n"
+}
+
+type catalogVariable struct {
+	Name         string          `json:"name"`
+	Type         map[string]any  `json:"type"`
+	TypeString   string          `json:"typeString"`
+	Required     bool            `json:"required"`
+	HasDefault   bool            `json:"hasDefault"`
+	DefaultValue json.RawMessage `json:"defaultValue,omitempty"`
+}
+type catalogResult struct {
+	Field       string `json:"field"`
+	ResponseKey string `json:"responseKey"`
+	Type        string `json:"type"`
+}
+
+func catalogTypeRef(typ *ast.Type) map[string]any {
+	if typ.NonNull {
+		copy := *typ
+		copy.NonNull = false
+		return map[string]any{"kind": "NON_NULL", "ofType": catalogTypeRef(&copy)}
+	}
+	if typ.Elem != nil {
+		return map[string]any{"kind": "LIST", "ofType": catalogTypeRef(typ.Elem)}
+	}
+	return map[string]any{"name": typ.NamedType}
 }

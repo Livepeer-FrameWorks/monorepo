@@ -3,7 +3,7 @@
  * Replaces Apollo for dynamic query execution
  */
 
-import { parse } from "graphql";
+import { Kind, parse, getOperationAST, print, separateOperations } from "graphql";
 
 import {
   loadAllTemplates,
@@ -25,7 +25,13 @@ import {
 } from "./schemaUtils";
 
 import { extractOperationType, stripClientDirectives } from "./gqlParser";
-import { generateSdkSnippets, loadSdkCatalog, type SdkCatalog } from "./sdkSnippets";
+import {
+  assertVariablesObject,
+  generateSdkSnippets,
+  goString,
+  loadSdkCatalog,
+  type SdkCatalog,
+} from "./sdkSnippets";
 import {
   EXPLORER_CATALOG,
   type ResolvedExplorerSection,
@@ -148,7 +154,8 @@ interface GraphQLResponse {
 async function executeGraphQL(
   query: string,
   variables: Record<string, unknown> = {},
-  headers: Record<string, string> = {}
+  headers: Record<string, string> = {},
+  operationName?: string
 ): Promise<GraphQLResponse> {
   if (!GRAPHQL_HTTP_URL) {
     throw new Error("VITE_GRAPHQL_HTTP_URL is required");
@@ -161,7 +168,7 @@ async function executeGraphQL(
       ...headers,
     },
     credentials: "include", // Send cookies for auth
-    body: JSON.stringify({ query, variables }),
+    body: JSON.stringify({ query, variables, ...(operationName ? { operationName } : {}) }),
   });
 
   if (!response.ok) {
@@ -185,6 +192,7 @@ interface QueryTemplates {
 }
 
 interface CodeExamples {
+  [language: string]: string | undefined;
   tsSdk?: string;
   goSdk?: string;
   pythonSdk?: string;
@@ -471,7 +479,8 @@ export const explorerService = {
     query: string,
     variables: Record<string, unknown> = {},
     _operationType: string = "query",
-    demoMode: boolean = false
+    demoMode: boolean = false,
+    operationName?: string
   ): Promise<ExplorerResult> {
     try {
       const startTime = Date.now();
@@ -479,7 +488,12 @@ export const explorerService = {
       // Configure headers for demo mode
       const headers: Record<string, string> = demoMode ? { "X-Demo-Mode": "true" } : {};
 
-      const result = await executeGraphQL(stripClientDirectives(query), variables, headers);
+      const result = await executeGraphQL(
+        stripClientDirectives(query),
+        variables,
+        headers,
+        operationName
+      );
 
       const endTime = Date.now();
       const duration = endTime - startTime;
@@ -579,152 +593,136 @@ export const explorerService = {
       catalog: SdkCatalog | null;
       schema?: IntrospectedSchema | null;
       docsUrl: string;
+      operationName?: string;
     } | null = null
   ): CodeExamples {
-    const tokenValue = token || "your_token_here";
-    const hasVariables = Object.keys(variables).length > 0;
-
-    const sdkSnippets = sdk?.catalog
-      ? generateSdkSnippets({
-          query,
-          variables,
-          token: tokenValue,
-          catalog: sdk.catalog,
-          schema: sdk.schema,
-          httpUrl: absoluteEndpoint(GRAPHQL_HTTP_URL, false),
-          wsUrl: absoluteEndpoint(GRAPHQL_WS_URL, true),
-          docsUrl: (sdk.docsUrl || "https://logbook.frameworks.network").replace(/\/$/, ""),
-        })
-      : null;
-
-    const examples: CodeExamples = {
-      ...sdkSnippets,
-      javascript: `// JavaScript (Apollo Client)
-import { ApolloClient, InMemoryCache, gql } from '@apollo/client';
-
-  const client = new ApolloClient({
-  uri: '${GRAPHQL_HTTP_URL}',
-  cache: new InMemoryCache(),
-  headers: {
-    Authorization: 'Bearer ${tokenValue}'
-  }
-});
-
-const query = gql\`${query}\`;
-
+    assertVariablesObject(variables);
+    const tokenValue = token || "YOUR_API_TOKEN";
+    const document = stripClientDirectives(query);
+    const parsed = parse(document);
+    const names = new Set<string>();
+    const operations = parsed.definitions.filter((item) => item.kind === Kind.OPERATION_DEFINITION);
+    if (operations.length > 1 && operations.some((item) => !item.name))
+      throw new TypeError("An anonymous operation must be the only operation in its document");
+    for (const definition of parsed.definitions) {
+      if (
+        definition.kind !== Kind.OPERATION_DEFINITION &&
+        definition.kind !== Kind.FRAGMENT_DEFINITION
+      )
+        throw new TypeError("Export only executable GraphQL definitions");
+      const key = `${definition.kind}:${definition.name?.value ?? ""}`;
+      if (names.has(key)) throw new TypeError("GraphQL definition names must be unique");
+      names.add(key);
+    }
+    const selected = getOperationAST(parsed, sdk?.operationName);
+    if (!selected)
+      throw new TypeError("Select exactly one GraphQL operation before exporting examples");
+    const operationName = selected.name?.value;
+    // Apollo accepts one operation per DocumentNode, with its fragment closure.
+    const apolloDocument = print(separateOperations(parsed)[operationName ?? ""]);
+    const httpUrl = absoluteEndpoint(GRAPHQL_HTTP_URL, false);
+    const wsUrl = absoluteEndpoint(GRAPHQL_WS_URL, true);
+    const payload = JSON.stringify({
+      query: document,
+      variables,
+      ...(operationName ? { operationName } : {}),
+    });
+    const quote = (value: string) => JSON.stringify(value);
+    const shellQuote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'";
+    let sdkSnippets = {};
+    try {
+      sdkSnippets = sdk?.catalog
+        ? generateSdkSnippets({
+            query: document,
+            variables,
+            operationName,
+            token: tokenValue,
+            catalog: sdk.catalog,
+            schema: sdk.schema,
+            httpUrl,
+            wsUrl,
+            docsUrl: (sdk.docsUrl || "https://logbook.frameworks.network").replace(/\/$/, ""),
+          })
+        : {};
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      sdkSnippets = { tsSdk: `// ${message}`, goSdk: `// ${message}`, pythonSdk: `# ${message}` };
+    }
+    const subscription = selected.operation === "subscription";
+    const apolloLink = subscription
+      ? `new GraphQLWsLink(createClient({ url: ${quote(wsUrl)}, connectionParams: { Authorization: ${quote(`Bearer ${tokenValue}`)} } }))`
+      : `new HttpLink({ uri: ${quote(httpUrl)}, headers: { Authorization: ${quote(`Bearer ${tokenValue}`)} } })`;
+    const apolloOptions = `${selected.operation === "mutation" ? "mutation" : "query"}: gql(${quote(apolloDocument)}), variables: JSON.parse(${quote(JSON.stringify(variables))})`;
+    const javascript = `// npm install @apollo/client@^4 graphql rxjs${subscription ? " graphql-ws" : ""}
+import { ApolloClient, InMemoryCache, ${subscription ? "" : "HttpLink, "}gql } from "@apollo/client";
+${subscription ? 'import { GraphQLWsLink } from "@apollo/client/link/subscriptions";\nimport { createClient } from "graphql-ws";\n' : ""}
+const client = new ApolloClient({ cache: new InMemoryCache(), link: ${apolloLink} });
 ${
-  hasVariables
-    ? `const variables = ${JSON.stringify(variables, null, 2)};
-
-const { data, error } = await client.query({
-  query,
-  variables
-});`
-    : `const { data, error } = await client.query({
-  query
-});`
-}
-
-console.log(data);`,
-
-      fetch: `// JavaScript (Fetch API)
-const query = \`${query}\`;
-${hasVariables ? `const variables = ${JSON.stringify(variables, null, 2)};` : ""}
-
-const response = await fetch('${GRAPHQL_HTTP_URL}', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'Authorization': 'Bearer ${tokenValue}'
-  },
-  body: JSON.stringify({
-    query${hasVariables ? ",\n    variables" : ""}
-  })
+  subscription
+    ? `const subscription = client.subscribe({ ${apolloOptions} }).subscribe({ next: console.log, error: console.error });\n// Call subscription.unsubscribe() when finished.`
+    : `const { data } = await client.${selected.operation === "mutation" ? "mutate" : "query"}({ ${apolloOptions} });\nconsole.log(data);`
+}`;
+    const unsupported =
+      "// Subscriptions require graphql-transport-ws over WebSocket. Use the SDK subscription example.";
+    return {
+      ...sdkSnippets,
+      javascript,
+      fetch: subscription
+        ? unsupported
+        : `// JavaScript (Fetch API)
+const response = await fetch(${quote(httpUrl)}, {
+  method: "POST",
+  headers: { "Content-Type": "application/json", Authorization: ${quote(`Bearer ${tokenValue}`)} },
+  body: ${quote(payload)},
 });
-
+if (!response.ok) throw new Error(\`HTTP \${response.status}\`);
 const result = await response.json();
-console.log(result.data);`,
-
-      curl: `# cURL
-curl -X POST \\
-  -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer ${tokenValue}" \\
-  -d '{"query":"${query.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"${hasVariables ? `,"variables":${JSON.stringify(variables)}` : ""}}' \\
-  ${GRAPHQL_HTTP_URL}`,
-
-      python: `# Python (requests)
-import requests
+console.log(result);`,
+      curl: subscription
+        ? "# Subscriptions require WebSocket; use the SDK subscription example."
+        : `curl --request POST \\
+  --header ${shellQuote("Content-Type: application/json")} \\
+  --header ${shellQuote(`Authorization: Bearer ${tokenValue}`)} \\
+  --data-raw ${shellQuote(payload)} \\
+  ${shellQuote(httpUrl)}`,
+      python: subscription
+        ? "# Subscriptions require WebSocket; use the SDK subscription example."
+        : `# pip install requests
 import json
+import requests
 
-url = "${GRAPHQL_HTTP_URL}"
-headers = {
-    "Content-Type": "application/json",
-    "Authorization": "Bearer ${tokenValue}"
-}
-
-query = """${query}"""
-${hasVariables ? `variables = ${JSON.stringify(variables, null, 4)}` : ""}
-
-payload = {
-    "query": query${hasVariables ? ',\n    "variables": variables' : ""}
-}
-
-response = requests.post(url, headers=headers, json=payload)
-result = response.json()
-print(result["data"])`,
-
-      go: `// Go
-package main
+payload = json.loads(${quote(payload)})
+response = requests.post(${quote(httpUrl)}, headers={"Authorization": ${quote(`Bearer ${tokenValue}`)}}, json=payload, timeout=30)
+response.raise_for_status()
+print(response.json())`,
+      go: subscription
+        ? unsupported
+        : `package main
 
 import (
-    "bytes"
-    "encoding/json"
-    "fmt"
-    "net/http"
+  "bytes"
+  "fmt"
+  "io"
+  "net/http"
+  "time"
 )
 
-type GraphQLRequest struct {
-    Query     string      \`json:"query"\`${hasVariables ? '\n    Variables interface{} `json:"variables,omitempty"`' : ""}
-}
-
 func main() {
-    url := "${GRAPHQL_HTTP_URL}"
-
-    query := \`${query}\`
-${
-  hasVariables
-    ? `    variables := map[string]interface{}{
-${Object.entries(variables)
-  .map(([key, value]) => `        "${key}": ${JSON.stringify(value)},`)
-  .join("\n")}
-    }
-`
-    : ""
-}
-    reqBody := GraphQLRequest{
-        Query: query,${hasVariables ? "\n        Variables: variables," : ""}
-    }
-
-    jsonData, _ := json.Marshal(reqBody)
-
-    req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-    req.Header.Set("Content-Type", "application/json")
-    req.Header.Set("Authorization", "Bearer ${tokenValue}")
-
-    client := &http.Client{}
-    resp, err := client.Do(req)
-    if err != nil {
-        panic(err)
-    }
-    defer resp.Body.Close()
-
-    var result map[string]interface{}
-    json.NewDecoder(resp.Body).Decode(&result)
-    fmt.Printf("%+v\\n", result["data"])
+  payload := []byte(${goString(payload)})
+  req, err := http.NewRequest("POST", ${goString(httpUrl)}, bytes.NewReader(payload))
+  if err != nil { panic(err) }
+  req.Header.Set("Content-Type", "application/json")
+  req.Header.Set("Authorization", ${goString(`Bearer ${tokenValue}`)})
+  client := &http.Client{Timeout: 30 * time.Second}
+  resp, err := client.Do(req)
+  if err != nil { panic(err) }
+  defer resp.Body.Close()
+  body, err := io.ReadAll(resp.Body)
+  if err != nil { panic(err) }
+  if resp.StatusCode < 200 || resp.StatusCode >= 300 { panic(fmt.Sprintf("HTTP %d: %s", resp.StatusCode, body)) }
+  fmt.Println(string(body))
 }`,
     };
-
-    return examples;
   },
 
   /**
@@ -779,7 +777,7 @@ ${Object.entries(variables)
     if (normalized.includes("page:")) {
       hints.push({
         title: "Pagination",
-        body: "Connections use page: { first, after, last, before }. Use pageInfo.endCursor to fetch more.",
+        body: "Use pageInfo.endCursor to fetch more. Set the pagination variables declared by this operation, such as $first/$after or fields inside $page.",
       });
     }
 

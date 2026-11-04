@@ -65,40 +65,17 @@ func TestExtractDescription(t *testing.T) {
 	}
 }
 
-func TestExtractDefaultVariables(t *testing.T) {
-	content := `query Q($page: Pagination, $streamId: ID, $name: String, $count: Int, $flag: Boolean, $id: ID, $filter: StreamFilterInput, $tr: timeRange) {}`
-	// Note the parser keys on variable NAME first (page/streamId/nodeId/timeRange),
-	// then falls back to TYPE. Verify the name-keyed special cases.
-	vars := extractDefaultVariables(`query Q($page: Foo, $streamId: ID, $nodeId: ID, $timeRange: TR) {}`)
-	if _, ok := vars["page"].(map[string]any); !ok {
-		t.Fatalf("page should default to a pagination map, got %T", vars["page"])
+func TestTemplateVariablesRemainAbsent(t *testing.T) {
+	loader := NewTemplateLoader()
+	template := loader.parseTemplate(`query Q($count: Int = 50, $flag: Boolean = true, $range: String = "default", $id: ID!, $withDefault: Int! = 4) { stream(id: $id) { id } }`, "operations/queries/Q.gql", nil)
+	if template == nil {
+		t.Fatal("template missing")
 	}
-	if vars["streamId"] != "stream_global_id" {
-		t.Fatalf("streamId default = %v", vars["streamId"])
+	if len(template.Variables) != 0 {
+		t.Fatalf("unsupplied variables must be absent: %v", template.Variables)
 	}
-	if vars["nodeId"] != "node_id" {
-		t.Fatalf("nodeId default = %v", vars["nodeId"])
-	}
-	if vars["timeRange"] != nil {
-		t.Fatalf("timeRange default should be nil, got %v", vars["timeRange"])
-	}
-
-	// Type-keyed fallbacks.
-	vars = extractDefaultVariables(content)
-	if vars["name"] != "" {
-		t.Fatalf("String → empty string, got %v", vars["name"])
-	}
-	if vars["count"] != 0 {
-		t.Fatalf("Int → 0, got %v", vars["count"])
-	}
-	if vars["flag"] != false {
-		t.Fatalf("Boolean → false, got %v", vars["flag"])
-	}
-	if vars["id"] != "id_placeholder" {
-		t.Fatalf("ID → placeholder, got %v", vars["id"])
-	}
-	if _, ok := vars["filter"].(map[string]any); !ok {
-		t.Fatalf("*Input → empty map, got %T", vars["filter"])
+	if !slices.Equal(template.RequiredVariables, []string{"id"}) {
+		t.Fatalf("required variables = %v", template.RequiredVariables)
 	}
 }
 

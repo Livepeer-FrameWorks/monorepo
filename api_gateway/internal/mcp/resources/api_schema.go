@@ -25,6 +25,7 @@ type CatalogTemplateRef struct {
 	FilePath      string   `json:"file_path"`
 	OperationType string   `json:"operation_type"`
 	FieldPaths    []string `json:"field_paths,omitempty"`
+	SDKOperations []string `json:"sdk_operations,omitempty"`
 }
 
 // CatalogEntry represents a merged schema + template + curated entry.
@@ -124,6 +125,7 @@ func handleAPICatalog(ctx context.Context, logger logging.Logger) (*mcp.ReadReso
 				FilePath:      tmpl.FilePath,
 				OperationType: tmpl.OperationType,
 				FieldPaths:    tmpl.FieldPaths,
+				SDKOperations: tmpl.SDKOperations,
 			}
 			for _, path := range tmpl.FieldPaths {
 				if path == "" {

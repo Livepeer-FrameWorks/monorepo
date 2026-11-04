@@ -1,5 +1,27 @@
 # @livepeer-frameworks/api
 
+For named operations, wrap the client with the optional method entry:
+
+```ts
+import { createClient } from "@livepeer-frameworks/api";
+import { getSdk } from "@livepeer-frameworks/api/operations";
+
+const sdk = getSdk(
+  createClient({
+    url: "https://bridge.frameworks.network/graphql",
+    token: process.env.FRAMEWORKS_API_TOKEN,
+  })
+);
+const data = await sdk.listStreams({ page: { first: 10 } });
+console.log(data.streamsConnection.nodes);
+```
+
+Every packaged query and mutation has a camelCase method with the same variables,
+result, and per-call options as its typed document. Pass `{ subscriptions }` as the
+second argument to `getSdk` for subscription methods. This optional entry loads the
+method table. `getSdk` loads all packaged operation documents; use direct document
+imports when minimizing a browser bundle matters.
+
 Typed client for the FrameWorks GraphQL API. It ships a typed document for every public root field and argument-taking
 field of the public schema, typed custom selections, and the parts every integration writes by hand otherwise: retries,
 pagination, typed errors, a server version check, VOD uploads, playback token signing, and webhook verification.
@@ -70,7 +92,7 @@ selects every scalar field of a level that needs no argument. `__scalar` is refu
 roots: name each root field the operation runs. A selected field the schema does not have throws `TypeError` before
 anything is sent. Results are typed from the selection: a union or interface result is the union of its members, each
 with `__typename` (always selected there, so the result can be narrowed) and only the fields its branches select.
-`__name` names the operation, and may not reuse an SDK operation name. The entry carries the schema's type map (about 20 kB gzipped), which
+`__name` names the operation and may reuse an SDK operation name. Version checks bind to document identity. The entry carries the schema's type map (about 20 kB gzipped), which
 the main entry does not include.
 
 ## Scopes and partial errors

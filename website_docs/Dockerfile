@@ -53,6 +53,7 @@ COPY npm_api/tsconfig.json npm_api/tsconfig.json
 COPY npm_api/examples/ npm_api/examples/
 COPY sdk_go/examples/ sdk_go/examples/
 COPY sdk_python/examples/ sdk_python/examples/
+COPY pkg/graphql/public/catalog.json pkg/graphql/public/catalog.json
 
 # build the docs site
 COPY scripts/copy-agent-files.sh scripts/copy-agent-files.sh

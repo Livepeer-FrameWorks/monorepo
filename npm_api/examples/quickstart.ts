@@ -1,20 +1,15 @@
 // Create a stream, then list every stream page by page.
-import {
-  createClient,
-  CreateStreamDocument,
-  expectResult,
-  ListStreamsDocument,
-  paginateRelay,
-  ResultError,
-} from "@livepeer-frameworks/api";
+import { createClient, expectResult, paginateRelay, ResultError } from "@livepeer-frameworks/api";
+import { getSdk } from "@livepeer-frameworks/api/operations";
 
 const client = createClient({
   url: "https://bridge.example.com/graphql",
   token: process.env.FRAMEWORKS_API_TOKEN,
 });
+const sdk = getSdk(client);
 
 try {
-  const created = await client.request(CreateStreamDocument, {
+  const created = await sdk.createStream({
     input: { name: "Launch stream", record: true },
   });
   const stream = expectResult(created.createStream, "Stream");
@@ -29,7 +24,7 @@ try {
 }
 
 const streams = paginateRelay(
-  (page) => client.request(ListStreamsDocument, { page }).then((data) => data.streamsConnection),
+  (page) => sdk.listStreams({ page }).then((data) => data.streamsConnection),
   { pageSize: 50 }
 );
 for await (const stream of streams) {

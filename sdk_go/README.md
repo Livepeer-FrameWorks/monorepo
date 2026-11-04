@@ -68,8 +68,9 @@ err := client.MakeRequest(ctx, &graphql.Request{
 ```
 
 `MakeRequest` runs queries and mutations; subscriptions use a
-`SubscriptionClient`. Give custom operations names of your own: the server
-version check looks up an SDK operation's release by its name.
+`SubscriptionClient`. Operation-specific version checks use the selected
+document's identity. Custom documents retain the baseline server check and may
+reuse packaged operation names.
 
 ## Scopes and partial errors
 

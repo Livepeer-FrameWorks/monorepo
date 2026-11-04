@@ -1,5 +1,6 @@
 import type { DocumentTypeDecoration } from "@graphql-typed-document-node/core";
 import { getOperationAST, parse } from "graphql";
+import { documentIdentity } from "./identity.js";
 
 import { ServerInfoDocument } from "./generated/graphql.js";
 import { minServerVersion, operations } from "./generated/manifest.js";
@@ -75,7 +76,7 @@ export interface RequestOptions {
   onPartialErrors?: (partial: PartialErrors) => void;
 }
 
-type VariablesArgs<TVariables> =
+export type OperationArguments<TVariables> =
   Record<string, never> extends TVariables
     ? [variables?: TVariables, options?: RequestOptions]
     : [variables: TVariables, options: RequestOptions] | [variables: TVariables];
@@ -85,7 +86,7 @@ export interface FrameWorksClient {
   /** Runs one query or mutation and returns its data. Subscriptions use the ./subscriptions entry. */
   request<TResult, TVariables>(
     document: DocumentTypeDecoration<TResult, TVariables> | string,
-    ...args: VariablesArgs<TVariables>
+    ...args: OperationArguments<TVariables>
   ): Promise<TResult>;
   /** The server's version and features, from the cached serverInfo probe. */
   serverInfo(options?: { signal?: AbortSignal }): Promise<ServerStatus>;
@@ -228,7 +229,7 @@ export function createClientWith(
     url: options.url,
     async request<TResult, TVariables>(
       document: DocumentTypeDecoration<TResult, TVariables> | string,
-      ...args: VariablesArgs<TVariables>
+      ...args: OperationArguments<TVariables>
     ): Promise<TResult> {
       const [variables, requestOptions = {}] = args as [
         TVariables | undefined,
@@ -236,6 +237,21 @@ export function createClientWith(
       ];
       const query = String(document);
       const op = parseOperation(query, requestOptions.operationName);
+      const info = op.name
+        ? (operations as Record<string, { identity: string }>)[op.name]
+        : undefined;
+      let knownName: string | null = null;
+      if (checkServer && op.name) {
+        if (internal.operationSince && op.name in internal.operationSince) knownName = op.name;
+        else if (info) {
+          try {
+            if (documentIdentity(query, requestOptions.operationName) === info.identity)
+              knownName = op.name;
+          } catch {
+            // A custom document's fragment validation belongs to the server.
+          }
+        }
+      }
       if (op.kind === "subscription") {
         throw new TypeError(
           "subscriptions run over WebSocket; use @livepeer-frameworks/api/subscriptions"
@@ -262,21 +278,21 @@ export function createClientWith(
           onPartialErrors,
         }) as Promise<TResult>;
 
-      if (!checkServer || op.name === "ServerInfo") {
+      if (!checkServer || knownName === "ServerInfo") {
         return run();
       }
       // Mutations, and queries newer than the line's minimum server, wait for
       // the probe so an unsupported call is never sent.
-      if (op.kind === "mutation" || newerThanMinimum(since(op.name))) {
-        await withSignal(gate(op.name), requestOptions.signal);
-        return recheckOnSchemaMismatch(run(), op.name, requestOptions.signal);
+      if (op.kind === "mutation" || newerThanMinimum(since(knownName))) {
+        await withSignal(gate(knownName), requestOptions.signal);
+        return recheckOnSchemaMismatch(run(), knownName, requestOptions.signal);
       }
       // Other queries run alongside the probe; the result is held until the
       // probe settles so a too-old server still fails the call.
       const result = run();
       result.catch(() => undefined);
-      await withSignal(gate(op.name), requestOptions.signal);
-      return recheckOnSchemaMismatch(result, op.name, requestOptions.signal);
+      await withSignal(gate(knownName), requestOptions.signal);
+      return recheckOnSchemaMismatch(result, knownName, requestOptions.signal);
     },
     serverInfo: (requestOptions) =>
       withSignal(clientProbes.probe(options.url, runProbe).pending, requestOptions?.signal),

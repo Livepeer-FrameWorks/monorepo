@@ -187,6 +187,20 @@ func runEmit(repo, lang string, check bool) error {
 		return fmt.Errorf("%s version %s is not on the current line %s in %s; a new line needs its version bump first: run `pnpm version-packages`, then make graphql-all", npmPackagePath, version, line.Line, supportPath)
 	}
 	in := emitInput{Version: version, Line: line.Line, MinServer: line.MinServer, Ops: entry.Operations, Events: publicEvents()}
+	if lang == "ts" {
+		in.Schema, err = loadPublicSchema(repo, headRef)
+		if err != nil {
+			return err
+		}
+		ops, loadErr := loadOperations(repo)
+		if loadErr != nil {
+			return loadErr
+		}
+		in.Targets = map[string]string{}
+		for _, op := range ops {
+			in.Targets[op.Name] = op.Target
+		}
+	}
 	files, err := in.render(lang)
 	if err != nil {
 		return err

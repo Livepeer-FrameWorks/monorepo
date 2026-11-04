@@ -11,8 +11,9 @@ import (
 )
 
 type operationInfo struct {
-	Kind  string
-	Since string
+	Kind     string
+	Since    string
+	Identity string
 }
 
 // ServerStatus is what the client learned from the server's serverInfo.

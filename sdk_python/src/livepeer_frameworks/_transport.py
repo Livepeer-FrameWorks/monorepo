@@ -27,6 +27,7 @@ from pydantic import BaseModel as PydanticBaseModel
 from pydantic_core import to_jsonable_python
 
 from ._generated.manifest import MIN_SERVER_VERSION, OPERATIONS
+from ._identity import document_identity
 from ._server_info import (
     PROBES,
     ProbeEntry,
@@ -65,12 +66,18 @@ DEFAULT_GRAPHQL_URL = "https://bridge.frameworks.network/graphql"
 #: A bearer token, or a function returning the current one. None sends no Authorization header.
 Token = Union[str, None, Callable[[], Union[str, None]]]
 #: As Token; the async client also accepts a coroutine function.
-AsyncToken = Union[str, None, Callable[[], Union[str, None]], Callable[[], Awaitable[Union[str, None]]]]
+AsyncToken = Union[
+    str, None, Callable[[], Union[str, None]], Callable[[], Awaitable[Union[str, None]]]
+]
 
-SERVER_INFO_QUERY = "query ServerInfo {\n  serverInfo {\n    version\n    features\n  }\n}\n"
+SERVER_INFO_QUERY = (
+    "query ServerInfo {\n  serverInfo {\n    version\n    features\n  }\n}\n"
+)
 
 
-def parse_operation(query: str, operation_name: str | None = None) -> tuple[OperationKind, str | None]:
+def parse_operation(
+    query: str, operation_name: str | None = None
+) -> tuple[OperationKind, str | None]:
     operation = get_operation_ast(parse(query), operation_name)
     if operation is None:
         raise ValueError("document must select exactly one GraphQL operation")
@@ -167,7 +174,14 @@ def _http_error(
 
 #: extensions.code values that fail a call wherever they appear, even below a
 #: root field that came back.
-_FATAL_CODES = frozenset({"UNAUTHORIZED", "RATE_LIMITED", "GRAPHQL_VALIDATION_FAILED", "GRAPHQL_PARSE_FAILED"})
+_FATAL_CODES = frozenset(
+    {
+        "UNAUTHORIZED",
+        "RATE_LIMITED",
+        "GRAPHQL_VALIDATION_FAILED",
+        "GRAPHQL_PARSE_FAILED",
+    }
+)
 
 
 def _field_errors_only(data: Any, errors: list[Mapping[str, Any]]) -> bool:
@@ -211,19 +225,35 @@ def classify(status: int, retry_after_header: str | None, text: str) -> _Outcome
     if obj is not None and isinstance(obj.get("errors"), list) and obj["errors"]:
         errors = [e for e in obj["errors"] if isinstance(e, Mapping)]
         data = obj.get("data")
-        if is_2xx and len(errors) == len(obj["errors"]) and _field_errors_only(data, errors):
+        if (
+            is_2xx
+            and len(errors) == len(obj["errors"])
+            and _field_errors_only(data, errors)
+        ):
             return _Outcome(data=data, partial_errors=errors)
         return _Outcome(
-            error=graphql_error(errors, obj.get("data"), None if is_2xx else status, retry_after, body),
+            error=graphql_error(
+                errors, obj.get("data"), None if is_2xx else status, retry_after, body
+            ),
             retryable=retryable,
         )
     if not is_2xx:
-        return _Outcome(error=_http_error(status, obj, text, retry_after, body), retryable=retryable)
+        return _Outcome(
+            error=_http_error(status, obj, text, retry_after, body), retryable=retryable
+        )
     if obj is None:
-        return _Outcome(error=ProtocolError(f"response is not JSON (HTTP {status})", status=status, body=text))
+        return _Outcome(
+            error=ProtocolError(
+                f"response is not JSON (HTTP {status})", status=status, body=text
+            )
+        )
     data = obj.get("data")
     if not isinstance(data, dict):
-        return _Outcome(error=ProtocolError(f"response has no data (HTTP {status})", status=status, body=body))
+        return _Outcome(
+            error=ProtocolError(
+                f"response has no data (HTTP {status})", status=status, body=body
+            )
+        )
     return _Outcome(data=data)
 
 
@@ -238,7 +268,11 @@ def _json_variables(variables: Mapping[str, Any] | None) -> dict[str, Any]:
             return [convert(item) for item in value]
         return value
 
-    out = {k: convert(v) for k, v in (variables or {}).items() if not isinstance(v, UnsetType)}
+    out = {
+        k: convert(v)
+        for k, v in (variables or {}).items()
+        if not isinstance(v, UnsetType)
+    }
     result: dict[str, Any] = to_jsonable_python(out)
     return result
 
@@ -251,6 +285,7 @@ PartialErrorsHandler = Callable[[PartialErrors], None]
 class _Call:
     kind: OperationKind
     name: str | None
+    gate_name: str | None
     body: dict[str, Any]
     headers: dict[str, str]
     idempotency_key: str | None
@@ -281,6 +316,21 @@ class _TransportCore:
         # The clock the serverInfo cache ages its answers against; tests
         # replace it.
         self._clock: Callable[[], float] = time.monotonic
+
+    def _identity_name(self, query: str, name: str | None) -> str | None:
+        if not self.check_server or name is None:
+            return None
+        if name in self._operation_since:
+            return name
+        info = OPERATIONS.get(name)
+        if info:
+            try:
+                if document_identity(query, name) == info["identity"]:
+                    return name
+            except ValueError:
+                # A custom document's fragment validation belongs to the server.
+                pass
+        return None
 
     def _since(self, name: str | None) -> str | None:
         if name is None:
@@ -314,7 +364,15 @@ class _TransportCore:
             call_headers["x-frameworks-playback-jwt"] = playback_token
         if idempotency_key:
             call_headers["idempotency-key"] = idempotency_key
-        return _Call(kind, name, body, call_headers, idempotency_key, on_partial_errors)
+        return _Call(
+            kind,
+            name,
+            self._identity_name(query, name),
+            body,
+            call_headers,
+            idempotency_key,
+            on_partial_errors,
+        )
 
     def _report_partial(self, call: _Call, outcome: _Outcome) -> None:
         """Hands the field errors of a successful call to the call's handler
@@ -370,7 +428,9 @@ class _TransportCore:
         features = info.get("features")
         return server_status(
             info["version"],
-            [f for f in features if isinstance(f, str)] if isinstance(features, list) else [],
+            [f for f in features if isinstance(f, str)]
+            if isinstance(features, list)
+            else [],
         )
 
 
@@ -552,17 +612,25 @@ class SyncTransport(_TransportCore):
         returns its data with field errors (see PartialErrors), they go to
         on_partial_errors and then to the client's on_partial_errors."""
         call = self._call(
-            query, operation_name, variables, idempotency_key, playback_token, headers, on_partial_errors
+            query,
+            operation_name,
+            variables,
+            idempotency_key,
+            playback_token,
+            headers,
+            on_partial_errors,
         )
         if call.kind == "subscription":
-            raise TypeError("subscriptions run over WebSocket; use AsyncFrameWorksClient")
-        if self.check_server and call.name != "ServerInfo":
-            self._gate(call.name)
+            raise TypeError(
+                "subscriptions run over WebSocket; use AsyncFrameWorksClient"
+            )
+        if self.check_server and call.gate_name != "ServerInfo":
+            self._gate(call.gate_name)
         try:
             return GraphQLResponse(self._send(call))
         except SchemaMismatchError as err:
-            if self.check_server and call.name != "ServerInfo":
-                self._recheck(call.name, err)
+            if self.check_server and call.gate_name != "ServerInfo":
+                self._recheck(call.gate_name, err)
             raise
 
     def get_data(self, response: GraphQLResponse) -> dict[str, Any]:
@@ -720,17 +788,25 @@ class AsyncTransport(_TransportCore):
     ) -> GraphQLResponse:
         """Runs one query or mutation; see SyncTransport.execute."""
         call = self._call(
-            query, operation_name, variables, idempotency_key, playback_token, headers, on_partial_errors
+            query,
+            operation_name,
+            variables,
+            idempotency_key,
+            playback_token,
+            headers,
+            on_partial_errors,
         )
         if call.kind == "subscription":
-            raise TypeError("subscriptions use the generated async subscription methods")
-        if self.check_server and call.name != "ServerInfo":
-            await self._gate(call.name)
+            raise TypeError(
+                "subscriptions use the generated async subscription methods"
+            )
+        if self.check_server and call.gate_name != "ServerInfo":
+            await self._gate(call.gate_name)
         try:
             return GraphQLResponse(await self._send(call))
         except SchemaMismatchError as err:
-            if self.check_server and call.name != "ServerInfo":
-                await self._recheck(call.name, err)
+            if self.check_server and call.gate_name != "ServerInfo":
+                await self._recheck(call.gate_name, err)
             raise
 
     def get_data(self, response: GraphQLResponse) -> dict[str, Any]:
@@ -758,8 +834,9 @@ class AsyncTransport(_TransportCore):
         from websockets.exceptions import ConnectionClosed, InvalidHandshake
 
         name = parse_operation(query, operation_name)[1]
+        gate_name = self._identity_name(query, name)
         if self.check_server:
-            await self._gate(name)
+            await self._gate(gate_name)
         payload: dict[str, Any] = {
             "query": query,
             "variables": _json_variables(variables),
@@ -771,7 +848,9 @@ class AsyncTransport(_TransportCore):
             acked = False
             failure: FrameWorksError
             try:
-                async with connect(self.ws_url, subprotocols=[_subprotocol()], open_timeout=10) as ws:
+                async with connect(
+                    self.ws_url, subprotocols=[_subprotocol()], open_timeout=10
+                ) as ws:
                     token = await self._token()
                     init: dict[str, Any] = {"type": "connection_init", "payload": {}}
                     if token:
@@ -787,7 +866,9 @@ class AsyncTransport(_TransportCore):
                                 continue
                             if not acked:
                                 if mtype != "connection_ack":
-                                    raise ProtocolError(f"first subscription message is {mtype}, not connection_ack")
+                                    raise ProtocolError(
+                                        f"first subscription message is {mtype}, not connection_ack"
+                                    )
                                 acked = True
                                 await ws.send(
                                     json.dumps(
@@ -805,7 +886,9 @@ class AsyncTransport(_TransportCore):
                                 result = message.get("payload") or {}
                                 errors = result.get("errors")
                                 if isinstance(errors, list) and errors:
-                                    raise graphql_error(errors, result.get("data"), None, None, result)
+                                    raise graphql_error(
+                                        errors, result.get("data"), None, None, result
+                                    )
                                 yield result.get("data") or {}
                             elif mtype == "error":
                                 errors = message.get("payload")
@@ -820,7 +903,9 @@ class AsyncTransport(_TransportCore):
                                 return
                     except GeneratorExit:
                         if acked:
-                            await ws.send(json.dumps({"id": sub_id, "type": "complete"}))
+                            await ws.send(
+                                json.dumps({"id": sub_id, "type": "complete"})
+                            )
                         raise
                     except ConnectionClosed:
                         pass
@@ -832,9 +917,13 @@ class AsyncTransport(_TransportCore):
                             "the token is invalid or expired",
                             code=None,
                         )
-                    failure = NetworkError(f"subscription connection closed ({code} {reason})")
+                    failure = NetworkError(
+                        f"subscription connection closed ({code} {reason})"
+                    )
             except (OSError, InvalidHandshake, asyncio.TimeoutError) as err:
-                failure = NetworkError(f"subscription connection to {self.ws_url} failed: {err}")
+                failure = NetworkError(
+                    f"subscription connection to {self.ws_url} failed: {err}"
+                )
             # max_reconnects bounds reconnects in a row without an
             # acknowledged connection between them.
             if acked:

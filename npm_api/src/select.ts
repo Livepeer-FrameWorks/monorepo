@@ -22,7 +22,6 @@
  * bundle; the main entry does not depend on it.
  */
 import type { FrameWorksClient, RequestOptions } from "./client.js";
-import { operations } from "./generated/manifest.js";
 import {
   generateGraphqlOperation,
   type GraphqlOperation,
@@ -111,13 +110,6 @@ export function buildOperation(
   selection: SubscriptionGenqlSelection & NoRootScalar & SelectionName
 ): GraphqlOperation;
 export function buildOperation(kind: OperationKind, selection: SelectionName): GraphqlOperation {
-  // The server version check reads an operation's release from the SDK
-  // manifest by name, so a selection may not borrow a generated operation's.
-  if (selection.__name && Object.hasOwn(operations, selection.__name)) {
-    throw new TypeError(
-      `__name ${selection.__name} is an SDK operation name; choose a name of your own`
-    );
-  }
   const type = root(kind);
   // At the Mutation root, `__scalar` would run every mutation that takes no
   // required argument (markSkipperReportsRead without ids marks every report

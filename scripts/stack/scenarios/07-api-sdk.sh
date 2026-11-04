@@ -27,6 +27,18 @@ else
   blocked "TS SDK smoke needs node and a built $REPO/npm_api/dist"
 fi
 
+log "Bridge MCP query generation"
+if bash "$REPO/scripts/stack/sdk/mcp-smoke.sh"; then
+  pass "MCP generate_query -> execute_query"
+else
+  mcp_result=$?
+  if [ "$mcp_result" = 2 ]; then
+    blocked "MCP smoke prerequisites unavailable"
+  else
+    fail "MCP generate_query -> execute_query"
+  fi
+fi
+
 log "Python SDK"
 if PYTHONPATH="$REPO/sdk_python/src" python3 -c 'import livepeer_frameworks' 2>/dev/null; then
   if PYTHONPATH="$REPO/sdk_python/src" python3 "$REPO/scripts/stack/sdk/smoke.py" "$BRIDGE_URL/graphql" "$BRIDGE_WS_URL" "$STACK_API_TOKEN"; then

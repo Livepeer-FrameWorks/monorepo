@@ -4,6 +4,7 @@
 //   node smoke.mjs <repo> <graphql url> <ws url> <token>
 const [repo, url, wsUrl, token] = process.argv.slice(2);
 const sdk = await import(`${repo}/npm_api/dist/index.js`);
+const { getSdk } = await import(`${repo}/npm_api/dist/generated/methods.js`);
 const subs = await import(`${repo}/npm_api/dist/subscriptions.js`);
 let failed = 0;
 const pass = (m) => console.log(`PASS  sdk-ts: ${m}`);
@@ -13,8 +14,9 @@ const fail = (m) => {
 };
 
 const client = sdk.createClient({ url, token });
+const operations = getSdk(client);
 try {
-  const list = await client.request(sdk.ListStreamsDocument, { page: { first: 5 } });
+  const list = await operations.listStreams({ page: { first: 5 } });
   typeof list.streamsConnection.totalCount === "number"
     ? pass("listStreams")
     : fail("listStreams shape");
@@ -41,7 +43,7 @@ const seen = new Promise((resolve) => {
 });
 await new Promise((r) => setTimeout(r, 1500));
 try {
-  const created = await client.request(sdk.CreateStreamDocument, { input: { name } });
+  const created = await operations.createStream({ input: { name } });
   createdId = created.createStream?.id ?? "";
   createdId ? pass("createStream") : fail(`createStream: ${JSON.stringify(created)}`);
 } catch (e) {
@@ -54,7 +56,7 @@ got
 await sc.close();
 if (createdId) {
   try {
-    const del = await client.request(sdk.DeleteStreamDocument, { id: createdId });
+    const del = await operations.deleteStream({ id: createdId });
     del.deleteStream?.__typename === "DeleteSuccess"
       ? pass("deleteStream")
       : fail(`deleteStream: ${JSON.stringify(del)}`);

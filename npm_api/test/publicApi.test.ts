@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import * as gatewayProbe from "../src/gatewayProbe.js";
+import * as methods from "../src/generated/methods.js";
 import * as root from "../src/index.js";
 import * as select from "../src/select.js";
 import * as subscriptions from "../src/subscriptions.js";
@@ -11,6 +12,16 @@ import * as webhooks from "../src/webhooks.js";
 describe("public API", () => {
   it("root entry exports", () => {
     expect(Object.keys(root).sort()).toMatchSnapshot();
+  });
+
+  it("operation-method entry exports", () => {
+    expect(Object.keys(methods).sort()).toEqual(["getSdk"]);
+    const sdk = methods.getSdk(root.createClient({ url: "https://methods.test/graphql" }));
+    expect(Object.keys(sdk).sort()).toEqual(
+      Object.keys(root.operations)
+        .map((name) => name.charAt(0).toLowerCase() + name.slice(1))
+        .sort()
+    );
   });
 
   it("subscriptions entry exports", () => {

@@ -665,12 +665,6 @@
           "description": "Public web application URL returned by /auth/webapp-url for native client browser handoff. Re-read after an env-file reload."
         },
         {
-          "key": "GATEWAY_PUBLIC_URL",
-          "type": "string",
-          "introduced": "v0.3.0",
-          "description": "Public Bridge URL. The MCP schema tools introspect its /graphql/ endpoint; empty uses http://localhost:8080/graphql/."
-        },
-        {
           "key": "DOCS_PUBLIC_URL",
           "type": "string",
           "introduced": "v0.3.0",

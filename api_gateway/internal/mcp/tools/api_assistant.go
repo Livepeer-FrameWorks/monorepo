@@ -127,10 +127,12 @@ type GenerateQueryInput struct {
 
 // GenerateQueryResult is the result of query generation.
 type GenerateQueryResult struct {
-	Query     string                 `json:"query"`
-	Variables map[string]interface{} `json:"variables"`
-	Source    string                 `json:"source"`
-	Hints     []string               `json:"hints,omitempty"`
+	Query             string                 `json:"query"`
+	Variables         map[string]interface{} `json:"variables"`
+	Source            string                 `json:"source"`
+	RequiredVariables []string               `json:"required_variables,omitempty"`
+	SDKOperations     []string               `json:"sdk_operations,omitempty"`
+	Hints             []string               `json:"hints,omitempty"`
 }
 
 func handleGenerateQuery(ctx context.Context, args GenerateQueryInput, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -152,10 +154,12 @@ func handleGenerateQuery(ctx context.Context, args GenerateQueryInput, logger lo
 	template := templateLoader.FindByField(opType, fieldPath)
 	if template != nil {
 		result := GenerateQueryResult{
-			Query:     template.Query,
-			Variables: template.Variables,
-			Source:    "template",
-			Hints:     getQueryHints(template.Query),
+			Query:             template.Query,
+			Variables:         template.Variables,
+			Source:            template.Source,
+			RequiredVariables: template.RequiredVariables,
+			SDKOperations:     template.SDKOperations,
+			Hints:             getQueryHints(template.Query),
 		}
 		return toolSuccess(result)
 	}
@@ -225,7 +229,7 @@ func getQueryHints(query string) []string {
 	lower := strings.ToLower(query)
 
 	if strings.Contains(lower, "connection") {
-		hints = append(hints, "This is a paginated connection. Use page: { first: N, after: cursor } for pagination.")
+		hints = append(hints, "Use pageInfo.endCursor to fetch more. Set the pagination variables declared by this operation, such as $first/$after or fields inside $page.")
 	}
 	if strings.Contains(lower, "analytics") {
 		hints = append(hints, "Analytics queries benefit from timeRange filtering.")

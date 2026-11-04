@@ -5,8 +5,8 @@ package appconfig
 
 import (
 	"errors"
+	"net"
 	"strconv"
-	"strings"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 )
@@ -79,10 +79,9 @@ type Bridge struct {
 	PeriscopeCacheMax                int `env:"PERISCOPE_CACHE_MAX" default:"5000" desc:"Maximum entries in the Periscope analytics query cache." introduced:"v0.3.0"`
 	PeriscopeCacheLoadTimeoutSeconds int `env:"PERISCOPE_CACHE_LOAD_TIMEOUT_SECONDS" default:"30" desc:"Seconds a shared Periscope cache load may run before it is abandoned." introduced:"v0.3.0"`
 
-	CookieDomain     string `env:"COOKIE_DOMAIN" desc:"Domain attribute for auth cookies, leading dot ignored. Empty scopes cookies to the Bridge host; set a parent domain to share them across subdomains." introduced:"v0.3.0"`
-	WebappPublicURL  string `env:"WEBAPP_PUBLIC_URL" desc:"Public web application URL returned by /auth/webapp-url for native client browser handoff. Re-read after an env-file reload." introduced:"v0.3.0"`
-	GatewayPublicURL string `env:"GATEWAY_PUBLIC_URL" desc:"Public Bridge URL. The MCP schema tools introspect its /graphql/ endpoint; empty uses http://localhost:8080/graphql/." introduced:"v0.3.0"`
-	DocsPublicURL    string `env:"DOCS_PUBLIC_URL" desc:"Public documentation URL linked from rate-limit responses. Empty omits the link. Re-read after an env-file reload." introduced:"v0.3.0"`
+	CookieDomain    string `env:"COOKIE_DOMAIN" desc:"Domain attribute for auth cookies, leading dot ignored. Empty scopes cookies to the Bridge host; set a parent domain to share them across subdomains." introduced:"v0.3.0"`
+	WebappPublicURL string `env:"WEBAPP_PUBLIC_URL" desc:"Public web application URL returned by /auth/webapp-url for native client browser handoff. Re-read after an env-file reload." introduced:"v0.3.0"`
+	DocsPublicURL   string `env:"DOCS_PUBLIC_URL" desc:"Public documentation URL linked from rate-limit responses. Empty omits the link. Re-read after an env-file reload." introduced:"v0.3.0"`
 
 	PublicRateLimitPerMinute int `env:"PUBLIC_RATE_LIMIT_PER_MINUTE" default:"60" desc:"Requests per minute allowed per client IP for unauthenticated callers. Values below 1 use 60. Re-read after an env-file reload." introduced:"v0.3.0"`
 	PublicRateLimitBurst     int `env:"PUBLIC_RATE_LIMIT_BURST" default:"30" desc:"Burst allowance per client IP for unauthenticated callers. Values below 1 use 30. Re-read after an env-file reload." introduced:"v0.3.0"`
@@ -105,13 +104,22 @@ type Bridge struct {
 	X402GasWalletAddress string `env:"X402_GAS_WALLET_ADDRESS" desc:"Wallet address substituted into did.json. Empty removes the verification method from did.json." introduced:"v0.3.0"`
 }
 
-// GatewayGraphQLURL is the GraphQL endpoint under GATEWAY_PUBLIC_URL, or the
-// local listener default when it is unset.
+// GatewayGraphQLURL uses Bridge's own listener for MCP schema and query calls.
 func (c *Bridge) GatewayGraphQLURL() string {
-	if base := strings.TrimRight(c.GatewayPublicURL, "/"); base != "" {
-		return base + "/graphql/"
+	host := "localhost"
+	for _, address := range c.BindAddrs {
+		ip := net.ParseIP(address)
+		if ip != nil && (ip.IsLoopback() || ip.IsUnspecified()) {
+			if ip.To4() == nil {
+				host = "::1"
+			} else {
+				host = "127.0.0.1"
+			}
+			break
+		}
+		host = address
 	}
-	return "http://localhost:8080/graphql/"
+	return "http://" + net.JoinHostPort(host, c.Port) + "/graphql/"
 }
 
 // PlaygroundEnabled resolves GRAPHQL_PLAYGROUND_ENABLED against GIN_MODE.

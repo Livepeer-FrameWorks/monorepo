@@ -4,6 +4,8 @@ description: "The TypeScript, Go, and Python SDKs: typed operations, retries, pa
 ---
 
 import { Aside, Code, Tabs, TabItem } from "@astrojs/starlight/components";
+import sdkCatalog from "../../../../../pkg/graphql/public/catalog.json";
+
 import tsQuickstart from "../../../../../npm_api/examples/quickstart.ts?raw";
 import tsUpload from "../../../../../npm_api/examples/upload.ts?raw";
 import tsPlayback from "../../../../../npm_api/examples/playbackToken.ts?raw";
@@ -45,9 +47,9 @@ Other languages use the [GraphQL API](/builders/api-reference) directly and a
 
 ## Generated operations
 
-Each operation is a typed document in TypeScript (`GetStreamDocument`, passed to
-`client.request`), a function in Go (`frameworks.GetStream(ctx, client, id)`), and a method on the
-client in Python (`client.get_stream(id=...)`). The operations come from two sources:
+TypeScript provides named methods through `getSdk(client)` from
+`@livepeer-frameworks/api/operations` (`sdk.getStream({ id })`), as well as typed documents
+(`GetStreamDocument`, passed to `client.request`). Go exposes a function per operation (`frameworks.GetStream(ctx, client, id)`), and Python exposes a method on its client (`client.get_stream(id=...)`). The operations come from two sources:
 
 - **Default operations.** One per public root field and one per field that takes arguments on a
   type reached from `Query` through single (non-list) objects. A nested operation selects the
@@ -58,7 +60,7 @@ client in Python (`client.get_stream(id=...)`). The operations come from two sou
   implements `Node`: `InfrastructureNode.metricsConnection` is
   `GetInfrastructureNodeMetricsConnection(id, page, timeRange)`, which selects
   `node(id:) { ... on InfrastructureNode { metricsConnection } }`.
-- **Hand-written operations.** 44 documents with a curated selection (for example `CreateStream`,
+- **Hand-written operations.** Documents with a curated selection (for example `CreateStream`,
   `ListStreams`, `ListPushTargets`). A hand-written operation replaces the default operation of
   the field it addresses.
 
@@ -247,8 +249,9 @@ Every generated operation has a default selection. For fields beyond it:
   and mutations and returns untyped dictionaries with undecoded scalars, so send your own document
   through `execute` (or `execute_ws` on the async client for subscriptions).
 
-Give a custom operation a name of your own: the server check looks up an SDK operation's release by
-its name.
+Custom operation names are yours to choose. Operation-specific version checks apply only when
+the selected document matches a packaged operation's canonical identity; changing its selection,
+arguments, or defaults makes it a custom document. The SDK still checks its minimum server version.
 
 <Code code={tsSelect} lang="ts" title="select.ts" />
 
@@ -258,11 +261,10 @@ The SDKs are 0.x until the platform reaches 1.0, and the three languages always 
 Under 0.x each minor version is a line: 0.1, 0.2, and so on. A line names the oldest FrameWorks
 release it supports and supports every stable release from there on.
 
-| SDK line | Oldest supported FrameWorks release | Operations                                       |
-| -------- | ----------------------------------- | ------------------------------------------------ |
-| 0.3      | v0.3.11                             | 182 default and 45 hand-written operations (227) |
-
-Lines 0.1 and 0.2 (the 44 hand-written operations) are retired; use 0.3.
+The current package version is **{sdkCatalog.version}**, on SDK line **{sdkCatalog.line}**.
+It supports FrameWorks **{sdkCatalog.minServer}** and later and includes
+**{sdkCatalog.operations.length}** operation documents. Lines 0.1 and 0.2 are retired.
+The operation-method entry is optional: importing the main client does not load the method table.
 
 Within a line, operations are only added; a breaking change starts a new minor line. The public
 schema follows the same rule from FrameWorks v0.3.11 on: a field, argument, enum value, or union

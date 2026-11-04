@@ -19,3 +19,8 @@ import "embed"
 //
 //go:embed operations/queries/*.gql operations/mutations/*.gql operations/subscriptions/*.gql operations/fragments/*.gql
 var OperationsFS embed.FS
+
+// PublicCatalog contains the exact SDK documents, targets, and compatibility metadata.
+//
+//go:embed public/catalog.json
+var PublicCatalog []byte

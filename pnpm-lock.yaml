@@ -74,6 +74,9 @@ importers:
       '@graphql-typed-document-node/core':
         specifier: ^3.2.0
         version: 3.2.0(graphql@16.13.2)
+      '@noble/hashes':
+        specifier: 1.8.0
+        version: 1.8.0
       graphql:
         specifier: ^16.13.2
         version: 16.13.2
@@ -12482,6 +12485,7 @@ snapshots:
   '@livepeer-frameworks/api@file:npm_api(graphql-ws@6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.18.3))':
     dependencies:
       '@graphql-typed-document-node/core': 3.2.0(graphql@16.13.2)
+      '@noble/hashes': 1.8.0
       graphql: 16.13.2
       standardwebhooks: 1.1.1
     optionalDependencies:
@@ -12490,6 +12494,7 @@ snapshots:
   '@livepeer-frameworks/api@file:npm_api(graphql-ws@6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.21.3))':
     dependencies:
       '@graphql-typed-document-node/core': 3.2.0(graphql@16.13.2)
+      '@noble/hashes': 1.8.0
       graphql: 16.13.2
       standardwebhooks: 1.1.1
     optionalDependencies:

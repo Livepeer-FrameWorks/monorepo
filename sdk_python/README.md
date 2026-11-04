@@ -59,7 +59,7 @@ operation builder generates only queries and mutations (no subscriptions), and r
 methods return `datetime`). For other selections, send your own document through the client's
 `execute` (queries and mutations; `get_data` returns the data) or the async client's `execute_ws`
 (subscriptions), which use the SDK's authentication, retries, and typed errors. Give it an
-operation name of your own: the server version check looks up an SDK operation's release by name.
+operation name freely: operation-specific server checks use the selected document's identity, while custom documents retain the baseline server check.
 
 ## Scopes and partial errors
 

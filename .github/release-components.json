@@ -186,6 +186,8 @@
       "extra_hash_paths": [
         "patches",
         "npm_api",
+        "sdk_python/src/livepeer_frameworks/_generated/public_exports.py",
+        "pkg/graphql/public/catalog.json",
         "npm_player",
         "npm_studio",
         "packages/site-config",
@@ -229,6 +231,7 @@
         "npm_api/examples",
         "sdk_go/examples",
         "sdk_python/examples",
+        "pkg/graphql/public/catalog.json",
         "scripts/copy-agent-files.sh"
       ]
     }

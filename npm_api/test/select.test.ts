@@ -144,9 +144,9 @@ describe("select: building operations", () => {
     }
   });
 
-  it("refuses an SDK operation name, whose release the version check would borrow", () => {
-    expect(() => buildOperation("query", { __name: "GetStream", tenant: { id: true } })).toThrow(
-      /SDK operation name/
+  it("allows a custom selection to reuse an SDK operation name", () => {
+    expect(buildOperation("query", { __name: "GetStream", tenant: { id: true } }).query).toContain(
+      "query GetStream"
     );
   });
 });

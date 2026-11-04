@@ -1,17 +1,19 @@
 /**
- * SDK code snippets for the GraphQL playground.
- *
- * The operation list comes from the SDKs' own sources: the TypeScript SDK's
- * generated manifest names every operation the current SDK line ships, and
- * the public operation documents in pkg/graphql/public (the documents all
- * three SDKs are generated from) give each operation's variables in the
- * order the Go SDK takes them as positional arguments. The Python SDK's
- * public `livepeer_frameworks.graphql` module decides which input models a
- * snippet can import.
+ * SDK snippets share the generated public catalog's documents and identities.
+ * Variable order follows the Go SDK; Python model imports follow its public exports.
  */
 
-import { Kind, parse, type OperationDefinitionNode, type TypeNode } from "graphql";
+import {
+  Kind,
+  parse,
+  getOperationAST,
+  type FragmentDefinitionNode,
+  type OperationDefinitionNode,
+  visit,
+} from "graphql";
 
+import { documentIdentity } from "../../../../../npm_api/src/identity";
+import { version as sdkVersion } from "../../../../../pkg/graphql/public/catalog.json";
 import type { IntrospectedSchema, TypeRef } from "./schemaUtils";
 
 export type SdkOperationKind = "query" | "mutation" | "subscription";
@@ -19,12 +21,16 @@ export type SdkOperationKind = "query" | "mutation" | "subscription";
 export interface SdkVariable {
   name: string;
   type: TypeRef;
+  hasDefault: boolean;
+  required: boolean;
 }
 
 export interface SdkOperation {
   name: string;
   kind: SdkOperationKind;
   variables: SdkVariable[];
+  identity: string;
+  document: string;
 }
 
 export interface SdkCatalog {
@@ -35,6 +41,7 @@ export interface SdkCatalog {
 
 export interface SdkSnippetInput {
   query: string;
+  operationName?: string;
   variables: Record<string, unknown>;
   token: string;
   catalog: SdkCatalog;
@@ -51,19 +58,6 @@ export interface SdkSnippets {
   pythonSdk: string;
 }
 
-// Lazy like the template loader: the documents load when the code panel opens.
-const operationSources = import.meta.glob(
-  [
-    "../../../../../pkg/graphql/public/queries/**/*.graphql",
-    "../../../../../pkg/graphql/public/mutations/**/*.graphql",
-    "../../../../../pkg/graphql/public/subscriptions/**/*.graphql",
-    "../../../../../pkg/graphql/public/generated/queries.graphql",
-    "../../../../../pkg/graphql/public/generated/mutations.graphql",
-    "../../../../../pkg/graphql/public/generated/subscriptions.graphql",
-  ],
-  { query: "?raw", import: "default", eager: false }
-) as Record<string, () => Promise<string>>;
-
 // livepeer_frameworks.graphql star-imports this generated module and its __all__.
 const pythonGraphqlModule = import.meta.glob(
   "../../../../../sdk_python/src/livepeer_frameworks/_generated/public_exports.py",
@@ -76,16 +70,15 @@ let catalogPromise: Promise<SdkCatalog> | null = null;
 export function loadSdkCatalog(): Promise<SdkCatalog> {
   if (!catalogPromise) {
     catalogPromise = (async () => {
-      const [{ operations: manifest }, documents, pythonSources] = await Promise.all([
-        import("../../../../../npm_api/src/generated/manifest"),
-        Promise.all(Object.values(operationSources).map((load) => load())),
+      const [catalog, pythonSources] = await Promise.all([
+        import("../../../../../pkg/graphql/public/catalog.json"),
         Promise.all(Object.values(pythonGraphqlModule).map((load) => load())),
       ]);
-      return buildSdkCatalog(
-        Object.entries(manifest).map(([name, info]) => ({ name, kind: info.kind })),
-        documents,
-        pythonSources.join("\n")
-      );
+      const operations = catalog.operations as unknown as SdkOperation[];
+      return {
+        operations: new Map(operations.map((operation) => [operation.name, operation])),
+        pythonExports: parsePythonAll(pythonSources.join("\n")),
+      };
     })().catch((err) => {
       catalogPromise = null;
       throw err;
@@ -94,43 +87,25 @@ export function loadSdkCatalog(): Promise<SdkCatalog> {
   return catalogPromise;
 }
 
-function typeNodeToRef(node: TypeNode): TypeRef {
-  if (node.kind === Kind.NON_NULL_TYPE)
-    return { kind: "NON_NULL", ofType: typeNodeToRef(node.type) };
-  if (node.kind === Kind.LIST_TYPE) return { kind: "LIST", ofType: typeNodeToRef(node.type) };
-  return { name: node.name.value };
-}
-
-/**
- * Builds the catalog from the manifest's operation list, the public operation
- * documents, and the source of the Python SDK's generated export list of
- * livepeer_frameworks.graphql.
- * An operation is in the catalog only when the manifest ships it and a
- * document defines it.
- */
-export function buildSdkCatalog(
-  manifest: ReadonlyArray<{ name: string; kind: string }>,
-  documents: ReadonlyArray<string>,
-  pythonGraphqlSource: string
-): SdkCatalog {
-  const shipped = new Map(manifest.map((op) => [op.name, op.kind]));
-  const operations = new Map<string, SdkOperation>();
-  for (const source of documents) {
-    for (const def of parse(source).definitions) {
-      if (def.kind !== Kind.OPERATION_DEFINITION || !def.name) continue;
-      const name = def.name.value;
-      if (shipped.get(name) !== def.operation) continue;
-      operations.set(name, {
-        name,
-        kind: def.operation,
-        variables: (def.variableDefinitions ?? []).map((v) => ({
-          name: v.variable.name.value,
-          type: typeNodeToRef(v.type),
-        })),
-      });
-    }
-  }
-  return { operations, pythonExports: parsePythonAll(pythonGraphqlSource) };
+function reachableFragments(
+  operation: OperationDefinitionNode,
+  fragments: Map<string, FragmentDefinitionNode>
+): FragmentDefinitionNode[] {
+  const used = new Set<string>();
+  const collect = (node: OperationDefinitionNode | FragmentDefinitionNode): void => {
+    visit(node, {
+      FragmentSpread(spread) {
+        const name = spread.name.value;
+        if (used.has(name)) return;
+        const fragment = fragments.get(name);
+        if (!fragment) throw new TypeError(`Missing fragment ${name}`);
+        used.add(name);
+        collect(fragment);
+      },
+    });
+  };
+  collect(operation);
+  return [...used].sort().map((name) => fragments.get(name)!);
 }
 
 function parsePythonAll(source: string): Set<string> {
@@ -278,60 +253,18 @@ function unwrapNonNull(type: TypeRef): TypeRef {
 }
 
 // ---------------------------------------------------------------------------
-// Value placeholders for required variables the editor leaves out
+// Values supplied by the editor
 // ---------------------------------------------------------------------------
 
-/**
- * A placeholder for a required value: an input object gets its required
- * fields (non-null without a default), so the snippet type-checks once the
- * values are filled in.
- */
-function placeholderValue(
-  type: TypeRef,
-  schema: IntrospectedSchema | null | undefined,
-  depth = 0
-): unknown {
-  const inner = unwrapNonNull(type);
-  if (inner.kind === "LIST") return [];
-  const name = inner.name ?? "String";
-  switch (namedKind(name, schema)) {
-    case "input": {
-      const out: Record<string, unknown> = {};
-      const fields = schema?.types?.find((t) => t.name === name)?.inputFields ?? [];
-      if (depth >= 4) return out;
-      for (const field of fields) {
-        if (field.type && isNonNull(field.type) && field.defaultValue == null) {
-          out[field.name] = placeholderValue(field.type, schema, depth + 1);
-        }
-      }
-      return out;
-    }
-    case "enum": {
-      const values = schema?.types?.find((t) => t.name === name)?.enumValues;
-      return values?.[0]?.name ?? "";
-    }
-    default:
-      if (name === "Int" || name === "Float") return 0;
-      if (name === "Boolean") return false;
-      return "";
-  }
-}
-
-/**
- * The value each SDK variable gets: the editor's value, a placeholder for a
- * required variable it leaves out, or undefined for an optional one.
- */
+/** Distinguish a supplied value from an absent optional variable. */
 function argumentValues(
   op: SdkOperation,
   variables: Record<string, unknown>,
-  schema: IntrospectedSchema | null | undefined
+  _schema: IntrospectedSchema | null | undefined
 ): Array<{ variable: SdkVariable; value: unknown; provided: boolean }> {
   return op.variables.map((variable) => {
     const provided = Object.prototype.hasOwnProperty.call(variables, variable.name);
     if (provided) return { variable, value: variables[variable.name], provided };
-    if (isNonNull(variable.type)) {
-      return { variable, value: placeholderValue(variable.type, schema), provided };
-    }
     return { variable, value: undefined, provided };
   });
 }
@@ -353,7 +286,8 @@ function indentLines(text: string, prefix: string): string {
 }
 
 function tsLiteral(value: unknown): string {
-  return JSON.stringify(value, null, 2);
+  // Computed keys preserve own __proto__ properties without changing prototypes.
+  return JSON.stringify(value, null, 2).replaceAll('"__proto__":', '["__proto__"]:');
 }
 
 function pyLiteral(value: unknown, indent = ""): string {
@@ -396,9 +330,20 @@ const GO_MONTHS = [
   "December",
 ];
 
-function goString(value: string): string {
-  if (!value.includes("`") && !value.includes("\r") && value.includes("\n")) return `\`${value}\``;
-  return JSON.stringify(value);
+export function goString(value: string): string {
+  // Go source forbids embedded BOMs and JSON's surrogate escape syntax.
+  return (
+    '"' +
+    Array.from(value, (character) => {
+      const point = character.codePointAt(0)!;
+      if (point >= 0xd800 && point <= 0xdfff) return "\\ufffd";
+      if (point < 0x7f) return JSON.stringify(character).slice(1, -1);
+      return point > 0xffff
+        ? `\\U${point.toString(16).padStart(8, "0")}`
+        : `\\u${point.toString(16).padStart(4, "0")}`;
+    }).join("") +
+    '"'
+  );
 }
 
 function goTime(value: unknown, ctx: GoContext): string {
@@ -415,7 +360,7 @@ function goScalar(name: string, value: unknown, ctx: GoContext): string {
       return typeof value === "number" ? String(Math.trunc(value)) : "0";
     case "Float":
       if (typeof value !== "number") return "0.0";
-      return Number.isInteger(value) ? `${value}.0` : String(value);
+      return Number.isInteger(value) && !String(value).includes("e") ? `${value}.0` : String(value);
     case "Boolean":
       return value === true ? "true" : "false";
     case "Time":
@@ -423,9 +368,7 @@ function goScalar(name: string, value: unknown, ctx: GoContext): string {
     case "JSON": {
       ctx.imports.add("encoding/json");
       const raw = JSON.stringify(value ?? null);
-      return raw.includes("`")
-        ? `json.RawMessage(${JSON.stringify(raw)})`
-        : `json.RawMessage(\`${raw}\`)`;
+      return `json.RawMessage(${goString(raw)})`;
     }
     default:
       return goString(typeof value === "string" ? value : String(value ?? ""));
@@ -547,7 +490,7 @@ function goArgument(variable: SdkVariable, value: unknown, ctx: GoContext, inden
   ctx.imports.add("encoding/json");
   const typeName = goTypeName(variable.type, ctx).replace(/^\*/, "");
   const raw = JSON.stringify(value ?? null);
-  const quoted = raw.includes("`") ? JSON.stringify(raw) : `\`${raw}\``;
+  const quoted = goString(raw);
   ctx.preamble.push(
     `var ${variable.name} ${typeName}`,
     `if err := json.Unmarshal([]byte(${quoted}), &${variable.name}); err != nil {`,
@@ -556,23 +499,6 @@ function goArgument(variable: SdkVariable, value: unknown, ctx: GoContext, inden
   );
   const pointer = !isNonNull(variable.type) && unwrapNonNull(variable.type).kind !== "LIST";
   return pointer ? `&${variable.name}` : variable.name;
-}
-
-/** An untyped Go literal (map[string]any, []any) for a custom document's variables. */
-function goAny(value: unknown, indent: string): string {
-  if (value === null || value === undefined) return "nil";
-  if (typeof value === "string") return goString(value);
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  const next = indent + "\t";
-  if (Array.isArray(value)) {
-    if (value.length === 0) return "[]any{}";
-    return `[]any{\n${value.map((v) => `${next}${goAny(v, next)},`).join("\n")}\n${indent}}`;
-  }
-  const entries = Object.entries(value as Record<string, unknown>);
-  if (entries.length === 0) return "map[string]any{}";
-  return `map[string]any{\n${entries
-    .map(([k, v]) => `${next}${JSON.stringify(k)}: ${goAny(v, next)},`)
-    .join("\n")}\n${indent}}`;
 }
 
 function goImports(ctx: GoContext, extra: string[]): string {
@@ -595,24 +521,49 @@ interface ParsedDocument {
   kind: SdkOperationKind;
 }
 
-function parseDocument(query: string): ParsedDocument | null {
+function parseDocument(query: string, operationName?: string): ParsedDocument | null {
   try {
-    const def = parse(query).definitions.find(
-      (d): d is OperationDefinitionNode => d.kind === Kind.OPERATION_DEFINITION
-    );
-    if (!def) return null;
-    return { name: def.name?.value ?? null, kind: def.operation };
+    const def = getOperationAST(parse(query), operationName);
+    return def ? { name: def.name?.value ?? null, kind: def.operation } : null;
   } catch {
     return null;
   }
 }
 
-/** The SDK operation the editor's document runs, matched by operation name and kind. */
-export function matchSdkOperation(query: string, catalog: SdkCatalog): SdkOperation | null {
-  const parsed = parseDocument(query);
+/** A packaged operation is usable only for the same executable document. */
+export function matchSdkOperation(
+  query: string,
+  catalog: SdkCatalog,
+  operationName?: string
+): SdkOperation | null {
+  const parsed = parseDocument(query, operationName);
   if (!parsed?.name) return null;
+  const definitions = parse(query).definitions;
+  if (
+    definitions.filter((item) => item.kind === Kind.OPERATION_DEFINITION).length !== 1 ||
+    definitions.some(
+      (item) => item.kind !== Kind.OPERATION_DEFINITION && item.kind !== Kind.FRAGMENT_DEFINITION
+    )
+  )
+    return null;
+  const operation = getOperationAST({ kind: Kind.DOCUMENT, definitions }, operationName)!;
+  const fragments = new Map(
+    definitions
+      .filter((item): item is FragmentDefinitionNode => item.kind === Kind.FRAGMENT_DEFINITION)
+      .map((item) => [item.name.value, item])
+  );
+  try {
+    if (reachableFragments(operation, fragments).length !== fragments.size) return null;
+  } catch {
+    return null;
+  }
   const op = catalog.operations.get(parsed.name);
-  return op && op.kind === parsed.kind ? op : null;
+  if (!op || op.kind !== parsed.kind) return null;
+  try {
+    return documentIdentity(query, operationName) === op.identity ? op : null;
+  } catch {
+    return null;
+  }
 }
 
 function header(
@@ -628,10 +579,8 @@ function header(
 }
 
 const MATCHED_NOTE = (name: string) =>
-  `${name} is a generated SDK operation;\nit returns the SDK's default selection set.`;
-const CUSTOM_NOTE =
-  "No SDK operation has this document's name, so it runs as a custom document.\n" +
-  "Give it a name of your own; the server version check matches SDK operation names.";
+  `${name} matches this document and uses a typed SDK operation.`;
+const CUSTOM_NOTE = "Runs your selected GraphQL document unchanged through the SDK.";
 
 function ignoredNote(ignored: string[]): string | undefined {
   if (ignored.length === 0) return undefined;
@@ -647,9 +596,7 @@ function tsSnippet(input: SdkSnippetInput, op: SdkOperation | null, doc: ParsedD
   const { token, httpUrl, wsUrl, docsUrl } = input;
   const guide = `${docsUrl}/builders/sdks`;
   const isSubscription = (op?.kind ?? doc?.kind) === "subscription";
-  const install = isSubscription
-    ? "npm install @livepeer-frameworks/api graphql-ws"
-    : "npm install @livepeer-frameworks/api";
+  const install = `npm install @livepeer-frameworks/api@^${sdkVersion}${isSubscription ? " graphql-ws" : ""}`;
 
   let vars: Record<string, unknown> = input.variables;
   let note: string | undefined;
@@ -663,6 +610,7 @@ function tsSnippet(input: SdkSnippetInput, op: SdkOperation | null, doc: ParsedD
     note = CUSTOM_NOTE;
   }
   const hasVars = Object.keys(vars).length > 0;
+  const selection = doc?.name ? `{ operationName: ${JSON.stringify(doc.name)} }` : undefined;
   const docRef = op ? `${op.name}Document` : "query";
   const customQuery = op
     ? ""
@@ -673,9 +621,10 @@ function tsSnippet(input: SdkSnippetInput, op: SdkOperation | null, doc: ParsedD
     const imports = op
       ? `import { ${docRef} } from "@livepeer-frameworks/api";\nimport { createSubscriptionClient } from "@livepeer-frameworks/api/subscriptions";`
       : `import { createSubscriptionClient } from "@livepeer-frameworks/api/subscriptions";`;
-    const call = hasVars
-      ? `subscriptions.subscribe(${docRef}, ${tsLiteral(vars)})`
-      : `subscriptions.subscribe(${docRef})`;
+    const args = [docRef];
+    if (hasVars || selection) args.push(hasVars ? tsLiteral(vars) : "undefined");
+    if (selection) args.push(selection);
+    const call = `subscriptions.subscribe(${args.join(", ")})`;
     return `${head}
 ${imports}
 
@@ -690,11 +639,11 @@ ${customQuery}for await (const data of ${call}) {
   }
 
   const imports = op
-    ? `import { createClient, ${docRef} } from "@livepeer-frameworks/api";`
-    : `import { createClient } from "@livepeer-frameworks/api";`;
-  const call = hasVars
-    ? `client.request(${docRef}, ${tsLiteral(vars)})`
-    : `client.request(${docRef})`;
+    ? 'import { createClient } from "@livepeer-frameworks/api";\nimport { getSdk } from "@livepeer-frameworks/api/operations";'
+    : 'import { createClient } from "@livepeer-frameworks/api";';
+  const call = op
+    ? `sdk.${op.name[0].toLowerCase()}${op.name.slice(1)}(${hasVars ? tsLiteral(vars) : ""})`
+    : `client.request(query, ${tsLiteral(vars)}${selection ? `, ${selection}` : ""})`;
   return `${head}
 ${imports}
 
@@ -702,7 +651,7 @@ const client = createClient({
   url: ${JSON.stringify(httpUrl)},
   token: ${JSON.stringify(token)},
 });
-
+${op ? "const sdk = getSdk(client);\n" : ""}
 ${customQuery}const data = await ${call};
 console.log(data);`;
 }
@@ -716,15 +665,15 @@ function goSnippet(input: SdkSnippetInput, op: SdkOperation | null, doc: ParsedD
 
   const clientSetup = isSubscription
     ? `\tsc, err := frameworks.NewSubscriptionClient(frameworks.SubscriptionOptions{
-\t\tURL:   ${JSON.stringify(wsUrl)},
-\t\tToken: ${JSON.stringify(token)},
+\t\tURL:   ${goString(wsUrl)},
+\t\tToken: ${goString(token)},
 \t})
 \tif err != nil {
 \t\tlog.Fatal(err)
 \t}`
     : `\tclient, err := frameworks.NewClient(frameworks.ClientOptions{
-\t\tURL:   ${JSON.stringify(httpUrl)},
-\t\tToken: ${JSON.stringify(token)},
+\t\tURL:   ${goString(httpUrl)},
+\t\tToken: ${goString(token)},
 \t})
 \tif err != nil {
 \t\tlog.Fatal(err)
@@ -760,12 +709,13 @@ function goSnippet(input: SdkSnippetInput, op: SdkOperation | null, doc: ParsedD
 \tfmt.Printf("%+v\\n", resp)`;
   } else {
     note = CUSTOM_NOTE;
-    const queryLiteral = input.query.includes("`")
-      ? JSON.stringify(input.query)
-      : `\`${input.query}\``;
+    const queryLiteral = goString(input.query);
     const varsLiteral =
-      Object.keys(input.variables).length > 0 ? goAny(input.variables, "\t") : "nil";
-    const opName = JSON.stringify(doc?.name ?? "");
+      Object.keys(input.variables).length > 0
+        ? `json.RawMessage(${goString(JSON.stringify(input.variables))})`
+        : "nil";
+    if (varsLiteral !== "nil") ctx.imports.add("encoding/json");
+    const opName = goString(doc?.name ?? "");
     if (isSubscription) {
       const varsSetup = varsLiteral === "nil" ? "" : `\tvariables := ${varsLiteral}\n`;
       const varsArg = varsLiteral === "nil" ? "nil" : "variables";
@@ -796,7 +746,7 @@ ${alignGoKeys(
     }
   }
 
-  return `${header("//", "Go SDK", "go get github.com/Livepeer-FrameWorks/sdk-go", guide, note)}
+  return `${header("//", "Go SDK", `go get github.com/Livepeer-FrameWorks/sdk-go@v${sdkVersion}`, guide, note)}
 package main
 
 ${goImports(ctx, extraImports)}
@@ -912,14 +862,23 @@ function pySnippet(input: SdkSnippetInput, op: SdkOperation | null, doc: ParsedD
   }
 
   const hasVars = Object.keys(input.variables).length > 0;
+  if (!op) stdImports.add("import json");
   const customSetup = op
     ? ""
-    : `query = """${input.query.replace(/\\/g, "\\\\").replace(/"""/g, '\\"\\"\\"')}"""\n${
-        hasVars ? `variables = ${pyLiteral(input.variables)}\n` : ""
+    : `query = json.loads(${JSON.stringify(JSON.stringify(input.query))})\n${
+        hasVars
+          ? `variables = json.loads(${JSON.stringify(JSON.stringify(input.variables))})\n`
+          : ""
       }\n`;
   const opNameArg = doc?.name ? `, operation_name=${JSON.stringify(doc.name)}` : "";
   const varsArg = hasVars ? ", variables=variables" : "";
-  const head = header("#", "Python SDK", "pip install livepeer-frameworks", guide, note);
+  const head = header(
+    "#",
+    "Python SDK",
+    `pip install livepeer-frameworks~=${sdkVersion}`,
+    guide,
+    note
+  );
   const modelLine = modelImports.size
     ? `\nfrom livepeer_frameworks.graphql import ${[...modelImports].sort().join(", ")}`
     : "";
@@ -953,17 +912,87 @@ ${customSetup}${clientCall("", "with", "FrameWorksClient")}
 ${body}`;
 }
 
+function canRenderValue(
+  type: TypeRef,
+  value: unknown,
+  schema: IntrospectedSchema | null | undefined
+): boolean {
+  if (typeof value === "string" && /[\ud800-\udfff]/u.test(value)) return false;
+  if (value === null) return false;
+  const base = unwrapNonNull(type);
+  if (base.kind === "LIST")
+    return (
+      Array.isArray(value) &&
+      !!base.ofType &&
+      value.every((item) => canRenderValue(base.ofType!, item, schema))
+    );
+  const name = base.name ?? "";
+  // Host date types can truncate precision or accept/rewrite invalid input.
+  if (name === "Time") return false;
+  if (["ID", "String", "Currency", "Money"].includes(name)) return typeof value === "string";
+  if (name === "Boolean") return typeof value === "boolean";
+  if (name === "Int")
+    return (
+      typeof value === "number" &&
+      Number.isInteger(value) &&
+      value >= -2147483648 &&
+      value <= 2147483647
+    );
+  if (name === "Float") return typeof value === "number" && Number.isFinite(value);
+  if (name === "JSON") return true;
+  const definition = schema?.types?.find((item) => item.name === name);
+  if (definition?.kind === "ENUM")
+    return definition.enumValues?.some((item) => item.name === value) ?? false;
+  if (definition?.kind !== "INPUT_OBJECT" || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const fields = definition.inputFields ?? [];
+  return (
+    Object.entries(value as Record<string, unknown>).every(([key, item]) => {
+      const field = fields.find((candidate) => candidate.name === key);
+      return !!field?.type && canRenderValue(field.type, item, schema);
+    }) &&
+    // Omitted non-null defaults can become Go scalar zero values in structs.
+    fields.every(
+      (field) => !field.type || !isNonNull(field.type) || Object.hasOwn(value, field.name)
+    )
+  );
+}
+
 /**
  * Generates the TypeScript, Go, and Python SDK snippets for the editor's
- * document: a typed call when its operation name and kind match an SDK
- * operation, the SDK's custom-document path otherwise.
+ * document: a typed call only when the document and variables can be represented
+ * faithfully by that language's generated operation, a raw SDK request otherwise.
  */
 export function generateSdkSnippets(input: SdkSnippetInput): SdkSnippets {
-  const doc = parseDocument(input.query);
-  const op = matchSdkOperation(input.query, input.catalog);
+  assertVariablesObject(input.variables);
+  const doc = parseDocument(input.query, input.operationName);
+  let op = matchSdkOperation(input.query, input.catalog, input.operationName);
+  if (!doc) throw new TypeError("Select exactly one GraphQL operation before exporting examples");
+  if (op) {
+    const missing = op.variables.filter(
+      (v) => v.required && !Object.hasOwn(input.variables, v.name)
+    );
+    if (missing.length)
+      throw new TypeError(`Fill in required variables: ${missing.map((v) => v.name).join(", ")}`);
+  }
+  if (
+    op &&
+    Object.entries(input.variables).some(([name, value]) => {
+      const variable = op!.variables.find((item) => item.name === name);
+      return !variable || !canRenderValue(variable.type, value, input.schema);
+    })
+  )
+    op = null;
   return {
     tsSdk: tsSnippet(input, op, doc),
     goSdk: goSnippet(input, op, doc),
     pythonSdk: pySnippet(input, op, doc),
   };
+}
+
+export function assertVariablesObject(
+  variables: unknown
+): asserts variables is Record<string, unknown> {
+  if (variables === null || typeof variables !== "object" || Array.isArray(variables))
+    throw new TypeError("Variables must be a JSON object");
 }

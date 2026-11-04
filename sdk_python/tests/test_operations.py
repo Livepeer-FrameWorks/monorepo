@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.typing import Subprotocol
 
+from livepeer_frameworks._identity import document_identity
 from conftest import load_fixture
 from livepeer_frameworks import OPERATIONS, AsyncFrameWorksClient, FrameWorksClient
 
@@ -58,6 +59,7 @@ def _mock(op: dict[str, Any], sent: list[dict[str, Any]]) -> httpx.MockTransport
 def _check(op: dict[str, Any], result: BaseModel, sent: list[dict[str, Any]]) -> None:
     assert result.model_dump(by_alias=True, mode="json") == op["response"]["data"]
     assert len(sent) == 1
+    assert document_identity(sent[0]["query"], op["name"]) == op["identity"]
     assert sent[0]["operationName"] == op["name"]
     assert sent[0]["variables"] == op["variables"]
 

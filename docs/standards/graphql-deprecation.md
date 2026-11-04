@@ -115,7 +115,34 @@ select client.
 - **Python:** no typed builder. ariadne-codegen's custom operation builder has no subscriptions and returns untyped
   dictionaries with undecoded scalars; custom documents go through `execute` and the async client's `execute_ws`.
 
-A custom operation needs a name of its own: the server check looks up an SDK operation's `since` by name.
+Operation-specific version checks use the selected document's canonical identity, not its name. Custom documents may reuse packaged operation names; the SDK minimum-server check still applies.
+
+### Executable operation identity
+
+The manifest's `hash` continues to identify its release-contract document. Runtime
+`identity` is a separate SHA-256 digest with the `fw-operation-v1;` domain prefix.
+Select exactly one operation, collect its transitive fragment closure, sort fragment
+definitions by name, and lex the resulting document. Each token contributes
+`kind:UTF8-byte-length:value;`; punctuation uses an empty value and its symbol as
+kind. Names, integers, floats, and decoded strings use `Name`, `Int`, `Float`, and
+`String`; block strings use their decoded `String` value too. An anonymous query
+starts with the explicit `Name:5:query;` token. Whitespace, comments, commas, and
+printer indentation are irrelevant; literal values and selection order remain
+significant. Duplicate definitions and missing/cyclic fragments are rejected.
+
+Go's `sdk_go/identity`, TypeScript's `npm_api/src/identity.ts`, and Python's
+`_identity.py` implement this format. Shared conformance fixtures check Unicode,
+block strings, operation selection, fragment closure, and every generated SDK
+document. The public catalog (`pkg/graphql/public/catalog.json`) carries both
+hashes, the exact documents, schema targets, and supported server versions. The
+playground consumes that catalog; Bridge uses its public operations as fallback
+query templates and reports related SDK operations separately for application
+templates with different selections.
+
+MCP API-assistance templates remove recognized application-only directives from
+operations and fragments before execution. Their executable variables omit
+unsupplied values; required inputs without defaults are listed separately in
+`required_variables`. GraphQL applies declared defaults and enforces coercion.
 
 ## SDK lines
 
@@ -231,3 +258,8 @@ The `extensions.code` values the gateway sets (`UNAUTHORIZED`, `FORBIDDEN`, `NOT
 added, never renamed. Public event payloads, which the `tenantEvents` subscription and webhooks deliver, follow the
 protobuf rules in `pkg/proto/events/public/v1`: `make proto-breaking` checks them against the latest release at the
 file level.
+
+Go generated argument structs treat nil optional fields as omitted. Custom request
+maps and `json.RawMessage` retain explicit null values; JSON scalar contents are
+opaque to the omission pass. Use the raw request path when a generated pointer
+argument cannot distinguish an omitted value from an explicit null.

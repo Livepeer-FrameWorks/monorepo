@@ -227,7 +227,7 @@ SDK_BUF = go run github.com/bufbuild/buf/cmd/buf@v1.72.0
 
 graphql-sdk: graphql-sdk-ts graphql-sdk-go graphql-sdk-py
 
-SDK_GENERATED = pkg/graphql/public/schema.public.graphql pkg/graphql/public/generated pkg/graphql/public/majors sdk_conformance/operations.json \
+SDK_GENERATED = pkg/graphql/public/catalog.json pkg/graphql/public/schema.public.graphql pkg/graphql/public/generated pkg/graphql/public/majors sdk_conformance/operations.json \
 	npm_api/src/generated sdk_go/generated.go sdk_go/operation_calls_gen_test.go sdk_go/manifest_gen.go sdk_go/events_gen.go \
 	sdk_python/src/livepeer_frameworks/_generated
 
@@ -720,6 +720,7 @@ verify-stack-fixtures:
 	bash scripts/stack/test_list.sh
 	bash scripts/stack/test_staging_adapter.sh
 	bash scripts/stack/test_sdk_prereqs.sh
+	bash scripts/stack/test_mcp_smoke.sh
 	bash scripts/stack/test_test_tenant.sh
 
 clean:
@@ -2275,3 +2276,9 @@ test-purser-tier-downgrade:
 test-purser-free-fallback:
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-free-fallback -tags schema_verify -run '$(PURSER_FREE_FALLBACK_GRPC_REALPG_TESTS)' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-free-fallback-provider -tags schema_verify -run '$(PURSER_FREE_FALLBACK_HANDLERS_REALPG_TESTS)' -count=1 -timeout 600s ./internal/handlers/
+
+# Executes an exported Go example in snippet recording-fixture tests.
+.PHONY: test-sdk-go-snippet
+test-sdk-go-snippet:
+	@test -n "$(SDK_SNIPPET_FILE)" || { echo "Set SDK_SNIPPET_FILE"; exit 1; }
+	@cd sdk_go && go run "$(SDK_SNIPPET_FILE)"

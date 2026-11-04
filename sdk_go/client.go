@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"reflect"
 	"strings"
 	"syscall"
 	"time"
@@ -177,16 +178,20 @@ func (c *Client) MakeRequest(ctx context.Context, req *graphql.Request, resp *gr
 	if kind == "subscription" {
 		return errors.New("frameworks: subscriptions run over WebSocket; use a SubscriptionClient")
 	}
-	if c.checkServer && name != "ServerInfo" {
-		if gateErr := c.gate(ctx, name); gateErr != nil {
+	gateName := ""
+	if c.checkServer {
+		gateName = c.identityName(req.Query, name)
+	}
+	if c.checkServer && gateName != "ServerInfo" {
+		if gateErr := c.gate(ctx, gateName); gateErr != nil {
 			return gateErr
 		}
 	}
 	data, err := c.send(ctx, kind, name, req.Query, req.Variables)
 	if err != nil {
 		var mismatch *SchemaMismatchError
-		if c.checkServer && name != "ServerInfo" && errors.As(err, &mismatch) {
-			return c.recheck(ctx, name, err)
+		if c.checkServer && gateName != "ServerInfo" && errors.As(err, &mismatch) {
+			return c.recheck(ctx, gateName, err)
 		}
 		return err
 	}
@@ -258,47 +263,143 @@ func (c *Client) send(ctx context.Context, kind, name, query string, variables a
 	}
 }
 
-// omitNulls encodes variables with every null object member removed. The
-// generated argument and input types hold unset optional values as nil
-// pointers, which encode as null; GraphQL treats an explicit null
-// differently from an omitted value (it overrides a default), so unset
-// values are left out, as the TypeScript and Python SDKs leave them out.
+// omitNulls omits unset fields of typed argument structs. Maps and raw JSON
+// retain explicit null values, including nulls inside JSON scalar fields.
 func omitNulls(variables any) (any, error) {
 	if variables == nil {
 		return map[string]any{}, nil
+	}
+	if _, ok := variables.(json.Marshaler); ok {
+		return variables, nil
 	}
 	raw, err := json.Marshal(variables)
 	if err != nil {
 		return nil, err
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	var v any
-	if err := dec.Decode(&v); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var encoded any
+	if err := decoder.Decode(&encoded); err != nil {
 		return nil, err
 	}
-	var strip func(any) any
-	strip = func(v any) any {
-		switch t := v.(type) {
-		case map[string]any:
-			for k, child := range t {
-				if child == nil {
-					delete(t, k)
+	omitUnsetFields(reflect.ValueOf(variables), encoded)
+	return encoded, nil
+}
+
+func omitUnsetFields(value reflect.Value, encoded any) {
+	if !value.IsValid() {
+		return
+	}
+	if value.CanInterface() {
+		if _, ok := value.Interface().(json.Marshaler); ok {
+			return
+		}
+	}
+	switch value.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		if !value.IsNil() {
+			omitUnsetFields(value.Elem(), encoded)
+		}
+	case reflect.Struct:
+		object, ok := encoded.(map[string]any)
+		if !ok {
+			return
+		}
+		for name, index := range variableJSONFields(value.Type()) {
+			item, err := value.FieldByIndexErr(index)
+			if err != nil {
+				continue
+			}
+			switch item.Kind() {
+			case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice:
+				if item.IsNil() {
+					if object[name] == nil {
+						delete(object, name)
+					}
 					continue
 				}
-				t[k] = strip(child)
 			}
-		case []any:
-			for i, child := range t {
-				t[i] = strip(child)
+			omitUnsetFields(item, object[name])
+		}
+	case reflect.Map:
+		object, ok := encoded.(map[string]any)
+		if !ok || value.Type().Key().Kind() != reflect.String {
+			return
+		}
+		iter := value.MapRange()
+		for iter.Next() {
+			// Nil map entries are explicit values. Struct entries still carry unset fields.
+			omitUnsetFields(iter.Value(), object[iter.Key().String()])
+		}
+	case reflect.Slice, reflect.Array:
+		array, ok := encoded.([]any)
+		if !ok {
+			return
+		}
+		for i := 0; i < value.Len() && i < len(array); i++ {
+			omitUnsetFields(value.Index(i), array[i])
+		}
+	}
+}
+
+// variableJSONFields follows encoding/json's depth and tagged-field precedence
+// so a promoted nil field cannot remove a different field that shadows it.
+func variableJSONFields(typ reflect.Type) map[string][]int {
+	type candidate struct {
+		index     []int
+		tagged    bool
+		ambiguous bool
+	}
+	fields := map[string]candidate{}
+	var collect func(reflect.Type, []int, map[reflect.Type]bool)
+	collect = func(current reflect.Type, prefix []int, parents map[reflect.Type]bool) {
+		if parents[current] {
+			return
+		}
+		ancestors := make(map[reflect.Type]bool, len(parents)+1)
+		for key, value := range parents {
+			ancestors[key] = value
+		}
+		ancestors[current] = true
+		for i := 0; i < current.NumField(); i++ {
+			field := current.Field(i)
+			inner := field.Type
+			if inner.Kind() == reflect.Pointer {
+				inner = inner.Elem()
+			}
+			if field.PkgPath != "" && (!field.Anonymous || inner.Kind() != reflect.Struct) {
+				continue
+			}
+			name := strings.Split(field.Tag.Get("json"), ",")[0]
+			if name == "-" {
+				continue
+			}
+			index := append(append([]int(nil), prefix...), i)
+			if field.Anonymous && name == "" && inner.Kind() == reflect.Struct {
+				collect(inner, index, ancestors)
+				continue
+			}
+			tagged := name != ""
+			if name == "" {
+				name = field.Name
+			}
+			previous, exists := fields[name]
+			if !exists || len(index) < len(previous.index) || (len(index) == len(previous.index) && tagged && !previous.tagged) {
+				fields[name] = candidate{index: index, tagged: tagged}
+			} else if len(index) == len(previous.index) && tagged == previous.tagged {
+				previous.ambiguous = true
+				fields[name] = previous
 			}
 		}
-		return v
 	}
-	if v == nil {
-		return map[string]any{}, nil
+	collect(typ, nil, nil)
+	result := map[string][]int{}
+	for name, field := range fields {
+		if !field.ambiguous {
+			result[name] = field.index
+		}
 	}
-	return strip(v), nil
+	return result
 }
 
 // failedBeforeSend reports whether a transport error happened before any

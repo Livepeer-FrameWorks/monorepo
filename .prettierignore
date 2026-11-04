@@ -28,6 +28,7 @@ website_application/src/lib/features/registry.json
 pkg/graphql/public/majors/
 pkg/graphql/public/schema.public.graphql
 pkg/graphql/public/generated/
+pkg/graphql/public/catalog.json
 sdk_conformance/operations.json
 website_docs/src/content/docs/builders/api-schema/
 

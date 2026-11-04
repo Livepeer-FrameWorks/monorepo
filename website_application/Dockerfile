@@ -75,6 +75,7 @@ RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
 
 # copy sources
 COPY npm_api/ npm_api/
+COPY sdk_python/src/livepeer_frameworks/_generated/public_exports.py sdk_python/src/livepeer_frameworks/_generated/public_exports.py
 COPY npm_player/ npm_player/
 COPY npm_studio/ npm_studio/
 COPY website_application/ website_application/
@@ -83,6 +84,7 @@ COPY docs/skills/ docs/skills/
 # copy GraphQL schema and operations for Houdini codegen
 COPY pkg/graphql/schema.graphql pkg/graphql/schema.graphql
 COPY pkg/graphql/operations/ pkg/graphql/operations/
+COPY pkg/graphql/public/catalog.json pkg/graphql/public/catalog.json
 
 # ensure skill files are present in static assets
 COPY scripts/copy-agent-files.sh scripts/copy-agent-files.sh

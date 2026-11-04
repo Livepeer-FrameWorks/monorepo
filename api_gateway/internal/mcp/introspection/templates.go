@@ -1,7 +1,10 @@
 package introspection
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"regexp"
 	"sort"
@@ -11,6 +14,7 @@ import (
 	graphqlpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/graphql"
 
 	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/formatter"
 	"github.com/vektah/gqlparser/v2/parser"
 )
 
@@ -18,13 +22,16 @@ const maxFieldPathDepth = 6
 
 // Template represents a loaded GraphQL operation template.
 type Template struct {
-	Name          string                 `json:"name"`
-	Description   string                 `json:"description"`
-	Query         string                 `json:"query"`
-	Variables     map[string]interface{} `json:"variables"`
-	FilePath      string                 `json:"file_path"`
-	OperationType string                 `json:"operation_type"`
-	FieldPaths    []string               `json:"field_paths"`
+	Name              string                 `json:"name"`
+	Description       string                 `json:"description"`
+	Query             string                 `json:"query"`
+	Variables         map[string]interface{} `json:"variables"`
+	FilePath          string                 `json:"file_path"`
+	OperationType     string                 `json:"operation_type"`
+	FieldPaths        []string               `json:"field_paths"`
+	RequiredVariables []string               `json:"required_variables,omitempty"`
+	SDKOperations     []string               `json:"sdk_operations,omitempty"`
+	Source            string                 `json:"source,omitempty"`
 }
 
 // TemplateLoader loads and caches GraphQL templates from embedded files.
@@ -32,6 +39,7 @@ type TemplateLoader struct {
 	mu        sync.RWMutex
 	templates map[string]*Template // key: "query:fieldPath"
 	loaded    bool
+	all       []*Template
 }
 
 // NewTemplateLoader creates a new template loader.
@@ -43,27 +51,46 @@ func NewTemplateLoader() *TemplateLoader {
 
 // Load loads all templates from the embedded filesystem.
 func (tl *TemplateLoader) Load() error {
+	return tl.loadFrom(graphqlpkg.OperationsFS, graphqlpkg.PublicCatalog)
+}
+
+func (tl *TemplateLoader) loadFrom(operationsFS fs.FS, catalogJSON []byte) error {
 	tl.mu.Lock()
 	defer tl.mu.Unlock()
 
 	if tl.loaded {
 		return nil
 	}
+	candidate := NewTemplateLoader()
+	if err := candidate.load(operationsFS, catalogJSON); err != nil {
+		return err
+	}
+	tl.templates, tl.all, tl.loaded = candidate.templates, candidate.all, true
+	return nil
+}
 
+func (tl *TemplateLoader) load(operationsFS fs.FS, catalogJSON []byte) error {
 	// Load fragments first for resolution
 	fragments := make(map[string]string)
-	if err := fs.WalkDir(graphqlpkg.OperationsFS, "operations/fragments", func(path string, d fs.DirEntry, err error) error {
+	if err := fs.WalkDir(operationsFS, "operations/fragments", func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".gql") {
 			return err
 		}
-		content, readErr := fs.ReadFile(graphqlpkg.OperationsFS, path)
+		content, readErr := fs.ReadFile(operationsFS, path)
 		if readErr != nil {
 			return readErr
 		}
-		// Extract fragment name
-		if match := regexp.MustCompile(`fragment\s+(\w+)`).FindSubmatch(content); match != nil {
-			fragments[string(match[1])] = string(content)
+		doc, parseErr := parser.ParseQuery(&ast.Source{Input: string(content)})
+		if parseErr != nil {
+			return fmt.Errorf("%s: %w", path, parseErr)
 		}
+		for _, fragment := range doc.Fragments {
+			if _, exists := fragments[fragment.Name]; exists {
+				return fmt.Errorf("duplicate fragment %s", fragment.Name)
+			}
+			fragments[fragment.Name] = string(content)
+		}
+
 		return nil
 	}); err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
@@ -74,17 +101,21 @@ func (tl *TemplateLoader) Load() error {
 	// Load queries, mutations, subscriptions
 	for _, opType := range []string{"queries", "mutations", "subscriptions"} {
 		dirPath := "operations/" + opType
-		if err := fs.WalkDir(graphqlpkg.OperationsFS, dirPath, func(path string, d fs.DirEntry, err error) error {
+		if err := fs.WalkDir(operationsFS, dirPath, func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".gql") {
 				return err
 			}
-			content, readErr := fs.ReadFile(graphqlpkg.OperationsFS, path)
+			content, readErr := fs.ReadFile(operationsFS, path)
 			if readErr != nil {
 				return readErr
 			}
 
 			template := tl.parseTemplate(string(content), path, fragments)
+			if template == nil {
+				return fmt.Errorf("invalid operation template %s", path)
+			}
 			if template != nil {
+				tl.all = append(tl.all, template)
 				fieldPaths := template.FieldPaths
 				if len(fieldPaths) == 0 {
 					fieldPaths = []string{extractFieldName(template.Query)}
@@ -106,8 +137,97 @@ func (tl *TemplateLoader) Load() error {
 		}
 	}
 
+	var catalog struct {
+		Operations []struct {
+			Name      string `json:"name"`
+			Kind      string `json:"kind"`
+			Target    string `json:"target"`
+			Document  string `json:"document"`
+			Variables []struct {
+				Name     string `json:"name"`
+				Required bool   `json:"required"`
+			} `json:"variables"`
+		} `json:"operations"`
+	}
+	if err := json.Unmarshal(catalogJSON, &catalog); err != nil {
+		return err
+	}
+	for _, op := range catalog.Operations {
+		path := strings.TrimPrefix(op.Target, op.Kind+".")
+		key := op.Kind + ":" + path
+		if existing := tl.templates[key]; existing != nil && resolveFragments(existing.Query, nil) == resolveFragments(op.Document, nil) {
+			existing.SDKOperations = append(existing.SDKOperations, op.Name)
+			continue
+		}
+		required := []string{}
+		for _, variable := range op.Variables {
+			if variable.Required {
+				required = append(required, variable.Name)
+			}
+		}
+		template := &Template{Name: op.Name, Query: op.Document, Variables: map[string]interface{}{}, RequiredVariables: required, FilePath: "public/catalog.json", OperationType: op.Kind, FieldPaths: []string{path}, SDKOperations: []string{op.Name}, Source: "sdk"}
+		// A wrapper or dashboard template can mention a field incidentally. Prefer
+		// its dedicated SDK document while keeping every application example listed.
+		if existing := tl.templates[key]; existing == nil || primaryFieldPath(existing.Query) != path {
+			tl.templates[key] = template
+		}
+		tl.all = append(tl.all, template)
+	}
+
 	tl.loaded = true
 	return nil
+}
+
+// primaryFieldPath follows a single selection through wrapper fields. Identity
+// fields do not make a wrapper into an entity-detail query; multiple root fields
+// describe an overview rather than a dedicated example for any one root.
+func primaryFieldPath(query string) string {
+	doc, err := parser.ParseQuery(&ast.Source{Input: query})
+	if err != nil || len(doc.Operations) != 1 {
+		return ""
+	}
+	active := map[string]bool{}
+	var fields func(ast.SelectionSet) []*ast.Field
+	fields = func(set ast.SelectionSet) []*ast.Field {
+		var result []*ast.Field
+		for _, selection := range set {
+			switch selected := selection.(type) {
+			case *ast.Field:
+				if selected.Name != "__typename" {
+					result = append(result, selected)
+				}
+			case *ast.InlineFragment:
+				result = append(result, fields(selected.SelectionSet)...)
+			case *ast.FragmentSpread:
+				if fragment := doc.Fragments.ForName(selected.Name); fragment != nil && !active[selected.Name] {
+					active[selected.Name] = true
+					result = append(result, fields(fragment.SelectionSet)...)
+					delete(active, selected.Name)
+				}
+			}
+		}
+		return result
+	}
+	root := fields(doc.Operations[0].SelectionSet)
+	if len(root) != 1 {
+		return ""
+	}
+	current := root[0]
+	path := []string{current.Name}
+	for {
+		var content []*ast.Field
+		for _, child := range fields(current.SelectionSet) {
+			if child.Name != "id" {
+				content = append(content, child)
+			}
+		}
+		if len(content) != 1 || len(content[0].SelectionSet) == 0 {
+			break
+		}
+		current = content[0]
+		path = append(path, current.Name)
+	}
+	return strings.Join(path, ".")
 }
 
 // FindByField finds a template by operation type and field path.
@@ -124,16 +244,7 @@ func (tl *TemplateLoader) GetAll() []*Template {
 	tl.mu.RLock()
 	defer tl.mu.RUnlock()
 
-	result := make([]*Template, 0, len(tl.templates))
-	seen := make(map[*Template]bool)
-	for _, t := range tl.templates {
-		if seen[t] {
-			continue
-		}
-		seen[t] = true
-		result = append(result, t)
-	}
-	return result
+	return append([]*Template(nil), tl.all...)
 }
 
 // parseTemplate parses a .gql file content into a Template.
@@ -150,29 +261,36 @@ func (tl *TemplateLoader) parseTemplate(content, path string, fragments map[stri
 		return nil
 	}
 
-	// Extract operation name from content
-	opNameRe := regexp.MustCompile(`(?:query|mutation|subscription)\s+(\w+)`)
-	nameMatch := opNameRe.FindStringSubmatch(content)
-	if nameMatch == nil {
+	doc, err := parser.ParseQuery(&ast.Source{Input: content})
+	if err != nil || len(doc.Operations) != 1 {
 		return nil
 	}
-
-	name := nameMatch[1]
+	op := doc.Operations[0]
+	name := op.Name
 	description := extractDescription(content)
-
-	// Resolve fragment spreads for output
 	resolvedQuery := resolveFragments(content, fragments)
+	if resolvedQuery == "" {
+		return nil
+	}
+	required := []string{}
+	for _, variable := range op.VariableDefinitions {
+		if variable.Type.NonNull && variable.DefaultValue == nil {
+			required = append(required, variable.Variable)
+		}
+	}
 
 	fieldPaths := extractFieldPaths(resolvedQuery)
 
 	return &Template{
-		Name:          name,
-		Description:   description,
-		Query:         resolvedQuery,
-		Variables:     extractDefaultVariables(content),
-		FilePath:      cleanPath(path),
-		OperationType: opType,
-		FieldPaths:    fieldPaths,
+		Name:              name,
+		Description:       description,
+		Query:             resolvedQuery,
+		Variables:         map[string]interface{}{},
+		RequiredVariables: required,
+		Source:            "template",
+		FilePath:          cleanPath(path),
+		OperationType:     opType,
+		FieldPaths:        fieldPaths,
 	}
 }
 
@@ -257,91 +375,98 @@ func extractDescription(content string) string {
 	return strings.TrimSpace(strings.Join(desc, " "))
 }
 
-// extractDefaultVariables extracts variable names and generates defaults.
-func extractDefaultVariables(content string) map[string]interface{} {
-	vars := make(map[string]interface{})
-
-	// Match variable definitions: $varName: Type
-	varRe := regexp.MustCompile(`\$(\w+)\s*:\s*([^,\)\s!]+)(!)?`)
-	matches := varRe.FindAllStringSubmatch(content, -1)
-
-	for _, match := range matches {
-		name := match[1]
-		typeName := match[2]
-
-		// Generate sensible defaults
-		switch {
-		case name == "page":
-			vars[name] = map[string]interface{}{"first": 50}
-		case name == "timeRange":
-			vars[name] = nil // Will be filled by caller
-		case name == "streamId":
-			vars[name] = "stream_global_id"
-		case name == "nodeId":
-			vars[name] = "node_id"
-		case typeName == "ID":
-			vars[name] = "id_placeholder"
-		case typeName == "String":
-			vars[name] = ""
-		case typeName == "Int":
-			vars[name] = 0
-		case typeName == "Boolean":
-			vars[name] = false
-		default:
-			if strings.HasSuffix(typeName, "Input") {
-				vars[name] = map[string]interface{}{}
-			} else {
-				vars[name] = nil
-			}
+// resolveFragments normalizes the complete executable document, including
+// directives inside fragments that came from the application template set.
+func resolveFragments(query string, fragments map[string]string) string {
+	doc, err := parser.ParseQuery(&ast.Source{Input: query})
+	if err != nil {
+		return ""
+	}
+	definitions := map[string]*ast.FragmentDefinition{}
+	for _, f := range doc.Fragments {
+		definitions[f.Name] = f
+	}
+	for _, source := range fragments {
+		parsed, err := parser.ParseQuery(&ast.Source{Input: source})
+		if err != nil {
+			return ""
+		}
+		for _, f := range parsed.Fragments {
+			definitions[f.Name] = f
 		}
 	}
-
-	return vars
+	used := map[string]bool{}
+	active := map[string]bool{}
+	var walk func(ast.SelectionSet) bool
+	walk = func(set ast.SelectionSet) bool {
+		for _, selection := range set {
+			switch s := selection.(type) {
+			case *ast.Field:
+				s.Directives = serverDirectives(s.Directives)
+				if !walk(s.SelectionSet) {
+					return false
+				}
+			case *ast.InlineFragment:
+				s.Directives = serverDirectives(s.Directives)
+				if !walk(s.SelectionSet) {
+					return false
+				}
+			case *ast.FragmentSpread:
+				s.Directives = serverDirectives(s.Directives)
+				if active[s.Name] {
+					return false
+				}
+				if used[s.Name] {
+					continue
+				}
+				f := definitions[s.Name]
+				if f == nil {
+					return false
+				}
+				active[s.Name] = true
+				f.Directives = serverDirectives(f.Directives)
+				if !walk(f.SelectionSet) {
+					return false
+				}
+				delete(active, s.Name)
+				used[s.Name] = true
+			}
+		}
+		return true
+	}
+	for _, op := range doc.Operations {
+		op.Directives = serverDirectives(op.Directives)
+		for _, v := range op.VariableDefinitions {
+			v.Directives = serverDirectives(v.Directives)
+		}
+		if !walk(op.SelectionSet) {
+			return ""
+		}
+	}
+	doc.Fragments = nil
+	names := make([]string, 0, len(used))
+	for name := range used {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		doc.Fragments = append(doc.Fragments, definitions[name])
+	}
+	var out bytes.Buffer
+	formatter.NewFormatter(&out, formatter.WithIndent("  "), formatter.WithoutDescription()).FormatQueryDocument(doc)
+	return out.String()
 }
 
-// resolveFragments inlines fragment definitions into the query.
-func resolveFragments(query string, fragments map[string]string) string {
-	// Find all fragment spreads: ...FragmentName (no space between ... and name)
-	// Inline fragments have space: "... on Type" so won't match
-	spreadRe := regexp.MustCompile(`\.\.\.(\w+)`)
-	matches := spreadRe.FindAllStringSubmatch(query, -1)
-
-	required := make(map[string]bool)
-	toProcess := make([]string, 0)
-	for _, m := range matches {
-		toProcess = append(toProcess, m[1])
-	}
-
-	// Recursively collect required fragments
-	for len(toProcess) > 0 {
-		name := toProcess[0]
-		toProcess = toProcess[1:]
-
-		if required[name] {
-			continue
-		}
-
-		if def, ok := fragments[name]; ok {
-			required[name] = true
-			// Find nested spreads
-			nested := spreadRe.FindAllStringSubmatch(def, -1)
-			for _, n := range nested {
-				if !required[n[1]] {
-					toProcess = append(toProcess, n[1])
-				}
-			}
+func serverDirectives(directives ast.DirectiveList) ast.DirectiveList {
+	kept := make(ast.DirectiveList, 0, len(directives))
+	for _, d := range directives {
+		switch d.Name {
+		case "paginate", "list", "prepend", "append", "allLists", "parentID", "loading", "required", "optimisticKey", "blocking", "cache", "mask_disable", "mask":
+		default:
+			kept = append(kept, d)
 		}
 	}
-
-	// Append fragment definitions
-	result := query
-	for name := range required {
-		if def, ok := fragments[name]; ok {
-			result += "\n\n" + strings.TrimSpace(def)
-		}
-	}
-
-	return result
+	return kept
 }
 
 // cleanPath cleans the file path for display.

@@ -4,6 +4,7 @@ go 1.27.0
 
 require (
 	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0
+	github.com/Livepeer-FrameWorks/sdk-go v0.0.0
 	github.com/vektah/gqlparser/v2 v2.5.32
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -15,3 +16,5 @@ require (
 )
 
 replace github.com/Livepeer-FrameWorks/monorepo/pkg => ../../pkg
+
+replace github.com/Livepeer-FrameWorks/sdk-go => ../../sdk_go

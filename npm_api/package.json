@@ -37,7 +37,12 @@
       "types": "./dist/gatewayProbe.d.ts",
       "default": "./dist/gatewayProbe.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./operations": {
+      "source": "./src/generated/methods.ts",
+      "types": "./dist/generated/methods.d.ts",
+      "default": "./dist/generated/methods.js"
+    }
   },
   "engines": {
     "node": ">=22"
@@ -52,6 +57,7 @@
   },
   "dependencies": {
     "@graphql-typed-document-node/core": "^3.2.0",
+    "@noble/hashes": "1.8.0",
     "graphql": "^16.13.2",
     "standardwebhooks": "^1.1.1"
   },
