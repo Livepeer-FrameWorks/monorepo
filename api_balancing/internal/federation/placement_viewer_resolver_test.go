@@ -3,6 +3,7 @@ package federation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -21,7 +22,7 @@ func (fn viewerSourceReaderFunc) ResolveSourceGeneration(ctx context.Context, au
 }
 
 func TestViewerPlacementResolverRevalidatesAuthorityAndSource(t *testing.T) {
-	for _, change := range []string{"none", "shorter-source", "first-source-expiry", "authority-version", "authority-renewal", "playback", "authority", "generation", "expired-source", "source-error", "cancelled"} {
+	for _, change := range []string{"none", "shorter-source", "first-source-expiry", "authority-version", "authority-renewal", "playback", "authority", "authority-keeps-changing", "generation", "expired-source", "source-error", "cancelled"} {
 		t.Run(change, func(t *testing.T) {
 			f := newDiscoveryFixture(t)
 			f.now = time.Now()
@@ -48,7 +49,7 @@ func TestViewerPlacementResolverRevalidatesAuthorityAndSource(t *testing.T) {
 			defer cancel()
 			rpc := placementRPCFixture{query: f.discovery.QueryPlacementCandidates, prepare: func(_ context.Context, req *placementpb.PreparePlacementRequest) (*placementpb.Preparation, error) {
 				preparations++
-				if change == "authority-version" || change == "authority" || change == "authority-renewal" {
+				if change == "authority-version" || change == "authority" || change == "authority-renewal" || change == "authority-keeps-changing" {
 					f.pair.Object.Version++
 				}
 				// A renewal re-signs the same facts with a later lifetime.
@@ -59,6 +60,9 @@ func TestViewerPlacementResolverRevalidatesAuthorityAndSource(t *testing.T) {
 				}
 				if change == "authority" {
 					f.pair.Tenant.Authority.EffectiveClusterGrants[0].OwnerTenantId = "another-owner"
+				}
+				if change == "authority-keeps-changing" {
+					f.pair.Tenant.Authority.EffectiveClusterGrants[0].OwnerTenantId = fmt.Sprintf("owner-%d", preparations)
 				}
 				if change == "cancelled" {
 					cancel()
@@ -97,6 +101,16 @@ func TestViewerPlacementResolverRevalidatesAuthorityAndSource(t *testing.T) {
 			case "none", "shorter-source", "first-source-expiry", "authority-version", "authority-renewal":
 				if err != nil || got.ClusterID != "us" || got.NodeID == "" || !got.ExpiresAt.Equal(sourceUntil) || sourceCalls != 2 || preparations != 1 {
 					t.Fatalf("prepared destination: %+v, %v, source=%d prepare=%d", got, err, sourceCalls, preparations)
+				}
+			// Authority that changed a decision fact while the route was made is
+			// routed again under the newer authority instead of refusing the viewer.
+			case "authority":
+				if err != nil || got.ClusterID != "us" || got.NodeID == "" || preparations != 2 {
+					t.Fatalf("authority changed once during routing: %+v, %v, prepare=%d; want the viewer routed again under the newer authority", got, err, preparations)
+				}
+			case "authority-keeps-changing":
+				if !errors.Is(err, ErrPlacementAuthorityChanged) || got.Endpoint != "" || preparations != placementAuthorityRounds {
+					t.Fatalf("authority changing on every round: %+v, %v, prepare=%d", got, err, preparations)
 				}
 			default:
 				if err == nil || got.Endpoint != "" {

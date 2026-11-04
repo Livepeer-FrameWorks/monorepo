@@ -133,22 +133,31 @@ func (resolver *ViewerPlacementResolver) routeRequest(subject viewerPlacementSub
 func (resolver *ViewerPlacementResolver) PrepareViewer(ctx context.Context, request control.ViewerPlacementRequest) (balancer.PlacementPreparationResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	subject, err := resolver.subject(ctx, request)
-	if err != nil {
-		return balancer.PlacementPreparationResult{}, err
-	}
-	result, err := resolver.Router.Route(ctx, resolver.routeRequest(subject, request))
-	if err != nil {
-		return balancer.PlacementPreparationResult{}, err
-	}
-	current, err := subject.read()
-	if err != nil {
-		return balancer.PlacementPreparationResult{}, err
-	}
-	// A version advance that leaves every decision fact unchanged does not
-	// invalidate the route; the source generation check below still binds it.
-	if !placementDecisionFactsEqual(subject.authority, current) {
-		return balancer.PlacementPreparationResult{}, errors.New("viewer authority changed during routing")
+	// A route decided under authority that changed while it was made is made
+	// again under the newer authority, up to placementAuthorityRounds times: a
+	// policy rollout reaching the cell mid-request is not a refusal.
+	var subject viewerPlacementSubject
+	var result balancer.PlacementRouteResult
+	var current balancer.PlacementAuthority
+	for round := 1; ; round++ {
+		var err error
+		if subject, err = resolver.subject(ctx, request); err != nil {
+			return balancer.PlacementPreparationResult{}, err
+		}
+		if result, err = resolver.Router.Route(ctx, resolver.routeRequest(subject, request)); err != nil {
+			return balancer.PlacementPreparationResult{}, err
+		}
+		if current, err = subject.read(); err != nil {
+			return balancer.PlacementPreparationResult{}, err
+		}
+		// A version advance that leaves every decision fact unchanged does not
+		// invalidate the route; the source generation check below still binds it.
+		if placementDecisionFactsEqual(subject.authority, current) {
+			break
+		}
+		if round == placementAuthorityRounds {
+			return balancer.PlacementPreparationResult{}, &placementAuthorityChangedError{rounds: round}
+		}
 	}
 	currentGeneration, currentUntil, err := resolver.Source.ResolveSourceGeneration(ctx, current)
 	if err != nil {

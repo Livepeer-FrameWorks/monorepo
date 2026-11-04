@@ -521,7 +521,10 @@ applied the newer tenant authority: one object compile (90 seconds) plus one
 delivery attempt's lease (55 seconds). A decision made on it expires when the
 window ends. Every other mismatch still refuses as an inconsistent pair: an
 object naming a revision the cell never held, an object ahead of the tenant, and
-a lag that outlives the window.
+a lag that outlives the window. When the pair a viewer route was decided on
+changes a decision fact before the route is returned, as it does when the
+stream's recompiled authority lands mid-request, the route is made again under
+the newer pair, up to three rounds, instead of refusing the viewer.
 
 Shadow comparison uses a canonical authority projection, not whole transport
 messages. Connected responses expose health-filtered `cluster_peers` for
