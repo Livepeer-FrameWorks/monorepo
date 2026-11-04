@@ -1358,40 +1358,6 @@
   text-underline-offset: 3px;
 }
 
-.landing-studio__list.marketing-icon-list {
-  gap: 0;
-}
-.landing-studio__list .marketing-icon-list__item {
-  padding: 0.85rem clamp(1.25rem, 2vw, 1.75rem);
-}
-.landing-studio__list .marketing-icon-list__title {
-  font-size: 1rem;
-  font-weight: 500;
-  line-height: 1.5;
-}
-.landing-studio__next {
-  display: grid;
-  gap: 0.5rem;
-  padding: 1rem clamp(1.25rem, 2vw, 1.75rem);
-  border-top: 1px solid var(--fx-seam-strong);
-}
-.landing-studio__next p,
-.landing-studio__note {
-  margin: 0;
-  color: hsl(var(--muted-foreground));
-  font-size: 0.875rem;
-  line-height: 1.6;
-}
-.landing-studio__next strong {
-  color: hsl(var(--foreground));
-  font-weight: 600;
-}
-.landing-studio__note {
-  padding: 1rem clamp(1.25rem, 2vw, 1.75rem);
-  border-top: 1px solid var(--fx-seam-strong);
-  border-left: 3px solid hsl(var(--brand-cyan));
-}
-
 .journey-outcome__header > span,
 .journey-insights__header span,
 .journey-insight-panel__header span {

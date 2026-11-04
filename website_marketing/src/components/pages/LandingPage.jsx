@@ -22,7 +22,6 @@ import {
   AgentPipelineStrip,
   DeploymentModes,
   MultistreamFanout,
-  StudioComposite,
   DashboardFrame,
   StatRow,
   RetentionCurve,
@@ -44,16 +43,13 @@ import config from "../../config";
 import pricingCatalog from "@/data/pricing-catalog.json";
 import status from "@/data/status.json";
 import { compactLabel, featureOf, statusKey, tierAnchor, tierOf } from "@/lib/featureStatus";
-import { docsLink, signupUrl } from "@/lib/siteLinks";
+import { signupUrl } from "@/lib/siteLinks";
 import { contactPath } from "@/lib/contactTopics";
 import { multistreamLine } from "@/lib/planCopy";
-import StatusTag from "../shared/StatusTag";
 
 const paygCatalog = pricingCatalog.tiers.find((t) => t.id === "payg");
 const freeCatalog = pricingCatalog.tiers.find((t) => t.id === "free");
 const paidCatalog = pricingCatalog.tiers.find((t) => t.id === "supporter");
-const streamcrafter = featureOf(status, "streamcrafter");
-const cloudProduction = featureOf(status, "composition");
 const lowestPaidBase = Math.min(
   ...pricingCatalog.tiers.filter((t) => t.basePrice > 0).map((t) => t.basePrice)
 );
@@ -871,71 +867,14 @@ const LandingPage = () => {
                       label="Ingest and stream docs"
                       icon="book"
                     />
+                    <MarketingCTAButton
+                      intent="secondary"
+                      to="/stream-test"
+                      label="Try StreamCrafter"
+                    />
                   </div>
                 </div>
                 <MediaControlPreview />
-              </MarketingGridSplit>
-            </MarketingBand>
-          </SectionContainer>
-        </Section>
-
-        <SectionDivider />
-
-        <Section id="streamcrafter" className="bg-brand-surface-muted landing-section--studio">
-          <SectionContainer>
-            <MarketingBand
-              preset="foundation"
-              tone="cool"
-              texturePattern="pinlines"
-              textureNoise="film"
-            >
-              <HeadlineStack
-                eyebrow={`StreamCrafter · ${streamcrafter.tag}`}
-                title="A live production studio in the browser"
-                subtitle={streamcrafter.showcase.summary}
-                align="left"
-                underlineAlign="start"
-              />
-              <MarketingGridSplit align="stretch" stackAt="lg" seam ratio="narrow-wide">
-                <div className="slab-zone">
-                  <div className="slab-zone__body">
-                    <IconList
-                      items={streamcrafter.showcase.bullets.map((bullet) => ({
-                        title: bullet,
-                      }))}
-                      variant="list"
-                      indicator="dot"
-                      headingLevel="h3"
-                      className="landing-studio__list"
-                    />
-                    <div className="landing-studio__next">
-                      <StatusTag feature={cloudProduction.id} />
-                      <p>
-                        <strong>{cloudProduction.showcase.title}.</strong>{" "}
-                        {cloudProduction.showcase.summary}
-                      </p>
-                    </div>
-                    {streamcrafter.note ? (
-                      <p className="landing-studio__note">{streamcrafter.note}</p>
-                    ) : null}
-                  </div>
-                  <div className="slab-zone__actions">
-                    <MarketingCTAButton intent="primary" to="/stream-test" label="Try it now" />
-                    <MarketingCTAButton
-                      intent="secondary"
-                      href={docsLink(config.docsUrl, "/builders/go-live-browser")}
-                      label="Go live guide"
-                    />
-                    <MarketingCTAButton
-                      intent="secondary"
-                      to={`/showcase#${streamcrafter.id}`}
-                      label="See the showcase"
-                    />
-                  </div>
-                </div>
-                <div className="marketing-figure-cell">
-                  <StudioComposite />
-                </div>
               </MarketingGridSplit>
             </MarketingBand>
           </SectionContainer>
