@@ -172,10 +172,13 @@ func (h *AnalyticsHandler) staleCloseRestreamSessions(ctx context.Context) error
 	return nil
 }
 
-// staleCloseViewerSessions scans viewer_sessions_current for sessions
-// whose last activity is older than StaleCloseTimeout and that have no
-// matching row in viewer_sessions_final. Each matching row is appended
-// to viewer_sessions_anomalous.
+// staleCloseViewerSessions scans viewer_sessions_current for session
+// lifecycles whose last activity is older than StaleCloseTimeout and that
+// have no final. Mist reuses a session id when a viewer resumes a playback
+// after Mist ended its session, so a session's current lifecycle starts at
+// its latest connect: it is open while no disconnect, final or anomaly
+// followed that connect. Each matching lifecycle is appended to
+// viewer_sessions_anomalous with the connect as observed_first_at_ms.
 func (h *AnalyticsHandler) staleCloseViewerSessions(ctx context.Context) error {
 	cutoff := time.Now().Add(-StaleCloseTimeout).UTC()
 
@@ -196,6 +199,18 @@ func (h *AnalyticsHandler) staleCloseViewerSessions(ctx context.Context) error {
 			FROM periscope.viewer_connection_events
 			WHERE timestamp >= now() - INTERVAL 24 HOUR
 			GROUP BY tenant_id, node_id, session_id
+		), finals AS (
+			SELECT tenant_id, node_id, session_id, max(source_ended_at_ms) AS last_ended_at_ms
+			FROM periscope.viewer_sessions_final
+			WHERE projection_version_ms > toUnixTimestamp(now() - INTERVAL 30 DAY) * 1000
+			GROUP BY tenant_id, node_id, session_id
+		), anomalies AS (
+			SELECT tenant_id, node_id, session_id, max(observed_first_at_ms) AS last_observed_first_at_ms
+			FROM periscope.viewer_sessions_anomalous
+			GROUP BY tenant_id, node_id, session_id
+		), sessions AS (
+			SELECT *, toInt64(toUnixTimestamp(ifNull(last_connected_at, connected_at))) * 1000 AS lifecycle_connected_at_ms
+			FROM periscope.viewer_sessions_current FINAL
 		)
 		SELECT
 			s.tenant_id,
@@ -203,25 +218,18 @@ func (h *AnalyticsHandler) staleCloseViewerSessions(ctx context.Context) error {
 			s.session_id,
 			s.node_id,
 			at.cluster_id,
-			toInt64(toUnixTimestamp(s.connected_at)) * 1000 AS observed_first_at_ms,
+			s.lifecycle_connected_at_ms AS observed_first_at_ms,
 			toInt64(toUnixTimestamp(greatest(s.last_updated, ifNull(q.last_sample_at, s.last_updated)))) * 1000 AS observed_last_at_ms,
 			s.session_duration
-		FROM periscope.viewer_sessions_current AS s FINAL
+		FROM sessions AS s
 		LEFT JOIN latest_qoe q USING (tenant_id, node_id, session_id)
 		LEFT JOIN attribution at USING (tenant_id, node_id, session_id)
+		LEFT JOIN finals f USING (tenant_id, node_id, session_id)
+		LEFT JOIN anomalies a USING (tenant_id, node_id, session_id)
 		WHERE greatest(s.last_updated, ifNull(q.last_sample_at, s.last_updated)) < ?
-		  AND (s.disconnected_at IS NULL OR s.disconnected_at = toDateTime(0))
-		  AND (s.tenant_id, s.node_id, s.session_id) NOT IN (
-		      SELECT tenant_id, node_id, session_id
-		      FROM periscope.viewer_sessions_final
-		      WHERE projection_version_ms > toUnixTimestamp(now() - INTERVAL 30 DAY) * 1000
-		      GROUP BY tenant_id, node_id, session_id
-		  )
-		  AND (s.tenant_id, s.node_id, s.session_id) NOT IN (
-		      SELECT tenant_id, node_id, session_id
-		      FROM periscope.viewer_sessions_anomalous
-		      GROUP BY tenant_id, node_id, session_id
-		  )
+		  AND toInt64(toUnixTimestamp(ifNull(s.disconnected_at, toDateTime(0)))) * 1000 < s.lifecycle_connected_at_ms
+		  AND ifNull(f.last_ended_at_ms, 0) < s.lifecycle_connected_at_ms
+		  AND ifNull(a.last_observed_first_at_ms, 0) < s.lifecycle_connected_at_ms
 		LIMIT %d`, StaleCloseScanLimit),
 		cutoff)
 	if err != nil {

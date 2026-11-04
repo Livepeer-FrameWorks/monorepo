@@ -509,6 +509,10 @@ CREATE TABLE IF NOT EXISTS viewer_sessions_current (
 
     connected_at SimpleAggregateFunction(min, Nullable(DateTime)),
     disconnected_at SimpleAggregateFunction(max, Nullable(DateTime)),
+    -- Mist reuses a session id when a viewer resumes a playback after Mist
+    -- ended its session, so the latest connect starts the session's current
+    -- lifecycle; it is open while no disconnect followed it.
+    last_connected_at SimpleAggregateFunction(max, Nullable(DateTime)),
 
     connector SimpleAggregateFunction(any, LowCardinality(String)),
 
@@ -535,6 +539,7 @@ SELECT
     cluster_id,
     timestamp AS connected_at,
     CAST(NULL AS Nullable(DateTime)) AS disconnected_at,
+    timestamp AS last_connected_at,
     connector,
     country_code,
     city,
@@ -557,6 +562,7 @@ SELECT
     cluster_id,
     CAST(NULL AS Nullable(DateTime)) AS connected_at,
     timestamp AS disconnected_at,
+    CAST(NULL AS Nullable(DateTime)) AS last_connected_at,
     connector,
     country_code,
     city,

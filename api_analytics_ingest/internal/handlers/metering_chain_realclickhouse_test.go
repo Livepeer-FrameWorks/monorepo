@@ -4,6 +4,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -235,6 +236,74 @@ func TestSourceFactProjectionAndLedgerReplay_RealClickHouse(t *testing.T) {
 	t.Run("a reused Mist session id bills each lifecycle", func(t *testing.T) {
 		testReusedViewerSessionLifecycles(t, ctx, h, conn, tenantID, streamID, endedAt)
 	})
+	t.Run("a resumed lifecycle that never ends is stale-closed", func(t *testing.T) {
+		testResumedViewerLifecycleStaleClose(t, ctx, h, conn, streamID)
+	})
+}
+
+// A viewer resumed a playback after Mist ended its first session; the second
+// lifecycle, under the same session id on the same node, never reached a
+// USER_END. That lifecycle is a stale anomaly; the first, which has its final,
+// is not, and a session whose final ended after its connect is not either.
+func testResumedViewerLifecycleStaleClose(t *testing.T, ctx context.Context, h *AnalyticsHandler, conn database.ClickHouseNativeConn, streamID string) {
+	t.Helper()
+	tenantID := uuid.NewString()
+	const nodeID = "edge-chain-1"
+	firstConnect := time.Now().UTC().Add(-StaleCloseTimeout - 2*time.Hour).Truncate(time.Second)
+	firstEnd := firstConnect.Add(30 * time.Second)
+	resumed := firstConnect.Add(time.Hour)
+	event := func(sessionID, kind string, at time.Time) {
+		t.Helper()
+		if err := conn.Exec(ctx, `INSERT INTO periscope.viewer_connection_events
+			(event_id,timestamp,tenant_id,stream_id,internal_name,session_id,connection_addr,connector,node_id,cluster_id,event_type,session_duration,bytes_transferred)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			uuid.New(), at, uuid.MustParse(tenantID), uuid.MustParse(streamID), "live+chain", sessionID, "203.0.113.9", "HLS", nodeID, "cluster-us",
+			kind, uint32(0), uint64(0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	final := func(sessionID, sourceEventID string, startedAt, endedAt time.Time) {
+		t.Helper()
+		if err := conn.Exec(ctx, `INSERT INTO periscope.viewer_sessions_final
+			(tenant_id,node_id,session_id,source_event_id,cluster_id,stream_id,duration_seconds,source_started_at_ms,source_ended_at_ms,edge_received_at_ms,projection_version_ms,closed_reason,payload_raw)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			uuid.MustParse(tenantID), nodeID, sessionID, sourceEventID, "cluster-us", uuid.MustParse(streamID),
+			uint32(endedAt.Sub(startedAt)/time.Second), startedAt.UnixMilli(), endedAt.UnixMilli(), endedAt.UnixMilli(), time.Now().UnixMilli(), "final", "{}"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	event("session-resumed", "connect", firstConnect)
+	event("session-resumed", "disconnect", firstEnd)
+	final("session-resumed", "resumed-first", firstConnect, firstEnd)
+	event("session-resumed", "connect", resumed)
+	// This session's disconnect event was lost but its USER_END final landed.
+	event("session-ended", "connect", firstConnect)
+	final("session-ended", "ended-only", firstConnect, firstEnd)
+
+	for range 2 {
+		if err := h.staleCloseViewerSessions(ctx); err != nil {
+			t.Fatalf("stale close: %v", err)
+		}
+	}
+	rows, err := conn.Query(ctx, `SELECT session_id, observed_first_at_ms FROM periscope.viewer_sessions_anomalous
+		WHERE tenant_id = ? ORDER BY session_id, observed_first_at_ms`, uuid.MustParse(tenantID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var got []string
+	for rows.Next() {
+		var sessionID string
+		var firstMS int64
+		if err := rows.Scan(&sessionID, &firstMS); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, fmt.Sprintf("%s@%d", sessionID, firstMS))
+	}
+	want := []string{fmt.Sprintf("session-resumed@%d", resumed.UnixMilli())}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("stale-closed lifecycles %v, want only the resumed lifecycle %v", got, want)
+	}
 }
 
 // Mist derives a viewer session id from the stream, the viewer address and the
