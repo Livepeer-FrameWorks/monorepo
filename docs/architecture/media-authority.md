@@ -519,9 +519,12 @@ a withdrawn grant or a billing denial in the newer authority still applies. The
 substitution answers for `PlacementParentLagWindow`, 145 seconds after the cell
 applied the newer tenant authority: one object compile (90 seconds) plus one
 delivery attempt's lease (55 seconds). A decision made on it expires when the
-window ends. Every other mismatch still refuses as an inconsistent pair: an
-object naming a revision the cell never held, an object ahead of the tenant, and
-a lag that outlives the window. When the pair a viewer route was decided on
+window ends. Deliveries to one cell are applied concurrently, so an object can
+also arrive a moment before the tenant revision it names; the placement pair
+reader then asks for the object, and the fetch returns the cell's current tenant
+authority with it. Every other mismatch still refuses as an inconsistent pair:
+an object naming a revision the cell never held, an object still ahead of the
+tenant after that fetch, and a lag that outlives the window. When the pair a viewer route was decided on
 changes a decision fact before the route is returned, as it does when the
 stream's recompiled authority lands mid-request, the route is made again under
 the newer pair, up to three rounds, instead of refusing the viewer.

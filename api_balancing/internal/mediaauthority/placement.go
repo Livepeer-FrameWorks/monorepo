@@ -63,8 +63,9 @@ func (pair PlacementPair) PolicyTenant(now time.Time) (tenant *mediaauthoritypb.
 // the evaluator still requires the object's exact parent policy revision.
 //
 // Federation discovery, admission and ingest resolution decide on this pair
-// alone, so it is where a cell that holds nothing for the object, or holds it
-// past its validity, asks for it: every cell a request reaches repairs its own
+// alone, so it is where a cell that holds nothing for the object, holds it past
+// its validity, or holds it ahead of its tenant's placement revision, asks for
+// it: every cell a request reaches repairs its own
 // authority. The fetched versions go through Apply and its version and policy
 // fences like any delivery; when nothing can be fetched the read stands.
 func (s *Store) Placement(ctx context.Context, tenantID, authorityID, internalName string) (PlacementPair, error) {
@@ -157,8 +158,17 @@ func placementPairNeedsFetch(pair PlacementPair, err error, now time.Time) bool 
 	}
 	// Freshness also carries the restore fence, which withholds a pair the cell
 	// may hold stale.
-	return !now.Before(pair.Object.ValidUntil) || !now.Before(pair.Tenant.ValidUntil) ||
-		pair.Object.Freshness == FreshnessHardExpired || pair.Tenant.Freshness == FreshnessHardExpired
+	if !now.Before(pair.Object.ValidUntil) || !now.Before(pair.Tenant.ValidUntil) ||
+		pair.Object.Freshness == FreshnessHardExpired || pair.Tenant.Freshness == FreshnessHardExpired {
+		return true
+	}
+	// Tenant and object deliveries reach a cell independently, so an object
+	// recompiled for a newer tenant placement revision can be applied before
+	// that tenant. The object's fetch returns the current tenant authority for
+	// this cell with it.
+	tenant, object := pair.Tenant.Authority, pair.Object.Authority
+	return sharedauthority.IsPlacementSchema(tenant.GetSchemaVersion()) && tenant.GetSchemaVersion() == object.GetSchemaVersion() &&
+		object.GetPlacementTenantRevision() > tenant.GetMediaPlacement().GetRevision()
 }
 
 // decodePlacementPair verifies and decodes the stored rows. Freshness is left

@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
+	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/sirupsen/logrus"
@@ -269,6 +271,16 @@ func TestPlacementPairIsFetchedOnMissOrExpiry(t *testing.T) {
 	tombstone := valid
 	tombstone.Object.Authority = &mediaauthoritypb.MediaObjectAuthority{Lifecycle: mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_TOMBSTONE}
 	tombstone.Object.ValidUntil = now.Add(-time.Hour)
+	// Tenant and object deliveries reach a cell independently, so an object
+	// recompiled for a tenant revision can be applied before that tenant.
+	placed := func(tenantRevision, objectParent uint64) PlacementPair {
+		pair := valid
+		pair.Tenant.Authority = &mediaauthoritypb.TenantAuthority{SchemaVersion: sharedauthority.PlacementSchemaVersion, Lifecycle: mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE,
+			MediaPlacement: &placementpb.PolicySet{Revision: tenantRevision}}
+		pair.Object.Authority = &mediaauthoritypb.MediaObjectAuthority{SchemaVersion: sharedauthority.PlacementSchemaVersion, Lifecycle: mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE,
+			MediaPlacement: &placementpb.PolicySet{Revision: 1}, PlacementTenantRevision: objectParent}
+		return pair
+	}
 
 	for name, tc := range map[string]struct {
 		first     PlacementPair
@@ -280,6 +292,11 @@ func TestPlacementPairIsFetchedOnMissOrExpiry(t *testing.T) {
 		"valid":             {first: valid},
 		"expired tombstone": {first: tombstone},
 		"unrelated failure": {firstErr: errors.New("connection reset")},
+		// The fetch returns the tenant the object was compiled for with it.
+		"object ahead of its tenant": {first: placed(1, 2), wantFetch: true},
+		"object on the held tenant":  {first: placed(2, 2)},
+		// A lagging object is the previous-revision rule's case, not a fetch.
+		"object behind its tenant": {first: placed(2, 1)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			store := fetchTestStore(&now)
