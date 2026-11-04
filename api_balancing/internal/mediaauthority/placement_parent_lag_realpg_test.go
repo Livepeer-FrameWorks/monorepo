@@ -67,7 +67,8 @@ func placementArtifactAt(t *testing.T, version, parent uint64) []byte {
 }
 
 // A tenant authority that raises the placement revision keeps the policy set
-// it replaced next to it, a renewal at the same revision keeps that record, and
+// it replaced next to it, including a tenant's initial rule-less revision 0,
+// which encodes to no bytes at all, a renewal at the same revision keeps that record, and
 // a placement pair read hands it to the evaluator, so an object still compiled
 // against the replaced revision is evaluated against it while its own
 // replacement is on the way.
@@ -82,8 +83,8 @@ func TestMediaAuthorityTenantKeepsReplacedPlacementForLaggingObjects_RealPG(t *t
 	clock := storeFixtureNow.Add(time.Minute)
 	store.now = func() time.Time { return clock }
 	tenantID, artifactID := "10000000-0000-0000-0000-000000000001", sharedauthority.ArtifactAuthorityID("20000000-0000-0000-0000-000000000001")
-	replaced := &placementpb.PolicySet{Revision: 1}
-	raised := &placementpb.PolicySet{Revision: 2, Serve: &placementpb.Rules{SchemaVersion: 1, Constraints: &placementpb.Constraints{
+	replaced := &placementpb.PolicySet{}
+	raised := &placementpb.PolicySet{Revision: 1, Serve: &placementpb.Rules{SchemaVersion: 1, Constraints: &placementpb.Constraints{
 		Allow: &placementpb.SelectorSet{Any: []*placementpb.Selector{{ClusterIds: []string{"cell-a"}}}}}}}
 	apply := func(envelope []byte) {
 		t.Helper()
@@ -101,7 +102,7 @@ func TestMediaAuthorityTenantKeepsReplacedPlacementForLaggingObjects_RealPG(t *t
 	}
 
 	apply(placementTenantAt(t, 7, replaced, ""))
-	apply(placementArtifactAt(t, 2, 1))
+	apply(placementArtifactAt(t, 2, 0))
 	if pair := read(); pair.Tenant.PreviousPlacement != nil || !pair.Tenant.PlacementSupersededAt.IsZero() {
 		t.Fatalf("first tenant authority recorded a previous placement: %v at %s", pair.Tenant.PreviousPlacement, pair.Tenant.PlacementSupersededAt)
 	}
@@ -131,7 +132,7 @@ func TestMediaAuthorityTenantKeepsReplacedPlacementForLaggingObjects_RealPG(t *t
 	}
 
 	// Once the object names the held revision the record no longer applies.
-	apply(placementArtifactAt(t, 3, 2))
+	apply(placementArtifactAt(t, 3, 1))
 	caughtUp := read()
 	if evaluated, until = caughtUp.PolicyTenant(supersededAt.Add(time.Second)); !proto.Equal(evaluated.GetMediaPlacement(), raised) || !until.IsZero() {
 		t.Fatalf("caught-up object evaluated against %v until %s, want the held revision", evaluated.GetMediaPlacement(), until)

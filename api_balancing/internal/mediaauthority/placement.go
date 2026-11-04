@@ -203,8 +203,10 @@ func decodePlacementPair(row foghorndb.GetLocalPlacementAuthorityPairRow, tenant
 	}
 	// The previous policy set was taken from a verified tenant payload. One that
 	// no longer decodes is left out: a lagging object then meets the exact
-	// revision fence, as it would on a cell that never held that revision.
-	if len(row.TenantPreviousPlacementPolicy) > 0 && row.TenantPlacementSupersededAt.Valid {
+	// revision fence, as it would on a cell that never held that revision. The
+	// replacement time marks a record; the set itself is empty bytes when the
+	// replaced revision was a tenant's initial, rule-less revision 0.
+	if row.TenantPlacementSupersededAt.Valid {
 		previous := &placementpb.PolicySet{}
 		if (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(row.TenantPreviousPlacementPolicy, previous) == nil {
 			snapshot.PreviousPlacement, snapshot.PlacementSupersededAt = previous, row.TenantPlacementSupersededAt.Time
