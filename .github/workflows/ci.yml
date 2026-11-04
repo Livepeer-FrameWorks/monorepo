@@ -728,7 +728,7 @@ jobs:
           path: coverage/contracts/
           if-no-files-found: error
       - name: Upload PostgreSQL contract coverage to Codecov
-        if: ${{ !cancelled() }}
+        if: success()
         timeout-minutes: 5
         continue-on-error: true
         uses: codecov/codecov-action@v6
@@ -739,7 +739,7 @@ jobs:
           name: postgres-contract-coverage
           fail_ci_if_error: false
       - name: Upload ClickHouse contract coverage to Codecov
-        if: ${{ !cancelled() }}
+        if: success()
         timeout-minutes: 5
         continue-on-error: true
         uses: codecov/codecov-action@v6
@@ -750,7 +750,7 @@ jobs:
           name: clickhouse-contract-coverage
           fail_ci_if_error: false
       - name: Upload Valkey contract coverage to Codecov
-        if: ${{ !cancelled() }}
+        if: success()
         timeout-minutes: 5
         continue-on-error: true
         uses: codecov/codecov-action@v6
@@ -805,7 +805,7 @@ jobs:
           path: coverage/contracts/yugabyte/
           if-no-files-found: error
       - name: Upload Yugabyte contract coverage to Codecov
-        if: ${{ !cancelled() }}
+        if: success()
         timeout-minutes: 5
         continue-on-error: true
         uses: codecov/codecov-action@v6
@@ -890,7 +890,7 @@ jobs:
           path: coverage/contracts/yugabyte/
           if-no-files-found: error
       - name: Upload Yugabyte contract coverage to Codecov
-        if: ${{ !cancelled() }}
+        if: success()
         timeout-minutes: 5
         continue-on-error: true
         uses: codecov/codecov-action@v6

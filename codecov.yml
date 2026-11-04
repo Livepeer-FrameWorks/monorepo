@@ -33,6 +33,7 @@ coverage:
           - postgres-contract
           - clickhouse-contract
           - yugabyte-contract
+          - valkey-contract
         informational: true
       frontend:
         target: auto
@@ -48,6 +49,7 @@ coverage:
           - postgres-contract
           - clickhouse-contract
           - yugabyte-contract
+          - valkey-contract
         informational: true
       frontend:
         target: 50%
@@ -81,6 +83,10 @@ flags:
       - "**/*.go"
     carryforward: true
   yugabyte-contract:
+    paths:
+      - "**/*.go"
+    carryforward: true
+  valkey-contract:
     paths:
       - "**/*.go"
     carryforward: true
