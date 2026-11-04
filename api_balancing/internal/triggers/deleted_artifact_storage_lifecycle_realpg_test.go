@@ -24,6 +24,15 @@ import (
 // foghorn.sql baseline applied.
 func startFoghornTriggersRealPG(t *testing.T) *sql.DB {
 	t.Helper()
+	conn, _ := startFoghornTriggersRealPGWithDSN(t)
+	return conn
+}
+
+func startFoghornTriggersRealPGWithDSN(t *testing.T) (*sql.DB, string) {
+	t.Helper()
+	if conn, dsn, ok := dockerpg.OpenSharedYugabyteBaselineWithDSN(t, "foghorn_triggers", "foghorn"); ok {
+		return conn, dsn
+	}
 	if _, lookErr := exec.LookPath("docker"); lookErr != nil {
 		t.Skip("docker not available")
 	}
@@ -40,7 +49,8 @@ func startFoghornTriggersRealPG(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn, err := sql.Open("postgres", fmt.Sprintf("postgres://postgres:harness@127.0.0.1:%s/postgres?sslmode=disable", port))
+	dsn := fmt.Sprintf("postgres://postgres:harness@127.0.0.1:%s/postgres?sslmode=disable", port)
+	conn, err := sql.Open("postgres", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +65,7 @@ func startFoghornTriggersRealPG(t *testing.T) *sql.DB {
 	if _, err = conn.ExecContext(context.Background(), string(schema)); err != nil {
 		t.Fatalf("apply foghorn.sql: %v", err)
 	}
-	return conn
+	return conn, dsn
 }
 
 // A node evicts its copy of an artifact after the artifact was deleted. Commodore no longer knows the hash, but

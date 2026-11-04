@@ -31,7 +31,13 @@ func RuntimeNameForStream(r *StreamRegistry, internalName string) string {
 // priorOwnerNodeID identifies a different projected node that the caller must drain. Pull ownership
 // uses MarkSourceOwnerIfUnset instead of this versioned push-source transition.
 func (r *StreamRegistry) ProjectSource(internalName, nodeID string, connectorPID int64, triggerUUID, generation string, revision int64) (priorOwnerNodeID string, applied bool, err error) {
-	priorOwnerNodeID, _, applied, err = r.projectSourceWithPriorGeneration(internalName, nodeID, connectorPID, triggerUUID, generation, revision)
+	return r.ProjectSourceContext(context.Background(), internalName, nodeID, connectorPID, triggerUUID, generation, revision)
+}
+
+// ProjectSourceContext carries the caller lifetime through the source-write
+// queue and shared CAS. Failed writes restore only this exact local revision.
+func (r *StreamRegistry) ProjectSourceContext(ctx context.Context, internalName, nodeID string, connectorPID int64, triggerUUID, generation string, revision int64) (priorOwnerNodeID string, applied bool, err error) {
+	priorOwnerNodeID, _, applied, err = r.projectSourceWithPriorGenerationContext(ctx, internalName, nodeID, connectorPID, triggerUUID, generation, revision)
 	return priorOwnerNodeID, applied, err
 }
 
@@ -57,7 +63,11 @@ func (r *StreamRegistry) sharedSourceRevision(ctx context.Context, internalName 
 	return max(localRevision, durableRevision), nil
 }
 
-func (r *StreamRegistry) projectSourceWithPriorGeneration(internalName, nodeID string, connectorPID int64, triggerUUID, generation string, revision int64) (priorOwnerNodeID, priorOwnerSourceGeneration string, applied bool, err error) {
+func (r *StreamRegistry) projectSourceWithPriorGenerationContext(ctx context.Context, internalName, nodeID string, connectorPID int64, triggerUUID, generation string, revision int64) (priorOwnerNodeID, priorOwnerSourceGeneration string, applied bool, err error) {
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", "", false, contextErr
+	}
+
 	internalName = strings.TrimSpace(internalName)
 	nodeID = strings.TrimSpace(nodeID)
 	if internalName == "" || nodeID == "" {
@@ -122,7 +132,7 @@ func (r *StreamRegistry) projectSourceWithPriorGeneration(internalName, nodeID s
 	snapshot = ce.entry
 	snapshot.Locations = cloneLocations(map[string]Location{r.clusterID: loc})
 	r.mu.Unlock()
-	applied, err = r.publishUpsertSourceFenced(snapshot)
+	applied, err = r.publishUpsertSourceFencedContext(ctx, snapshot)
 	if err == nil && applied {
 		return priorOwnerNodeID, priorOwnerSourceGeneration, true, nil
 	}

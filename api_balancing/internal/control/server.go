@@ -185,8 +185,9 @@ type Registry struct {
 }
 
 type conn struct {
-	stream ipcpb.HelmsmanControl_ConnectServer
-	last   time.Time
+	admissionToken []byte
+	stream         ipcpb.HelmsmanControl_ConnectServer
+	last           time.Time
 	// registeredAt is when this control connection began. A stream the node's snapshots have not
 	// listed since then may have ended while no connection carried Helmsman's own vanish report.
 	registeredAt time.Time
@@ -2035,6 +2036,12 @@ receiveLoop:
 			// NodeSession is COMPLETE and IMMUTABLE, then publish it into the dispatchable registry. Every
 			// command-dispatch path reads registry.conns, so nothing can route to this connection (or read an
 			// incomplete session from it) before this point.
+			if processor, ok := mistTriggerProcessor.(publisherAdmissionProcessor); ok && processor.PublisherAdmissionEnabled() {
+				newConn.admissionToken = make([]byte, 32)
+				if _, err := rand.Read(newConn.admissionToken); err != nil {
+					return status.Error(codes.Internal, "cannot issue node admission session")
+				}
+			}
 			newConn.canonicalID = canonicalNodeID
 			newConn.clusterID = clusterID
 			connSession = newConn.session()
@@ -2086,6 +2093,11 @@ receiveLoop:
 				retireConn(retire)
 			}
 			registry.log.WithField("node_id", canonicalNodeID).Info("Helmsman registered")
+			if len(newConn.admissionToken) > 0 {
+				if err := stream.Send(&ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_PublisherAdmissionSession{PublisherAdmissionSession: &ipcpb.PublisherAdmissionSession{NodeId: canonicalNodeID, Token: newConn.admissionToken}}}); err != nil {
+					return err
+				}
+			}
 			state.DefaultManager().TouchNode(canonicalNodeID, true)
 			if newConn.features().RestreamAttemptFence {
 				scheduleReconnectPushTargetRearmFn(canonicalNodeID, connFence, GetInstanceID(), registry.log)
@@ -3163,9 +3175,11 @@ type IngestSessionRequest struct {
 	StartedAtMillis int64
 	// DVRIntent is the durable DVR start intent (JSON of the StartDVR inputs) for a
 	// record:true session, or nil for a non-recording session.
-	DVRIntent       []byte
-	IngestClusterID string
-	Authority       *IngestAuthoritySnapshot
+	DVRIntent         []byte
+	IngestClusterID   string
+	StrictLeaseOwner  bool
+	DecisionExpiresAt time.Time
+	Authority         *IngestAuthoritySnapshot
 }
 
 const (
@@ -3190,6 +3204,10 @@ const (
 	// IngestSessionRejectedCapacity means the tenant already has the maximum
 	// number of active publisher sessions allowed by the authority snapshot.
 	IngestSessionRejectedCapacity
+	ingestSessionTakeoverRequired
+	// IngestSessionAuthorityChanged refuses a pending retry with different
+	// configuration from the generation already prepared for that execution.
+	IngestSessionAuthorityChanged
 )
 
 // ingestStreamAdvisoryLockKey is the (tenant, stream) advisory-lock key that serializes ingest
@@ -4122,7 +4140,7 @@ func ProjectSourceIfCurrent(ctx context.Context, registry *StreamRegistry, tenan
 		}
 		return true, true, nil
 	}
-	prior, priorGeneration, projected, projectErr := registry.projectSourceWithPriorGeneration(internalName, nodeID, connectorPID, triggerUUID, generation, rev)
+	prior, priorGeneration, projected, projectErr := registry.projectSourceWithPriorGenerationContext(ctx, internalName, nodeID, connectorPID, triggerUUID, generation, rev)
 	if projectErr != nil {
 		cause := fmt.Errorf("publish source projection: %w", projectErr)
 		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation, 0))
@@ -4323,7 +4341,7 @@ func applyResumedSourceRepair(ctx context.Context, registry *StreamRegistry, ten
 	// retries for this generation cannot overtake one another in the
 	// commit-to-publish gap. A rejected write rolls back the stream state, but
 	// never the already-issued cell-wide fencing token.
-	_, projected, projectErr := registry.ProjectSource(internalName, nodeID, connectorPID, triggerUUID, generation, newRevision)
+	_, projected, projectErr := registry.ProjectSourceContext(ctx, internalName, nodeID, connectorPID, triggerUUID, generation, newRevision)
 	if projectErr != nil {
 		rollbackQuiet(tx)
 		return resumedRepairRestart, fmt.Errorf("publish resumed source repair: %w", projectErr)
@@ -4736,6 +4754,8 @@ func appendCommonInterceptors(opts []grpc.ServerOption, cfg GRPCServerConfig) []
 			"/grpc.health.v1.Health/Check",
 			"/grpc.health.v1.Health/Watch",
 			ipcpb.HelmsmanControl_Connect_FullMethodName,
+			// The handler authenticates the capability issued on its node control session.
+			ipcpb.HelmsmanControl_AdmitPublisher_FullMethodName,
 			"/foghorn.EdgeProvisioningService/PreRegisterEdge",
 		}
 		if strings.TrimSpace(cfg.JWTSecret) != "" {
@@ -5667,7 +5687,22 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 	}
 
 	// Process the typed trigger directly through the handlers package
-	responseText, shouldAbort, err := mistTriggerProcessor.ProcessTypedTrigger(trigger)
+	var responseText string
+	var shouldAbort bool
+	var err error
+	if processor, ok := mistTriggerProcessor.(publisherAdmissionProcessor); ok && trigger.GetPushRewrite() != nil {
+		requestCtx, cancel := LegacyPublisherContext(stream.Context(), trigger)
+		release, queueErr := acquirePublisherAdmission(requestCtx)
+		if queueErr != nil {
+			shouldAbort, err = true, queueErr
+		} else {
+			responseText, shouldAbort, err = processor.ProcessPublisher(requestCtx, trigger)
+			release()
+		}
+		cancel()
+	} else {
+		responseText, shouldAbort, err = mistTriggerProcessor.ProcessTypedTrigger(trigger)
+	}
 	if currentAdmissionRead && !sourceConnectionSessionCurrent(session, stream) {
 		responseText, shouldAbort, err = "", true, errStreamNotCurrent
 	}

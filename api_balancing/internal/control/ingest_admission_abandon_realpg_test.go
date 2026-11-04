@@ -112,16 +112,47 @@ func TestAbandonIngestAdmission_RefusesLaterMintOfTheExecution_RealPG(t *testing
 		t.Fatalf("same UUID on another node: outcome=%v err=%v, want active", outcome, err)
 	}
 
-	// The reaper's tombstone purge retires the record with the close tombstones.
-	if _, err := PurgeExpiredCloseTombstones(ctx, 0); err != nil {
-		t.Fatalf("purge: %v", err)
+	// A new marker remains a global settlement obligation until acknowledged.
+	countMarkers := func() int {
+		t.Helper()
+		var records int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM foghorn.ingest_admission_abandonments WHERE node_id=$1`, node).Scan(&records); err != nil {
+			t.Fatal(err)
+		}
+		return records
 	}
-	var records int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM foghorn.ingest_admission_abandonments WHERE node_id=$1`, node).Scan(&records); err != nil {
+	if _, err := PurgeExpiredCloseTombstones(ctx, 0); err != nil {
 		t.Fatal(err)
 	}
-	if records != 0 {
-		t.Fatalf("%d abandonment records survived the purge", records)
+	if records := countMarkers(); records != 1 {
+		t.Fatalf("unforwarded abandonment was purged: records=%d", records)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE foghorn.ingest_admission_abandonments SET publisher_lease_settled_at=NOW() WHERE node_id=$1 AND start_trigger_uuid=$2`, node, execution); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PurgeExpiredCloseTombstones(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if records := countMarkers(); records != 1 {
+		t.Fatalf("globally acknowledged marker lost unfinished local settlement: records=%d", records)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE foghorn.ingest_admission_abandonments SET publisher_sessions_settled_at=NOW() WHERE node_id=$1 AND start_trigger_uuid=$2`, node, execution); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PurgeExpiredCloseTombstones(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if records := countMarkers(); records != 0 {
+		t.Fatalf("fully acknowledged abandonment survived purge: records=%d", records)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO foghorn.ingest_admission_abandonments(node_id,start_trigger_uuid,connector_pid,created_at) VALUES($1,$2,811,NOW()-INTERVAL '3 days')`, node, execution); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PurgeExpiredCloseTombstones(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if records := countMarkers(); records != 0 {
+		t.Fatalf("expired unacknowledged abandonment survived the bounded retention: records=%d", records)
 	}
 }
 
@@ -307,4 +338,32 @@ func registryEntry(t *testing.T, registry *StreamRegistry, stream string) Stream
 		t.Fatalf("registry has no entry for %s", stream)
 	}
 	return entry.entry
+}
+
+func TestAbandonIngestAdmission_WrongPIDCannotRetireAcceptedExecution_RealPG(t *testing.T) {
+	useRealPG(t)
+	ctx := t.Context()
+	logger := logging.NewLogger()
+	const node, stream, execution, cluster = "node-abandon-pid", "live+abandon-pid", "abandon-pid-trigger", "cluster-A"
+	sessionID, outcome, err := CreateIngestSession(ctx, ingA, node, stream, 841, execution, time.Now().UnixMilli(), nil, cluster, logger)
+	if err != nil || outcome != IngestSessionActive {
+		t.Fatalf("mint: %v %v", outcome, err)
+	}
+	registry := NewStreamRegistry(nil, cluster, time.Minute)
+	if applied, _, err := ProjectSourceIfCurrent(ctx, registry, ingA, node, stream, 841, execution, sessionID, AdmissionEffectIntent{}); err != nil || !applied {
+		t.Fatalf("confirm: %v %v", applied, err)
+	}
+	// An anomalous same-UUID/different-PID replay is refused as a duplicate.
+	// Its edge report must not abandon the already accepted connector.
+	ended, _ := AbandonIngestAdmission(ctx, node, execution, 842, logger)
+	var markers int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM foghorn.ingest_admission_abandonments WHERE node_id=$1 AND start_trigger_uuid=$2`, node, execution).Scan(&markers); err != nil {
+		t.Fatal(err)
+	}
+	if isEnded, _ := sessionEnded(t, sessionID); ended != 0 || isEnded || markers != 0 {
+		t.Fatalf("wrong-PID duplicate abandoned accepted execution: ended=%d rowEnded=%v markers=%d", ended, isEnded, markers)
+	}
+	if _, outcome, err := CreateIngestSession(ctx, ingA, node, stream, 841, execution, time.Now().UnixMilli(), nil, cluster, logger); err != nil || outcome != IngestSessionActive {
+		t.Fatalf("accepted execution cannot resume after malformed abandonment: %v %v", outcome, err)
+	}
 }

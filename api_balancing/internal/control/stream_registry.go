@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/semaphore"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -416,7 +417,8 @@ type StreamRegistry struct {
 	// concurrent advertisements from several peers for one stream would
 	// otherwise keep invalidating each other's compare until one exhausts its
 	// retries and drops a live peer's Location.
-	sourceLocationLocks [64]sync.Mutex
+	sourceLocationLocks     [64]*semaphore.Weighted
+	sourceLocationLocksOnce sync.Once
 
 	// watermarks tracks per-key changelog positions so stale or replayed
 	// peer entries never roll back a later local write. See

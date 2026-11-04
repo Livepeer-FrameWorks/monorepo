@@ -1278,6 +1278,8 @@ FOGHORN_QUERY_CATALOG_REALYB_TESTS_A := TestFoghornGeneratedQueryCatalogPrepares
 FOGHORN_QUERY_CATALOG_REALYB_TESTS_B := TestKeyScopedOrderingAllocators_RealYugabyte|TestLegacyOrderingSequencesRemainBelowCounters_RealYugabyte|TestArtifactNodePlacementSerializesAbsentRows_RealYugabyte|TestArtifactDeletionRejectsReplayOlderThanPlacement_RealYugabyte
 FOGHORN_QUERY_CATALOG_REALPG_TESTS := $(FOGHORN_QUERY_CATALOG_REALPG_TESTS)|TestPlacementAuthorityPairTenantAndVersionFences_RealPG|TestControlReplicaCapabilityLedger_RealPG|TestPlacementMembershipSnapshotStore_RealPG|TestDVRDiagnosis_RealPG|TestFreshRelayOriginNodeExcludesRequester_RealPG|TestAdoptRemoteArtifactTakesOriginsCurrentFormat_RealPG
 FOGHORN_QUERY_CATALOG_REALYB_TESTS_B := $(FOGHORN_QUERY_CATALOG_REALYB_TESTS_B)|TestPlacementAuthorityPairTenantAndVersionFences_RealYugabyte|TestControlReplicaCapabilityLedger_RealYugabyte|TestPlacementMembershipSnapshotStore_RealYugabyte|TestDVRDiagnosis_RealYugabyte|TestMediaAuthorityLookupIndexes_RealYugabyte
+FOGHORN_QUERY_CATALOG_REALPG_TESTS := $(FOGHORN_QUERY_CATALOG_REALPG_TESTS)|TestPublisherRecoverySelectionSkipsActiveSessions_RealPG|TestPublisherLookupPlansBounded_RealPG
+FOGHORN_QUERY_CATALOG_REALYB_TESTS_B := $(FOGHORN_QUERY_CATALOG_REALYB_TESTS_B)|TestPublisherRecoverySelectionSkipsActiveSessions_RealYugabyte|TestPublisherLookupPlansBounded_RealYugabyte
 FOGHORN_QUERY_CATALOG_REALYB_TESTS := $(FOGHORN_QUERY_CATALOG_REALYB_TESTS_A)|$(FOGHORN_QUERY_CATALOG_REALYB_TESTS_B)
 COMMODORE_QUERY_CATALOG_REALYB_TESTS := TestGeneratedQueryCatalogPrepares_RealYugabyte|TestArtifactCreationCommandAckLease_RealYugabyte|TestServiceEventOutboxPrunesDelivered_RealYugabyte
 COMMODORE_QUERY_CATALOG_REALPG_TESTS := $(COMMODORE_QUERY_CATALOG_REALPG_TESTS)|TestStreamFinalizationCascadeBounded_RealPG
@@ -1323,6 +1325,7 @@ COMMODORE_DOMAIN_EVENTS_REALPG_TESTS := TestCommodoreDomainEventOutbox_RealPG
 PURSER_DOMAIN_EVENTS_REALPG_TESTS := TestPurserDomainEventOutbox_RealPG|TestMollieBillingEventsCommitWithTheirState_RealPG
 FOGHORN_GRPC_REALPG_TESTS := TestRequestedUploadEventsCarryTheCaller_RealPG|TestVodImportRecordsSourceAndQueuesProcessing_RealPG|TestTerminalArtifactSettlesSyncStatus_RealPG
 FOGHORN_TRIGGERS_REALPG_TESTS := TestStorageEvictionOfDeletedArtifactReachesDecklogWithOwnerTenant_RealPG|TestVanishOnlyEndForwardsSessionEndFact_RealPG|TestStreamEndedAcrossHelmsmanRestartForwardsSessionEnd_RealPG
+FOGHORN_TRIGGERS_REALPG_TESTS := $(FOGHORN_TRIGGERS_REALPG_TESTS)|TestPublisherAdmissionWAN_RealPG
 PURSER_HANDLERS_DOMAIN_EVENTS_REALPG_TESTS := TestStripeSubscriptionPaymentFailedRecordedOncePerCharge_RealPG
 PURSER_HANDLERS_REALPG_TESTS := TestProcessUsageSummaryAbsentDimensions_RealPG|TestV3UsageRowsRemainImmutableOnConflictingReplay_RealPG|TestV2UsageEnvelopePersistsIdempotentlyOnV3Schema_RealPG|TestV2ProviderReplayAdoptsBackfilledEmptyDimensions_RealPG|TestMeteringSourceRegionRemainsAuthoritative_RealPG|TestPrepaidUsageSettlementMatchesAppliedBalanceTransactions_RealPG|TestProviderWebhookInboxRepository_RealPG|TestCryptoTaxDocuments_RealPG|TestCryptoTaxDocumentAnomalyReopensAndResolves_RealPG|TestCryptoScannerReadinessFollowsFinalizedCatchUp_RealPG|TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG|TestInvoiceEmailOutboxLifecycleAndReads_RealPG|TestInvoiceEmailOverdueBalanceRead_RealPG|TestOperationalDatabaseGuards_RealPG|TestPrepaidBalanceCurrencyRepairMigration_RealPG|TestInvoiceCollectionMinimumSerializesAndPersists_RealPG|TestInvoiceRatingRepository_RealPG|TestInvoiceSettlementSurvivesConcurrentConfirmations_RealPG|TestInvoiceSettlementWaitsForFullCoverage_RealPG|TestInvoiceSettlementRecomputesOnAlreadyConfirmedReplay_RealPG|TestMonthlyInvoiceReplaysAfterSerializationFailure_RealPG|TestMonthlyInvoiceRejectsPhaseChangedByGrant_RealPG|TestProviderCheckoutExpiryReleasesReservation_RealPG|TestStripeWebhookPreservesClosedGrantPhase_RealPG|TestPostpaidGrantBoundaryKeepsAdvanceFeeForNetting_RealPG|TestPostpaidPrepaidCreditIsTakenWhenTheInvoiceIsFinalized_RealPG|TestReturnOpenInvoicePrepaidCredit_RealPG|TestPrepaidMonthEndStatesUsageWithoutChargingTheBalanceAgain_RealPG|TestPrepaidStatementChargesMonthlyClusterFeeOnce_RealPG|TestPrepaidStatementEmailReadsAsAStatement_RealPG|TestPrepaidRoundTripMonthEndStartsTheNextMonth_RealPG|TestPostpaidMonthEndAfterPrepaidSwitchesStartsTheNextMonth_RealPG|TestPostpaidToPrepaidSwitchBillsEachPhaseOnce_RealPG|TestPostpaidPhaseCloseCollectsTheClosingInvoice_RealPG|TestPostpaidPhaseCloseRetriesWhenThePhaseChangedSinceRating_RealPG|TestUsageReportInFlightAtASwitchIsBilledByExactlyOnePhase_RealPG|TestUsageProcessedUnderTheModelATenantLeftIsPaidOnceByItsPhase_RealPG|TestUsageCorrectionStraddlingASwitchIsBilledOnce_RealPG|TestRoundTripPaysThePostpaidBaseFeeOnlyForItsOwnTime_RealPG|TestEarlyClosedPeriodKeepsItsInvoiceCreditFromTheNextDraft_RealPG|TestSwitchToPrepaidForfeitsTheUnusedAdvanceBaseFee_RealPG|TestSwitchOfAMollieAnchoredSubscriptionFinalizesItsDraft_RealPG|TestSwitchClosesItsPhaseWithAnOverlappingDraftStartingElsewhere_RealPG|TestPrepaidSettlementWaitsForASwitchClosingItsPhase_RealPG|TestLivepeerFundingSignerLostLock_RealPG
 PURSER_PRESENTMENT_HANDLERS_REALPG_TESTS := TestClusterMonthlyFeeKeepsSplitCycle_RealPG|TestUSDCDepositCreditsTheLockedEURAndDocumentsEURVAT_RealPG|TestX402QuoteLocksTheUSDRateForCreditAndDocument_RealPG|TestUSDInvoiceFinalizationPresentsAtTheFinalizationRate_RealPG|TestStripeSettlementFromChargeUpdatedAndRetry_RealPG|TestMollieSettlementReadsBalanceTransactionsBackToTheCursor_RealPG|TestPrepaidTopupReversalLedger_RealPG|TestLatePrepaidCryptoReceiptGoesToReviewWithoutCredit_RealPG|TestX402QuoteExpiryRefusesClaimAndRecordsLateSettlement_RealPG|TestAdvanceBilledTierUpgradeClosesThePeriodAndProratesTheBaseFee_RealPG|TestIneligibleCheckoutCompensates_RealPG|TestAdvanceSetupRefusesMidPeriodTierChange_RealPG|TestAdvanceBaseFeeCreditIsCappedAndAudited_RealPG|TestAdvanceBilledTierChangeReducesAnUnpaidPreviousBaseFeeInvoice_RealPG|TestAdvanceBilledTierChangeWaitsForAPendingPreviousBaseFeeCharge_RealPG|TestOffSessionInvoicePaymentsRecordTheInvoiceLockedEUR_RealPG|TestMollieSettlementRereadsLateRowsWithoutPinningTheCursor_RealPG|TestPurserInvoicedClusterMonthlyFeeProratesByActiveTime_RealPG|TestMollieFirstPaymentUsesThePresentmentCurrencyItWasCreatedUnder_RealPG
@@ -1342,7 +1345,7 @@ verify-commodore-placement-test-selection:
 
 verify-foghorn-test-selection: verify-commodore-placement-test-selection verify-purser-free-fallback-test-selection verify-purser-tier-downgrade-test-selection
 	@./scripts/check-go-test-selection.sh cli ./pkg/provisioner '$(CLI_PROVISIONER_REAL_ENGINE_TESTS)' '^Test' schema_verify
-	@./scripts/check-go-test-selection.sh api_control ./internal/grpc '$(COMMODORE_INGEST_CLAIM_REALPG_TESTS)' '^(TestValidateStreamKey_|TestSyncActiveIngestPlacement_|TestClearStreamActiveCluster_).*RealPG$$'
+	@./scripts/check-go-test-selection.sh api_control ./internal/grpc '$(COMMODORE_INGEST_CLAIM_REALPG_TESTS)' '^(TestValidateStreamKey_|TestSyncActiveIngestPlacement_|TestClearStreamActiveCluster_|TestPublisherLease_).*RealPG$$'
 	@./scripts/check-go-test-selection.sh api_control ./internal/grpc '$(COMMODORE_PLACEMENT_ACTIVATION_REALPG_TESTS)' '^TestPlacementActivation.*_RealPG$$'
 	@./scripts/check-go-test-selection.sh api_control ./internal/grpc '$(COMMODORE_CELL_CAPABILITY_REALPG_TESTS)' '^(TestRecordCapability_|TestCapabilityAck_|TestReportCapability_|TestObligationLease).*_RealPG$$'
 	@./scripts/check-go-test-selection.sh cli ./cmd '$(CLI_CMD_REALPG_TESTS)' 'RealPG$$'
@@ -1351,6 +1354,9 @@ verify-foghorn-test-selection: verify-commodore-placement-test-selection verify-
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/control '$(FOGHORN_CONTROL_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/grpc '$(FOGHORN_GRPC_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/triggers '$(FOGHORN_TRIGGERS_REALPG_TESTS)' 'RealPG$$'
+	@./scripts/check-go-test-selection.sh api_balancing ./internal/triggers 'TestPublisherAdmissionWAN_RealYugabyte' '^TestPublisherAdmissionWAN_RealYugabyte$$'
+	@./scripts/check-go-test-selection.sh api_balancing ./internal/control 'TestPublisherAdmissionOperations_RealYugabyte|TestPublisherRecoveryDispatch_RealYugabyte' '^(TestPublisherAdmissionOperations_RealYugabyte|TestPublisherRecoveryDispatch_RealYugabyte)$$'
+	@./scripts/check-go-test-selection.sh api_control ./internal/grpc 'TestPublisherLease_RealYugabyte' '^TestPublisherLease_RealYugabyte$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/jobs '$(FOGHORN_JOBS_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/jobs '$(FOGHORN_JOBS_REALYB_TESTS)' 'RealYugabyte$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/federation '$(FOGHORN_FEDERATION_REALPG_TESTS)' 'RealPG$$'
@@ -1590,10 +1596,49 @@ verify-quartermaster-yugabyte-db:
 	@echo "Verifying Quartermaster's converted repositories on Yugabyte (Docker)..."
 	@$(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory -k -j1 verify-yugabyte-quartermaster-contracts verify-yugabyte-distributed-quartermaster
 
+FOGHORN_CONTROL_REALPG_TESTS := $(FOGHORN_CONTROL_REALPG_TESTS)|TestPublisherAdmissionOperations_RealPG|TestPublisherRecoveryDispatch_RealPG|TestAbandonIngestAdmission_WrongPIDCannotRetireAcceptedExecution_RealPG
+COMMODORE_INGEST_CLAIM_REALPG_TESTS := $(COMMODORE_INGEST_CLAIM_REALPG_TESTS)|TestPublisherLease_RealPG
+
+.PHONY: verify-publisher-schema verify-publisher-schema-postgres verify-publisher-schema-yugabyte verify-publisher-schema-yugabyte-foghorn verify-publisher-schema-yugabyte-commodore
+verify-publisher-schema: verify-publisher-schema-postgres verify-publisher-schema-yugabyte
+
+verify-publisher-schema-postgres:
+	@test -n "$(SCHEMA_VERIFY_FROM_TAG)" || { echo "ERROR: publisher schema verification requires a reachable shipped tag"; exit 1; }
+	@FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' $(CONTRACT_GO_TEST) cli postgres/publisher-schema -tags schema_verify -run '^(TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestPostgresServiceCapabilitiesExecute|TestPostgresServiceBaselinesApplyTwice|TestPostgresBaselineEqualsReplay)$$' -v -count=1 -timeout 1200s ./pkg/provisioner/
+
+verify-publisher-schema-yugabyte: verify-publisher-schema-yugabyte-foghorn verify-publisher-schema-yugabyte-commodore
+
+verify-publisher-schema-yugabyte-foghorn:
+	@$(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory -k -j1 verify-schema-yugabyte-unit-foghorn-compat verify-schema-yugabyte-unit-foghorn-completion verify-schema-yugabyte-unit-foghorn-preflight
+
+verify-publisher-schema-yugabyte-commodore:
+	@$(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory -k -j1 verify-schema-yugabyte-unit-commodore-compat verify-schema-yugabyte-unit-commodore-completion verify-schema-yugabyte-unit-commodore-preflight
+
+.PHONY: verify-publisher-lookups
 .PHONY: verify-stream-finalization-cascade
 verify-stream-finalization-cascade:
 	@$(CONTRACT_GO_TEST) api_control postgres/stream-finalization-cascade -tags schema_verify -run '^TestStreamFinalizationCascadeBounded_RealPG$$' -v -count=1 -timeout 180s ./internal/database/commodoredb/
 	@$(YUGABYTE_FIXTURE) $(CONTRACT_GO_TEST) api_control yugabyte/stream-finalization-cascade -tags schema_verify -run '^TestStreamFinalizationCascadeBounded_RealYugabyte$$' -v -count=1 -timeout 300s ./internal/database/commodoredb/
+
+verify-publisher-lookups:
+	@$(CONTRACT_GO_TEST) api_balancing postgres/publisher-lookups -tags schema_verify -run '^TestPublisherLookupPlansBounded_RealPG$$' -count=1 -timeout 180s ./internal/database/foghorndb/
+	@$(YUGABYTE_FIXTURE) $(CONTRACT_GO_TEST) api_balancing yugabyte/publisher-lookups -tags schema_verify -run '^TestPublisherLookupPlansBounded_RealYugabyte$$' -count=1 -timeout 300s ./internal/database/foghorndb/
+
+.PHONY: verify-publisher-admission verify-publisher-recovery
+verify-publisher-recovery:
+	@$(CONTRACT_GO_TEST) api_balancing postgres/publisher-recovery-plan -tags schema_verify -run '^TestPublisherRecoverySelectionSkipsActiveSessions_RealPG$$' -count=1 -timeout 180s ./internal/database/foghorndb/
+	@$(YUGABYTE_FIXTURE) $(CONTRACT_GO_TEST) api_balancing yugabyte/publisher-recovery-plan -tags schema_verify -run '^TestPublisherRecoverySelectionSkipsActiveSessions_RealYugabyte$$' -count=1 -timeout 300s ./internal/database/foghorndb/
+
+verify-publisher-admission:
+	@$(CONTRACT_GO_TEST) api_control postgres/publisher-lease -tags schema_verify -run '^TestPublisherLease_RealPG$$' -count=1 -timeout 180s ./internal/grpc/
+	@$(YUGABYTE_FIXTURE) $(CONTRACT_GO_TEST) api_control yugabyte/publisher-lease -tags schema_verify -run '^TestPublisherLease_RealYugabyte$$' -count=1 -timeout 300s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_balancing postgres/publisher-admission -tags schema_verify -run '^(TestPublisherAdmissionOperations_RealPG|TestPublisherRecoveryDispatch_RealPG)$$' -count=1 -timeout 180s ./internal/control/
+	@$(YUGABYTE_FIXTURE) $(CONTRACT_GO_TEST) api_balancing yugabyte/publisher-admission -tags schema_verify -run '^(TestPublisherAdmissionOperations_RealYugabyte|TestPublisherRecoveryDispatch_RealYugabyte)$$' -count=1 -timeout 300s ./internal/control/
+
+.PHONY: verify-ingest-admission-wan
+verify-ingest-admission-wan:
+	@$(CONTRACT_GO_TEST) api_balancing postgres/ingest-admission-wan -tags schema_verify -run '^TestPublisherAdmissionWAN_RealPG$$' -v -count=1 -timeout 180s ./internal/triggers/
+	@$(YUGABYTE_FIXTURE) $(CONTRACT_GO_TEST) api_balancing yugabyte/ingest-admission-wan -tags schema_verify -run '^TestPublisherAdmissionWAN_RealYugabyte$$' -v -count=1 -timeout 300s ./internal/triggers/
 
 verify-foghorn-db: verify-foghorn-test-selection
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-foghorn-db requires a running Docker daemon"; exit 1; }
@@ -1837,6 +1882,7 @@ verify-schema-yugabyte-selection-contracts:
 verify-yugabyte-commodore-contracts: verify-commodore-placement-test-selection verify-yugabyte-commodore-operator-accounts verify-yugabyte-commodore-contracts-a verify-yugabyte-commodore-contracts-b verify-yugabyte-commodore-contracts-c verify-yugabyte-commodore-contracts-d
 
 verify-yugabyte-commodore-contracts-a: verify-yugabyte-shared-fixture
+	@$(CONTRACT_GO_TEST) api_control yugabyte/publisher-lease -tags schema_verify -run '^TestPublisherLease_RealYugabyte$$' -count=1 -timeout 300s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_control yugabyte/commodore-query-catalog -tags schema_verify -run '$(COMMODORE_QUERY_CATALOG_REALYB_TESTS)' -count=1 -timeout 1200s ./internal/database/commodoredb/
 	@$(CONTRACT_GO_TEST) api_control yugabyte/commodore-placement-a -tags schema_verify -run '^($(COMMODORE_PLACEMENT_REALYB_TESTS_A))$$' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_control yugabyte/commodore-account-email -tags schema_verify -run '^TestAccountEmailOutbox_(RetriesUntilDelivered|AbandonsRejectedRecipient)_RealYugabyte$$' -count=1 -timeout 600s ./internal/grpc/
@@ -1937,9 +1983,11 @@ verify-yugabyte-periscope-metering-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_analytics_query yugabyte/periscope-metering -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealYugabyte|TestMeteringStateTransitions_RealYugabyte' -count=1 -timeout 1200s ./internal/database/meteringdb/
 
 verify-yugabyte-foghorn-contracts-a: verify-yugabyte-shared-fixture
+	@$(CONTRACT_GO_TEST) api_balancing yugabyte/publisher-admission -tags schema_verify -run '^(TestPublisherAdmissionOperations_RealYugabyte|TestPublisherRecoveryDispatch_RealYugabyte)$$' -count=1 -timeout 300s ./internal/control/
 	@$(CONTRACT_GO_TEST) api_balancing yugabyte/foghorn-query-catalog-a -tags schema_verify -run '$(FOGHORN_QUERY_CATALOG_REALYB_TESTS_A)' -count=1 -timeout 1200s ./internal/database/foghorndb/
 
 verify-yugabyte-foghorn-contracts-b: verify-yugabyte-shared-fixture
+	@$(CONTRACT_GO_TEST) api_balancing yugabyte/ingest-admission-wan -tags schema_verify -run '^TestPublisherAdmissionWAN_RealYugabyte$$' -v -count=1 -timeout 300s ./internal/triggers/
 	@$(CONTRACT_GO_TEST) api_balancing yugabyte/foghorn-query-catalog-b -tags schema_verify -run '$(FOGHORN_QUERY_CATALOG_REALYB_TESTS_B)' -count=1 -timeout 1200s ./internal/database/foghorndb/
 
 verify-yugabyte-foghorn-contracts: verify-yugabyte-foghorn-contracts-a verify-yugabyte-foghorn-contracts-b verify-yugabyte-foghorn-authority-contracts verify-yugabyte-foghorn-jobs-contracts

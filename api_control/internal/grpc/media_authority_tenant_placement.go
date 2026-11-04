@@ -207,7 +207,7 @@ func (s *CommodoreServer) issueTenantPlacement(ctx context.Context, payload *med
 	if previousPolicy != nil && (snapshot.Own.GetRevision() < previousPolicy.GetRevision() || snapshot.Own.GetRevision() == previousPolicy.GetRevision() && !proto.Equal(snapshot.Own, previousPolicy)) {
 		return errors.New("tenant placement intent regressed or changed without revision")
 	}
-	if schema != sharedauthority.NodePlacementSchemaVersion && placement.PolicySetHasNodeSelectors(snapshot.Own) {
+	if schema < sharedauthority.NodePlacementSchemaVersion && placement.PolicySetHasNodeSelectors(snapshot.Own) {
 		return errors.New("tenant placement names nodes but a target cell has not attested node placement")
 	}
 	if entitlement == nil || len(entitlement.GetEffectiveAccess()) > 4096 || len(entitlement.GetAllowedClusterIds()) > 4096 || proto.Size(entitlement) > 16<<20 || len(entitlement.ProtoReflect().GetUnknown()) != 0 {

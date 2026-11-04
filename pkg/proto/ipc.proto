@@ -24,6 +24,8 @@ message GeoBucket {
 service HelmsmanControl {
   rpc Connect(stream ControlMessage) returns (stream ControlMessage);
   rpc ResolveClipHash(ClipHashRequest) returns (ClipHashResponse);
+  // Bound to the live node session issued after authenticated registration.
+  rpc AdmitPublisher(AdmitPublisherRequest) returns (MistTriggerResponse);
 }
 
 // Service for sending events to Decklog (Foghorn -> Decklog/api_firehose)
@@ -429,6 +431,7 @@ message ControlMessage {
     // durable_delivery_id. Helmsman deletes the outbox row only on a
     // successful ack.
     DurableDeliveryAck durable_delivery_ack = 177;
+    PublisherAdmissionSession publisher_admission_session = 178;
   }
 }
 
@@ -442,6 +445,19 @@ message ControlCapabilities {
   // state). Without it Helmsman keeps the older contract: a row is confirmed
   // by the next heartbeat sent after it.
   bool durable_delivery_acks = 1;
+}
+
+// Possession binds unary admission to this authenticated control connection.
+// A reconnect revokes the previous token. Never persist or log it.
+message PublisherAdmissionSession {
+  string node_id = 1;
+  bytes token = 2;
+}
+
+message AdmitPublisherRequest {
+  string node_id = 1;
+  bytes session_token = 2;
+  MistTrigger trigger = 3;
 }
 
 // DurableDeliveryAck answers one ControlMessage.durable_delivery_id.
@@ -1114,6 +1130,9 @@ message MistTrigger {
   // Content identity of non-live content (uploaded VOD, clip, DVR, DVR chapter), enriched by
   // Foghorn; stream_id on such content only names its source stream, if it has one.
   optional string artifact_hash = 61;
+  // Absolute useful response deadline supplied by Helmsman for a legacy
+  // control-stream publisher request. Unary admission uses the gRPC deadline.
+  optional google.protobuf.Timestamp publisher_deadline = 62;
 
   reserved 20;               // Legacy: removed stream_bandwidth field
   reserved "stream_bandwidth";

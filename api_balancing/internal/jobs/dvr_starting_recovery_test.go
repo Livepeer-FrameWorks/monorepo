@@ -302,3 +302,60 @@ func TestDVRStartingRecovery_ActiveIngestGenerationStillRedispatches(t *testing.
 		t.Fatalf("unmet SQL expectations: %v", err)
 	}
 }
+
+// A freshly committed stop must wake the existing worker immediately, without
+// making admission wait for storage-node network I/O.
+func TestDVRStartingRecovery_StopHintWakesWithoutBlockingAdmission(t *testing.T) {
+	j := NewDVRStartingRecoveryJob(DVRStartingRecoveryConfig{Logger: logging.NewLogger(), Interval: time.Hour})
+	entered, release := make(chan *ipcpb.DVRStopRequest, 1), make(chan struct{})
+	j.sendStop = func(node string, request *ipcpb.DVRStopRequest) error {
+		if node != "storage-hint" {
+			t.Errorf("node=%q", node)
+		}
+		entered <- request
+		<-release
+		return nil
+	}
+	j.Start()
+	defer j.Stop()
+	defer close(release)
+	returned := make(chan struct{})
+	go func() {
+		control.QueueDVRStopClaims([]control.DVRStopClaim{{DVRHash: "fresh-stop-hint", StorageNodeID: "storage-hint"}})
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("admission waited for storage stop I/O")
+	}
+	select {
+	case request := <-entered:
+		if request.GetDvrHash() != "fresh-stop-hint" || request.GetCommandGeneration() != control.DVRStopCommandGeneration {
+			t.Fatalf("stop=%+v", request)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fresh durable stop did not wake recovery worker")
+	}
+}
+
+func TestDVRStartingRecovery_GenerationHintDrainsFreshStops(t *testing.T) {
+	j, mock, cleanup := newDVRRecoveryJob(t)
+	defer cleanup()
+	mock.ExpectQuery("ListDVRStopClaimsByGeneration").WithArgs("tenant-stop", "generation-stop").WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "storage_node_id"}).AddRow("dvr-generation-stop", "storage-generation"))
+	called := false
+	j.sendStop = func(node string, request *ipcpb.DVRStopRequest) error {
+		called = true
+		if node != "storage-generation" || request.GetDvrHash() != "dvr-generation-stop" {
+			t.Fatalf("stop %q %+v", node, request)
+		}
+		return nil
+	}
+	j.dispatchStopHint(control.DVRStopDispatchHint{TenantID: "tenant-stop", Generation: "generation-stop"})
+	if !called {
+		t.Fatal("fresh settlement stop was not drained")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

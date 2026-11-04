@@ -82,3 +82,15 @@ discovery remains gated on a fresh healthy result.
 
 - **A third region.** MirrorMaker2 links form a full mesh, so replication and Signalman consumption grow with the number of regions. Before adding one, move realtime replication to subscriber-aware forwarding or partition-aligned stream ownership; see [multiregion-kafka-mirrormaker.md](multiregion-kafka-mirrormaker.md).
 - **Regional analytics.** Moving Periscope-Ingest out of the aggregator requires regional ClickHouse first.
+
+## Publisher admission across a remote database
+
+The [publisher admission protocol](publisher-admission.md) bounds normal cell SQL
+to one authority/session preflight, one atomic preparation and one atomic
+confirmation, with source CAS between the two transitions. A ready signed pair
+avoids central configuration rebuilding; global ownership remains a separate
+lease. This supports the existing topology without provisioning a new database.
+Every remaining operation still pays the physical database RTT. Autonomous
+regional durability requires a regional quorum and its own backup/failover
+policy; a remote read replica or an extra regional member of an EU-majority
+quorum does not make publisher writes local.

@@ -62,8 +62,7 @@ func SettlePushRewriteAnswer(mistTrigger *ipcpb.MistTrigger, result *MistTrigger
 		// Foghorn never received the execution, so it admitted nothing.
 		return
 	}
-	if !relayedAccept && foghornDecidedDenial(result) {
-		// Foghorn denied the execution itself and released what it had minted.
+	if pushExecutionAccepted(triggerUUID) {
 		return
 	}
 	if delivered {
@@ -81,20 +80,6 @@ func SettlePushRewriteAnswer(mistTrigger *ipcpb.MistTrigger, result *MistTrigger
 		}
 		reportAbandonedPushAdmissionLogged(mistTrigger, logger)
 	})
-}
-
-// foghornDecidedDenial reports whether result is Foghorn's own refusal of the execution. Timeouts
-// and internal failures, including Helmsman refusing an accept it could not persist, leave the
-// admission's state unknown.
-func foghornDecidedDenial(result *MistTriggerResult) bool {
-	if !result.Abort {
-		return false
-	}
-	switch result.ErrorCode {
-	case ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT:
-		return false
-	}
-	return result.IngestGeneration == ""
 }
 
 func reportAbandonedPushAdmissionLogged(mistTrigger *ipcpb.MistTrigger, logger logging.Logger) {

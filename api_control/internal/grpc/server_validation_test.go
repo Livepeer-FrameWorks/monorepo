@@ -217,7 +217,7 @@ func TestValidateStreamKey(t *testing.T) {
 					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push", nil, nil, "")
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
 				expectNoEnabledPushTargets(mock, "stream-id", "tenant-id")
-				mock.ExpectQuery("UPDATE commodore.streams").WithArgs("cluster-us", "conn-1", int64(activeIngestLease.Seconds()), "good-key").
+				mock.ExpectQuery("UPDATE commodore.streams").WithArgs("cluster-us", "conn-1", nil, nil, int64(activeIngestLease.Seconds()), "good-key").
 					WillReturnRows(claimReserved())
 			},
 			assert: func(t *testing.T, resp *commodorepb.ValidateStreamKeyResponse, err error) {
@@ -243,7 +243,7 @@ func TestValidateStreamKey(t *testing.T) {
 					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push", nil, nil, "")
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("contended-key").WillReturnRows(rows)
 				expectNoEnabledPushTargets(mock, "stream-id", "tenant-id")
-				mock.ExpectQuery("UPDATE commodore.streams").WithArgs("cluster-eu", "conn-2", int64(activeIngestLease.Seconds()), "contended-key").
+				mock.ExpectQuery("UPDATE commodore.streams").WithArgs("cluster-eu", "conn-2", nil, nil, int64(activeIngestLease.Seconds()), "contended-key").
 					WillReturnError(sql.ErrNoRows)
 				mock.ExpectQuery("SELECT active_ingest_cluster_id").WithArgs("contended-key").
 					WillReturnRows(sqlmock.NewRows([]string{"active_ingest_cluster_id", "active_ingest_claim_id"}).AddRow("cluster-eu", "conn-2"))
@@ -835,7 +835,7 @@ func TestValidateStreamKey_OriginClusterUsesIngestClusterWhenProvided(t *testing
 		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push", "fixed_interval", int32(7200), "")
 	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
 	expectNoEnabledPushTargets(mock, "stream-id", "tenant-id")
-	mock.ExpectQuery("SET active_ingest_cluster_id").WithArgs("cluster-ingest", "conn-ingest", int64(activeIngestLease.Seconds()), "good-key").
+	mock.ExpectQuery("SET active_ingest_cluster_id").WithArgs("cluster-ingest", "conn-ingest", nil, nil, int64(activeIngestLease.Seconds()), "good-key").
 		WillReturnRows(claimReserved())
 
 	server := &CommodoreServer{
@@ -1127,7 +1127,7 @@ func TestValidateStreamKeyGrantExpiryUsesPaymentRequiredReason(t *testing.T) {
 			mock.ExpectQuery("FROM commodore.streams").WithArgs("key").WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode", "dvr_chapter_mode", "dvr_chapter_interval_seconds", "last_ingest_cluster_id"}).AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push", nil, nil, ""))
 			if !expired {
 				expectNoEnabledPushTargets(mock, "stream-id", "tenant-id")
-				mock.ExpectQuery("UPDATE commodore.streams").WithArgs("cluster-us", "claim", int64(activeIngestLease.Seconds()), "key").WillReturnRows(claimReserved())
+				mock.ExpectQuery("UPDATE commodore.streams").WithArgs("cluster-us", "claim", nil, nil, int64(activeIngestLease.Seconds()), "key").WillReturnRows(claimReserved())
 			}
 			billing := &countingStreamAdmissionBilling{expired: expired}
 			server := &CommodoreServer{db: db, logger: logrus.New(), streamAdmissionBilling: billing, routeCache: map[string]*clusterRoute{"tenant-id": admittingRoute("cluster-us")}, routeCacheTTL: 5 * time.Minute}

@@ -20,6 +20,7 @@ require (
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/sirupsen/logrus v1.9.4
 	github.com/uber/h3-go/v4 v4.4.1
+	github.com/yugabyte/pgx/v5 v5.7.6-yb-1
 	golang.org/x/sync v0.20.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478
 	google.golang.org/grpc v1.80.0
@@ -95,7 +96,6 @@ require (
 	github.com/twmb/franz-go/pkg/kmsg v1.13.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
 	github.com/x402-foundation/x402/go/v2 v2.23.0 // indirect
-	github.com/yugabyte/pgx/v5 v5.7.6-yb-1 // indirect
 	github.com/yuin/gopher-lua v1.1.2 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.1 // indirect
 	go.opentelemetry.io/otel v1.43.0 // indirect

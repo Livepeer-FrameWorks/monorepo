@@ -16,8 +16,10 @@ import (
 )
 
 type localIngestAuthority struct {
-	object localauthority.MediaObjectSnapshot
-	tenant localauthority.TenantSnapshot
+	object           localauthority.MediaObjectSnapshot
+	tenant           localauthority.TenantSnapshot
+	sessionClusterID string
+	sessionChecked   bool
 }
 
 // ResolveLocalIngestContext exposes the signed credential projection to the
@@ -60,11 +62,11 @@ func (p *Processor) ResolveLocalIngestContext(ctx context.Context, credential st
 // the cell holds nothing for is not fetched here: the credential never leaves
 // the cell, so the caller validates it against the control plane, which names
 // the stream, and asks for that stream's authority (fetchLocalIngestAuthority).
-func (p *Processor) resolveReadyLocalIngest(ctx context.Context, credential string) (*commodorepb.ValidateStreamKeyResponse, localIngestAuthority, bool, error) {
-	response, result, found, err := p.readReadyLocalIngest(ctx, credential)
+func (p *Processor) resolveReadyLocalIngest(ctx context.Context, credential string, execution ...string) (*commodorepb.ValidateStreamKeyResponse, localIngestAuthority, bool, error) {
+	response, result, found, err := p.readReadyLocalIngest(ctx, credential, execution...)
 	if IsLocalAuthorityExpired(err) && result.object.AuthorityID != "" &&
 		p.fetchLocalAuthority(ctx, localauthority.AuthorityLookup{AuthorityID: result.object.AuthorityID}) {
-		response, result, found, err = p.readReadyLocalIngest(ctx, credential)
+		response, result, found, err = p.readReadyLocalIngest(ctx, credential, execution...)
 	}
 	if err == nil && response != nil && response.GetValid() {
 		p.mediaAuthorityStore.NoteMediaObjectUse(result.object)
@@ -82,11 +84,25 @@ func (p *Processor) fetchLocalIngestAuthority(ctx context.Context, streamID stri
 	}
 }
 
-func (p *Processor) readReadyLocalIngest(ctx context.Context, credential string) (*commodorepb.ValidateStreamKeyResponse, localIngestAuthority, bool, error) {
+func (p *Processor) readReadyLocalIngest(ctx context.Context, credential string, execution ...string) (*commodorepb.ValidateStreamKeyResponse, localIngestAuthority, bool, error) {
 	if p == nil || p.mediaAuthorityStore == nil {
 		return nil, localIngestAuthority{}, false, nil
 	}
-	object, err := p.mediaAuthorityStore.MediaObjectByPublishingCredential(ctx, credential)
+	var object localauthority.MediaObjectSnapshot
+	var pairedTenant localauthority.TenantSnapshot
+	var err error
+	var sessionClusterID string
+	if p.publisherAdmissions != nil {
+		var pair localauthority.PlacementPair
+		if len(execution) == 2 {
+			pair, sessionClusterID, err = p.mediaAuthorityStore.PublishingAdmission(ctx, credential, execution[0], execution[1])
+		} else {
+			pair, err = p.mediaAuthorityStore.PublishingPair(ctx, credential)
+		}
+		object, pairedTenant = pair.Object, pair.Tenant
+	} else {
+		object, err = p.mediaAuthorityStore.MediaObjectByPublishingCredential(ctx, credential)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		p.observeMediaAuthorityLocalRead("publishing_credential", "absent")
 		return nil, localIngestAuthority{}, false, nil
@@ -95,7 +111,7 @@ func (p *Processor) readReadyLocalIngest(ctx context.Context, credential string)
 		p.observeMediaAuthorityLocalRead("publishing_credential", "error")
 		return nil, localIngestAuthority{}, true, fmt.Errorf("read local publishing authority: %w", err)
 	}
-	result := localIngestAuthority{object: object}
+	result := localIngestAuthority{object: object, sessionClusterID: sessionClusterID, sessionChecked: p.publisherAdmissions != nil && len(execution) == 2}
 	if !object.IngestReady {
 		p.observeMediaAuthorityLocalRead("publishing_credential", "unready")
 		return nil, result, true, nil
@@ -134,7 +150,10 @@ func (p *Processor) readReadyLocalIngest(ctx context.Context, credential string)
 			RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY,
 		}, result, true, nil
 	}
-	tenant, err := p.mediaAuthorityStore.TenantForObject(ctx, object)
+	tenant := pairedTenant
+	if p.publisherAdmissions == nil {
+		tenant, err = p.mediaAuthorityStore.TenantForObject(ctx, object)
+	}
 	if err != nil {
 		return nil, result, true, fmt.Errorf("read local tenant ingest authority: %w", err)
 	}
@@ -169,6 +188,11 @@ func (p *Processor) readReadyLocalIngest(ctx context.Context, credential string)
 		}, result, true, nil
 	}
 
+	if p.publisherAdmissions != nil && payload.GetSchemaVersion() >= sharedauthority.PublisherAdmissionSchemaVersion && live.GetPublisherConfigurationVersion() < 1 {
+		p.observeMediaAuthorityLocalRead("publishing_credential", "unready")
+		return nil, result, true, nil
+	}
+
 	origin := payload.GetOriginClusterId()
 	official := tenantPayload.GetOfficialClusterId()
 	response := &commodorepb.ValidateStreamKeyResponse{
@@ -176,7 +200,9 @@ func (p *Processor) readReadyLocalIngest(ctx context.Context, credential string)
 		IsRecordingEnabled: live.GetRecordingEnabled(), StreamId: live.GetStreamId(), PlaybackId: payload.GetPlaybackId(),
 		BillingModel: localBillingModel(tenantPayload.GetBillingModel()), OriginClusterId: &origin, OfficialClusterId: &official,
 		ClusterPeers: p.mediaAuthorityStore.RoutingClusterPeers(tenantPayload, p.clusterID), AuthorityClusterPeers: localClusterPeers(tenantPayload), ProcessesJson: live.GetProcessesJson(), DvrProcessesJson: live.GetDvrProcessesJson(),
-		DvrPolicy: tenantPayload.GetDvrPolicy(), Allowances: tenantPayload.GetAllowances(), TenantResourceLimits: localTenantResourceLimits(tenantPayload, live.GetOutageIngestClusterId()),
+		DvrChapterMode: live.GetDvrChapterMode(), DvrChapterIntervalSeconds: live.GetDvrChapterIntervalSeconds(),
+		PushTargetsComplete: proto.Bool(true),
+		DvrPolicy:           tenantPayload.GetDvrPolicy(), Allowances: tenantPayload.GetAllowances(), TenantResourceLimits: localTenantResourceLimits(tenantPayload, live.GetOutageIngestClusterId()),
 	}
 	secret, secretErr := p.mediaAuthorityStore.OpenLiveStreamSecret(object)
 	if secretErr != nil && len(live.GetSealedCellSecrets()) > 0 {
@@ -234,6 +260,7 @@ func (p *Processor) promoteLocalIngestIfMatching(ctx context.Context, credential
 		object.Authority.GetInternalName() != connected.GetInternalName() || object.Authority.GetPlaybackId() != connected.GetPlaybackId() ||
 		live.GetStreamId() != connected.GetStreamId() || live.GetRecordingEnabled() != connected.GetIsRecordingEnabled() ||
 		live.GetProcessesJson() != connected.GetProcessesJson() || live.GetDvrProcessesJson() != connected.GetDvrProcessesJson() ||
+		(live.GetPublisherConfigurationVersion() >= 1 && (live.GetDvrChapterMode() != connected.GetDvrChapterMode() || live.GetDvrChapterIntervalSeconds() != connected.GetDvrChapterIntervalSeconds())) ||
 		strings.TrimSpace(object.Authority.GetOriginClusterId()) != strings.TrimSpace(connected.GetOriginClusterId()) {
 		p.observeMediaAuthorityShadow("ingest_object_mismatch")
 		return

@@ -94,4 +94,5 @@ WHERE created_at < NOW() - make_interval(secs => sqlc.arg(older_than_seconds)::d
 
 -- name: PurgeExpiredIngestAdmissionAbandonments :execrows
 DELETE FROM foghorn.ingest_admission_abandonments
-WHERE created_at < NOW() - make_interval(secs => sqlc.arg(older_than_seconds)::double precision);
+WHERE created_at < NOW() - make_interval(secs => sqlc.arg(older_than_seconds)::double precision)
+  AND ((publisher_lease_settled_at IS NOT NULL AND publisher_sessions_settled_at IS NOT NULL) OR created_at < NOW() - INTERVAL '2 days');

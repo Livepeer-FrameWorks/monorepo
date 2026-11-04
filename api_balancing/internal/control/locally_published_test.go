@@ -30,9 +30,9 @@ func installSessionClaimForNode(t *testing.T, nodeID, clusterID, claimToken stri
 		t.Fatalf("sqlmock: %v", err)
 	}
 	mock.MatchExpectationsInOrder(false)
-	rows := sqlmock.NewRows([]string{"tenant_id", "stream_internal_name", "node_id", "ingest_cluster_id", "start_trigger_uuid", "id"})
+	rows := sqlmock.NewRows([]string{"tenant_id", "stream_internal_name", "node_id", "ingest_cluster_id", "start_trigger_uuid", "id", "publisher_lease_strict_owner"})
 	if clusterID != "" {
-		rows.AddRow("tenant-1", publishedInternalName, nodeID, clusterID, claimToken, seededGeneration)
+		rows.AddRow("tenant-1", publishedInternalName, nodeID, clusterID, claimToken, seededGeneration, false)
 	}
 	mock.ExpectQuery(`FROM foghorn\.ingest_sessions`).WillReturnRows(rows)
 	SetDB(claimDB)

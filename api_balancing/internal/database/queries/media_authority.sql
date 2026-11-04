@@ -429,6 +429,45 @@ JOIN foghorn.media_authorities AS tenant_authority
 WHERE object_projection.tenant_id = sqlc.arg(tenant_id)::uuid
   AND object_projection.internal_name = sqlc.arg(internal_name);
 
+-- name: GetPublisherAuthorityPreflight :one
+SELECT COALESCE((SELECT session.ingest_cluster_id FROM foghorn.ingest_sessions session
+           WHERE session.tenant_id=object_projection.tenant_id AND session.node_id=sqlc.arg(node_id)
+             AND session.start_trigger_uuid=sqlc.arg(trigger_uuid) AND session.ended_at IS NULL), '')::text AS session_cluster_id,
+       object_authority.payload AS object_payload,
+       object_authority.payload_sha256 AS object_payload_sha256,
+       object_authority.refresh_after AS object_refresh_after,
+       object_authority.valid_until AS object_valid_until,
+       object_projection.authority_id AS object_authority_id,
+       object_projection.authority_version AS object_authority_version,
+       object_projection.local_read_ready AS object_read_ready,
+       object_projection.local_ingest_ready AS object_ingest_ready,
+       object_projection.local_source_ready AS object_source_ready,
+       tenant_authority.payload AS tenant_payload,
+       tenant_authority.payload_sha256 AS tenant_payload_sha256,
+       tenant_authority.refresh_after AS tenant_refresh_after,
+       tenant_authority.valid_until AS tenant_valid_until,
+       tenant_projection.authority_version AS tenant_authority_version,
+       tenant_projection.local_read_ready AS tenant_read_ready,
+       tenant_projection.local_ingest_ready AS tenant_ingest_ready,
+       tenant_projection.local_source_ready AS tenant_source_ready,
+       tenant_projection.previous_placement_policy AS tenant_previous_placement_policy,
+       tenant_projection.placement_superseded_at AS tenant_placement_superseded_at,
+       COALESCE(tenant_projection.objects_trusted_from > object_authority.confirmed_at, FALSE)::boolean AS object_withheld_by_tenant_revival
+FROM foghorn.media_object_authority_projection AS object_projection
+JOIN foghorn.media_authorities AS object_authority
+  ON object_authority.authority_kind = 'media_object'
+ AND object_authority.authority_id = object_projection.authority_id
+ AND object_authority.authority_version = object_projection.authority_version
+JOIN foghorn.tenant_authority_projection AS tenant_projection
+  ON tenant_projection.tenant_id = object_projection.tenant_id
+JOIN foghorn.media_authorities AS tenant_authority
+  ON tenant_authority.authority_kind = 'tenant'
+ AND tenant_authority.authority_id = tenant_projection.tenant_id::text
+ AND tenant_authority.authority_version = tenant_projection.authority_version
+WHERE object_projection.publishing_credential_sha256 = sqlc.arg(credential_digest)
+ORDER BY (object_projection.lifecycle = 'active') DESC, object_projection.authority_version DESC
+LIMIT 1;
+
 -- name: GetLocalTenantSourceAuthority :one
 SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,
        projection.authority_version, projection.local_source_ready

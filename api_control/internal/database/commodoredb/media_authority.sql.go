@@ -1150,6 +1150,7 @@ const getLiveStreamMediaAuthoritySource = `-- name: GetLiveStreamMediaAuthorityS
 SELECT id::text AS stream_id, tenant_id::text AS tenant_id, user_id::text AS user_id,
        internal_name, playback_id::text AS playback_id, stream_key::text AS stream_key,
        ingest_mode, requires_auth, COALESCE(is_recording_enabled, FALSE)::boolean AS is_recording_enabled,
+       dvr_chapter_mode, dvr_chapter_interval_seconds,
        COALESCE(playback_policy::text, '')::text AS playback_policy,
        COALESCE(playback_webhook_secret_enc, '')::text AS playback_webhook_secret_enc,
        COALESCE(active_ingest_cluster_id, '')::text AS active_ingest_cluster_id,
@@ -1164,23 +1165,25 @@ WHERE id = $1::uuid
 `
 
 type GetLiveStreamMediaAuthoritySourceRow struct {
-	StreamID                 string       `db:"stream_id" json:"stream_id"`
-	TenantID                 string       `db:"tenant_id" json:"tenant_id"`
-	UserID                   string       `db:"user_id" json:"user_id"`
-	InternalName             string       `db:"internal_name" json:"internal_name"`
-	PlaybackID               string       `db:"playback_id" json:"playback_id"`
-	StreamKey                string       `db:"stream_key" json:"stream_key"`
-	IngestMode               string       `db:"ingest_mode" json:"ingest_mode"`
-	RequiresAuth             bool         `db:"requires_auth" json:"requires_auth"`
-	IsRecordingEnabled       bool         `db:"is_recording_enabled" json:"is_recording_enabled"`
-	PlaybackPolicy           string       `db:"playback_policy" json:"playback_policy"`
-	PlaybackWebhookSecretEnc string       `db:"playback_webhook_secret_enc" json:"playback_webhook_secret_enc"`
-	ActiveIngestClusterID    string       `db:"active_ingest_cluster_id" json:"active_ingest_cluster_id"`
-	LastIngestClusterID      string       `db:"last_ingest_cluster_id" json:"last_ingest_cluster_id"`
-	DeletedAt                sql.NullTime `db:"deleted_at" json:"deleted_at"`
-	AgeSeconds               int64        `db:"age_seconds" json:"age_seconds"`
-	IngestLeaseAgeSeconds    int64        `db:"ingest_lease_age_seconds" json:"ingest_lease_age_seconds"`
-	MayPublish               bool         `db:"may_publish" json:"may_publish"`
+	StreamID                  string         `db:"stream_id" json:"stream_id"`
+	TenantID                  string         `db:"tenant_id" json:"tenant_id"`
+	UserID                    string         `db:"user_id" json:"user_id"`
+	InternalName              string         `db:"internal_name" json:"internal_name"`
+	PlaybackID                string         `db:"playback_id" json:"playback_id"`
+	StreamKey                 string         `db:"stream_key" json:"stream_key"`
+	IngestMode                string         `db:"ingest_mode" json:"ingest_mode"`
+	RequiresAuth              bool           `db:"requires_auth" json:"requires_auth"`
+	IsRecordingEnabled        bool           `db:"is_recording_enabled" json:"is_recording_enabled"`
+	DvrChapterMode            sql.NullString `db:"dvr_chapter_mode" json:"dvr_chapter_mode"`
+	DvrChapterIntervalSeconds sql.NullInt32  `db:"dvr_chapter_interval_seconds" json:"dvr_chapter_interval_seconds"`
+	PlaybackPolicy            string         `db:"playback_policy" json:"playback_policy"`
+	PlaybackWebhookSecretEnc  string         `db:"playback_webhook_secret_enc" json:"playback_webhook_secret_enc"`
+	ActiveIngestClusterID     string         `db:"active_ingest_cluster_id" json:"active_ingest_cluster_id"`
+	LastIngestClusterID       string         `db:"last_ingest_cluster_id" json:"last_ingest_cluster_id"`
+	DeletedAt                 sql.NullTime   `db:"deleted_at" json:"deleted_at"`
+	AgeSeconds                int64          `db:"age_seconds" json:"age_seconds"`
+	IngestLeaseAgeSeconds     int64          `db:"ingest_lease_age_seconds" json:"ingest_lease_age_seconds"`
+	MayPublish                bool           `db:"may_publish" json:"may_publish"`
 }
 
 func (q *Queries) GetLiveStreamMediaAuthoritySource(ctx context.Context, streamID string) (GetLiveStreamMediaAuthoritySourceRow, error) {
@@ -1196,6 +1199,8 @@ func (q *Queries) GetLiveStreamMediaAuthoritySource(ctx context.Context, streamI
 		&i.IngestMode,
 		&i.RequiresAuth,
 		&i.IsRecordingEnabled,
+		&i.DvrChapterMode,
+		&i.DvrChapterIntervalSeconds,
 		&i.PlaybackPolicy,
 		&i.PlaybackWebhookSecretEnc,
 		&i.ActiveIngestClusterID,

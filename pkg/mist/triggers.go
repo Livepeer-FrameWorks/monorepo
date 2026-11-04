@@ -20,6 +20,10 @@ import (
 // TriggerType represents the type of MistServer trigger
 type TriggerType string
 
+// PublisherResponseTimeout is Helmsman's useful response ceiling inside a
+// five-second Mist HTTP delivery, leaving time to persist and return its answer.
+const PublisherResponseTimeout = 4 * time.Second
+
 const (
 	TriggerPushRewrite      TriggerType = "PUSH_REWRITE"
 	TriggerPlayRewrite      TriggerType = "PLAY_REWRITE"

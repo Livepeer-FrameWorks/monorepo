@@ -39,6 +39,7 @@ type pairCache struct {
 	entries   int
 	lastSweep time.Time
 	reads     *prometheus.CounterVec
+	changes   uint64
 }
 
 type pairCacheTenant struct {
@@ -146,6 +147,7 @@ func (c *pairCache) count(result string) {
 func (c *pairCache) forget(tenantID, internalName, authorityID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.changes++
 	tenant := c.tenants[tenantID]
 	if tenant == nil {
 		return
@@ -176,6 +178,7 @@ func (c *pairCache) forget(tenantID, internalName, authorityID string) {
 func (c *pairCache) forgetAll() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.changes++
 	for _, tenant := range c.tenants {
 		for _, flight := range tenant.flights {
 			flight.detached = true

@@ -77,7 +77,7 @@ const (
 	// for unchanged source state. Reconciliation then re-issues every authority
 	// in use once; nothing else would, because an unchanged compile publishes
 	// nothing.
-	mediaAuthorityCompilerRevision = 2
+	mediaAuthorityCompilerRevision = 3
 	// Queue gauges and the sweeps that settle deliveries nothing will ever make.
 	// Neither is needed to deliver, so they run off the one-second delivery tick.
 	// Each replica observes once a minute; the alerts on these gauges wait
@@ -506,6 +506,7 @@ func (s *CommodoreServer) compileLiveStreamAuthority(ctx context.Context, stream
 	if originClusterID != "" && source.MayPublish {
 		publishingCredential = sharedauthority.PublishingCredentialDigest(source.StreamKey)
 	}
+	chapterMode, chapterInterval := streamDVRChapterPolicy(source.DvrChapterMode, source.DvrChapterIntervalSeconds)
 	payload := &mediaauthoritypb.MediaObjectAuthority{
 		SchemaVersion:         sharedauthority.SchemaVersion,
 		ObjectKind:            mediaauthoritypb.MediaObjectKind_MEDIA_OBJECT_KIND_LIVE_STREAM,
@@ -524,8 +525,14 @@ func (s *CommodoreServer) compileLiveStreamAuthority(ctx context.Context, stream
 			RecordingEnabled:           source.IsRecordingEnabled,
 			ProcessesJson:              processesJSON,
 			DvrProcessesJson:           dvrProcessesJSON,
-			SealedCellSecrets:          sealedSecrets,
+
+			SealedCellSecrets: sealedSecrets,
 		}},
+	}
+	if tenant.GetSchemaVersion() >= sharedauthority.PublisherAdmissionSchemaVersion {
+		payload.GetLiveStream().DvrChapterMode = chapterMode
+		payload.GetLiveStream().DvrChapterIntervalSeconds = chapterInterval
+		payload.GetLiveStream().PublisherConfigurationVersion = 1
 	}
 	issuedAt := time.Now().UTC()
 	validUntil := issuedAt.Add(mediaAuthorityValidity)
@@ -1983,7 +1990,7 @@ func (s *CommodoreServer) neverCompiledTenants(ctx context.Context, queries *com
 // how it shapes payloads. mediaAuthorityCompilerRevision is raised by hand in the
 // change that alters a payload for unchanged source state.
 func (s *CommodoreServer) mediaAuthorityCompilerFingerprint() string {
-	return fmt.Sprintf("key=%s;schema=%d;revision=%d", s.mediaAuthorityKeyID, sharedauthority.NodePlacementSchemaVersion, mediaAuthorityCompilerRevision)
+	return fmt.Sprintf("key=%s;schema=%d;revision=%d", s.mediaAuthorityKeyID, sharedauthority.PublisherAdmissionSchemaVersion, mediaAuthorityCompilerRevision)
 }
 
 func (s *CommodoreServer) mediaAuthorityCompilerChanged(ctx context.Context, queries *commodoredb.Queries) bool {
@@ -2126,7 +2133,11 @@ func (s *CommodoreServer) sweepMediaAuthorityRetention(ctx context.Context, now 
 		if err != nil {
 			return fmt.Errorf("delete expired media authority versions: %w", err)
 		}
-		if targetRows < mediaAuthorityRetentionBatch && inboxRows < mediaAuthorityRetentionBatch && deliveryRows < mediaAuthorityRetentionBatch && versionRows < mediaAuthorityRetentionBatch {
+		markerRows, err := queries.PurgePublisherLeaseAbandonments(ctx)
+		if err != nil {
+			return fmt.Errorf("delete expired publisher abandonments: %w", err)
+		}
+		if markerRows < 1000 && targetRows < mediaAuthorityRetentionBatch && inboxRows < mediaAuthorityRetentionBatch && deliveryRows < mediaAuthorityRetentionBatch && versionRows < mediaAuthorityRetentionBatch {
 			return nil
 		}
 	}

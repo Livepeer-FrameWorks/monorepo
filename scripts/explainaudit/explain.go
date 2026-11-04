@@ -255,7 +255,11 @@ func explainQuery(ctx context.Context, conn *sql.Conn, s *seeder, opts options, 
 	// Sampled values first; then type-only synthetic values, since a sampled value can violate a constraint of a
 	// write; then synthetic text as a UUID and as a number, for text parameters the statement casts further.
 	variants := [][]paramBinding{params}
+	fixture := publisherFixtureFor(q.ID, s.now)
 	for _, textValue := range []string{"", "uuid", "60"} {
+		if fixture != nil {
+			break
+		}
 		fallback := make([]paramBinding, len(params))
 		for i, p := range params {
 			v := b.synthetic(p.Type, nameAt(q.ParamNames, i))
@@ -272,7 +276,7 @@ func explainQuery(ctx context.Context, conn *sql.Conn, s *seeder, opts options, 
 	var plan json.RawMessage
 	var err, firstErr error
 	for _, variant := range variants {
-		if plan, err = runExplain(ctx, conn, "EXPLAIN (ANALYZE, DIST, FORMAT JSON) "+execute(variant), opts.queryTimeout); err == nil {
+		if plan, err = runExplain(ctx, conn, "EXPLAIN (ANALYZE, DIST, FORMAT JSON) "+execute(variant), opts.queryTimeout, fixture); err == nil {
 			params = variant
 			break
 		}
@@ -289,7 +293,7 @@ func explainQuery(ctx context.Context, conn *sql.Conn, s *seeder, opts options, 
 		var planOnly json.RawMessage
 		var perr error
 		for _, variant := range variants {
-			if planOnly, perr = runExplain(ctx, conn, "EXPLAIN (FORMAT JSON) "+execute(variant), opts.queryTimeout); perr == nil {
+			if planOnly, perr = runExplain(ctx, conn, "EXPLAIN (FORMAT JSON) "+execute(variant), opts.queryTimeout, nil); perr == nil {
 				r.Params = variant
 				break
 			}
@@ -314,10 +318,10 @@ func explainQuery(ctx context.Context, conn *sql.Conn, s *seeder, opts options, 
 
 // runExplain explains inside a transaction that is always rolled back, twice, keeping the second plan: the first
 // execution in a session also pays catalog reads that a long-lived connection pool does not.
-func runExplain(ctx context.Context, conn *sql.Conn, statement string, timeout time.Duration) (json.RawMessage, error) {
+func runExplain(ctx context.Context, conn *sql.Conn, statement string, timeout time.Duration, fixture *publisherFixture) (json.RawMessage, error) {
 	var out json.RawMessage
 	for attempt := 0; attempt < 2; attempt++ {
-		raw, err := runExplainAttempt(ctx, conn, statement, timeout)
+		raw, err := runExplainAttempt(ctx, conn, statement, timeout, fixture)
 		if err != nil {
 			return nil, err
 		}
@@ -326,7 +330,7 @@ func runExplain(ctx context.Context, conn *sql.Conn, statement string, timeout t
 	return out, nil
 }
 
-func runExplainAttempt(ctx context.Context, conn *sql.Conn, statement string, timeout time.Duration) (out json.RawMessage, err error) {
+func runExplainAttempt(ctx context.Context, conn *sql.Conn, statement string, timeout time.Duration, fixture *publisherFixture) (out json.RawMessage, err error) {
 	if _, err = conn.ExecContext(ctx, "BEGIN"); err != nil {
 		return nil, err
 	}
@@ -338,8 +342,16 @@ func runExplainAttempt(ctx context.Context, conn *sql.Conn, statement string, ti
 	if _, err = conn.ExecContext(ctx, fmt.Sprintf("SET LOCAL statement_timeout = %d", timeout.Milliseconds())); err != nil {
 		return nil, err
 	}
+	if fixture != nil {
+		if err = fixture.setup(ctx, conn); err != nil {
+			return nil, err
+		}
+	}
 	var text string
 	err = conn.QueryRowContext(ctx, statement).Scan(&text)
+	if err == nil && fixture != nil {
+		err = fixture.verify(ctx, conn)
+	}
 	return json.RawMessage(text), err
 }
 

@@ -234,6 +234,10 @@ message LiveStreamAuthority {
   string processes_json = 6;
   string dvr_processes_json = 7;
   repeated SealedCellSecret sealed_cell_secrets = 8;
+  string dvr_chapter_mode = 9;
+  int32 dvr_chapter_interval_seconds = 10;
+  // Version 1 includes all publisher configuration used by local admission.
+  uint32 publisher_configuration_version = 11;
 }
 
 message ArtifactAuthority {

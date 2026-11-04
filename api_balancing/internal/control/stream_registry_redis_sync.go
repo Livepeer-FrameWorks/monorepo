@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"sync"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pkgredis "github.com/Livepeer-FrameWorks/monorepo/pkg/redis"
+	"golang.org/x/sync/semaphore"
 )
 
 // EnableRedisSync wires the registry to a Redis store: rehydrates from
@@ -418,9 +418,11 @@ func (r *StreamRegistry) publishSourceWrite(ctx context.Context, w SourceLocatio
 	}
 	w.RevisionCluster = r.clusterID
 	lock := r.sourceLocationLock(name)
-	lock.Lock()
+	if err := lock.Acquire(ctx, 1); err != nil {
+		return RegistryChange{}, false, err
+	}
 	change, applied, err := store.WriteSourceLocations(ctx, w, instance)
-	lock.Unlock()
+	lock.Release(1)
 	if err == nil && applied && notify {
 		r.notifySourceChanged(name)
 	}
@@ -505,12 +507,17 @@ func (r *StreamRegistry) publishSourceRemovals(identity StreamEntry, removals ma
 	return true
 }
 
-func (r *StreamRegistry) sourceLocationLock(internalName string) *sync.Mutex {
+func (r *StreamRegistry) sourceLocationLock(internalName string) *semaphore.Weighted {
+	r.sourceLocationLocksOnce.Do(func() {
+		for i := range r.sourceLocationLocks {
+			r.sourceLocationLocks[i] = semaphore.NewWeighted(1)
+		}
+	})
 	hash := uint32(2166136261)
 	for i := 0; i < len(internalName); i++ {
 		hash = hash*16777619 ^ uint32(internalName[i])
 	}
-	return &r.sourceLocationLocks[hash%uint32(len(r.sourceLocationLocks))]
+	return r.sourceLocationLocks[hash%uint32(len(r.sourceLocationLocks))]
 }
 
 func (r *StreamRegistry) publishUpsertArtifact(e ArtifactEntry) {

@@ -1439,6 +1439,7 @@ ORDER BY delivery.cell_id;
 SELECT id::text AS stream_id, tenant_id::text AS tenant_id, user_id::text AS user_id,
        internal_name, playback_id::text AS playback_id, stream_key::text AS stream_key,
        ingest_mode, requires_auth, COALESCE(is_recording_enabled, FALSE)::boolean AS is_recording_enabled,
+       dvr_chapter_mode, dvr_chapter_interval_seconds,
        COALESCE(playback_policy::text, '')::text AS playback_policy,
        COALESCE(playback_webhook_secret_enc, '')::text AS playback_webhook_secret_enc,
        COALESCE(active_ingest_cluster_id, '')::text AS active_ingest_cluster_id,

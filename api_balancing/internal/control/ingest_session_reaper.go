@@ -54,6 +54,15 @@ func RetireIngestSession(ctx context.Context, sessionID, tenantID, internalName,
 		if lockErr := qtx.AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
 			return fmt.Errorf("lock ingest session retirement: %w", lockErr)
 		}
+		if reason == IngestEndedAdmissionLapsed {
+			lapsed, lapsedErr := qtx.PublisherAdmissionStillLapsed(ctx, foghorndb.PublisherAdmissionStillLapsedParams{TenantID: tenantID, Generation: sessionID, AdmissionWindowMs: IngestAdmissionWindow.Milliseconds()})
+			if lapsedErr != nil {
+				return lapsedErr
+			}
+			if !lapsed {
+				return nil
+			}
+		}
 		retiredRow, retireErr := qtx.RetireIngestSession(ctx, foghorndb.RetireIngestSessionParams{
 			EndedReason: reason, SessionID: sessionID, TenantID: tenantID, StreamInternalName: internalName,
 		})

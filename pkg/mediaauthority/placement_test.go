@@ -163,3 +163,28 @@ func TestNodeSelectorsRequireSchemaThree(t *testing.T) {
 		t.Fatalf("mixed schema-2/3 pair compiled: %v", err)
 	}
 }
+
+func TestPublisherAdmissionSchemaPreservesConfigurationAndNodePolicy(t *testing.T) {
+	tenant, object := placementTenant(), placementObject()
+	tenant.SchemaVersion, object.SchemaVersion = PublisherAdmissionSchemaVersion, PublisherAdmissionSchemaVersion
+	object.GetLiveStream().PublisherConfigurationVersion = 1
+	object.GetLiveStream().DvrChapterMode = "fixed_interval"
+	object.GetLiveStream().DvrChapterIntervalSeconds = 60
+	for _, payload := range []proto.Message{tenant, object} {
+		signed, trust := fixtureSigned(t, payload)
+		verified, err := Verify(signed, trust, "cell-a", fixtureNow.Add(time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if verified.MediaObject != nil && !proto.Equal(verified.MediaObject, object) {
+			t.Fatal("schema-4 signed publisher configuration changed during verification")
+		}
+	}
+	if _, err := EffectivePlacement(tenant, object, placement.Ingest); err != nil {
+		t.Fatalf("schema-4 placement rejected: %v", err)
+	}
+	object.SchemaVersion = NodePlacementSchemaVersion
+	if _, err := EffectivePlacement(tenant, object, placement.Ingest); !errors.Is(err, ErrUnknownSchema) {
+		t.Fatalf("mixed publisher schema pair allowed: %v", err)
+	}
+}

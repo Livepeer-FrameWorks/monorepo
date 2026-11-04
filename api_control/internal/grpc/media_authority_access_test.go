@@ -229,9 +229,9 @@ func TestCompileAuthorityChecksAccessBeforeTenantLookupSucceeds(t *testing.T) {
 						StreamId: objectID, IngestMode: "push", PublishingCredentialSha256: sharedauthority.PublishingCredentialDigest("stream-key"),
 					}}
 					mock.ExpectQuery("GetLiveStreamMediaAuthoritySource").WithArgs(objectID).WillReturnRows(sqlmock.NewRows([]string{
-						"stream_id", "tenant_id", "user_id", "internal_name", "playback_id", "stream_key", "ingest_mode", "requires_auth", "is_recording_enabled",
+						"stream_id", "tenant_id", "user_id", "internal_name", "playback_id", "stream_key", "ingest_mode", "requires_auth", "is_recording_enabled", "dvr_chapter_mode", "dvr_chapter_interval_seconds",
 						"playback_policy", "playback_webhook_secret_enc", "active_ingest_cluster_id", "last_ingest_cluster_id", "deleted_at", "age_seconds", "ingest_lease_age_seconds", "may_publish",
-					}).AddRow(objectID, tenantID, "user", "internal", "playback", "stream-key", "push", true, false, tt.policy, "", "", "", nil, 0, 0, true))
+					}).AddRow(objectID, tenantID, "user", "internal", "playback", "stream-key", "push", true, false, nil, nil, tt.policy, "", "", "", nil, 0, 0, true))
 				}
 				encoded, err := proto.Marshal(object)
 				if err != nil {

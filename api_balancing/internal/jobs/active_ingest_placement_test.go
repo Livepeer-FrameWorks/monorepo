@@ -518,3 +518,89 @@ func TestActiveIngestPlacementJob_RenewsPublishersAdmittedAfterASnapshot(t *test
 		t.Fatalf("second tick renewed %v; the newly admitted publisher must be included", renewed)
 	}
 }
+
+type splitPublisherSyncer struct{ recordingSyncer }
+
+func (s *splitPublisherSyncer) RenewPublisherLeases(ctx context.Context, entries []*commodorepb.ActiveIngestStream) (*commodorepb.SyncActiveIngestPlacementResponse, error) {
+	for _, entry := range entries {
+		if !entry.GetRequireExistingOwner() {
+			return nil, errors.New("legacy outage owner was sent to strict renewal")
+		}
+	}
+	return s.SyncActiveIngestPlacement(ctx, "strict", entries, nil)
+}
+func TestActiveIngestPlacementJob_MixedOwnersUseSeparateRenewalContracts(t *testing.T) {
+	syncer := &splitPublisherSyncer{}
+	job := placementJob(syncer, func(context.Context) []LiveIngest {
+		return []LiveIngest{
+			{TenantID: "t", InternalName: "old", ClusterID: "c", ClaimToken: "old"},
+			{TenantID: "t", InternalName: "new", ClusterID: "c", ClaimToken: "new", StrictLeaseOwner: true},
+		}
+	})
+	renewAndWait(job)
+	calls := syncer.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("mixed owners did not each renew: %+v", calls)
+	}
+	for _, call := range calls {
+		if len(call.renew) != 1 || (call.clusterID == "strict") != call.renew[0].GetRequireExistingOwner() {
+			t.Fatalf("mixed renewal contract: %+v", call)
+		}
+	}
+}
+
+func TestActiveIngestPlacementJob_PreservesExecutionFenceIdentity(t *testing.T) {
+	syncer := &recordingSyncer{}
+	job := placementJob(syncer, func(context.Context) []LiveIngest {
+		return []LiveIngest{{TenantID: "tenant", InternalName: "stream", ClusterID: "cluster", ClaimToken: "execution", NodeID: "node", ControlCellID: "cell"}}
+	})
+	renewAndWait(job)
+	calls := syncer.snapshot()
+	if len(calls) != 1 || len(calls[0].renew) != 1 {
+		t.Fatalf("renewal missing: %+v", calls)
+	}
+	entry := calls[0].renew[0]
+	if entry.GetNodeId() != "node" || entry.GetControlCellId() != "cell" || entry.GetClaimToken() != "execution" {
+		t.Fatalf("outage renewal lost execution fence identity: %v", entry)
+	}
+}
+
+func TestActiveIngestPlacementJob_GroupFailureStillAttemptsOtherContract(t *testing.T) {
+	syncer := &splitPublisherSyncer{recordingSyncer: recordingSyncer{err: errors.New("renewal unavailable")}}
+	job := placementJob(syncer, nil)
+	err := job.syncBatch([]*commodorepb.ActiveIngestStream{{TenantId: "t", InternalName: "strict", ClusterId: "c", ClaimToken: "s", RequireExistingOwner: true}, {TenantId: "t", InternalName: "legacy", ClusterId: "c", ClaimToken: "l"}})
+	if err == nil {
+		t.Fatal("renewal errors were discarded")
+	}
+	calls := syncer.snapshot()
+	if len(calls) != 2 || calls[0].clusterID != "strict" || calls[1].clusterID != "" {
+		t.Fatalf("strict failure suppressed legacy renewal: %+v", calls)
+	}
+}
+
+type expiredStrictRenewalSyncer struct {
+	recordingSyncer
+	legacyContextErr error
+}
+
+func (s *expiredStrictRenewalSyncer) RenewPublisherLeases(ctx context.Context, _ []*commodorepb.ActiveIngestStream) (*commodorepb.SyncActiveIngestPlacementResponse, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+func (s *expiredStrictRenewalSyncer) SyncActiveIngestPlacement(ctx context.Context, cluster string, renew, release []*commodorepb.ActiveIngestStream) (*commodorepb.SyncActiveIngestPlacementResponse, error) {
+	s.legacyContextErr = ctx.Err()
+	return s.recordingSyncer.SyncActiveIngestPlacement(ctx, cluster, renew, release)
+}
+func TestActiveIngestPlacementJob_SlowStrictGroupReservesLegacyLifetime(t *testing.T) {
+	syncer := &expiredStrictRenewalSyncer{}
+	job := placementJob(syncer, nil)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	err := job.syncBatchContext(ctx, []*commodorepb.ActiveIngestStream{{TenantId: "t", InternalName: "strict", ClusterId: "c", ClaimToken: "s", RequireExistingOwner: true}, {TenantId: "t", InternalName: "legacy", ClusterId: "c", ClaimToken: "l"}})
+	if err == nil {
+		t.Fatal("strict deadline failure was lost")
+	}
+	if calls := syncer.snapshot(); len(calls) != 1 || syncer.legacyContextErr != nil {
+		t.Fatalf("slow strict renewal consumed legacy lifetime: calls=%+v context_error=%v", calls, syncer.legacyContextErr)
+	}
+}

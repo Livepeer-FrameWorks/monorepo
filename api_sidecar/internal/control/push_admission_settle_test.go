@@ -94,8 +94,7 @@ func TestSettlePushRewriteAnswer_LocallyRefusedAcceptIsReported(t *testing.T) {
 	}
 }
 
-// Nothing is reported for an execution Foghorn never received, one Foghorn itself denied for a
-// business reason, or one whose accept reached Mist.
+// Nothing is reported for an execution Foghorn never received or one whose accept reached Mist.
 func TestSettlePushRewriteAnswer_SettledExecutionsAreNotReported(t *testing.T) {
 	withTestTriggerWAL(t)
 	resetAcceptedPushExecutions(t)
@@ -104,8 +103,6 @@ func TestSettlePushRewriteAnswer_SettledExecutionsAreNotReported(t *testing.T) {
 
 	SettlePushRewriteAnswer(pushRewriteForSettle("exec-unsent", 1, time.Now()),
 		&MistTriggerResult{Abort: true, ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT}, false, true, logger)
-	SettlePushRewriteAnswer(pushRewriteForSettle("exec-duplicate", 2, time.Now()),
-		&MistTriggerResult{Abort: true, ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_DUPLICATE_INGEST, Forwarded: true}, false, true, logger)
 	SettlePushRewriteAnswer(pushRewriteForSettle("exec-accepted", 3, time.Now()),
 		&MistTriggerResult{Response: "live+s", IngestGeneration: "gen-3", Forwarded: true}, true, true, logger)
 
@@ -249,5 +246,45 @@ func TestSendMistTriggerContext_ReportsWhetherThePushWasForwarded(t *testing.T) 
 	result, err = SendMistTriggerContext(ctx2, pushRewriteForSettle("exec-unsent", 22, time.Now()), logging.NewLogger())
 	if err == nil || result == nil || result.Forwarded {
 		t.Fatalf("failed send: result=%+v err=%v, want not Forwarded", result, err)
+	}
+}
+
+func TestSettlePushRewriteAnswer_DomainDenialWithoutGenerationSettlesLeaseExecution(t *testing.T) {
+	for _, code := range []ipcpb.IngestErrorCode{
+		ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED,
+		ipcpb.IngestErrorCode_INGEST_ERROR_DUPLICATE_INGEST,
+		ipcpb.IngestErrorCode_INGEST_ERROR_TENANT_STREAM_CAP,
+		ipcpb.IngestErrorCode_INGEST_ERROR_PAYMENT_REQUIRED,
+		ipcpb.IngestErrorCode_INGEST_ERROR_ACCOUNT_SUSPENDED,
+		ipcpb.IngestErrorCode_INGEST_ERROR_FREE_TIER_EXHAUSTED,
+	} {
+		t.Run(code.String(), func(t *testing.T) {
+			withTestTriggerWAL(t)
+			resetAcceptedPushExecutions(t)
+			checks := captureDeferredAdmissionChecks(t)
+			trigger := pushRewriteForSettle("lease-before-denial", 99, time.Now())
+			result := &MistTriggerResult{Abort: true, ErrorCode: code, Forwarded: true}
+			SettlePushRewriteAnswer(trigger, result, false, true, logging.NewLogger())
+			if reports := pendingAbandonments(t); len(reports) != 1 || reports[0].GetTriggerUuid() != "lease-before-denial" || reports[0].GetConnectorPid() != 99 {
+				t.Fatalf("domain denial left its global lease execution unsettled: reports=%+v", reports)
+			}
+			if len(*checks) != 0 {
+				t.Fatalf("delivered domain denial scheduled %d deferred checks", len(*checks))
+			}
+		})
+	}
+}
+
+func TestSettlePushRewriteAnswer_AcceptedExecutionSurvivesLaterDomainDenial(t *testing.T) {
+	withTestTriggerWAL(t)
+	resetAcceptedPushExecutions(t)
+	trigger := pushRewriteForSettle("already-accepted", 101, time.Now())
+	logger := logging.NewLogger()
+	SettlePushRewriteAnswer(trigger, &MistTriggerResult{Response: "live+s", IngestGeneration: "generation", Forwarded: true}, true, true, logger)
+	for _, code := range []ipcpb.IngestErrorCode{ipcpb.IngestErrorCode_INGEST_ERROR_DUPLICATE_INGEST, ipcpb.IngestErrorCode_INGEST_ERROR_PAYMENT_REQUIRED} {
+		SettlePushRewriteAnswer(trigger, &MistTriggerResult{Abort: true, ErrorCode: code, Forwarded: true}, false, true, logger)
+	}
+	if reports := pendingAbandonments(t); len(reports) != 0 {
+		t.Fatalf("a duplicate result abandoned an execution whose accept already reached Mist: %+v", reports)
 	}
 }

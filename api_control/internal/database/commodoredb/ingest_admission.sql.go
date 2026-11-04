@@ -15,15 +15,16 @@ WITH held AS (
     SELECT current_stream.id,
            current_stream.active_ingest_cluster_id AS prev_cluster,
            current_stream.active_ingest_claim_id AS prev_token,
+           current_stream.active_ingest_node_id AS prev_node, current_stream.active_ingest_control_cell_id AS prev_cell,
            COALESCE(
                current_stream.active_ingest_cluster_id IS NOT NULL
                AND current_stream.active_ingest_cluster_id <> ''
                AND current_stream.active_ingest_cluster_updated_at IS NOT NULL
-               AND current_stream.active_ingest_cluster_updated_at >= NOW() - ($3::bigint * INTERVAL '1 second'),
+               AND current_stream.active_ingest_cluster_updated_at >= NOW() - ($5::bigint * INTERVAL '1 second'),
                false
            )::boolean AS prev_fresh
     FROM commodore.streams current_stream
-    WHERE current_stream.stream_key = $4
+    WHERE current_stream.stream_key = $6
       AND current_stream.deleted_at IS NULL
     FOR UPDATE
 )
@@ -31,12 +32,16 @@ UPDATE commodore.streams s
 SET active_ingest_cluster_id = $1,
     active_ingest_cluster_updated_at = NOW(),
     active_ingest_claim_id = $2,
+    active_ingest_node_id = CASE WHEN $3::text IS NOT NULL THEN $3::text WHEN active_ingest_cluster_id=$1 AND active_ingest_claim_id=$2 THEN active_ingest_node_id ELSE NULL END,
+    active_ingest_control_cell_id = CASE WHEN $4::text IS NOT NULL THEN $4::text WHEN active_ingest_cluster_id=$1 AND active_ingest_claim_id=$2 THEN active_ingest_control_cell_id ELSE NULL END,
     updated_at = NOW()
 FROM held
 WHERE s.id = held.id
   AND (
       NOT held.prev_fresh
-      OR (held.prev_cluster = $1 AND held.prev_token = $2)
+      OR (held.prev_cluster = $1 AND held.prev_token = $2
+          AND ($3::text IS NULL OR (held.prev_node IS NULL AND held.prev_cell IS NULL)
+            OR (held.prev_node=$3::text AND held.prev_cell=$4::text)))
   )
 RETURNING held.prev_cluster, held.prev_token, held.prev_fresh
 `
@@ -44,6 +49,8 @@ RETURNING held.prev_cluster, held.prev_token, held.prev_fresh
 type AcquireIngestClaimParams struct {
 	ClusterID       sql.NullString `db:"cluster_id" json:"cluster_id"`
 	ClaimToken      sql.NullString `db:"claim_token" json:"claim_token"`
+	NodeID          sql.NullString `db:"node_id" json:"node_id"`
+	ControlCellID   sql.NullString `db:"control_cell_id" json:"control_cell_id"`
 	LeaseSeconds    int64          `db:"lease_seconds" json:"lease_seconds"`
 	LookupStreamKey string         `db:"lookup_stream_key" json:"lookup_stream_key"`
 }
@@ -58,6 +65,8 @@ func (q *Queries) AcquireIngestClaim(ctx context.Context, arg AcquireIngestClaim
 	row := q.db.QueryRowContext(ctx, acquireIngestClaim,
 		arg.ClusterID,
 		arg.ClaimToken,
+		arg.NodeID,
+		arg.ControlCellID,
 		arg.LeaseSeconds,
 		arg.LookupStreamKey,
 	)

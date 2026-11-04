@@ -84,7 +84,9 @@ type LiveIngest struct {
 	ClusterID    string
 	// ClaimToken owns the claim being re-asserted, so an acquired claim is
 	// stamped with the live session rather than left ownerless.
-	ClaimToken string
+	ClaimToken            string
+	StrictLeaseOwner      bool
+	NodeID, ControlCellID string
 }
 
 // ActiveIngestPlacementSyncer is the Commodore call this job makes.
@@ -100,9 +102,10 @@ type ActiveIngestPlacementSyncer interface {
 // for as long as the publisher is connected — the same job the managed-stream
 // reconciler does for mist_native.
 //
-// Liveness is the registry's projection of the database-confirmed publisher generation. An open
-// ingest-session row is not sufficient: it can outlive a crashed node, and renewing from one would
-// hold placement for a publisher that is gone, preventing another cluster from accepting it.
+// Renewal follows open durable sessions on nodes whose control connection this
+// replica owns, including pending generations inside the admission window.
+// Registry projection can transiently disappear without ending a publisher;
+// an unreachable node is skipped so its placement lease can lapse.
 //
 // Placement is keyed by the publishing node's media cluster, carried per entry,
 // so one batch can mix clusters and a tick's cost tracks publishers rather than
@@ -218,10 +221,12 @@ func (j *ActiveIngestPlacementJob) renew() {
 			continue
 		}
 		streams = append(streams, &commodorepb.ActiveIngestStream{
-			TenantId:     live.TenantID,
-			InternalName: live.InternalName,
-			ClaimToken:   live.ClaimToken,
-			ClusterId:    live.ClusterID,
+			TenantId:             live.TenantID,
+			InternalName:         live.InternalName,
+			ClaimToken:           live.ClaimToken,
+			ClusterId:            live.ClusterID,
+			RequireExistingOwner: live.StrictLeaseOwner,
+			NodeId:               live.NodeID, ControlCellId: live.ControlCellID,
 		})
 	}
 	if len(streams) == 0 {
@@ -270,8 +275,56 @@ func (j *ActiveIngestPlacementJob) renew() {
 func (j *ActiveIngestPlacementJob) syncBatch(streams []*commodorepb.ActiveIngestStream) error {
 	ctx, cancel := stoppable(j.stopCh, activeIngestPlacementCallTimeout)
 	defer cancel()
-	// No request-level cluster: every entry names its own.
-	resp, err := j.syncer.SyncActiveIngestPlacement(ctx, "", streams, nil)
+	return j.syncBatchContext(ctx, streams)
+}
+
+func (j *ActiveIngestPlacementJob) syncBatchContext(ctx context.Context, streams []*commodorepb.ActiveIngestStream) error {
+	var strict, legacy []*commodorepb.ActiveIngestStream
+	for _, stream := range streams {
+		if stream.GetRequireExistingOwner() {
+			strict = append(strict, stream)
+		} else {
+			legacy = append(legacy, stream)
+		}
+	}
+	groups := make([][]*commodorepb.ActiveIngestStream, 0, 2)
+	if len(strict) > 0 {
+		groups = append(groups, strict)
+	}
+	if len(legacy) > 0 {
+		groups = append(groups, legacy)
+	}
+	// Both contracts share the lease-derived batch lifetime. Reserve a fair
+	// share for every remaining group so an unavailable first contract cannot
+	// consume the other's chance to renew, without increasing RPC concurrency.
+	var result error
+	for i, group := range groups {
+		groupCtx := ctx
+		cancelGroup := func() {}
+		if deadline, ok := ctx.Deadline(); ok {
+			groupCtx, cancelGroup = context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(groups)-i))
+		}
+		groupErr := j.syncOwnerBatch(groupCtx, group)
+		cancelGroup()
+		result = errors.Join(result, groupErr)
+	}
+	return result
+}
+
+func (j *ActiveIngestPlacementJob) syncOwnerBatch(ctx context.Context, streams []*commodorepb.ActiveIngestStream) error {
+	var resp *commodorepb.SyncActiveIngestPlacementResponse
+	var err error
+	if streams[0].GetRequireExistingOwner() {
+		client, ok := j.syncer.(interface {
+			RenewPublisherLeases(context.Context, []*commodorepb.ActiveIngestStream) (*commodorepb.SyncActiveIngestPlacementResponse, error)
+		})
+		if !ok {
+			return errors.New("publisher lease renewal capability unavailable")
+		}
+		resp, err = client.RenewPublisherLeases(ctx, streams)
+	} else {
+		resp, err = j.syncer.SyncActiveIngestPlacement(ctx, "", streams, nil)
+	}
 	if err != nil {
 		return err
 	}

@@ -574,60 +574,61 @@ func constraintNames(pattern *regexp.Regexp, content string) []string {
 	return names
 }
 
-// immediateMigrationSQL hides only registered trigger routines in a DDL-only
-// migration. Any executable statement keeps bodies visible: it could invoke a
-// routine directly or fire a newly installed trigger.
+// immediateMigrationSQL omits stored routine definitions only when expansion
+// declares DDL without invoking them. Calls, DO, DML, CTAS and references from
+// expressions keep bodies visible to the rewrite checks.
 func immediateMigrationSQL(content string) string {
 	statements, err := sqlStatements(content)
 	if err != nil {
 		return content
 	}
-	registered := map[string]bool{}
+	routines := map[string]bool{}
+	definition := func(statement []sqlToken) (string, bool) {
+		i := 1
+		if len(statement) > 3 && isSQLWord(statement[1], "or") && isSQLWord(statement[2], "replace") {
+			i = 3
+		}
+		if len(statement) <= i || !isSQLWord(statement[0], "create") || (!isSQLWord(statement[i], "function") && !isSQLWord(statement[i], "procedure")) {
+			return "", false
+		}
+		name, _, ok := qualifiedName(statement, i+1)
+		return name, ok
+	}
 	for _, statement := range statements {
 		if len(statement) == 0 {
 			continue
 		}
-		if !isSQLWord(statement[0], "create") && !isSQLWord(statement[0], "alter") && !isSQLWord(statement[0], "comment") && !isSQLWord(statement[0], "grant") && !isSQLWord(statement[0], "revoke") {
+		if migrationCreatesRelationAsQuery(statement) || (!isSQLWord(statement[0], "create") && !isSQLWord(statement[0], "alter") && !isSQLWord(statement[0], "comment") && !isSQLWord(statement[0], "grant") && !isSQLWord(statement[0], "revoke")) {
 			return content
 		}
-
-		// CREATE ... AS executes its query, which can fire registered triggers.
-		if migrationCreatesRelationAsQuery(statement) {
-			return content
+		if name, ok := definition(statement); ok {
+			routines[name] = true
+			if dot := strings.LastIndexByte(name, '.'); dot >= 0 {
+				routines[name[dot+1:]] = true
+			}
 		}
-		i := 1
-		if len(statement) > 3 && isSQLWord(statement[1], "or") && isSQLWord(statement[2], "replace") {
-			i = 3
-		}
-		if len(statement) <= i || !isSQLWord(statement[0], "create") || !isSQLWord(statement[i], "trigger") {
+	}
+	var immediate strings.Builder
+	for _, statement := range statements {
+		if len(statement) == 0 {
 			continue
 		}
-		for j := i + 1; j+2 < len(statement); j++ {
-			if isSQLWord(statement[j], "execute") && (isSQLWord(statement[j+1], "function") || isSQLWord(statement[j+1], "procedure")) {
-				if name, _, ok := qualifiedName(statement, j+2); ok {
-					registered[name] = true
+		if _, ok := definition(statement); ok {
+			continue
+		}
+		// Installing a trigger does not execute its function.
+		if !isSQLWord(statement[0], "create") || !hasSQLWord(statement, "trigger") {
+			for i := range statement {
+				name, next, ok := qualifiedName(statement, i)
+				if ok && routines[name] && next < len(statement) && isSQLPunct(statement[next], "(") {
+					return content
 				}
 			}
 		}
+		immediate.WriteString(content[statement[0].start:statement[len(statement)-1].end])
+		immediate.WriteByte(';')
 	}
-	var executed strings.Builder
-	for _, statement := range statements {
-		i := 1
-		if len(statement) > 3 && isSQLWord(statement[1], "or") && isSQLWord(statement[2], "replace") {
-			i = 3
-		}
-		if len(statement) > i && isSQLWord(statement[0], "create") && isSQLWord(statement[i], "function") {
-			name, _, ok := qualifiedName(statement, i+1)
-			if ok && registered[name] && hasWordPair(statement, "returns", "trigger") {
-				continue
-			}
-		}
-		if len(statement) > 0 {
-			executed.WriteString(content[statement[0].start:statement[len(statement)-1].end])
-			executed.WriteByte(';')
-		}
-	}
-	return executed.String()
+	return immediate.String()
 }
 
 // executingMigrationSQL excludes stored definitions from direct data-operation

@@ -2,13 +2,20 @@ package control
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ControlMetrics holds Prometheus metrics for the HelmsmanControl stream ingress.
 type ControlMetrics struct {
+	// PublisherAdmissionDuration records request-owned phase durations in seconds.
+	// Labels are fixed phase/outcome enums; identities never become labels.
+	PublisherAdmissionDuration *prometheus.HistogramVec
 	// MistTriggers counts MistTrigger messages received/processed over the HelmsmanControl stream.
 	// Labels: trigger_type, blocking ("true"|"false"), status
 	MistTriggers *prometheus.CounterVec
@@ -151,4 +158,23 @@ func incNodeAdmissionEvent(operation, result string) {
 		return
 	}
 	controlMetrics.NodeAdmissionEvents.WithLabelValues(operation, result).Inc()
+}
+
+// ObservePublisherAdmissionPhase records one bounded phase without attaching
+// stream, tenant or execution identity to operational metrics.
+func ObservePublisherAdmissionPhase(phase string, started time.Time, err error) {
+	if controlMetrics == nil || controlMetrics.PublisherAdmissionDuration == nil {
+		return
+	}
+	outcome := "success"
+	if err != nil {
+		outcome = "error"
+		if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
+			outcome = "deadline"
+		}
+		if errors.Is(err, context.Canceled) || status.Code(err) == codes.Canceled {
+			outcome = "cancelled"
+		}
+	}
+	controlMetrics.PublisherAdmissionDuration.WithLabelValues(phase, outcome).Observe(time.Since(started).Seconds())
 }

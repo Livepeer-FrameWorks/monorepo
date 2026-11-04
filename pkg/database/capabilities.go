@@ -49,6 +49,7 @@ var capabilityCatalog = map[string][]Capability{
 		{Name: "domain event outbox", Engine: EnginePostgres, Probe: "SELECT event_id, event_type, tenant_id, lease_token, completed_at FROM bosun.domain_event_outbox LIMIT 0", IntroducedIn: "v0.3.11"},
 	},
 	"commodore": {
+		{Name: "publisher lease execution fencing", Engine: EnginePostgres, Probe: "SELECT s.tenant_id, s.active_ingest_node_id, s.active_ingest_control_cell_id, a.execution_token FROM commodore.streams s LEFT JOIN commodore.publisher_lease_abandonments a ON false LIMIT 0", IntroducedIn: "v0.3.14"},
 		{Name: "media cell activation edge", Engine: EnginePostgres, Probe: "SELECT cell_id, activation_schema_version FROM commodore.media_cell_placement_capabilities LIMIT 0", IntroducedIn: "v0.3.11"},
 		{Name: "media authority target retirement", Engine: EnginePostgres, Probe: "SELECT correction_until FROM commodore.media_authority_targets LIMIT 0", IntroducedIn: "v0.3.11"},
 		{Name: "media authority recipient validity", Engine: EnginePostgres, Probe: "SELECT correction_until FROM commodore.media_authority_deliveries LIMIT 0", IntroducedIn: "v0.3.11"},
@@ -62,6 +63,8 @@ var capabilityCatalog = map[string][]Capability{
 	"foghorn": {
 		{Name: "media authority recovery confirmation", Engine: EnginePostgres, Probe: "SELECT authority_id, confirmed_at FROM foghorn.media_authorities LIMIT 0", IntroducedIn: "v0.3.11"},
 		{Name: "ingest admission fencing", Engine: EnginePostgres, Probe: "SELECT id, tenant_id, node_id, stream_internal_name, connector_pid, projection_state, source_revision FROM foghorn.ingest_sessions LIMIT 0"},
+		{Name: "publisher admission operations", Engine: EnginePostgres, Probe: "SELECT foghorn.prepare_publisher_admission_v1(NULL::jsonb), foghorn.confirm_publisher_admission_v1(NULL::jsonb), foghorn.settle_publisher_admission_v1(NULL::jsonb) LIMIT 0", IntroducedIn: "v0.3.14"},
+		{Name: "publisher settlement queues", Engine: EnginePostgres, Probe: "SELECT publisher_sessions_settled_at, publisher_lease_settled_at FROM foghorn.ingest_admission_abandonments LIMIT 0", IntroducedIn: "v0.3.14"},
 		{Name: "restream activation-attempt fencing", Engine: EnginePostgres, Probe: "SELECT source_generation, target_revision, activation_attempt, mist_push_ids FROM foghorn.admission_push_target_revisions LIMIT 0"},
 		{Name: "cell storage identity", Engine: EnginePostgres, Probe: "SELECT backend_id, bucket, endpoint, region, prefix FROM foghorn.cell_storage_identity LIMIT 0"},
 		{Name: "artifact placement stable identity", Engine: EnginePostgres, Probe: "SELECT a.artifact_hash, a.tenant_id, n.node_id, n.last_emitted_version FROM foghorn.artifacts a LEFT JOIN foghorn.artifact_nodes n ON n.artifact_hash = a.artifact_hash LIMIT 0"},

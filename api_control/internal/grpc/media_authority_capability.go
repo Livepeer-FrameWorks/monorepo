@@ -70,6 +70,9 @@ func attestedCellPlacementCapability(capability *foghornpb.MediaCellPlacementCap
 	if ready && capability.GetNodePlacementReady() {
 		maxSchema = int32(sharedauthority.NodePlacementSchemaVersion)
 	}
+	if ready && capability.GetNodePlacementReady() && capability.GetPublisherAdmissionReady() {
+		maxSchema = int32(sharedauthority.PublisherAdmissionSchemaVersion)
+	}
 	return maxSchema, ready, replicas
 }
 
@@ -120,6 +123,9 @@ func (s *CommodoreServer) recordCellPlacementCapability(ctx context.Context, cel
 		listSchema, keySuffix := int32(sharedauthority.PlacementSchemaVersion), ""
 		if maxSchema >= int32(sharedauthority.NodePlacementSchemaVersion) {
 			listSchema, keySuffix = int32(sharedauthority.NodePlacementSchemaVersion), ":schema-3"
+		}
+		if maxSchema >= int32(sharedauthority.PublisherAdmissionSchemaVersion) {
+			listSchema, keySuffix = int32(sharedauthority.PublisherAdmissionSchemaVersion), ":schema-4"
 		}
 		if row.ActivationSchemaVersion >= listSchema {
 			return nil
@@ -270,6 +276,8 @@ func cellPlacementSchema(maxSchemaVersion int32, enforcementReady bool) uint32 {
 	switch {
 	case !cellPlacementCapabilityReady(maxSchemaVersion, enforcementReady):
 		return 0
+	case maxSchemaVersion >= int32(sharedauthority.PublisherAdmissionSchemaVersion):
+		return sharedauthority.PublisherAdmissionSchemaVersion
 	case maxSchemaVersion >= int32(sharedauthority.NodePlacementSchemaVersion):
 		return sharedauthority.NodePlacementSchemaVersion
 	default:
@@ -327,7 +335,7 @@ func (a placementCellAttestations) cellSchema(cell string) uint32 {
 // schema is the highest placement schema every cell attests, zero when any
 // attests none.
 func (a placementCellAttestations) schema() uint32 {
-	result := uint32(sharedauthority.NodePlacementSchemaVersion)
+	result := uint32(sharedauthority.PublisherAdmissionSchemaVersion)
 	for _, cell := range a.cells {
 		result = min(result, a.cellSchema(cell))
 	}
