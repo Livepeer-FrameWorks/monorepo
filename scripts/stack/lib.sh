@@ -418,11 +418,42 @@ pg() { # pg <db> <sql>: the service's own role, read-only use
   need psql || return 1
   PGPASSWORD="${POSTGRES_PASSWORD:-}" psql -h "$PG_HOST" -p "$PG_PORT" -U "$1" -d "$1" -v ON_ERROR_STOP=1 -Atc "$2" 2>/dev/null </dev/null
 }
+pg_diagnostic() { # pg_diagnostic <db> <sql>: retain SQL/client failures
+  need psql || return 1
+  PGPASSWORD="${POSTGRES_PASSWORD:-}" psql -h "$PG_HOST" -p "$PG_PORT" -U "$1" -d "$1" -v ON_ERROR_STOP=1 -Atc "$2" </dev/null
+}
 pg_fixture() { # pg_fixture <db> <sql>: isolated-stack fixture writes only
   [ "${STACK_TARGET:-stack}" != staging ] || { echo 'fixture SQL is forbidden on staging' >&2; return 1; }
   need psql || return 1
   PGPASSWORD="${POSTGRES_PASSWORD:-}" psql -h "$PG_HOST" -p "$PG_PORT" -U "$1" -d "$1" -v ON_ERROR_STOP=1 -Atc "$2" 2>/dev/null </dev/null
 }
+pg_fixture_diagnostic() {
+  [ "${STACK_TARGET:-stack}" != staging ] || { echo 'fixture SQL is forbidden on staging' >&2; return 1; }
+  pg_diagnostic "$@"
+}
+
+# A billing mutation also queues a durable entitlement reconciliation. Its
+# acknowledgement follows the Quartermaster writes, so fixture restoration must
+# wait for this owner phase before touching derived cluster-access rows.
+billing_entitlement_reconciled() { # tenant
+  local pending
+  pending=$(pg_diagnostic purser "SELECT COUNT(*) FROM purser.media_authority_refresh_outbox
+    WHERE tenant_id='$1' AND status <> 'completed'
+      AND reason IN ('subscription_authority_changed','subscription_entitlement_changed',
+                     'tier_entitlement_changed','billing_tier_authority_changed')") || {
+    echo "failed to read billing entitlement reconciliation for tenant $1" >&2
+    return 2
+  }
+  [[ "$pending" =~ ^[0-9]+$ ]] || {
+    echo "invalid billing reconciliation count for tenant $1: $pending" >&2
+    return 2
+  }
+  [ "$pending" = 0 ]
+}
+wait_billing_entitlement_reconcile() { # tenant [seconds]
+  eventually "${2:-30}" "billing entitlement reconciliation completed for $1" billing_entitlement_reconciled "$1"
+}
+
 ch() { # ch <sql>: CLICKHOUSE_URL carries the credentials as query parameters
   curl -s -m 20 "$CLICKHOUSE_URL" --data-binary "$1"
 }

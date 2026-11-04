@@ -20,14 +20,14 @@ snapshot_cluster_access_fixture() { # tenant cluster snapshot-file
 }
 restore_cluster_access_fixture() { # tenant cluster snapshot-file
   local tenant=$1 cluster=$2 snapshot=$3 prior current
-  [ -f "$snapshot" ] || return 1
-  prior=$(cat "$snapshot")
+  [ -f "$snapshot" ] || { echo "missing cluster access snapshot: $snapshot" >&2; return 1; }
+  prior=$(cat "$snapshot") || return 1
   if [ -z "$prior" ]; then
-    pg_fixture quartermaster "DELETE FROM quartermaster.tenant_cluster_access WHERE tenant_id='$tenant' AND cluster_id='$cluster'" >/dev/null || return 1
+    pg_fixture_diagnostic quartermaster "DELETE FROM quartermaster.tenant_cluster_access WHERE tenant_id='$tenant' AND cluster_id='$cluster'" >/dev/null || return 1
   else
     # This system-tenant access row is shared with other scenarios. Restore every field,
     # including provenance and expiry, after billing cleanup reconciles access.
-    pg_fixture quartermaster "INSERT INTO quartermaster.tenant_cluster_access
+    pg_fixture_diagnostic quartermaster "INSERT INTO quartermaster.tenant_cluster_access
       SELECT restored.* FROM json_populate_record(NULL::quartermaster.tenant_cluster_access,
         convert_from(decode('$prior','base64'),'UTF8')::json) AS restored
       WHERE restored.tenant_id='$tenant' AND restored.cluster_id='$cluster'
@@ -39,27 +39,39 @@ restore_cluster_access_fixture() { # tenant cluster snapshot-file
         is_active=EXCLUDED.is_active,granted_at=EXCLUDED.granted_at,expires_at=EXCLUDED.expires_at,
         created_at=EXCLUDED.created_at,updated_at=EXCLUDED.updated_at" >/dev/null || return 1
   fi
-  current=$(pg quartermaster "SELECT replace(encode(convert_to(row_to_json(access)::text,'UTF8'),'base64'), E'\\n','')
+  current=$(pg_diagnostic quartermaster "SELECT replace(encode(convert_to(row_to_json(access)::text,'UTF8'),'base64'), E'\\n','')
     FROM quartermaster.tenant_cluster_access access WHERE tenant_id='$tenant' AND cluster_id='$cluster'") || return 1
-  [ "$current" = "$prior" ]
+  if [ "$current" != "$prior" ]; then
+    printf '%s\n' "$current" >"$snapshot.after"
+    echo "cluster access snapshot mismatch for $cluster: expected $snapshot, actual $snapshot.after" >&2
+    return 1
+  fi
 }
 cleanup() {
+  # Explicit cleanup and EXIT share one attempt. Failed restoration must remain
+  # visible rather than being silently repeated by the exit trap.
+  [ "${CLEANUP_STARTED:-0}" = 0 ] || return 0
+  CLEANUP_STARTED=1
+  local cluster restore_access=1
   if [ "$FIXTURES" = 1 ]; then
     stack_exec commodore /app/commodore bootstrap --file /dev/stdin <"$STACK_LIB_DIR/bootstrap.yaml" >/dev/null || fail 'remove managed playback fixtures'
   fi
   if [ "$BILLING_FIXTURE" = 1 ]; then
-    FW_USER_TOKEN="$OPERATOR_TOKEN" "$STACK_REPO/bin/cli" admin billing grant revoke --tenant-id "$TENANT" --tier free --reason 'stack managed playback cleanup' >/dev/null || fail 'remove managed playback billing grant'
+    if FW_USER_TOKEN="$OPERATOR_TOKEN" "$STACK_REPO/bin/cli" admin billing grant revoke --tenant-id "$TENANT" --tier free --reason 'stack managed playback cleanup' >/dev/null; then
+      wait_billing_entitlement_reconcile "$TENANT" || restore_access=0
+    else
+      fail 'remove managed playback billing grant'
+      restore_access=0
+    fi
     BILLING_FIXTURE=0
   fi
-  if [ "$ACCESS_FIXTURES" = 1 ]; then
-    local cluster restored=1
+  if [ "$ACCESS_FIXTURES" = 1 ] && [ "$restore_access" = 1 ]; then
+    ACCESS_FIXTURES=0
     for cluster in "$CELL_A_CLUSTER" "$CELL_B_CLUSTER"; do
       if ! restore_cluster_access_fixture "$TENANT" "$cluster" "$WORK/access-$cluster.before"; then
         fail "restore original cluster access for $cluster"
-        restored=0
       fi
     done
-    [ "$restored" = 0 ] || ACCESS_FIXTURES=0
   fi
   [ -z "$SOURCE_PID" ] || kill "$SOURCE_PID" 2>/dev/null
   SOURCE_PID=""
