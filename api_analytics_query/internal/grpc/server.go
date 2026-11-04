@@ -2946,7 +2946,7 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *periscop
 				if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id)) AS viewer_key,
 				uniqExact(concat(toString(u.node_id), '|', u.session_id)) OVER (PARTITION BY u.window_start) AS window_viewers
 			FROM periscope.viewer_usage_5m_v AS u
-			LEFT JOIN periscope.viewer_sessions_final_v AS s USING (tenant_id, node_id, session_id)
+			LEFT JOIN periscope.viewer_sessions_final_v AS s USING (tenant_id, node_id, session_id, source_event_id)
 			WHERE u.tenant_id = ?
 			  AND u.window_start >= ?
 			  AND u.window_start <  ?
@@ -7212,7 +7212,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 				concat(toString(u.node_id), '|', u.session_id) AS session_key,
 				if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id)) AS viewer_key
 			FROM viewer_usage_5m_v u
-			LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+			LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id, source_event_id)
 			WHERE u.tenant_id = ?
 			  AND u.window_start >= ?
 			  AND u.window_start <  ?

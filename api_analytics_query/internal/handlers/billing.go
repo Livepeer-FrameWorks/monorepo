@@ -904,8 +904,10 @@ func (bs *BillingSummarizer) divergenceAlreadyCursored(ctx context.Context, tabl
 
 	switch tableName {
 	case "viewer_sessions_final":
+		sourceEventID := stringFromJSONMap(naturalKey, "source_event_id")
 		return queryFirstProjection(0, periscopequerydb.FirstViewerSessionProjection,
-			stringFromJSONMap(naturalKey, "tenant_id"), stringFromJSONMap(naturalKey, "node_id"), stringFromJSONMap(naturalKey, "session_id"))
+			stringFromJSONMap(naturalKey, "tenant_id"), stringFromJSONMap(naturalKey, "node_id"), stringFromJSONMap(naturalKey, "session_id"),
+			sourceEventID, sourceEventID)
 	case "restream_sessions_final":
 		return queryFirstProjection(bs.restreamBillingEffectiveMS, periscopequerydb.FirstRestreamSessionProjection,
 			stringFromJSONMap(naturalKey, "tenant_id"), stringFromJSONMap(naturalKey, "node_id"), stringFromJSONMap(naturalKey, "source_event_id"))
@@ -1413,10 +1415,10 @@ func (bs *BillingSummarizer) aggregateTenantRestreamMetrics(tenantID string, row
 func (bs *BillingSummarizer) queryTenantViewerMetrics(ctx context.Context, tenantID string, startTime, endTime time.Time) ([]tenantViewerMetricRow, error) {
 	// Walks billable_at_ms over viewer_sessions_final using the two-step
 	// CTE + LEFT ANTI JOIN pattern from docs/architecture/meter-contracts.md:
-	// each session bills exactly once when its min(projection_version_ms)
-	// first lands in the cursor window; later reprojections don't re-bill
-	// because the anti-join filters out natural keys with an earlier
-	// projection.
+	// each session lifecycle bills exactly once when its
+	// min(projection_version_ms) first lands in the cursor window; later
+	// reprojections don't re-bill because the anti-join filters out
+	// lifecycles with an earlier projection.
 	rows, err := periscopequerydb.TenantViewerMetrics.Query(ctx, bs.clickhouse,
 		tenantID, startTime.UnixMilli(), endTime.UnixMilli(), tenantID, startTime.UnixMilli())
 	if err != nil {

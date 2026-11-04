@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -229,6 +230,119 @@ func TestSourceFactProjectionAndLedgerReplay_RealClickHouse(t *testing.T) {
 	}
 	if apiRequests != 3 {
 		t.Fatalf("late/replayed API ledger requests=%d, want 3", apiRequests)
+	}
+
+	t.Run("a reused Mist session id bills each lifecycle", func(t *testing.T) {
+		testReusedViewerSessionLifecycles(t, ctx, h, conn, tenantID, streamID, endedAt)
+	})
+}
+
+// Mist derives a viewer session id from the stream, the viewer address and the
+// playback token, so a viewer that resumes a playback after Mist ended its
+// session starts a second session under the same id on the same node. Each
+// lifecycle ends with its own USER_END and source_event_id; both are usage, and
+// a replay of either stays one fact.
+func testReusedViewerSessionLifecycles(t *testing.T, ctx context.Context, h *AnalyticsHandler, conn database.ClickHouseNativeConn, tenantID, streamID string, firstEnd time.Time) {
+	t.Helper()
+	const nodeID, sessionID = "edge-chain-1", "session-chain-reused"
+	message := func(sourceID string, endedAt time.Time, duration int64, mistUp, mistDown int64) kafka.Message {
+		trigger := &ipcpb.MistTrigger{
+			NodeId: nodeID, TriggerType: "USER_END", RequestId: sourceID,
+			Timestamp: endedAt.UnixMilli(), TenantId: proto.String(tenantID), ClusterId: proto.String("cluster-us"),
+			StreamId: proto.String(streamID),
+			TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{
+				StreamName: "live+chain", StreamId: proto.String(streamID), SessionId: sessionID,
+				Connector: "HLS", Host: "203.0.113.9", Duration: duration, UpBytes: mistUp, DownBytes: mistDown,
+			}},
+		}
+		payload, err := proto.Marshal(trigger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return kafka.Message{Topic: "analytics.raw_mist_triggers", Value: payload, Headers: map[string]string{
+			"tenant_id": tenantID, "cluster_id": "cluster-us", "source_event_id": sourceID,
+			"trigger_type": "USER_END", "node_id": nodeID,
+		}}
+	}
+	deliver := func(msg kafka.Message) {
+		t.Helper()
+		for range 2 {
+			if err := h.HandleRawMistTriggerMessage(ctx, msg); err != nil {
+				t.Fatal(err)
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+	rebuild := func(start, end time.Time) {
+		t.Helper()
+		if err := h.rebuildViewerUsage5m(ctx, start, end); err != nil {
+			t.Fatalf("viewer ledger rebuild: %v", err)
+		}
+		if err := h.rebuildDeliveryUsage5m(ctx, start, end); err != nil {
+			t.Fatalf("delivery ledger rebuild: %v", err)
+		}
+	}
+
+	firstEnd = firstEnd.Add(time.Minute)
+	firstStart := time.Now().UTC()
+	deliver(message("lifecycle-first", firstEnd, 30, 3<<20, 1<<20))
+	firstStop := time.Now().UTC().Add(time.Millisecond)
+	rebuild(firstStart, firstStop)
+	time.Sleep(2 * time.Millisecond)
+	secondStart := time.Now().UTC()
+	deliver(message("lifecycle-second", firstEnd.Add(20*time.Second), 40, 4<<20, 2<<20))
+	secondStop := time.Now().UTC().Add(time.Millisecond)
+	rebuild(secondStart, secondStop)
+
+	var lifecycles, seconds, egress uint64
+	if err := conn.QueryRow(ctx, `SELECT count(), sum(duration_seconds), sum(downloaded_bytes) FROM periscope.viewer_sessions_final_v
+		WHERE tenant_id = ? AND node_id = ? AND session_id = ?`, tenantID, nodeID, sessionID).Scan(&lifecycles, &seconds, &egress); err != nil {
+		t.Fatal(err)
+	}
+	if lifecycles != 2 || seconds != 70 || egress != 7<<20 {
+		t.Fatalf("final facts of a reused session lifecycles=%d seconds=%d egress=%d, want 2/70/%d", lifecycles, seconds, egress, uint64(7<<20))
+	}
+	var topologyRows, topologySeconds uint64
+	if err := conn.QueryRow(ctx, `SELECT count(), sum(duration_seconds) FROM periscope.viewer_sessions_topology_v
+		WHERE tenant_id = ? AND node_id = ? AND session_id = ?`, tenantID, nodeID, sessionID).Scan(&topologyRows, &topologySeconds); err != nil {
+		t.Fatal(err)
+	}
+	if topologyRows != 2 || topologySeconds != 70 {
+		t.Fatalf("topology view of a reused session rows=%d seconds=%d, want 2/70", topologyRows, topologySeconds)
+	}
+	// Each lifecycle was delivered twice; the replays are projections of the
+	// same lifecycle and materialize as its one fact above.
+	var rows, distinctLifecycles uint64
+	if err := conn.QueryRow(ctx, `SELECT count(), uniqExact(tuple(node_id, session_id, source_event_id)) FROM periscope.viewer_sessions_final
+		WHERE tenant_id = ? AND session_id = ?`, tenantID, sessionID).Scan(&rows, &distinctLifecycles); err != nil {
+		t.Fatal(err)
+	}
+	if rows < 2 || distinctLifecycles != 2 {
+		t.Fatalf("projections of a reused session rows=%d lifecycles=%d, want the two lifecycles", rows, distinctLifecycles)
+	}
+	var divergences uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM periscope.projection_divergences
+		WHERE table_name = 'viewer_sessions_final' AND JSONExtractString(natural_key_json, 'session_id') = ?`, sessionID).Scan(&divergences); err != nil {
+		t.Fatal(err)
+	}
+	if divergences != 0 {
+		t.Fatalf("a second lifecycle recorded %d divergences, want none", divergences)
+	}
+	var ledgerSeconds, ledgerEgress uint64
+	if err := conn.QueryRow(ctx, `SELECT sum(seconds_observed), sum(down_bytes_observed) FROM periscope.viewer_usage_5m_v
+		WHERE tenant_id = ? AND node_id = ? AND session_id = ?`, tenantID, nodeID, sessionID).Scan(&ledgerSeconds, &ledgerEgress); err != nil {
+		t.Fatal(err)
+	}
+	if ledgerSeconds != 70 || ledgerEgress != 7<<20 {
+		t.Fatalf("viewer ledger of a reused session seconds=%d egress=%d, want 70/%d", ledgerSeconds, ledgerEgress, uint64(7<<20))
+	}
+	var deliverySeconds, deliveryEgress uint64
+	if err := conn.QueryRow(ctx, `SELECT sum(seconds_observed), sum(down_bytes_observed) FROM periscope.delivery_usage_5m_v
+		WHERE tenant_id = ? AND node_id = ? AND delivery_kind = 'playback' AND delivery_id = ?`, tenantID, nodeID, sessionID).Scan(&deliverySeconds, &deliveryEgress); err != nil {
+		t.Fatal(err)
+	}
+	if deliverySeconds != 70 || deliveryEgress != 7<<20 {
+		t.Fatalf("delivery ledger of a reused session seconds=%d egress=%d, want 70/%d", deliverySeconds, deliveryEgress, uint64(7<<20))
 	}
 }
 

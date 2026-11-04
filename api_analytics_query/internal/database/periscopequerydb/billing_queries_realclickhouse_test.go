@@ -46,7 +46,7 @@ func billingQueryContracts() []queryContract {
 		{ClusterProcessingSeconds, []any{contractTenantID, startMS, endMS, contractTenantID, startMS}},
 		{ClusterStorageProviderUsage, []any{contractTenantID, endMS, startMS, endMS}},
 		{UsageAdjustments, []any{startMS, endMS, contractTenantID}},
-		{FirstViewerSessionProjection, []any{contractTenantID, "edge-node-1", "session-1"}},
+		{FirstViewerSessionProjection, []any{contractTenantID, "edge-node-1", "session-1", "source-1", "source-1"}},
 		{FirstRestreamSessionProjection, []any{contractTenantID, "edge-node-1", "source-1"}},
 		{FirstProcessingSegmentProjection, []any{contractTenantID, "edge-node-1", contractStreamID, "source-1"}},
 		{FirstStreamSessionProjection, []any{contractTenantID, "edge-node-1", contractStreamID, "source-1"}},

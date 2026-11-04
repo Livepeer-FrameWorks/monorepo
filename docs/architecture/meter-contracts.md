@@ -84,7 +84,7 @@ This model applies to every `*_final` and 5-minute ledger table — viewer sessi
 ```sql
 CREATE VIEW periscope.viewer_sessions_final_v AS
 SELECT
-    tenant_id, node_id, session_id,
+    tenant_id, node_id, session_id, source_event_id,
     min(projection_version_ms) AS billable_at_ms,
     argMax(source_started_at_ms, projection_version_ms) AS source_started_at_ms,
     argMax(source_ended_at_ms,   projection_version_ms) AS source_ended_at_ms,
@@ -95,8 +95,10 @@ SELECT
     argMax(closed_reason,        projection_version_ms) AS closed_reason
     -- … remaining fields …
 FROM periscope.viewer_sessions_final
-GROUP BY tenant_id, node_id, session_id;
+GROUP BY tenant_id, node_id, session_id, source_event_id;
 ```
+
+A viewer fact is one Mist session lifecycle. Mist derives the session id from the stream, viewer address and playback token, so a viewer that resumes a playback after Mist ended its session (15 seconds without a request) starts another lifecycle under the same id on the same node, ending with its own `USER_END` and `source_event_id`. Each lifecycle is its own usage; replays of one lifecycle carry its `source_event_id` and stay one fact. The viewer and playback delivery ledgers carry the same `source_event_id`, and rollups join a ledger row to the final fact of its own lifecycle.
 
 This view is the canonical surface for dashboards, ledger rebuilders, and audit queries. It is **not** the surface the billing cursor uses — see below.
 
@@ -116,7 +118,7 @@ WITH window_candidates AS (
     -- Step 1: rows with at least one projection in the cursor window.
     -- Partition pruning + sort skip-index hit projection_version_ms cleanly.
     SELECT
-        tenant_id, node_id, session_id,
+        tenant_id, node_id, session_id, source_event_id,
         min(projection_version_ms)   AS proj_first_in_window,
         argMax(duration_seconds,     projection_version_ms) AS duration_seconds,
         argMax(uploaded_bytes,       projection_version_ms) AS uploaded_bytes,
@@ -126,7 +128,7 @@ WITH window_candidates AS (
     FROM periscope.viewer_sessions_final
     WHERE projection_version_ms >= ? -- cursor_start
       AND projection_version_ms <  ? -- cursor_end
-    GROUP BY tenant_id, node_id, session_id
+    GROUP BY tenant_id, node_id, session_id, source_event_id
 )
 SELECT c.*
 FROM window_candidates c
@@ -134,14 +136,14 @@ LEFT ANTI JOIN (
     -- Step 2: anti-join — exclude keys whose first projection is older
     -- than the cursor window. Bounded to the candidate natural keys.
     -- Partition pruning: projection_version_ms < cursor_start.
-    SELECT DISTINCT tenant_id, node_id, session_id
+    SELECT DISTINCT tenant_id, node_id, session_id, source_event_id
     FROM periscope.viewer_sessions_final
     WHERE projection_version_ms < ? -- cursor_start
-      AND (tenant_id, node_id, session_id) IN (
-          SELECT tenant_id, node_id, session_id FROM window_candidates
+      AND (tenant_id, node_id, session_id, source_event_id) IN (
+          SELECT tenant_id, node_id, session_id, source_event_id FROM window_candidates
       )
 ) prior
-USING (tenant_id, node_id, session_id);
+USING (tenant_id, node_id, session_id, source_event_id);
 ```
 
 The result set is exactly the logical facts whose `billable_at_ms` (= `min(projection_version_ms)`) lies in the cursor window. The candidates scan touches the partitions overlapping the window plus settlement lag; the anti-join touches older partitions but only for the candidate natural keys.

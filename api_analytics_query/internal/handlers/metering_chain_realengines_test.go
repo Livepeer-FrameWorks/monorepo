@@ -173,6 +173,52 @@ func TestCrossEngineMeteringReplayLateCorrectionAndFencing_RealEngines(t *testin
 	assertMeterWithDimensions(t, producer.reports[1], "api_requests", 3, apiDimensions)
 
 	testReservationLifecycle(t, ctx, ch, queries, bs, producer, tenantID, streamID)
+	t.Run("a reused Mist session id bills each lifecycle", func(t *testing.T) {
+		testReusedViewerSessionBillsEachLifecycle(t, ctx, ch, bs)
+	})
+}
+
+// Mist ends a viewer session that made no request for 15 seconds and starts a
+// new one under the same deterministic id when the viewer resumes. The second
+// lifecycle lands in a later cursor slice and is new usage there; a replay of
+// the first lifecycle in that slice bills nothing again.
+func testReusedViewerSessionBillsEachLifecycle(t *testing.T, ctx context.Context, ch *sql.DB, bs *BillingSummarizer) {
+	t.Helper()
+	tenantID, streamID := uuid.NewString(), uuid.NewString()
+	firstSlice := time.Now().UTC().Add(-30 * time.Minute).Truncate(5 * time.Minute)
+	secondSlice := firstSlice.Add(5 * time.Minute)
+	endedMS := firstSlice.Add(-time.Hour).UnixMilli()
+	insert := `INSERT INTO periscope.viewer_sessions_final
+		(tenant_id,node_id,session_id,source_event_id,cluster_id,stream_id,duration_seconds,uploaded_bytes,downloaded_bytes,source_started_at_ms,source_ended_at_ms,edge_received_at_ms,projection_version_ms,closed_reason,payload_raw)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+	lifecycle := func(sourceEventID string, endedMS int64, seconds uint32, egress uint64, projectedAt time.Time) {
+		t.Helper()
+		if _, err := ch.ExecContext(ctx, insert, tenantID, "edge-chain-1", "session-reused", sourceEventID, "cluster-chain-1", streamID,
+			seconds, uint64(0), egress, endedMS-int64(seconds)*1000, endedMS, endedMS, projectedAt.UnixMilli(), "final", "{}"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lifecycle("lifecycle-first", endedMS, 1800, 1<<30, firstSlice.Add(time.Minute))
+	lifecycle("lifecycle-second", endedMS+20_000, 3600, 2<<30, secondSlice.Add(time.Minute))
+	lifecycle("lifecycle-first", endedMS, 1800, 1<<30, secondSlice.Add(2*time.Minute))
+
+	for _, slice := range []struct {
+		start      time.Time
+		hours, egb float64
+	}{{firstSlice, 0.5, 1}, {secondSlice, 1, 2}} {
+		rows, err := bs.queryTenantViewerMetrics(ctx, tenantID, slice.start, slice.start.Add(5*time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var hours, egressGB float64
+		for _, row := range rows {
+			hours += row.ViewerHours
+			egressGB += row.EgressGB
+		}
+		if hours != slice.hours || egressGB != slice.egb {
+			t.Fatalf("slice %s billed viewer_hours=%v egress_gb=%v, want %v/%v", slice.start.Format(time.RFC3339), hours, egressGB, slice.hours, slice.egb)
+		}
+	}
 }
 
 func testReservationLifecycle(t *testing.T, ctx context.Context, ch *sql.DB, queries *meteringdb.Queries, bs *BillingSummarizer, producer *capturedUsageProducer, tenantID, streamID string) {

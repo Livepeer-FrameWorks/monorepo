@@ -2165,8 +2165,12 @@ GROUP BY timestamp_1h, tenant_id, cluster_owner_tenant_id, gateway_id, gateway_r
 -- ============================================================================
 
 -- viewer_sessions_final: one logical row per Mist USER_END accepted by
--- Periscope. Natural key (tenant_id, node_id, session_id). Append-only
--- projections; viewer_sessions_final_v materializes the logical fact.
+-- Periscope. Natural key (tenant_id, node_id, session_id, source_event_id):
+-- Mist derives a viewer session id from the stream, viewer address and
+-- playback token, so a viewer resuming a playback after Mist ended its session
+-- starts another lifecycle under the same id on the same node, and each
+-- lifecycle ends with its own USER_END. Append-only projections;
+-- viewer_sessions_final_v materializes one logical fact per lifecycle.
 --
 -- Source proto: pkg/proto/ipc.proto ViewerDisconnectTrigger. Multi-stream
 -- sessions land with parallel (name, seconds) tuples in stream_times /
@@ -2237,7 +2241,7 @@ CREATE VIEW IF NOT EXISTS viewer_sessions_final_v AS
 SELECT
     tenant_id, node_id, session_id,
     min(projection_version_ms) AS billable_at_ms,
-    argMax(source_event_id,       projection_version_ms) AS source_event_id,
+    source_event_id,
     argMax(cluster_id,            projection_version_ms) AS cluster_id,
     argMax(stream_id,             projection_version_ms) AS stream_id,
     argMax(artifact_hash,         projection_version_ms) AS artifact_hash,
@@ -2266,7 +2270,7 @@ SELECT
     argMax(connector_times,       projection_version_ms) AS connector_times,
     argMax(host_times,            projection_version_ms) AS host_times
 FROM viewer_sessions_final
-GROUP BY tenant_id, node_id, session_id;
+GROUP BY tenant_id, node_id, session_id, source_event_id;
 
 -- Restream delivery is viewer-like delivery capacity and usage, but it is not
 -- an audience session. Keeping it in a separate final-fact table prevents
@@ -2567,12 +2571,12 @@ SELECT f.*, p.origin_cluster_id, p.control_cell_id
 FROM viewer_sessions_final_v AS f
 LEFT JOIN
 (
-    SELECT tenant_id, node_id, session_id,
+    SELECT tenant_id, node_id, session_id, source_event_id,
            argMax(origin_cluster_id, projection_version_ms) AS origin_cluster_id,
            argMax(control_cell_id, projection_version_ms) AS control_cell_id
     FROM viewer_sessions_final
-    GROUP BY tenant_id, node_id, session_id
-) AS p USING (tenant_id, node_id, session_id);
+    GROUP BY tenant_id, node_id, session_id, source_event_id
+) AS p USING (tenant_id, node_id, session_id, source_event_id);
 
 CREATE VIEW IF NOT EXISTS stream_sessions_topology_v AS
 SELECT f.*, p.origin_cluster_id, p.control_cell_id
@@ -2742,8 +2746,9 @@ CREATE TABLE IF NOT EXISTS viewer_usage_5m (
     up_bytes_observed UInt64 DEFAULT 0,
     down_bytes_observed UInt64 DEFAULT 0,
 
-    -- Traceback
-    source_event_id String,             -- USER_END source_event_id that produced this row
+    -- Session lifecycle: the USER_END source_event_id that produced this row.
+    -- One Mist session id can end several lifecycles on a node; each is its own usage.
+    source_event_id String,
 
     projection_version_ms Int64
 ) ENGINE = ReplicatedMergeTree()
@@ -2763,15 +2768,14 @@ SELECT
     source_event_id, latest_projection_version_ms
 FROM (
     SELECT
-        window_start, tenant_id, cluster_id, stream_id, node_id, session_id,
+        window_start, tenant_id, cluster_id, stream_id, node_id, session_id, source_event_id,
         min(projection_version_ms) AS billable_at_ms,
         argMax(seconds_observed,    projection_version_ms) AS seconds_observed,
         argMax(up_bytes_observed,   projection_version_ms) AS up_bytes_observed,
         argMax(down_bytes_observed, projection_version_ms) AS down_bytes_observed,
-        argMax(source_event_id,     projection_version_ms) AS source_event_id,
         max(projection_version_ms) AS latest_projection_version_ms
     FROM viewer_usage_5m
-    GROUP BY window_start, tenant_id, cluster_id, stream_id, node_id, session_id
+    GROUP BY window_start, tenant_id, cluster_id, stream_id, node_id, session_id, source_event_id
 )
 WHERE seconds_observed > 0 OR up_bytes_observed > 0 OR down_bytes_observed > 0;
 
@@ -2804,10 +2808,10 @@ SELECT
     argMax(seconds_observed, projection_version_ms) AS seconds_observed,
     argMax(up_bytes_observed, projection_version_ms) AS up_bytes_observed,
     argMax(down_bytes_observed, projection_version_ms) AS down_bytes_observed,
-    argMax(source_event_id, projection_version_ms) AS source_event_id,
+    source_event_id,
     max(projection_version_ms) AS latest_projection_version_ms
 FROM delivery_usage_5m
-GROUP BY window_start, tenant_id, cluster_id, stream_id, node_id, delivery_kind, delivery_id, platform
+GROUP BY window_start, tenant_id, cluster_id, stream_id, node_id, delivery_kind, delivery_id, platform, source_event_id
 HAVING seconds_observed > 0 OR up_bytes_observed > 0 OR down_bytes_observed > 0;
 
 -- Upgrade-only discovery keys. The contract migration seeds retained
@@ -3207,7 +3211,7 @@ REFRESH EVERY 5 MINUTE APPEND TO viewer_hours_hourly_store AS
 WITH affected AS (
     SELECT DISTINCT toStartOfHour(u.window_start) AS hour, u.tenant_id, u.cluster_id, u.stream_id, s.country_code
     FROM viewer_usage_5m u
-    LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+    LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id, source_event_id)
     WHERE u.projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
       AND u.window_start >= toStartOfHour(now() - INTERVAL 89 DAY)
 )
@@ -3223,7 +3227,7 @@ LEFT JOIN (
         toUInt64(sum(u.down_bytes_observed)) AS egress_bytes,
         uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state
     FROM viewer_usage_5m_v u
-    LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+    LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id, source_event_id)
     WHERE (toStartOfHour(u.window_start), u.tenant_id, u.cluster_id, u.stream_id, s.country_code) IN
           (SELECT hour, tenant_id, cluster_id, stream_id, country_code FROM affected)
     GROUP BY hour, u.tenant_id, u.cluster_id, u.stream_id, s.country_code
@@ -3259,7 +3263,7 @@ REFRESH EVERY 5 MINUTE APPEND TO viewer_geo_hourly_store AS
 WITH affected AS (
     SELECT DISTINCT toStartOfHour(u.window_start) AS hour, u.tenant_id, s.country_code
     FROM viewer_usage_5m u
-    LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+    LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id, source_event_id)
     WHERE u.projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
       AND u.window_start >= toStartOfHour(now() - INTERVAL 89 DAY)
 )
@@ -3275,7 +3279,7 @@ LEFT JOIN (
         sum(u.down_bytes_observed) / pow(1024, 3) AS egress_gb,
         uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state
     FROM viewer_usage_5m_v u
-    LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+    LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id, source_event_id)
     WHERE (toStartOfHour(u.window_start), u.tenant_id, s.country_code) IN
           (SELECT hour, tenant_id, country_code FROM affected)
     GROUP BY hour, u.tenant_id, s.country_code
@@ -3315,7 +3319,7 @@ REFRESH EVERY 5 MINUTE APPEND TO viewer_city_hourly_store AS
 WITH affected AS (
     SELECT DISTINCT toStartOfHour(u.window_start) AS hour, u.tenant_id, u.stream_id, s.country_code, s.city
     FROM viewer_usage_5m u
-    INNER JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+    INNER JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id, source_event_id)
     WHERE u.projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
       AND u.window_start >= toStartOfHour(now() - INTERVAL 89 DAY)
       AND s.city != ''
@@ -3334,7 +3338,7 @@ LEFT JOIN (
         sum(u.down_bytes_observed) / pow(1024, 3) AS egress_gb,
         uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state
     FROM viewer_usage_5m_v u
-    INNER JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+    INNER JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id, source_event_id)
     WHERE s.city != '' AND (toStartOfHour(u.window_start), u.tenant_id, u.stream_id, s.country_code, s.city) IN
           (SELECT hour, tenant_id, stream_id, country_code, city FROM affected)
     GROUP BY hour, u.tenant_id, u.stream_id, s.country_code, s.city
@@ -3387,7 +3391,7 @@ LEFT JOIN (
         toUInt64(uniqCombined(u.session_id)) AS total_sessions,
         uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state
     FROM viewer_usage_5m_v u
-    LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+    LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id, source_event_id)
     WHERE (toStartOfHour(u.window_start), u.tenant_id, u.stream_id) IN
           (SELECT hour, tenant_id, stream_id FROM affected)
     GROUP BY hour, u.tenant_id, u.stream_id

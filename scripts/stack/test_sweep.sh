@@ -140,6 +140,28 @@ expect "a ledger missing part of a session fails" fails runtime "$work/runtime-s
 jq '.runtime.s2.seconds = 900 | .live = ["s2"]' "$work/runtime-ok.json" >"$work/runtime-live.json"
 expect "a stream live again is not judged" passes runtime "$work/runtime-live.json"
 
+# ---- duplicate final rows -------------------------------------------------------
+# Scenario 33 reused one playback URL 20 s apart: Mist ended the viewer session
+# after 15 s without requests and the second fetch started a new one under the
+# same session id on the same node, each with its own USER_END.
+cat >"$work/dup-lifecycles.json" <<'JSON'
+{"table": "viewer_sessions_final",
+ "columns": ["tenant_id", "node_id", "session_id", "source_event_id", "duration_seconds"],
+ "rows": [["t1", "edge-node-1", "ccffd1ca", "1f795557", 1],
+          ["t1", "edge-node-1", "ccffd1ca", "466e9215", 1],
+          ["t1", "edge-node-b", "b53203a8", "20509808", 1],
+          ["t1", "edge-node-b", "b53203a8", "9eea83d7", 1]]}
+JSON
+expect "two lifecycles of one Mist session id are not duplicates" passes duplicates "$work/dup-lifecycles.json"
+jq '.rows += [["t1", "edge-node-1", "ccffd1ca", "466e9215", 1]]' "$work/dup-lifecycles.json" >"$work/dup-replay.json"
+expect "a lifecycle's final written twice is a duplicate" fails duplicates "$work/dup-replay.json"
+expect "  ...counting the one extra row" said 'viewer_sessions_final: 1 duplicate row\(s\) of 5'
+cat >"$work/dup-events.json" <<'JSON'
+{"table": "viewer_connection_events", "columns": ["event_id", "session_id"],
+ "rows": [["e1", "s1"], ["e2", "s1"], ["e2", "s1"]]}
+JSON
+expect "other tables keep their event_id record key" fails duplicates "$work/dup-events.json"
+
 # ---- renditions -----------------------------------------------------------------
 renditions() { # renditions <file> <source WxH...>: the stack's Livepeer ladder over the given video tracks
   local f=$1

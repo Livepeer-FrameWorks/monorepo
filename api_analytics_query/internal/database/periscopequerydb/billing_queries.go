@@ -62,13 +62,13 @@ var PeakBandwidth = statement("billing.peak_bandwidth", `
 
 var MonthlyUniqueUsers = statement("billing.monthly_unique_users", `
 	WITH sessions AS (
-		SELECT tenant_id, node_id, session_id,
+		SELECT tenant_id, node_id, session_id, source_event_id,
 			argMax(host, projection_version_ms) AS host,
 			argMax(source_ended_at_ms, projection_version_ms) AS source_ended_at_ms,
 			argMax(closed_reason, projection_version_ms) AS closed_reason
 		FROM periscope.viewer_sessions_final
 		WHERE tenant_id = ? AND projection_version_ms < ?
-		GROUP BY tenant_id, node_id, session_id
+		GROUP BY tenant_id, node_id, session_id, source_event_id
 	)
 	SELECT COALESCE(uniqCombined(if(host != '', host, concat(toString(node_id), '|', session_id))), 0) AS unique_users
 	FROM sessions
@@ -203,10 +203,13 @@ var UsageAdjustments = statement("billing.usage_adjustments", `
 	  AND JSONExtractString(natural_key_json, 'tenant_id') = ?
 `)
 
+// FirstViewerSessionProjection reads one session lifecycle. A divergence
+// natural key without source_event_id names the whole session.
 var FirstViewerSessionProjection = statement("billing.first_viewer_session_projection", `
 	SELECT if(count() = 0, 0, min(projection_version_ms))
 	FROM periscope.viewer_sessions_final
 	WHERE tenant_id = toUUID(?) AND node_id = ? AND session_id = ?
+	  AND (? = '' OR source_event_id = ?)
 `)
 
 var FirstRestreamSessionProjection = statement("billing.first_restream_session_projection", `
@@ -235,9 +238,12 @@ var FirstStorageProjection = statement("billing.first_storage_projection", `
 	  AND storage_backend = ? AND window_start = parseDateTimeBestEffort(?)
 `)
 
+// TenantViewerMetrics bills each viewer session lifecycle once: a Mist
+// session id can end several lifecycles on a node, each with its own USER_END
+// source_event_id and its own usage.
 var TenantViewerMetrics = statement("billing.tenant_viewer_metrics", `
 	WITH window_candidates AS (
-		SELECT tenant_id, node_id, session_id,
+		SELECT tenant_id, node_id, session_id, source_event_id,
 			min(projection_version_ms) AS proj_first_in_window,
 			argMax(cluster_id, projection_version_ms) AS cluster_id,
 			argMax(duration_seconds, projection_version_ms) AS duration_seconds,
@@ -246,7 +252,7 @@ var TenantViewerMetrics = statement("billing.tenant_viewer_metrics", `
 			argMax(closed_reason, projection_version_ms) AS closed_reason
 		FROM periscope.viewer_sessions_final
 		WHERE tenant_id = ? AND projection_version_ms >= ? AND projection_version_ms < ?
-		GROUP BY tenant_id, node_id, session_id
+		GROUP BY tenant_id, node_id, session_id, source_event_id
 	)
 	SELECT c.cluster_id, '' AS origin_cluster_id,
 		sum(c.uploaded_bytes) / pow(1024, 3) AS ingress_gb,
@@ -255,13 +261,13 @@ var TenantViewerMetrics = statement("billing.tenant_viewer_metrics", `
 		toInt64(uniqCombined(c.session_id)) AS unique_viewers
 	FROM window_candidates c
 	LEFT ANTI JOIN (
-		SELECT DISTINCT tenant_id, node_id, session_id
+		SELECT DISTINCT tenant_id, node_id, session_id, source_event_id
 		FROM periscope.viewer_sessions_final
 		WHERE tenant_id = ? AND projection_version_ms < ?
-		  AND (tenant_id, node_id, session_id) IN (
-			SELECT tenant_id, node_id, session_id FROM window_candidates
+		  AND (tenant_id, node_id, session_id, source_event_id) IN (
+			SELECT tenant_id, node_id, session_id, source_event_id FROM window_candidates
 		  )
-	) prior USING (tenant_id, node_id, session_id)
+	) prior USING (tenant_id, node_id, session_id, source_event_id)
 	WHERE c.closed_reason = 'final'
 	GROUP BY c.cluster_id
 `)

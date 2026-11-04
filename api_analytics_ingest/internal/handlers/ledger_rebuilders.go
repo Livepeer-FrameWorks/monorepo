@@ -210,7 +210,7 @@ func (h *AnalyticsHandler) rebuildDeliveryUsage5m(ctx context.Context, windowSta
 			return fmt.Errorf("delivery_usage_5m scan: %w", scanErr)
 		}
 		s.sourceVersionMS = max(s.sourceVersionMS, versionFloorMS)
-		identity := deliveryUsageIdentity{tenantID: s.tenantID, nodeID: s.nodeID, kind: s.kind, deliveryID: s.deliveryID}
+		identity := deliveryUsageIdentity{tenantID: s.tenantID, nodeID: s.nodeID, kind: s.kind, deliveryID: s.deliveryID, sourceEventID: s.sourceEventID}
 		sourceVersionByIdentity[identity] = s.sourceVersionMS
 		if (s.state != "idle" && s.state != "failed") || s.startMS <= 0 || s.endMS <= s.startMS {
 			desiredByIdentity[identity] = map[deliveryUsageWindowKey]struct{}{}
@@ -267,7 +267,7 @@ func (h *AnalyticsHandler) rebuildDeliveryUsage5m(ctx context.Context, windowSta
 			if err := emit(deliveryUsageEmission{
 				windowStartMS: tombstone.windowStartMS, tenantID: identity.tenantID, clusterID: tombstone.clusterID,
 				streamID: tombstone.streamID, nodeID: identity.nodeID, kind: identity.kind, deliveryID: identity.deliveryID,
-				platform: tombstone.platform, sourceEventID: tombstone.sourceEventID,
+				platform: tombstone.platform, sourceEventID: identity.sourceEventID,
 				projectionVersionMS: sourceVersionByIdentity[identity],
 			}); err != nil {
 				return err
@@ -280,9 +280,8 @@ func (h *AnalyticsHandler) rebuildDeliveryUsage5m(ctx context.Context, windowSta
 func (h *AnalyticsHandler) reconcilePlaybackDeliveryUsage5m(ctx context.Context, windowStart, windowEnd time.Time, versionFloorMS int64, desiredByIdentity map[deliveryUsageIdentity]map[deliveryUsageWindowKey]struct{}, sourceVersionByIdentity map[deliveryUsageIdentity]int64, emit func(deliveryUsageEmission) error) error {
 	rows, err := h.clickhouse.Query(ctx, `
 		WITH sessions AS (
-			SELECT tenant_id, node_id, session_id,
+			SELECT tenant_id, node_id, session_id, source_event_id,
 				max(projection_version_ms) AS source_version_ms,
-				argMax(source_event_id, projection_version_ms) AS source_event_id,
 				argMax(cluster_id, projection_version_ms) AS cluster_id,
 				argMax(stream_id, projection_version_ms) AS stream_id,
 				argMax(source_started_at_ms, projection_version_ms) AS source_started_at_ms,
@@ -292,7 +291,7 @@ func (h *AnalyticsHandler) reconcilePlaybackDeliveryUsage5m(ctx context.Context,
 				argMax(closed_reason, projection_version_ms) AS closed_reason
 			FROM periscope.viewer_sessions_final
 			WHERE projection_version_ms >= ? AND projection_version_ms < ?
-			GROUP BY tenant_id, node_id, session_id
+			GROUP BY tenant_id, node_id, session_id, source_event_id
 		)
 		SELECT
 			toString(tenant_id), node_id, session_id, source_event_id, source_version_ms,
@@ -314,7 +313,7 @@ func (h *AnalyticsHandler) reconcilePlaybackDeliveryUsage5m(ctx context.Context,
 			return fmt.Errorf("delivery_usage_5m playback reconciliation scan: %w", scanErr)
 		}
 		sourceVersionMS = max(sourceVersionMS, versionFloorMS)
-		identity := deliveryUsageIdentity{tenantID: tenantID, nodeID: nodeID, kind: "playback", deliveryID: sessionID}
+		identity := deliveryUsageIdentity{tenantID: tenantID, nodeID: nodeID, kind: "playback", deliveryID: sessionID, sourceEventID: sourceEventID}
 		sourceVersionByIdentity[identity] = sourceVersionMS
 		if closedReason != "final" || startMS <= 0 || endMS <= startMS {
 			desiredByIdentity[identity] = map[deliveryUsageWindowKey]struct{}{}
@@ -410,13 +409,15 @@ type deliveryUsageWindowKey struct {
 	platform      string
 }
 
+// deliveryUsageIdentity is one delivery fact: a restream final, or one
+// lifecycle of a playback session (a Mist session id can end several
+// lifecycles on a node, each with its own USER_END source_event_id).
 type deliveryUsageIdentity struct {
-	tenantID, nodeID, kind, deliveryID string
+	tenantID, nodeID, kind, deliveryID, sourceEventID string
 }
 
 type deliveryUsageTombstone struct {
 	deliveryUsageWindowKey
-	sourceEventID string
 }
 
 func (h *AnalyticsHandler) deliveryUsageTombstonesForProjectionWindow(ctx context.Context, windowStart, windowEnd time.Time, desiredByIdentity map[deliveryUsageIdentity]map[deliveryUsageWindowKey]struct{}) (map[deliveryUsageIdentity][]deliveryUsageTombstone, error) {
@@ -430,18 +431,17 @@ func (h *AnalyticsHandler) deliveryUsageTombstonesForProjectionWindow(ctx contex
 	// by the delivery_id bloom filter.
 	rows, err := h.clickhouse.Query(ctx, `
 		WITH changed AS (
-			SELECT DISTINCT tenant_id, node_id, 'restream' AS delivery_kind, source_event_id AS delivery_id
+			SELECT DISTINCT tenant_id, node_id, 'restream' AS delivery_kind, source_event_id AS delivery_id, source_event_id
 			FROM periscope.restream_sessions_final
 			WHERE projection_version_ms >= ? AND projection_version_ms < ?
 			UNION DISTINCT
-			SELECT DISTINCT tenant_id, node_id, 'playback' AS delivery_kind, session_id AS delivery_id
+			SELECT DISTINCT tenant_id, node_id, 'playback' AS delivery_kind, session_id AS delivery_id, source_event_id
 			FROM periscope.viewer_sessions_final
 			WHERE projection_version_ms >= ? AND projection_version_ms < ?
 		)
-		SELECT toString(ledger.tenant_id), ledger.node_id, ledger.delivery_kind, ledger.delivery_id,
+		SELECT toString(ledger.tenant_id), ledger.node_id, ledger.delivery_kind, ledger.delivery_id, ledger.source_event_id,
 			toInt64(toUnixTimestamp(ledger.window_start)) * 1000 AS window_start_ms,
 			ledger.cluster_id, toString(ledger.stream_id), ledger.platform,
-			argMax(ledger.source_event_id, ledger.projection_version_ms) AS source_event_id,
 			argMax(ledger.seconds_observed, ledger.projection_version_ms) AS seconds_observed,
 			argMax(ledger.up_bytes_observed, ledger.projection_version_ms) AS up_bytes_observed,
 			argMax(ledger.down_bytes_observed, ledger.projection_version_ms) AS down_bytes_observed
@@ -449,9 +449,9 @@ func (h *AnalyticsHandler) deliveryUsageTombstonesForProjectionWindow(ctx contex
 		WHERE ledger.projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 90 DAY)
 		  AND ledger.tenant_id IN (SELECT tenant_id FROM changed)
 		  AND ledger.delivery_id IN (SELECT delivery_id FROM changed)
-		  AND (ledger.tenant_id, ledger.node_id, ledger.delivery_kind, ledger.delivery_id) IN
-		      (SELECT tenant_id, node_id, delivery_kind, delivery_id FROM changed)
-		GROUP BY ledger.tenant_id, ledger.node_id, ledger.delivery_kind, ledger.delivery_id,
+		  AND (ledger.tenant_id, ledger.node_id, ledger.delivery_kind, ledger.delivery_id, ledger.source_event_id) IN
+		      (SELECT tenant_id, node_id, delivery_kind, delivery_id, source_event_id FROM changed)
+		GROUP BY ledger.tenant_id, ledger.node_id, ledger.delivery_kind, ledger.delivery_id, ledger.source_event_id,
 			ledger.window_start, ledger.cluster_id, ledger.stream_id, ledger.platform`,
 		windowStart.UnixMilli(), windowEnd.UnixMilli(), windowStart.UnixMilli(), windowEnd.UnixMilli())
 	if err != nil {
@@ -462,11 +462,10 @@ func (h *AnalyticsHandler) deliveryUsageTombstonesForProjectionWindow(ctx contex
 		var (
 			identity                 deliveryUsageIdentity
 			key                      deliveryUsageWindowKey
-			sourceEventID            string
 			secondsObserved          uint32
 			upObserved, downObserved uint64
 		)
-		if err := rows.Scan(&identity.tenantID, &identity.nodeID, &identity.kind, &identity.deliveryID, &key.windowStartMS, &key.clusterID, &key.streamID, &key.platform, &sourceEventID, &secondsObserved, &upObserved, &downObserved); err != nil {
+		if err := rows.Scan(&identity.tenantID, &identity.nodeID, &identity.kind, &identity.deliveryID, &identity.sourceEventID, &key.windowStartMS, &key.clusterID, &key.streamID, &key.platform, &secondsObserved, &upObserved, &downObserved); err != nil {
 			return nil, fmt.Errorf("delivery_usage_5m batched tombstone scan: %w", err)
 		}
 		desired, eligible := desiredByIdentity[identity]
@@ -476,7 +475,7 @@ func (h *AnalyticsHandler) deliveryUsageTombstonesForProjectionWindow(ctx contex
 		if _, current := desired[key]; current {
 			continue
 		}
-		out[identity] = append(out[identity], deliveryUsageTombstone{deliveryUsageWindowKey: key, sourceEventID: sourceEventID})
+		out[identity] = append(out[identity], deliveryUsageTombstone{deliveryUsageWindowKey: key})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("delivery_usage_5m batched tombstone iterate: %w", err)
@@ -690,9 +689,8 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 	rows, err := h.clickhouse.Query(ctx, `
 		WITH sessions AS (
 			SELECT
-				tenant_id, node_id, session_id,
+				tenant_id, node_id, session_id, source_event_id,
 				max(projection_version_ms)                          AS source_version_ms,
-				argMax(source_event_id,      projection_version_ms) AS source_event_id,
 				argMax(cluster_id,           projection_version_ms) AS cluster_id,
 				argMax(stream_id,            projection_version_ms) AS stream_id,
 				argMax(source_started_at_ms, projection_version_ms) AS source_started_at_ms,
@@ -703,7 +701,7 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 				argMax(closed_reason,       projection_version_ms) AS closed_reason
 			FROM periscope.viewer_sessions_final
 			WHERE projection_version_ms >= ? AND projection_version_ms < ?
-			GROUP BY tenant_id, node_id, session_id
+			GROUP BY tenant_id, node_id, session_id, source_event_id
 		)
 		SELECT
 			tenant_id, node_id, session_id, source_version_ms,
@@ -770,7 +768,7 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 			continue
 		}
 		desiredKeys := map[viewerUsageWindowKey]struct{}{}
-		identity := viewerUsageIdentity{tenantID: s.tenantID, nodeID: s.nodeID, sessionID: s.sessionID}
+		identity := viewerUsageIdentity{tenantID: s.tenantID, nodeID: s.nodeID, sessionID: s.sessionID, sourceEventID: s.sourceEventID}
 		desiredByIdentity[identity] = desiredKeys
 		sourceVersionByIdentity[identity] = s.sourceVersionMS
 		var cumulativeOverlapMS int64
@@ -828,7 +826,7 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 				streamID:            t.streamID,
 				nodeID:              identity.nodeID,
 				sessionID:           identity.sessionID,
-				sourceEventID:       t.sourceEventID,
+				sourceEventID:       identity.sourceEventID,
 				projectionVersionMS: sourceVersionByIdentity[identity],
 			}); err != nil {
 				return err
@@ -887,13 +885,15 @@ type viewerUsageWindowKey struct {
 	streamID      string
 }
 
+// viewerUsageIdentity is one lifecycle of a viewer session: a Mist session id
+// can end several lifecycles on a node, each with its own USER_END
+// source_event_id and its own usage.
 type viewerUsageIdentity struct {
-	tenantID, nodeID, sessionID string
+	tenantID, nodeID, sessionID, sourceEventID string
 }
 
 type viewerUsageTombstone struct {
 	viewerUsageWindowKey
-	sourceEventID string
 }
 
 func (h *AnalyticsHandler) viewerUsageTombstonesForProjectionWindow(ctx context.Context, windowStart, windowEnd time.Time, desiredByIdentity map[viewerUsageIdentity]map[viewerUsageWindowKey]struct{}) (map[viewerUsageIdentity][]viewerUsageTombstone, error) {
@@ -907,14 +907,13 @@ func (h *AnalyticsHandler) viewerUsageTombstonesForProjectionWindow(ctx context.
 	// by the session_id bloom filter.
 	rows, err := h.clickhouse.Query(ctx, `
 		WITH changed AS (
-			SELECT DISTINCT tenant_id, node_id, session_id
+			SELECT DISTINCT tenant_id, node_id, session_id, source_event_id
 			FROM periscope.viewer_sessions_final
 			WHERE projection_version_ms >= ? AND projection_version_ms < ?
 		)
-		SELECT toString(ledger.tenant_id), ledger.node_id, ledger.session_id,
+		SELECT toString(ledger.tenant_id), ledger.node_id, ledger.session_id, ledger.source_event_id,
 			toInt64(toUnixTimestamp(ledger.window_start)) * 1000 AS window_start_ms,
 			ledger.cluster_id, toString(ledger.stream_id),
-			argMax(ledger.source_event_id, ledger.projection_version_ms) AS source_event_id,
 			argMax(ledger.seconds_observed, ledger.projection_version_ms) AS seconds_observed,
 			argMax(ledger.up_bytes_observed, ledger.projection_version_ms) AS up_bytes_observed,
 			argMax(ledger.down_bytes_observed, ledger.projection_version_ms) AS down_bytes_observed
@@ -922,9 +921,9 @@ func (h *AnalyticsHandler) viewerUsageTombstonesForProjectionWindow(ctx context.
 		WHERE ledger.projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 90 DAY)
 		  AND ledger.tenant_id IN (SELECT tenant_id FROM changed)
 		  AND ledger.session_id IN (SELECT session_id FROM changed)
-		  AND (ledger.tenant_id, ledger.node_id, ledger.session_id) IN
-		      (SELECT tenant_id, node_id, session_id FROM changed)
-		GROUP BY ledger.tenant_id, ledger.node_id, ledger.session_id, ledger.window_start, ledger.cluster_id, ledger.stream_id`,
+		  AND (ledger.tenant_id, ledger.node_id, ledger.session_id, ledger.source_event_id) IN
+		      (SELECT tenant_id, node_id, session_id, source_event_id FROM changed)
+		GROUP BY ledger.tenant_id, ledger.node_id, ledger.session_id, ledger.source_event_id, ledger.window_start, ledger.cluster_id, ledger.stream_id`,
 		windowStart.UnixMilli(), windowEnd.UnixMilli())
 	if err != nil {
 		return nil, fmt.Errorf("viewer_usage_5m batched tombstone lookup: %w", err)
@@ -934,11 +933,10 @@ func (h *AnalyticsHandler) viewerUsageTombstonesForProjectionWindow(ctx context.
 		var (
 			identity                 viewerUsageIdentity
 			key                      viewerUsageWindowKey
-			sourceEventID            string
 			secondsObserved          uint32
 			upObserved, downObserved uint64
 		)
-		if err := rows.Scan(&identity.tenantID, &identity.nodeID, &identity.sessionID, &key.windowStartMS, &key.clusterID, &key.streamID, &sourceEventID, &secondsObserved, &upObserved, &downObserved); err != nil {
+		if err := rows.Scan(&identity.tenantID, &identity.nodeID, &identity.sessionID, &identity.sourceEventID, &key.windowStartMS, &key.clusterID, &key.streamID, &secondsObserved, &upObserved, &downObserved); err != nil {
 			return nil, fmt.Errorf("viewer_usage_5m batched tombstone scan: %w", err)
 		}
 		desired, eligible := desiredByIdentity[identity]
@@ -948,7 +946,7 @@ func (h *AnalyticsHandler) viewerUsageTombstonesForProjectionWindow(ctx context.
 		if _, current := desired[key]; current {
 			continue
 		}
-		out[identity] = append(out[identity], viewerUsageTombstone{viewerUsageWindowKey: key, sourceEventID: sourceEventID})
+		out[identity] = append(out[identity], viewerUsageTombstone{viewerUsageWindowKey: key})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("viewer_usage_5m batched tombstone iterate: %w", err)

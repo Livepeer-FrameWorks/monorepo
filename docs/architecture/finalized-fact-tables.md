@@ -15,7 +15,7 @@ This separation is what makes billing auditable. The cursor invariant in [meter-
 Every `*_final` and 5-min ledger table follows the same physical shape:
 
 - **Engine**: `MergeTree` (append-only). Not `ReplacingMergeTree`. Not upserted.
-- **Identity**: natural key columns explicit in the table — for example `(tenant_id, node_id, session_id)` for `viewer_sessions_final`. Stable cross-pipeline identity (`source_event_id` from the edge WAL) is preserved as a column for traceback.
+- **Identity**: natural key columns explicit in the table, plus the stable cross-pipeline identity `source_event_id` from the edge WAL where one natural key can end more than once. `viewer_sessions_final` is keyed by `(tenant_id, node_id, session_id, source_event_id)`: Mist derives a viewer session id from the stream, viewer address and playback token, so a viewer resuming a playback after Mist ended its session starts another lifecycle under the same id on the same node, and each lifecycle ends with its own `USER_END`.
 - **Time**: four columns. `source_started_at_ms` and `source_ended_at_ms` mark the activity window in the source system's frame. `edge_received_at_ms` marks when Helmsman accepted the trigger at the edge. `projection_version_ms` marks when this projection row was written.
 - **Ordering**: `ORDER BY (tenant_id, projection_version_ms, …natural-key columns…)` — tenant for pruning, projection time for cursor range scans, then the natural key for prior-projection lookups.
 - **Partitioning**: `PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))` — monthly partitions on projection time.

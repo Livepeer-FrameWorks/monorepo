@@ -881,22 +881,48 @@ def collect_runtime(src, since, streams):
     return {"finals": finals, "runtime": runtime, "processed_ms": processed_ms, "live": {r[0] for r in rows}}
 
 
+# A viewer final is one Mist session lifecycle. Mist derives the session id
+# from the stream, viewer address and playback token, so a viewer resuming a
+# playback after Mist ended its session starts a second lifecycle under the
+# same id on the same node; each lifecycle has its own USER_END source_event_id.
+RECORD_KEYS = {"viewer_sessions_final": ("node_id", "session_id", "source_event_id")}
+
+
+def record_key(table, columns):
+    """The columns whose values identify one record of an analytics table: its
+    RECORD_KEYS entry, else event_id, else session_id, else ingest_id (the
+    Kafka record identity)."""
+    if table in RECORD_KEYS and all(name in columns for name in RECORD_KEYS[table]):
+        return RECORD_KEYS[table]
+    for name in ("event_id", "session_id", "ingest_id"):
+        if name in columns:
+            return (name,)
+    return ()
+
+
+def duplicate_count(table, columns, rows):
+    """(rows, distinct record keys) of a table's rows, given as value lists in
+    the order of columns."""
+    key = record_key(table, columns)
+    at = [columns.index(name) for name in key]
+    return len(rows), len({tuple(row[i] for i in at) for row in rows})
+
+
 def duplicate_rows(src, streams):
     """count() - uniqExact(record key) per analytics table over the run's
-    streams: a redelivered Kafka record written twice. The key is the table's
-    event_id, else session_id, else ingest_id (the Kafka record identity)."""
+    streams: a redelivered Kafka record written twice."""
     if not streams:
         return {}
     ids = ",".join(f"toUUID('{s}')" for s in sorted(streams))
     out = {}
     for table in ANALYTICS_TABLES:
-        key = src.ch(f"SELECT name FROM system.columns WHERE database='periscope' AND table='{table}' "
-                     f"AND name IN ('event_id','session_id','ingest_id') ORDER BY name='event_id' DESC, name='session_id' DESC LIMIT 1")
+        columns = src.ch(f"SELECT name FROM system.columns WHERE database='periscope' AND table='{table}'")
+        key = record_key(table, [c[0] for c in columns or []])
         if not key:
             continue
-        rows = src.ch(f"SELECT count(), uniqExact({key[0][0]}) FROM periscope.{table} WHERE stream_id IN ({ids})")
+        rows = src.ch(f"SELECT count(), uniqExact(tuple({', '.join(key)})) FROM periscope.{table} WHERE stream_id IN ({ids})")
         if rows:
-            out[f"{table} [{key[0][0]}]"] = (int(rows[0][0]), int(rows[0][1]))
+            out[f"{table} [{', '.join(key)}]"] = (int(rows[0][0]), int(rows[0][1]))
     return out
 
 
@@ -1268,6 +1294,8 @@ def main(argv):
     lr.add_argument("file")
     td = sub.add_parser("trigger-drops")
     td.add_argument("file")
+    du = sub.add_parser("duplicates")
+    du.add_argument("file")
     o = p.parse_args(argv)
 
     if o.cmd == "run":
@@ -1326,6 +1354,10 @@ def main(argv):
         problems = lifecycle_rule_drift(open(o.file).read())
     elif o.cmd == "trigger-drops":
         problems = tenant_conflict_drops(open(o.file).read())
+    elif o.cmd == "duplicates":
+        doc = json.load(open(o.file))
+        count, uniq = duplicate_count(doc["table"], doc["columns"], doc["rows"])
+        problems = [f"{doc['table']}: {count - uniq} duplicate row(s) of {count}"] if count != uniq else []
     for line in problems:
         print(line)
     return 1 if problems else 0

@@ -333,11 +333,11 @@ func TestViewerUsageTombstonesOnlyRetractsStaleNonZeroWindows(t *testing.T) {
 	currentWindow := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC).UnixMilli()
 	staleWindow := time.Date(2026, 6, 3, 12, 5, 0, 0, time.UTC).UnixMilli()
 	alreadyZeroWindow := time.Date(2026, 6, 3, 12, 10, 0, 0, time.UTC).UnixMilli()
-	conn.addQueryRow("periscope.viewer_usage_5m", "tenant-a", "node-a", "session-a", currentWindow, "cluster-a", "stream-a", "source-current", uint32(60), uint64(100), uint64(200))
-	conn.addQueryRow("periscope.viewer_usage_5m", "tenant-a", "node-a", "session-a", staleWindow, "cluster-a", "stream-a", "source-stale", uint32(60), uint64(100), uint64(200))
-	conn.addQueryRow("periscope.viewer_usage_5m", "tenant-a", "node-a", "session-a", alreadyZeroWindow, "cluster-a", "stream-a", "source-zero", uint32(0), uint64(0), uint64(0))
+	conn.addQueryRow("periscope.viewer_usage_5m", "tenant-a", "node-a", "session-a", "source-a", currentWindow, "cluster-a", "stream-a", uint32(60), uint64(100), uint64(200))
+	conn.addQueryRow("periscope.viewer_usage_5m", "tenant-a", "node-a", "session-a", "source-a", staleWindow, "cluster-a", "stream-a", uint32(60), uint64(100), uint64(200))
+	conn.addQueryRow("periscope.viewer_usage_5m", "tenant-a", "node-a", "session-a", "source-a", alreadyZeroWindow, "cluster-a", "stream-a", uint32(0), uint64(0), uint64(0))
 
-	identity := viewerUsageIdentity{tenantID: "tenant-a", nodeID: "node-a", sessionID: "session-a"}
+	identity := viewerUsageIdentity{tenantID: "tenant-a", nodeID: "node-a", sessionID: "session-a", sourceEventID: "source-a"}
 	tombstonesByIdentity, err := handler.viewerUsageTombstonesForProjectionWindow(context.Background(), time.UnixMilli(currentWindow), time.UnixMilli(staleWindow+1), map[viewerUsageIdentity]map[viewerUsageWindowKey]struct{}{
 		identity: {{windowStartMS: currentWindow, clusterID: "cluster-a", streamID: "stream-a"}: {}},
 	})
@@ -349,7 +349,7 @@ func TestViewerUsageTombstonesOnlyRetractsStaleNonZeroWindows(t *testing.T) {
 		t.Fatalf("expected one tombstone, got %#v", tombstonesByIdentity)
 	}
 	got := tombstones[0]
-	if got.windowStartMS != staleWindow || got.clusterID != "cluster-a" || got.streamID != "stream-a" || got.sourceEventID != "source-stale" {
+	if got.windowStartMS != staleWindow || got.clusterID != "cluster-a" || got.streamID != "stream-a" {
 		t.Fatalf("unexpected tombstone: %#v", got)
 	}
 }
@@ -359,19 +359,27 @@ func TestViewerUsageTombstonesBatchChangedSessions(t *testing.T) {
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	window := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
 	conn.addQueryRow("periscope.viewer_usage_5m",
-		ledgerTestTenantID, "node-a", "session-b", window.UnixMilli(), "cluster-a", ledgerTestStreamID,
-		"source-b", uint32(60), uint64(0), uint64(200))
+		ledgerTestTenantID, "node-a", "session-b", "source-b", window.UnixMilli(), "cluster-a", ledgerTestStreamID,
+		uint32(60), uint64(0), uint64(200))
+	// An earlier lifecycle of session-b under the same Mist session id is its
+	// own usage: a change to the later lifecycle never retracts it.
+	conn.addQueryRow("periscope.viewer_usage_5m",
+		ledgerTestTenantID, "node-a", "session-b", "source-b-earlier", window.UnixMilli(), "cluster-a", ledgerTestStreamID,
+		uint32(30), uint64(0), uint64(100))
 	desired := map[viewerUsageIdentity]map[viewerUsageWindowKey]struct{}{
-		{tenantID: ledgerTestTenantID, nodeID: "node-a", sessionID: "session-a"}: {},
-		{tenantID: ledgerTestTenantID, nodeID: "node-a", sessionID: "session-b"}: {},
+		{tenantID: ledgerTestTenantID, nodeID: "node-a", sessionID: "session-a", sourceEventID: "source-a"}: {},
+		{tenantID: ledgerTestTenantID, nodeID: "node-a", sessionID: "session-b", sourceEventID: "source-b"}: {},
 	}
 	tombstones, err := handler.viewerUsageTombstonesForProjectionWindow(context.Background(), window, window.Add(time.Hour), desired)
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity := viewerUsageIdentity{tenantID: ledgerTestTenantID, nodeID: "node-a", sessionID: "session-b"}
-	if len(conn.queries) != 1 || len(tombstones[identity]) != 1 {
-		t.Fatalf("changed sessions were not tombstoned in one query: queries=%d tombstones=%+v", len(conn.queries), tombstones)
+	identity := viewerUsageIdentity{tenantID: ledgerTestTenantID, nodeID: "node-a", sessionID: "session-b", sourceEventID: "source-b"}
+	if len(conn.queries) != 1 || len(tombstones[identity]) != 1 || len(tombstones) != 1 {
+		t.Fatalf("changed lifecycles were not tombstoned in one query: queries=%d tombstones=%+v", len(conn.queries), tombstones)
+	}
+	if !strings.Contains(conn.queries[0].query, "GROUP BY ledger.tenant_id, ledger.node_id, ledger.session_id, ledger.source_event_id") {
+		t.Fatalf("tombstone lookup must keep each lifecycle's windows apart: %s", conn.queries[0].query)
 	}
 }
 
@@ -482,11 +490,11 @@ func TestDeliveryUsageTombstonesRetractMovedWindowsAndDimensions(t *testing.T) {
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	currentWindow := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC).UnixMilli()
 	staleWindow := time.Date(2026, 6, 3, 12, 5, 0, 0, time.UTC).UnixMilli()
-	conn.addQueryRow("periscope.delivery_usage_5m", ledgerTestTenantID, "edge-a", "restream", "delivery-a", currentWindow, "cluster-new", ledgerTestStreamID, "youtube", "event-current", uint32(60), uint64(0), uint64(200))
-	conn.addQueryRow("periscope.delivery_usage_5m", ledgerTestTenantID, "edge-a", "restream", "delivery-a", staleWindow, "cluster-old", ledgerTestStreamID, "youtube", "event-stale", uint32(60), uint64(0), uint64(300))
-	conn.addQueryRow("periscope.delivery_usage_5m", ledgerTestTenantID, "edge-a", "restream", "delivery-a", staleWindow, "cluster-old", ledgerTestStreamID, "twitch", "event-zero", uint32(0), uint64(0), uint64(0))
+	conn.addQueryRow("periscope.delivery_usage_5m", ledgerTestTenantID, "edge-a", "restream", "delivery-a", "delivery-a", currentWindow, "cluster-new", ledgerTestStreamID, "youtube", uint32(60), uint64(0), uint64(200))
+	conn.addQueryRow("periscope.delivery_usage_5m", ledgerTestTenantID, "edge-a", "restream", "delivery-a", "delivery-a", staleWindow, "cluster-old", ledgerTestStreamID, "youtube", uint32(60), uint64(0), uint64(300))
+	conn.addQueryRow("periscope.delivery_usage_5m", ledgerTestTenantID, "edge-a", "restream", "delivery-a", "delivery-a", staleWindow, "cluster-old", ledgerTestStreamID, "twitch", uint32(0), uint64(0), uint64(0))
 
-	identity := deliveryUsageIdentity{tenantID: ledgerTestTenantID, nodeID: "edge-a", kind: "restream", deliveryID: "delivery-a"}
+	identity := deliveryUsageIdentity{tenantID: ledgerTestTenantID, nodeID: "edge-a", kind: "restream", deliveryID: "delivery-a", sourceEventID: "delivery-a"}
 	tombstonesByIdentity, err := handler.deliveryUsageTombstonesForProjectionWindow(context.Background(), time.UnixMilli(currentWindow), time.UnixMilli(staleWindow+1), map[deliveryUsageIdentity]map[deliveryUsageWindowKey]struct{}{
 		identity: {{windowStartMS: currentWindow, clusterID: "cluster-new", streamID: ledgerTestStreamID, platform: "youtube"}: {}},
 	})
@@ -498,7 +506,7 @@ func TestDeliveryUsageTombstonesRetractMovedWindowsAndDimensions(t *testing.T) {
 		t.Fatalf("expected one non-zero stale natural key, got %#v", tombstonesByIdentity)
 	}
 	got := tombstones[0]
-	if got.windowStartMS != staleWindow || got.clusterID != "cluster-old" || got.platform != "youtube" || got.sourceEventID != "event-stale" {
+	if got.windowStartMS != staleWindow || got.clusterID != "cluster-old" || got.platform != "youtube" {
 		t.Fatalf("unexpected delivery tombstone: %#v", got)
 	}
 	if len(conn.queries) != 1 || !strings.Contains(conn.queries[0].query, "ledger.tenant_id IN (SELECT tenant_id FROM changed)") ||

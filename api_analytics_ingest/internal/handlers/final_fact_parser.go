@@ -824,14 +824,15 @@ func (h *AnalyticsHandler) checkRestreamSessionDivergence(ctx context.Context, r
 }
 
 // checkViewerSessionDivergence looks up the prior materialized row for
-// this natural key and, if found, compares rated fields to the new
+// this session lifecycle (the natural key plus the USER_END
+// source_event_id) and, if found, compares rated fields to the new
 // projection. Material divergence must be durably recorded before the
 // newer projection is written because the billing cursor does not revisit
 // already-seen logical facts.
 func (h *AnalyticsHandler) checkViewerSessionDivergence(ctx context.Context, row viewerSessionFinalRow) error {
 	if err := h.flushBeforeRead(ctx, "viewer_sessions_final", func(pending any) bool {
 		prior, ok := pending.(periscopeingestdb.ViewerSessionFinalRow)
-		return ok && prior.TenantID == row.tenantID && prior.NodeID == row.nodeID && prior.SessionID == row.sessionID
+		return ok && prior.TenantID == row.tenantID && prior.NodeID == row.nodeID && prior.SessionID == row.sessionID && prior.SourceEventID == row.sourceEventID
 	}); err != nil {
 		return err
 	}
@@ -843,9 +844,9 @@ func (h *AnalyticsHandler) checkViewerSessionDivergence(ctx context.Context, row
 			argMax(cluster_id,          projection_version_ms),
 			max(projection_version_ms)
 		FROM periscope.viewer_sessions_final
-		WHERE tenant_id = ? AND node_id = ? AND session_id = ?
-		GROUP BY tenant_id, node_id, session_id`,
-		row.tenantID, row.nodeID, row.sessionID)
+		WHERE tenant_id = ? AND node_id = ? AND session_id = ? AND source_event_id = ?
+		GROUP BY tenant_id, node_id, session_id, source_event_id`,
+		row.tenantID, row.nodeID, row.sessionID, row.sourceEventID)
 	if err != nil {
 		return fmt.Errorf("lookup prior viewer session projection: %w", err)
 	}
@@ -907,10 +908,11 @@ func (h *AnalyticsHandler) checkViewerSessionDivergence(ctx context.Context, row
 	}
 
 	naturalKey := map[string]string{
-		"tenant_id":  row.tenantID.String(),
-		"node_id":    row.nodeID,
-		"session_id": row.sessionID,
-		"cluster_id": row.clusterID,
+		"tenant_id":       row.tenantID.String(),
+		"node_id":         row.nodeID,
+		"session_id":      row.sessionID,
+		"source_event_id": row.sourceEventID,
+		"cluster_id":      row.clusterID,
 	}
 	naturalKeyJSON, err := json.Marshal(naturalKey)
 	if err != nil {

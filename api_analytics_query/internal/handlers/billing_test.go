@@ -197,13 +197,13 @@ func TestQueryUsageAdjustmentsDeduplicatesReplayedDivergence(t *testing.T) {
 	defer db.Close()
 	start := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
 	end := start.Add(time.Hour)
-	naturalKey := `{"tenant_id":"tenant-1","node_id":"node-1","session_id":"session-1","cluster_id":"cluster-a"}`
+	naturalKey := `{"tenant_id":"tenant-1","node_id":"node-1","session_id":"session-1","source_event_id":"event-1","cluster_id":"cluster-a"}`
 	rows := sqlmock.NewRows([]string{"observed_at_ms", "table_name", "meter", "field", "natural_key_json", "prior_value_json", "new_value_json", "source_event_id", "occurrence_id"}).
 		AddRow(start.Add(time.Minute).UnixMilli(), "viewer_sessions_final", "delivered_minutes", "duration_seconds", naturalKey, `600`, `720`, "event-1", "").
 		AddRow(start.Add(2*time.Minute).UnixMilli(), "viewer_sessions_final", "delivered_minutes", "duration_seconds", naturalKey, `600`, `720`, "event-1", "")
 	mock.ExpectQuery(`FROM periscope\.projection_divergences`).WithArgs(start.UnixMilli(), end.UnixMilli(), "tenant-1").WillReturnRows(rows)
 	for range 2 {
-		mock.ExpectQuery(`FROM periscope\.viewer_sessions_final`).WithArgs("tenant-1", "node-1", "session-1").
+		mock.ExpectQuery(`FROM periscope\.viewer_sessions_final`).WithArgs("tenant-1", "node-1", "session-1", "event-1", "event-1").
 			WillReturnRows(sqlmock.NewRows([]string{"first_projection_ms"}).AddRow(start.Add(-time.Hour).UnixMilli()))
 	}
 
@@ -231,7 +231,7 @@ func TestQueryUsageAdjustmentsSkipsOrphanedDivergence(t *testing.T) {
 	mock.ExpectQuery(`FROM periscope\.projection_divergences`).WithArgs(start.UnixMilli(), end.UnixMilli(), "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"observed_at_ms", "table_name", "meter", "field", "natural_key_json", "prior_value_json", "new_value_json", "source_event_id", "occurrence_id"}).
 			AddRow(start.Add(time.Minute).UnixMilli(), "viewer_sessions_final", "delivered_minutes", "duration_seconds", naturalKey, `600`, `720`, "event-1", ""))
-	mock.ExpectQuery(`FROM periscope\.viewer_sessions_final`).WithArgs("tenant-1", "node-1", "missing").
+	mock.ExpectQuery(`FROM periscope\.viewer_sessions_final`).WithArgs("tenant-1", "node-1", "missing", "", "").
 		WillReturnRows(sqlmock.NewRows([]string{"first_projection_ms"}).AddRow(int64(0)))
 
 	adjustments, err := (&BillingSummarizer{clickhouse: db, logger: logging.NewLogger()}).queryUsageAdjustments(context.Background(), "tenant-1", start, end)
