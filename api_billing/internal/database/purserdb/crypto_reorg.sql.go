@@ -186,17 +186,19 @@ FROM (
     SELECT id, tenant_id, reference_type, reference_id, gross_amount_cents, currency,
            'simplified_invoice'::text AS source_type
     FROM purser.simplified_invoices
+    WHERE tenant_id=$4::text::uuid
+      AND reference_type='crypto_payment' AND reference_id=$2::text
     UNION ALL
     SELECT id, tenant_id, reference_type, reference_id, gross_amount_cents, currency,
            'crypto_invoice'::text AS source_type
     FROM purser.crypto_invoices
+    WHERE tenant_id=$4::text::uuid
+      AND reference_type='crypto_payment' AND reference_id=$2::text
     UNION ALL
     SELECT id,tenant_id,source_reference_type,source_reference_id,document_gross_minor,presentment_currency,'invoice'::text AS source_type
-    FROM purser.billing_invoices WHERE source_reference_type='crypto_payment' AND tax_status='ready'
+    FROM purser.billing_invoices WHERE tenant_id=$4::text::uuid
+      AND source_reference_type='crypto_payment' AND source_reference_id=$2::text AND tax_status='ready'
 ) invoice
-WHERE invoice.tenant_id = $4::text::uuid
-  AND invoice.reference_type = 'crypto_payment'
-  AND invoice.reference_id = $2::text
 ON CONFLICT (source_document_type, source_document_id, reversal_reference_type, reversal_reference_id)
 DO NOTHING
 `

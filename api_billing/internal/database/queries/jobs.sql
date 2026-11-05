@@ -759,11 +759,12 @@ INSERT INTO purser.usage_records (
     sqlc.arg(period_start), sqlc.arg(period_end), sqlc.arg(granularity),
     sqlc.arg(value_kind),
     GREATEST(NOW(), (
-        SELECT MAX(phase_close.period_end)
+        SELECT phase_close.period_end
         FROM purser.billing_invoices phase_close
         WHERE phase_close.tenant_id = sqlc.arg(tenant_id)::text::uuid
           AND ((phase_close.document_kind = 'prepaid_statement' AND phase_close.usage_details->'statement'->>'closes_prepaid_phase' = 'true')
             OR (phase_close.document_kind = 'invoice' AND phase_close.usage_details->>'closes_postpaid_phase' = 'true'))
+        ORDER BY phase_close.period_end DESC NULLS LAST LIMIT 1
     ))
 )
 ON CONFLICT (

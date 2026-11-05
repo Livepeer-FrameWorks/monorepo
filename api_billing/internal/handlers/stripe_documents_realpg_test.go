@@ -121,6 +121,38 @@ func TestStripeOriginalDocumentsImportRetryAndOwnership_RealPG(t *testing.T) {
 	if err = db.QueryRow(`SELECT count(*) FROM purser.billing_invoices WHERE tenant_id=$1::uuid`, tenant).Scan(&local); err != nil || local != 0 {
 		t.Fatal("provider import created duplicate Purser invoice", err)
 	}
+	// Many purchases of the same customer are one owner. A second tenant must
+	// remain visible even when it follows many duplicate mappings in one source.
+	if _, err = db.Exec(`INSERT INTO purser.cluster_subscriptions(tenant_id,cluster_id,stripe_customer_id)
+SELECT $1::uuid,'owner-fixture-'||n,'cus_original' FROM generate_series(1,200) n`, tenant); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`INSERT INTO purser.payment_provider_intents(tenant_id,provider,purpose,provider_customer_id,currency,idempotency_key)
+SELECT $1::uuid,'stripe','cluster_subscription_checkout','cus_original','EUR','owner-fixture-'||n FROM generate_series(1,200) n`, tenant); err != nil {
+		t.Fatal(err)
+	}
+	owners, err := purserdb.New(db).ResolveStripeTaxDocumentOwners(ctx, "cus_original")
+	if err != nil || len(owners) != 1 || owners[0] != tenant {
+		t.Fatalf("duplicate mappings became ambiguous: owners%v err%v", owners, err)
+	}
+	other := seedPrepaidLedgerTenant(t, db)
+	if _, err = db.Exec(`INSERT INTO purser.cluster_subscriptions(tenant_id,cluster_id,stripe_customer_id) VALUES($1::uuid,'owner-second','cus_original')`, other); err != nil {
+		t.Fatal(err)
+	}
+	owners, err = purserdb.New(db).ResolveStripeTaxDocumentOwners(ctx, "cus_original")
+	if err != nil || len(owners) != 2 {
+		t.Fatalf("cluster source hid second owner: %v %v", owners, err)
+	}
+	if _, err = db.Exec(`UPDATE purser.cluster_subscriptions SET stripe_customer_id='cus_other' WHERE tenant_id=$1::uuid AND cluster_id='owner-second'`, other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`INSERT INTO purser.payment_provider_intents(tenant_id,provider,purpose,provider_customer_id,currency,idempotency_key) VALUES($1::uuid,'stripe','cluster_subscription_checkout','cus_original','EUR','owner-second')`, other); err != nil {
+		t.Fatal(err)
+	}
+	owners, err = purserdb.New(db).ResolveStripeTaxDocumentOwners(ctx, "cus_original")
+	if err != nil || len(owners) != 2 {
+		t.Fatalf("intent source hid second owner: %v %v", owners, err)
+	}
 }
 
 type providerPDFTestTransport struct {

@@ -202,6 +202,66 @@ func TestListBillingDocumentsUnionStatesChargedAndEURAmounts_RealPG(t *testing.T
 	if first, last := pagedDocuments[0].GetDocumentNumber(), pagedDocuments[999].GetDocumentNumber(); first != "CN-PAGE-1001" || last != "CN-PAGE-0002" {
 		t.Fatalf("paged window = %s .. %s, want the newest 1000 (CN-PAGE-1001 .. CN-PAGE-0002)", first, last)
 	}
+	t.Run("nullable timestamps preserve now ordering and legacy owners", func(t *testing.T) {
+		execNullable := func(query string, args ...any) {
+			t.Helper()
+			if _, insertErr := db.ExecContext(ctx, query, args...); insertErr != nil {
+				t.Fatalf("%v\n%s", insertErr, query)
+			}
+		}
+		tenant := uuid.NewString()
+		nullInvoice := "00000000-0000-4000-8000-000000000002"
+		nullPayment := "00000000-0000-4000-8000-000000000003"
+		legacyPayment := "00000000-0000-4000-8000-000000000004"
+		createdPayment := "00000000-0000-4000-8000-000000000005"
+		source, future := uuid.NewString(), uuid.NewString()
+		execNullable(`INSERT INTO purser.billing_invoices(id,tenant_id,invoice_number,status,currency,amount,due_date,created_at)
+VALUES($1::uuid,$2::uuid,'INV-NULL-TIME','paid','EUR',1,NOW(),NULL),($3::uuid,$2::uuid,'INV-NULL-SOURCE','paid','EUR',1,NOW(),$4),($5::uuid,$2::uuid,'INV-FUTURE','paid','EUR',1,NOW(),NOW()+INTERVAL '1 day')`, nullInvoice, tenant, source, base, future)
+		execNullable(`INSERT INTO purser.billing_payments(id,tenant_id,invoice_id,method,amount,currency,status,created_at,confirmed_at,original_amount_cents,original_currency,eur_amount_cents,fx_units_per_eur,fx_source,fx_reference_date)
+VALUES($1::uuid,$2::uuid,$3::uuid,'card',1,'EUR','confirmed',NULL,NULL,100,'EUR',100,1,'identity',CURRENT_DATE),($4::uuid,$2::uuid,$3::uuid,'card',1,'EUR','confirmed',$5,NULL,100,'EUR',100,1,'identity',CURRENT_DATE)`, nullPayment, tenant, source, createdPayment, base.Add(time.Hour))
+		legacyTx, beginErr := db.BeginTx(ctx, nil)
+		if beginErr != nil {
+			t.Fatal(beginErr)
+		}
+		if _, legacyErr := legacyTx.ExecContext(ctx, `ALTER TABLE purser.billing_payments DROP CONSTRAINT billing_payment_tenant_required`); legacyErr != nil {
+			_ = legacyTx.Rollback()
+			t.Fatal(legacyErr)
+		}
+		if _, legacyErr := legacyTx.ExecContext(ctx, `SET LOCAL session_replication_role=replica`); legacyErr != nil {
+			_ = legacyTx.Rollback()
+			t.Fatal(legacyErr)
+		}
+		if _, legacyErr := legacyTx.ExecContext(ctx, `INSERT INTO purser.billing_payments(id,tenant_id,invoice_id,method,amount,currency,status,created_at,confirmed_at,original_amount_cents,original_currency,eur_amount_cents,fx_units_per_eur,fx_source,fx_reference_date) VALUES($1::uuid,NULL,$2::uuid,'card',1,'EUR','confirmed',NULL,NULL,100,'EUR',100,1,'identity',CURRENT_DATE)`, legacyPayment, source); legacyErr != nil {
+			_ = legacyTx.Rollback()
+			t.Fatal(legacyErr)
+		}
+		if _, legacyErr := legacyTx.ExecContext(ctx, `ALTER TABLE purser.billing_payments ADD CONSTRAINT billing_payment_tenant_required CHECK(tenant_id IS NOT NULL) NOT VALID`); legacyErr != nil {
+			_ = legacyTx.Rollback()
+			t.Fatal(legacyErr)
+		}
+		if commitErr := legacyTx.Commit(); commitErr != nil {
+			t.Fatal(commitErr)
+		}
+		before := time.Now().UTC().Add(-time.Second)
+		listed, listErr := server.ListBillingDocuments(serviceTestContext(), &purserpb.ListBillingDocumentsRequest{TenantId: tenant})
+		after := time.Now().UTC().Add(time.Second)
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		wantIDs := []string{future, legacyPayment, nullPayment, nullInvoice, createdPayment, source}
+		if len(listed.GetDocuments()) != len(wantIDs) {
+			t.Fatalf("nullable/legacy documents missing: %v", listed.GetDocuments())
+		}
+		for n, id := range wantIDs {
+			doc := listed.GetDocuments()[n]
+			if doc.GetId() != id {
+				t.Fatalf("global future/now/id ordering at%d: %s, want%s", n, doc.GetId(), id)
+			}
+			if n >= 1 && n <= 3 && (doc.GetIssuedAt().AsTime().Before(before) || doc.GetIssuedAt().AsTime().After(after)) {
+				t.Fatal("NULL timestamp did not retain NOW fallback", doc)
+			}
+		}
+	})
 }
 
 // A finalized postpaid invoice downloads as a PDF that states its base fee

@@ -123,6 +123,39 @@ func TestAnalyzeFlagsPerRowSubplanAndUnbatchedNestedLoop(t *testing.T) {
 	}
 }
 
+func TestNestedLoopDistinguishesLocalRescansFromRepeatedStorage(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		inner planNode
+		want  bool
+	}{
+		{"empty cached CTE", planNode{NodeType: "CTE Scan", ActualLoops: 300}, false},
+		{"populated cached CTE", planNode{NodeType: "CTE Scan", ActualRows: 2, ActualLoops: 300}, false},
+		{"materialized storage read once", planNode{NodeType: "Materialize", ActualRows: 2, ActualLoops: 300, Plans: []planNode{
+			{NodeType: "Index Scan", Relation: "payments", Index: "payments_pkey", ActualRows: 2, ActualLoops: 1, IndexReads: 1},
+		}}, false},
+		{"empty physical lookup per row", planNode{NodeType: "Index Only Scan", Relation: "payments", Index: "payments_pkey", ActualLoops: 300, IndexReads: 1}, true},
+		{"wrapped physical lookup per row", planNode{NodeType: "Result", ActualRows: 1, ActualLoops: 300, Plans: []planNode{
+			{NodeType: "Index Scan", Relation: "payments", Index: "payments_pkey", ActualRows: 1, ActualLoops: 300, IndexReads: 1},
+		}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := json.Marshal([]planRoot{{Plan: planNode{
+				NodeType: "Nested Loop", ActualRows: 300, ActualLoops: 1,
+				Plans: []planNode{{NodeType: "CTE Scan", ActualRows: 300, ActualLoops: 1}, tc.inner},
+			}, ReadRequests: 3, RowsScanned: 300, Execution: 2}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var analyzed result
+			analyze(plan, &seeder{tables: map[string]*table{}}, &analyzed)
+			if got := hasFlag(analyzed, "NESTED_LOOP_UNBATCHED"); got != tc.want {
+				t.Fatalf("unbatched storage finding = %v, want %v; findings %+v", got, tc.want, analyzed.Findings)
+			}
+		})
+	}
+}
+
 func TestBudgetRejectsNewFlagAndGrowth(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/budget.json"

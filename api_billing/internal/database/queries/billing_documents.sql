@@ -1,56 +1,96 @@
 -- name: ListBillingDocuments :many
 SELECT id::text AS id, kind, document_number, amount_cents, currency, status,
-       COALESCE(issued_at, NOW()) AS issued_at, retention_until,
+       COALESCE(documents.issued_at, NOW()) AS issued_at, retention_until,
        (eur_amount_cents IS NOT NULL)::boolean AS has_eur_amount,
        COALESCE(eur_amount_cents, 0)::bigint AS eur_amount_cents,
        net_eur_cents, vat_eur_cents,
        COALESCE(units_per_eur, '')::text AS units_per_eur,
        COALESCE(TO_CHAR(fx_reference_date, 'YYYY-MM-DD'), '')::text AS fx_reference_date
 FROM (
-    SELECT id, document_kind::text AS kind, invoice_number AS document_number,
+    (SELECT id, document_kind::text AS kind, invoice_number::text AS document_number,
            COALESCE(presentment_amount_cents, ROUND(amount * 100)::bigint)::bigint AS amount_cents,
-           COALESCE(presentment_currency, currency)::varchar AS currency, status,
-           COALESCE(finalized_at, created_at, NOW()) AS issued_at, retention_until,
+           COALESCE(presentment_currency, currency)::text AS currency, status::text AS status,
+           COALESCE(finalized_at, created_at) AS issued_at, retention_until,
            CASE WHEN presentment_amount_cents IS NULL THEN NULL ELSE ROUND(amount * 100)::bigint END AS eur_amount_cents,
            net_eur_cents, vat_eur_cents,
            presentment_units_per_eur::text AS units_per_eur,
            presentment_reference_date::date AS fx_reference_date
-    FROM purser.billing_invoices WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND status <> 'draft'
+    FROM purser.billing_invoices
+    WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND status <> 'draft'
+      AND COALESCE(finalized_at, created_at) IS NOT NULL
+    ORDER BY issued_at DESC, id DESC LIMIT 1000)
     UNION ALL
-    SELECT id, 'simplified_invoice', invoice_number, gross_amount_cents, currency,
-           tax_validation_status, issued_at, retention_until,
+    (SELECT id, document_kind::text, invoice_number::text,
+           COALESCE(presentment_amount_cents, ROUND(amount * 100)::bigint)::bigint,
+           COALESCE(presentment_currency, currency)::text, status::text,
+           NOW() AS issued_at, retention_until,
+           CASE WHEN presentment_amount_cents IS NULL THEN NULL ELSE ROUND(amount * 100)::bigint END,
+           net_eur_cents, vat_eur_cents, presentment_units_per_eur::text, presentment_reference_date::date
+    FROM purser.billing_invoices
+    WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND status <> 'draft'
+      AND finalized_at IS NULL AND created_at IS NULL
+    ORDER BY issued_at DESC, id DESC LIMIT 1000)
+    UNION ALL
+    (SELECT id, 'simplified_invoice'::text, invoice_number::text, gross_amount_cents, currency::text,
+           tax_validation_status::text, issued_at, retention_until,
            amount_eur_cents, net_eur_cents, vat_eur_cents, fx_units_per_eur::text, fx_reference_date
     FROM purser.simplified_invoices
     WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND tax_validation_status <> 'location_review'
+    ORDER BY issued_at DESC, id DESC LIMIT 1000)
     UNION ALL
-    SELECT id, 'crypto_invoice', invoice_number, gross_amount_cents, currency,
-           tax_validation_status, issued_at, retention_until,
+    (SELECT id, 'crypto_invoice'::text, invoice_number::text, gross_amount_cents, currency::text,
+           tax_validation_status::text, issued_at, retention_until,
            amount_eur_cents, net_eur_cents, vat_eur_cents, fx_units_per_eur::text, fx_reference_date
     FROM purser.crypto_invoices
     WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND tax_validation_status <> 'location_review'
+    ORDER BY issued_at DESC, id DESC LIMIT 1000)
     UNION ALL
-    SELECT payment.id, 'payment_receipt', 'PAY-' || UPPER(LEFT(REPLACE(payment.id::text, '-', ''), 12)),
-           ROUND(payment.amount * 100)::bigint, payment.currency, payment.status,
-           COALESCE(payment.confirmed_at, payment.created_at, NOW()), payment.retention_until,
+    (SELECT payment.id, 'payment_receipt'::text, 'PAY-' || UPPER(LEFT(REPLACE(payment.id::text, '-', ''), 12)),
+           ROUND(payment.amount * 100)::bigint, payment.currency::text, payment.status::text,
+           COALESCE(payment.confirmed_at, payment.created_at) AS issued_at, payment.retention_until,
+           payment.eur_amount_cents, NULL::bigint, NULL::bigint,
+           payment.fx_units_per_eur::text, payment.fx_reference_date
+    FROM purser.billing_payments payment
+    WHERE payment.tenant_id = sqlc.arg(tenant_id)::text::uuid AND payment.status = 'confirmed'
+      AND COALESCE(payment.confirmed_at, payment.created_at) IS NOT NULL
+    ORDER BY issued_at DESC, payment.id DESC LIMIT 1000)
+    UNION ALL
+    (SELECT payment.id, 'payment_receipt'::text, 'PAY-' || UPPER(LEFT(REPLACE(payment.id::text, '-', ''), 12)),
+           ROUND(payment.amount * 100)::bigint, payment.currency::text, payment.status::text,
+           NOW() AS issued_at, payment.retention_until,
+           payment.eur_amount_cents, NULL::bigint, NULL::bigint,
+           payment.fx_units_per_eur::text, payment.fx_reference_date
+    FROM purser.billing_payments payment
+    WHERE payment.tenant_id = sqlc.arg(tenant_id)::text::uuid AND payment.status = 'confirmed'
+      AND payment.confirmed_at IS NULL AND payment.created_at IS NULL
+    ORDER BY issued_at DESC, payment.id DESC LIMIT 1000)
+    UNION ALL
+    (SELECT payment.id, 'payment_receipt'::text, 'PAY-' || UPPER(LEFT(REPLACE(payment.id::text, '-', ''), 12)),
+           ROUND(payment.amount * 100)::bigint, payment.currency::text, payment.status::text,
+           COALESCE(payment.confirmed_at, payment.created_at, NOW()) AS issued_at, payment.retention_until,
            payment.eur_amount_cents, NULL::bigint, NULL::bigint,
            payment.fx_units_per_eur::text, payment.fx_reference_date
     FROM purser.billing_payments payment
     JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
-    WHERE invoice.tenant_id = sqlc.arg(tenant_id)::text::uuid AND payment.status = 'confirmed'
+    WHERE invoice.tenant_id = sqlc.arg(tenant_id)::text::uuid AND payment.status = 'confirmed' AND payment.tenant_id IS NULL
+    ORDER BY issued_at DESC, payment.id DESC LIMIT 1000)
     UNION ALL
-    SELECT id, 'credit_note', credit_note_number, amount_cents, currency, 'issued', issued_at, retention_until,
+    (SELECT id, 'credit_note'::text, credit_note_number::text, amount_cents, currency::text, 'issued'::text, issued_at, retention_until,
            NULL::bigint, NULL::bigint, NULL::bigint, NULL::text, NULL::date
     FROM purser.credit_notes WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+    ORDER BY issued_at DESC, id DESC LIMIT 1000)
     UNION ALL
-    SELECT id, document_kind, original_number, gross_minor, currency::varchar, status, issued_at, retention_until,
+    (SELECT id, document_kind::text, original_number::text, gross_minor, currency::text, status::text, issued_at, retention_until,
            CASE WHEN currency='EUR' THEN gross_minor ELSE NULL END,
            CASE WHEN currency='EUR' THEN net_minor ELSE NULL END,
            CASE WHEN currency='EUR' THEN vat_minor ELSE NULL END,
            NULL::text, NULL::date
     FROM purser.provider_billing_documents WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid
+    ORDER BY issued_at DESC, id DESC LIMIT 1000)
+    ORDER BY issued_at DESC, id DESC
+    LIMIT 1000
 ) documents
-ORDER BY issued_at DESC, id DESC
-LIMIT 1000;
+ORDER BY documents.issued_at DESC, documents.id DESC;
 
 -- name: GetInvoiceDocument :one
 -- An invoice is issued when it is finalized; created_at is when its draft was
