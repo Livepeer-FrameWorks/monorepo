@@ -1,0 +1,4 @@
+ALTER TABLE purser.pending_topups VALIDATE CONSTRAINT pending_topups_tax_document_id_fkey;
+ALTER TABLE purser.prepaid_funding_lots VALIDATE CONSTRAINT prepaid_funding_lots_source_document_id_fkey;
+ALTER TABLE purser.prepaid_funding_lots VALIDATE CONSTRAINT prepaid_funding_lots_funding_balance_transaction_id_fkey;
+ALTER TABLE purser.prepaid_funding_allocations VALIDATE CONSTRAINT prepaid_funding_allocations_lot_id_fkey;

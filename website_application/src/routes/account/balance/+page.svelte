@@ -10,7 +10,6 @@
     formatCents,
     formatCurrency,
     formatEcbRate,
-    formatEurConversion,
     type CurrencyConversionFields,
   } from "$lib/utils/formatters";
   import { topupCurrency } from "$lib/utils/presentment-currency";
@@ -99,11 +98,14 @@
   let cryptoAsset = $state<"ETH" | "USDC">("USDC");
   let topupLoading = $state(false);
   let topupGuidance = $state<string | null>(null);
+  let topupNeedsBillingDetails = $state(false);
   let minimumTopupAmount = $derived(topupMethod === "card" ? 5 : 0.01);
 
   // Crypto deposit state — populated post-quote.
   let cryptoDeposit = $state<{
     topupId: string;
+    requestedNetMinor: number;
+    requestedCurrency: string;
     depositAddress: string;
     asset: string;
     expiresAt: string;
@@ -114,12 +116,14 @@
     conversion: CurrencyConversionFields | null;
   } | null>(null);
 
-  // A non-EUR card checkout is shown with its EUR credit before redirecting.
+  // Keep the accepted net request beside the provider's gross charge.
   let cardCheckout = $state<{
     checkoutUrl: string;
+    requestedNetMinor: number;
+    requestedCurrency: string;
     amountCents: number;
     currency: string;
-    conversion: CurrencyConversionFields;
+    conversion: CurrencyConversionFields | null;
   } | null>(null);
 
   // Polling status — set from GetCryptoTopupStatus on a 15s interval.
@@ -245,13 +249,16 @@
       return;
     }
 
+    const requestedNetMinor = Math.round(topupAmount * 100);
+    const requestedCurrency = presentmentCurrency;
     topupLoading = true;
     topupGuidance = null;
+    topupNeedsBillingDetails = false;
     cardCheckout = null;
     try {
       const result = await cardTopupMutation.mutate({
         input: {
-          amountCents: Math.round(topupAmount * 100),
+          amountCents: requestedNetMinor,
           provider: cardProvider,
           successUrl: `${window.location.origin}${resolve("/account/balance")}?success=true`,
           cancelUrl: `${window.location.origin}${resolve("/account/balance")}?cancelled=true`,
@@ -259,21 +266,20 @@
       });
 
       if (result.errors?.length) {
+        topupNeedsBillingDetails = paymentErrorNeedsBillingDetails(result.errors[0]);
         throw new Error(paymentErrorMessage(result.errors[0], "Failed to create checkout session"));
       }
 
       const checkout = result.data?.createCardTopup;
       if (checkout?.checkoutUrl) {
-        if (checkout.conversion && formatEurConversion(checkout.conversion)) {
-          cardCheckout = {
-            checkoutUrl: checkout.checkoutUrl,
-            amountCents: checkout.amountCents,
-            currency: checkout.currency,
-            conversion: checkout.conversion,
-          };
-        } else {
-          window.location.href = checkout.checkoutUrl;
-        }
+        cardCheckout = {
+          checkoutUrl: checkout.checkoutUrl,
+          requestedNetMinor,
+          requestedCurrency,
+          amountCents: checkout.amountCents,
+          currency: checkout.currency,
+          conversion: checkout.conversion ?? null,
+        };
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to create checkout session";
@@ -291,18 +297,22 @@
       return;
     }
 
+    const requestedNetMinor = Math.round(topupAmount * 100);
+    const requestedCurrency = presentmentCurrency;
     topupLoading = true;
     topupGuidance = null;
+    topupNeedsBillingDetails = false;
     cardCheckout = null;
     try {
       const result = await cryptoTopupMutation.mutate({
         input: {
-          amountCents: Math.round(topupAmount * 100),
+          amountCents: requestedNetMinor,
           asset: cryptoAsset,
         },
       });
 
       if (result.errors?.length) {
+        topupNeedsBillingDetails = paymentErrorNeedsBillingDetails(result.errors[0]);
         throw new Error(paymentErrorMessage(result.errors[0], "Failed to create deposit address"));
       }
 
@@ -310,6 +320,8 @@
         const r = result.data.createCryptoTopup;
         cryptoDeposit = {
           topupId: r.topupId,
+          requestedNetMinor,
+          requestedCurrency,
           depositAddress: r.depositAddress,
           asset: r.assetSymbol,
           expiresAt: r.expiresAt,
@@ -337,11 +349,6 @@
       navigator.clipboard.writeText(cryptoDeposit.depositAddress);
       toast.success("Address copied to clipboard");
     }
-  }
-
-  function conversionCredit(conversion: CurrencyConversionFields | null): string | null {
-    if (!conversion) return null;
-    return formatEurConversion(conversion) ?? formatCents(conversion.eurAmountCents, "EUR");
   }
 
   function conversionRate(conversion: CurrencyConversionFields): string | null {
@@ -411,6 +418,24 @@
     return typeof candidate.message === "string" && candidate.message.length > 0
       ? candidate.message
       : fallback;
+  }
+
+  function paymentErrorNeedsBillingDetails(error: unknown): boolean {
+    if (!error || typeof error !== "object") return false;
+    const code = (error as { extensions?: { code?: unknown } }).extensions?.code;
+    return (
+      typeof code === "string" &&
+      [
+        "BILLING_PROFILE_REQUIRED",
+        "CUSTOMER_TYPE_REQUIRED",
+        "BILLING_COUNTRY_REQUIRED",
+        "CONSUMER_VAT_CLAIM",
+        "VAT_NUMBER_REQUIRED",
+        "VAT_NUMBER_INVALID",
+        "CONSUMER_LOCATION_CONFLICT",
+        "CONSUMER_LOCATION_EVIDENCE_REQUIRED",
+      ].includes(code)
+    );
   }
 </script>
 
@@ -532,7 +557,7 @@
               <!-- Amount -->
               <div>
                 <span class="block text-sm font-medium text-muted-foreground mb-2"
-                  >Amount ({presentmentCurrency})</span
+                  >Service credit before VAT ({presentmentCurrency})</span
                 >
                 <div class="flex gap-2">
                   {#each topupMethod === "card" ? [5, 10, 25, 50, 100] : [0.01, 1, 5, 10, 25] as amount (amount)}
@@ -645,7 +670,7 @@
               {#if topupGuidance}
                 <div class="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
                   <p>{topupGuidance}</p>
-                  {#if topupGuidance.includes("billing profile") || topupGuidance.includes("Check your billing details")}
+                  {#if topupNeedsBillingDetails}
                     <Button href={resolve("/settings")} variant="ghost" size="sm" class="mt-2 px-0">
                       Complete billing profile
                     </Button>
@@ -662,7 +687,7 @@
                 >
                   {topupLoading
                     ? "Processing..."
-                    : `Pay ${formatCurrency(topupAmount, presentmentCurrency)}`}
+                    : `Pay for ${formatCurrency(topupAmount, presentmentCurrency)} credit (VAT added)`}
                 </Button>
               {:else}
                 <Button
@@ -677,7 +702,7 @@
           {/if}
         </div>
 
-        <!-- Card checkout in a non-EUR presentment currency -->
+        <!-- Accepted card top-up quote -->
         {#if cardCheckout}
           <div class="slab col-span-full">
             <div class="slab-header">
@@ -688,13 +713,17 @@
             </div>
             <div class="slab-body--padded">
               <p class="text-sm text-foreground">
-                Pays <span class="font-semibold tabular-nums"
+                Charge: <span class="font-semibold tabular-nums"
                   >{formatCents(cardCheckout.amountCents, cardCheckout.currency)}</span
-                >
-                and credits
-                <span class="font-semibold tabular-nums"
-                  >{conversionCredit(cardCheckout.conversion)}</span
-                >.
+                >, including applicable VAT.
+              </p>
+              <p class="mt-1 text-sm text-foreground">
+                Service credit: <span class="font-semibold tabular-nums"
+                  >{formatCents(
+                    cardCheckout.requestedNetMinor,
+                    cardCheckout.requestedCurrency
+                  )}</span
+                > before VAT.
               </p>
             </div>
             <div class="slab-actions">
@@ -729,12 +758,20 @@
               </p>
               {#if cryptoDeposit.conversion}
                 <p class="text-xs text-muted-foreground mb-3">
-                  {formatCents(
+                  Charge: {formatCents(
                     cryptoDeposit.conversion.originalAmountCents,
                     cryptoDeposit.conversion.originalCurrency
-                  )} credits {conversionCredit(cryptoDeposit.conversion)}.
+                  )}, including applicable VAT.
                 </p>
               {/if}
+              <p class="text-sm text-foreground mb-3">
+                Service credit: <span class="font-semibold tabular-nums"
+                  >{formatCents(
+                    cryptoDeposit.requestedNetMinor,
+                    cryptoDeposit.requestedCurrency
+                  )}</span
+                > before VAT. The token amount includes applicable VAT.
+              </p>
               <div
                 class="flex items-center gap-2 p-3 bg-muted/30 rounded-md font-mono text-sm break-all"
               >

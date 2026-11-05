@@ -70,10 +70,15 @@ func (c *Client) UpgradeMonthlySubscription(ctx context.Context, request billing
 		return billing.TierUpgradeReceipt{}, fmt.Errorf("%w: fixed Mollie subscription has no EUR fee", billing.ErrTierUpgradeRejected)
 	}
 	oldFee, amountErr := decimal.NewFromString(sub.Amount.Value)
+	if retained, ok := metadata["frameworks_net_minor"].(string); ok {
+		oldFee, amountErr = decimal.NewFromString(retained)
+		oldFee = oldFee.Shift(-2)
+	}
 	if amountErr != nil || oldFee.IsNegative() {
 		return billing.TierUpgradeReceipt{}, fmt.Errorf("%w: fixed Mollie subscription has an invalid fee", billing.ErrTierUpgradeRejected)
 	}
-	paid, paymentIDs, basisStart, err := c.paidUpgradeBasis(ctx, request, sub)
+	var taxPaymentIDs []string
+	paid, paymentIDs, basisStart, err := c.paidUpgradeBasis(ctx, request, sub, &taxPaymentIDs)
 	if err != nil {
 		if errors.Is(err, billing.ErrTierUpgradeUnsettled) {
 			return billing.TierUpgradeReceipt{}, errors.Join(billing.ErrTierUpgradeRejected, err)
@@ -90,7 +95,7 @@ func (c *Client) UpgradeMonthlySubscription(ctx context.Context, request billing
 		return billing.TierUpgradeReceipt{}, errors.New("mollie upgrade has no old billing period")
 	}
 	credit := decimal.NewFromInt(min(paid, oldFee.Shift(2).IntPart())).Mul(decimal.NewFromInt(min(remaining, whole))).Div(decimal.NewFromInt(whole)).Round(0).IntPart()
-	receipt := billing.TierUpgradeReceipt{Applied: true, PeriodStart: at, PeriodEnd: next, PaidPeriodStart: basisStart, PaidPeriodEnd: request.OldPeriodEnd, UnusedPaidCents: credit, PaidReceiptID: strings.Join(paymentIDs, ",")}
+	receipt := billing.TierUpgradeReceipt{Applied: true, PeriodStart: at, PeriodEnd: next, PaidPeriodStart: basisStart, PaidPeriodEnd: request.OldPeriodEnd, UnusedPaidCents: credit, PaidReceiptID: strings.Join(paymentIDs, ","), TaxDocumentPaymentIDs: taxPaymentIDs}
 	encoded, err := json.Marshal(receipt)
 	if err != nil {
 		return receipt, err
@@ -98,8 +103,12 @@ func (c *Client) UpgradeMonthlySubscription(ctx context.Context, request billing
 	metadata["billing_tier_upgrade_id"] = request.ID
 	metadata["billing_tier_upgrade_receipt"] = string(encoded)
 	metadata["tier_id"] = request.TierID
+	renewalAmount, err := assessedRenewalAmount(metadata, request.BaseCents)
+	if err != nil {
+		return receipt, err
+	}
 	body, err := json.Marshal(map[string]any{
-		"amount":   map[string]string{"currency": "EUR", "value": decimal.New(request.BaseCents, -2).StringFixed(2)},
+		"amount":   map[string]string{"currency": "EUR", "value": renewalAmount.StringFixed(2)},
 		"interval": "1 month", "startDate": next.Format(time.DateOnly), "metadata": metadata,
 	})
 	if err != nil {
@@ -144,13 +153,14 @@ func validateMollieUpgrade(sub *mollie.Subscription, request billing.TierUpgrade
 		return errors.New("mollie upgrade has not confirmed its replacement amount and renewal date")
 	}
 	amount, err := decimal.NewFromString(sub.Amount.Value)
-	if err != nil || !amount.Equal(decimal.New(request.BaseCents, -2)) {
+	wanted, taxErr := assessedRenewalAmount(taxMetadata(sub.Metadata), request.BaseCents)
+	if err != nil || taxErr != nil || !amount.Equal(wanted) {
 		return errors.New("mollie upgrade returned a different replacement fee")
 	}
 	return nil
 }
 
-func (c *Client) paidUpgradeBasis(ctx context.Context, request billing.TierUpgradeRequest, sub *mollie.Subscription) (int64, []string, time.Time, error) {
+func (c *Client) paidUpgradeBasis(ctx context.Context, request billing.TierUpgradeRequest, sub *mollie.Subscription, taxPaymentIDs *[]string) (int64, []string, time.Time, error) {
 	basisStart := request.OldPeriodStart
 	cycleStart := billing.PreviousMonthlyAnniversary(request.OldPeriodEnd)
 	// Mollie creates calendar-date payments in the customer's billing timezone.
@@ -238,7 +248,20 @@ func (c *Client) paidUpgradeBasis(ctx context.Context, request billing.TierUpgra
 				}
 				amount = amount.Sub(chargedBack)
 			}
-			paid += max(amount.Shift(2).IntPart(), 0)
+			paidMinor := max(amount.Shift(2).IntPart(), 0)
+			meta := taxMetadata(payment.Metadata)
+			if meta["frameworks_tax_profile"] != nil || meta["frameworks_net_minor"] != nil {
+				*taxPaymentIDs = append(*taxPaymentIDs, payment.ID)
+			}
+			if retained, ok := meta["frameworks_net_minor"].(string); ok {
+				net, parseErr := decimal.NewFromString(retained)
+				original, originalErr := decimal.NewFromString(payment.Amount.Value)
+				if parseErr != nil || originalErr != nil || !original.IsPositive() {
+					return 0, nil, basisStart, errors.New("mollie payment has invalid frozen net tax basis")
+				}
+				paidMinor = decimal.NewFromInt(paidMinor).Mul(net).Div(original.Shift(2)).Round(0).IntPart()
+			}
+			paid += paidMinor
 			ids = append(ids, payment.ID)
 		}
 		if page.Links.Next == nil || page.Links.Next.Href == "" {

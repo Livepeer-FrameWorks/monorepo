@@ -146,29 +146,6 @@ func (q *Queries) CountX402NonceUses(ctx context.Context, arg CountX402NonceUses
 	return count, err
 }
 
-const getActiveTenantTaxProfile = `-- name: GetActiveTenantTaxProfile :one
-SELECT tax_id, COALESCE(billing_address, '{}'::jsonb) AS billing_address,
-       billing_customer_type::text AS customer_type
-FROM purser.tenant_subscriptions
-WHERE tenant_id = $1::text::uuid
-  AND status != 'cancelled'
-ORDER BY created_at DESC
-LIMIT 1
-`
-
-type GetActiveTenantTaxProfileRow struct {
-	TaxID          sql.NullString  `db:"tax_id" json:"tax_id"`
-	BillingAddress json.RawMessage `db:"billing_address" json:"billing_address"`
-	CustomerType   string          `db:"customer_type" json:"customer_type"`
-}
-
-func (q *Queries) GetActiveTenantTaxProfile(ctx context.Context, tenantID string) (GetActiveTenantTaxProfileRow, error) {
-	row := q.db.QueryRowContext(ctx, getActiveTenantTaxProfile, tenantID)
-	var i GetActiveTenantTaxProfileRow
-	err := row.Scan(&i.TaxID, &i.BillingAddress, &i.CustomerType)
-	return i, err
-}
-
 const getCryptoDocumentBillingProfile = `-- name: GetCryptoDocumentBillingProfile :one
 SELECT billing_email, billing_name, billing_company,
        COALESCE(billing_address, '{}'::jsonb) AS billing_address, tax_id,
@@ -302,6 +279,11 @@ FROM (
     WHERE crypto.tenant_id = $1::text::uuid
       AND crypto.reference_type = $2
       AND crypto.reference_id = $3
+    UNION ALL
+    SELECT invoice.invoice_number, invoice.created_at AS issued_at FROM purser.billing_invoices invoice
+    WHERE invoice.tenant_id=$1::text::uuid
+      AND invoice.source_reference_type=$2
+      AND invoice.source_reference_id=$3
 ) documents
 ORDER BY issued_at ASC
 LIMIT 1
@@ -488,7 +470,7 @@ INSERT INTO purser.crypto_invoices (
     currency, amount_eur_cents, net_eur_cents, vat_eur_cents,
     fx_units_per_eur, fx_reference_date, fx_rate_source, fx_rate_observed_at,
     evidence_ip_country, evidence_wallet_network, evidence_billing_country,
-    evidence_status, evidence_conflict, tax_policy_ref,
+    evidence_status, evidence_conflict, tax_policy_ref, tax_assessment,
     supplier_name, supplier_address, supplier_vat_number, supplier_registration_number,
     service_description, service_quantity, service_date,
     customer_email, customer_name, customer_company, customer_address,
@@ -506,13 +488,13 @@ INSERT INTO purser.crypto_invoices (
     $19, $20,
     $21, $22,
     $23, $24,
-    $25, $26,
-    $27, $28, $29,
-    $30, $31,
-    $32, CURRENT_DATE,
-    $33, $34, $35,
-    $36::jsonb, $37,
-    $38, NOW()
+    $25, $26, $27::jsonb,
+    $28, $29, $30,
+    $31, $32,
+    $33, CURRENT_DATE,
+    $34, $35, $36,
+    $37::jsonb, $38,
+    $39, NOW()
 )
 `
 
@@ -543,6 +525,7 @@ type InsertCryptoTopupInvoiceParams struct {
 	EvidenceStatus             string          `db:"evidence_status" json:"evidence_status"`
 	EvidenceConflict           bool            `db:"evidence_conflict" json:"evidence_conflict"`
 	TaxPolicyRef               sql.NullString  `db:"tax_policy_ref" json:"tax_policy_ref"`
+	TaxAssessment              json.RawMessage `db:"tax_assessment" json:"tax_assessment"`
 	SupplierName               string          `db:"supplier_name" json:"supplier_name"`
 	SupplierAddress            string          `db:"supplier_address" json:"supplier_address"`
 	SupplierVatNumber          string          `db:"supplier_vat_number" json:"supplier_vat_number"`
@@ -585,6 +568,7 @@ func (q *Queries) InsertCryptoTopupInvoice(ctx context.Context, arg InsertCrypto
 		arg.EvidenceStatus,
 		arg.EvidenceConflict,
 		arg.TaxPolicyRef,
+		arg.TaxAssessment,
 		arg.SupplierName,
 		arg.SupplierAddress,
 		arg.SupplierVatNumber,
@@ -651,7 +635,7 @@ INSERT INTO purser.simplified_invoices (
     currency, amount_eur_cents, net_eur_cents, vat_eur_cents,
     fx_units_per_eur, fx_reference_date, fx_rate_source, fx_rate_observed_at,
     evidence_ip_country, evidence_wallet_network, evidence_billing_country,
-    evidence_status, evidence_conflict, tax_policy_ref,
+    evidence_status, evidence_conflict, tax_policy_ref, tax_assessment,
     supplier_name, supplier_address, supplier_vat_number, supplier_registration_number,
     service_description, service_quantity, service_date, customer_snapshot, issued_at
 ) VALUES (
@@ -667,47 +651,49 @@ INSERT INTO purser.simplified_invoices (
     $19, $20,
     $21, $22,
     $23, $24,
-    $25, $26,
-    $27, $28, $29,
-    $30, $31,
-    $32, CURRENT_DATE,
-    purser.billing_customer_snapshot($2::text::uuid), NOW()
+    $25, $26, $27::jsonb,
+    $28, $29, $30,
+    $31, $32,
+    $33, CURRENT_DATE,
+    $34::jsonb, NOW()
 )
 `
 
 type InsertSimplifiedCryptoTopupInvoiceParams struct {
-	InvoiceNumber              string         `db:"invoice_number" json:"invoice_number"`
-	TenantID                   string         `db:"tenant_id" json:"tenant_id"`
-	ReferenceType              string         `db:"reference_type" json:"reference_type"`
-	ReferenceID                string         `db:"reference_id" json:"reference_id"`
-	GrossAmountCents           int64          `db:"gross_amount_cents" json:"gross_amount_cents"`
-	NetAmountCents             int64          `db:"net_amount_cents" json:"net_amount_cents"`
-	VatAmountCents             int64          `db:"vat_amount_cents" json:"vat_amount_cents"`
-	VatRateBps                 int32          `db:"vat_rate_bps" json:"vat_rate_bps"`
-	VatRateSource              sql.NullString `db:"vat_rate_source" json:"vat_rate_source"`
-	VatRateTableCheckedOn      string         `db:"vat_rate_table_checked_on" json:"vat_rate_table_checked_on"`
-	VatRateEffectiveFrom       string         `db:"vat_rate_effective_from" json:"vat_rate_effective_from"`
-	TaxValidationStatus        string         `db:"tax_validation_status" json:"tax_validation_status"`
-	Currency                   string         `db:"currency" json:"currency"`
-	AmountEurCents             int64          `db:"amount_eur_cents" json:"amount_eur_cents"`
-	NetEurCents                int64          `db:"net_eur_cents" json:"net_eur_cents"`
-	VatEurCents                int64          `db:"vat_eur_cents" json:"vat_eur_cents"`
-	FxUnitsPerEur              string         `db:"fx_units_per_eur" json:"fx_units_per_eur"`
-	FxReferenceDate            time.Time      `db:"fx_reference_date" json:"fx_reference_date"`
-	FxRateSource               sql.NullString `db:"fx_rate_source" json:"fx_rate_source"`
-	FxRateObservedAt           sql.NullTime   `db:"fx_rate_observed_at" json:"fx_rate_observed_at"`
-	EvidenceIpCountry          sql.NullString `db:"evidence_ip_country" json:"evidence_ip_country"`
-	EvidenceWalletNetwork      sql.NullString `db:"evidence_wallet_network" json:"evidence_wallet_network"`
-	EvidenceBillingCountry     sql.NullString `db:"evidence_billing_country" json:"evidence_billing_country"`
-	EvidenceStatus             string         `db:"evidence_status" json:"evidence_status"`
-	EvidenceConflict           bool           `db:"evidence_conflict" json:"evidence_conflict"`
-	TaxPolicyRef               sql.NullString `db:"tax_policy_ref" json:"tax_policy_ref"`
-	SupplierName               string         `db:"supplier_name" json:"supplier_name"`
-	SupplierAddress            string         `db:"supplier_address" json:"supplier_address"`
-	SupplierVatNumber          string         `db:"supplier_vat_number" json:"supplier_vat_number"`
-	SupplierRegistrationNumber sql.NullString `db:"supplier_registration_number" json:"supplier_registration_number"`
-	ServiceDescription         sql.NullString `db:"service_description" json:"service_description"`
-	ServiceQuantity            sql.NullInt32  `db:"service_quantity" json:"service_quantity"`
+	InvoiceNumber              string          `db:"invoice_number" json:"invoice_number"`
+	TenantID                   string          `db:"tenant_id" json:"tenant_id"`
+	ReferenceType              string          `db:"reference_type" json:"reference_type"`
+	ReferenceID                string          `db:"reference_id" json:"reference_id"`
+	GrossAmountCents           int64           `db:"gross_amount_cents" json:"gross_amount_cents"`
+	NetAmountCents             int64           `db:"net_amount_cents" json:"net_amount_cents"`
+	VatAmountCents             int64           `db:"vat_amount_cents" json:"vat_amount_cents"`
+	VatRateBps                 int32           `db:"vat_rate_bps" json:"vat_rate_bps"`
+	VatRateSource              sql.NullString  `db:"vat_rate_source" json:"vat_rate_source"`
+	VatRateTableCheckedOn      string          `db:"vat_rate_table_checked_on" json:"vat_rate_table_checked_on"`
+	VatRateEffectiveFrom       string          `db:"vat_rate_effective_from" json:"vat_rate_effective_from"`
+	TaxValidationStatus        string          `db:"tax_validation_status" json:"tax_validation_status"`
+	Currency                   string          `db:"currency" json:"currency"`
+	AmountEurCents             int64           `db:"amount_eur_cents" json:"amount_eur_cents"`
+	NetEurCents                int64           `db:"net_eur_cents" json:"net_eur_cents"`
+	VatEurCents                int64           `db:"vat_eur_cents" json:"vat_eur_cents"`
+	FxUnitsPerEur              string          `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxReferenceDate            time.Time       `db:"fx_reference_date" json:"fx_reference_date"`
+	FxRateSource               sql.NullString  `db:"fx_rate_source" json:"fx_rate_source"`
+	FxRateObservedAt           sql.NullTime    `db:"fx_rate_observed_at" json:"fx_rate_observed_at"`
+	EvidenceIpCountry          sql.NullString  `db:"evidence_ip_country" json:"evidence_ip_country"`
+	EvidenceWalletNetwork      sql.NullString  `db:"evidence_wallet_network" json:"evidence_wallet_network"`
+	EvidenceBillingCountry     sql.NullString  `db:"evidence_billing_country" json:"evidence_billing_country"`
+	EvidenceStatus             string          `db:"evidence_status" json:"evidence_status"`
+	EvidenceConflict           bool            `db:"evidence_conflict" json:"evidence_conflict"`
+	TaxPolicyRef               sql.NullString  `db:"tax_policy_ref" json:"tax_policy_ref"`
+	TaxAssessment              json.RawMessage `db:"tax_assessment" json:"tax_assessment"`
+	SupplierName               string          `db:"supplier_name" json:"supplier_name"`
+	SupplierAddress            string          `db:"supplier_address" json:"supplier_address"`
+	SupplierVatNumber          string          `db:"supplier_vat_number" json:"supplier_vat_number"`
+	SupplierRegistrationNumber sql.NullString  `db:"supplier_registration_number" json:"supplier_registration_number"`
+	ServiceDescription         sql.NullString  `db:"service_description" json:"service_description"`
+	ServiceQuantity            sql.NullInt32   `db:"service_quantity" json:"service_quantity"`
+	CustomerSnapshot           json.RawMessage `db:"customer_snapshot" json:"customer_snapshot"`
 }
 
 func (q *Queries) InsertSimplifiedCryptoTopupInvoice(ctx context.Context, arg InsertSimplifiedCryptoTopupInvoiceParams) error {
@@ -738,12 +724,14 @@ func (q *Queries) InsertSimplifiedCryptoTopupInvoice(ctx context.Context, arg In
 		arg.EvidenceStatus,
 		arg.EvidenceConflict,
 		arg.TaxPolicyRef,
+		arg.TaxAssessment,
 		arg.SupplierName,
 		arg.SupplierAddress,
 		arg.SupplierVatNumber,
 		arg.SupplierRegistrationNumber,
 		arg.ServiceDescription,
 		arg.ServiceQuantity,
+		arg.CustomerSnapshot,
 	)
 	return err
 }

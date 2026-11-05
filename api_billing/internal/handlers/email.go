@@ -114,7 +114,15 @@ func NewEmailPrepaidStatement(statementID, number string, periodStart, periodEnd
 
 // EmailFX is the EUR amount a non-EUR amount converts to at an ECB reference
 // rate. The zero value renders nothing, which is the case for EUR amounts.
+type EmailTaxTotals struct {
+	Net     string
+	VAT     string
+	Gross   string
+	Wording string
+}
+
 type EmailFX struct {
+	Tax           *EmailTaxTotals
 	EURAmount     string
 	UnitsPerEUR   string
 	ReferenceDate string

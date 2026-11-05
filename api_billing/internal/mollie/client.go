@@ -131,6 +131,8 @@ func (c *Client) GetCustomer(ctx context.Context, customerID string) (*mollie.Cu
 
 // FirstPaymentParams for creating the initial payment that establishes a mandate
 type FirstPaymentParams struct {
+	TaxTerms *TaxTerms
+
 	CustomerID        string               // Mollie customer ID
 	TenantID          string               // For metadata/logging
 	TierID            string               // For price lookup
@@ -169,7 +171,10 @@ func (c *Client) CreateFirstPayment(ctx context.Context, params FirstPaymentPara
 	if params.IdempotencyKey == "" {
 		return nil, fmt.Errorf("CreateFirstPayment requires a deterministic IdempotencyKey")
 	}
-	body, err := json.Marshal(map[string]any{
+	if err := params.TaxTerms.validateAmount(params.Amount); err != nil {
+		return nil, err
+	}
+	bodyMap := map[string]any{
 		"amount":      params.Amount,
 		"description": params.Description,
 		"redirectUrl": params.RedirectURL,
@@ -184,7 +189,13 @@ func (c *Client) CreateFirstPayment(ctx context.Context, params FirstPaymentPara
 			"payment_type":            "first_payment",
 		},
 		"sequenceType": mollie.FirstSequence,
-	})
+	}
+	metadata, metadataOK := bodyMap["metadata"].(map[string]any)
+	if !metadataOK {
+		return nil, fmt.Errorf("mollie request metadata invalid")
+	}
+	params.TaxTerms.Metadata(metadata)
+	body, err := json.Marshal(bodyMap)
 	if err != nil {
 		return nil, fmt.Errorf("marshal first payment: %w", err)
 	}
@@ -240,6 +251,8 @@ func (c *Client) GetMandate(ctx context.Context, customerID, mandateID string) (
 
 // SubscriptionParams for creating a subscription
 type SubscriptionParams struct {
+	TaxTerms *TaxTerms
+
 	CustomerID             string
 	TenantID               string
 	TierID                 string
@@ -276,6 +289,9 @@ func (c *Client) CreateSubscription(ctx context.Context, params SubscriptionPara
 	if params.IdempotencyKey == "" {
 		return nil, fmt.Errorf("CreateSubscription requires a deterministic IdempotencyKey")
 	}
+	if err := params.TaxTerms.validateAmount(params.Amount); err != nil {
+		return nil, err
+	}
 	bodyMap := map[string]any{
 		"amount":      params.Amount,
 		"interval":    params.Interval,
@@ -291,6 +307,11 @@ func (c *Client) CreateSubscription(ctx context.Context, params SubscriptionPara
 		},
 	}
 
+	metadata, metadataOK := bodyMap["metadata"].(map[string]any)
+	if !metadataOK {
+		return nil, fmt.Errorf("mollie request metadata invalid")
+	}
+	params.TaxTerms.Metadata(metadata)
 	if params.StartDate != "" {
 		bodyMap["startDate"] = params.StartDate
 	}

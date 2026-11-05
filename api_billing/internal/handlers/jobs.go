@@ -415,6 +415,7 @@ type JobManager struct {
 	cryptoMonitor     *CryptoMonitor
 	gasWalletMonitor  *GasWalletMonitor
 	x402Reconciler    *X402Reconciler
+	taxHandler        *X402Handler
 	kafkaConsumer     *kafka.Consumer
 	stopCh            chan struct{}
 	billingTopic      string
@@ -473,6 +474,7 @@ func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient Commodo
 		cryptoMonitor:     NewCryptoMonitorWithMetrics(database, log, decklogSvc, purserMetrics, geoipReader),
 		gasWalletMonitor:  NewGasWalletMonitor(log),
 		x402Reconciler:    NewX402Reconciler(database, log, includeTestnets, x402Submitter),
+		taxHandler:        x402Submitter,
 		kafkaConsumer:     consumer,
 		stopCh:            make(chan struct{}),
 		billingTopic:      billingTopic,
@@ -521,6 +523,7 @@ func (jm *JobManager) Start(ctx context.Context) {
 
 	// Start x402 settlement reconciler (confirms or fails pending settlements)
 	go jm.x402Reconciler.Start(ctx)
+	go jm.runVATRevalidation(ctx)
 
 	// Start invoice generation job
 	go jm.runInvoiceGeneration(ctx)

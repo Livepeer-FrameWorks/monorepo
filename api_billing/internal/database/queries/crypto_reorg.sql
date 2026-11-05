@@ -86,6 +86,9 @@ FROM (
     SELECT id, tenant_id, reference_type, reference_id, gross_amount_cents, currency,
            'crypto_invoice'::text AS source_type
     FROM purser.crypto_invoices
+    UNION ALL
+    SELECT id,tenant_id,source_reference_type,source_reference_id,document_gross_minor,presentment_currency,'invoice'::text AS source_type
+    FROM purser.billing_invoices WHERE source_reference_type='crypto_payment' AND tax_status='ready'
 ) invoice
 WHERE invoice.tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND invoice.reference_type = 'crypto_payment'
@@ -128,7 +131,7 @@ INSERT INTO purser.credit_notes (
     credit_note_number, tenant_id, source_document_type, source_document_id,
     reversal_reference_type, reversal_reference_id, amount_cents, currency,
     reason, evidence_json, customer_snapshot, supplier_snapshot
-) VALUES (
+) SELECT
     'CN-' || lpad(nextval('purser.credit_note_number_seq')::text, 10, '0'),
     sqlc.arg(tenant_id)::text::uuid, 'invoice', sqlc.arg(invoice_id)::text::uuid,
     'crypto_reorg', sqlc.arg(event_id), sqlc.arg(amount_cents), sqlc.arg(currency),
@@ -136,6 +139,14 @@ INSERT INTO purser.credit_notes (
     jsonb_build_object('payment_id', sqlc.arg(payment_id)::text, 'transaction_hash', sqlc.arg(tx_hash)::text),
     purser.billing_customer_snapshot(sqlc.arg(tenant_id)::text::uuid),
     NULLIF(sqlc.arg(supplier_snapshot)::text, '')::jsonb
-)
+FROM purser.billing_invoices source_invoice
+WHERE source_invoice.tenant_id=sqlc.arg(tenant_id)::text::uuid AND source_invoice.id=sqlc.arg(invoice_id)::text::uuid
+  AND (source_invoice.tax_status NOT IN ('ready','no_supply') OR source_invoice.source_reference_type IN ('crypto_payment','x402_payment'))
 ON CONFLICT (source_document_type, source_document_id, reversal_reference_type, reversal_reference_id)
 DO NOTHING;
+
+-- name: RevokeCryptoAdvanceFundingLot :exec
+UPDATE purser.prepaid_funding_lots SET remaining_net_eur_cents=0, remaining_vat_eur_cents=0, revoked_net_eur_cents=net_credit_eur_cents, revoked_vat_eur_cents=COALESCE(vat_eur_cents,0)
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid
+ AND source_reference_type=sqlc.arg(source_reference_type)
+ AND source_reference_id=sqlc.arg(source_reference_id);

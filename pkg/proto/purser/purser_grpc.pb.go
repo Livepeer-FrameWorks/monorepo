@@ -22,16 +22,17 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	BillingService_AdminFinancialAuditPage_FullMethodName    = "/purser.BillingService/AdminFinancialAuditPage"
-	BillingService_DiagnoseBilling_FullMethodName            = "/purser.BillingService/DiagnoseBilling"
-	BillingService_GetBillingTiers_FullMethodName            = "/purser.BillingService/GetBillingTiers"
-	BillingService_GetBillingTier_FullMethodName             = "/purser.BillingService/GetBillingTier"
-	BillingService_ListMeterDefinitions_FullMethodName       = "/purser.BillingService/ListMeterDefinitions"
-	BillingService_CreateBillingTier_FullMethodName          = "/purser.BillingService/CreateBillingTier"
-	BillingService_UpdateBillingTier_FullMethodName          = "/purser.BillingService/UpdateBillingTier"
-	BillingService_GetTenantAdmissionStatus_FullMethodName   = "/purser.BillingService/GetTenantAdmissionStatus"
-	BillingService_GetTenantBillingStatus_FullMethodName     = "/purser.BillingService/GetTenantBillingStatus"
-	BillingService_ListTenantBillingSnapshots_FullMethodName = "/purser.BillingService/ListTenantBillingSnapshots"
+	BillingService_AdminFinancialAuditPage_FullMethodName     = "/purser.BillingService/AdminFinancialAuditPage"
+	BillingService_AdminRecordBusinessEvidence_FullMethodName = "/purser.BillingService/AdminRecordBusinessEvidence"
+	BillingService_DiagnoseBilling_FullMethodName             = "/purser.BillingService/DiagnoseBilling"
+	BillingService_GetBillingTiers_FullMethodName             = "/purser.BillingService/GetBillingTiers"
+	BillingService_GetBillingTier_FullMethodName              = "/purser.BillingService/GetBillingTier"
+	BillingService_ListMeterDefinitions_FullMethodName        = "/purser.BillingService/ListMeterDefinitions"
+	BillingService_CreateBillingTier_FullMethodName           = "/purser.BillingService/CreateBillingTier"
+	BillingService_UpdateBillingTier_FullMethodName           = "/purser.BillingService/UpdateBillingTier"
+	BillingService_GetTenantAdmissionStatus_FullMethodName    = "/purser.BillingService/GetTenantAdmissionStatus"
+	BillingService_GetTenantBillingStatus_FullMethodName      = "/purser.BillingService/GetTenantBillingStatus"
+	BillingService_ListTenantBillingSnapshots_FullMethodName  = "/purser.BillingService/ListTenantBillingSnapshots"
 )
 
 // BillingServiceClient is the client API for BillingService service.
@@ -42,6 +43,8 @@ const (
 type BillingServiceClient interface {
 	// Read-only financial evidence pages; requires a platform-operator JWT.
 	AdminFinancialAuditPage(ctx context.Context, in *AdminFinancialAuditPageRequest, opts ...grpc.CallOption) (*AdminFinancialAuditPageResponse, error)
+	// Record a reviewed establishment proof against an unchanged customer profile.
+	AdminRecordBusinessEvidence(ctx context.Context, in *AdminRecordBusinessEvidenceRequest, opts ...grpc.CallOption) (*AdminRecordBusinessEvidenceResponse, error)
 	// Read-only support snapshot; requires a platform-operator JWT.
 	DiagnoseBilling(ctx context.Context, in *DiagnoseBillingRequest, opts ...grpc.CallOption) (*DiagnoseBillingResponse, error)
 	// Billing tiers
@@ -74,6 +77,16 @@ func (c *billingServiceClient) AdminFinancialAuditPage(ctx context.Context, in *
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AdminFinancialAuditPageResponse)
 	err := c.cc.Invoke(ctx, BillingService_AdminFinancialAuditPage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *billingServiceClient) AdminRecordBusinessEvidence(ctx context.Context, in *AdminRecordBusinessEvidenceRequest, opts ...grpc.CallOption) (*AdminRecordBusinessEvidenceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminRecordBusinessEvidenceResponse)
+	err := c.cc.Invoke(ctx, BillingService_AdminRecordBusinessEvidence_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -178,6 +191,8 @@ func (c *billingServiceClient) ListTenantBillingSnapshots(ctx context.Context, i
 type BillingServiceServer interface {
 	// Read-only financial evidence pages; requires a platform-operator JWT.
 	AdminFinancialAuditPage(context.Context, *AdminFinancialAuditPageRequest) (*AdminFinancialAuditPageResponse, error)
+	// Record a reviewed establishment proof against an unchanged customer profile.
+	AdminRecordBusinessEvidence(context.Context, *AdminRecordBusinessEvidenceRequest) (*AdminRecordBusinessEvidenceResponse, error)
 	// Read-only support snapshot; requires a platform-operator JWT.
 	DiagnoseBilling(context.Context, *DiagnoseBillingRequest) (*DiagnoseBillingResponse, error)
 	// Billing tiers
@@ -208,6 +223,9 @@ type UnimplementedBillingServiceServer struct{}
 
 func (UnimplementedBillingServiceServer) AdminFinancialAuditPage(context.Context, *AdminFinancialAuditPageRequest) (*AdminFinancialAuditPageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminFinancialAuditPage not implemented")
+}
+func (UnimplementedBillingServiceServer) AdminRecordBusinessEvidence(context.Context, *AdminRecordBusinessEvidenceRequest) (*AdminRecordBusinessEvidenceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminRecordBusinessEvidence not implemented")
 }
 func (UnimplementedBillingServiceServer) DiagnoseBilling(context.Context, *DiagnoseBillingRequest) (*DiagnoseBillingResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DiagnoseBilling not implemented")
@@ -271,6 +289,24 @@ func _BillingService_AdminFinancialAuditPage_Handler(srv interface{}, ctx contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BillingServiceServer).AdminFinancialAuditPage(ctx, req.(*AdminFinancialAuditPageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BillingService_AdminRecordBusinessEvidence_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminRecordBusinessEvidenceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BillingServiceServer).AdminRecordBusinessEvidence(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BillingService_AdminRecordBusinessEvidence_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BillingServiceServer).AdminRecordBusinessEvidence(ctx, req.(*AdminRecordBusinessEvidenceRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -447,6 +483,10 @@ var BillingService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AdminFinancialAuditPage",
 			Handler:    _BillingService_AdminFinancialAuditPage_Handler,
+		},
+		{
+			MethodName: "AdminRecordBusinessEvidence",
+			Handler:    _BillingService_AdminRecordBusinessEvidence_Handler,
 		},
 		{
 			MethodName: "DiagnoseBilling",

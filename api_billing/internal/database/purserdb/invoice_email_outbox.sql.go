@@ -204,7 +204,8 @@ func (q *Queries) FailInvoiceEmailWithLease(ctx context.Context, arg FailInvoice
 }
 
 const getInvoiceEmailHeader = `-- name: GetInvoiceEmailHeader :one
-SELECT amount::float8 AS amount,
+SELECT net_eur_cents,vat_eur_cents,gross_eur_cents,tax_status,COALESCE(tax_summary,'[]'::jsonb)::jsonb AS tax_summary,
+       amount::float8 AS amount,
        metered_amount::float8 AS metered_amount,
        gross_metered_amount::float8 AS gross_metered_amount,
        currency, due_date, status,
@@ -223,16 +224,21 @@ type GetInvoiceEmailHeaderParams struct {
 }
 
 type GetInvoiceEmailHeaderRow struct {
-	Amount                   float64       `db:"amount" json:"amount"`
-	MeteredAmount            float64       `db:"metered_amount" json:"metered_amount"`
-	GrossMeteredAmount       float64       `db:"gross_metered_amount" json:"gross_metered_amount"`
-	Currency                 string        `db:"currency" json:"currency"`
-	DueDate                  time.Time     `db:"due_date" json:"due_date"`
-	Status                   string        `db:"status" json:"status"`
-	PresentmentAmountCents   sql.NullInt64 `db:"presentment_amount_cents" json:"presentment_amount_cents"`
-	PresentmentCurrency      string        `db:"presentment_currency" json:"presentment_currency"`
-	PresentmentUnitsPerEur   string        `db:"presentment_units_per_eur" json:"presentment_units_per_eur"`
-	PresentmentReferenceDate string        `db:"presentment_reference_date" json:"presentment_reference_date"`
+	NetEurCents              sql.NullInt64   `db:"net_eur_cents" json:"net_eur_cents"`
+	VatEurCents              sql.NullInt64   `db:"vat_eur_cents" json:"vat_eur_cents"`
+	GrossEurCents            sql.NullInt64   `db:"gross_eur_cents" json:"gross_eur_cents"`
+	TaxStatus                string          `db:"tax_status" json:"tax_status"`
+	TaxSummary               json.RawMessage `db:"tax_summary" json:"tax_summary"`
+	Amount                   float64         `db:"amount" json:"amount"`
+	MeteredAmount            float64         `db:"metered_amount" json:"metered_amount"`
+	GrossMeteredAmount       float64         `db:"gross_metered_amount" json:"gross_metered_amount"`
+	Currency                 string          `db:"currency" json:"currency"`
+	DueDate                  time.Time       `db:"due_date" json:"due_date"`
+	Status                   string          `db:"status" json:"status"`
+	PresentmentAmountCents   sql.NullInt64   `db:"presentment_amount_cents" json:"presentment_amount_cents"`
+	PresentmentCurrency      string          `db:"presentment_currency" json:"presentment_currency"`
+	PresentmentUnitsPerEur   string          `db:"presentment_units_per_eur" json:"presentment_units_per_eur"`
+	PresentmentReferenceDate string          `db:"presentment_reference_date" json:"presentment_reference_date"`
 }
 
 // amount and currency are the EUR invoice total; the presentment fields are
@@ -242,6 +248,11 @@ func (q *Queries) GetInvoiceEmailHeader(ctx context.Context, arg GetInvoiceEmail
 	row := q.db.QueryRowContext(ctx, getInvoiceEmailHeader, arg.InvoiceID, arg.TenantID)
 	var i GetInvoiceEmailHeaderRow
 	err := row.Scan(
+		&i.NetEurCents,
+		&i.VatEurCents,
+		&i.GrossEurCents,
+		&i.TaxStatus,
+		&i.TaxSummary,
 		&i.Amount,
 		&i.MeteredAmount,
 		&i.GrossMeteredAmount,

@@ -27,6 +27,13 @@ func createUpgradeInvoiceTx(ctx context.Context, tx *sql.Tx, row purserdb.GetTie
 	if err != nil {
 		return err
 	}
+	var nativeCredits []nativeMollieUpgradeCredit
+	if !previous.found && row.Provider == "mollie" {
+		previous, nativeCredits, err = planNativeMollieUpgradeCredit(ctx, q, row.TenantID, receipt)
+		if err != nil {
+			return err
+		}
+	}
 	credit := previous.credit
 	if !previous.found && row.Provider == "mollie" {
 		credit = baseFeeCredit{cents: receipt.UnusedPaidCents, providerPaymentID: receipt.PaidReceiptID, periodStart: receipt.PaidPeriodStart, periodEnd: receipt.PaidPeriodEnd}
@@ -44,7 +51,19 @@ func createUpgradeInvoiceTx(ctx context.Context, tx *sql.Tx, row purserdb.GetTie
 	credit = cappedReplacementCredit(credit, row.BaseCents)
 	baseEUR := decimal.New(row.BaseCents, -2)
 	collectCents := max(row.BaseCents-credit.cents, 0)
+	if previous.taxReady {
+		collectCents = max(row.BaseCents, 0)
+	}
 	now := time.Now().UTC()
+	taxAssessment, taxErr := assessInvoiceTaxTx(ctx, tx, row.TenantID, collectCents, now)
+	if taxErr != nil {
+		return taxErr
+	}
+	collectCents = taxAssessment.Gross
+	if previous.taxReady {
+		credit, previous.creditOriginalMinor = frozenReplacementCredit(previous, collectCents)
+		collectCents -= credit.cents
+	}
 	quote, err := fx.QuoteFromEUR(ctx, tx, profile.PresentmentCurrency, collectCents, now)
 	if err != nil {
 		return err
@@ -79,14 +98,32 @@ func createUpgradeInvoiceTx(ctx context.Context, tx *sql.Tx, row purserdb.GetTie
 			BillableQuantity: decimal.NewFromInt(1), UnitPrice: amount, Amount: amount, Currency: billing.LedgerCurrency}, PricingSource: pricing.SourceTier}
 	}
 	lines := &clusterRatingResult{BaseLine: line(rating.LineKeyBaseSubscription, fmt.Sprintf("Base subscription %s to %s", receipt.PeriodStart.Format(time.DateOnly), receipt.PeriodEnd.Format(time.DateOnly)), baseEUR)}
-	if credit.cents > 0 {
+	if credit.cents > 0 && !previous.taxReady {
 		lines.UsageLines = append(lines.UsageLines, line(unusedBaseFeeCreditLineKey, "Credit for the unused paid share of the previous base subscription", decimal.New(-credit.cents, -2)))
 	}
 	if err = persistInvoiceLineItems(ctx, tx, invoiceID, row.TenantID, lines); err != nil {
 		return err
 	}
+	if err = freezeInvoiceTaxTx(ctx, tx, row.TenantID, invoiceID, taxAssessment, quote); err != nil {
+		return err
+	}
 	if previous.reduction != nil {
 		if err = reducePreviousBaseFeeInvoiceTx(ctx, tx, row.TenantID, *previous.reduction, now); err != nil {
+			return err
+		}
+	}
+	if previous.taxReady {
+		if previous.reduction == nil && credit.cents > 0 && len(nativeCredits) == 0 {
+			if err = issueUnusedBaseFeeCredit(ctx, q, row.TenantID, previous.credit.invoiceID, previous.creditOriginalMinor, previous.creditCurrency, receipt.PeriodStart); err != nil {
+				return err
+			}
+		}
+		if err = q.ApplyUnusedBaseFeeFinancialCredit(ctx, purserdb.ApplyUnusedBaseFeeFinancialCreditParams{TenantID: row.TenantID, InvoiceID: invoiceID, CreditEurCents: credit.cents}); err != nil {
+			return err
+		}
+	}
+	if len(nativeCredits) > 0 {
+		if err = consumeNativeMollieUpgradeCredit(ctx, q, row.TenantID, invoiceID, receipt, nativeCredits, credit.cents); err != nil {
 			return err
 		}
 	}

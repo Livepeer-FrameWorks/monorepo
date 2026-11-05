@@ -162,6 +162,9 @@ func TestEURLedgerConversionDataMigration_RealPG(t *testing.T) {
 		return os.ReadFile(filepath.Join("testdata", "eurofxref-hist.xml"))
 	}
 	Register(Settings{Fetch: fetch})
+	if registered := datamigrate.Lookup(PaymentTenantBackfillID); registered == nil || registered.RequiredBeforePhase != "postdeploy" || registered.IntroducedIn != "v0.3.14" {
+		t.Fatal("Purser registry omitted payment ownership postdeploy prerequisite")
+	}
 	openDB := func() (*sql.DB, error) { return db, nil }
 	runCLI := func(args ...string) (string, error) {
 		var out bytes.Buffer

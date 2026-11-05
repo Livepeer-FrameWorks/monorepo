@@ -455,12 +455,31 @@ services:
       SMTP_ALLOW_INSECURE: "true"
       FROM_EMAIL: stack@frameworks.network
   purser:
+    build:
+      args:
+        GO_BUILD_TAGS: nomsgpack,stack_verify
     environment:
+      STRIPE_SECRET_KEY: sk_test_stack_fixture
+      STRIPE_WEBHOOK_SECRET: whsec_stack_fixture
+      VIES_ENDPOINT: https://vies.stack.test/vies
+      CRYPTO_TAX_POLICY_JSON: '{"reference":"stack-country-review","supplier_country":"NL","valid_from":"2020-01-01T00:00:00Z","valid_until":"2099-01-01T00:00:00Z","non_eu_businesses":{"US":{"rate_bps":0,"source":"Stack fixture business treatment","evidence_reference":"stack-country-memo","tax_label":"VAT","wording":"Outside Dutch VAT"}}}'
+      X402_FACILITATOR_PROVIDER: hosted
+      X402_FACILITATOR_URL: https://facilitator.stack.test
+      BASE_RPC_ENDPOINT: http://billing-provider:18778/rpc/base
+      ARBITRUM_RPC_ENDPOINT: http://billing-provider:18778/rpc/arbitrum
+      HD_WALLET_XPUB: xpub6DZ3xpo1ixWwwNDQ7KFTamRVM46FQtgcDxsmAyeBpTHEo79E1n1LuWiZSMSRhqMQmrHaqJpek2TbtTzbAdNWJm9AhGdv7iJUpDjA6oJD84b
       SMTP_HOST: mailpit
       SMTP_PORT: "1025"
       SMTP_USER: ""
       SMTP_PASSWORD: ""
       SMTP_ALLOW_INSECURE: "true"
+  billing-provider:
+    image: python:3.13-alpine
+    profiles: [stack]
+    command: [python3, /app/billing-provider.py]
+    volumes:
+      - ./scripts/stack/billing-provider.py:/app/billing-provider.py:ro
+    networks: [frameworks]
   lookout:
     environment:
       SMTP_HOST: mailpit

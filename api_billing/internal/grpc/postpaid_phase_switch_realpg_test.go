@@ -25,6 +25,7 @@ import (
 // invoice is a normal postpaid invoice: emailed, announced, and paid like any
 // other.
 func TestPostpaidToPrepaidSwitchInvoicesThePostpaidPhase_RealPG(t *testing.T) { //nolint:funlen // One switch, followed through to the invoice's payment.
+	configureRPCTaxSupplier(t)
 	appconfigtest.Set(t, "WAIVE_USAGE_CHARGES", "false")
 	db := startPurserTransitionRealPG(t)
 	ctx := context.Background()
@@ -43,6 +44,7 @@ func TestPostpaidToPrepaidSwitchInvoicesThePostpaidPhase_RealPG(t *testing.T) { 
 		VALUES ($1, 'egress_gb', 'all_usage', 'EUR', 0, 0.01, '{}'), ($2, 'egress_gb', 'all_usage', 'EUR', 0, 0.02, '{}')`, paygID, supporterID)
 	exec(t, `INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model, billing_email, billing_period_start, billing_period_end, presentment_currency)
 		VALUES ($1, $2, 'active', 'postpaid', 'billing@example.com', $3, $4, 'EUR')`, tenantID, supporterID, periodStart, periodEnd)
+	seedRPCTaxBuyer(t, db, tenantID)
 	// 150 GiB of postpaid usage, reported while the tenant was postpaid.
 	exec(t, `INSERT INTO purser.usage_records (
 			tenant_id, cluster_id, usage_type, unit, dimensions, dimension_key,
@@ -108,6 +110,7 @@ func TestPostpaidToPrepaidSwitchInvoicesThePostpaidPhase_RealPG(t *testing.T) { 
 // invoice, at the postpaid tier's prices; and the prepaid period resumes at
 // the second switch until the period would have ended.
 func TestPrepaidPostpaidPrepaidRoundTripBillsEachPhaseOnce_RealPG(t *testing.T) { //nolint:funlen // Two switches, followed through every document.
+	configureRPCTaxSupplier(t)
 	appconfigtest.Set(t, "WAIVE_USAGE_CHARGES", "false")
 	db := startPurserTransitionRealPG(t)
 	ctx := context.Background()
@@ -138,6 +141,8 @@ func TestPrepaidPostpaidPrepaidRoundTripBillsEachPhaseOnce_RealPG(t *testing.T) 
 	// Prepaid phase: 200 GiB the balance paid (2.00 at 0.01) from a 10.00 top-up.
 	prepaidReport := strings.Repeat("a", 64)
 	recordEgress(t, prepaidReport, periodStart.Add(2*time.Hour), 200)
+	seedRPCTaxBuyer(t, db, tenantID)
+
 	exec(t, `INSERT INTO purser.prepaid_usage_settlements (report_id, tenant_id, billing_period_start, billing_period_end, amount_micro, cumulative_amount_micro, currency)
 		VALUES ($1, $2, $3, $4, 2000000, 2000000, 'EUR')`, prepaidReport, tenantID, periodStart, periodEnd)
 	exec(t, `INSERT INTO purser.balance_transactions (tenant_id, amount_cents, balance_after_cents, transaction_type, description, reference_id, reference_type, created_at)

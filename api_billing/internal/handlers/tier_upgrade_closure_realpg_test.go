@@ -75,8 +75,8 @@ billing_name='Customer',billing_address='{"street":"Street 1","city":"Leiden","p
 				return 200, map[string]any{"id": "customer", "invoice_settings": map[string]any{"default_payment_method": "pm"}}
 			})
 			fixture.route("POST", "/v1/payment_intents", func(r recordedProviderRequest) (int, any) {
-				if r.form.Get("amount") != "5000" {
-					t.Errorf("wrong replacement charge: %v", r.form)
+				if r.form.Get("amount") != "6050" {
+					t.Errorf("wrong replacement gross charge: %v", r.form)
 				}
 				return 200, map[string]any{"id": "upgrade-payment", "status": "processing"}
 			})
@@ -176,6 +176,13 @@ VALUES($1,'paid',20,20,NOW(),$2,$3,2500,'USD',1.25,CURRENT_DATE,NOW())`, tenant.
 			if name == "pricing_applied" {
 				if ok, err := tenant.svc.ProcessTierUpgrade(t.Context(), tenant.id, id); err == nil || ok {
 					t.Fatalf("interrupted collection did not remain pending: %v %v", ok, err)
+				}
+				var netMinor, vatMinor, grossMinor int64
+				if err := db.QueryRowContext(t.Context(), `SELECT document_net_minor,document_vat_minor,document_gross_minor FROM purser.billing_invoices WHERE tenant_id=$1 AND usage_details->>'tier_upgrade_id'=$2`, tenant.id, id).Scan(&netMinor, &vatMinor, &grossMinor); err != nil {
+					t.Fatal(err)
+				}
+				if netMinor != 5000 || vatMinor != 1050 || grossMinor != 6050 {
+					t.Fatalf("NL replacement tax totals net=%d VAT=%d gross=%d, want5000/1050/6050", netMinor, vatMinor, grossMinor)
 				}
 				tenant.svc.chargeTierUpgradeInvoice = collectUpgrade
 			}

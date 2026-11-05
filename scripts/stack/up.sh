@@ -45,7 +45,7 @@ STACK_SERVICES=(
   livepeer-orch-a livepeer-gateway-a livepeer-proxy-a
   livepeer-orch-b livepeer-gateway-b livepeer-proxy-b
   livepeer-chain network-observer network-prober
-  webhook-receiver mailpit stack-runner
+  webhook-receiver billing-provider mailpit stack-runner
 )
 
 # A slot's environment is generated once per slot state: fresh platform secrets
@@ -147,7 +147,7 @@ stack_compose build edge
 exec 8>&-
 
 log "2/7 databases and control plane"
-stack_compose up -d --build postgres foghorn-redis foghorn-redis-b quartermaster purser commodore bridge decklog storage-init "s3-$STACK_S3" s3-proxy
+stack_compose up -d --build postgres foghorn-redis foghorn-redis-b quartermaster billing-provider purser commodore bridge decklog storage-init "s3-$STACK_S3" s3-proxy
 wait_for 180 "postgres" stack_compose exec -T postgres pg_isready -q
 pg_user="$(sed -n 's/^POSTGRES_USER="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$ENV_FILE" | head -1)"
 stack_compose exec -T postgres psql -U "$pg_user" -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname='foghorn_b'" | grep -q 1 ||

@@ -6,20 +6,22 @@ Approved for staged implementation — 2026-11-05, including consumers. No produ
 Local execution log: `PLAN_BILLING_FINANCIALS_2026-11-04.md` (root PLAN files are
 ignored by repository convention; this RFC contains the durable proposal).
 
-First delivery implements personal/business profiles, a shared tax decision
-engine with crypto payment safeguards, and the read-only
-`frameworks admin billing finance audit` evidence archive. Its operator contract
-and remaining limitations are documented in
-`website_docs/src/content/docs/operators/billing-financials.mdx`. The archive is
-explicitly not posting-ready. Regular invoice tax finalization, Stripe recurring
-tax integration, prepaid migration, reconciliation and journal exports below
-remain outstanding.
+The implementation includes personal/business profiles, shared tax decisions,
+frozen regular-invoice tax facts, original Stripe document import, Mollie
+subscription tax invoices, and gross-payment/net-credit prepaid purchases.
+Integration verification is in progress. The read-only
+`frameworks admin billing finance audit` evidence archive and its limits are
+documented in `website_docs/src/content/docs/operators/billing-financials.mdx`.
+The archive is not posting-ready; reconciled accounting closes and journal
+exports remain proposals below.
 
-DDVTech reports predominantly B2B support sales before launching this product.
-That does not establish a consumer VAT exemption, verified cross-border annual
-totals, or an OSS election. No exemption or registration is activated from that
-statement. Unconfigured foreign consumer tax treatment is held before new crypto
-payment instructions; enabling the threshold exception requires verified inputs.
+DDVTech prices are VAT-exclusive. The selected Dutch supplier policy charges
+domestic and EU consumer sales at 21%, uses reverse charge for qualifying EU
+businesses outside the Netherlands, and states non-EU services as outside Dutch
+VAT. Existing paid amounts are preserved; historical missing VAT is not recovered
+with another customer charge. No registration or tax exemption is inferred from
+a customer calling itself a business. Reviewed destination policies retain their
+explicit evidence requirements.
 
 ## TL;DR
 

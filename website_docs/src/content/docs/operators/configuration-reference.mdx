@@ -315,7 +315,8 @@ Read by `api_billing/cmd/purser`.
 | `SUPPLIER_REGISTRATION_NUMBER` | string |  |  | v0.3.0 | Supplier company registration number on billing documents and crypto invoices. |
 | `SUPPLIER_COUNTRY` | string |  |  | v0.3.0 | Supplier country, normalized to a two-letter country code, for crypto invoices and crypto deposit readiness. |
 | `VIES_ENDPOINT` | string |  |  | v0.3.0 | EU VIES SOAP endpoint that validates customer VAT numbers. Empty uses the European Commission service. Re-read after an env-file reload. |
-| `EU_CONSUMER_VAT_MODE` | string |  |  | v0.3.14 | Cross-border digital-service consumer VAT regime: destination or origin_threshold. Empty holds cross-border consumer tax decisions until the operator confirms the regime. Re-read after reload. |
+| `EU_CONSUMER_VAT_MODE` | string |  |  | v0.3.14 | Cross-border digital-service consumer VAT regime: destination. Empty holds foreign consumer decisions. Only destination is accepted. Re-read after reload. |
+| `CRYPTO_TAX_POLICY_JSON` | string |  |  | v0.3.14 | Reviewed supplier tax policy JSON: validity window, explicit non-EU rates and evidence references. Tenant establishment proofs are recorded separately through the operator finance commands. Covers the service and applicable regional rules. Empty holds unsupported destinations. Does not register or file tax. Re-read after reload. |
 | `EU_CONSUMER_DESTINATION_REGISTERED` | boolean | `false` |  | v0.3.14 | Operator confirmation that OSS or applicable destination VAT registration is in place for cross-border EU consumer services. Does not elect the scheme or file returns. |
 | `HD_WALLET_XPUB` | string |  | secret | v0.3.0 | Extended public key that initializes HD wallet deposit address state at startup when the database has none. A different stored key is kept and the mismatch is logged. |
 | `X402_GAS_WALLET_PRIVKEY` | string |  | secret | v0.3.0 | Hex private key of the gas wallet that submits self-facilitated x402 settlements and funds Livepeer TicketBroker deposits. |
@@ -391,6 +392,14 @@ Read by `api_billing/cmd/purser`.
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
 | `DATABASE_URL` | string |  | required, secret | v0.3.0 | Connection URL for this service's PostgreSQL or YugabyteDB database. |
+
+### financial-audit subcommand
+
+Read by `api_billing/cmd/purser`.
+
+| Variable | Type | Default | Notes | Since | Description |
+| --- | --- | --- | --- | --- | --- |
+| `STRIPE_SECRET_KEY` | string |  | secret | v0.3.14 | Stripe key used for GET-only financial evidence reads. |
 
 ## quartermaster
 

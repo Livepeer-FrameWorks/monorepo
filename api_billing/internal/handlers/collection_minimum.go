@@ -3,14 +3,12 @@ package handlers
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
 	"frameworks/api_billing/internal/database/purserdb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
-	"github.com/shopspring/decimal"
 )
 
 type invoiceCollectionDecision struct {
@@ -140,36 +138,7 @@ func persistInvoiceCollectionDecisionTx(
 	}); err != nil {
 		return fmt.Errorf("persist invoice collection decision: %w", err)
 	}
-
-	var lineKey, description string
-	var amountCents int64
-	switch {
-	case decision.Outcome == "deferred" && decision.CurrentChargeCents > 0:
-		lineKey = "collection_balance_deferred"
-		description = "Small balance carried forward (no payment due)"
-		amountCents = -decision.CurrentChargeCents
-	case decision.Outcome == "collected" && decision.OpeningBalanceCents > 0:
-		lineKey = "collection_balance_opening"
-		description = "Balance carried forward from earlier periods"
-		amountCents = decision.OpeningBalanceCents
-	default:
-		return nil
-	}
-
-	dimensions, err := json.Marshal(map[string]int64{
-		"minimum_cents":         decision.MinimumCents,
-		"opening_balance_cents": decision.OpeningBalanceCents,
-		"closing_balance_cents": decision.ClosingBalanceCents,
-	})
-	if err != nil {
-		return fmt.Errorf("marshal collection line dimensions: %w", err)
-	}
-	amount := decimal.NewFromInt(amountCents).Div(decimal.NewFromInt(100)).StringFixed(2)
-	if err = queries.InsertBillingCollectionLineItem(ctx, purserdb.InsertBillingCollectionLineItemParams{
-		InvoiceID: invoiceID, TenantID: tenantID, LineKey: lineKey,
-		Dimensions: dimensions, Description: description, Amount: amount, Currency: decision.Currency,
-	}); err != nil {
-		return fmt.Errorf("persist invoice collection line: %w", err)
-	}
+	// Issued tax invoices show collection carry in their totals. It is a
+	// payment allocation, not another supply or a change to frozen tax lines.
 	return nil
 }

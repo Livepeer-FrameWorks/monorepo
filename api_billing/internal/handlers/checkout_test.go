@@ -23,7 +23,7 @@ func TestHandlePrepaidCheckoutCompletedRejectsTenantMismatch(t *testing.T) {
 	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`(?s)SELECT status, tenant_id::text AS tenant_id.*FROM purser.pending_topups.*FOR UPDATE`).
+	mock.ExpectQuery(`(?s)-- name: LockPendingTopupForCheckout.*FROM purser.pending_topups.*FOR UPDATE`).
 		WithArgs("topup-123").
 		WillReturnRows(pendingTopupRows("pending", checkoutTenantID, "stripe", 1500, "EUR", "sess-1", ""))
 	mock.ExpectRollback()
@@ -69,7 +69,7 @@ func TestHandlePrepaidCheckoutCompletedRejectsSettlementEvidenceMismatch(t *test
 
 			s := &Service{db: mockDB, logger: logrus.New()}
 			mock.ExpectBegin()
-			mock.ExpectQuery(`(?s)SELECT status, tenant_id::text AS tenant_id.*FROM purser.pending_topups.*FOR UPDATE`).
+			mock.ExpectQuery(`(?s)-- name: LockPendingTopupForCheckout.*FROM purser.pending_topups.*FOR UPDATE`).
 				WithArgs("topup-1").
 				WillReturnRows(pendingTopupRows("pending", checkoutTenantID, tc.storedProvider, tc.storedAmount, tc.storedCurrency, tc.storedCheckoutID, tc.storedPaymentID))
 			mock.ExpectRollback()
@@ -106,7 +106,7 @@ func TestHandlePrepaidCheckoutCompletedSkipsAlreadyProcessed(t *testing.T) {
 	}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`(?s)SELECT status, tenant_id::text AS tenant_id.*FROM purser.pending_topups.*FOR UPDATE`).
+	mock.ExpectQuery(`(?s)-- name: LockPendingTopupForCheckout.*FROM purser.pending_topups.*FOR UPDATE`).
 		WithArgs("topup-456").
 		WillReturnRows(pendingTopupRows("completed", checkoutTenantID, "stripe", 1500, "USD", "sess-2", "pi-2"))
 	mock.ExpectRollback()
@@ -177,7 +177,7 @@ func TestHandlePrepaidCheckoutCompletedRollsBackCreditWhenOutboxInsertFails(t *t
 
 func expectPrepaidTopupCreditMutations(mock sqlmock.Sqlmock) {
 	mock.ExpectBegin()
-	mock.ExpectQuery(`(?s)SELECT status, tenant_id::text AS tenant_id.*FROM purser.pending_topups.*FOR UPDATE`).
+	mock.ExpectQuery(`(?s)-- name: LockPendingTopupForCheckout.*FROM purser.pending_topups.*FOR UPDATE`).
 		WithArgs("topup-789").
 		WillReturnRows(pendingTopupRows("pending", checkoutTenantID, "mollie", 1500, "EUR", "sess-3", ""))
 	mock.ExpectExec("UPDATE purser.pending_topups").
@@ -467,7 +467,7 @@ func TestHandlePrepaidCheckoutCompletedPendingWhenUnsettled(t *testing.T) {
 	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`(?s)SELECT status, tenant_id::text AS tenant_id.*FROM purser.pending_topups.*FOR UPDATE`).
+	mock.ExpectQuery(`(?s)-- name: LockPendingTopupForCheckout.*FROM purser.pending_topups.*FOR UPDATE`).
 		WithArgs("topup-1").
 		WillReturnRows(pendingTopupRows("pending", checkoutTenantID, "stripe", 1500, "EUR", "cs_test_session", ""))
 	mock.ExpectExec("UPDATE purser.pending_topups").
@@ -510,9 +510,10 @@ func pendingTopupRows(status, tenantID, provider string, amountCents int64, curr
 		eurAmount, units, source = amountCents*4/5, "1.25", "ecb"
 	}
 	return sqlmock.NewRows([]string{
+		"net_eur_cents", "vat_eur_cents", "gross_eur_cents", "tax_assessment", "tax_document_id",
 		"status", "tenant_id", "provider", "amount_cents", "currency", "checkout_id", "provider_payment_id", "refunded_amount_cents",
 		"original_amount_cents", "original_currency", "eur_amount_cents", "fx_units_per_eur", "fx_source", "fx_reference_date",
-	}).AddRow(status, tenantID, provider, amountCents, currency, checkoutValue, paymentValue, int64(0),
+	}).AddRow(nil, nil, nil, []byte(`{}`), nil, status, tenantID, provider, amountCents, currency, checkoutValue, paymentValue, int64(0),
 		amountCents, strings.ToUpper(currency), eurAmount, units, source, time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC))
 }
 

@@ -2,7 +2,7 @@
 SELECT wallet.id::text AS id, wallet.tenant_id::text AS tenant_id, wallet.purpose,
        COALESCE(wallet.invoice_id::text, '')::text AS invoice_id,
        wallet.expected_amount_cents, wallet.asset, wallet.network, wallet.wallet_address,
-       wallet.status, COALESCE(wallet.tx_hash, '')::text AS tx_hash,
+       wallet.tax_profile_snapshot, wallet.tax_document_kind, wallet.status, COALESCE(wallet.tx_hash, '')::text AS tx_hash,
        COALESCE(wallet.expected_amount_base_units::text, '')::text AS expected_amount_base_units,
        COALESCE(wallet.quoted_price_usd::text, '')::text AS quoted_price_usd,
        COALESCE(wallet.original_amount_cents, 0)::bigint AS original_amount_cents,
@@ -88,6 +88,7 @@ WHERE wallet.purpose = 'prepaid' AND wallet.status IN ('completed', 'swept')
         AND invoice.reference_type = 'crypto_payment'
         AND invoice.reference_id = wallet.tx_hash
   )
+AND NOT EXISTS (SELECT 1 FROM purser.billing_invoices invoice WHERE invoice.tenant_id=wallet.tenant_id AND invoice.source_reference_type='crypto_payment' AND invoice.source_reference_id=wallet.tx_hash)
 ORDER BY wallet.completed_at
 LIMIT 100;
 

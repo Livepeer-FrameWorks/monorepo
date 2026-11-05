@@ -2,18 +2,25 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"frameworks/api_billing/internal/appconfig/appconfigtest"
+	billingtax "frameworks/api_billing/internal/tax"
 	"github.com/DATA-DOG/go-sqlmock"
 	x402sdk "github.com/x402-foundation/x402/go/v2"
 )
 
-func TestCreatePaymentQuoteCoversDeficitAndBuffer(t *testing.T) {
+func TestCreatePaymentQuotesAssessOnceAndCoverDeficitAndBuffer(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -31,27 +38,32 @@ func TestCreatePaymentQuoteCoversDeficitAndBuffer(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(-250)))
 	mock.ExpectQuery("SELECT billing_email, billing_name, billing_company").
 		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id"}))
-	mock.ExpectExec("INSERT INTO purser.x402_payment_quotes").
-		WithArgs(
-			sqlmock.AnyArg(), "tenant-1", "graphql://createStream", "graphql",
-			"eip155:8453", "0xAsset", "0xpayto", "7500000", int64(750),
-			sqlmock.AnyArg(), "simplified", sqlmock.AnyArg(), sqlmock.AnyArg(),
-			int64(750), "USD", "1", "ecb", sqlmock.AnyArg(),
-		).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow("buyer@example.test", "Original Buyer", nil, []byte(`{"country":"NL"}`), nil, "consumer"))
+	mock.ExpectQuery("SELECT rate_bps, source, source_checked_on::text AS source_checked_on").WillReturnRows(sqlmock.NewRows([]string{"rate_bps", "source", "source_checked_on", "effective_from"}).AddRow(2100, "Dutch VAT", "2026-01-01", "2026-01-01"))
+	for _, chain := range []string{"eip155:8453", "eip155:42161"} {
+		mock.ExpectExec("INSERT INTO purser.x402_payment_quotes").
+			WithArgs(
+				sqlmock.AnyArg(), "tenant-1", "graphql://createStream", "graphql",
+				chain, "0xAsset", "0xpayto", "9080000", int64(750),
+				sqlmock.AnyArg(), "simplified", sqlmock.AnyArg(), sqlmock.AnyArg(),
+				int64(908), "USD", int64(908), "1", "ecb", sqlmock.AnyArg(),
+			).
+			WillReturnResult(sqlmock.NewResult(1, 1))
 
-	h := &X402Handler{db: db, topupUSDCents: 500}
-	quote, err := h.CreatePaymentQuote(context.Background(), "tenant-1", "graphql://createStream", "0xPayTo", NetworkConfig{
-		Name:           "base",
-		ChainID:        8453,
-		USDCContract:   "0xAsset",
-		USDCDomainName: "USD Coin",
-	})
+	}
+	h := &X402Handler{db: db, topupUSDCents: 500, supplierCountry: "NL", supplierName: "DDVTech B.V.", supplierAddress: "Leiden, NL", supplierVAT: "NL123456789B01", supplierRegistration: "12345678"}
+	quotes, requirement, err := h.CreatePaymentQuotes(context.Background(), "tenant-1", "graphql://createStream", "0xPayTo", []NetworkConfig{{Name: "base", ChainID: 8453, USDCContract: "0xAsset", USDCDomainName: "USD Coin"}, {Name: "arbitrum", ChainID: 42161, USDCContract: "0xAsset", USDCDomainName: "USD Coin"}}, "")
 	if err != nil {
 		t.Fatalf("CreatePaymentQuote() error = %v", err)
 	}
-	if quote.AmountAtomic != "7500000" || quote.CreditAmountCents != 750 {
+	if len(quotes) != 2 || requirement.RequiresCompleteProfile {
+		t.Fatalf("quotes=%d requirement=%+v", len(quotes), requirement)
+	}
+	quote := quotes[0]
+	if string(quote.TaxProfileSnapshot) != string(quotes[1].TaxProfileSnapshot) || !quote.ExpiresAt.Equal(quotes[1].ExpiresAt) || quote.FX.EURMinor != quotes[1].FX.EURMinor {
+		t.Fatal("network options received different tax/financial assessments")
+	}
+	if quote.AmountAtomic != "9080000" || quote.CreditAmountCents != 750 {
 		t.Fatalf("quote does not cover deficit + buffer: %+v", quote)
 	}
 	var extra map[string]interface{}
@@ -245,5 +257,52 @@ func TestAdvertisableNetworksAreFacilitatorIntersection(t *testing.T) {
 	}
 	if len(networks) != 1 || networks[0].Name != "base" {
 		t.Fatalf("advertisable networks = %+v, want Base only", networks)
+	}
+}
+
+func TestPaymentQuotesDoNotOfferUnverifiedVATDuringVIESOutage(t *testing.T) {
+	for _, cached := range []bool{false, true} {
+		t.Run(fmt.Sprintf("valid_cached_evidence_%v", cached), func(t *testing.T) {
+			var calls atomic.Int32
+			endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}))
+			defer endpoint.Close()
+			appconfigtest.Set(t, "VIES_ENDPOINT", endpoint.URL)
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			today := time.Now().UTC().Truncate(24 * time.Hour)
+			mock.ExpectQuery("FROM purser.fx_rates").WillReturnRows(sqlmock.NewRows([]string{"currency", "reference_date", "units_per_eur", "source", "fetched_at"}).AddRow("USD", today, "1", "ecb", time.Now()))
+			mock.ExpectQuery("SELECT balance_cents").WithArgs("tenant-1").WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(0))
+			mock.ExpectQuery("SELECT billing_email, billing_name, billing_company").WithArgs("tenant-1").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow("buyer@example.test", "German Buyer", nil, []byte(`{"street":"Main 1","city":"Berlin","postal_code":"10115","country":"DE"}`), "DE123456789", "business"))
+			expectation := mock.ExpectQuery("-- name: GetCachedVATValidation").WithArgs(viesOutageGraceHours, "tenant-1", sqlmock.AnyArg())
+			if cached {
+				expectation.WillReturnRows(sqlmock.NewRows([]string{"valid", "validation_snapshot", "fresh", "within_outage_grace"}).AddRow(true, []byte(`{"valid":true,"expires_at":"2027-01-01T00:00:00Z"}`), true, false))
+				for range 2 {
+					mock.ExpectExec("INSERT INTO purser.x402_payment_quotes").WillReturnResult(sqlmock.NewResult(1, 1))
+				}
+			} else {
+				expectation.WillReturnError(sql.ErrNoRows)
+			}
+			h := &X402Handler{db: db, supplierCountry: "NL", topupUSDCents: 500, supplierName: "DDVTech B.V.", supplierAddress: "Leiden, NL", supplierVAT: "NL123456789B01", supplierRegistration: "12345678"}
+			quotes, requirement, err := h.CreatePaymentQuotes(context.Background(), "tenant-1", "mcp://test", "0xPayTo", []NetworkConfig{Networks["base"], Networks["arbitrum"]}, "")
+			if cached {
+				if err != nil || len(quotes) != 2 || calls.Load() != 0 || len(requirement.Profile.TaxAssessment.VATValidation) == 0 {
+					t.Fatalf("valid cached proof was not usable: quotes=%d calls=%d err=%v", len(quotes), calls.Load(), err)
+				}
+			} else {
+				var review *billingtax.ReviewError
+				if !errors.As(err, &review) || review.Code != "vat_validation_unavailable" || len(quotes) != 0 || calls.Load() != 1 {
+					t.Fatalf("unverified VAT was advertised or repeatedly retried: quotes=%d calls=%d err=%v", len(quotes), calls.Load(), err)
+				}
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

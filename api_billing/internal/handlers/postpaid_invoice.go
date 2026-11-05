@@ -184,24 +184,42 @@ func writePostpaidInvoiceTx(ctx context.Context, tx *sql.Tx, run *postpaidInvoic
 
 	// Money stays in decimal.Decimal until the SQL boundary. The gross metered
 	// amount is the would-have-cost usage total, for display only.
-	grossDec := ratingResult.TotalAmount
+	issuedAt := time.Now().UTC()
+	netDec := ratingResult.TotalAmount.Round(2)
+	var taxAssessment invoiceTaxAssessment
+	grossDec := netDec
+	if !heldForReview {
+		var taxErr error
+		taxAssessment, taxErr = assessInvoiceTaxTx(ctx, tx, tenantID, netDec.Shift(2).IntPart(), issuedAt)
+		if taxErr != nil {
+			return result, fmt.Errorf("assess invoice tax: %w", taxErr)
+		}
+		grossDec = decimal.New(taxAssessment.Gross, -2)
+	}
 	result.total = grossDec
 
 	// A held invoice records no credit, so it reconciles the period's credit
 	// to zero and anything an earlier draft took returns.
 	creditTargetCents := int64(0)
 	if !heldForReview {
-		creditTargetCents = grossDec.Mul(decimal.NewFromInt(100)).Round(0).IntPart()
+		creditTargetCents = netDec.Shift(2).IntPart()
 	}
 	var err error
 	result.creditChange, err = reconcileInvoicePrepaidCreditTx(ctx, tx, tenantID, run.periodStart, creditTargetCents)
 	if err != nil {
 		return result, err
 	}
+	var financialCredit, absorbedVAT int64
+	var advanceLines []pricedLine
 	var collectionDecision *invoiceCollectionDecision
 	if !heldForReview {
 		result.credit = decimal.NewFromInt(result.creditChange.AppliedCents).Div(decimal.NewFromInt(100))
-		result.total = grossDec.Sub(result.credit)
+		advanceLines, financialCredit, absorbedVAT, err = applyInvoiceAdvanceTaxTx(ctx, tx, tenantID, run.periodStart, result.creditChange.AppliedCents, &taxAssessment)
+		if err != nil {
+			return result, err
+		}
+		grossDec = decimal.New(taxAssessment.Gross, -2)
+		result.total = grossDec.Sub(decimal.New(financialCredit+absorbedVAT, -2))
 		if result.total.IsNegative() {
 			result.total = decimal.Zero
 		}
@@ -265,15 +283,25 @@ func writePostpaidInvoiceTx(ctx context.Context, tx *sql.Tx, run *postpaidInvoic
 			return result, fmt.Errorf("upsert invoice: %w", err)
 		}
 	}
-	if err = persistInvoiceLineItems(ctx, tx, result.invoiceID, tenantID, ratingResult); err != nil {
+	invoiceRating := *ratingResult
+	invoiceRating.UsageLines = append(append([]pricedLine(nil), ratingResult.UsageLines...), advanceLines...)
+	if err = persistInvoiceLineItems(ctx, tx, result.invoiceID, tenantID, &invoiceRating); err != nil {
 		return result, err
+	}
+	if financialCredit != 0 || absorbedVAT != 0 {
+		if _, err = tx.ExecContext(ctx, `UPDATE purser.billing_invoices SET prepaid_financial_credit_eur_cents=$3,absorbed_vat_eur_cents=$4 WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, result.invoiceID, financialCredit, absorbedVAT); err != nil {
+			return result, err
+		}
 	}
 	// A finalized invoice is presented in the tenant's presentment currency at
 	// the ECB rate of the finalization date. Without a usable rate the whole
 	// finalization rolls back and is retried.
 	if !heldForReview {
-		result.presentment, err = finalizeInvoicePresentmentTx(ctx, tx, result.invoiceID, tenantID, run.presentmentCurrency, result.total, time.Now().UTC())
+		result.presentment, err = finalizeInvoicePresentmentTx(ctx, tx, result.invoiceID, tenantID, run.presentmentCurrency, result.total, issuedAt)
 		if err != nil {
+			return result, err
+		}
+		if err = freezeInvoiceTaxTx(ctx, tx, tenantID, result.invoiceID, taxAssessment, result.presentment); err != nil {
 			return result, err
 		}
 	}

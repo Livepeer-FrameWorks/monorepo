@@ -995,6 +995,19 @@ func (s *Service) handlePrepaidCheckoutCompleted(ctx context.Context, sessionID,
 		// 2. Credit prepaid balance. Providers report lowercase ISO codes, so the
 		// row is addressed by the canonical ledger currency.
 		creditCents = topupFX.EURMinor
+		var retainedTax *invoiceTaxAssessment
+		if topup.NetEurCents.Valid {
+			var assessed invoiceTaxAssessment
+			if err = json.Unmarshal(topup.TaxAssessment, &assessed); err != nil {
+				return fmt.Errorf("decode retained top-up tax: %w", err)
+			}
+			if assessed.Advance == nil || assessed.Net != topup.NetEurCents.Int64 || assessed.Gross != topupFX.EURMinor || assessed.Advance.GrossOriginal != amountCents {
+				return fmt.Errorf("settled top-up differs from retained gross/net quote")
+			}
+			creditCents = assessed.Net
+			retainedTax = &assessed
+		}
+
 		if err = queries.EnsurePrepaidBalanceRow(ctx, purserdb.EnsurePrepaidBalanceRowParams{TenantID: tenantID, Currency: billing.LedgerCurrency}); err != nil {
 			return fmt.Errorf("failed to ensure prepaid balance: %w", err)
 		}
@@ -1035,6 +1048,16 @@ func (s *Service) handlePrepaidCheckoutCompleted(ctx context.Context, sessionID,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to create balance transaction: %w", err)
+		}
+
+		if retainedTax != nil {
+			invoiceID, _, issueErr := issueFundedAdvanceInvoiceTx(ctx, tx, tenantID, "prepaid_topup", topupID, providerPaymentID, *retainedTax, *topupFX, now, currentBalance-creditCents, txID.String())
+			if issueErr != nil {
+				return issueErr
+			}
+			if _, err = queries.LinkPendingTopupTaxDocument(ctx, purserdb.LinkPendingTopupTaxDocumentParams{TenantID: tenantID, TopupID: topupID, InvoiceID: invoiceID}); err != nil {
+				return err
+			}
 		}
 
 		// 4. Update pending_topup to completed

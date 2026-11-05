@@ -19,6 +19,7 @@ import (
 // Staging, re-pointing and cancelling each commit one durable provider step for
 // the tenant; a tier a recurring price cannot reach is refused, not promised.
 func TestChangeBillingTierQueuesProviderStep_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	db := startOperatorGrantDatabase(t)
 	ctx := t.Context()
 	tenant, paid, low, lower, free := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
@@ -31,9 +32,9 @@ func TestChangeBillingTierQueuesProviderStep_RealPG(t *testing.T) {
 	exec(`INSERT INTO purser.billing_tiers (id,tier_name,display_name,tier_level,base_price,currency,metering_enabled,stripe_price_id_monthly) VALUES
 		($1::text::uuid,$1::text,'Paid',4,50,'EUR',false,'paid-price'),($2::text::uuid,$2::text,'Low',3,30,'EUR',false,'low-price'),
 		($3::text::uuid,$3::text,'Lower',2,20,'EUR',false,'lower-price'),($4::text::uuid,$4::text,'No fee',1,0,'EUR',false,NULL)`, paid, low, lower, free)
-	exec(`INSERT INTO purser.tenant_subscriptions (tenant_id,tier_id,status,billing_model,payment_method,stripe_customer_id,stripe_subscription_id,
+	exec(`INSERT INTO purser.tenant_subscriptions (billing_customer_type,billing_company,tenant_id,tier_id,status,billing_model,payment_method,stripe_customer_id,stripe_subscription_id,
 		billing_name,billing_email,billing_address,presentment_currency,billing_period_start,billing_period_end,next_billing_date)
-		VALUES ($1,$2,'active','postpaid','stripe','customer','subscription','Customer','billing@example.com',
+		VALUES ('business','Fixture Ltd',$1,$2,'active','postpaid','stripe','customer','subscription','Customer','billing@example.com',
 		'{"street":"Street 1","city":"Leiden","postal_code":"2332ED","country":"NL"}','EUR',NOW()-INTERVAL '10 days',NOW()+INTERVAL '20 days',NOW()+INTERVAL '20 days')`, tenant, paid)
 	logger := logging.NewLogger()
 	stripeClient := billingstripe.NewClient(billingstripe.Config{SecretKey: "sk_test_fixture", Logger: logger})

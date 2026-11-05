@@ -12,7 +12,7 @@ FROM (
            COALESCE(presentment_currency, currency)::varchar AS currency, status,
            COALESCE(finalized_at, created_at, NOW()) AS issued_at, retention_until,
            CASE WHEN presentment_amount_cents IS NULL THEN NULL ELSE ROUND(amount * 100)::bigint END AS eur_amount_cents,
-           NULL::bigint AS net_eur_cents, NULL::bigint AS vat_eur_cents,
+           net_eur_cents, vat_eur_cents,
            presentment_units_per_eur::text AS units_per_eur,
            presentment_reference_date::date AS fx_reference_date
     FROM purser.billing_invoices WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND status <> 'draft'
@@ -41,6 +41,13 @@ FROM (
     SELECT id, 'credit_note', credit_note_number, amount_cents, currency, 'issued', issued_at, retention_until,
            NULL::bigint, NULL::bigint, NULL::bigint, NULL::text, NULL::date
     FROM purser.credit_notes WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+    UNION ALL
+    SELECT id, document_kind, original_number, gross_minor, currency::varchar, status, issued_at, retention_until,
+           CASE WHEN currency='EUR' THEN gross_minor ELSE NULL END,
+           CASE WHEN currency='EUR' THEN net_minor ELSE NULL END,
+           CASE WHEN currency='EUR' THEN vat_minor ELSE NULL END,
+           NULL::text, NULL::date
+    FROM purser.provider_billing_documents WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid
 ) documents
 ORDER BY issued_at DESC, id DESC
 LIMIT 1000;
@@ -51,7 +58,11 @@ LIMIT 1000;
 -- supplier recorded when it was issued. A document issued without that record
 -- states the tenant's current billing details, and has_supplier_snapshot false
 -- tells the caller to state the configured supplier.
-SELECT invoice.invoice_number,
+SELECT invoice.net_eur_cents,invoice.vat_eur_cents,invoice.gross_eur_cents,
+       invoice.document_net_minor,invoice.document_vat_minor,invoice.document_gross_minor,
+       invoice.prepaid_financial_credit_eur_cents,invoice.absorbed_vat_eur_cents,
+       invoice.tax_status,COALESCE(invoice.tax_summary,'[]'::jsonb)::jsonb AS tax_summary,COALESCE(invoice.tax_decision,'{}'::jsonb)::jsonb AS tax_decision,
+       invoice.invoice_number,
        COALESCE(invoice.presentment_amount_cents, ROUND(invoice.amount * 100)::bigint)::bigint AS amount_cents,
        COALESCE(invoice.presentment_currency, invoice.currency)::text AS currency, invoice.status,
        COALESCE(invoice.finalized_at, invoice.created_at, NOW()) AS issued_at, invoice.retention_until,
@@ -105,7 +116,11 @@ WHERE payment.id = sqlc.arg(document_id)::text::uuid
   AND payment.status = 'confirmed';
 
 -- name: GetCreditNoteDocument :one
-SELECT note.credit_note_number, note.amount_cents, note.currency, note.issued_at, note.retention_until,
+SELECT note.document_net_minor,note.document_vat_minor,note.net_eur_cents,note.vat_eur_cents,note.gross_eur_cents,COALESCE(note.tax_summary,'{}'::jsonb)::jsonb AS tax_summary,
+       COALESCE((SELECT invoice_number FROM purser.billing_invoices WHERE tenant_id=note.tenant_id AND id=note.source_document_id),
+       (SELECT invoice_number FROM purser.simplified_invoices WHERE tenant_id=note.tenant_id AND id=note.source_document_id),
+       (SELECT invoice_number FROM purser.crypto_invoices WHERE tenant_id=note.tenant_id AND id=note.source_document_id),note.source_document_id::text)::text AS source_document_number,
+       note.credit_note_number, note.amount_cents, note.currency, note.issued_at, note.retention_until,
        note.source_document_type, note.source_document_id::text AS source_document_id,
        note.reversal_reference_type, note.reversal_reference_id, note.reason,
        COALESCE(note.customer_snapshot->>'email', subscription.billing_email, '')::text AS customer_email,
@@ -125,7 +140,7 @@ WHERE note.id = sqlc.arg(document_id)::text::uuid
 
 -- name: GetSimplifiedInvoiceDocument :one
 SELECT invoice.invoice_number, invoice.gross_amount_cents, invoice.currency,
-       invoice.tax_validation_status, invoice.issued_at, invoice.retention_until,
+       invoice.tax_validation_status, invoice.tax_assessment, invoice.issued_at, invoice.retention_until,
        invoice.net_amount_cents, invoice.vat_amount_cents, invoice.vat_rate_bps,
        invoice.amount_eur_cents, COALESCE(invoice.net_eur_cents, 0)::bigint AS net_eur_cents,
        COALESCE(invoice.vat_eur_cents, 0)::bigint AS vat_eur_cents,
@@ -149,7 +164,7 @@ WHERE invoice.id = sqlc.arg(document_id)::text::uuid
   AND invoice.tax_validation_status <> 'location_review';
 
 -- name: GetCryptoInvoiceDocument :one
-SELECT invoice_number, gross_amount_cents, currency, tax_validation_status,
+SELECT invoice_number, gross_amount_cents, currency, tax_validation_status, tax_assessment,
        issued_at, retention_until, net_amount_cents, vat_amount_cents, vat_rate_bps,
        amount_eur_cents, COALESCE(net_eur_cents, 0)::bigint AS net_eur_cents,
        COALESCE(vat_eur_cents, 0)::bigint AS vat_eur_cents,

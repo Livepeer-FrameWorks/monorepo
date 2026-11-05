@@ -23,6 +23,7 @@ import (
 
 func testEndedProviderAssignmentBilling(t *testing.T, db *sql.DB, server *PurserServer, operatorID string) {
 	t.Helper()
+	configureRPCTaxSupplier(t)
 	appconfigtest.Set(t, "WAIVE_USAGE_CHARGES", "false")
 	ender := &fallbackLifecycleProvider{call: func(context.Context, billing.SubscriptionEndRequest) (billing.SubscriptionEndResult, error) {
 		return billing.SubscriptionEndResult{}, nil
@@ -48,6 +49,7 @@ func testEndedProviderAssignmentBilling(t *testing.T, db *sql.DB, server *Purser
 			t.Run(provider+" ended paid term "+action, func(t *testing.T) {
 				tenant := uuid.NewString()
 				exec(t, `INSERT INTO purser.tenant_subscriptions(tenant_id,tier_id,status,billing_model,presentment_currency,billing_period_start,billing_period_end,free_fallback_at,free_fallback_reason,free_fallback_notified_at,free_fallback_provider_ended_at,stripe_subscription_id,stripe_subscription_status,mollie_subscription_id) VALUES($1,$2,'pending_cancellation','postpaid','EUR',$3::timestamptz AT TIME ZONE 'UTC',$4::timestamptz AT TIME ZONE 'UTC',$4::timestamptz,'cancelled',NOW(),NOW(),CASE WHEN $5='stripe' THEN 'ended-stripe' END,CASE WHEN $5='stripe' THEN 'canceled' END,CASE WHEN $5='mollie' THEN 'ended-mollie' END)`, tenant, paidTier, start, end, provider)
+				seedRPCTaxBuyer(t, db, tenant)
 				for i, at := range []time.Time{start.Add(time.Hour), end.Add(time.Hour)} {
 					exec(t, `INSERT INTO purser.usage_records(tenant_id,cluster_id,usage_type,unit,dimensions,dimension_key,source_id,report_id,usage_value,usage_details,period_start,period_end,granularity,value_kind,created_at) VALUES($1,'','egress_gb','gibibyte','{}',$2,'ended-provider',$3,5000,'{}',$4,$4::timestamptz+INTERVAL '5 minutes','minute_5','delta',$4)`, tenant, fmt.Sprintf("%x", sha256.Sum256([]byte("{}"))), strings.Repeat(fmt.Sprintf("%x", i+1), 64), at)
 				}

@@ -243,7 +243,7 @@ func TestStripeCheckoutUsesReservationDeadline(t *testing.T) {
 	installBackend(t, b)
 	c := NewClient(Config{SecretKey: "sk_test", Logger: logging.NewLogger()})
 	deadline := time.Now().Add(time.Hour).Truncate(time.Second)
-	if _, err := c.CreateCheckoutSession(context.Background(), CheckoutSessionParams{TenantID: "tenant", ReservationID: "reservation", ExpiresAt: deadline, IdempotencyKey: "key"}); err != nil {
+	if _, err := c.CreateCheckoutSession(context.Background(), CheckoutSessionParams{TaxProfile: &TaxProfile{}, TaxRateID: "txr_test", TenantID: "tenant", ReservationID: "reservation", ExpiresAt: deadline, IdempotencyKey: "key"}); err != nil {
 		t.Fatal(err)
 	}
 	if b.checkoutParams.ExpiresAt == nil || *b.checkoutParams.ExpiresAt != deadline.Unix() || b.checkoutParams.Metadata["checkout_reservation_id"] != "reservation" {
@@ -268,7 +268,7 @@ func TestCheckoutRetryResumesExistingProviderSession(t *testing.T) {
 		if setup {
 			_, err = c.CreateSetupCheckoutSession(t.Context(), SetupCheckoutParams{CustomerID: "customer", ReservationID: "reservation", ExistingSessionID: "cs_reserved", ResumeOnly: true})
 		} else {
-			_, err = c.CreateCheckoutSession(t.Context(), CheckoutSessionParams{CustomerID: "customer", ReservationID: "reservation", ExistingSessionID: "cs_reserved", ResumeOnly: true})
+			_, err = c.CreateCheckoutSession(t.Context(), CheckoutSessionParams{TaxProfile: &TaxProfile{}, TaxRateID: "txr_test", CustomerID: "customer", ReservationID: "reservation", ExistingSessionID: "cs_reserved", ResumeOnly: true})
 		}
 		if err != nil {
 			t.Fatal(err)
@@ -294,7 +294,7 @@ func TestUnboundCheckoutRetryReplaysWithinProviderWindow(t *testing.T) {
 			if setup {
 				_, err = c.CreateSetupCheckoutSession(t.Context(), SetupCheckoutParams{CustomerID: "customer", Currency: "USD", ReservationID: "reservation", IdempotencyKey: "original-key", ResumeOnly: true, ReplayBefore: time.Now().Add(time.Minute)})
 			} else {
-				_, err = c.CreateCheckoutSession(t.Context(), CheckoutSessionParams{CustomerID: "customer", Currency: "EUR", PriceID: "price", ReservationID: "reservation", IdempotencyKey: "original-key", ResumeOnly: true, ReplayBefore: time.Now().Add(time.Minute)})
+				_, err = c.CreateCheckoutSession(t.Context(), CheckoutSessionParams{TaxProfile: &TaxProfile{}, TaxRateID: "txr_test", CustomerID: "customer", Currency: "EUR", PriceID: "price", ReservationID: "reservation", IdempotencyKey: "original-key", ResumeOnly: true, ReplayBefore: time.Now().Add(time.Minute)})
 			}
 			if err != nil || b.checkoutParams == nil || *b.checkoutParams.IdempotencyKey != "original-key" {
 				t.Fatalf("unbound attempt was not replayed with original identity: params=%v err=%v", b.checkoutParams, err)

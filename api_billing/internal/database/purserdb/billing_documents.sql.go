@@ -8,11 +8,16 @@ package purserdb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 )
 
 const getCreditNoteDocument = `-- name: GetCreditNoteDocument :one
-SELECT note.credit_note_number, note.amount_cents, note.currency, note.issued_at, note.retention_until,
+SELECT note.document_net_minor,note.document_vat_minor,note.net_eur_cents,note.vat_eur_cents,note.gross_eur_cents,COALESCE(note.tax_summary,'{}'::jsonb)::jsonb AS tax_summary,
+       COALESCE((SELECT invoice_number FROM purser.billing_invoices WHERE tenant_id=note.tenant_id AND id=note.source_document_id),
+       (SELECT invoice_number FROM purser.simplified_invoices WHERE tenant_id=note.tenant_id AND id=note.source_document_id),
+       (SELECT invoice_number FROM purser.crypto_invoices WHERE tenant_id=note.tenant_id AND id=note.source_document_id),note.source_document_id::text)::text AS source_document_number,
+       note.credit_note_number, note.amount_cents, note.currency, note.issued_at, note.retention_until,
        note.source_document_type, note.source_document_id::text AS source_document_id,
        note.reversal_reference_type, note.reversal_reference_id, note.reason,
        COALESCE(note.customer_snapshot->>'email', subscription.billing_email, '')::text AS customer_email,
@@ -37,32 +42,46 @@ type GetCreditNoteDocumentParams struct {
 }
 
 type GetCreditNoteDocumentRow struct {
-	CreditNoteNumber           string    `db:"credit_note_number" json:"credit_note_number"`
-	AmountCents                int64     `db:"amount_cents" json:"amount_cents"`
-	Currency                   string    `db:"currency" json:"currency"`
-	IssuedAt                   time.Time `db:"issued_at" json:"issued_at"`
-	RetentionUntil             time.Time `db:"retention_until" json:"retention_until"`
-	SourceDocumentType         string    `db:"source_document_type" json:"source_document_type"`
-	SourceDocumentID           string    `db:"source_document_id" json:"source_document_id"`
-	ReversalReferenceType      string    `db:"reversal_reference_type" json:"reversal_reference_type"`
-	ReversalReferenceID        string    `db:"reversal_reference_id" json:"reversal_reference_id"`
-	Reason                     string    `db:"reason" json:"reason"`
-	CustomerEmail              string    `db:"customer_email" json:"customer_email"`
-	CustomerName               string    `db:"customer_name" json:"customer_name"`
-	CustomerCompany            string    `db:"customer_company" json:"customer_company"`
-	CustomerAddress            string    `db:"customer_address" json:"customer_address"`
-	CustomerVat                string    `db:"customer_vat" json:"customer_vat"`
-	HasSupplierSnapshot        bool      `db:"has_supplier_snapshot" json:"has_supplier_snapshot"`
-	SupplierName               string    `db:"supplier_name" json:"supplier_name"`
-	SupplierAddress            string    `db:"supplier_address" json:"supplier_address"`
-	SupplierVatNumber          string    `db:"supplier_vat_number" json:"supplier_vat_number"`
-	SupplierRegistrationNumber string    `db:"supplier_registration_number" json:"supplier_registration_number"`
+	DocumentNetMinor           sql.NullInt64   `db:"document_net_minor" json:"document_net_minor"`
+	DocumentVatMinor           sql.NullInt64   `db:"document_vat_minor" json:"document_vat_minor"`
+	NetEurCents                sql.NullInt64   `db:"net_eur_cents" json:"net_eur_cents"`
+	VatEurCents                sql.NullInt64   `db:"vat_eur_cents" json:"vat_eur_cents"`
+	GrossEurCents              sql.NullInt64   `db:"gross_eur_cents" json:"gross_eur_cents"`
+	TaxSummary                 json.RawMessage `db:"tax_summary" json:"tax_summary"`
+	SourceDocumentNumber       string          `db:"source_document_number" json:"source_document_number"`
+	CreditNoteNumber           string          `db:"credit_note_number" json:"credit_note_number"`
+	AmountCents                int64           `db:"amount_cents" json:"amount_cents"`
+	Currency                   string          `db:"currency" json:"currency"`
+	IssuedAt                   time.Time       `db:"issued_at" json:"issued_at"`
+	RetentionUntil             time.Time       `db:"retention_until" json:"retention_until"`
+	SourceDocumentType         string          `db:"source_document_type" json:"source_document_type"`
+	SourceDocumentID           string          `db:"source_document_id" json:"source_document_id"`
+	ReversalReferenceType      string          `db:"reversal_reference_type" json:"reversal_reference_type"`
+	ReversalReferenceID        string          `db:"reversal_reference_id" json:"reversal_reference_id"`
+	Reason                     string          `db:"reason" json:"reason"`
+	CustomerEmail              string          `db:"customer_email" json:"customer_email"`
+	CustomerName               string          `db:"customer_name" json:"customer_name"`
+	CustomerCompany            string          `db:"customer_company" json:"customer_company"`
+	CustomerAddress            string          `db:"customer_address" json:"customer_address"`
+	CustomerVat                string          `db:"customer_vat" json:"customer_vat"`
+	HasSupplierSnapshot        bool            `db:"has_supplier_snapshot" json:"has_supplier_snapshot"`
+	SupplierName               string          `db:"supplier_name" json:"supplier_name"`
+	SupplierAddress            string          `db:"supplier_address" json:"supplier_address"`
+	SupplierVatNumber          string          `db:"supplier_vat_number" json:"supplier_vat_number"`
+	SupplierRegistrationNumber string          `db:"supplier_registration_number" json:"supplier_registration_number"`
 }
 
 func (q *Queries) GetCreditNoteDocument(ctx context.Context, arg GetCreditNoteDocumentParams) (GetCreditNoteDocumentRow, error) {
 	row := q.db.QueryRowContext(ctx, getCreditNoteDocument, arg.DocumentID, arg.TenantID)
 	var i GetCreditNoteDocumentRow
 	err := row.Scan(
+		&i.DocumentNetMinor,
+		&i.DocumentVatMinor,
+		&i.NetEurCents,
+		&i.VatEurCents,
+		&i.GrossEurCents,
+		&i.TaxSummary,
+		&i.SourceDocumentNumber,
 		&i.CreditNoteNumber,
 		&i.AmountCents,
 		&i.Currency,
@@ -88,7 +107,7 @@ func (q *Queries) GetCreditNoteDocument(ctx context.Context, arg GetCreditNoteDo
 }
 
 const getCryptoInvoiceDocument = `-- name: GetCryptoInvoiceDocument :one
-SELECT invoice_number, gross_amount_cents, currency, tax_validation_status,
+SELECT invoice_number, gross_amount_cents, currency, tax_validation_status, tax_assessment,
        issued_at, retention_until, net_amount_cents, vat_amount_cents, vat_rate_bps,
        amount_eur_cents, COALESCE(net_eur_cents, 0)::bigint AS net_eur_cents,
        COALESCE(vat_eur_cents, 0)::bigint AS vat_eur_cents,
@@ -111,34 +130,35 @@ type GetCryptoInvoiceDocumentParams struct {
 }
 
 type GetCryptoInvoiceDocumentRow struct {
-	InvoiceNumber              string    `db:"invoice_number" json:"invoice_number"`
-	GrossAmountCents           int64     `db:"gross_amount_cents" json:"gross_amount_cents"`
-	Currency                   string    `db:"currency" json:"currency"`
-	TaxValidationStatus        string    `db:"tax_validation_status" json:"tax_validation_status"`
-	IssuedAt                   time.Time `db:"issued_at" json:"issued_at"`
-	RetentionUntil             time.Time `db:"retention_until" json:"retention_until"`
-	NetAmountCents             int64     `db:"net_amount_cents" json:"net_amount_cents"`
-	VatAmountCents             int64     `db:"vat_amount_cents" json:"vat_amount_cents"`
-	VatRateBps                 int32     `db:"vat_rate_bps" json:"vat_rate_bps"`
-	AmountEurCents             int64     `db:"amount_eur_cents" json:"amount_eur_cents"`
-	NetEurCents                int64     `db:"net_eur_cents" json:"net_eur_cents"`
-	VatEurCents                int64     `db:"vat_eur_cents" json:"vat_eur_cents"`
-	FxUnitsPerEur              string    `db:"fx_units_per_eur" json:"fx_units_per_eur"`
-	FxReferenceDate            time.Time `db:"fx_reference_date" json:"fx_reference_date"`
-	ReferenceType              string    `db:"reference_type" json:"reference_type"`
-	ReferenceID                string    `db:"reference_id" json:"reference_id"`
-	SupplierName               string    `db:"supplier_name" json:"supplier_name"`
-	SupplierAddress            string    `db:"supplier_address" json:"supplier_address"`
-	SupplierVatNumber          string    `db:"supplier_vat_number" json:"supplier_vat_number"`
-	SupplierRegistrationNumber string    `db:"supplier_registration_number" json:"supplier_registration_number"`
-	ServiceDescription         string    `db:"service_description" json:"service_description"`
-	ServiceQuantity            int32     `db:"service_quantity" json:"service_quantity"`
-	ServiceDate                time.Time `db:"service_date" json:"service_date"`
-	CustomerEmail              string    `db:"customer_email" json:"customer_email"`
-	CustomerName               string    `db:"customer_name" json:"customer_name"`
-	CustomerCompany            string    `db:"customer_company" json:"customer_company"`
-	CustomerAddress            string    `db:"customer_address" json:"customer_address"`
-	CustomerVat                string    `db:"customer_vat" json:"customer_vat"`
+	InvoiceNumber              string          `db:"invoice_number" json:"invoice_number"`
+	GrossAmountCents           int64           `db:"gross_amount_cents" json:"gross_amount_cents"`
+	Currency                   string          `db:"currency" json:"currency"`
+	TaxValidationStatus        string          `db:"tax_validation_status" json:"tax_validation_status"`
+	TaxAssessment              json.RawMessage `db:"tax_assessment" json:"tax_assessment"`
+	IssuedAt                   time.Time       `db:"issued_at" json:"issued_at"`
+	RetentionUntil             time.Time       `db:"retention_until" json:"retention_until"`
+	NetAmountCents             int64           `db:"net_amount_cents" json:"net_amount_cents"`
+	VatAmountCents             int64           `db:"vat_amount_cents" json:"vat_amount_cents"`
+	VatRateBps                 int32           `db:"vat_rate_bps" json:"vat_rate_bps"`
+	AmountEurCents             int64           `db:"amount_eur_cents" json:"amount_eur_cents"`
+	NetEurCents                int64           `db:"net_eur_cents" json:"net_eur_cents"`
+	VatEurCents                int64           `db:"vat_eur_cents" json:"vat_eur_cents"`
+	FxUnitsPerEur              string          `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxReferenceDate            time.Time       `db:"fx_reference_date" json:"fx_reference_date"`
+	ReferenceType              string          `db:"reference_type" json:"reference_type"`
+	ReferenceID                string          `db:"reference_id" json:"reference_id"`
+	SupplierName               string          `db:"supplier_name" json:"supplier_name"`
+	SupplierAddress            string          `db:"supplier_address" json:"supplier_address"`
+	SupplierVatNumber          string          `db:"supplier_vat_number" json:"supplier_vat_number"`
+	SupplierRegistrationNumber string          `db:"supplier_registration_number" json:"supplier_registration_number"`
+	ServiceDescription         string          `db:"service_description" json:"service_description"`
+	ServiceQuantity            int32           `db:"service_quantity" json:"service_quantity"`
+	ServiceDate                time.Time       `db:"service_date" json:"service_date"`
+	CustomerEmail              string          `db:"customer_email" json:"customer_email"`
+	CustomerName               string          `db:"customer_name" json:"customer_name"`
+	CustomerCompany            string          `db:"customer_company" json:"customer_company"`
+	CustomerAddress            string          `db:"customer_address" json:"customer_address"`
+	CustomerVat                string          `db:"customer_vat" json:"customer_vat"`
 }
 
 func (q *Queries) GetCryptoInvoiceDocument(ctx context.Context, arg GetCryptoInvoiceDocumentParams) (GetCryptoInvoiceDocumentRow, error) {
@@ -149,6 +169,7 @@ func (q *Queries) GetCryptoInvoiceDocument(ctx context.Context, arg GetCryptoInv
 		&i.GrossAmountCents,
 		&i.Currency,
 		&i.TaxValidationStatus,
+		&i.TaxAssessment,
 		&i.IssuedAt,
 		&i.RetentionUntil,
 		&i.NetAmountCents,
@@ -178,7 +199,11 @@ func (q *Queries) GetCryptoInvoiceDocument(ctx context.Context, arg GetCryptoInv
 }
 
 const getInvoiceDocument = `-- name: GetInvoiceDocument :one
-SELECT invoice.invoice_number,
+SELECT invoice.net_eur_cents,invoice.vat_eur_cents,invoice.gross_eur_cents,
+       invoice.document_net_minor,invoice.document_vat_minor,invoice.document_gross_minor,
+       invoice.prepaid_financial_credit_eur_cents,invoice.absorbed_vat_eur_cents,
+       invoice.tax_status,COALESCE(invoice.tax_summary,'[]'::jsonb)::jsonb AS tax_summary,COALESCE(invoice.tax_decision,'{}'::jsonb)::jsonb AS tax_decision,
+       invoice.invoice_number,
        COALESCE(invoice.presentment_amount_cents, ROUND(invoice.amount * 100)::bigint)::bigint AS amount_cents,
        COALESCE(invoice.presentment_currency, invoice.currency)::text AS currency, invoice.status,
        COALESCE(invoice.finalized_at, invoice.created_at, NOW()) AS issued_at, invoice.retention_until,
@@ -215,32 +240,43 @@ type GetInvoiceDocumentParams struct {
 }
 
 type GetInvoiceDocumentRow struct {
-	InvoiceNumber              string       `db:"invoice_number" json:"invoice_number"`
-	AmountCents                int64        `db:"amount_cents" json:"amount_cents"`
-	Currency                   string       `db:"currency" json:"currency"`
-	Status                     string       `db:"status" json:"status"`
-	IssuedAt                   sql.NullTime `db:"issued_at" json:"issued_at"`
-	RetentionUntil             time.Time    `db:"retention_until" json:"retention_until"`
-	PeriodStart                sql.NullTime `db:"period_start" json:"period_start"`
-	PeriodEnd                  sql.NullTime `db:"period_end" json:"period_end"`
-	DueDate                    time.Time    `db:"due_date" json:"due_date"`
-	EurAmountCents             int64        `db:"eur_amount_cents" json:"eur_amount_cents"`
-	BaseAmountCents            int64        `db:"base_amount_cents" json:"base_amount_cents"`
-	MeteredAmountCents         int64        `db:"metered_amount_cents" json:"metered_amount_cents"`
-	PrepaidCreditCents         int64        `db:"prepaid_credit_cents" json:"prepaid_credit_cents"`
-	CollectionMinimumApplied   bool         `db:"collection_minimum_applied" json:"collection_minimum_applied"`
-	PresentmentUnitsPerEur     string       `db:"presentment_units_per_eur" json:"presentment_units_per_eur"`
-	PresentmentReferenceDate   sql.NullTime `db:"presentment_reference_date" json:"presentment_reference_date"`
-	CustomerEmail              string       `db:"customer_email" json:"customer_email"`
-	CustomerName               string       `db:"customer_name" json:"customer_name"`
-	CustomerCompany            string       `db:"customer_company" json:"customer_company"`
-	CustomerAddress            string       `db:"customer_address" json:"customer_address"`
-	CustomerVat                string       `db:"customer_vat" json:"customer_vat"`
-	HasSupplierSnapshot        bool         `db:"has_supplier_snapshot" json:"has_supplier_snapshot"`
-	SupplierName               string       `db:"supplier_name" json:"supplier_name"`
-	SupplierAddress            string       `db:"supplier_address" json:"supplier_address"`
-	SupplierVatNumber          string       `db:"supplier_vat_number" json:"supplier_vat_number"`
-	SupplierRegistrationNumber string       `db:"supplier_registration_number" json:"supplier_registration_number"`
+	NetEurCents                    sql.NullInt64   `db:"net_eur_cents" json:"net_eur_cents"`
+	VatEurCents                    sql.NullInt64   `db:"vat_eur_cents" json:"vat_eur_cents"`
+	GrossEurCents                  sql.NullInt64   `db:"gross_eur_cents" json:"gross_eur_cents"`
+	DocumentNetMinor               sql.NullInt64   `db:"document_net_minor" json:"document_net_minor"`
+	DocumentVatMinor               sql.NullInt64   `db:"document_vat_minor" json:"document_vat_minor"`
+	DocumentGrossMinor             sql.NullInt64   `db:"document_gross_minor" json:"document_gross_minor"`
+	PrepaidFinancialCreditEurCents int64           `db:"prepaid_financial_credit_eur_cents" json:"prepaid_financial_credit_eur_cents"`
+	AbsorbedVatEurCents            int64           `db:"absorbed_vat_eur_cents" json:"absorbed_vat_eur_cents"`
+	TaxStatus                      string          `db:"tax_status" json:"tax_status"`
+	TaxSummary                     json.RawMessage `db:"tax_summary" json:"tax_summary"`
+	TaxDecision                    json.RawMessage `db:"tax_decision" json:"tax_decision"`
+	InvoiceNumber                  string          `db:"invoice_number" json:"invoice_number"`
+	AmountCents                    int64           `db:"amount_cents" json:"amount_cents"`
+	Currency                       string          `db:"currency" json:"currency"`
+	Status                         string          `db:"status" json:"status"`
+	IssuedAt                       sql.NullTime    `db:"issued_at" json:"issued_at"`
+	RetentionUntil                 time.Time       `db:"retention_until" json:"retention_until"`
+	PeriodStart                    sql.NullTime    `db:"period_start" json:"period_start"`
+	PeriodEnd                      sql.NullTime    `db:"period_end" json:"period_end"`
+	DueDate                        time.Time       `db:"due_date" json:"due_date"`
+	EurAmountCents                 int64           `db:"eur_amount_cents" json:"eur_amount_cents"`
+	BaseAmountCents                int64           `db:"base_amount_cents" json:"base_amount_cents"`
+	MeteredAmountCents             int64           `db:"metered_amount_cents" json:"metered_amount_cents"`
+	PrepaidCreditCents             int64           `db:"prepaid_credit_cents" json:"prepaid_credit_cents"`
+	CollectionMinimumApplied       bool            `db:"collection_minimum_applied" json:"collection_minimum_applied"`
+	PresentmentUnitsPerEur         string          `db:"presentment_units_per_eur" json:"presentment_units_per_eur"`
+	PresentmentReferenceDate       sql.NullTime    `db:"presentment_reference_date" json:"presentment_reference_date"`
+	CustomerEmail                  string          `db:"customer_email" json:"customer_email"`
+	CustomerName                   string          `db:"customer_name" json:"customer_name"`
+	CustomerCompany                string          `db:"customer_company" json:"customer_company"`
+	CustomerAddress                string          `db:"customer_address" json:"customer_address"`
+	CustomerVat                    string          `db:"customer_vat" json:"customer_vat"`
+	HasSupplierSnapshot            bool            `db:"has_supplier_snapshot" json:"has_supplier_snapshot"`
+	SupplierName                   string          `db:"supplier_name" json:"supplier_name"`
+	SupplierAddress                string          `db:"supplier_address" json:"supplier_address"`
+	SupplierVatNumber              string          `db:"supplier_vat_number" json:"supplier_vat_number"`
+	SupplierRegistrationNumber     string          `db:"supplier_registration_number" json:"supplier_registration_number"`
 }
 
 // An invoice is issued when it is finalized; created_at is when its draft was
@@ -252,6 +288,17 @@ func (q *Queries) GetInvoiceDocument(ctx context.Context, arg GetInvoiceDocument
 	row := q.db.QueryRowContext(ctx, getInvoiceDocument, arg.DocumentID, arg.TenantID)
 	var i GetInvoiceDocumentRow
 	err := row.Scan(
+		&i.NetEurCents,
+		&i.VatEurCents,
+		&i.GrossEurCents,
+		&i.DocumentNetMinor,
+		&i.DocumentVatMinor,
+		&i.DocumentGrossMinor,
+		&i.PrepaidFinancialCreditEurCents,
+		&i.AbsorbedVatEurCents,
+		&i.TaxStatus,
+		&i.TaxSummary,
+		&i.TaxDecision,
 		&i.InvoiceNumber,
 		&i.AmountCents,
 		&i.Currency,
@@ -366,7 +413,7 @@ func (q *Queries) GetPaymentReceiptDocument(ctx context.Context, arg GetPaymentR
 
 const getSimplifiedInvoiceDocument = `-- name: GetSimplifiedInvoiceDocument :one
 SELECT invoice.invoice_number, invoice.gross_amount_cents, invoice.currency,
-       invoice.tax_validation_status, invoice.issued_at, invoice.retention_until,
+       invoice.tax_validation_status, invoice.tax_assessment, invoice.issued_at, invoice.retention_until,
        invoice.net_amount_cents, invoice.vat_amount_cents, invoice.vat_rate_bps,
        invoice.amount_eur_cents, COALESCE(invoice.net_eur_cents, 0)::bigint AS net_eur_cents,
        COALESCE(invoice.vat_eur_cents, 0)::bigint AS vat_eur_cents,
@@ -396,34 +443,35 @@ type GetSimplifiedInvoiceDocumentParams struct {
 }
 
 type GetSimplifiedInvoiceDocumentRow struct {
-	InvoiceNumber              string       `db:"invoice_number" json:"invoice_number"`
-	GrossAmountCents           int64        `db:"gross_amount_cents" json:"gross_amount_cents"`
-	Currency                   string       `db:"currency" json:"currency"`
-	TaxValidationStatus        string       `db:"tax_validation_status" json:"tax_validation_status"`
-	IssuedAt                   time.Time    `db:"issued_at" json:"issued_at"`
-	RetentionUntil             time.Time    `db:"retention_until" json:"retention_until"`
-	NetAmountCents             int64        `db:"net_amount_cents" json:"net_amount_cents"`
-	VatAmountCents             int64        `db:"vat_amount_cents" json:"vat_amount_cents"`
-	VatRateBps                 int32        `db:"vat_rate_bps" json:"vat_rate_bps"`
-	AmountEurCents             int64        `db:"amount_eur_cents" json:"amount_eur_cents"`
-	NetEurCents                int64        `db:"net_eur_cents" json:"net_eur_cents"`
-	VatEurCents                int64        `db:"vat_eur_cents" json:"vat_eur_cents"`
-	FxUnitsPerEur              string       `db:"fx_units_per_eur" json:"fx_units_per_eur"`
-	FxReferenceDate            time.Time    `db:"fx_reference_date" json:"fx_reference_date"`
-	ReferenceType              string       `db:"reference_type" json:"reference_type"`
-	ReferenceID                string       `db:"reference_id" json:"reference_id"`
-	SupplierName               string       `db:"supplier_name" json:"supplier_name"`
-	SupplierAddress            string       `db:"supplier_address" json:"supplier_address"`
-	SupplierVatNumber          string       `db:"supplier_vat_number" json:"supplier_vat_number"`
-	SupplierRegistrationNumber string       `db:"supplier_registration_number" json:"supplier_registration_number"`
-	ServiceDescription         string       `db:"service_description" json:"service_description"`
-	ServiceQuantity            int32        `db:"service_quantity" json:"service_quantity"`
-	ServiceDate                sql.NullTime `db:"service_date" json:"service_date"`
-	CustomerEmail              string       `db:"customer_email" json:"customer_email"`
-	CustomerName               string       `db:"customer_name" json:"customer_name"`
-	CustomerCompany            string       `db:"customer_company" json:"customer_company"`
-	CustomerAddress            string       `db:"customer_address" json:"customer_address"`
-	CustomerVat                string       `db:"customer_vat" json:"customer_vat"`
+	InvoiceNumber              string          `db:"invoice_number" json:"invoice_number"`
+	GrossAmountCents           int64           `db:"gross_amount_cents" json:"gross_amount_cents"`
+	Currency                   string          `db:"currency" json:"currency"`
+	TaxValidationStatus        string          `db:"tax_validation_status" json:"tax_validation_status"`
+	TaxAssessment              json.RawMessage `db:"tax_assessment" json:"tax_assessment"`
+	IssuedAt                   time.Time       `db:"issued_at" json:"issued_at"`
+	RetentionUntil             time.Time       `db:"retention_until" json:"retention_until"`
+	NetAmountCents             int64           `db:"net_amount_cents" json:"net_amount_cents"`
+	VatAmountCents             int64           `db:"vat_amount_cents" json:"vat_amount_cents"`
+	VatRateBps                 int32           `db:"vat_rate_bps" json:"vat_rate_bps"`
+	AmountEurCents             int64           `db:"amount_eur_cents" json:"amount_eur_cents"`
+	NetEurCents                int64           `db:"net_eur_cents" json:"net_eur_cents"`
+	VatEurCents                int64           `db:"vat_eur_cents" json:"vat_eur_cents"`
+	FxUnitsPerEur              string          `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxReferenceDate            time.Time       `db:"fx_reference_date" json:"fx_reference_date"`
+	ReferenceType              string          `db:"reference_type" json:"reference_type"`
+	ReferenceID                string          `db:"reference_id" json:"reference_id"`
+	SupplierName               string          `db:"supplier_name" json:"supplier_name"`
+	SupplierAddress            string          `db:"supplier_address" json:"supplier_address"`
+	SupplierVatNumber          string          `db:"supplier_vat_number" json:"supplier_vat_number"`
+	SupplierRegistrationNumber string          `db:"supplier_registration_number" json:"supplier_registration_number"`
+	ServiceDescription         string          `db:"service_description" json:"service_description"`
+	ServiceQuantity            int32           `db:"service_quantity" json:"service_quantity"`
+	ServiceDate                sql.NullTime    `db:"service_date" json:"service_date"`
+	CustomerEmail              string          `db:"customer_email" json:"customer_email"`
+	CustomerName               string          `db:"customer_name" json:"customer_name"`
+	CustomerCompany            string          `db:"customer_company" json:"customer_company"`
+	CustomerAddress            string          `db:"customer_address" json:"customer_address"`
+	CustomerVat                string          `db:"customer_vat" json:"customer_vat"`
 }
 
 func (q *Queries) GetSimplifiedInvoiceDocument(ctx context.Context, arg GetSimplifiedInvoiceDocumentParams) (GetSimplifiedInvoiceDocumentRow, error) {
@@ -434,6 +482,7 @@ func (q *Queries) GetSimplifiedInvoiceDocument(ctx context.Context, arg GetSimpl
 		&i.GrossAmountCents,
 		&i.Currency,
 		&i.TaxValidationStatus,
+		&i.TaxAssessment,
 		&i.IssuedAt,
 		&i.RetentionUntil,
 		&i.NetAmountCents,
@@ -476,7 +525,7 @@ FROM (
            COALESCE(presentment_currency, currency)::varchar AS currency, status,
            COALESCE(finalized_at, created_at, NOW()) AS issued_at, retention_until,
            CASE WHEN presentment_amount_cents IS NULL THEN NULL ELSE ROUND(amount * 100)::bigint END AS eur_amount_cents,
-           NULL::bigint AS net_eur_cents, NULL::bigint AS vat_eur_cents,
+           net_eur_cents, vat_eur_cents,
            presentment_units_per_eur::text AS units_per_eur,
            presentment_reference_date::date AS fx_reference_date
     FROM purser.billing_invoices WHERE tenant_id = $1::text::uuid AND status <> 'draft'
@@ -505,6 +554,13 @@ FROM (
     SELECT id, 'credit_note', credit_note_number, amount_cents, currency, 'issued', issued_at, retention_until,
            NULL::bigint, NULL::bigint, NULL::bigint, NULL::text, NULL::date
     FROM purser.credit_notes WHERE tenant_id = $1::text::uuid
+    UNION ALL
+    SELECT id, document_kind, original_number, gross_minor, currency::varchar, status, issued_at, retention_until,
+           CASE WHEN currency='EUR' THEN gross_minor ELSE NULL END,
+           CASE WHEN currency='EUR' THEN net_minor ELSE NULL END,
+           CASE WHEN currency='EUR' THEN vat_minor ELSE NULL END,
+           NULL::text, NULL::date
+    FROM purser.provider_billing_documents WHERE tenant_id=$1::text::uuid
 ) documents
 ORDER BY issued_at DESC, id DESC
 LIMIT 1000

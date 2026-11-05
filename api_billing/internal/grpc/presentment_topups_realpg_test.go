@@ -87,6 +87,7 @@ func storeECBRates(t *testing.T, db *sql.DB, referenceDate time.Time, unitsPerEU
 }
 
 func TestCardTopupsCreditTheEURLockedAtCheckoutCreation_RealPG(t *testing.T) { //nolint:funlen // One engine run proves creation, rate change, and completion for three currencies.
+	configureRPCTaxSupplier(t)
 	db := startPurserTransitionRealPG(t)
 	ctx := context.Background()
 	sessions := installStripeCheckoutFixture(t)
@@ -103,14 +104,15 @@ func TestCardTopupsCreditTheEURLockedAtCheckoutCreation_RealPG(t *testing.T) { /
 	storeECBRates(t, db, now.AddDate(0, 0, -1), map[string]string{"USD": "1.2000", "GBP": "0.8000"})
 
 	cases := []struct {
-		country, currency string
-		amountCents       int64
-		wantEURCents      int64
-		wantUnits         string
+		country, currency, customerType          string
+		amountCents                              int64
+		wantEURCents                             int64
+		wantGrossCents, wantGrossEUR, wantVATEUR int64
+		wantUnits                                string
 	}{
-		{country: "NL", currency: "EUR", amountCents: 1200, wantEURCents: 1200, wantUnits: "1.0000000000"},
-		{country: "US", currency: "USD", amountCents: 1200, wantEURCents: 1000, wantUnits: "1.2000000000"},
-		{country: "GB", currency: "GBP", amountCents: 1200, wantEURCents: 1500, wantUnits: "0.8000000000"},
+		{country: "NL", currency: "EUR", customerType: "consumer", amountCents: 1200, wantEURCents: 1200, wantGrossCents: 1452, wantGrossEUR: 1452, wantVATEUR: 252, wantUnits: "1.0000000000"},
+		{country: "US", currency: "USD", customerType: "business", amountCents: 1200, wantEURCents: 1000, wantGrossCents: 1200, wantGrossEUR: 1000, wantUnits: "1.2000000000"},
+		{country: "GB", currency: "GBP", customerType: "business", amountCents: 1200, wantEURCents: 1500, wantGrossCents: 1200, wantGrossEUR: 1500, wantUnits: "0.8000000000"},
 	}
 	type created struct {
 		tenantID, topupID, sessionID string
@@ -119,9 +121,9 @@ func TestCardTopupsCreditTheEURLockedAtCheckoutCreation_RealPG(t *testing.T) { /
 	for index, tc := range cases {
 		tenantID := uuid.NewString()
 		if _, err := db.ExecContext(ctx, `
-			INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model, billing_email, billing_name)
-			VALUES ($1, $2, 'active', 'prepaid', 'billing@example.com', 'Card Customer')
-		`, tenantID, tierID); err != nil {
+			INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model, billing_email, billing_name,billing_customer_type)
+			VALUES ($1, $2, 'active', 'prepaid', 'billing@example.com', 'Card Customer',$3)
+		`, tenantID, tierID, tc.customerType); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := server.UpdateBillingDetails(ctx, &purserpb.UpdateBillingDetailsRequest{
@@ -150,21 +152,21 @@ func TestCardTopupsCreditTheEURLockedAtCheckoutCreation_RealPG(t *testing.T) { /
 		`, response.GetTopupId()).Scan(&original, &originalCurrency, &eur, &units, &source); err != nil {
 			t.Fatal(err)
 		}
-		if original != tc.amountCents || originalCurrency != tc.currency || eur != tc.wantEURCents || units != tc.wantUnits {
+		if original != tc.wantGrossCents || originalCurrency != tc.currency || eur != tc.wantGrossEUR || units != tc.wantUnits {
 			t.Fatalf("%s top-up FX = (%d %s, %d EUR, %s), want (%d %s, %d EUR, %s)",
-				tc.currency, original, originalCurrency, eur, units, tc.amountCents, tc.currency, tc.wantEURCents, tc.wantUnits)
+				tc.currency, original, originalCurrency, eur, units, tc.wantGrossCents, tc.currency, tc.wantGrossEUR, tc.wantUnits)
 		}
 		responseFX := response.GetFx()
-		if responseFX.GetOriginalAmountCents() != tc.amountCents || responseFX.GetOriginalCurrency() != tc.currency ||
-			responseFX.GetEurAmountCents() != tc.wantEURCents || responseFX.GetUnitsPerEur() != decimalText(tc.wantUnits) {
+		if responseFX.GetOriginalAmountCents() != tc.wantGrossCents || responseFX.GetOriginalCurrency() != tc.currency ||
+			responseFX.GetEurAmountCents() != tc.wantGrossEUR || responseFX.GetUnitsPerEur() != decimalText(tc.wantUnits) {
 			t.Fatalf("%s response FX = %+v, want (%d %s, %d EUR, %s)",
-				tc.currency, responseFX, tc.amountCents, tc.currency, tc.wantEURCents, tc.wantUnits)
+				tc.currency, responseFX, tc.wantGrossCents, tc.currency, tc.wantGrossEUR, tc.wantUnits)
 		}
 		pending, err := server.GetPendingTopup(ctx, &purserpb.GetPendingTopupRequest{Lookup: &purserpb.GetPendingTopupRequest_TopupId{TopupId: response.GetTopupId()}})
 		if err != nil {
 			t.Fatalf("%s GetPendingTopup: %v", tc.currency, err)
 		}
-		if pending.GetFx().GetEurAmountCents() != tc.wantEURCents || pending.GetFx().GetReferenceDate() != responseFX.GetReferenceDate() {
+		if pending.GetFx().GetEurAmountCents() != tc.wantGrossEUR || pending.GetFx().GetReferenceDate() != responseFX.GetReferenceDate() {
 			t.Fatalf("%s pending top-up FX = %+v, want %+v", tc.currency, pending.GetFx(), responseFX)
 		}
 	}
@@ -173,8 +175,8 @@ func TestCardTopupsCreditTheEURLockedAtCheckoutCreation_RealPG(t *testing.T) { /
 		t.Fatalf("checkout sessions = %+v, want %d", requests, len(cases))
 	}
 	for index, tc := range cases {
-		if !strings.EqualFold(requests[index].currency, tc.currency) || requests[index].unitAmount != fmt.Sprint(tc.amountCents) {
-			t.Fatalf("%s checkout session = %+v, want %d %s", tc.currency, requests[index], tc.amountCents, strings.ToLower(tc.currency))
+		if !strings.EqualFold(requests[index].currency, tc.currency) || requests[index].unitAmount != fmt.Sprint(tc.wantGrossCents) {
+			t.Fatalf("%s checkout session = %+v, want %d %s", tc.currency, requests[index], tc.wantGrossCents, strings.ToLower(tc.currency))
 		}
 	}
 
@@ -185,7 +187,7 @@ func TestCardTopupsCreditTheEURLockedAtCheckoutCreation_RealPG(t *testing.T) { /
 		topup := createdTopups[index]
 		session, err := json.Marshal(map[string]any{
 			"id": topup.sessionID, "payment_intent": "pi_" + topup.topupID, "payment_status": "paid", "mode": "payment",
-			"amount_total": tc.amountCents, "currency": strings.ToLower(tc.currency),
+			"amount_total": tc.wantGrossCents, "currency": strings.ToLower(tc.currency),
 			"metadata": map[string]string{"purpose": string(handlers.PurposePrepaid), "tenant_id": topup.tenantID, "reference_id": topup.topupID},
 		})
 		if err != nil {
@@ -205,6 +207,10 @@ func TestCardTopupsCreditTheEURLockedAtCheckoutCreation_RealPG(t *testing.T) { /
 		if balance != tc.wantEURCents {
 			t.Fatalf("%s top-up credited %d EUR cents, want %d", tc.currency, balance, tc.wantEURCents)
 		}
+		var invoiceNet, invoiceVAT, invoiceGross int64
+		if err := db.QueryRowContext(ctx, `SELECT invoice.net_eur_cents,invoice.vat_eur_cents,invoice.gross_eur_cents FROM purser.pending_topups topup JOIN purser.billing_invoices invoice ON invoice.id=topup.tax_document_id AND invoice.tenant_id=topup.tenant_id WHERE topup.tenant_id=$1 AND topup.id=$2`, topup.tenantID, topup.topupID).Scan(&invoiceNet, &invoiceVAT, &invoiceGross); err != nil || invoiceNet != tc.wantEURCents || invoiceVAT != tc.wantVATEUR || invoiceGross != tc.wantGrossEUR {
+			t.Fatalf("%s advance invoice net/VAT/gross=%d/%d/%d want%d/%d/%d: %v", tc.currency, invoiceNet, invoiceVAT, invoiceGross, tc.wantEURCents, tc.wantVATEUR, tc.wantGrossEUR, err)
+		}
 		var chargeAmount int64
 		var chargeCurrency, settlementStatus string
 		if err := db.QueryRowContext(ctx, `
@@ -213,7 +219,7 @@ func TestCardTopupsCreditTheEURLockedAtCheckoutCreation_RealPG(t *testing.T) { /
 		`, "pi_"+topup.topupID).Scan(&chargeAmount, &chargeCurrency, &settlementStatus); err != nil {
 			t.Fatalf("%s settlement row: %v", tc.currency, err)
 		}
-		if chargeAmount != tc.amountCents || chargeCurrency != tc.currency || settlementStatus != "pending" {
+		if chargeAmount != tc.wantGrossCents || chargeCurrency != tc.currency || settlementStatus != "pending" {
 			t.Fatalf("%s settlement row = (%d %s %s)", tc.currency, chargeAmount, chargeCurrency, settlementStatus)
 		}
 	}

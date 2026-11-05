@@ -116,6 +116,7 @@ func (*unavailableTierCache) InvalidateTenantCache(context.Context, string, stri
 }
 
 func TestOperatorTierChangeCacheFailure_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	db := startOperatorGrantDatabase(t)
 	for _, operation := range []string{"self", "operator", "promotion"} {
 		t.Run(operation, func(t *testing.T) {
@@ -133,6 +134,7 @@ func TestOperatorTierChangeCacheFailure_RealPG(t *testing.T) {
 			if _, err := db.Exec(`INSERT INTO purser.tenant_subscriptions(tenant_id,tier_id,status,billing_model,presentment_currency,billing_name,billing_email,billing_address,payment_method,stripe_subscription_id,billing_period_start,billing_period_end) VALUES($1,$2,'active',$3,'EUR','Customer','billing@example.test','{"street":"Street 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}','stripe','sub_confirmed',NOW(),NOW()+INTERVAL '1 month')`, tenant, oldTier, model); err != nil {
 				t.Fatal(err)
 			}
+			seedRPCTaxBuyer(t, db, tenant)
 			if _, err := db.Exec(`INSERT INTO purser.prepaid_balances(tenant_id,currency,balance_cents) VALUES($1,'EUR',0)`, tenant); err != nil {
 				t.Fatal(err)
 			}

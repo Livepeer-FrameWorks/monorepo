@@ -8,6 +8,7 @@ package purserdb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 )
 
@@ -90,7 +91,7 @@ func (q *Queries) GetCryptoScanCursor(ctx context.Context, network string) (GetC
 const listConfirmedCryptoDepositAllocations = `-- name: ListConfirmedCryptoDepositAllocations :many
 SELECT event.id::text AS event_id, event.tx_hash, event.block_number,
        event.amount_base_units::text AS amount_base_units,
-       wallet.id::text AS wallet_id, wallet.tenant_id::text AS tenant_id,
+       wallet.id::text AS wallet_id, wallet.tenant_id::text AS tenant_id, wallet.tax_profile_snapshot, wallet.tax_document_kind,
        wallet.purpose, COALESCE(wallet.invoice_id::text, '')::text AS invoice_id,
        wallet.expected_amount_cents, wallet.asset, wallet.network, wallet.wallet_address,
        COALESCE(wallet.expected_amount_base_units::text, '')::text AS expected_amount_base_units,
@@ -120,32 +121,34 @@ LIMIT 100
 `
 
 type ListConfirmedCryptoDepositAllocationsRow struct {
-	EventID                 string        `db:"event_id" json:"event_id"`
-	TxHash                  string        `db:"tx_hash" json:"tx_hash"`
-	BlockNumber             int64         `db:"block_number" json:"block_number"`
-	AmountBaseUnits         string        `db:"amount_base_units" json:"amount_base_units"`
-	WalletID                string        `db:"wallet_id" json:"wallet_id"`
-	TenantID                string        `db:"tenant_id" json:"tenant_id"`
-	Purpose                 string        `db:"purpose" json:"purpose"`
-	InvoiceID               string        `db:"invoice_id" json:"invoice_id"`
-	ExpectedAmountCents     sql.NullInt64 `db:"expected_amount_cents" json:"expected_amount_cents"`
-	Asset                   string        `db:"asset" json:"asset"`
-	Network                 string        `db:"network" json:"network"`
-	WalletAddress           string        `db:"wallet_address" json:"wallet_address"`
-	ExpectedAmountBaseUnits string        `db:"expected_amount_base_units" json:"expected_amount_base_units"`
-	QuotedPriceUsd          string        `db:"quoted_price_usd" json:"quoted_price_usd"`
-	OriginalAmountCents     int64         `db:"original_amount_cents" json:"original_amount_cents"`
-	OriginalCurrency        string        `db:"original_currency" json:"original_currency"`
-	EurAmountCents          int64         `db:"eur_amount_cents" json:"eur_amount_cents"`
-	FxUnitsPerEur           string        `db:"fx_units_per_eur" json:"fx_units_per_eur"`
-	FxSource                string        `db:"fx_source" json:"fx_source"`
-	FxReferenceDate         time.Time     `db:"fx_reference_date" json:"fx_reference_date"`
-	QuoteSource             string        `db:"quote_source" json:"quote_source"`
-	CreditedAmountCurrency  string        `db:"credited_amount_currency" json:"credited_amount_currency"`
-	ClientIp                string        `db:"client_ip" json:"client_ip"`
-	ExpiresAt               time.Time     `db:"expires_at" json:"expires_at"`
-	InvoiceAmount           float64       `db:"invoice_amount" json:"invoice_amount"`
-	InvoiceCurrency         string        `db:"invoice_currency" json:"invoice_currency"`
+	EventID                 string          `db:"event_id" json:"event_id"`
+	TxHash                  string          `db:"tx_hash" json:"tx_hash"`
+	BlockNumber             int64           `db:"block_number" json:"block_number"`
+	AmountBaseUnits         string          `db:"amount_base_units" json:"amount_base_units"`
+	WalletID                string          `db:"wallet_id" json:"wallet_id"`
+	TenantID                string          `db:"tenant_id" json:"tenant_id"`
+	TaxProfileSnapshot      json.RawMessage `db:"tax_profile_snapshot" json:"tax_profile_snapshot"`
+	TaxDocumentKind         string          `db:"tax_document_kind" json:"tax_document_kind"`
+	Purpose                 string          `db:"purpose" json:"purpose"`
+	InvoiceID               string          `db:"invoice_id" json:"invoice_id"`
+	ExpectedAmountCents     sql.NullInt64   `db:"expected_amount_cents" json:"expected_amount_cents"`
+	Asset                   string          `db:"asset" json:"asset"`
+	Network                 string          `db:"network" json:"network"`
+	WalletAddress           string          `db:"wallet_address" json:"wallet_address"`
+	ExpectedAmountBaseUnits string          `db:"expected_amount_base_units" json:"expected_amount_base_units"`
+	QuotedPriceUsd          string          `db:"quoted_price_usd" json:"quoted_price_usd"`
+	OriginalAmountCents     int64           `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency        string          `db:"original_currency" json:"original_currency"`
+	EurAmountCents          int64           `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur           string          `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource                string          `db:"fx_source" json:"fx_source"`
+	FxReferenceDate         time.Time       `db:"fx_reference_date" json:"fx_reference_date"`
+	QuoteSource             string          `db:"quote_source" json:"quote_source"`
+	CreditedAmountCurrency  string          `db:"credited_amount_currency" json:"credited_amount_currency"`
+	ClientIp                string          `db:"client_ip" json:"client_ip"`
+	ExpiresAt               time.Time       `db:"expires_at" json:"expires_at"`
+	InvoiceAmount           float64         `db:"invoice_amount" json:"invoice_amount"`
+	InvoiceCurrency         string          `db:"invoice_currency" json:"invoice_currency"`
 }
 
 func (q *Queries) ListConfirmedCryptoDepositAllocations(ctx context.Context) ([]ListConfirmedCryptoDepositAllocationsRow, error) {
@@ -164,6 +167,8 @@ func (q *Queries) ListConfirmedCryptoDepositAllocations(ctx context.Context) ([]
 			&i.AmountBaseUnits,
 			&i.WalletID,
 			&i.TenantID,
+			&i.TaxProfileSnapshot,
+			&i.TaxDocumentKind,
 			&i.Purpose,
 			&i.InvoiceID,
 			&i.ExpectedAmountCents,

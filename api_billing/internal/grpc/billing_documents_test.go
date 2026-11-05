@@ -1,12 +1,24 @@
 package grpc
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
 )
+
+func TestCryptoDocumentUsesRetainedForeignTaxLabelAndWording(t *testing.T) {
+	label, wording := cryptoDocumentTaxDescription(json.RawMessage(`{"confirmed_decision":{"tax_label":"GST","wording":"Reviewed destination registration applies"}}`))
+	if label != "GST" || wording != "Reviewed destination registration applies" {
+		t.Fatalf("retained foreign wording lost: %q %q", label, wording)
+	}
+	label, wording = cryptoDocumentTaxDescription(json.RawMessage(`{}`))
+	if label != "VAT" || wording != "" {
+		t.Fatalf("legacy document wording changed: %q %q", label, wording)
+	}
+}
 
 func TestRenderBillingDocumentDrawsPersistedCustomerDataAsText(t *testing.T) {
 	now := time.Now().UTC()

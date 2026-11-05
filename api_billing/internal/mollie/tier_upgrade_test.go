@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,7 +38,7 @@ func TestTierUpgradeMollieCreditsOnlyPaidFeeAndLocatesLostPatch(t *testing.T) {
 			return mollieJSONResponse(200, string(body)), nil
 		}
 		if req.URL.Path == "/v2/customers/customer/payments" {
-			return mollieJSONResponse(200, fmt.Sprintf(`{"_embedded":{"payments":[{"id":"paid","subscriptionId":"sub","customerId":"customer","status":"paid","createdAt":%q,"amount":{"value":"20.00","currency":"EUR"},"amountRefunded":{"value":"4.00","currency":"EUR"}}]},"_links":{}}`, start.Format(time.RFC3339))), nil
+			return mollieJSONResponse(200, fmt.Sprintf(`{"_embedded":{"payments":[{"id":"paid","subscriptionId":"sub","customerId":"customer","status":"paid","createdAt":%q,"amount":{"value":"20.00","currency":"EUR"},"amountRefunded":{"value":"4.00","currency":"EUR"},"metadata":{"frameworks_net_minor":"2000","frameworks_tax_profile":%q}}]},"_links":{}}`, start.Format(time.RFC3339), strings.Repeat("a", 64))), nil
 		}
 		return nil, fmt.Errorf("unexpected provider operation: %s %s", req.Method, req.URL.Path)
 	})
@@ -46,7 +47,7 @@ func TestTierUpgradeMollieCreditsOnlyPaidFeeAndLocatesLostPatch(t *testing.T) {
 		t.Fatal("lost PATCH response did not fail")
 	}
 	receipt, err := c.UpgradeMonthlySubscription(t.Context(), request)
-	if err != nil || !receipt.Applied || receipt.UnusedPaidCents != 800 || patches != 1 || metadata["checkout_reservation_id"] != "original" {
+	if err != nil || !receipt.Applied || receipt.UnusedPaidCents != 800 || patches != 1 || metadata["checkout_reservation_id"] != "original" || len(receipt.TaxDocumentPaymentIDs) != 1 || receipt.TaxDocumentPaymentIDs[0] != "paid" {
 		t.Fatalf("receipt=%+v patches=%d err=%v", receipt, patches, err)
 	}
 }

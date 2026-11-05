@@ -58,8 +58,8 @@ INSERT INTO purser.x402_payment_quotes (
     $10, $11,
     $12, $13,
     $14::bigint, $15::text,
-    $9, $16::text::numeric,
-    $17::text, $18::date
+    $16::bigint, $17::text::numeric,
+    $18::text, $19::date
 )
 `
 
@@ -79,6 +79,7 @@ type CreateX402PaymentQuoteParams struct {
 	ExpiresAt           time.Time       `db:"expires_at" json:"expires_at"`
 	OriginalAmountCents int64           `db:"original_amount_cents" json:"original_amount_cents"`
 	OriginalCurrency    string          `db:"original_currency" json:"original_currency"`
+	GrossEurCents       int64           `db:"gross_eur_cents" json:"gross_eur_cents"`
 	FxUnitsPerEur       string          `db:"fx_units_per_eur" json:"fx_units_per_eur"`
 	FxSource            string          `db:"fx_source" json:"fx_source"`
 	FxReferenceDate     time.Time       `db:"fx_reference_date" json:"fx_reference_date"`
@@ -101,6 +102,7 @@ func (q *Queries) CreateX402PaymentQuote(ctx context.Context, arg CreateX402Paym
 		arg.ExpiresAt,
 		arg.OriginalAmountCents,
 		arg.OriginalCurrency,
+		arg.GrossEurCents,
 		arg.FxUnitsPerEur,
 		arg.FxSource,
 		arg.FxReferenceDate,

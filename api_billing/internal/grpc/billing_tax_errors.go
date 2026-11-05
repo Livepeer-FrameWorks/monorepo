@@ -17,7 +17,10 @@ func billingTaxRequirementError(err error) error {
 		return status.Errorf(codes.Unavailable, "determine tax-document requirement: %v", err)
 	}
 	st := status.New(codes.FailedPrecondition, billingTaxPublicMessage(review))
-	detailed, detailErr := st.WithDetails(&errdetails.ErrorInfo{Reason: strings.ToUpper(review.Code), Domain: "billing.frameworks.network"})
+	detailed, detailErr := st.WithDetails(&errdetails.ErrorInfo{
+		Reason: strings.ToUpper(review.Code), Domain: "billing.frameworks.network",
+		Metadata: map[string]string{"public_message": st.Message()},
+	})
 	if detailErr != nil {
 		return st.Err()
 	}

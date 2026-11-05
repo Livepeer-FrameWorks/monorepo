@@ -298,7 +298,7 @@ func TestApplyProviderReversal_MissingLocalRefIsBlockedRetryable(t *testing.T) {
 	mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, payment\.invoice_id::text AS invoice_id`).
 		WithArgs("pi_unknown").
 		WillReturnError(sql.ErrNoRows)
-	mock.ExpectQuery(`SELECT id::text AS topup_id, tenant_id::text AS tenant_id`).
+	mock.ExpectQuery(`-- name: GetPendingTopupForReversal`).
 		WithArgs("pi_unknown").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("HasRefundSettlementOwner").WithArgs("stripe", "pi_unknown").WillReturnRows(sqlmock.NewRows([]string{"owned"}).AddRow(false))
@@ -449,12 +449,13 @@ func TestApplyProviderReversal_PrepaidTopupRefundFlagsNegativeBalance(t *testing
 	mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, payment\.invoice_id::text AS invoice_id`).
 		WithArgs("pi_topup").
 		WillReturnError(sql.ErrNoRows)
-	mock.ExpectQuery(`SELECT id::text AS topup_id, tenant_id::text AS tenant_id`).
+	mock.ExpectQuery(`-- name: GetPendingTopupForReversal`).
 		WithArgs("pi_topup").
 		WillReturnRows(sqlmock.NewRows([]string{
+			"net_eur_cents", "vat_eur_cents", "gross_eur_cents", "tax_document_id", "tax_assessment",
 			"id", "tenant_id", "currency", "status", "amount_cents",
 			"original_amount_cents", "original_currency", "eur_amount_cents", "fx_units_per_eur", "fx_source", "fx_reference_date",
-		}).AddRow("topup-1", "tenant-prepaid", "EUR", "completed", int64(2000), int64(2000), "EUR", int64(2000), "1", "identity", time.Now()))
+		}).AddRow(nil, nil, nil, nil, []byte(`{}`), "topup-1", "tenant-prepaid", "EUR", "completed", int64(2000), int64(2000), "EUR", int64(2000), "1", "identity", time.Now()))
 	expectNoEarlierReversals(mock, "re_topup")
 	mock.ExpectQuery(`INSERT INTO purser\.payment_reversals`).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("00000000-0000-0000-0000-000000000001"))

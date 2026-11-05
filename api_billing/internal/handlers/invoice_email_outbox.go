@@ -243,6 +243,21 @@ func (d *invoiceEmailDispatcher) Dispatch(ctx context.Context, payload invoiceEm
 		currency = header.PresentmentCurrency
 		invoiceFX = NewEmailFX(currency, int64(math.Round(header.Amount*100)), header.PresentmentUnitsPerEur, header.PresentmentReferenceDate)
 	}
+	if header.NetEurCents.Valid && header.VatEurCents.Valid && header.GrossEurCents.Valid {
+		var groups []struct {
+			Wording string `json:"wording"`
+		}
+		if err = json.Unmarshal(header.TaxSummary, &groups); err != nil {
+			return []string{"smtp"}, fmt.Errorf("invalid retained invoice tax summary: %w", err)
+		}
+		words := []string{}
+		for _, group := range groups {
+			if group.Wording != "" {
+				words = append(words, group.Wording)
+			}
+		}
+		invoiceFX.Tax = &EmailTaxTotals{Net: fmt.Sprintf("%d.%02d", header.NetEurCents.Int64/100, header.NetEurCents.Int64%100), VAT: fmt.Sprintf("%d.%02d", header.VatEurCents.Int64/100, header.VatEurCents.Int64%100), Gross: fmt.Sprintf("%d.%02d", header.GrossEurCents.Int64/100, header.GrossEurCents.Int64%100), Wording: strings.Join(words, "; ")}
+	}
 	if err := send(payload.Recipient, payload.InvoiceID, amount, header.MeteredAmount,
 		header.GrossMeteredAmount, currency, header.DueDate, lineItems, invoiceFX); err != nil {
 		return []string{"smtp"}, err

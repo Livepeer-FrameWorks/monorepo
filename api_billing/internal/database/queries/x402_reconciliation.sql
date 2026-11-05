@@ -62,6 +62,7 @@ WHERE nonce.status = 'confirmed'
               SELECT tenant_id, reference_type, reference_id FROM purser.simplified_invoices
               UNION ALL
               SELECT tenant_id, reference_type, reference_id FROM purser.crypto_invoices
+              UNION ALL SELECT tenant_id,source_reference_type,source_reference_id FROM purser.billing_invoices WHERE source_reference_type='x402_payment'
           ) invoice
           WHERE invoice.tenant_id = nonce.tenant_id
             AND invoice.reference_type = 'x402_payment'
@@ -107,6 +108,9 @@ FROM (
     SELECT id, tenant_id, reference_type, reference_id, gross_amount_cents, currency,
            invoice_number, 'crypto_invoice'::text AS source_type
     FROM purser.crypto_invoices
+    UNION ALL
+    SELECT id,tenant_id,source_reference_type,source_reference_id,document_gross_minor,presentment_currency,invoice_number,'invoice'::text AS source_type
+    FROM purser.billing_invoices WHERE source_reference_type='x402_payment' AND tax_status='ready'
 ) document
 WHERE document.tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND document.reference_type = 'x402_payment'

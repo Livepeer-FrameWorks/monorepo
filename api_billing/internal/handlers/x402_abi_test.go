@@ -304,29 +304,3 @@ func TestHashTransferWithAuthorization(t *testing.T) {
 		})
 	}
 }
-
-// TestIsValidEUVATFormat pins the VAT-number format gate: 8–14 chars after
-// removing spaces, uppercased, with a two-letter prefix that is a known EU
-// country. Anything else (too short/long, non-EU prefix, numeric prefix) is
-// rejected.
-func TestIsValidEUVATFormat(t *testing.T) {
-	h := &X402Handler{}
-	cases := []struct {
-		name, vat string
-		want      bool
-	}{
-		{"valid NL", "NL123456789B01", true},
-		{"lowercase and spaces normalized", "nl 1234 5678", true},
-		{"too short", "NL12345", false},
-		{"too long", "NL1234567890123", false},
-		{"non-EU prefix", "US123456789", false},
-		{"numeric prefix", "1234567890", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := h.isValidEUVATFormat(tc.vat); got != tc.want {
-				t.Fatalf("isValidEUVATFormat(%q) = %v, want %v", tc.vat, got, tc.want)
-			}
-		})
-	}
-}

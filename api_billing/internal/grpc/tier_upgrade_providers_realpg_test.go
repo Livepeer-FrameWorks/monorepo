@@ -46,6 +46,8 @@ type upgradeProviderFixture struct {
 	roundBoundary    time.Time
 	unpaidRenewal    bool
 	stripeParams     url.Values
+	taxRateID        string
+	mollieRenewal    string
 }
 
 func (f *upgradeProviderFixture) serve(t *testing.T, w http.ResponseWriter, r *http.Request) {
@@ -78,8 +80,10 @@ func (f *upgradeProviderFixture) serve(t *testing.T, w http.ResponseWriter, r *h
 			amount = 6000
 		}
 		respond(map[string]any{"id": "new-price", "object": "price", "active": true, "unit_amount": amount, "currency": "eur", "recurring": map[string]any{"interval": "month", "interval_count": 1}})
-	case "GET /v1/customers/customer":
-		respond(map[string]any{"id": "customer", "object": "customer", "invoice_settings": map[string]any{"default_payment_method": map[string]any{"id": "pm", "object": "payment_method"}}})
+	case "GET /v1/customers/customer", "POST /v1/customers/customer":
+		respond(map[string]any{"id": "customer", "object": "customer", "metadata": map[string]string{"tenant_id": f.tenant}, "invoice_settings": map[string]any{"default_payment_method": map[string]any{"id": "pm", "object": "payment_method"}}})
+	case "GET /v1/tax_rates":
+		respond(map[string]any{"object": "list", "data": []any{map[string]any{"id": "txr_fixture21", "object": "tax_rate", "active": true, "country": "NL", "display_name": "VAT", "percentage": 21, "inclusive": false, "metadata": map[string]string{"frameworks_policy": billing.CurrentInvoiceTaxPolicy}}}, "has_more": false})
 	case "GET /v1/subscriptions/sub", "POST /v1/subscriptions/sub":
 		price := "old-price"
 		invoiceStatus := "paid"
@@ -91,22 +95,32 @@ func (f *upgradeProviderFixture) serve(t *testing.T, w http.ResponseWriter, r *h
 				t.Error(err)
 				return
 			}
-			f.updates++
-			f.stripeParams = r.Form
-			f.stripeMetadata = map[string]string{"tenant_id": f.tenant, "tier_id": r.Form.Get("metadata[tier_id]"), "billing_tier_upgrade_id": r.Form.Get("metadata[billing_tier_upgrade_id]")}
-			f.start = time.Now().UTC().Truncate(time.Second)
-			if !f.roundBoundary.IsZero() {
-				f.start = f.roundBoundary.Truncate(time.Second)
-			}
-			f.end = f.start.AddDate(0, 1, 0)
-			if f.loseResponse {
-				f.loseResponse = false
-				w.Header().Set("Stripe-Should-Retry", "false")
-				w.WriteHeader(http.StatusBadGateway)
-				respond(map[string]any{"error": map[string]string{"type": "api_error", "message": "update committed but response was lost"}})
-				return
+			if r.Form.Get("proration_behavior") == "none" {
+				f.taxRateID = r.Form.Get("default_tax_rates[0]")
+				f.stripeMetadata["frameworks_tax_profile"] = r.Form.Get("metadata[frameworks_tax_profile]")
+			} else {
+				f.updates++
+				f.stripeParams = r.Form
+				for key, values := range r.Form {
+					if strings.HasPrefix(key, "metadata[") && len(values) > 0 {
+						f.stripeMetadata[strings.TrimSuffix(strings.TrimPrefix(key, "metadata["), "]")] = values[0]
+					}
+				}
+				f.start = time.Now().UTC().Truncate(time.Second)
+				if !f.roundBoundary.IsZero() {
+					f.start = f.roundBoundary.Truncate(time.Second)
+				}
+				f.end = f.start.AddDate(0, 1, 0)
+				if f.loseResponse {
+					f.loseResponse = false
+					w.Header().Set("Stripe-Should-Retry", "false")
+					w.WriteHeader(http.StatusBadGateway)
+					respond(map[string]any{"error": map[string]string{"type": "api_error", "message": "update committed but response was lost"}})
+					return
+				}
 			}
 		}
+
 		fee, invoiceID := 2000, "old-invoice"
 		if f.stripeMetadata["billing_tier_upgrade_id"] != "" {
 			price, fee, invoiceID = "new-price", 5000, "upgrade-invoice"
@@ -117,7 +131,12 @@ func (f *upgradeProviderFixture) serve(t *testing.T, w http.ResponseWriter, r *h
 			"pricing": map[string]any{"price_details": map[string]any{"price": price}},
 			"period":  map[string]any{"start": f.start.Unix(), "end": f.end.Unix()},
 		}
-		respond(map[string]any{"id": "sub", "object": "subscription", "customer": "customer", "status": "active", "metadata": f.stripeMetadata,
+		respond(map[string]any{"id": "sub", "object": "subscription", "customer": "customer", "status": "active", "metadata": f.stripeMetadata, "automatic_tax": map[string]bool{"enabled": false}, "default_tax_rates": func() []any {
+			if f.taxRateID == "" {
+				return []any{}
+			}
+			return []any{map[string]string{"id": f.taxRateID}}
+		}(),
 			"latest_invoice": map[string]any{"id": invoiceID, "object": "invoice", "status": invoiceStatus, "amount_paid": fee, "lines": map[string]any{"data": []any{baseLine}}},
 			"items":          map[string]any{"object": "list", "data": []any{map[string]any{"id": "item", "object": "subscription_item", "quantity": 1, "price": map[string]any{"id": price, "object": "price", "unit_amount": fee, "currency": "eur", "recurring": map[string]any{"interval": "month", "interval_count": 1}}, "current_period_start": f.start.Unix(), "current_period_end": f.end.Unix()}}}})
 	case "POST /v1/payment_intents":
@@ -140,21 +159,26 @@ func (f *upgradeProviderFixture) serve(t *testing.T, w http.ResponseWriter, r *h
 				t.Error(err)
 				return
 			}
-			f.updates++
-			next, parseErr := time.Parse(time.DateOnly, body["startDate"].(string))
-			if parseErr != nil {
-				t.Error(parseErr)
-				return
+			if startDate, upgrading := body["startDate"].(string); upgrading {
+				f.updates++
+				next, parseErr := time.Parse(time.DateOnly, startDate)
+				if parseErr != nil {
+					t.Error(parseErr)
+					return
+				}
+				f.end = next
+				if body["amount"].(map[string]any)["value"] != "60.50" {
+					t.Errorf("wrong Mollie gross renewal amount: %v", body)
+				}
+			} else if body["amount"].(map[string]any)["value"] != "24.20" || body["metadata"].(map[string]any)["frameworks_net_minor"] != "2000" {
+				t.Errorf("tax-only sync must preserve previous net fee: %v", body)
 			}
-			f.end = next
 			f.metadata = body["metadata"].(map[string]any)
-			if body["amount"].(map[string]any)["value"] != "50.00" {
-				t.Errorf("wrong Mollie renewal amount: %v", body)
-			}
+			f.mollieRenewal = body["amount"].(map[string]any)["value"].(string)
 		}
 		value := "20.00"
-		if f.metadata["billing_tier_upgrade_id"] != "" {
-			value = "50.00"
+		if f.mollieRenewal != "" {
+			value = f.mollieRenewal
 		}
 		state := "active"
 		if f.cancelled {
@@ -206,6 +230,7 @@ func (tr upgradeMollieTransport) RoundTrip(request *http.Request) (*http.Respons
 }
 
 func TestTierUpgradeProviders_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	for _, mode := range []string{"advance Stripe", "advance missing invoice", "fixed Stripe", "grandfathered Stripe price", "fixed Mollie", "Mollie cancellation after provider receipt", "lost Stripe response", "metering delay", "cancelled subscription during metering wait", "cancelled subscription after advance receipt", "account closure after advance receipt", "refusal write failure", "stale Stripe price", "unpaid Stripe fee", "rejected price transaction retry", "Stripe rounded grant boundary", "Stripe same second callback", "unpaid Mollie renewal", "paid Mollie renewal before rollover", "declined upgrade with scheduled downgrade", "operator cancels metering wait", "operator completes lost Stripe response"} {
 		t.Run(mode, func(t *testing.T) {
 			db := startOperatorGrantDatabase(t)
@@ -590,13 +615,25 @@ SELECT 'upgrade-source',w,w+INTERVAL '5 minutes',true FROM generate_series($1::t
 				if err = db.QueryRowContext(ctx, `SELECT i.amount::text,(-l.amount)::text FROM purser.billing_invoices i JOIN purser.invoice_line_items l ON l.invoice_id=i.id AND l.line_key='unused_base_fee_credit' WHERE i.tenant_id=$1 AND i.base_fee_period_start=$2`, tenant, actualStart).Scan(&invoice, &credit); err != nil {
 					t.Fatal(err)
 				}
-				if invoice != "40.00" || credit != "10.00" {
+				if invoice != "48.40" || credit != "10.00" {
 					t.Fatalf("unused paid fee did not net once: invoice=%s credit=%s", invoice, credit)
 				}
-				if advance && (amount != "5000" || !strings.EqualFold(chargedCurrency, "USD")) {
+				var docNet, docVAT, docGross int64
+				if err = db.QueryRowContext(ctx, `SELECT document_net_minor,document_vat_minor,document_gross_minor FROM purser.billing_invoices WHERE tenant_id=$1 AND base_fee_period_start=$2`, tenant, actualStart).Scan(&docNet, &docVAT, &docGross); err != nil {
+					t.Fatal(err)
+				}
+				wantNet, wantVAT, wantGross := int64(4000), int64(840), int64(4840)
+				if advance {
+					wantNet, wantVAT, wantGross = 5000, 1050, 6050
+				}
+				if docNet != wantNet || docVAT != wantVAT || docGross != wantGross {
+					t.Fatalf("Dutch replacement tax=%d/%d/%d want%d/%d/%d", docNet, docVAT, docGross, wantNet, wantVAT, wantGross)
+				}
+
+				if advance && (amount != "6050" || !strings.EqualFold(chargedCurrency, "USD")) {
 					t.Fatalf("wrong converted charge: %s %s", amount, chargedCurrency)
 				}
-				if mode == "fixed Mollie" && (amount != "40.00" || chargedCurrency != "EUR") {
+				if mode == "fixed Mollie" && (amount != "48.40" || chargedCurrency != "EUR") {
 					t.Fatalf("wrong net Mollie charge: %s %s", amount, chargedCurrency)
 				}
 			} else if params.Get("billing_cycle_anchor") != "now" || params.Get("proration_behavior") != "always_invoice" || params.Get("items[0][id]") != "item" {

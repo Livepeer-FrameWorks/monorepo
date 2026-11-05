@@ -251,27 +251,3 @@ func TestIdempotentPendingSettlementDoesNotCreditBeforeConfirmation(t *testing.T
 		t.Fatalf("unmet expectations: %v", err)
 	}
 }
-
-func TestReverseChargeRequiresValidatedCrossBorderVATID(t *testing.T) {
-	tests := []struct {
-		name             string
-		supplierCountry  string
-		customerCountry  string
-		validated        bool
-		reverseChargeVAT bool
-	}{
-		{name: "cross-border validated", supplierCountry: "NL", customerCountry: "DE", validated: true, reverseChargeVAT: true},
-		{name: "domestic validated", supplierCountry: "NL", customerCountry: "NL", validated: true, reverseChargeVAT: false},
-		{name: "cross-border unvalidated", supplierCountry: "NL", customerCountry: "DE", validated: false, reverseChargeVAT: false},
-		{name: "non-EU supplier", supplierCountry: "US", customerCountry: "DE", validated: true, reverseChargeVAT: false},
-		{name: "missing supplier country", customerCountry: "DE", validated: true, reverseChargeVAT: false},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := reverseChargeEligible(test.supplierCountry, test.customerCountry, test.validated); got != test.reverseChargeVAT {
-				t.Fatalf("reverseChargeEligible() = %v, want %v", got, test.reverseChargeVAT)
-			}
-		})
-	}
-}

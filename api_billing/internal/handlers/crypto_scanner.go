@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -657,6 +658,13 @@ func (cm *CryptoMonitor) allocateConfirmedDepositEvents(ctx context.Context) {
 			continue
 		}
 		wallet.FX = record
+		if len(row.TaxProfileSnapshot) > 0 {
+			if err = json.Unmarshal(row.TaxProfileSnapshot, &wallet.TaxProfile); err != nil {
+				cm.logger.WithError(err).Warn("Invalid retained crypto tax snapshot")
+				continue
+			}
+		}
+		wallet.TaxDocumentKind = row.TaxDocumentKind
 		wallet.QuoteSource = row.QuoteSource
 		wallet.CreditedAmountCurrency = row.CreditedAmountCurrency
 		wallet.ClientIP = row.ClientIp

@@ -770,8 +770,9 @@ func (r *X402Reconciler) recoverReversedBalance(ctx context.Context, tenantID st
 			return err
 		}
 
+		transactionID := uuid.New()
 		err = queries.InsertBalanceTransaction(ctx, purserdb.InsertBalanceTransactionParams{
-			ID: uuid.New(), TenantID: tenantID, AmountCents: amountCents, BalanceAfterCents: newBalance,
+			ID: transactionID, TenantID: tenantID, AmountCents: amountCents, BalanceAfterCents: newBalance,
 			TransactionType: "topup", Description: sql.NullString{String: fmt.Sprintf("x402 settlement recovered (%s)", truncateTxHash(txHash)), Valid: true},
 			ReferenceID: sql.NullString{String: nonceID, Valid: true}, ReferenceType: sql.NullString{String: "x402_recovery", Valid: true},
 			CreatedAt: sql.NullTime{Time: time.Now(), Valid: true},
@@ -780,6 +781,9 @@ func (r *X402Reconciler) recoverReversedBalance(ctx context.Context, tenantID st
 			return err
 		}
 
+		if err = recoverX402AdvanceTx(ctx, tx, tenantID, nonceID, txHash, transactionID.String(), amountCents, newBalance); err != nil {
+			return err
+		}
 		return emitBillingEventTx(ctx, tx, eventX402LateRecovery, tenantID, "x402_nonce", txHash, &ipcpb.BillingEvent{
 			Amount:   float64(amountCents) / 100,
 			Currency: "EUR",
@@ -948,6 +952,9 @@ func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amou
 			return err
 		}
 
+		if err = queries.RevokeCryptoAdvanceFundingLot(ctx, purserdb.RevokeCryptoAdvanceFundingLotParams{TenantID: tenantID, SourceReferenceType: "x402_payment", SourceReferenceID: txHash}); err != nil {
+			return err
+		}
 		err = queries.InsertX402ReversalCreditNote(ctx, purserdb.InsertX402ReversalCreditNoteParams{
 			NonceID: nonceID, TxHash: txHash, TenantID: tenantID, SupplierSnapshot: DocumentSupplierSnapshot(),
 		})

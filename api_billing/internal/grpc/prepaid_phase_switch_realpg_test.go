@@ -27,6 +27,7 @@ import (
 // the usage from the switch on, including prepaid-phase usage that reached
 // Purser after the switch and so was never paid from the balance.
 func TestPrepaidToPostpaidSwitchInvoicesOnlyUsageFromTheSwitch_RealPG(t *testing.T) { //nolint:funlen // One switch, followed through to the postpaid invoice.
+	configureRPCTaxSupplier(t)
 	appconfigtest.Set(t, "WAIVE_USAGE_CHARGES", "false")
 	db := startPurserTransitionRealPG(t)
 	ctx := context.Background()
@@ -56,6 +57,7 @@ func TestPrepaidToPostpaidSwitchInvoicesOnlyUsageFromTheSwitch_RealPG(t *testing
 		VALUES ($1, 'egress_gb', 'all_usage', 'EUR', 0, 0.01, '{}'), ($2, 'egress_gb', 'all_usage', 'EUR', 0, 0.02, '{}')`, paygID, supporterID)
 	exec(t, `INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model, billing_email, billing_period_start, billing_period_end, presentment_currency)
 		VALUES ($1, $2, 'active', 'prepaid', 'billing@example.com', $3, $4, 'EUR')`, tenantID, paygID, periodStart, periodEnd)
+	seedRPCTaxBuyer(t, db, tenantID)
 	exec(t, `INSERT INTO purser.metering_sources (source_id, region, active_from, required) VALUES ('periscope-default', '', $1, TRUE)`, periodStart.AddDate(0, -1, 0))
 	exec(t, `INSERT INTO purser.metering_windows (source_id, period_start, period_end, complete)
 		SELECT 'periscope-default', window_start, window_start + INTERVAL '5 minutes', TRUE

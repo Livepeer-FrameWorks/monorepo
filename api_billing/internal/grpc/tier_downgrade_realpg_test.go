@@ -84,6 +84,7 @@ func (*downgradeRecoveryReconciler) SweepDeploymentTiers(context.Context) (int, 
 // previews it without writing, refuses a target other than the previewed one,
 // and on confirmation records the operator and reason before applying it.
 func TestTierDowngradeRecoveryRecordsAndReleasesTheHold_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	db := startOperatorGrantDatabase(t)
 	ctx := t.Context()
 	tenant, current, target, operatorID := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
@@ -97,9 +98,9 @@ func TestTierDowngradeRecoveryRecordsAndReleasesTheHold_RealPG(t *testing.T) {
 	periodStart := effective.Add(-30 * 24 * time.Hour)
 	exec(`INSERT INTO purser.billing_tiers (id,tier_name,display_name,tier_level,base_price,currency,metering_enabled,is_active) VALUES
 		($1::text::uuid,$1::text,'Current',3,0,'EUR',false,true),($2::text::uuid,$2::text,'Target',2,0,'EUR',false,true)`, current, target)
-	exec(`INSERT INTO purser.tenant_subscriptions (tenant_id,tier_id,status,billing_model,billing_email,presentment_currency,
+	exec(`INSERT INTO purser.tenant_subscriptions (billing_customer_type,billing_name,billing_company,billing_address,tenant_id,tier_id,status,billing_model,billing_email,presentment_currency,
 		billing_period_start,billing_period_end,next_billing_date,pending_tier_id,pending_reason,pending_effective_at,pending_provider_tier_id)
-		VALUES ($1,$2,'active','postpaid','billing@example.com','EUR',$4,$5,$5,$3,'downgrade',$6,$3)`, tenant, current, target, periodStart, effective, effective)
+		VALUES ('business','Fixture Buyer','Fixture Ltd','{"street":"1 Main Street","city":"Toronto","postal_code":"M5V1J1","country":"CA"}'::jsonb,$1,$2,'active','postpaid','billing@example.com','EUR',$4,$5,$5,$3,'downgrade',$6,$3)`, tenant, current, target, periodStart, effective, effective)
 	exec(`INSERT INTO purser.billing_invoices (tenant_id,status,currency,amount,period_start,period_end,due_date,paid_at)
 		VALUES ($1,'paid','EUR',0,$2,$3,$3,NOW())`, tenant, periodStart, effective)
 

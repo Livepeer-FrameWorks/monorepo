@@ -1,6 +1,8 @@
 package grpc
 
 import (
+	"encoding/json"
+	"reflect"
 	"testing"
 
 	"frameworks/api_billing/internal/handlers"
@@ -12,6 +14,17 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 )
+
+func TestCompleteCryptoProfileOnlyRequestsMissingCustomerType(t *testing.T) {
+	r := handlers.CryptoDocumentRequirement{
+		NeedsFullDocument: true, RequiresCustomerType: true, RequiresCompleteProfile: true,
+		Profile: handlers.CryptoBillingProfile{Name: "Customer", Email: "payer@example.test",
+			Address: json.RawMessage(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`)},
+	}
+	if fields := cryptoBillingProfileRequiredFields(r); !reflect.DeepEqual(fields, []string{"customer_type"}) {
+		t.Fatalf("complete profile must only request missing customer_type, got %v", fields)
+	}
+}
 
 func TestCryptoBillingProfileRequiredErrorCarriesStableDetails(t *testing.T) {
 	err := cryptoBillingProfileRequiredError(handlers.CryptoDocumentRequirement{NeedsFullDocument: true})

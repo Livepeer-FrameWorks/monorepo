@@ -21,6 +21,30 @@ import (
 
 type financialPageFunc func(context.Context, *purserpb.AdminFinancialAuditPageRequest) (*purserpb.AdminFinancialAuditPageResponse, error)
 
+func TestFinancialAuditAcceptsFrozenRegularInvoiceTax(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want string
+	}{
+		{`{"id":"invoice-1","status":"paid","document_kind":"invoice","tax_status":"ready","tax_policy_version":"exclusive-service-invoice-v1","net_eur_cents":10000,"vat_eur_cents":2100,"gross_eur_cents":12100}`, ""},
+		{`{"id":"invoice-1","status":"paid","document_kind":"invoice","tax_status":"ready","tax_policy_version":"exclusive-service-invoice-v1","net_eur_cents":10000,"vat_eur_cents":2100,"gross_eur_cents":10000}`, "TAX_TOTALS_MISMATCH"},
+		{`{"id":"historic","status":"paid","document_kind":"invoice","tax_status":"legacy_unknown","net_eur_cents":null}`, "UNKNOWN_TAX_TREATMENT"},
+	} {
+		var data map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(tc.raw), &data); err != nil {
+			t.Fatal(err)
+		}
+		got := auditTaxException("invoices", "tenant", data)
+		if tc.want == "" {
+			if got != nil {
+				t.Fatalf("fully taxed invoice falsely flagged: %+v", got)
+			}
+		} else if got == nil || got.Code != tc.want {
+			t.Fatalf("exception=%+v, want %s", got, tc.want)
+		}
+	}
+}
+
 func (f financialPageFunc) AdminFinancialAuditPage(ctx context.Context, r *purserpb.AdminFinancialAuditPageRequest) (*purserpb.AdminFinancialAuditPageResponse, error) {
 	return f(ctx, r)
 }
@@ -81,6 +105,12 @@ func TestFinancialAuditPreservesEveryPageAndEvidenceHashes(t *testing.T) {
 	if !bytes.Contains(files["exceptions.csv"], []byte("UNKNOWN_TAX_TREATMENT")) {
 		t.Fatal("missing historic VAT was silently accepted")
 	}
+	if count := bytes.Count(files["exceptions.csv"], []byte("\nUNKNOWN_TAX_TREATMENT,")); count != 1 {
+		t.Fatalf("summary must group repeated missing-tax warnings, got %d rows", count)
+	}
+	if count := bytes.Count(files["exception_records.csv"], []byte("\nUNKNOWN_TAX_TREATMENT,")); count != 2 {
+		t.Fatalf("detail must retain both invoice identities, got %d rows", count)
+	}
 	if _, ok := files["journal.csv"]; ok {
 		t.Fatal("unreviewed evidence archive contained a posting feed")
 	}
@@ -124,6 +154,57 @@ func TestFinancialAuditIntervalRejectsFutureAndReversedCutoffs(t *testing.T) {
 			t.Fatalf("accepted %v", pair)
 		}
 	}
+}
+
+func TestFinancialAuditDefaultCutoffUsesOneServerTime(t *testing.T) {
+	clientNow := time.Date(2026, 11, 5, 12, 0, 2, 0, time.UTC)
+	from, through, err := financialAuditInterval("inception", "now", clientNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !through.IsZero() {
+		t.Fatalf("default cutoff must be resolved by server, not client clock: %v", through)
+	}
+	serverNow := clientNow.Add(-2 * time.Second)
+	requests := 0
+	client := financialPageFunc(func(_ context.Context, r *purserpb.AdminFinancialAuditPageRequest) (*purserpb.AdminFinancialAuditPageResponse, error) {
+		if requests == 0 {
+			if r.GetThrough() != nil {
+				t.Fatal("first request must omit client cutoff")
+			}
+		} else if r.GetThrough() == nil || !r.GetThrough().AsTime().Equal(serverNow) {
+			t.Fatalf("later pages changed the server cutoff: %v", r.GetThrough())
+		}
+		requests++
+		return &purserpb.AdminFinancialAuditPageResponse{EffectiveThrough: timestamppb.New(serverNow), CapturedAt: timestamppb.New(serverNow)}, nil
+	})
+	var out bytes.Buffer
+	if writeErr := writeFinancialAudit(context.Background(), &out, client, []string{"tenant"}, from, through, false); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	archive, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range archive.File {
+		if f.Name != "manifest.json" {
+			continue
+		}
+		r, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close()
+		var manifest financialAuditManifest
+		if err := json.NewDecoder(r).Decode(&manifest); err != nil {
+			t.Fatal(err)
+		}
+		if !manifest.Through.Equal(serverNow) {
+			t.Fatalf("manifest cutoff=%v, want server %v", manifest.Through, serverNow)
+		}
+		return
+	}
+	t.Fatal("manifest missing")
 }
 
 func TestFinancialAuditFlagsUnknownOccurrenceDates(t *testing.T) {
@@ -190,4 +271,74 @@ func TestFinancialAuditCapturesProviderAccountAndTestMode(t *testing.T) {
 		return
 	}
 	t.Fatal("manifest missing")
+}
+
+func TestFinancialAuditRequiresReviewForUnsettledCryptoTaxEvidence(t *testing.T) {
+	for _, test := range []struct{ policy, assessment, want string }{
+		{"vat-at-confirmed-topup-v2", `{"review_required":true}`, "CRYPTO_TAX_REVIEW_REQUIRED"},
+		{"vat-at-confirmed-topup-v2", `{}`, "CRYPTO_TAX_ASSESSMENT_MISSING"},
+		{"vat-at-confirmed-topup-v1", `{}`, "LEGACY_CRYPTO_TAX_REVIEW"},
+	} {
+		row := map[string]json.RawMessage{"id": json.RawMessage(`"document-id"`), "tax_policy_ref": json.RawMessage(`"` + test.policy + `"`), "tax_assessment": json.RawMessage(test.assessment)}
+		got := auditTaxException("crypto_invoices", "tenant-id", row)
+		if got == nil || got.Code != test.want || got.RecordID != "document-id" {
+			t.Fatalf("tax evidence warning=%+v want=%s", got, test.want)
+		}
+	}
+}
+
+func TestFinancialAuditDoesNotCallAnUnknownPolicyLegacy(t *testing.T) {
+	row := map[string]json.RawMessage{"id": json.RawMessage(`"document-id"`), "tax_policy_ref": json.RawMessage(`"vat-at-confirmed-topup-v99"`), "tax_assessment": json.RawMessage(`{"policy_version":"vat-at-confirmed-topup-v99"}`)}
+	got := auditTaxException("crypto_invoices", "tenant-id", row)
+	if got == nil || got.Code != "UNSUPPORTED_CRYPTO_TAX_POLICY" {
+		t.Fatalf("unknown policy was misclassified as legacy: %+v", got)
+	}
+}
+
+func TestProviderFinancialAuditUsesOriginalTaxTotals(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{`{"id":"provider","tax_status":"ready","net_minor":10000,"vat_minor":2100,"gross_minor":12100,"pdf_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`, ""},
+		{`{"id":"provider","tax_status":"ready","net_minor":10000,"vat_minor":2100,"gross_minor":99999}`, "TAX_TOTALS_MISMATCH"},
+		{`{"id":"provider","tax_status":"legacy_unknown"}`, "PROVIDER_TAX_TREATMENT_UNKNOWN"},
+		{`{"id":"provider","tax_status":"ready","net_minor":10000,"vat_minor":2100,"gross_minor":12100}`, "PROVIDER_PDF_PENDING"},
+	} {
+		var data map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(tc.raw), &data); err != nil {
+			t.Fatal(err)
+		}
+		result := auditTaxException("provider_billing_documents", "tenant", data)
+		if tc.want == "" {
+			if result != nil {
+				t.Fatalf("valid imported tax invoice falsely flagged: %+v", result)
+			}
+		} else if result == nil || result.Code != tc.want {
+			t.Fatalf("want%s,got%+v", tc.want, result)
+		}
+	}
+}
+
+func TestFinancialAuditRetainsCanonicalCryptoReviewUntilResolved(t *testing.T) {
+	for _, tc := range []struct{ name, assessment, revalidated, want string }{
+		{"revoked business", `{"review_required":true,"review_reasons":["business_evidence_unavailable"]}`, "", "CRYPTO_TAX_REVIEW_REQUIRED"},
+		{"expired policy", `{"review_required":true,"review_reasons":["tax_policy_expired"]}`, "valid", "CRYPTO_TAX_REVIEW_REQUIRED"},
+		{"grace pending", `{"review_required":true,"vat_validation_mode":"outage_grace","review_reasons":["vies_outage_grace"]}`, "", "CRYPTO_TAX_REVIEW_REQUIRED"},
+		{"grace verified", `{"review_required":true,"vat_validation_mode":"outage_grace","review_reasons":["vies_outage_grace"]}`, "valid", ""},
+		{"grace with expired policy", `{"review_required":true,"vat_validation_mode":"outage_grace","review_reasons":["vies_outage_grace","tax_policy_expired"]}`, "valid", "CRYPTO_TAX_REVIEW_REQUIRED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var data map[string]json.RawMessage
+			raw := `{"id":"invoice","status":"paid","document_kind":"invoice","tax_status":"ready","tax_policy_version":"exclusive-service-invoice-v1","net_eur_cents":800,"vat_eur_cents":0,"gross_eur_cents":800,"tax_decision":` + tc.assessment + `,"vies_revalidation":"` + tc.revalidated + `"}`
+			if err := json.Unmarshal([]byte(raw), &data); err != nil {
+				t.Fatal(err)
+			}
+			got := auditTaxException("invoices", "tenant", data)
+			if tc.want == "" {
+				if got != nil {
+					t.Fatalf("resolved grace kept a pending exception: %+v", got)
+				}
+			} else if got == nil || got.Code != tc.want {
+				t.Fatalf("canonical crypto review silently passed ready-invoice audit: got=%+v want=%s", got, tc.want)
+			}
+		})
+	}
 }

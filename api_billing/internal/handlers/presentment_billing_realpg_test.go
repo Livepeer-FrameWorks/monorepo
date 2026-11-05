@@ -242,20 +242,31 @@ func TestX402QuoteLocksTheUSDRateForCreditAndDocument_RealPG(t *testing.T) {
 	tenantID := uuid.NewString()
 	network := Networks["base"]
 
-	if _, err := handler.CreatePaymentQuote(ctx, tenantID, "mcp://tool", "0x0000000000000000000000000000000000000002", network); err == nil {
+	if _, _, err := handler.CreatePaymentQuotes(ctx, tenantID, "mcp://tool", "0x0000000000000000000000000000000000000002", []NetworkConfig{network}, ""); err == nil {
 		t.Fatal("x402 quote created without an ECB USD rate")
 	}
 	storeRate(t, db, "USD", now.AddDate(0, 0, -6), "1.1000")
-	if _, err := handler.CreatePaymentQuote(ctx, tenantID, "mcp://tool", "0x0000000000000000000000000000000000000002", network); err == nil {
+	if _, _, err := handler.CreatePaymentQuotes(ctx, tenantID, "mcp://tool", "0x0000000000000000000000000000000000000002", []NetworkConfig{network}, ""); err == nil {
 		t.Fatal("x402 quote created from a stale ECB USD rate")
 	}
 	storeRate(t, db, "USD", now, "1.2500")
-	quote, err := handler.CreatePaymentQuote(ctx, tenantID, "mcp://tool", "0x0000000000000000000000000000000000000002", network)
+	tierID := uuid.NewString()
+	if _, err := db.ExecContext(ctx, `INSERT INTO purser.billing_tiers(id,tier_name,display_name) VALUES ($1,$2,'Quote test')`, tierID, "quote-"+tierID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO purser.tenant_subscriptions(id,tenant_id,tier_id,billing_customer_type,billing_address) VALUES($1,$2,$3,'consumer','{"country":"NL"}')`, uuid.NewString(), tenantID, tierID); err != nil {
+		t.Fatal(err)
+	}
+	quotes, requirement, err := handler.CreatePaymentQuotes(ctx, tenantID, "mcp://tool", "0x0000000000000000000000000000000000000002", []NetworkConfig{network}, "")
 	if err != nil {
 		t.Fatalf("CreatePaymentQuote: %v", err)
 	}
+	if len(quotes) != 1 || requirement.RequiresCompleteProfile {
+		t.Fatalf("quote terms withheld: %+v", requirement)
+	}
+	quote := quotes[0]
 	// The 1000 USD cent minimum at 1.25 USD per EUR credits 800 EUR cents.
-	if quote.CreditAmountCents != 800 || quote.AmountAtomic != "10000000" || quote.FX.OriginalMinor != 1000 ||
+	if quote.CreditAmountCents != 800 || quote.AmountAtomic != "12100000" || quote.FX.OriginalMinor != 1210 ||
 		quote.FX.OriginalCurrency != fx.USD || !quote.FX.UnitsPerEUR.Equal(decimal.RequireFromString("1.25")) {
 		t.Fatalf("quote = credit %d atomic %s FX %+v", quote.CreditAmountCents, quote.AmountAtomic, quote.FX)
 	}
@@ -265,7 +276,7 @@ func TestX402QuoteLocksTheUSDRateForCreditAndDocument_RealPG(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadPaymentQuote: %v", err)
 	}
-	if loaded.CreditAmountCents != 800 || loaded.FX.EURMinor != 800 || !loaded.FX.UnitsPerEUR.Equal(decimal.RequireFromString("1.25")) {
+	if loaded.CreditAmountCents != 800 || loaded.FX.EURMinor != 968 || !loaded.FX.UnitsPerEUR.Equal(decimal.RequireFromString("1.25")) {
 		t.Fatalf("loaded quote after rate change = credit %d FX %+v", loaded.CreditAmountCents, loaded.FX)
 	}
 
@@ -288,13 +299,13 @@ func TestX402QuoteLocksTheUSDRateForCreditAndDocument_RealPG(t *testing.T) {
 	var gross, eur, vatEUR int64
 	var vatRateBps int
 	if err := db.QueryRowContext(ctx, `
-		SELECT currency, gross_amount_cents, amount_eur_cents, vat_eur_cents, fx_units_per_eur::text, vat_rate_bps
-		FROM purser.simplified_invoices WHERE tenant_id = $1 AND reference_id = $2
+		SELECT presentment_currency, document_gross_minor, gross_eur_cents, vat_eur_cents, presentment_units_per_eur::text, (tax_summary->0->>'rate_bps')::integer
+		FROM purser.billing_invoices WHERE tenant_id = $1 AND source_reference_id = $2
 	`, tenantID, txHash).Scan(&currency, &gross, &eur, &vatEUR, &units, &vatRateBps); err != nil {
 		t.Fatalf("tax document: %v", err)
 	}
-	_, wantVATEUR := extractVATInclusive(800, vatRateBps)
-	if currency != "USD" || gross != 1000 || eur != 800 || units != "1.2500000000" || vatEUR != wantVATEUR || vatEUR == 0 {
+	wantVATEUR := int64(168)
+	if currency != "USD" || gross != 1210 || eur != 968 || units != "1.2500000000" || vatEUR != wantVATEUR || vatEUR == 0 {
 		t.Fatalf("x402 document = (%s %d, EUR %d, VAT EUR %d, units %s)", currency, gross, eur, vatEUR, units)
 	}
 }
@@ -335,6 +346,7 @@ func TestUSDInvoiceFinalizationPresentsAtTheFinalizationRate_RealPG(t *testing.T
 	`, tenantID, tierID, periodStart, periodEnd); err != nil {
 		t.Fatal(err)
 	}
+	seedContractBillingIdentity(t, db, tenantID)
 	jobs := &JobManager{db: db, logger: logging.NewLogger(), billing: &Service{db: db, logger: logging.NewLogger(), stripeClient: stripeClient}}
 
 	// Only a rate older than the five-day limit exists: finalization rolls back.

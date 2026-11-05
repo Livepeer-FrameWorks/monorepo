@@ -66,6 +66,8 @@ type CryptoTransaction struct {
 
 // PendingWallet represents an active crypto wallet awaiting payment
 type PendingWallet struct {
+	TaxProfile          CryptoBillingProfile
+	TaxDocumentKind     string
 	ID                  string
 	TenantID            string
 	Purpose             string  // 'invoice' or 'prepaid'
@@ -187,6 +189,13 @@ func (cm *CryptoMonitor) checkPendingPayments(ctx context.Context) {
 			continue
 		}
 		wallet.FX = record
+		if len(row.TaxProfileSnapshot) > 0 {
+			if err := json.Unmarshal(row.TaxProfileSnapshot, &wallet.TaxProfile); err != nil {
+				cm.logger.WithError(err).Error("Invalid retained crypto tax snapshot")
+				continue
+			}
+		}
+		wallet.TaxDocumentKind = row.TaxDocumentKind
 		cm.checkWalletForPayments(ctx, wallet)
 	}
 }
@@ -838,6 +847,17 @@ func (cm *CryptoMonitor) confirmPrepaidTopup(ctx context.Context, dbTx *sql.Tx, 
 	if err != nil {
 		return 0, "", err
 	}
+	var advanceCash fx.Record
+	if wallet.TaxProfile.TaxAssessment != nil && wallet.TaxProfile.TaxAssessment.PolicyVersion == billing.CurrentCryptoTopupTaxPolicy {
+		advanceCash, err = wallet.FX.Scale(txBaseUnits, wallet.ExpectedAmountBaseUnits)
+		if err != nil {
+			return 0, "", err
+		}
+		if err = resizeCryptoAdvance(&wallet.TaxProfile, advanceCash); err != nil {
+			return 0, "", err
+		}
+		amountCents = wallet.TaxProfile.TaxAssessment.Advance.NetEUR
+	}
 	if amountCents <= 0 {
 		return 0, "", fmt.Errorf("invalid credit amount: %d cents", amountCents)
 	}
@@ -856,14 +876,21 @@ func (cm *CryptoMonitor) confirmPrepaidTopup(ctx context.Context, dbTx *sql.Tx, 
 	}
 
 	// Record transaction in audit trail
+	transactionID := uuid.New()
 	err = queries.InsertBalanceTransaction(ctx, purserdb.InsertBalanceTransactionParams{
-		ID: uuid.New(), TenantID: wallet.TenantID, AmountCents: amountCents, BalanceAfterCents: newBalance,
+		ID: transactionID, TenantID: wallet.TenantID, AmountCents: amountCents, BalanceAfterCents: newBalance,
 		TransactionType: "topup", Description: sql.NullString{String: fmt.Sprintf("Crypto top-up via %s (%s)", wallet.Asset, tx.Hash), Valid: true},
 		ReferenceID: sql.NullString{String: wallet.ID, Valid: true}, ReferenceType: sql.NullString{String: "crypto_payment", Valid: true},
 		CreatedAt: sql.NullTime{Time: now, Valid: true},
 	})
 	if err != nil {
 		return 0, "", fmt.Errorf("failed to record balance transaction: %w", err)
+	}
+
+	if wallet.TaxProfile.TaxAssessment != nil && wallet.TaxProfile.TaxAssessment.PolicyVersion == billing.CurrentCryptoTopupTaxPolicy {
+		if err = issueCryptoAdvanceTx(ctx, dbTx, wallet.TenantID, "crypto_payment", tx.Hash, transactionID.String(), wallet.TaxProfile, wallet.TaxDocumentKind, advanceCash, now, newBalance-amountCents); err != nil {
+			return 0, "", err
+		}
 	}
 
 	// Persist the credited amount + currency on the wallet so GetCryptoTopup

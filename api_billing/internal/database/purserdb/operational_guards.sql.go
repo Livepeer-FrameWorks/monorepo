@@ -63,25 +63,41 @@ func (q *Queries) GetActiveTenantBillingModel(ctx context.Context, tenantID stri
 }
 
 const getCachedVATValidation = `-- name: GetCachedVATValidation :one
-SELECT valid
-FROM purser.vat_validation_evidence
-WHERE tenant_id = $1::text::uuid
-  AND vat_number_hash = $2
-  AND expires_at > NOW()
-ORDER BY checked_at DESC
-LIMIT 1
+WITH latest AS (
+    SELECT evidence.id, evidence.tenant_id, evidence.country_code, evidence.vat_number_hash, evidence.vat_number_masked, evidence.provider, evidence.valid, evidence.request_date, evidence.trader_name, evidence.trader_address, evidence.checked_at, evidence.expires_at, evidence.raw_response FROM purser.vat_validation_evidence evidence
+    WHERE evidence.tenant_id = $2::text::uuid
+      AND evidence.vat_number_hash = $3
+    ORDER BY evidence.checked_at DESC, evidence.id DESC LIMIT 1
+)
+SELECT latest.valid, to_jsonb(latest)::jsonb AS validation_snapshot,
+       (latest.checked_at <= NOW() AND latest.expires_at > NOW())::boolean AS fresh,
+       (latest.checked_at <= NOW() AND latest.expires_at >= NOW() - $1::integer * INTERVAL '1 hour')::boolean AS within_outage_grace
+FROM latest
 `
 
 type GetCachedVATValidationParams struct {
-	TenantID      string `db:"tenant_id" json:"tenant_id"`
-	VatNumberHash string `db:"vat_number_hash" json:"vat_number_hash"`
+	OutageGraceHours int32  `db:"outage_grace_hours" json:"outage_grace_hours"`
+	TenantID         string `db:"tenant_id" json:"tenant_id"`
+	VatNumberHash    string `db:"vat_number_hash" json:"vat_number_hash"`
 }
 
-func (q *Queries) GetCachedVATValidation(ctx context.Context, arg GetCachedVATValidationParams) (bool, error) {
-	row := q.db.QueryRowContext(ctx, getCachedVATValidation, arg.TenantID, arg.VatNumberHash)
-	var valid bool
-	err := row.Scan(&valid)
-	return valid, err
+type GetCachedVATValidationRow struct {
+	Valid              bool            `db:"valid" json:"valid"`
+	ValidationSnapshot json.RawMessage `db:"validation_snapshot" json:"validation_snapshot"`
+	Fresh              bool            `db:"fresh" json:"fresh"`
+	WithinOutageGrace  bool            `db:"within_outage_grace" json:"within_outage_grace"`
+}
+
+func (q *Queries) GetCachedVATValidation(ctx context.Context, arg GetCachedVATValidationParams) (GetCachedVATValidationRow, error) {
+	row := q.db.QueryRowContext(ctx, getCachedVATValidation, arg.OutageGraceHours, arg.TenantID, arg.VatNumberHash)
+	var i GetCachedVATValidationRow
+	err := row.Scan(
+		&i.Valid,
+		&i.ValidationSnapshot,
+		&i.Fresh,
+		&i.WithinOutageGrace,
+	)
+	return i, err
 }
 
 const getTenantBillingEmail = `-- name: GetTenantBillingEmail :one
@@ -99,6 +115,98 @@ func (q *Queries) GetTenantBillingEmail(ctx context.Context, tenantID string) (s
 	return billing_email, err
 }
 
+const listTenantVIESRevalidations = `-- name: ListTenantVIESRevalidations :many
+SELECT id::text AS id, evidence_json
+FROM purser.crypto_accounting_anomalies
+WHERE tenant_id=$1::text::uuid
+  AND kind='vies_revalidation' AND status='open'
+  AND last_seen_at < NOW()-INTERVAL '5 minutes'
+  AND NOT (evidence_json ? 'revalidation_outcome')
+ORDER BY last_seen_at,id LIMIT 20
+`
+
+type ListTenantVIESRevalidationsRow struct {
+	ID           string          `db:"id" json:"id"`
+	EvidenceJson json.RawMessage `db:"evidence_json" json:"evidence_json"`
+}
+
+func (q *Queries) ListTenantVIESRevalidations(ctx context.Context, tenantID string) ([]ListTenantVIESRevalidationsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTenantVIESRevalidations, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTenantVIESRevalidationsRow{}
+	for rows.Next() {
+		var i ListTenantVIESRevalidationsRow
+		if err := rows.Scan(&i.ID, &i.EvidenceJson); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const recordPermanentVIESFault = `-- name: RecordPermanentVIESFault :exec
+INSERT INTO purser.vat_validation_evidence(tenant_id,country_code,vat_number_hash,vat_number_masked,valid,request_date,checked_at,expires_at,raw_response)
+VALUES($1::text::uuid,$2,$3,$4,false,CURRENT_DATE,NOW(),NOW(),$5::jsonb)
+ON CONFLICT(tenant_id,vat_number_hash,request_date) DO UPDATE
+SET valid=false,checked_at=NOW(),expires_at=NOW(),raw_response=EXCLUDED.raw_response
+`
+
+type RecordPermanentVIESFaultParams struct {
+	TenantID        string          `db:"tenant_id" json:"tenant_id"`
+	CountryCode     string          `db:"country_code" json:"country_code"`
+	VatNumberHash   string          `db:"vat_number_hash" json:"vat_number_hash"`
+	VatNumberMasked string          `db:"vat_number_masked" json:"vat_number_masked"`
+	RawResponse     json.RawMessage `db:"raw_response" json:"raw_response"`
+}
+
+func (q *Queries) RecordPermanentVIESFault(ctx context.Context, arg RecordPermanentVIESFaultParams) error {
+	_, err := q.db.ExecContext(ctx, recordPermanentVIESFault,
+		arg.TenantID,
+		arg.CountryCode,
+		arg.VatNumberHash,
+		arg.VatNumberMasked,
+		arg.RawResponse,
+	)
+	return err
+}
+
+const recordVIESRevalidationResult = `-- name: RecordVIESRevalidationResult :exec
+UPDATE purser.crypto_accounting_anomalies
+SET last_seen_at=NOW(),
+    evidence_json=evidence_json || $1::jsonb,
+    status=CASE WHEN $2::boolean THEN 'resolved' ELSE status END,
+    resolved_at=CASE WHEN $2::boolean THEN NOW() ELSE resolved_at END,
+    resolution_note=CASE WHEN $2::boolean THEN 'VIES revalidated retained outage evidence' ELSE resolution_note END
+WHERE tenant_id=$3::text::uuid AND id=$4::text::uuid
+  AND kind='vies_revalidation' AND status='open'
+`
+
+type RecordVIESRevalidationResultParams struct {
+	Result   json.RawMessage `db:"result" json:"result"`
+	Verified bool            `db:"verified" json:"verified"`
+	TenantID string          `db:"tenant_id" json:"tenant_id"`
+	ID       string          `db:"id" json:"id"`
+}
+
+func (q *Queries) RecordVIESRevalidationResult(ctx context.Context, arg RecordVIESRevalidationResultParams) error {
+	_, err := q.db.ExecContext(ctx, recordVIESRevalidationResult,
+		arg.Result,
+		arg.Verified,
+		arg.TenantID,
+		arg.ID,
+	)
+	return err
+}
+
 const suspendActiveTenantSubscriptions = `-- name: SuspendActiveTenantSubscriptions :execrows
 UPDATE purser.tenant_subscriptions
 SET status = 'suspended', updated_at = NOW()
@@ -114,8 +222,8 @@ func (q *Queries) SuspendActiveTenantSubscriptions(ctx context.Context, tenantID
 	return result.RowsAffected()
 }
 
-const upsertVATValidationEvidence = `-- name: UpsertVATValidationEvidence :exec
-INSERT INTO purser.vat_validation_evidence (
+const upsertVATValidationEvidence = `-- name: UpsertVATValidationEvidence :one
+INSERT INTO purser.vat_validation_evidence AS evidence (
     tenant_id, country_code, vat_number_hash, vat_number_masked,
     valid, request_date, trader_name, trader_address,
     checked_at, expires_at, raw_response
@@ -133,6 +241,7 @@ SET valid = EXCLUDED.valid,
     checked_at = NOW(),
     expires_at = NOW() + INTERVAL '24 hours',
     raw_response = EXCLUDED.raw_response
+RETURNING to_jsonb(evidence)::jsonb AS validation_snapshot
 `
 
 type UpsertVATValidationEvidenceParams struct {
@@ -147,8 +256,8 @@ type UpsertVATValidationEvidenceParams struct {
 	RawResponse     json.RawMessage `db:"raw_response" json:"raw_response"`
 }
 
-func (q *Queries) UpsertVATValidationEvidence(ctx context.Context, arg UpsertVATValidationEvidenceParams) error {
-	_, err := q.db.ExecContext(ctx, upsertVATValidationEvidence,
+func (q *Queries) UpsertVATValidationEvidence(ctx context.Context, arg UpsertVATValidationEvidenceParams) (json.RawMessage, error) {
+	row := q.db.QueryRowContext(ctx, upsertVATValidationEvidence,
 		arg.TenantID,
 		arg.CountryCode,
 		arg.VatNumberHash,
@@ -159,5 +268,7 @@ func (q *Queries) UpsertVATValidationEvidence(ctx context.Context, arg UpsertVAT
 		arg.TraderAddress,
 		arg.RawResponse,
 	)
-	return err
+	var validation_snapshot json.RawMessage
+	err := row.Scan(&validation_snapshot)
+	return validation_snapshot, err
 }

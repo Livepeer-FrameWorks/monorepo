@@ -26,7 +26,10 @@ type TierUpgradeReceipt struct {
 	PaidPeriodStart, PaidPeriodEnd time.Time
 	UnusedPaidCents                int64
 	PaidReceiptID                  string
-	Applied                        bool
+	// TaxDocumentPaymentIDs identifies paid supplies that must have their frozen
+	// original tax documents before Purser allocates an unused-service credit.
+	TaxDocumentPaymentIDs []string `json:",omitempty"`
+	Applied               bool
 }
 
 // ErrTierUpgradeUnsettled waits for the old paid fee's authoritative outcome.

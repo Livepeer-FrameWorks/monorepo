@@ -78,6 +78,7 @@ func expectPrepaidDepositReversalMutations(mock sqlmock.Sqlmock) {
 			"crypto_reorg", "allocated deposit block is no longer canonical",
 			"old=0xold canonical=0xnew", "credit-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("-- name: RevokeCryptoAdvanceFundingLot").WithArgs("tenant-1", "crypto_payment", "0xtx").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`INSERT INTO purser\.credit_notes`).
 		WithArgs("event-1", "0xtx", sqlmock.AnyArg(), "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))

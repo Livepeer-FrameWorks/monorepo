@@ -66,12 +66,17 @@ func (c *Client) SyncSubscriptionTier(ctx context.Context, request billing.Provi
 		return receipt, nil
 	}
 	recorded, hasRecorded := metadata[restoreAmountKey].(string)
+	restoring := !request.Downgrade && metadata[restoreTierKey] == request.TierID && hasRecorded
 	if !request.Downgrade && metadata[restoreTierKey] == request.TierID && hasRecorded {
 		if amount, err = decimal.NewFromString(recorded); err != nil {
 			return billing.ProviderTierReceipt{}, fmt.Errorf("mollie recorded restore amount: %w", err)
 		}
 		delete(metadata, restoreTierKey)
 		delete(metadata, restoreAmountKey)
+		if net, ok := metadata["billing_restore_net_minor"]; ok {
+			metadata["frameworks_net_minor"] = net
+			delete(metadata, "billing_restore_net_minor")
+		}
 	} else {
 		if request.BaseCents <= 0 {
 			return billing.ProviderTierReceipt{}, fmt.Errorf("%w: the tier has no monthly fee and the subscription recorded none to restore", billing.ErrProviderTierRefused)
@@ -80,7 +85,19 @@ func (c *Client) SyncSubscriptionTier(ctx context.Context, request billing.Provi
 		// replacing a record an earlier applied downgrade left behind.
 		if request.Downgrade && (providerTier == request.CurrentTierID || metadata[restoreTierKey] != request.CurrentTierID) && sub.Amount != nil {
 			metadata[restoreTierKey], metadata[restoreAmountKey] = request.CurrentTierID, sub.Amount.Value
+			if net, ok := metadata["frameworks_net_minor"]; ok {
+				metadata["billing_restore_net_minor"] = net
+			}
 		}
+	}
+	if !restoring {
+		amount, err = assessedRenewalAmount(metadata, request.BaseCents)
+		if err != nil {
+			return receipt, err
+		}
+	}
+	if request.Downgrade && mollieChargesAmount(sub, amount) && providerTier == request.TierID {
+		return receipt, nil
 	}
 	metadata["tier_id"] = request.TierID
 	body, err := json.Marshal(map[string]any{

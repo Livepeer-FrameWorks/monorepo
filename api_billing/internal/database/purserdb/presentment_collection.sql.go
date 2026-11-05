@@ -108,6 +108,22 @@ func (q *Queries) ActivatePurserInvoicedClusterSubscription(ctx context.Context,
 	return id, err
 }
 
+const applyUnusedBaseFeeFinancialCredit = `-- name: ApplyUnusedBaseFeeFinancialCredit :exec
+UPDATE purser.billing_invoices SET prepaid_credit_applied=$1::bigint/100.0
+WHERE tenant_id=$2::text::uuid AND id=$3::text::uuid
+`
+
+type ApplyUnusedBaseFeeFinancialCreditParams struct {
+	CreditEurCents int64  `db:"credit_eur_cents" json:"credit_eur_cents"`
+	TenantID       string `db:"tenant_id" json:"tenant_id"`
+	InvoiceID      string `db:"invoice_id" json:"invoice_id"`
+}
+
+func (q *Queries) ApplyUnusedBaseFeeFinancialCredit(ctx context.Context, arg ApplyUnusedBaseFeeFinancialCreditParams) error {
+	_, err := q.db.ExecContext(ctx, applyUnusedBaseFeeFinancialCredit, arg.CreditEurCents, arg.TenantID, arg.InvoiceID)
+	return err
+}
+
 const baseFeeInvoiceExistsForPeriod = `-- name: BaseFeeInvoiceExistsForPeriod :one
 SELECT EXISTS (
     SELECT 1 FROM purser.billing_invoices
@@ -528,6 +544,34 @@ func (q *Queries) InsertPendingProviderSettlement(ctx context.Context, arg Inser
 	return err
 }
 
+const insertUnusedBaseFeeCreditNote = `-- name: InsertUnusedBaseFeeCreditNote :exec
+INSERT INTO purser.credit_notes(credit_note_number,tenant_id,source_document_type,source_document_id,reversal_reference_type,reversal_reference_id,amount_cents,currency,reason,evidence_json)
+SELECT 'CN-'||lpad(nextval('purser.credit_note_number_seq')::text,10,'0'),i.tenant_id,'invoice',i.id,'unused_base_fee',$1::text,$2::bigint,$3::text,'Unused subscription period',jsonb_build_object('unused_from',$4::timestamptz)
+FROM purser.billing_invoices i WHERE i.tenant_id=$5::text::uuid AND i.id=$6::text::uuid AND i.tax_status='ready'
+ON CONFLICT(source_document_type,source_document_id,reversal_reference_type,reversal_reference_id) DO NOTHING
+`
+
+type InsertUnusedBaseFeeCreditNoteParams struct {
+	ReferenceID string    `db:"reference_id" json:"reference_id"`
+	AmountMinor int64     `db:"amount_minor" json:"amount_minor"`
+	Currency    string    `db:"currency" json:"currency"`
+	UnusedFrom  time.Time `db:"unused_from" json:"unused_from"`
+	TenantID    string    `db:"tenant_id" json:"tenant_id"`
+	InvoiceID   string    `db:"invoice_id" json:"invoice_id"`
+}
+
+func (q *Queries) InsertUnusedBaseFeeCreditNote(ctx context.Context, arg InsertUnusedBaseFeeCreditNoteParams) error {
+	_, err := q.db.ExecContext(ctx, insertUnusedBaseFeeCreditNote,
+		arg.ReferenceID,
+		arg.AmountMinor,
+		arg.Currency,
+		arg.UnusedFrom,
+		arg.TenantID,
+		arg.InvoiceID,
+	)
+	return err
+}
+
 const listAdvanceBaseFeeCandidates = `-- name: ListAdvanceBaseFeeCandidates :many
 SELECT ts.tenant_id::text AS tenant_id,
        ts.billing_period_start::timestamptz AS billing_period_start,
@@ -703,6 +747,8 @@ func (q *Queries) ListPurserInvoicedClusterSubscriptionsForPeriod(ctx context.Co
 
 const lockOverlappedBaseFeeInvoice = `-- name: LockOverlappedBaseFeeInvoice :one
 SELECT invoice.id::text AS id, invoice.status, invoice.base_amount::text AS base_amount,
+ invoice.tax_status,invoice.gross_eur_cents,invoice.document_gross_minor,
+ COALESCE(invoice.presentment_currency,invoice.currency)::text AS document_currency,
        invoice.base_fee_period_start::timestamptz AS base_fee_period_start,
        invoice.base_fee_period_end::timestamptz AS base_fee_period_end,
        (SELECT COUNT(*) FROM purser.billing_payments payment
@@ -719,12 +765,16 @@ type LockOverlappedBaseFeeInvoiceParams struct {
 }
 
 type LockOverlappedBaseFeeInvoiceRow struct {
-	ID                 string    `db:"id" json:"id"`
-	Status             string    `db:"status" json:"status"`
-	BaseAmount         string    `db:"base_amount" json:"base_amount"`
-	BaseFeePeriodStart time.Time `db:"base_fee_period_start" json:"base_fee_period_start"`
-	BaseFeePeriodEnd   time.Time `db:"base_fee_period_end" json:"base_fee_period_end"`
-	PendingPayments    int64     `db:"pending_payments" json:"pending_payments"`
+	ID                 string        `db:"id" json:"id"`
+	Status             string        `db:"status" json:"status"`
+	BaseAmount         string        `db:"base_amount" json:"base_amount"`
+	TaxStatus          string        `db:"tax_status" json:"tax_status"`
+	GrossEurCents      sql.NullInt64 `db:"gross_eur_cents" json:"gross_eur_cents"`
+	DocumentGrossMinor sql.NullInt64 `db:"document_gross_minor" json:"document_gross_minor"`
+	DocumentCurrency   string        `db:"document_currency" json:"document_currency"`
+	BaseFeePeriodStart time.Time     `db:"base_fee_period_start" json:"base_fee_period_start"`
+	BaseFeePeriodEnd   time.Time     `db:"base_fee_period_end" json:"base_fee_period_end"`
+	PendingPayments    int64         `db:"pending_payments" json:"pending_payments"`
 }
 
 // Locks the base-fee invoice FindOverlappedBaseFeeInvoice found.
@@ -735,6 +785,10 @@ func (q *Queries) LockOverlappedBaseFeeInvoice(ctx context.Context, arg LockOver
 		&i.ID,
 		&i.Status,
 		&i.BaseAmount,
+		&i.TaxStatus,
+		&i.GrossEurCents,
+		&i.DocumentGrossMinor,
+		&i.DocumentCurrency,
 		&i.BaseFeePeriodStart,
 		&i.BaseFeePeriodEnd,
 		&i.PendingPayments,
@@ -748,7 +802,7 @@ SET usage_details = usage_details || jsonb_build_object('unused_share_returned',
     updated_at = NOW()
 WHERE id = $2::text::uuid
   AND tenant_id = $3::text::uuid
-  AND base_fee_period_start IS NOT NULL
+  AND (base_fee_period_start IS NOT NULL OR source_reference_type='mollie_native_payment')
 `
 
 type MarkBaseFeeUnusedShareReturnedParams struct {
@@ -769,7 +823,8 @@ func (q *Queries) MarkBaseFeeUnusedShareReturned(ctx context.Context, arg MarkBa
 
 const reduceUnpaidBaseFeeInvoice = `-- name: ReduceUnpaidBaseFeeInvoice :execrows
 UPDATE purser.billing_invoices
-SET amount = $1::text::numeric,
+SET prepaid_credit_applied=CASE WHEN tax_status='ready' THEN COALESCE(prepaid_credit_applied,0)+amount-$1::text::numeric ELSE prepaid_credit_applied END,
+    amount = $1::text::numeric,
     presentment_amount_cents = $2::bigint,
     usage_details = usage_details || $3::jsonb,
     updated_at = NOW()

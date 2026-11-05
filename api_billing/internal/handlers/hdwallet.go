@@ -199,8 +199,8 @@ type DepositAddressParams struct {
 type DepositQuote struct {
 	ExpectedAmountBaseUnits *big.Int        // Token base units the user must send (NOT NULL)
 	QuotedPriceUSD          decimal.Decimal // USD per 1 whole token
-	// FX is the presentment amount the quote prices and the EUR it credits,
-	// converted on one ECB reference date.
+	// FX values gross payment instructions on one ECB reference date.
+	// The retained advance assessment separates VAT from spendable credit.
 	FX                     fx.Record
 	QuotedAt               time.Time
 	QuoteSource            string // "chainlink" | "one_to_one"

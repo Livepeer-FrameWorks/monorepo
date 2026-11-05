@@ -33,7 +33,7 @@ func TestCheckoutRequestJournalAndLateResponseHandoff_RealPG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	original := billingstripe.CheckoutSessionParams{CustomerID: "customer", TenantID: tenant.id, TierID: tenant.supporterID, Purpose: "subscription", ReferenceID: tenant.supporterID, PriceID: "original_price", Currency: "EUR", SuccessURL: "https://original.example/success", CancelURL: "https://original.example/cancel", IdempotencyKey: key, ReservationID: id, ExpiresAt: now.Add(23 * time.Hour)}
+	original := billingstripe.CheckoutSessionParams{TaxProfile: &billingstripe.TaxProfile{}, TaxRateID: "txr_test", CustomerID: "customer", TenantID: tenant.id, TierID: tenant.supporterID, Purpose: "subscription", ReferenceID: tenant.supporterID, PriceID: "original_price", Currency: "EUR", SuccessURL: "https://original.example/success", CancelURL: "https://original.example/cancel", IdempotencyKey: key, ReservationID: id, ExpiresAt: now.Add(23 * time.Hour)}
 	params := original
 	journal, err := subscriptions.SaveProviderRequest(ctx, db, tenant.id, id, "stripe", "stripe_checkout", client.CredentialFingerprint(), &params)
 	if err != nil {

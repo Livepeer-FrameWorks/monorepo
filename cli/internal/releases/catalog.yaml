@@ -163,8 +163,13 @@ releases:
   - version: v0.3.13
     min_cli_version: v0.3.13-rc1
   - version: v0.3.14
+    required_data_migrations:
+      - id: purser_payment_tenant_backfill_v0_3_14
+        service: purser
+        introduced_in: v0.3.14
+        required_before_phase: postdeploy
     rollback_disabled:
       - commodore
       - foghorn
     capabilities: [accounts_bootstrap]
-    min_cli_version: v0.3.14-rc3
+    min_cli_version: v0.3.14-rc4

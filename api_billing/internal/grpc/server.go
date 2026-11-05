@@ -226,6 +226,7 @@ type ServerMetrics struct {
 }
 
 type stripeBillingClient interface {
+	PrepareCustomerTax(context.Context, string, string, stripe.TaxProfile) (string, error)
 	CredentialFingerprint() string
 	CreateOrGetCustomer(ctx context.Context, info stripe.CustomerInfo) (*stripelib.Customer, error)
 	CreateCheckoutSession(ctx context.Context, params stripe.CheckoutSessionParams) (*stripelib.CheckoutSession, error)
@@ -4231,7 +4232,17 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *purse
 			cancelURL = fmt.Sprintf("%s/clusters/%s?status=cancelled", webappURL, clusterID)
 		}
 
+		taxProfile, taxErr := handlers.AssessStripeTaxProfile(ctx, s.db, tenantID, ctxkeys.GetClientIP(ctx))
+		if taxErr != nil {
+			return nil, billingTaxRequirementError(taxErr)
+		}
+		taxRateID, prepareTaxErr := s.stripeClient.PrepareCustomerTax(ctx, tenantID, cust.ID, *taxProfile)
+		if prepareTaxErr != nil {
+			return nil, status.Error(codes.Unavailable, "prepare cluster subscription tax before checkout")
+		}
 		sess, err := s.stripeClient.CreateCheckoutSession(ctx, stripe.CheckoutSessionParams{
+			TaxRateID:      taxRateID,
+			TaxProfile:     taxProfile,
 			CustomerID:     cust.ID,
 			TenantID:       tenantID,
 			Purpose:        "cluster_subscription",
@@ -5365,6 +5376,15 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *purserpb.Create
 		return nil, fxStatus(quoteErr)
 	}
 
+	advance, cash, retainedTax, taxErr := handlers.QuoteFiatPrepaidAdvance(ctx, s.db, tenantID, topupFX)
+	if taxErr != nil {
+		return nil, billingTaxRequirementError(taxErr)
+	}
+	amountCents, topupFX = cash.OriginalMinor, cash
+	if amountCents > billing.MaximumTopupCents {
+		return nil, status.Error(codes.InvalidArgument, "gross top-up exceeds the maximum payment amount")
+	}
+
 	userID := middleware.GetUserID(ctx)
 	topupID := uuid.New().String()
 	intentKey := fmt.Sprintf("prepaid-topup:%s", topupID)
@@ -5391,6 +5411,11 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *purserpb.Create
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create pending topup")
 		return nil, status.Error(codes.Internal, "failed to create topup record")
+	}
+
+	frozen, taxErr := purserdb.New(s.db).FreezePendingTopupTax(ctx, purserdb.FreezePendingTopupTaxParams{TenantID: tenantID, TopupID: topupID, NetEurCents: sql.NullInt64{Int64: advance.NetEUR, Valid: true}, VatEurCents: sql.NullInt64{Int64: advance.VATEUR, Valid: true}, GrossEurCents: sql.NullInt64{Int64: advance.GrossEUR, Valid: true}, TaxAssessment: retainedTax})
+	if taxErr != nil || frozen != 1 {
+		return nil, status.Error(codes.Internal, "retain top-up tax quote before collection")
 	}
 
 	checkoutSvc := handlers.NewCheckoutService(s.db, s.logger)
@@ -5743,12 +5768,13 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *purserpb.Crea
 		return nil, status.Errorf(codes.Internal, "unknown token decimals for %s", assetStr)
 	}
 
-	quote, expectedBaseUnits, err := s.buildDepositQuote(ctx, network, assetStr, normalizedCurrency, expectedAmountCents, tokenDecimals)
+	quote, _, err := s.buildDepositQuote(ctx, network, assetStr, normalizedCurrency, expectedAmountCents, tokenDecimals)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	amountEurCents := quote.FX.EURMinor
-	documentRequirement, requirementErr := s.x402handler.GetCryptoDocumentRequirement(ctx, tenantID, amountEurCents)
+	documentRequirement, requirementErr := s.x402handler.ApplyCryptoAdvanceQuote(ctx, tenantID, quote, req.GetClientIp())
+	expectedBaseUnits := quote.ExpectedAmountBaseUnits
+	expectedAmountCents = quote.FX.OriginalMinor
 	if requirementErr != nil {
 		return nil, billingTaxRequirementError(requirementErr)
 	}
@@ -5759,7 +5785,10 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *purserpb.Crea
 	quote.TaxProfile = documentRequirement.Profile
 
 	now := time.Now()
-	expiresAt := now.Add(24 * time.Hour)
+	expiresAt, expiryErr := documentRequirement.Profile.TaxAssessment.QuoteExpiry(now.Add(24*time.Hour), now)
+	if expiryErr != nil {
+		return nil, billingTaxRequirementError(expiryErr)
+	}
 
 	// Re-derive token amount from the ceiled base units so the displayed
 	// "send exactly X" matches what the monitor compares against.
@@ -6712,7 +6741,17 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *purserpb.
 		providerParams.ExistingSessionID = reservation.ProviderSessionID.String
 		sess, err = s.stripeClient.CreateSetupCheckoutSession(ctx, providerParams)
 	} else {
+		taxProfile, taxErr := handlers.AssessStripeTaxProfile(ctx, s.db, tenantID, ctxkeys.GetClientIP(ctx))
+		if taxErr != nil {
+			return nil, billingTaxRequirementError(taxErr)
+		}
+		taxRateID, prepareTaxErr := s.stripeClient.PrepareCustomerTax(ctx, tenantID, customer.ID, *taxProfile)
+		if prepareTaxErr != nil {
+			return nil, status.Error(codes.Unavailable, "prepare subscription tax before checkout")
+		}
 		providerParams := stripe.CheckoutSessionParams{
+			TaxRateID:      taxRateID,
+			TaxProfile:     taxProfile,
 			CustomerID:     customer.ID,
 			TenantID:       tenantID,
 			TierID:         tierID,
@@ -6979,6 +7018,14 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 		firstPaymentAmount = decimal.Zero
 		firstPaymentIntentKey = fmt.Sprintf("mollie-mandate-setup:%s:%s:%s", tenantID, tierID, presentmentCurrency)
 	}
+	var firstTaxTerms *mollie.TaxTerms
+	if firstPaymentAmount.IsPositive() {
+		firstTaxTerms, err = handlers.AssessMollieTaxTerms(ctx, s.db, tenantID, firstPaymentAmount.Shift(2).IntPart())
+		if err != nil {
+			return nil, billingTaxRequirementError(err)
+		}
+		firstPaymentAmount = decimal.New(firstTaxTerms.GrossMinor, -2)
+	}
 	firstPaymentIntentID, intentErr := s.reserveMollieCheckout(ctx, tenantID, func(tx *sql.Tx) (string, error) {
 		if fundingErr := subscriptions.CheckMollieFirstPayment(ctx, tx, tenantID); fundingErr != nil {
 			return "", fundingErr
@@ -7083,6 +7130,7 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 
 	// Create first payment
 	providerParams := mollie.FirstPaymentParams{
+		TaxTerms:       firstTaxTerms,
 		CustomerID:     mollieCustomerID,
 		TenantID:       tenantID,
 		TierID:         tierID,
@@ -7097,6 +7145,14 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 	if journalErr != nil {
 		return nil, checkoutRequestError(journalErr)
 	}
+	if providerParams.Amount == nil {
+		return nil, status.Error(codes.Internal, "frozen first payment amount missing")
+	}
+	firstPaymentAmount, err = decimal.NewFromString(providerParams.Amount.Value)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "frozen first payment amount invalid")
+	}
+	firstPaymentCurrency = providerParams.Amount.Currency
 	providerParams.ReplayBefore = journal.ReplayBefore
 	providerParams.ResumeOnly = reservation.AttemptCount > 0
 	providerParams.ExistingPaymentID = reservation.ProviderPaymentID.String
@@ -7334,13 +7390,18 @@ func (s *PurserServer) createMollieSubscription(ctx context.Context, req *purser
 		return nil, mollieActivationStatus(subscriptions.ErrCheckoutExpired)
 	}
 
-	// Create subscription
+	subscriptionTaxTerms, taxErr := handlers.AssessMollieTaxTerms(ctx, s.db, tenantID, basePrice.Round(2).Shift(2).IntPart())
+	if taxErr != nil {
+		return nil, billingTaxRequirementError(taxErr)
+	}
+	// The journal freezes the gross amount and tax profile before the provider write.
 	providerParams := mollie.SubscriptionParams{
+		TaxTerms:       subscriptionTaxTerms,
 		CustomerID:     mollieCustomerID,
 		TenantID:       tenantID,
 		TierID:         tierID,
 		MandateID:      mandateID,
-		Amount:         mollie.Amount(basePrice.Round(2).StringFixed(2), tier.Currency),
+		Amount:         mollie.Amount(decimal.New(subscriptionTaxTerms.GrossMinor, -2).StringFixed(2), tier.Currency),
 		Interval:       "1 month",
 		Description:    fmt.Sprintf("Subscription: %s", tier.TierName),
 		StartDate:      startDate,
@@ -7649,7 +7710,21 @@ func cryptoBillingProfileRequiredFields(requirement handlers.CryptoDocumentRequi
 		fields = append(fields, "country")
 	}
 	if requirement.NeedsFullDocument {
-		fields = append(fields, "name", "email", "street", "city", "postal_code", "country")
+		if strings.TrimSpace(requirement.Profile.Name) == "" {
+			fields = append(fields, "name")
+		}
+		if strings.TrimSpace(requirement.Profile.Email) == "" {
+			fields = append(fields, "email")
+		}
+		var address map[string]string
+		if err := json.Unmarshal(requirement.Profile.Address, &address); err != nil {
+			address = nil
+		}
+		for _, field := range []string{"street", "city", "postal_code", "country"} {
+			if strings.TrimSpace(address[field]) == "" || (field == "country" && !countries.IsValid(address[field])) {
+				fields = append(fields, field)
+			}
+		}
 	}
 	return fields
 }
@@ -7915,36 +7990,17 @@ func (s *PurserServer) GetPaymentRequirements(ctx context.Context, req *purserpb
 		}, nil
 	}
 
-	// Build immutable v2 quotes for all supported networks. Each accepted
-	// requirement has its own quote because chain and asset are quote-bound.
-	accepts := make([]*purserpb.PaymentRequirement, 0, len(networks))
-	for index, network := range networks {
-		quote, quoteErr := s.x402handler.CreatePaymentQuote(ctx, tenantID, resource, payToAddr, network)
-		if quoteErr != nil {
-			s.logger.WithError(quoteErr).WithField("tenant_id", tenantID).Warn("Failed to create x402 quote")
-			return billingTaxPaymentFailure(quoteErr, "failed to create payment quote"), nil
-		}
-		if index == 0 {
-			documentRequirement, requirementErr := s.x402handler.GetCryptoDocumentRequirement(ctx, tenantID, quote.CreditAmountCents)
-			if requirementErr != nil {
-				if expireErr := s.x402handler.ExpirePaymentQuote(ctx, quote.ID); expireErr != nil {
-					s.logger.WithError(expireErr).WithField("quote_id", quote.ID).Warn("Failed to expire unusable x402 quote")
-				}
-				return billingTaxPaymentFailure(requirementErr, "unable to determine the tax-document requirement; retry later"), nil
-			}
-			if documentRequirement.RequiresCompleteProfile {
-				if expireErr := s.x402handler.ExpirePaymentQuote(ctx, quote.ID); expireErr != nil {
-					s.logger.WithError(expireErr).WithField("quote_id", quote.ID).Warn("Failed to expire profile-blocked x402 quote")
-				}
-				return &purserpb.PaymentRequirements{
-					X402Version:    2,
-					Error:          cryptoBillingProfileRequirementMessage(documentRequirement),
-					ErrorCode:      "BILLING_PROFILE_REQUIRED",
-					RequiredFields: cryptoBillingProfileRequiredFields(documentRequirement),
-					TopupUrl:       "/account/billing",
-				}, nil
-			}
-		}
+	quotes, documentRequirement, quoteErr := s.x402handler.CreatePaymentQuotes(ctx, tenantID, resource, payToAddr, networks, req.GetClientIp())
+	if quoteErr != nil {
+		s.logger.WithError(quoteErr).WithField("tenant_id", tenantID).Warn("Failed to create x402 quotes")
+		return billingTaxPaymentFailure(quoteErr, "failed to create payment quote"), nil
+	}
+	if documentRequirement.RequiresCompleteProfile {
+		return &purserpb.PaymentRequirements{X402Version: 2, Error: cryptoBillingProfileRequirementMessage(documentRequirement), ErrorCode: "BILLING_PROFILE_REQUIRED", RequiredFields: cryptoBillingProfileRequiredFields(documentRequirement), TopupUrl: "/account/billing"}, nil
+	}
+	accepts := make([]*purserpb.PaymentRequirement, 0, len(quotes))
+	for index, quote := range quotes {
+		network := networks[index]
 		accepts = append(accepts, &purserpb.PaymentRequirement{
 			Scheme:            "exact",
 			Network:           quote.CAIP2Network,

@@ -42,8 +42,8 @@ func TestOperationalDatabaseGuards_RealPG(t *testing.T) { //nolint:funlen // One
 		handler := &X402Handler{db: db}
 		tenantID := uuid.NewString()
 		for attempt := 0; attempt < 2; attempt++ {
-			valid, err := handler.validateVIESVAT(ctx, tenantID, "nl", "NL123456789B01")
-			if err != nil || !valid {
+			valid, err := handler.validateVIESVATEvidence(ctx, tenantID, "nl", "NL123456789B01")
+			if err != nil || !valid.Valid {
 				t.Fatalf("validation attempt %d = %v, %v", attempt, valid, err)
 			}
 		}

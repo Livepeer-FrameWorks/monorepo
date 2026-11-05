@@ -310,7 +310,19 @@ func (jm *JobManager) chargeAdvanceBaseFee(ctx context.Context, tenantID string,
 			return nil
 		}
 		netCents := baseEUR.Shift(2).IntPart() - credit.cents
+		if previous.taxReady {
+			netCents = baseEUR.Shift(2).IntPart()
+		}
 		collectCents := max(netCents, 0)
+		taxAssessment, taxErr := assessInvoiceTaxTx(ctx, tx, tenantID, collectCents, now)
+		if taxErr != nil {
+			return taxErr
+		}
+		collectCents = taxAssessment.Gross
+		if previous.taxReady {
+			credit, previous.creditOriginalMinor = frozenReplacementCredit(previous, collectCents)
+			collectCents -= credit.cents
+		}
 		var quoteErr error
 		record, quoteErr = fx.QuoteFromEUR(ctx, tx, currency, collectCents, now)
 		if quoteErr != nil {
@@ -359,7 +371,7 @@ func (jm *JobManager) chargeAdvanceBaseFee(ctx context.Context, tenantID string,
 				PricingSource: pricing.SourceTier,
 			},
 		}
-		if credit.cents > 0 {
+		if credit.cents > 0 && !previous.taxReady {
 			creditEUR := decimal.New(-credit.cents, -2)
 			lines.UsageLines = append(lines.UsageLines, pricedLine{
 				LineItem: rating.LineItem{
@@ -379,9 +391,22 @@ func (jm *JobManager) chargeAdvanceBaseFee(ctx context.Context, tenantID string,
 		if lineErr := persistInvoiceLineItems(ctx, tx, invoiceID, tenantID, lines); lineErr != nil {
 			return lineErr
 		}
+		if taxErr = freezeInvoiceTaxTx(ctx, tx, tenantID, invoiceID, taxAssessment, record); taxErr != nil {
+			return taxErr
+		}
 		if previous.reduction != nil {
 			if reduceErr := reducePreviousBaseFeeInvoiceTx(ctx, tx, tenantID, *previous.reduction, now); reduceErr != nil {
 				return reduceErr
+			}
+		}
+		if previous.taxReady {
+			if previous.reduction == nil && credit.cents > 0 {
+				if creditErr := issueUnusedBaseFeeCredit(ctx, txQueries, tenantID, previous.credit.invoiceID, previous.creditOriginalMinor, previous.creditCurrency, periodStart); creditErr != nil {
+					return creditErr
+				}
+			}
+			if creditErr := txQueries.ApplyUnusedBaseFeeFinancialCredit(ctx, purserdb.ApplyUnusedBaseFeeFinancialCreditParams{TenantID: tenantID, InvoiceID: invoiceID, CreditEurCents: credit.cents}); creditErr != nil {
+				return creditErr
 			}
 		}
 		if consumeErr := consumePreviousBaseFee(ctx, txQueries, tenantID, previous, credit, invoiceID, periodStart); consumeErr != nil {
@@ -426,6 +451,22 @@ func cappedReplacementCredit(credit baseFeeCredit, baseCents int64) baseFeeCredi
 	credit.forfeitedCents = max(credit.cents-applied, 0)
 	credit.cents = applied
 	return credit
+}
+
+// A capped paid-service credit reverses only the amount allocated to the new
+// purchase. Retained fees keep their original tax instead of losing VAT twice.
+func frozenReplacementCredit(previous previousBaseFee, limit int64) (baseFeeCredit, int64) {
+	credit := cappedReplacementCredit(previous.credit, limit)
+	original := previous.creditOriginalMinor
+	if previous.reduction == nil && previous.credit.cents > 0 && credit.cents < previous.credit.cents {
+		original = decimal.NewFromInt(original).Mul(decimal.NewFromInt(credit.cents)).Div(decimal.NewFromInt(previous.credit.cents)).Round(0).IntPart()
+		for original > 0 && decimal.NewFromInt(previous.sourceGrossEUR).Mul(decimal.NewFromInt(original)).Div(decimal.NewFromInt(previous.sourceGrossOriginal)).Round(0).IntPart() > credit.cents {
+			original--
+		}
+		credit.cents = decimal.NewFromInt(previous.sourceGrossEUR).Mul(decimal.NewFromInt(original)).Div(decimal.NewFromInt(previous.sourceGrossOriginal)).Round(0).IntPart()
+		credit.forfeitedCents = max(previous.credit.cents-credit.cents, 0)
+	}
+	return credit, original
 }
 
 // unusedBaseFeeReductionLineKey is the line that takes the unused share of its
@@ -494,7 +535,12 @@ func settleUnusedBaseFeeTx(ctx context.Context, tx *sql.Tx, tenantID string, swi
 // base-fee invoice whose period it cut short.
 type previousBaseFee struct {
 	// found reports a base-fee invoice overlapping the new period.
-	found bool
+	found               bool
+	taxReady            bool
+	creditOriginalMinor int64
+	sourceGrossEUR      int64
+	sourceGrossOriginal int64
+	creditCurrency      string
 	// credit is the EUR the new base-fee invoice credits.
 	credit baseFeeCredit
 	// reduction, when set, lowers the unpaid previous invoice to its used share.
@@ -502,6 +548,9 @@ type previousBaseFee struct {
 }
 
 type baseFeeReduction struct {
+	taxReady                  bool
+	creditOriginalMinor       int64
+	creditCurrency            string
 	invoiceID                 string
 	reducedCents, amountCents int64
 	presentmentCents          int64
@@ -560,6 +609,14 @@ func planPreviousBaseFee(ctx context.Context, queries *purserdb.Queries, tenantI
 		return plan, nil
 	}
 	unusedCents := baseEUR.Shift(2).Mul(decimal.NewFromInt(remaining)).Div(decimal.NewFromInt(whole)).Round(0).IntPart()
+	if previous.TaxStatus == "ready" && previous.DocumentGrossMinor.Valid && previous.GrossEurCents.Valid && previous.DocumentGrossMinor.Int64 > 0 {
+		plan.taxReady = true
+		plan.sourceGrossEUR = previous.GrossEurCents.Int64
+		plan.sourceGrossOriginal = previous.DocumentGrossMinor.Int64
+		plan.creditCurrency = previous.DocumentCurrency
+		plan.creditOriginalMinor = decimal.NewFromInt(previous.DocumentGrossMinor.Int64).Mul(decimal.NewFromInt(remaining)).Div(decimal.NewFromInt(whole)).Round(0).IntPart()
+		unusedCents = decimal.NewFromInt(previous.GrossEurCents.Int64).Mul(decimal.NewFromInt(plan.creditOriginalMinor)).Div(decimal.NewFromInt(previous.DocumentGrossMinor.Int64)).Round(0).IntPart()
+	}
 	credit := baseFeeCredit{invoiceID: previous.ID, periodStart: previous.BaseFeePeriodStart, periodEnd: previous.BaseFeePeriodEnd}
 	switch previous.Status {
 	case "paid":
@@ -587,6 +644,9 @@ func planPreviousBaseFee(ctx context.Context, queries *purserdb.Queries, tenantI
 	if err != nil {
 		return previousBaseFee{}, fmt.Errorf("present reduced invoice %s: %w", previous.ID, err)
 	}
+	if plan.taxReady && basis.PresentmentAmountCents.Valid {
+		presentmentCents = max(basis.PresentmentAmountCents.Int64-plan.creditOriginalMinor, 0)
+	}
 	covered := basis.PaidOriginalCents >= presentmentCents
 	credit.cents = unusedCents - reducedCents
 	if covered && basis.PaidEurCents > amountCents {
@@ -594,6 +654,7 @@ func planPreviousBaseFee(ctx context.Context, queries *purserdb.Queries, tenantI
 	}
 	plan.credit = credit
 	plan.reduction = &baseFeeReduction{
+		taxReady: plan.taxReady, creditOriginalMinor: plan.creditOriginalMinor, creditCurrency: plan.creditCurrency,
 		invoiceID: previous.ID, reducedCents: reducedCents, amountCents: amountCents, presentmentCents: presentmentCents,
 		unusedFrom: periodStart, unusedUntil: previous.BaseFeePeriodEnd, covered: covered,
 	}
@@ -626,7 +687,12 @@ func reducePreviousBaseFeeInvoiceTx(ctx context.Context, tx *sql.Tx, tenantID st
 	if rows != 1 {
 		return fmt.Errorf("reduce base-fee invoice %s: invoice is no longer payable", reduction.invoiceID)
 	}
-	if reduction.reducedCents > 0 {
+	if reduction.taxReady {
+		if err := issueUnusedBaseFeeCredit(ctx, queries, tenantID, reduction.invoiceID, reduction.creditOriginalMinor, reduction.creditCurrency, reduction.unusedFrom); err != nil {
+			return err
+		}
+	}
+	if reduction.reducedCents > 0 && !reduction.taxReady {
 		reducedEUR := decimal.New(-reduction.reducedCents, -2)
 		if err := queries.UpsertInvoiceLineItem(ctx, purserdb.UpsertInvoiceLineItemParams{
 			InvoiceID: reduction.invoiceID, TenantID: tenantID, LineKey: unusedBaseFeeReductionLineKey,
@@ -646,6 +712,13 @@ func reducePreviousBaseFeeInvoiceTx(ctx context.Context, tx *sql.Tx, tenantID st
 		}
 	}
 	return nil
+}
+
+func issueUnusedBaseFeeCredit(ctx context.Context, queries *purserdb.Queries, tenant, invoice string, minor int64, currency string, at time.Time) error {
+	if minor <= 0 {
+		return nil
+	}
+	return queries.InsertUnusedBaseFeeCreditNote(ctx, purserdb.InsertUnusedBaseFeeCreditNoteParams{TenantID: tenant, InvoiceID: invoice, AmountMinor: minor, Currency: currency, UnusedFrom: at, ReferenceID: invoice + ":" + at.UTC().Format(time.RFC3339Nano)})
 }
 
 // baseFeeInvoiceDetails is the usage_details of a base-fee invoice.
