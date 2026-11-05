@@ -5750,7 +5750,7 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *purserpb.Crea
 	amountEurCents := quote.FX.EURMinor
 	documentRequirement, requirementErr := s.x402handler.GetCryptoDocumentRequirement(ctx, tenantID, amountEurCents)
 	if requirementErr != nil {
-		return nil, status.Errorf(codes.Unavailable, "determine crypto tax-document requirement: %v", requirementErr)
+		return nil, billingTaxRequirementError(requirementErr)
 	}
 	if documentRequirement.RequiresCompleteProfile {
 		return nil, cryptoBillingProfileRequiredError(documentRequirement)
@@ -7571,6 +7571,7 @@ func (s *PurserServer) GetBillingDetails(ctx context.Context, req *purserpb.GetB
 	}
 
 	details := &purserpb.BillingDetails{
+		CustomerType:        row.CustomerType,
 		TenantId:            tenantID,
 		UpdatedAt:           timestamppb.New(row.UpdatedAt.Time),
 		PresentmentCurrency: strings.TrimSpace(row.PresentmentCurrency),
@@ -7615,7 +7616,7 @@ func cryptoBillingProfileRequiredError(requirement handlers.CryptoDocumentRequir
 		Reason: "BILLING_PROFILE_REQUIRED",
 		Domain: "billing.frameworks.network",
 		Metadata: map[string]string{
-			"required_fields": "name,email,street,city,postal_code,country",
+			"required_fields": strings.Join(cryptoBillingProfileRequiredFields(requirement), ","),
 			"public_message":  cryptoBillingProfileRequirementMessage(requirement),
 		},
 	})
@@ -7626,11 +7627,31 @@ func cryptoBillingProfileRequiredError(requirement handlers.CryptoDocumentRequir
 }
 
 func cryptoBillingProfileRequirementMessage(requirement handlers.CryptoDocumentRequirement) string {
+	if requirement.RequiresCustomerType {
+		return "choose personal or business billing in your billing profile before paying"
+	}
+	if requirement.RequiresBillingCountry {
+		return "confirm your billing country in your billing profile before paying"
+	}
 	reason := "this payment requires a full customer tax invoice"
 	if requirement.HasVATClaim {
 		reason = "a submitted VAT number requires a complete customer billing profile"
 	}
 	return reason + "; add a legal name, billing email, and postal address before paying"
+}
+
+func cryptoBillingProfileRequiredFields(requirement handlers.CryptoDocumentRequirement) []string {
+	var fields []string
+	if requirement.RequiresCustomerType {
+		fields = append(fields, "customer_type")
+	}
+	if requirement.RequiresBillingCountry && !requirement.NeedsFullDocument {
+		fields = append(fields, "country")
+	}
+	if requirement.NeedsFullDocument {
+		fields = append(fields, "name", "email", "street", "city", "postal_code", "country")
+	}
+	return fields
 }
 
 const presentmentCurrencyLockedReason = "PRESENTMENT_CURRENCY_LOCKED"
@@ -7665,6 +7686,9 @@ func isPresentmentCurrencyLockedDBError(err error) bool {
 // normalized address the update writes.
 func changedBillingDetailFields(before purserdb.GetTenantBillingDetailsForUpdateRow, req *purserpb.UpdateBillingDetailsRequest, addressJSON []byte) ([]string, error) {
 	var fields []string
+	if req.CustomerType != nil && *req.CustomerType != before.CustomerType {
+		fields = append(fields, "customer_type")
+	}
 	if req.Email != nil && *req.Email != before.BillingEmail {
 		fields = append(fields, "email")
 	}
@@ -7698,7 +7722,10 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *purserpb.U
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	if req.Email == nil && req.Name == nil && req.Company == nil && req.VatNumber == nil && req.Address == nil {
+	if req.CustomerType != nil && *req.CustomerType != "consumer" && *req.CustomerType != "business" {
+		return nil, status.Error(codes.InvalidArgument, "customer_type must be consumer or business")
+	}
+	if req.Email == nil && req.Name == nil && req.Company == nil && req.VatNumber == nil && req.Address == nil && req.CustomerType == nil {
 		return s.GetBillingDetails(ctx, &purserpb.GetBillingDetailsRequest{TenantId: tenantID})
 	}
 	addressJSON := []byte(`{}`)
@@ -7747,6 +7774,16 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *purserpb.U
 		if detailErr != nil {
 			return status.Errorf(codes.Internal, "compare billing details: %v", detailErr)
 		}
+		customerType, vatNumber := before.CustomerType, before.TaxID
+		if req.CustomerType != nil {
+			customerType = *req.CustomerType
+		}
+		if req.VatNumber != nil {
+			vatNumber = *req.VatNumber
+		}
+		if customerType == "consumer" && strings.TrimSpace(vatNumber) != "" {
+			return status.Error(codes.InvalidArgument, "personal billing cannot claim a business VAT number; clear it or select business billing")
+		}
 		if req.Address != nil {
 			desired := billing.PresentmentCurrencyForCountry(countryCode)
 			if desired != current.PresentmentCurrency {
@@ -7770,6 +7807,7 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *purserpb.U
 			SetCompany: req.Company != nil, Company: derefString(req.Company),
 			SetVatNumber: req.VatNumber != nil, VatNumber: derefString(req.VatNumber),
 			SetAddress: req.Address != nil, Address: addressJSON, TenantID: tenantID,
+			SetCustomerType: req.CustomerType != nil, CustomerType: derefString(req.CustomerType),
 		})
 		if updateErr != nil {
 			return txStatusErrorf(updateErr, codes.Internal, "database error: %v", updateErr)
@@ -7884,11 +7922,7 @@ func (s *PurserServer) GetPaymentRequirements(ctx context.Context, req *purserpb
 		quote, quoteErr := s.x402handler.CreatePaymentQuote(ctx, tenantID, resource, payToAddr, network)
 		if quoteErr != nil {
 			s.logger.WithError(quoteErr).WithField("tenant_id", tenantID).Warn("Failed to create x402 quote")
-			return &purserpb.PaymentRequirements{
-				X402Version: 2,
-				Error:       "failed to create payment quote",
-				TopupUrl:    "/account/billing",
-			}, nil
+			return billingTaxPaymentFailure(quoteErr, "failed to create payment quote"), nil
 		}
 		if index == 0 {
 			documentRequirement, requirementErr := s.x402handler.GetCryptoDocumentRequirement(ctx, tenantID, quote.CreditAmountCents)
@@ -7896,11 +7930,7 @@ func (s *PurserServer) GetPaymentRequirements(ctx context.Context, req *purserpb
 				if expireErr := s.x402handler.ExpirePaymentQuote(ctx, quote.ID); expireErr != nil {
 					s.logger.WithError(expireErr).WithField("quote_id", quote.ID).Warn("Failed to expire unusable x402 quote")
 				}
-				return &purserpb.PaymentRequirements{
-					X402Version: 2,
-					Error:       "unable to determine the tax-document requirement; retry later",
-					TopupUrl:    "/account/billing",
-				}, nil
+				return billingTaxPaymentFailure(requirementErr, "unable to determine the tax-document requirement; retry later"), nil
 			}
 			if documentRequirement.RequiresCompleteProfile {
 				if expireErr := s.x402handler.ExpirePaymentQuote(ctx, quote.ID); expireErr != nil {
@@ -7910,7 +7940,7 @@ func (s *PurserServer) GetPaymentRequirements(ctx context.Context, req *purserpb
 					X402Version:    2,
 					Error:          cryptoBillingProfileRequirementMessage(documentRequirement),
 					ErrorCode:      "BILLING_PROFILE_REQUIRED",
-					RequiredFields: []string{"billing_name", "billing_email", "billing_address.street", "billing_address.city", "billing_address.postal_code", "billing_address.country"},
+					RequiredFields: cryptoBillingProfileRequiredFields(documentRequirement),
 					TopupUrl:       "/account/billing",
 				}, nil
 			}

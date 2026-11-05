@@ -301,10 +301,10 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "GetBillingDetails": {
-      "hash": "sha256:03fb875d81d95de9f6dcdbd38b0a286fa15d22c743baa6961f7d114a4180ebb2",
-      "identity": "sha256:a4ac62959ebd17ed4c884b6fefa98e85b3aeab9dd2bcf65da9ad5146eb7d7670",
+      "hash": "sha256:bbc9dac16305674270aa178b8b62049ada9e7040ca48447516944badab7cb018",
+      "identity": "sha256:ed72a8d904049c717e2feef449783ebbedae862c0546536648779ab90ca6c56a",
       "kind": "query",
-      "since": "v0.3.11",
+      "since": "v0.3.14",
     },
     "GetBillingLifecycle": {
       "hash": "sha256:713da16f2459dd2e510d2f7227d0b4d3c0e6507c42492caf9320165f1a6e62b2",
@@ -1351,10 +1351,10 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "UpdateBillingDetails": {
-      "hash": "sha256:5cf7c4c3797f6f9bb2eac451d256c35ed53e9cc0149a28c4ca62363134e3929c",
-      "identity": "sha256:667248bff3cab2bc50deeea9789ae52464414c1ed57cb4ad2f3f1bf5717fbd06",
+      "hash": "sha256:2b1fb5f7aafd4a450dfdebc1b2cc3f10579d53a0b31a6995e79074bd040eab19",
+      "identity": "sha256:3a06589c208d59ff2d5e0619b327a028e76957edc6af8da4e6d3235efe15ba8d",
       "kind": "mutation",
-      "since": "v0.3.11",
+      "since": "v0.3.14",
     },
     "UpdateClusterMarketplace": {
       "hash": "sha256:2314541298128f4730a3f2e534b6504cb40c0a7132c250dd551f2885ff26cd2f",

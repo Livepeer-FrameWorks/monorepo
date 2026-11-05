@@ -27,6 +27,8 @@ import "x402.proto";
 
 // BillingService handles billing tiers, subscriptions, and invoices
 service BillingService {
+  // Read-only financial evidence pages; requires a platform-operator JWT.
+  rpc AdminFinancialAuditPage(AdminFinancialAuditPageRequest) returns (AdminFinancialAuditPageResponse);
   // Read-only support snapshot; requires a platform-operator JWT.
   rpc DiagnoseBilling(DiagnoseBillingRequest) returns (DiagnoseBillingResponse);
   // Billing tiers
@@ -438,6 +440,20 @@ message GetBillingDetailsRequest {
   string tenant_id = 1;
 }
 
+message AdminFinancialAuditPageRequest {
+  string tenant_id = 1;
+  string source = 2; // invoices, payments, simplified_invoices, crypto_invoices, credit_notes, provider_settlements
+  string after_id = 3;
+  google.protobuf.Timestamp from = 4;
+  google.protobuf.Timestamp through = 5;
+}
+
+message AdminFinancialAuditPageResponse {
+  repeated bytes records_json = 1;
+  string next_cursor = 2;
+  google.protobuf.Timestamp captured_at = 3;
+}
+
 message UpdateBillingDetailsRequest {
   string tenant_id = 1;
   optional string email = 2;            // Billing contact email
@@ -445,6 +461,7 @@ message UpdateBillingDetailsRequest {
   optional string vat_number = 4;       // VAT number (EU format: XX123456789)
   optional BillingAddress address = 5;  // Structured billing address
   optional string name = 6;             // Customer legal/person name for full invoices
+  optional string customer_type = 7;    // consumer or business; omitted preserves the current classification
 }
 
 // Complete billing details for a tenant
@@ -458,6 +475,7 @@ message BillingDetails {
   google.protobuf.Timestamp updated_at = 7;
   string name = 8;                      // Customer legal/person name for full invoices
   string presentment_currency = 9;      // EUR, USD, or GBP, derived from the billing country
+  string customer_type = 10;            // unspecified, consumer, or business; never inferred from company name
 }
 
 // Conversion of one money amount into the EUR ledger. units_per_eur is the ECB

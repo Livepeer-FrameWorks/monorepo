@@ -1,0 +1,83 @@
+---
+title: Billing financial evidence
+description: Download operator financial evidence and understand customer tax classification.
+sidebar:
+  order: 19
+---
+
+## Download an audit archive
+
+Use a platform-operator login and matching CLI/Purser versions:
+
+```bash
+frameworks admin billing finance audit --from inception --through now \
+  --provider stripe --output ./ddvtech-financial-audit.zip
+```
+
+The command reads Purser records for tenants enumerated through Quartermaster
+and the configured Stripe account. It performs no collections, refunds, payouts,
+invoice corrections, or database writes. Both service calls and provider calls
+are paginated. A failed page or a non-advancing cursor prevents publication of
+the archive. An existing output file is never overwritten; the completed ZIP
+has private filesystem permissions.
+
+The ZIP includes:
+
+- `manifest.json`: occurrence interval, tenant scope, source counts, page capture
+  timestamps, file hashes and `posting_ready: false`.
+- `evidence/*.jsonl`: retained invoice/payment/top-up/balance-movement records
+  from Purser, plus Stripe account, current balance, invoices, charges, balance
+  transactions and payouts.
+- `exceptions.csv`: missing regular-invoice tax breakdowns and source/evidence
+  limitations requiring review.
+
+`--from` accepts `inception`, a UTC date, or an RFC3339 timestamp; `--through`
+accepts `now` or RFC3339 and is exclusive. Purser source rows contain their status
+at capture time. Stripe account and balance snapshots are current at retrieval,
+even when the list-activity interval is historical. This is not an accounting
+snapshot reconstructed as of a past date.
+
+Purser rows with no occurrence date are retained regardless of the requested
+interval and flagged `OCCURRENCE_DATE_UNKNOWN`. Establish their accounting period
+before using the archive for interval control totals.
+
+`--provider none` omits provider evidence and records that omission explicitly.
+Historical tenants absent from Quartermaster enumeration remain a coverage
+exception; the archive does not certify that every retained tenant was included.
+Stripe invoice records retain provider document references, but original PDF
+files are not downloaded by this command.
+
+Use this archive to investigate the opening records and prepare corrections with
+the bookkeeper. It is not a journal import, reconciled close or payout approval.
+The export intentionally supplies no `journal.csv` and never marks itself
+posting-ready.
+
+## Personal and business billing
+
+Customers select **Personal** or **Business** in their saved billing details.
+Personal profiles need no company name or VAT number. Choosing personal billing
+clears those business fields; the backend rejects a consumer profile that still
+claims a business VAT number. Existing profiles remain `unspecified` until
+classified, rather than deriving tax status from their company name.
+
+For new crypto payment instructions, unclassified profiles without a VAT claim
+must choose a customer type, and all profiles must confirm their billing country.
+Cross-border tax decisions use a shared consumer/business rule engine. Consumer
+location evidence does not establish business status or reverse charge.
+
+`EU_CONSUMER_VAT_MODE=destination` selects destination-country consumer VAT.
+`EU_CONSUMER_DESTINATION_REGISTERED=true` records the operator's confirmation
+that OSS or applicable destination registration is in place. These settings do
+not register the supplier or file returns. Leave them unconfirmed until the
+seller's actual fiscal position is established.
+
+The rule engine also supports the conditional `origin_threshold` regime, including
+the purchase that crosses the threshold and the previous calendar year. The
+current crypto adapter has no verified annual turnover feed and holds that
+regime for review. Non-EU consumer and business destinations require a reviewed
+jurisdiction policy; country alone never produces an automatic exemption.
+
+Regular postpaid tax finalization, Stripe recurring invoice normalization,
+prepaid net-credit migration, and posting-ready accounting exports require the
+remaining billing implementation. This evidence command and consumer safeguards
+do not certify those paths as tax-complete.

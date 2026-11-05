@@ -15,7 +15,8 @@ const getTenantBillingDetails = `-- name: GetTenantBillingDetails :one
 SELECT billing_email, billing_name, billing_company, tax_id,
        COALESCE(billing_address, '{}'::jsonb) AS billing_address,
        COALESCE(updated_at, TIMESTAMP 'epoch') AS updated_at,
-       presentment_currency::text AS presentment_currency
+       presentment_currency::text AS presentment_currency,
+       billing_customer_type::text AS customer_type
 FROM purser.tenant_subscriptions
 WHERE tenant_id = $1::text::uuid AND status != 'cancelled'
 ORDER BY created_at DESC
@@ -30,6 +31,7 @@ type GetTenantBillingDetailsRow struct {
 	BillingAddress      json.RawMessage `db:"billing_address" json:"billing_address"`
 	UpdatedAt           sql.NullTime    `db:"updated_at" json:"updated_at"`
 	PresentmentCurrency string          `db:"presentment_currency" json:"presentment_currency"`
+	CustomerType        string          `db:"customer_type" json:"customer_type"`
 }
 
 func (q *Queries) GetTenantBillingDetails(ctx context.Context, tenantID string) (GetTenantBillingDetailsRow, error) {
@@ -43,6 +45,7 @@ func (q *Queries) GetTenantBillingDetails(ctx context.Context, tenantID string) 
 		&i.BillingAddress,
 		&i.UpdatedAt,
 		&i.PresentmentCurrency,
+		&i.CustomerType,
 	)
 	return i, err
 }
@@ -96,22 +99,25 @@ SET billing_email = CASE WHEN $1::boolean THEN $2::text ELSE billing_email END,
     billing_company = CASE WHEN $5::boolean THEN $6::text ELSE billing_company END,
     tax_id = CASE WHEN $7::boolean THEN $8::text ELSE tax_id END,
     billing_address = CASE WHEN $9::boolean THEN $10::jsonb ELSE billing_address END,
+    billing_customer_type = CASE WHEN $11::boolean THEN $12::text ELSE billing_customer_type END,
     updated_at = NOW()
-WHERE tenant_id = $11::text::uuid AND status != 'cancelled'
+WHERE tenant_id = $13::text::uuid AND status != 'cancelled'
 `
 
 type UpdateTenantBillingDetailsParams struct {
-	SetEmail     bool            `db:"set_email" json:"set_email"`
-	Email        string          `db:"email" json:"email"`
-	SetName      bool            `db:"set_name" json:"set_name"`
-	Name         string          `db:"name" json:"name"`
-	SetCompany   bool            `db:"set_company" json:"set_company"`
-	Company      string          `db:"company" json:"company"`
-	SetVatNumber bool            `db:"set_vat_number" json:"set_vat_number"`
-	VatNumber    string          `db:"vat_number" json:"vat_number"`
-	SetAddress   bool            `db:"set_address" json:"set_address"`
-	Address      json.RawMessage `db:"address" json:"address"`
-	TenantID     string          `db:"tenant_id" json:"tenant_id"`
+	SetEmail        bool            `db:"set_email" json:"set_email"`
+	Email           string          `db:"email" json:"email"`
+	SetName         bool            `db:"set_name" json:"set_name"`
+	Name            string          `db:"name" json:"name"`
+	SetCompany      bool            `db:"set_company" json:"set_company"`
+	Company         string          `db:"company" json:"company"`
+	SetVatNumber    bool            `db:"set_vat_number" json:"set_vat_number"`
+	VatNumber       string          `db:"vat_number" json:"vat_number"`
+	SetAddress      bool            `db:"set_address" json:"set_address"`
+	Address         json.RawMessage `db:"address" json:"address"`
+	SetCustomerType bool            `db:"set_customer_type" json:"set_customer_type"`
+	CustomerType    string          `db:"customer_type" json:"customer_type"`
+	TenantID        string          `db:"tenant_id" json:"tenant_id"`
 }
 
 func (q *Queries) UpdateTenantBillingDetails(ctx context.Context, arg UpdateTenantBillingDetailsParams) (int64, error) {
@@ -126,6 +132,8 @@ func (q *Queries) UpdateTenantBillingDetails(ctx context.Context, arg UpdateTena
 		arg.VatNumber,
 		arg.SetAddress,
 		arg.Address,
+		arg.SetCustomerType,
+		arg.CustomerType,
 		arg.TenantID,
 	)
 	if err != nil {

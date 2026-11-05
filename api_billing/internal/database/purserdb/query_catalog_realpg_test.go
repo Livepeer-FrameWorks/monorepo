@@ -40,6 +40,7 @@ func TestGeneratedQueryCatalogPrepares_RealPG(t *testing.T) {
 	assertMediaAuthorityRefreshTriggers(t, db)
 	assertStripeSyncPreservesBillingPhase(t, db)
 	assertDNSSweepMatchesTenantEntitlements(t, db)
+	assertFinancialAuditRetainsUndatedEvidence(t, db)
 
 	ctx := context.Background()
 	t.Run("x402 intent replay is explicit", func(t *testing.T) {
@@ -276,6 +277,7 @@ func TestGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {
 	assertTenantAdmissionQueryExecution(t, db)
 	assertMediaAuthorityRefreshTriggers(t, db)
 	assertDNSSweepMatchesTenantEntitlements(t, db)
+	assertFinancialAuditRetainsUndatedEvidence(t, db)
 }
 
 func assertDNSSweepMatchesTenantEntitlements(t *testing.T, db *sql.DB) {

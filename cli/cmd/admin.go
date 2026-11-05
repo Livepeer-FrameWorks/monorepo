@@ -2377,6 +2377,7 @@ func newAdminBillingCmd() *cobra.Command {
 	cmd.AddCommand(newAdminBillingGrantCmd(), newAdminBillingRecoveryCmd())
 	cmd.AddCommand(newAdminBillingRecordPaymentCmd())
 	cmd.AddCommand(newAdminBillingPrepaidDoubleChargesCmd())
+	cmd.AddCommand(newAdminBillingFinanceCmd())
 	return cmd
 }
 

@@ -2370,6 +2370,30 @@ frameworks admin billing set-cluster-pricing \
 
 ---
 
+### frameworks admin billing finance
+
+Read-only operator financial evidence collection. Requires a platform-operator
+login. See [Billing financial evidence](/operators/billing-financials/) for the
+archive contents and accounting limitations.
+
+#### frameworks admin billing finance audit
+
+```bash
+frameworks admin billing finance audit --from inception --through now \
+  --provider stripe --output ./billing-audit.zip
+```
+
+- `--output` (required) - New private ZIP file; an existing file is never overwritten.
+- `--from` - `inception` (default), a UTC date, or an RFC3339 occurrence start.
+- `--through` - `now` (default) or an exclusive RFC3339 occurrence cutoff.
+- `--provider` - `stripe` (default) or `none`; omitted provider evidence is recorded.
+
+The archive contains paginated Purser/Stripe source records, hashes, capture
+timestamps and an exception report. It performs no collections, refunds,
+payouts or corrections, supplies no journal import and remains
+`posting_ready: false`. Current status/balance observations are not reconstructed
+historical accounting snapshots.
+
 ### frameworks admin billing credit
 
 Add EUR prepaid balance to a tenant, typically to fund a staging or test tenant or a comped

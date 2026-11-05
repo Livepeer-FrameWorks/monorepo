@@ -46,8 +46,8 @@ func (m sameEventID) Match(v driver.Value) bool {
 // stored details, returning email and empty other fields.
 func expectBillingDetailsBeforeUpdate(mock sqlmock.Sqlmock, tenantID, email string) {
 	mock.ExpectQuery(`-- name: GetTenantBillingDetailsForUpdate`).WithArgs(tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address"}).
-			AddRow(email, "", "", "", []byte(`{}`)))
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "customer_type"}).
+			AddRow(email, "", "", "", []byte(`{}`), "unspecified"))
 }
 
 // expectDomainEvent expects one insert of eventType for tenantID into

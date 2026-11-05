@@ -1412,6 +1412,9 @@ const types: CompressedTypeMap<number> = {
             ]
         },
         "BillingDetails": {
+            "customerType": [
+                1
+            ],
             "email": [
                 1
             ],
@@ -13698,6 +13701,9 @@ const types: CompressedTypeMap<number> = {
             ]
         },
         "UpdateBillingDetailsInput": {
+            "customerType": [
+                1
+            ],
             "email": [
                 1
             ],

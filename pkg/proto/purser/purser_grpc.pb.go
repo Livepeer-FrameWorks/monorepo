@@ -22,6 +22,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	BillingService_AdminFinancialAuditPage_FullMethodName    = "/purser.BillingService/AdminFinancialAuditPage"
 	BillingService_DiagnoseBilling_FullMethodName            = "/purser.BillingService/DiagnoseBilling"
 	BillingService_GetBillingTiers_FullMethodName            = "/purser.BillingService/GetBillingTiers"
 	BillingService_GetBillingTier_FullMethodName             = "/purser.BillingService/GetBillingTier"
@@ -39,6 +40,8 @@ const (
 //
 // BillingService handles billing tiers, subscriptions, and invoices
 type BillingServiceClient interface {
+	// Read-only financial evidence pages; requires a platform-operator JWT.
+	AdminFinancialAuditPage(ctx context.Context, in *AdminFinancialAuditPageRequest, opts ...grpc.CallOption) (*AdminFinancialAuditPageResponse, error)
 	// Read-only support snapshot; requires a platform-operator JWT.
 	DiagnoseBilling(ctx context.Context, in *DiagnoseBillingRequest, opts ...grpc.CallOption) (*DiagnoseBillingResponse, error)
 	// Billing tiers
@@ -65,6 +68,16 @@ type billingServiceClient struct {
 
 func NewBillingServiceClient(cc grpc.ClientConnInterface) BillingServiceClient {
 	return &billingServiceClient{cc}
+}
+
+func (c *billingServiceClient) AdminFinancialAuditPage(ctx context.Context, in *AdminFinancialAuditPageRequest, opts ...grpc.CallOption) (*AdminFinancialAuditPageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminFinancialAuditPageResponse)
+	err := c.cc.Invoke(ctx, BillingService_AdminFinancialAuditPage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *billingServiceClient) DiagnoseBilling(ctx context.Context, in *DiagnoseBillingRequest, opts ...grpc.CallOption) (*DiagnoseBillingResponse, error) {
@@ -163,6 +176,8 @@ func (c *billingServiceClient) ListTenantBillingSnapshots(ctx context.Context, i
 //
 // BillingService handles billing tiers, subscriptions, and invoices
 type BillingServiceServer interface {
+	// Read-only financial evidence pages; requires a platform-operator JWT.
+	AdminFinancialAuditPage(context.Context, *AdminFinancialAuditPageRequest) (*AdminFinancialAuditPageResponse, error)
 	// Read-only support snapshot; requires a platform-operator JWT.
 	DiagnoseBilling(context.Context, *DiagnoseBillingRequest) (*DiagnoseBillingResponse, error)
 	// Billing tiers
@@ -191,6 +206,9 @@ type BillingServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedBillingServiceServer struct{}
 
+func (UnimplementedBillingServiceServer) AdminFinancialAuditPage(context.Context, *AdminFinancialAuditPageRequest) (*AdminFinancialAuditPageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminFinancialAuditPage not implemented")
+}
 func (UnimplementedBillingServiceServer) DiagnoseBilling(context.Context, *DiagnoseBillingRequest) (*DiagnoseBillingResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DiagnoseBilling not implemented")
 }
@@ -237,6 +255,24 @@ func RegisterBillingServiceServer(s grpc.ServiceRegistrar, srv BillingServiceSer
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&BillingService_ServiceDesc, srv)
+}
+
+func _BillingService_AdminFinancialAuditPage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminFinancialAuditPageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BillingServiceServer).AdminFinancialAuditPage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BillingService_AdminFinancialAuditPage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BillingServiceServer).AdminFinancialAuditPage(ctx, req.(*AdminFinancialAuditPageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _BillingService_DiagnoseBilling_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -408,6 +444,10 @@ var BillingService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "purser.BillingService",
 	HandlerType: (*BillingServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "AdminFinancialAuditPage",
+			Handler:    _BillingService_AdminFinancialAuditPage_Handler,
+		},
 		{
 			MethodName: "DiagnoseBilling",
 			Handler:    _BillingService_DiagnoseBilling_Handler,

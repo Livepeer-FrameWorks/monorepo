@@ -20,7 +20,8 @@ SELECT COALESCE(billing_email, '') AS billing_email,
        COALESCE(billing_name, '') AS billing_name,
        COALESCE(billing_company, '') AS billing_company,
        COALESCE(tax_id, '') AS tax_id,
-       COALESCE(billing_address, '{}'::jsonb) AS billing_address
+       COALESCE(billing_address, '{}'::jsonb) AS billing_address,
+       billing_customer_type::text AS customer_type
 FROM purser.tenant_subscriptions
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND status != 'cancelled'
 ORDER BY created_at DESC

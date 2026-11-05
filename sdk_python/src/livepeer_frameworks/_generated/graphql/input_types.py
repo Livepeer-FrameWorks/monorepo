@@ -917,6 +917,12 @@ class TimeRangeInput(BaseModel):
 class UpdateBillingDetailsInput(BaseModel):
     """Input for updating billing details."""
 
+    customer_type: Optional[str] = Field(
+        alias="customerType",
+        default=None,
+        description="consumer or business. Omitted preserves the saved classification.",
+    )
+    "consumer or business. Omitted preserves the saved classification."
     email: Optional[str] = Field(default=None, description="Billing contact email.")
     "Billing contact email."
     name: Optional[str] = Field(

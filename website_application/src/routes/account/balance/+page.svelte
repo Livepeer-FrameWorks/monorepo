@@ -389,8 +389,24 @@
         )
       : [];
     if (candidate.extensions?.code === "BILLING_PROFILE_REQUIRED") {
-      const suffix = fields.length > 0 ? ` Required: ${fields.join(", ")}.` : "";
-      return `This payment needs a full tax invoice. Complete your billing profile before requesting a new quote.${suffix}`;
+      const labels: Record<string, string> = {
+        customer_type: "personal or business billing",
+        name: "customer name",
+        billing_name: "customer name",
+        email: "billing email",
+        billing_email: "billing email",
+        street: "street address",
+        city: "city",
+        postal_code: "postal code",
+        country: "billing country",
+        "billing_address.street": "street address",
+        "billing_address.city": "city",
+        "billing_address.postal_code": "postal code",
+        "billing_address.country": "billing country",
+      };
+      const required = [...new Set(fields.map((field) => labels[field] || "billing details"))];
+      const suffix = required.length > 0 ? ` Required: ${required.join(", ")}.` : "";
+      return `Complete your billing profile before requesting a new quote.${suffix}`;
     }
     return typeof candidate.message === "string" && candidate.message.length > 0
       ? candidate.message
@@ -592,9 +608,9 @@
                   </div>
                 </div>
                 <p class="text-xs text-muted-foreground">
-                  Up to €100 in EUR can use the customer-anonymous simplified VAT document path. A
-                  larger payment or a VAT-number claim needs a complete billing profile before an
-                  address is issued.
+                  Confirm your billing country and choose personal or business billing before
+                  paying. Payments up to €100 may use a simplified invoice; larger payments or
+                  VAT-number claims need complete invoice details.
                 </p>
               {:else}
                 <div>
@@ -629,7 +645,7 @@
               {#if topupGuidance}
                 <div class="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
                   <p>{topupGuidance}</p>
-                  {#if topupGuidance.includes("billing profile")}
+                  {#if topupGuidance.includes("billing profile") || topupGuidance.includes("Check your billing details")}
                     <Button href={resolve("/settings")} variant="ghost" size="sm" class="mt-2 px-0">
                       Complete billing profile
                     </Button>

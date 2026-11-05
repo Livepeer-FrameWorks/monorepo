@@ -2965,6 +2965,8 @@ type TrackListEventsConnection struct {
 
 // Input for updating billing details.
 type UpdateBillingDetailsInput struct {
+	// consumer or business. Omitted preserves the saved classification.
+	CustomerType *string `json:"customerType,omitempty"`
 	// Billing contact email.
 	Email *string `json:"email,omitempty"`
 	// Customer legal or person name shown on full invoices.

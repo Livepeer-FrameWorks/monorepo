@@ -1905,10 +1905,11 @@ func (r *Resolver) DoGetBillingDetails(ctx context.Context) (*purserpb.BillingDe
 		r.Logger.Debug("Demo mode: returning synthetic billing details")
 		now := time.Now()
 		return &purserpb.BillingDetails{
-			TenantId:  "demo-tenant",
-			Email:     "billing@example.com",
-			Company:   "Demo Company Inc.",
-			VatNumber: "DE123456789",
+			TenantId:     "demo-tenant",
+			CustomerType: "business",
+			Email:        "billing@example.com",
+			Company:      "Demo Company Inc.",
+			VatNumber:    "DE123456789",
 			Address: &purserpb.BillingAddress{
 				Street:     "123 Demo Street",
 				City:       "Berlin",
@@ -1945,9 +1946,13 @@ func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.Updat
 		now := time.Now()
 		details := &purserpb.BillingDetails{
 			TenantId:            "demo-tenant",
+			CustomerType:        "business",
 			IsComplete:          false,
 			UpdatedAt:           timestamppb.New(now),
 			PresentmentCurrency: demo.DemoPresentmentCurrency,
+		}
+		if input.CustomerType != nil {
+			details.CustomerType = *input.CustomerType
 		}
 		if input.Email != nil {
 			details.Email = *input.Email
@@ -1973,6 +1978,9 @@ func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.Updat
 				details.Address.State = *input.Address.State
 			}
 		}
+		if details.CustomerType == "consumer" {
+			details.Company, details.VatNumber = "", ""
+		}
 		// Check completeness
 		details.IsComplete = details.Name != "" && details.Email != "" && details.Address != nil &&
 			details.Address.Street != "" && details.Address.City != "" &&
@@ -1987,7 +1995,8 @@ func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.Updat
 
 	// Build proto request
 	req := &purserpb.UpdateBillingDetailsRequest{
-		TenantId: tenantID,
+		TenantId:     tenantID,
+		CustomerType: input.CustomerType,
 	}
 	if input.Email != nil {
 		req.Email = input.Email

@@ -1,5 +1,6 @@
 query GetBillingDetails {
   billingDetails {
+    customerType
     email
     name
     company
