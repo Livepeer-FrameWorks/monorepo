@@ -176,6 +176,13 @@ func (b *binder) bind(text string, names []string, types []string) []paramBindin
 	for i, typ := range types {
 		n := i + 1
 		pb := paramBinding{Index: n, Type: typ}
+		if fixture := purserFixtureFor(b.queryID, b.now); fixture != nil {
+			if value, ok := fixture.parameter(nameAt(names, i)); ok {
+				pb.Source, pb.Value = "purser payment fixture", value
+				out[i] = pb
+				continue
+			}
+		}
 		if fixture := publisherFixtureFor(b.queryID, b.now); fixture != nil && n == 1 && typ == "jsonb" {
 			pb.Source, pb.Value = "publisher admission fixture", fixture.request()
 			out[i] = pb
@@ -384,6 +391,11 @@ func literal(p paramBinding) string {
 	quoted := "'" + strings.ReplaceAll(p.Value, "'", "''") + "'"
 	if p.Type == "unknown" || p.Type == "" {
 		return quoted
+	}
+	// Prepared bpchar parameters have no width modifier. SQL CHARACTER without
+	// a modifier means CHAR(1), which would truncate currencies such as EUR.
+	if p.Type == "character" {
+		return quoted + "::pg_catalog.bpchar"
 	}
 	return quoted + "::" + p.Type
 }

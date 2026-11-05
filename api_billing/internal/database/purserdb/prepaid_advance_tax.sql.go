@@ -66,7 +66,10 @@ func (q *Queries) GetFundedAdvanceInvoice(ctx context.Context, arg GetFundedAdva
 }
 
 const getFundingLotRemaining = `-- name: GetFundingLotRemaining :one
-SELECT COALESCE(SUM(remaining_net_eur_cents),0)::bigint AS remaining FROM purser.prepaid_funding_lots WHERE tenant_id=$1::text::uuid
+SELECT COALESCE(SUM(remaining_net_eur_cents),0)::bigint AS remaining
+FROM purser.prepaid_funding_lots
+WHERE tenant_id=$1::text::uuid
+ AND remaining_net_eur_cents>0
 `
 
 func (q *Queries) GetFundingLotRemaining(ctx context.Context, tenantID string) (int64, error) {

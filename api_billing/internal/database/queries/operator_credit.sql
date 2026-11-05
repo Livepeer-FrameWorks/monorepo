@@ -30,7 +30,7 @@ WHERE entry_type = 'accrual' AND source_type = 'invoice_line'
 DO NOTHING;
 
 -- name: ListStorageProviderCreditAllocations :many
-WITH provider_lines AS (
+WITH provider_lines AS MATERIALIZED (
     SELECT line.id AS line_item_id, line.tenant_id,
            COALESCE(line.cluster_id, '') AS customer_cluster_id,
            line.meter, line.dimensions, line.currency,
@@ -39,8 +39,31 @@ WITH provider_lines AS (
     FROM purser.invoice_line_items line
     JOIN purser.billing_invoices invoice ON invoice.id = line.invoice_id
     WHERE line.invoice_id = sqlc.arg(invoice_id)::text::uuid
+      AND line.tenant_id = invoice.tenant_id
       AND line.meter IS NOT NULL
       AND line.amount != 0
+),
+relevant_usage AS MATERIALIZED (
+    SELECT id,usage_tenant_id,work_cluster_id,provider_tenant_id,provider_cluster_id,
+           dimensions,usage_type,usage_value,period_start,period_end
+    FROM purser.provider_usage_records
+    WHERE usage_tenant_id = ANY(ARRAY(SELECT DISTINCT tenant_id FROM provider_lines))
+      AND work_cluster_id = ANY(ARRAY(SELECT DISTINCT customer_cluster_id FROM provider_lines))
+      AND usage_type = ANY(ARRAY(SELECT DISTINCT meter FROM provider_lines))
+      AND period_start < (SELECT MAX(period_end) FROM provider_lines)
+      AND period_end > (SELECT MIN(period_start) FROM provider_lines)
+      AND value_kind = 'delta' AND granularity = 'minute_5' AND usage_value != 0
+),
+relevant_adjustments AS MATERIALIZED (
+    SELECT id,tenant_id,cluster_id,details,usage_type,delta_value,period_start,period_end
+    FROM purser.usage_adjustments
+    WHERE tenant_id = ANY(ARRAY(SELECT DISTINCT tenant_id FROM provider_lines))
+      AND cluster_id = ANY(ARRAY(SELECT DISTINCT customer_cluster_id FROM provider_lines))
+      AND usage_type = ANY(ARRAY(SELECT DISTINCT meter FROM provider_lines))
+      AND period_start < (SELECT MAX(period_end) FROM provider_lines)
+      AND period_end > (SELECT MIN(period_start) FROM provider_lines)
+      AND value_kind = 'correction_delta' AND status = 'applied' AND delta_value != 0
+      AND COALESCE(details #>> '{natural_key,storage_provider_tenant_id}', '') <> ''
 ),
 base_provider_rows AS (
     SELECT provider_line.line_item_id, 'provider_usage'::text AS source_type,
@@ -52,16 +75,13 @@ base_provider_rows AS (
            provider_line.currency, provider_line.period_start, provider_line.period_end,
            provider_line.gross_cents
     FROM provider_lines provider_line
-    JOIN purser.provider_usage_records usage
+    JOIN relevant_usage usage
       ON usage.usage_tenant_id = provider_line.tenant_id
      AND usage.work_cluster_id = provider_line.customer_cluster_id
      AND usage.usage_type = provider_line.meter
      AND usage.dimensions @> provider_line.dimensions
      AND usage.period_start < provider_line.period_end
      AND usage.period_end > provider_line.period_start
-     AND usage.value_kind = 'delta'
-     AND usage.granularity = 'minute_5'
-    WHERE usage.usage_value != 0
 ),
 adjustment_provider_rows AS (
     SELECT provider_line.line_item_id, 'usage_adjustment'::text AS source_type,
@@ -73,16 +93,12 @@ adjustment_provider_rows AS (
            provider_line.currency, adjustment.period_start, adjustment.period_end,
            provider_line.gross_cents
     FROM provider_lines provider_line
-    JOIN purser.usage_adjustments adjustment
+    JOIN relevant_adjustments adjustment
       ON adjustment.tenant_id = provider_line.tenant_id
      AND adjustment.cluster_id = provider_line.customer_cluster_id
      AND adjustment.usage_type = provider_line.meter
      AND adjustment.period_start < provider_line.period_end
      AND adjustment.period_end > provider_line.period_start
-     AND adjustment.value_kind = 'correction_delta'
-     AND adjustment.status = 'applied'
-    WHERE adjustment.delta_value != 0
-      AND COALESCE(adjustment.details #>> '{natural_key,storage_provider_tenant_id}', '') <> ''
 ),
 all_provider_rows AS (
     SELECT rows.*, SUM(gb_seconds) OVER (PARTITION BY line_item_id) AS line_gb_seconds

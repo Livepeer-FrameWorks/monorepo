@@ -2,6 +2,7 @@ package datamigrations
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
@@ -74,12 +75,24 @@ func runPaymentTenantBackfill(ctx context.Context, db datamigrate.DB, opts datam
 
 // VerifyPaymentTenantBackfill rejects missing or mismatched invoice ownership.
 func VerifyPaymentTenantBackfill(ctx context.Context, db datamigrate.DB) error {
-	var invalid int64
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM purser.billing_payments payment LEFT JOIN purser.billing_invoices invoice ON invoice.id=payment.invoice_id WHERE invoice.id IS NULL OR payment.tenant_id IS DISTINCT FROM invoice.tenant_id`).Scan(&invalid); err != nil {
-		return err
+	var cursor sql.NullString
+	for {
+		var invalid, scanned int64
+		var next string
+		if err := db.QueryRowContext(ctx, `WITH payment_batch AS MATERIALIZED (
+ SELECT id,invoice_id,tenant_id FROM purser.billing_payments
+ WHERE ($1::text IS NULL OR id>$1::text::uuid) ORDER BY id LIMIT 200
+ ) SELECT COUNT(*),COUNT(*) FILTER(WHERE invoice.id IS NULL OR payment.tenant_id IS DISTINCT FROM invoice.tenant_id),
+ COALESCE(MAX(payment.id::text),'')
+ FROM payment_batch payment LEFT JOIN purser.billing_invoices invoice ON invoice.id=payment.invoice_id`, cursor).Scan(&scanned, &invalid, &next); err != nil {
+			return err
+		}
+		if invalid != 0 {
+			return fmt.Errorf("%d payments lack verified invoice tenant ownership", invalid)
+		}
+		if scanned < 200 {
+			return nil
+		}
+		cursor = sql.NullString{String: next, Valid: true}
 	}
-	if invalid != 0 {
-		return fmt.Errorf("%d payments lack verified invoice tenant ownership", invalid)
-	}
-	return nil
 }

@@ -24,7 +24,10 @@ UPDATE purser.pending_topups SET tax_document_id=sqlc.arg(invoice_id)::text::uui
 WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND id=sqlc.arg(topup_id)::text::uuid AND (tax_document_id IS NULL OR tax_document_id=sqlc.arg(invoice_id)::text::uuid);
 
 -- name: GetFundingLotRemaining :one
-SELECT COALESCE(SUM(remaining_net_eur_cents),0)::bigint AS remaining FROM purser.prepaid_funding_lots WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid;
+SELECT COALESCE(SUM(remaining_net_eur_cents),0)::bigint AS remaining
+FROM purser.prepaid_funding_lots
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid
+ AND remaining_net_eur_cents>0;
 
 -- name: InsertFundingLot :exec
 INSERT INTO purser.prepaid_funding_lots(tenant_id,source_reference_type,source_reference_id,source_document_id,funding_balance_transaction_id,classification,

@@ -166,11 +166,11 @@ func (q *Queries) ListTenantStripeTaxSubscriptions(ctx context.Context, tenantID
 
 const resolveStripeTaxDocumentOwners = `-- name: ResolveStripeTaxDocumentOwners :many
 SELECT DISTINCT tenant_id::text AS tenant_id FROM (
- SELECT tenant_id FROM purser.tenant_subscriptions WHERE stripe_customer_id=$1::text
+ (SELECT DISTINCT tenant_id FROM purser.tenant_subscriptions WHERE stripe_customer_id=$1::text ORDER BY tenant_id LIMIT 2)
  UNION ALL
- SELECT tenant_id FROM purser.cluster_subscriptions WHERE stripe_customer_id=$1::text
+ (SELECT DISTINCT tenant_id FROM purser.cluster_subscriptions WHERE stripe_customer_id=$1::text ORDER BY tenant_id LIMIT 2)
  UNION ALL
- SELECT tenant_id FROM purser.payment_provider_intents WHERE provider='stripe' AND provider_customer_id=$1::text
+ (SELECT DISTINCT tenant_id FROM purser.payment_provider_intents WHERE provider='stripe' AND provider_customer_id=$1::text ORDER BY tenant_id LIMIT 2)
 ) owned LIMIT 2
 `
 

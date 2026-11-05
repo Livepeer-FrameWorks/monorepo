@@ -1,11 +1,11 @@
 -- name: ResolveStripeTaxDocumentOwners :many
 -- Authenticated provider events locate only their existing tenant mapping.
 SELECT DISTINCT tenant_id::text AS tenant_id FROM (
- SELECT tenant_id FROM purser.tenant_subscriptions WHERE stripe_customer_id=sqlc.arg(customer_id)::text
+ (SELECT DISTINCT tenant_id FROM purser.tenant_subscriptions WHERE stripe_customer_id=sqlc.arg(customer_id)::text ORDER BY tenant_id LIMIT 2)
  UNION ALL
- SELECT tenant_id FROM purser.cluster_subscriptions WHERE stripe_customer_id=sqlc.arg(customer_id)::text
+ (SELECT DISTINCT tenant_id FROM purser.cluster_subscriptions WHERE stripe_customer_id=sqlc.arg(customer_id)::text ORDER BY tenant_id LIMIT 2)
  UNION ALL
- SELECT tenant_id FROM purser.payment_provider_intents WHERE provider='stripe' AND provider_customer_id=sqlc.arg(customer_id)::text
+ (SELECT DISTINCT tenant_id FROM purser.payment_provider_intents WHERE provider='stripe' AND provider_customer_id=sqlc.arg(customer_id)::text ORDER BY tenant_id LIMIT 2)
 ) owned LIMIT 2;
 
 -- name: StoreProviderBillingDocument :one

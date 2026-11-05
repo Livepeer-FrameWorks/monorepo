@@ -255,7 +255,7 @@ func explainQuery(ctx context.Context, conn *sql.Conn, s *seeder, opts options, 
 	// Sampled values first; then type-only synthetic values, since a sampled value can violate a constraint of a
 	// write; then synthetic text as a UUID and as a number, for text parameters the statement casts further.
 	variants := [][]paramBinding{params}
-	fixture := publisherFixtureFor(q.ID, s.now)
+	fixture := executionFixtureFor(q.ID, s.now)
 	for _, textValue := range []string{"", "uuid", "60"} {
 		if fixture != nil {
 			break
@@ -318,7 +318,7 @@ func explainQuery(ctx context.Context, conn *sql.Conn, s *seeder, opts options, 
 
 // runExplain explains inside a transaction that is always rolled back, twice, keeping the second plan: the first
 // execution in a session also pays catalog reads that a long-lived connection pool does not.
-func runExplain(ctx context.Context, conn *sql.Conn, statement string, timeout time.Duration, fixture *publisherFixture) (json.RawMessage, error) {
+func runExplain(ctx context.Context, conn *sql.Conn, statement string, timeout time.Duration, fixture executionFixture) (json.RawMessage, error) {
 	var out json.RawMessage
 	for attempt := 0; attempt < 2; attempt++ {
 		raw, err := runExplainAttempt(ctx, conn, statement, timeout, fixture)
@@ -330,7 +330,7 @@ func runExplain(ctx context.Context, conn *sql.Conn, statement string, timeout t
 	return out, nil
 }
 
-func runExplainAttempt(ctx context.Context, conn *sql.Conn, statement string, timeout time.Duration, fixture *publisherFixture) (out json.RawMessage, err error) {
+func runExplainAttempt(ctx context.Context, conn *sql.Conn, statement string, timeout time.Duration, fixture executionFixture) (out json.RawMessage, err error) {
 	if _, err = conn.ExecContext(ctx, "BEGIN"); err != nil {
 		return nil, err
 	}
@@ -486,9 +486,11 @@ func walk(n planNode, _ float64, s *seeder, r *result, executed bool) {
 			}
 		}
 	case "Nested Loop":
-		if len(n.Plans) > 1 && n.Plans[1].ActualLoops >= nestedLoopInnerLoops {
-			r.addFinding(finding{Kind: "NESTED_LOOP_UNBATCHED", Relation: innerRelation(n.Plans[1]), Loops: n.Plans[1].ActualLoops,
-				Detail: fmt.Sprintf("inner side executed %.0f times", n.Plans[1].ActualLoops)})
+		if len(n.Plans) > 1 {
+			if scan, repeated := repeatedStorageScan(n.Plans[1]); repeated {
+				r.addFinding(finding{Kind: "NESTED_LOOP_UNBATCHED", Relation: scan.Relation, Loops: scan.ActualLoops,
+					Detail: fmt.Sprintf("inner storage access executed %.0f times", scan.ActualLoops)})
+			}
 		}
 	}
 	if n.Relationship == "SubPlan" && n.ActualLoops >= subplanLoops {
@@ -506,6 +508,21 @@ func walk(n planNode, _ float64, s *seeder, r *result, executed bool) {
 	for _, child := range n.Plans {
 		walk(child, loops, s, r, executed)
 	}
+}
+
+// CTE and materialized rescans reuse local tuples; their storage child can have
+// executed only once. Count repeated physical access instead of cache reads.
+func repeatedStorageScan(n planNode) (planNode, bool) {
+	if n.ActualLoops >= nestedLoopInnerLoops && n.NodeType != "CTE Scan" && n.NodeType != "WorkTable Scan" &&
+		(n.Relation != "" || n.Index != "" || n.TableReads > 0 || n.IndexReads > 0) {
+		return n, true
+	}
+	for _, child := range n.Plans {
+		if scan, repeated := repeatedStorageScan(child); repeated {
+			return scan, true
+		}
+	}
+	return planNode{}, false
 }
 
 func innerRelation(n planNode) string {

@@ -4,6 +4,7 @@ package datamigrations
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"frameworks/api_billing/internal/database/purserdb"
@@ -87,6 +88,31 @@ func TestPaymentTenantBackfillIsBoundedAndRequiredBeforeValidation_RealPG(t *tes
 	}
 	if err = migration.Verify(ctx, db); err != nil {
 		t.Fatal(err)
+	}
+	for i := 1; i <= 203; i++ {
+		id := fmt.Sprintf("00000000-0000-4000-8000-%012x", i)
+		if _, err = db.ExecContext(ctx, `INSERT INTO purser.billing_payments(id,invoice_id,method,amount,currency,status) VALUES($1,$2,'card',10,'EUR','failed')`, id, invoice); err != nil {
+			t.Fatal(err)
+		}
+	}
+	last := fmt.Sprintf("00000000-0000-4000-8000-%012x", 203)
+	if _, err = db.ExecContext(ctx, `ALTER TABLE purser.billing_payments DISABLE TRIGGER billing_payment_tenant_guard`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.ExecContext(ctx, `UPDATE purser.billing_payments SET tenant_id=$2 WHERE id=$1`, last, other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.ExecContext(ctx, `ALTER TABLE purser.billing_payments ENABLE TRIGGER billing_payment_tenant_guard`); err != nil {
+		t.Fatal(err)
+	}
+	if err = migration.Verify(ctx, db); err == nil {
+		t.Fatal("payment ownership mismatch after the first verification page passed")
+	}
+	if _, err = db.ExecContext(ctx, `UPDATE purser.billing_payments SET tenant_id=$2 WHERE id=$1`, last, tenant); err != nil {
+		t.Fatal(err)
+	}
+	if err = migration.Verify(ctx, db); err != nil {
+		t.Fatalf("verified ownership failed across multiple pages: %v", err)
 	}
 	if ready, err := purserdb.New(db).FinancialAuditPaymentOwnershipReady(ctx, tenant); err != nil || !ready.Valid || !ready.Bool {
 		t.Fatalf("completed ownership did not unlock indexed audit: %+v %v", ready, err)

@@ -104,16 +104,18 @@ FROM (
     SELECT id, tenant_id, reference_type, reference_id, gross_amount_cents, currency,
            invoice_number, 'simplified_invoice'::text AS source_type
     FROM purser.simplified_invoices
+    WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid
+      AND reference_type='x402_payment' AND LOWER(reference_id)=LOWER(sqlc.arg(tx_hash)::text)
     UNION ALL
     SELECT id, tenant_id, reference_type, reference_id, gross_amount_cents, currency,
            invoice_number, 'crypto_invoice'::text AS source_type
     FROM purser.crypto_invoices
+    WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid
+      AND reference_type='x402_payment' AND LOWER(reference_id)=LOWER(sqlc.arg(tx_hash)::text)
     UNION ALL
     SELECT id,tenant_id,source_reference_type,source_reference_id,document_gross_minor,presentment_currency,invoice_number,'invoice'::text AS source_type
-    FROM purser.billing_invoices WHERE source_reference_type='x402_payment' AND tax_status='ready'
+    FROM purser.billing_invoices WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid
+      AND source_reference_type='x402_payment' AND LOWER(source_reference_id)=LOWER(sqlc.arg(tx_hash)::text) AND tax_status='ready'
 ) document
-WHERE document.tenant_id = sqlc.arg(tenant_id)::text::uuid
-  AND document.reference_type = 'x402_payment'
-  AND LOWER(document.reference_id) = LOWER(sqlc.arg(tx_hash))
 ON CONFLICT (source_document_type, source_document_id, reversal_reference_type, reversal_reference_id)
 DO NOTHING;
