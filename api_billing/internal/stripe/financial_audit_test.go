@@ -15,6 +15,13 @@ type financialAuditBackend struct {
 	call func(string, string, string, api.ParamsContainer, api.LastResponseSetter) error
 }
 
+func TestFinancialEvidenceUnavailableClientReturnsError(t *testing.T) {
+	var client *Client
+	if _, err := client.FinancialEvidencePage(context.Background(), "stripe_account", "", time.Unix(0, 0), time.Now()); err == nil {
+		t.Fatal("unconfigured Stripe reader must return an error without calling the provider")
+	}
+}
+
 func (b *financialAuditBackend) Call(method, path, key string, p api.ParamsContainer, out api.LastResponseSetter) error {
 	b.calls++
 	return b.call(method, path, key, p, out)
