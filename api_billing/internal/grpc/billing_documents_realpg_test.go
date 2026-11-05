@@ -103,17 +103,18 @@ func TestListBillingDocumentsUnionStatesChargedAndEURAmounts_RealPG(t *testing.T
 
 	lowNoteID := "00000000-0000-4000-8000-000000000001"
 	highNoteID := "00000000-0000-4000-8000-000000000002"
-	insertCreditNote := func(id, tenant, number string, issuedAt time.Time) {
+	insertCreditNote := func(id, tenant, sourceID, number, currency string, issuedAt time.Time) {
 		exec(`INSERT INTO purser.credit_notes (id, credit_note_number, tenant_id, source_document_type, source_document_id,
 		          reversal_reference_type, reversal_reference_id, amount_cents, currency, reason, issued_at)
-		      VALUES ($1, $2, $3, 'invoice', $4, 'refund', $2, 500, 'USD', 'refund', $5)`,
-			id, number, tenant, usdInvoiceID, issuedAt)
+		      VALUES ($1, $2, $3, 'invoice', $4, 'refund', $2, 500, $5, 'refund', $6)`,
+			id, number, tenant, sourceID, currency, issuedAt)
 	}
-	insertCreditNote(lowNoteID, tenantID, "CN-TIE-LOW", base.AddDate(0, 0, -1))
-	insertCreditNote(highNoteID, tenantID, "CN-TIE-HIGH", base.AddDate(0, 0, -1))
-	exec(`INSERT INTO purser.billing_invoices (tenant_id, invoice_number, status, currency, amount, due_date, created_at)
-	      VALUES ($1, 'INV-OTHER-1', 'pending', 'EUR', 99.00, $2, $2)`, otherTenantID, base)
-	insertCreditNote(uuid.NewString(), otherTenantID, "CN-OTHER-1", base)
+	insertCreditNote(lowNoteID, tenantID, usdInvoiceID, "CN-TIE-LOW", "USD", base.AddDate(0, 0, -1))
+	insertCreditNote(highNoteID, tenantID, usdInvoiceID, "CN-TIE-HIGH", "USD", base.AddDate(0, 0, -1))
+	otherInvoiceID := uuid.NewString()
+	exec(`INSERT INTO purser.billing_invoices (id, tenant_id, invoice_number, status, currency, amount, due_date, created_at)
+	      VALUES ($1, $2, 'INV-OTHER-1', 'pending', 'EUR', 99.00, $3, $3)`, otherInvoiceID, otherTenantID, base)
+	insertCreditNote(uuid.NewString(), otherTenantID, otherInvoiceID, "CN-OTHER-1", "EUR", base)
 
 	want := []wantBillingDocument{
 		{id: highNoteID, kind: "credit_note", number: "CN-TIE-HIGH", currency: "USD", status: "issued", amountCents: 500},
@@ -182,11 +183,14 @@ func TestListBillingDocumentsUnionStatesChargedAndEURAmounts_RealPG(t *testing.T
 	}
 
 	pagedTenantID := uuid.NewString()
+	pagedSourceID := uuid.NewString()
+	exec(`INSERT INTO purser.billing_invoices (id, tenant_id, invoice_number, status, currency, amount, due_date, created_at)
+	      VALUES ($1, $2, 'INV-PAGE-SOURCE', 'paid', 'EUR', 1001.00, $3, $3)`, pagedSourceID, pagedTenantID, base.Add(-time.Hour))
 	exec(`INSERT INTO purser.credit_notes (credit_note_number, tenant_id, source_document_type, source_document_id,
 	          reversal_reference_type, reversal_reference_id, amount_cents, currency, reason, issued_at)
 	      SELECT 'CN-PAGE-' || LPAD(n::text, 4, '0'), $1, 'invoice', $2, 'refund', 'page-' || n, 100, 'EUR', 'refund',
 	             $3::timestamptz + n * INTERVAL '1 second'
-	      FROM generate_series(1, 1001) AS n`, pagedTenantID, usdInvoiceID, base)
+	      FROM generate_series(1, 1001) AS n`, pagedTenantID, pagedSourceID, base)
 	paged, err := server.ListBillingDocuments(serviceTestContext(), &purserpb.ListBillingDocumentsRequest{TenantId: pagedTenantID})
 	if err != nil {
 		t.Fatal(err)
@@ -209,6 +213,7 @@ func TestInvoiceDocumentStatesLinesCreditAndBothParties_RealPG(t *testing.T) { /
 	appconfigtest.Set(t, "SUPPLIER_ADDRESS", "Amsterdam, NL")
 	appconfigtest.Set(t, "SUPPLIER_VAT_NUMBER", "NL000000000B01")
 	appconfigtest.Set(t, "SUPPLIER_REGISTRATION_NUMBER", "12345678")
+	appconfigtest.Set(t, "SUPPLIER_COUNTRY", "NL")
 	db := startPurserTransitionRealPG(t)
 	ctx := context.Background()
 	server := &PurserServer{db: db, logger: logging.NewLogger()}
@@ -281,6 +286,7 @@ func TestFinalizedDocumentKeepsThePartiesItWasIssuedTo_RealPG(t *testing.T) { //
 	appconfigtest.Set(t, "SUPPLIER_ADDRESS", "Keizersgracht 1, Amsterdam, NL")
 	appconfigtest.Set(t, "SUPPLIER_VAT_NUMBER", "NL000000000B01")
 	appconfigtest.Set(t, "SUPPLIER_REGISTRATION_NUMBER", "12345678")
+	appconfigtest.Set(t, "SUPPLIER_COUNTRY", "NL")
 	db := startPurserTransitionRealPG(t)
 	ctx := context.Background()
 	tenantID, paygID, supporterID := uuid.NewString(), uuid.NewString(), uuid.NewString()
@@ -300,6 +306,7 @@ func TestFinalizedDocumentKeepsThePartiesItWasIssuedTo_RealPG(t *testing.T) { //
 		VALUES ($1, $2, 'active', 'postpaid', 'ada@example.com', 'Ada Lovelace',
 		        '{"street":"Prinsengracht 263","city":"Amsterdam","postal_code":"1016 GV","country":"NL"}', 'NL111111111B01', $3, $4, 'EUR')`,
 		tenantID, supporterID, periodStart, periodStart.AddDate(0, 1, 0))
+	seedRPCTaxBuyer(t, db, tenantID)
 	exec(`INSERT INTO purser.usage_records (
 			tenant_id, cluster_id, usage_type, unit, dimensions, dimension_key,
 			source_id, report_id, usage_value, usage_details,
