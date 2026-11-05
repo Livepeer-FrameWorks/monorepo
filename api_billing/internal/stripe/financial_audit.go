@@ -25,6 +25,9 @@ type financialAuditResult struct {
 // provider facts. Balance/account snapshots describe retrieval time, while list
 // endpoints filter creation time to the requested interval.
 func (c *Client) FinancialEvidencePage(ctx context.Context, source, after string, from, through time.Time) (*FinancialAuditPage, error) {
+	if c == nil {
+		return nil, errors.New("stripe financial evidence reader is unavailable")
+	}
 	paths := map[string]string{"stripe_invoices": "/v1/invoices", "stripe_charges": "/v1/charges", "stripe_balance_transactions": "/v1/balance_transactions", "stripe_payouts": "/v1/payouts", "stripe_balance_snapshot": "/v1/balance", "stripe_account": "/v1/account"}
 	path, ok := paths[source]
 	if !ok {
