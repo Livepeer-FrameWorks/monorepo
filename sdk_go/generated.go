@@ -6818,6 +6818,8 @@ func (v *BillingAddressInput) GetCountry() string { return v.Country }
 // Billing details for a tenant. These are optional for Free and small simplified
 // top-ups, and required when paid postpaid collection or a full invoice needs them.
 type BillingDetailsDefaultFields struct {
+	// Personal or business billing; unspecified for an unclassified historical profile.
+	CustomerType string `json:"customerType"`
 	// Billing contact email.
 	Email *string `json:"email"`
 	// Customer legal or person name shown on full invoices.
@@ -6835,6 +6837,9 @@ type BillingDetailsDefaultFields struct {
 	// Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing address country. It cannot change while a provider subscription, an open invoice, or a card first payment started in the last day exists.
 	PresentmentCurrency *string `json:"presentmentCurrency"`
 }
+
+// GetCustomerType returns BillingDetailsDefaultFields.CustomerType, and is useful for accessing the field via an interface.
+func (v *BillingDetailsDefaultFields) GetCustomerType() string { return v.CustomerType }
 
 // GetEmail returns BillingDetailsDefaultFields.Email, and is useful for accessing the field via an interface.
 func (v *BillingDetailsDefaultFields) GetEmail() *string { return v.Email }
@@ -31277,6 +31282,11 @@ type GetBillingDetailsBillingDetails struct {
 	BillingDetailsDefaultFields `json:"-"`
 }
 
+// GetCustomerType returns GetBillingDetailsBillingDetails.CustomerType, and is useful for accessing the field via an interface.
+func (v *GetBillingDetailsBillingDetails) GetCustomerType() string {
+	return v.BillingDetailsDefaultFields.CustomerType
+}
+
 // GetEmail returns GetBillingDetailsBillingDetails.Email, and is useful for accessing the field via an interface.
 func (v *GetBillingDetailsBillingDetails) GetEmail() *string {
 	return v.BillingDetailsDefaultFields.Email
@@ -31343,6 +31353,8 @@ func (v *GetBillingDetailsBillingDetails) UnmarshalJSON(b []byte) error {
 }
 
 type __premarshalGetBillingDetailsBillingDetails struct {
+	CustomerType string `json:"customerType"`
+
 	Email *string `json:"email"`
 
 	Name *string `json:"name"`
@@ -31371,6 +31383,7 @@ func (v *GetBillingDetailsBillingDetails) MarshalJSON() ([]byte, error) {
 func (v *GetBillingDetailsBillingDetails) __premarshalJSON() (*__premarshalGetBillingDetailsBillingDetails, error) {
 	var retval __premarshalGetBillingDetailsBillingDetails
 
+	retval.CustomerType = v.BillingDetailsDefaultFields.CustomerType
 	retval.Email = v.BillingDetailsDefaultFields.Email
 	retval.Name = v.BillingDetailsDefaultFields.Name
 	retval.Company = v.BillingDetailsDefaultFields.Company
@@ -113444,6 +113457,8 @@ func (v *UnsubscribeFromClusterResponse) GetUnsubscribeFromCluster() bool {
 
 // Input for updating billing details.
 type UpdateBillingDetailsInput struct {
+	// consumer or business. Omitted preserves the saved classification.
+	CustomerType *string `json:"customerType"`
 	// Billing contact email.
 	Email *string `json:"email"`
 	// Customer legal or person name shown on full invoices.
@@ -113455,6 +113470,9 @@ type UpdateBillingDetailsInput struct {
 	// Structured billing address.
 	Address *BillingAddressInput `json:"address"`
 }
+
+// GetCustomerType returns UpdateBillingDetailsInput.CustomerType, and is useful for accessing the field via an interface.
+func (v *UpdateBillingDetailsInput) GetCustomerType() *string { return v.CustomerType }
 
 // GetEmail returns UpdateBillingDetailsInput.Email, and is useful for accessing the field via an interface.
 func (v *UpdateBillingDetailsInput) GetEmail() *string { return v.Email }
@@ -113490,6 +113508,11 @@ func (v *UpdateBillingDetailsResponse) GetUpdateBillingDetails() UpdateBillingDe
 // top-ups, and required when paid postpaid collection or a full invoice needs them.
 type UpdateBillingDetailsUpdateBillingDetails struct {
 	BillingDetailsDefaultFields `json:"-"`
+}
+
+// GetCustomerType returns UpdateBillingDetailsUpdateBillingDetails.CustomerType, and is useful for accessing the field via an interface.
+func (v *UpdateBillingDetailsUpdateBillingDetails) GetCustomerType() string {
+	return v.BillingDetailsDefaultFields.CustomerType
 }
 
 // GetEmail returns UpdateBillingDetailsUpdateBillingDetails.Email, and is useful for accessing the field via an interface.
@@ -113558,6 +113581,8 @@ func (v *UpdateBillingDetailsUpdateBillingDetails) UnmarshalJSON(b []byte) error
 }
 
 type __premarshalUpdateBillingDetailsUpdateBillingDetails struct {
+	CustomerType string `json:"customerType"`
+
 	Email *string `json:"email"`
 
 	Name *string `json:"name"`
@@ -113586,6 +113611,7 @@ func (v *UpdateBillingDetailsUpdateBillingDetails) MarshalJSON() ([]byte, error)
 func (v *UpdateBillingDetailsUpdateBillingDetails) __premarshalJSON() (*__premarshalUpdateBillingDetailsUpdateBillingDetails, error) {
 	var retval __premarshalUpdateBillingDetailsUpdateBillingDetails
 
+	retval.CustomerType = v.BillingDetailsDefaultFields.CustomerType
 	retval.Email = v.BillingDetailsDefaultFields.Email
 	retval.Name = v.BillingDetailsDefaultFields.Name
 	retval.Company = v.BillingDetailsDefaultFields.Company
@@ -129353,6 +129379,7 @@ query GetBillingDetails {
 	}
 }
 fragment BillingDetailsDefaultFields on BillingDetails {
+	customerType
 	email
 	name
 	company
@@ -145859,6 +145886,7 @@ mutation UpdateBillingDetails ($input: UpdateBillingDetailsInput!) {
 	}
 }
 fragment BillingDetailsDefaultFields on BillingDetails {
+	customerType
 	email
 	name
 	company

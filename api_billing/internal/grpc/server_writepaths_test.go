@@ -227,8 +227,8 @@ func TestPromoteToPaidAllowsVerifiedFreePathWithoutBillingProfileOrProvider(t *t
 func expectCompleteBillingDetails(mock sqlmock.Sqlmock, tenantID string) {
 	mock.ExpectQuery(`SELECT billing_email, billing_name, billing_company, tax_id, billing_address, updated_at`).
 		WithArgs(tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency"}).
-			AddRow("billing@example.com", "Example Customer", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "EUR"))
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type"}).
+			AddRow("billing@example.com", "Example Customer", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "EUR", "unspecified"))
 }
 
 func TestPromoteToPaidNotFoundAndAlreadyPostpaid(t *testing.T) {
@@ -317,8 +317,8 @@ func TestUpdateBillingDetailsAppliesAndRereads(t *testing.T) {
 	// trailing GetBillingDetails read
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
 		WithArgs(tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency"}).
-			AddRow("new@example.com", nil, nil, nil, []byte(`{}`), now, "USD"))
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type"}).
+			AddRow("new@example.com", nil, nil, nil, []byte(`{}`), now, "USD", "unspecified"))
 
 	email := "new@example.com"
 	resp, err := s.UpdateBillingDetails(context.Background(), &purserpb.UpdateBillingDetailsRequest{TenantId: tenantID, Email: &email})
@@ -348,8 +348,8 @@ func TestUpdateBillingDetailsUnchangedWritesNoEvent(t *testing.T) {
 	mock.ExpectCommit()
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
 		WithArgs(tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency"}).
-			AddRow("same@example.com", nil, nil, nil, []byte(`{}`), time.Now(), "USD"))
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type"}).
+			AddRow("same@example.com", nil, nil, nil, []byte(`{}`), time.Now(), "USD", "unspecified"))
 
 	email := "same@example.com"
 	if _, err := s.UpdateBillingDetails(context.Background(), &purserpb.UpdateBillingDetailsRequest{TenantId: tenantID, Email: &email}); err != nil {
@@ -378,8 +378,8 @@ func TestUpdateBillingDetailsNoFieldsDelegatesToRead(t *testing.T) {
 	now := time.Now()
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
 		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency"}).
-			AddRow("a@b.com", nil, nil, nil, []byte(`{}`), now, "USD"))
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type"}).
+			AddRow("a@b.com", nil, nil, nil, []byte(`{}`), now, "USD", "unspecified"))
 
 	resp, err := s.UpdateBillingDetails(context.Background(), &purserpb.UpdateBillingDetailsRequest{TenantId: "tenant-1"})
 	if err != nil {

@@ -366,6 +366,7 @@ fragment BalanceTransactionDefaultFields on BalanceTransaction {
 }
 
 fragment BillingDetailsDefaultFields on BillingDetails {
+  customerType
   email
   name
   company

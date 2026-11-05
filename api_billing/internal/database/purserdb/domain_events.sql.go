@@ -56,7 +56,8 @@ SELECT COALESCE(billing_email, '') AS billing_email,
        COALESCE(billing_name, '') AS billing_name,
        COALESCE(billing_company, '') AS billing_company,
        COALESCE(tax_id, '') AS tax_id,
-       COALESCE(billing_address, '{}'::jsonb) AS billing_address
+       COALESCE(billing_address, '{}'::jsonb) AS billing_address,
+       billing_customer_type::text AS customer_type
 FROM purser.tenant_subscriptions
 WHERE tenant_id = $1::text::uuid AND status != 'cancelled'
 ORDER BY created_at DESC
@@ -69,6 +70,7 @@ type GetTenantBillingDetailsForUpdateRow struct {
 	BillingCompany string          `db:"billing_company" json:"billing_company"`
 	TaxID          string          `db:"tax_id" json:"tax_id"`
 	BillingAddress json.RawMessage `db:"billing_address" json:"billing_address"`
+	CustomerType   string          `db:"customer_type" json:"customer_type"`
 }
 
 // The billing details UpdateBillingDetails is about to change, read after the
@@ -82,6 +84,7 @@ func (q *Queries) GetTenantBillingDetailsForUpdate(ctx context.Context, tenantID
 		&i.BillingCompany,
 		&i.TaxID,
 		&i.BillingAddress,
+		&i.CustomerType,
 	)
 	return i, err
 }

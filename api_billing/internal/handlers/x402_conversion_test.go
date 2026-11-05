@@ -100,8 +100,8 @@ func TestGetVATRateForTenant_MalformedBillingAddressDoesNotGuessCountry(t *testi
 
 	mock.ExpectQuery("SELECT tax_id, COALESCE\\(billing_address").
 		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"tax_id", "billing_address"}).
-			AddRow(sql.NullString{Valid: false}, []byte(`{"country":`)))
+		WillReturnRows(sqlmock.NewRows([]string{"tax_id", "billing_address", "customer_type"}).
+			AddRow(sql.NullString{Valid: false}, []byte(`{"country":`), "unspecified"))
 
 	handler := &X402Handler{
 		db:     db,

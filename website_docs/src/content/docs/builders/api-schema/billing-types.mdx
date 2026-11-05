@@ -84,6 +84,7 @@ A billing arrangement FrameWorks set up for an account. Only the terms the accou
 
 Billing details for a tenant. These are optional for Free and small simplified top-ups, and required when paid postpaid collection or a full invoice needs them.
 
+- **customerType**: `String!` — Personal or business billing; unspecified for an unclassified historical profile.
 - **email**: `String` — Billing contact email.
 - **name**: `String` — Customer legal or person name shown on full invoices.
 - **company**: `String` — Company name for invoices.
@@ -789,6 +790,7 @@ Stripe Checkout Session - redirect URL for hosted checkout.
 
 Input for updating billing details.
 
+- **customerType**: `String` — consumer or business. Omitted preserves the saved classification.
 - **email**: `String` — Billing contact email.
 - **name**: `String` — Customer legal or person name shown on full invoices.
 - **company**: `String` — Company name for invoices.

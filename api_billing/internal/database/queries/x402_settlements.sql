@@ -360,7 +360,8 @@ ORDER BY effective_from DESC
 LIMIT 1;
 
 -- name: GetActiveTenantTaxProfile :one
-SELECT tax_id, COALESCE(billing_address, '{}'::jsonb) AS billing_address
+SELECT tax_id, COALESCE(billing_address, '{}'::jsonb) AS billing_address,
+       billing_customer_type::text AS customer_type
 FROM purser.tenant_subscriptions
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND status != 'cancelled'
@@ -399,7 +400,8 @@ LIMIT 1;
 
 -- name: GetCryptoDocumentBillingProfile :one
 SELECT billing_email, billing_name, billing_company,
-       COALESCE(billing_address, '{}'::jsonb) AS billing_address, tax_id
+       COALESCE(billing_address, '{}'::jsonb) AS billing_address, tax_id,
+       billing_customer_type::text AS customer_type
 FROM purser.tenant_subscriptions
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND status != 'cancelled'

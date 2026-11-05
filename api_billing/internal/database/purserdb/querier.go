@@ -266,6 +266,7 @@ type Querier interface {
 	FailMediaAuthorityRefresh(ctx context.Context, arg FailMediaAuthorityRefreshParams) (int64, error)
 	FailPendingCardTopup(ctx context.Context, topupID string) (int64, error)
 	FailProviderWebhook(ctx context.Context, arg FailProviderWebhookParams) (sql.Result, error)
+	FinancialAuditPage(ctx context.Context, arg FinancialAuditPageParams) ([]FinancialAuditPageRow, error)
 	// The base-fee invoice of the period a tier change cut short: it started
 	// before period_start and would have run past it. An unused share already
 	// forfeited or credited to a replacement invoice is not found again.

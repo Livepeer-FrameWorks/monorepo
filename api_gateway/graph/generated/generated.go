@@ -458,6 +458,7 @@ type ComplexityRoot struct {
 	BillingDetails struct {
 		Address             func(childComplexity int) int
 		Company             func(childComplexity int) int
+		CustomerType        func(childComplexity int) int
 		Email               func(childComplexity int) int
 		IsComplete          func(childComplexity int) int
 		Name                func(childComplexity int) int
@@ -6937,6 +6938,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.BillingDetails.Company(childComplexity), true
+	case "BillingDetails.customerType":
+		if e.ComplexityRoot.BillingDetails.CustomerType == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BillingDetails.CustomerType(childComplexity), true
 	case "BillingDetails.email":
 		if e.ComplexityRoot.BillingDetails.Email == nil {
 			break
@@ -30770,6 +30777,8 @@ Billing details for a tenant. These are optional for Free and small simplified
 top-ups, and required when paid postpaid collection or a full invoice needs them.
 """
 type BillingDetails {
+  "Personal or business billing; unspecified for an unclassified historical profile."
+  customerType: String!
   "Billing contact email."
   email: String
   "Customer legal or person name shown on full invoices."
@@ -30808,6 +30817,8 @@ type BillingAddress {
 Input for updating billing details.
 """
 input UpdateBillingDetailsInput {
+  "consumer or business. Omitted preserves the saved classification."
+  customerType: String
   "Billing contact email."
   email: String
   "Customer legal or person name shown on full invoices."
@@ -45311,6 +45322,35 @@ func (ec *executionContext) fieldContext_BillingArrangement_fallbackTierDisplayN
 		Field:      field,
 		IsMethod:   true,
 		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BillingDetails_customerType(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingDetails) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BillingDetails_customerType,
+		func(ctx context.Context) (any, error) {
+			return obj.CustomerType, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_BillingDetails_customerType(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BillingDetails",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
 		},
@@ -78089,6 +78129,8 @@ func (ec *executionContext) fieldContext_Mutation_updateBillingDetails(ctx conte
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
+			case "customerType":
+				return ec.fieldContext_BillingDetails_customerType(ctx, field)
 			case "email":
 				return ec.fieldContext_BillingDetails_email(ctx, field)
 			case "name":
@@ -97171,6 +97213,8 @@ func (ec *executionContext) fieldContext_Query_billingDetails(_ context.Context,
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
+			case "customerType":
+				return ec.fieldContext_BillingDetails_customerType(ctx, field)
 			case "email":
 				return ec.fieldContext_BillingDetails_email(ctx, field)
 			case "name":
@@ -142060,13 +142104,20 @@ func (ec *executionContext) unmarshalInputUpdateBillingDetailsInput(ctx context.
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"email", "name", "company", "vatNumber", "address"}
+	fieldsInOrder := [...]string{"customerType", "email", "name", "company", "vatNumber", "address"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
+		case "customerType":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("customerType"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CustomerType = data
 		case "email":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("email"))
 			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
@@ -150262,6 +150313,11 @@ func (ec *executionContext) _BillingDetails(ctx context.Context, sel ast.Selecti
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("BillingDetails")
+		case "customerType":
+			out.Values[i] = ec._BillingDetails_customerType(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
 		case "email":
 			out.Values[i] = ec._BillingDetails_email(ctx, field, obj)
 		case "name":

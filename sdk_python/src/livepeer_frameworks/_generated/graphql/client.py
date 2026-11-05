@@ -3082,6 +3082,7 @@ class GraphQLClient(BaseClient):
             }
 
             fragment BillingDetailsDefaultFields on BillingDetails {
+              customerType
               email
               name
               company
@@ -3992,6 +3993,7 @@ class GraphQLClient(BaseClient):
             }
 
             fragment BillingDetailsDefaultFields on BillingDetails {
+              customerType
               email
               name
               company

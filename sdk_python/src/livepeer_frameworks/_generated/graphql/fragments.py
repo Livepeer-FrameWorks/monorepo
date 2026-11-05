@@ -1232,6 +1232,11 @@ class BillingDetailsDefault(BaseModel):
     """Billing details for a tenant. These are optional for Free and small simplified
     top-ups, and required when paid postpaid collection or a full invoice needs them."""
 
+    customer_type: str = Field(
+        alias="customerType",
+        description="Personal or business billing; unspecified for an unclassified historical profile.",
+    )
+    "Personal or business billing; unspecified for an unclassified historical profile."
     email: Optional[str] = Field(description="Billing contact email.")
     "Billing contact email."
     name: Optional[str] = Field(

@@ -3828,6 +3828,14 @@ WHERE provider = 'mollie' AND purpose = 'mollie_first_payment'
   AND provider_payment_id IS NOT NULL AND provider_mandate_id IS NULL
   AND activated_at IS NULL AND recovery_started_at IS NULL;
 
+ALTER TABLE purser.tenant_subscriptions
+    ADD COLUMN IF NOT EXISTS billing_customer_type VARCHAR(16) NOT NULL DEFAULT 'unspecified';
+ALTER TABLE purser.tenant_subscriptions
+    DROP CONSTRAINT IF EXISTS chk_billing_customer_type;
+ALTER TABLE purser.tenant_subscriptions
+    ADD CONSTRAINT chk_billing_customer_type
+    CHECK (billing_customer_type IN ('unspecified', 'consumer', 'business'));
+
 -- Schema baseline identity marker. Records that this database was created from the
 -- consolidated baseline at this floor, so the migration min-version guard treats
 -- below-floor migrations as folded into the baseline (not missing). An existing

@@ -248,6 +248,7 @@ export const scalarFields = {
         "__typename"
     ],
     "BillingDetails": [
+        "customerType",
         "email",
         "name",
         "company",
@@ -3542,6 +3543,7 @@ export const scalarFields = {
         "__typename"
     ],
     "UpdateBillingDetailsInput": [
+        "customerType",
         "email",
         "name",
         "company",

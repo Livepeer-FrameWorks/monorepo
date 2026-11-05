@@ -49,8 +49,8 @@ func TestGetBillingDetailsMapsRowAndComplete(t *testing.T) {
 	now := time.Now()
 
 	addr := `{"street":"1 A St","city":"Berlin","state":"","postal_code":"10115","country":"DE"}`
-	rows := sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency"}).
-		AddRow("ops@example.com", "Erika Mustermann", "Example GmbH", "DE123456789", []byte(addr), now, "EUR")
+	rows := sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type"}).
+		AddRow("ops@example.com", "Erika Mustermann", "Example GmbH", "DE123456789", []byte(addr), now, "EUR", "unspecified")
 
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
 		WithArgs("tenant-1").
@@ -82,8 +82,8 @@ func TestGetBillingDetailsNullsAndIncomplete(t *testing.T) {
 	now := time.Now()
 
 	addr := `{"street":"1 A St","city":"Berlin","state":"","postal_code":"","country":"DE"}`
-	rows := sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency"}).
-		AddRow("ops@example.com", nil, nil, nil, []byte(addr), now, "EUR")
+	rows := sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type"}).
+		AddRow("ops@example.com", nil, nil, nil, []byte(addr), now, "EUR", "unspecified")
 
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
 		WithArgs("tenant-1").

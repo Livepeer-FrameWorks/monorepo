@@ -3115,6 +3115,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
             }
 
             fragment BillingDetailsDefaultFields on BillingDetails {
+              customerType
               email
               name
               company
@@ -4027,6 +4028,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
             }
 
             fragment BillingDetailsDefaultFields on BillingDetails {
+              customerType
               email
               name
               company

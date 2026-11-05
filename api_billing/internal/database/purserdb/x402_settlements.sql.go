@@ -147,7 +147,8 @@ func (q *Queries) CountX402NonceUses(ctx context.Context, arg CountX402NonceUses
 }
 
 const getActiveTenantTaxProfile = `-- name: GetActiveTenantTaxProfile :one
-SELECT tax_id, COALESCE(billing_address, '{}'::jsonb) AS billing_address
+SELECT tax_id, COALESCE(billing_address, '{}'::jsonb) AS billing_address,
+       billing_customer_type::text AS customer_type
 FROM purser.tenant_subscriptions
 WHERE tenant_id = $1::text::uuid
   AND status != 'cancelled'
@@ -158,18 +159,20 @@ LIMIT 1
 type GetActiveTenantTaxProfileRow struct {
 	TaxID          sql.NullString  `db:"tax_id" json:"tax_id"`
 	BillingAddress json.RawMessage `db:"billing_address" json:"billing_address"`
+	CustomerType   string          `db:"customer_type" json:"customer_type"`
 }
 
 func (q *Queries) GetActiveTenantTaxProfile(ctx context.Context, tenantID string) (GetActiveTenantTaxProfileRow, error) {
 	row := q.db.QueryRowContext(ctx, getActiveTenantTaxProfile, tenantID)
 	var i GetActiveTenantTaxProfileRow
-	err := row.Scan(&i.TaxID, &i.BillingAddress)
+	err := row.Scan(&i.TaxID, &i.BillingAddress, &i.CustomerType)
 	return i, err
 }
 
 const getCryptoDocumentBillingProfile = `-- name: GetCryptoDocumentBillingProfile :one
 SELECT billing_email, billing_name, billing_company,
-       COALESCE(billing_address, '{}'::jsonb) AS billing_address, tax_id
+       COALESCE(billing_address, '{}'::jsonb) AS billing_address, tax_id,
+       billing_customer_type::text AS customer_type
 FROM purser.tenant_subscriptions
 WHERE tenant_id = $1::text::uuid
   AND status != 'cancelled'
@@ -183,6 +186,7 @@ type GetCryptoDocumentBillingProfileRow struct {
 	BillingCompany sql.NullString  `db:"billing_company" json:"billing_company"`
 	BillingAddress json.RawMessage `db:"billing_address" json:"billing_address"`
 	TaxID          sql.NullString  `db:"tax_id" json:"tax_id"`
+	CustomerType   string          `db:"customer_type" json:"customer_type"`
 }
 
 func (q *Queries) GetCryptoDocumentBillingProfile(ctx context.Context, tenantID string) (GetCryptoDocumentBillingProfileRow, error) {
@@ -194,6 +198,7 @@ func (q *Queries) GetCryptoDocumentBillingProfile(ctx context.Context, tenantID 
 		&i.BillingCompany,
 		&i.BillingAddress,
 		&i.TaxID,
+		&i.CustomerType,
 	)
 	return i, err
 }

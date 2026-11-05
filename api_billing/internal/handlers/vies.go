@@ -53,6 +53,10 @@ type viesFault struct {
 
 func (h *X402Handler) validateVIESVAT(ctx context.Context, tenantID, countryCode, vatNumber string) (bool, error) {
 	countryCode = strings.ToUpper(strings.TrimSpace(countryCode))
+	// VIES identifies Greece as EL, while billing addresses use ISO GR.
+	if countryCode == "GR" {
+		countryCode = "EL"
+	}
 	vatNumber = strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(vatNumber), " ", ""))
 	vatNumber = strings.TrimPrefix(vatNumber, countryCode)
 	if len(countryCode) != 2 || vatNumber == "" {

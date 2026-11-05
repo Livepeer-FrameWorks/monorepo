@@ -72,9 +72,20 @@ confirmed-payment receipt, and credit note, renders only persisted evidence, and
 returns an integrity hash. Database deletion guards retain these source records
 for at least ten years. Confirmed top-up is the VAT tax point; each document
 records the `vat-at-confirmed-topup-v1` policy, effective rate source, customer
-country fields, and any VIES result used for reverse charge. Anonymous
-simplified top-ups use supplier-country VAT; GeoIP is audit metadata and does
-not hold the document.
+country fields, and any VIES result used for reverse charge. New payment
+instructions require a billing country and a personal/business classification
+(a submitted VAT claim also identifies a business claim). Simplified invoices
+remain available for eligible small payments without requiring a company or VAT
+number. Previously captured anonymous quotes retain their legacy supplier-country
+document treatment; this does not establish the customer's historical location.
+
+Cross-border consumer payments are checked before payment instructions are
+returned. A foreign country alone cannot establish tax exemption. EU consumer
+destination VAT requires an explicitly configured regime and confirmed OSS or
+destination registration; unconfigured destinations and insufficient or
+conflicting location evidence are held for review. EU business reverse charge
+requires validated VAT evidence. These payer-level checks supplement the global
+crypto readiness report.
 
 ## Custody and sweeping
 

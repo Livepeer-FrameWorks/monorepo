@@ -37,6 +37,7 @@
 
   // Billing Details state
   interface BillingDetailsState {
+    customerType: string;
     email: string;
     name: string;
     company: string;
@@ -51,6 +52,7 @@
     presentmentCurrency: string;
   }
   let billingDetails = $state<BillingDetailsState>({
+    customerType: "unspecified",
     email: "",
     name: "",
     company: "",
@@ -107,6 +109,7 @@
         if (detailsResult.data?.billingDetails) {
           const d = detailsResult.data.billingDetails;
           billingDetails = {
+            customerType: d.customerType || "unspecified",
             email: d.email || "",
             name: d.name || "",
             company: d.company || "",
@@ -190,16 +193,20 @@
   async function handleSaveBillingDetails() {
     billingDetailsSaving = true;
     try {
+      if (!["consumer", "business"].includes(billingDetails.customerType)) {
+        throw new Error("Choose personal or business billing");
+      }
       // Only include address if we have the required fields (street + country)
       const hasAddress = billingDetails.street && billingDetails.country;
 
       const mutation = new UpdateBillingDetailsStore();
       const result = await mutation.mutate({
         input: {
+          customerType: billingDetails.customerType,
           email: billingDetails.email || null,
           name: billingDetails.name || null,
-          company: billingDetails.company || null,
-          vatNumber: billingDetails.vatNumber || null,
+          company: billingDetails.customerType === "consumer" ? "" : billingDetails.company,
+          vatNumber: billingDetails.customerType === "consumer" ? "" : billingDetails.vatNumber,
           address: hasAddress
             ? {
                 street: billingDetails.street,
@@ -220,6 +227,7 @@
       if (result.data?.updateBillingDetails) {
         const d = result.data.updateBillingDetails;
         billingDetails = {
+          customerType: d.customerType || "unspecified",
           email: d.email || "",
           name: d.name || "",
           company: d.company || "",
@@ -636,11 +644,42 @@
             {:else}
               <p class="text-sm text-muted-foreground mb-4">
                 Billing email and address are required before funding or enabling postpaid billing.
-                Add a VAT/tax identifier only if you are registered; leaving it blank records that
-                no identifier was supplied. Identifiers are not tax-authority verified
-                automatically.
+                Personal billing does not require a company or VAT number. Choose business billing
+                to provide your company details and any registered VAT identifier.
               </p>
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="md:col-span-2">
+                  <label for="billingCustomerType" class="text-sm font-medium text-muted-foreground"
+                    >Billing as</label
+                  >
+                  <Select
+                    type="single"
+                    value={billingDetails.customerType === "unspecified"
+                      ? ""
+                      : billingDetails.customerType}
+                    onValueChange={(v) => {
+                      billingDetails.customerType = v || "unspecified";
+                      if (v === "consumer") {
+                        billingDetails.company = "";
+                        billingDetails.vatNumber = "";
+                      }
+                    }}
+                  >
+                    <SelectTrigger id="billingCustomerType" class="w-full">
+                      <span
+                        >{billingDetails.customerType === "consumer"
+                          ? "Personal"
+                          : billingDetails.customerType === "business"
+                            ? "Business"
+                            : "Choose personal or business billing"}</span
+                      >
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="consumer">Personal</SelectItem>
+                      <SelectItem value="business">Business</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
                 <div>
                   <label for="billingName" class="text-sm font-medium text-muted-foreground"
                     >Legal / Customer Name</label
@@ -663,31 +702,33 @@
                     placeholder="billing@company.com"
                   />
                 </div>
-                <div>
-                  <label for="billingCompany" class="text-sm font-medium text-muted-foreground"
-                    >Company Name</label
-                  >
-                  <Input
-                    id="billingCompany"
-                    type="text"
-                    bind:value={billingDetails.company}
-                    placeholder="Acme Inc."
-                  />
-                </div>
-                <div>
-                  <label for="billingVat" class="text-sm font-medium text-muted-foreground"
-                    >VAT / Tax Identifier (optional)</label
-                  >
-                  <Input
-                    id="billingVat"
-                    type="text"
-                    bind:value={billingDetails.vatNumber}
-                    placeholder="DE123456789"
-                  />
-                  <p class="mt-1 text-xs text-muted-foreground">
-                    Leave blank if you are not VAT registered.
-                  </p>
-                </div>
+                {#if billingDetails.customerType === "business"}
+                  <div>
+                    <label for="billingCompany" class="text-sm font-medium text-muted-foreground"
+                      >Company Name</label
+                    >
+                    <Input
+                      id="billingCompany"
+                      type="text"
+                      bind:value={billingDetails.company}
+                      placeholder="Acme Inc."
+                    />
+                  </div>
+                  <div>
+                    <label for="billingVat" class="text-sm font-medium text-muted-foreground"
+                      >VAT / Tax Identifier (optional)</label
+                    >
+                    <Input
+                      id="billingVat"
+                      type="text"
+                      bind:value={billingDetails.vatNumber}
+                      placeholder="DE123456789"
+                    />
+                    <p class="mt-1 text-xs text-muted-foreground">
+                      Leave blank if you are not VAT registered.
+                    </p>
+                  </div>
+                {/if}
                 <div>
                   <label for="billingCountry" class="text-sm font-medium text-muted-foreground"
                     >Country</label

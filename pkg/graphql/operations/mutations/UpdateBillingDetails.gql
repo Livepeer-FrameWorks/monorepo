@@ -1,5 +1,6 @@
 mutation UpdateBillingDetails($input: UpdateBillingDetailsInput!) {
   updateBillingDetails(input: $input) {
+    customerType
     email
     name
     company

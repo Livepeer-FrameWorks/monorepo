@@ -1151,6 +1151,7 @@ enum GQL {
   static let GetBillingDetails = """
   query GetBillingDetails {
     billingDetails {
+      customerType
       email
       name
       company
@@ -6610,6 +6611,7 @@ enum GQL {
   static let UpdateBillingDetails = """
   mutation UpdateBillingDetails($input: UpdateBillingDetailsInput!) {
     updateBillingDetails(input: $input) {
+      customerType
       email
       name
       company

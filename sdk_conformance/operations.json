@@ -1875,8 +1875,8 @@
     },
     {
       "name": "GetBillingDetails",
-      "document": "query GetBillingDetails {\n  billingDetails {\n    ... BillingDetailsDefaultFields\n  }\n}\nfragment BillingDetailsDefaultFields on BillingDetails {\n  email\n  name\n  company\n  vatNumber\n  address {\n    street\n    city\n    state\n    postalCode\n    country\n  }\n  isComplete\n  updatedAt\n  presentmentCurrency\n}\n",
-      "identity": "sha256:a4ac62959ebd17ed4c884b6fefa98e85b3aeab9dd2bcf65da9ad5146eb7d7670",
+      "document": "query GetBillingDetails {\n  billingDetails {\n    ... BillingDetailsDefaultFields\n  }\n}\nfragment BillingDetailsDefaultFields on BillingDetails {\n  customerType\n  email\n  name\n  company\n  vatNumber\n  address {\n    street\n    city\n    state\n    postalCode\n    country\n  }\n  isComplete\n  updatedAt\n  presentmentCurrency\n}\n",
+      "identity": "sha256:ed72a8d904049c717e2feef449783ebbedae862c0546536648779ab90ca6c56a",
       "kind": "query",
       "variables": {},
       "response": {
@@ -1890,6 +1890,7 @@
               "street": "text"
             },
             "company": "text",
+            "customerType": "text",
             "email": "text",
             "isComplete": true,
             "name": "text",
@@ -11558,8 +11559,8 @@
     },
     {
       "name": "UpdateBillingDetails",
-      "document": "mutation UpdateBillingDetails ($input: UpdateBillingDetailsInput!) {\n  updateBillingDetails(input: $input) {\n    ... BillingDetailsDefaultFields\n  }\n}\nfragment BillingDetailsDefaultFields on BillingDetails {\n  email\n  name\n  company\n  vatNumber\n  address {\n    street\n    city\n    state\n    postalCode\n    country\n  }\n  isComplete\n  updatedAt\n  presentmentCurrency\n}\n",
-      "identity": "sha256:667248bff3cab2bc50deeea9789ae52464414c1ed57cb4ad2f3f1bf5717fbd06",
+      "document": "mutation UpdateBillingDetails ($input: UpdateBillingDetailsInput!) {\n  updateBillingDetails(input: $input) {\n    ... BillingDetailsDefaultFields\n  }\n}\nfragment BillingDetailsDefaultFields on BillingDetails {\n  customerType\n  email\n  name\n  company\n  vatNumber\n  address {\n    street\n    city\n    state\n    postalCode\n    country\n  }\n  isComplete\n  updatedAt\n  presentmentCurrency\n}\n",
+      "identity": "sha256:3a06589c208d59ff2d5e0619b327a028e76957edc6af8da4e6d3235efe15ba8d",
       "kind": "mutation",
       "variables": {
         "input": {}
@@ -11575,6 +11576,7 @@
               "street": "text"
             },
             "company": "text",
+            "customerType": "text",
             "email": "text",
             "isComplete": true,
             "name": "text",

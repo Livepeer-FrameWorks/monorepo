@@ -6005,6 +6005,8 @@ Billing details for a tenant. These are optional for Free and small simplified
 top-ups, and required when paid postpaid collection or a full invoice needs them.
 """
 type BillingDetails {
+  "Personal or business billing; unspecified for an unclassified historical profile."
+  customerType: String!
   "Billing contact email."
   email: String
   "Customer legal or person name shown on full invoices."
@@ -6043,6 +6045,8 @@ type BillingAddress {
 Input for updating billing details.
 """
 input UpdateBillingDetailsInput {
+  "consumer or business. Omitted preserves the saved classification."
+  customerType: String
   "Billing contact email."
   email: String
   "Customer legal or person name shown on full invoices."

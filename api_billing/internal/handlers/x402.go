@@ -18,9 +18,11 @@ import (
 	"frameworks/api_billing/internal/billingevents"
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/fx"
+	billingtax "frameworks/api_billing/internal/tax"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/countries"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -2018,55 +2020,66 @@ func (h *X402Handler) getVATDecisionForTenant(ctx context.Context, tenantID, cli
 
 	if err == nil {
 		return h.getVATDecisionForProfile(ctx, tenantID, CryptoBillingProfile{
-			VATNumber: profile.TaxID.String,
-			Address:   append(json.RawMessage(nil), profile.BillingAddress...),
+			CustomerType: profile.CustomerType,
+			VATNumber:    profile.TaxID.String,
+			Address:      append(json.RawMessage(nil), profile.BillingAddress...),
 		}, clientIP, at)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return vatDecision{}, fmt.Errorf("load tenant tax profile: %w", err)
 	}
 	return h.getVATDecisionForProfile(ctx, tenantID, CryptoBillingProfile{}, clientIP, at)
 }
 
-func (h *X402Handler) getVATDecisionForProfile(ctx context.Context, tenantID string, profile CryptoBillingProfile, _ string, at time.Time) (vatDecision, error) {
-	if len(profile.Address) > 0 {
-		addr, parseErr := parseBillingAddress(profile.Address)
-		if parseErr == nil && addr.Country != "" {
-			country := countries.Normalize(addr.Country)
-
-			// Reverse charge requires live/cached VIES evidence and a supplier in a
-			// different EU member state. Domestic business customers pay domestic VAT.
-			if strings.TrimSpace(profile.VATNumber) != "" && h.isValidEUVATFormat(profile.VATNumber) {
-				validated, validationErr := h.validateVIESVAT(ctx, tenantID, country, profile.VATNumber)
-				if validationErr == nil && validated {
-					if reverseChargeEligible(h.supplierCountry, country, true) {
-						return vatDecision{Country: country, VIESValidated: true, ReverseCharge: true, Source: "VIES validated cross-border EU reverse charge", CheckedOn: at.Format("2006-01-02"), EffectiveFrom: at.Format("2006-01-02")}, nil
-					}
-					decision, rateErr := h.loadEffectiveVATRate(ctx, country, at)
-					if rateErr != nil {
-						return vatDecision{}, rateErr
-					}
-					decision.VIESValidated = true
-					decision.Source += "; VIES validated domestic customer"
-					return decision, nil
-				}
-			}
-
-			// B2C or no valid VAT number
-			if _, isEU := developmentVATRates[country]; isEU {
-				return h.loadEffectiveVATRate(ctx, country, at)
-			}
-			// Non-EU billing country = export exempt
-			return vatDecision{Country: country, Source: "non-EU customer location", CheckedOn: at.Format("2006-01-02"), EffectiveFrom: at.Format("2006-01-02")}, nil
+func (h *X402Handler) getVATDecisionForProfile(ctx context.Context, tenantID string, profile CryptoBillingProfile, clientIP string, at time.Time) (vatDecision, error) {
+	addr, err := parseBillingAddress(profile.Address)
+	if len(profile.Address) == 0 || string(profile.Address) == "{}" {
+		if profile.CustomerType != "" && profile.CustomerType != "unspecified" {
+			return vatDecision{}, billingtax.Review("billing_country_required", "confirm the customer's billing country")
+		}
+		decision, loadErr := h.loadEffectiveVATRate(ctx, h.supplierCountry, at)
+		decision.Source += "; supplier-country default for legacy anonymous top-up"
+		return decision, loadErr
+	}
+	if err != nil || !countries.IsValid(addr.Country) {
+		return vatDecision{}, billingtax.Review("billing_country_required", "confirm a valid billing country")
+	}
+	country := countries.Normalize(addr.Country)
+	customerType := billingtax.CustomerType(profile.CustomerType)
+	if customerType == "" || customerType == "unspecified" {
+		customerType = billingtax.Consumer
+		if strings.TrimSpace(profile.VATNumber) != "" {
+			customerType = billingtax.Business
 		}
 	}
-
-	// Anonymous simplified top-ups use the supplier-country standard rate. IP
-	// location is retained as audit metadata but never silently creates a zero-
-	// VAT export or blocks the customer's document.
-	decision, err := h.loadEffectiveVATRate(ctx, h.supplierCountry, at)
+	evidence := []billingtax.Evidence{{Source: "billing_address", Country: country, Reference: "immutable-billing-profile"}}
+	if ipCountry := h.getCountryFromIP(clientIP); ipCountry != "" {
+		evidence = append(evidence, billingtax.Evidence{Source: "ip_country", Country: ipCountry, Reference: clientIP})
+	}
+	rt := appconfig.Runtime()
+	policy := billingtax.Policy{SupplierCountry: h.supplierCountry, EUConsumerMode: billingtax.ConsumerMode(rt.EUConsumerVATMode), DestinationRegistrationConfirmed: rt.EUConsumerDestinationRegistered}
+	lookup := func(ctx context.Context, country string, at time.Time) (billingtax.Rate, error) {
+		decision, err := h.loadEffectiveVATRate(ctx, country, at)
+		return billingtax.Rate{BPS: decision.RateBPS, Source: decision.Source, CheckedOn: decision.CheckedOn, EffectiveFrom: decision.EffectiveFrom}, err
+	}
+	validate := func(ctx context.Context, country, vatNumber string) (bool, error) {
+		return h.validateVIESVAT(ctx, tenantID, country, vatNumber)
+	}
+	decision, err := billingtax.Evaluate(ctx, policy, billingtax.Profile{Type: customerType, Country: country, VATNumber: profile.VATNumber, Evidence: evidence}, 0, at, lookup, validate)
 	if err != nil {
 		return vatDecision{}, err
 	}
-	decision.Source += "; supplier-country default for anonymous top-up"
-	return decision, nil
+	result := vatDecision{RateBPS: decision.Rate.BPS, Country: decision.Country, VIESValidated: decision.VATValidated, ReverseCharge: decision.ReverseCharge, Source: decision.Rate.Source, CheckedOn: decision.Rate.CheckedOn, EffectiveFrom: decision.Rate.EffectiveFrom}
+	if result.ReverseCharge {
+		result.CheckedOn, result.EffectiveFrom = at.Format("2006-01-02"), at.Format("2006-01-02")
+	} else if customerType == billingtax.Business && country == countries.Normalize(h.supplierCountry) && strings.TrimSpace(profile.VATNumber) != "" {
+		validated, validationErr := validate(ctx, country, profile.VATNumber)
+		if validationErr == nil && validated {
+			result.VIESValidated = true
+			result.Source += "; VIES validated domestic customer"
+		}
+	}
+	return result, nil
 }
 
 type cryptoTaxSnapshot struct {
@@ -2156,16 +2169,19 @@ type CryptoDocumentRequirement struct {
 	RequiresCompleteProfile bool
 	DocumentKind            string
 	Profile                 CryptoBillingProfile
+	RequiresCustomerType    bool
+	RequiresBillingCountry  bool
 }
 
 // CryptoBillingProfile is the immutable customer snapshot bound to a payment
 // quote or deposit address. The raw structured address is retained verbatim.
 type CryptoBillingProfile struct {
-	Email     string          `json:"email,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Company   string          `json:"company,omitempty"`
-	VATNumber string          `json:"vat_number,omitempty"`
-	Address   json.RawMessage `json:"address,omitempty"`
+	CustomerType string          `json:"customer_type,omitempty"`
+	Email        string          `json:"email,omitempty"`
+	Name         string          `json:"name,omitempty"`
+	Company      string          `json:"company,omitempty"`
+	VATNumber    string          `json:"vat_number,omitempty"`
+	Address      json.RawMessage `json:"address,omitempty"`
 }
 
 func (p CryptoBillingProfile) Complete() bool {
@@ -2189,18 +2205,29 @@ func (h *X402Handler) GetCryptoDocumentRequirement(ctx context.Context, tenantID
 		documentKind = "full"
 	}
 	profile := CryptoBillingProfile{
-		Email:     strings.TrimSpace(row.BillingEmail.String),
-		Name:      strings.TrimSpace(row.BillingName.String),
-		Company:   strings.TrimSpace(row.BillingCompany.String),
-		VATNumber: strings.TrimSpace(row.TaxID.String),
-		Address:   append(json.RawMessage(nil), row.BillingAddress...),
+		CustomerType: row.CustomerType,
+		Email:        strings.TrimSpace(row.BillingEmail.String),
+		Name:         strings.TrimSpace(row.BillingName.String),
+		Company:      strings.TrimSpace(row.BillingCompany.String),
+		VATNumber:    strings.TrimSpace(row.TaxID.String),
+		Address:      append(json.RawMessage(nil), row.BillingAddress...),
+	}
+	address, addressErr := parseBillingAddress(profile.Address)
+	requiresCountry := addressErr != nil || !countries.IsValid(address.Country)
+	requiresType := (profile.CustomerType == "" || profile.CustomerType == "unspecified") && !hasVATClaim
+	if addr, err := parseBillingAddress(profile.Address); !requiresType && !requiresCountry && err == nil && countries.IsValid(h.supplierCountry) && countries.IsValid(addr.Country) && countries.Normalize(addr.Country) != countries.Normalize(h.supplierCountry) {
+		if _, err := h.getVATDecisionForProfile(ctx, tenantID, profile, ctxkeys.GetClientIP(ctx), time.Now().UTC()); err != nil {
+			return CryptoDocumentRequirement{}, err
+		}
 	}
 	return CryptoDocumentRequirement{
 		NeedsFullDocument:       needsFullDocument,
 		HasVATClaim:             hasVATClaim,
-		RequiresCompleteProfile: needsFullDocument && !profile.Complete(),
+		RequiresCompleteProfile: (needsFullDocument && !profile.Complete()) || requiresCountry || requiresType,
 		DocumentKind:            documentKind,
 		Profile:                 profile,
+		RequiresCustomerType:    requiresType,
+		RequiresBillingCountry:  requiresCountry,
 	}, nil
 }
 

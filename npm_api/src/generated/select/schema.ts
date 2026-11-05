@@ -496,6 +496,8 @@ export interface BillingArrangement {
  * top-ups, and required when paid postpaid collection or a full invoice needs them.
  */
 export interface BillingDetails {
+    /** Personal or business billing; unspecified for an unclassified historical profile. */
+    customerType: Scalars['String']
     /** Billing contact email. */
     email: (Scalars['String'] | null)
     /** Customer legal or person name shown on full invoices. */
@@ -7430,6 +7432,8 @@ export interface BillingArrangementGenqlSelection{
  * top-ups, and required when paid postpaid collection or a full invoice needs them.
  */
 export interface BillingDetailsGenqlSelection{
+    /** Personal or business billing; unspecified for an unclassified historical profile. */
+    customerType?: boolean | number
     /** Billing contact email. */
     email?: boolean | number
     /** Customer legal or person name shown on full invoices. */
@@ -14423,6 +14427,8 @@ export interface UnlinkWalletResultGenqlSelection{
 
 /** Input for updating billing details. */
 export interface UpdateBillingDetailsInput {
+/** consumer or business. Omitted preserves the saved classification. */
+customerType?: (Scalars['String'] | null),
 /** Billing contact email. */
 email?: (Scalars['String'] | null),
 /** Customer legal or person name shown on full invoices. */

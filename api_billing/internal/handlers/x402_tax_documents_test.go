@@ -17,14 +17,23 @@ func TestCryptoDocumentRequirementIsPaymentSpecific(t *testing.T) {
 		company         any
 		address         any
 		vatNumber       any
+		customerType    string
 		wantKind        string
 		wantVATClaim    bool
 		wantProfileGate bool
 	}{
 		{
-			name:        "small anonymous payment uses simplified document",
-			amountCents: 500,
-			wantKind:    "simplified",
+			name:            "small payment still needs tax profile before instructions",
+			amountCents:     500,
+			wantKind:        "simplified",
+			wantProfileGate: true,
+		},
+		{
+			name:         "consumer simplified invoice needs no company or VAT number",
+			amountCents:  500,
+			customerType: "consumer",
+			address:      []byte(`{"country":"NL"}`),
+			wantKind:     "simplified",
 		},
 		{
 			name:            "payment over one hundred euros needs full profile",
@@ -58,8 +67,8 @@ func TestCryptoDocumentRequirementIsPaymentSpecific(t *testing.T) {
 			}
 			mock.ExpectQuery("SELECT billing_email, billing_name, billing_company").
 				WithArgs("tenant-1").
-				WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id"}).
-					AddRow(test.email, test.legalName, test.company, address, test.vatNumber))
+				WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).
+					AddRow(test.email, test.legalName, test.company, address, test.vatNumber, test.customerType))
 
 			requirement, err := (&X402Handler{db: db}).GetCryptoDocumentRequirement(context.Background(), "tenant-1", test.amountCents)
 			if err != nil {

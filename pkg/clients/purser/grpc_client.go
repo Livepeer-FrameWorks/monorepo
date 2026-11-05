@@ -817,6 +817,10 @@ func (c *GRPCClient) AdminListBillingGrants(ctx context.Context, req *purserpb.A
 	return c.prepaid.AdminListBillingGrants(ctx, req)
 }
 
+func (c *GRPCClient) AdminFinancialAuditPage(ctx context.Context, req *purserpb.AdminFinancialAuditPageRequest) (*purserpb.AdminFinancialAuditPageResponse, error) {
+	return c.billing.AdminFinancialAuditPage(ctx, req)
+}
+
 // AdminListCheckoutRecovery reads outstanding provider work for a platform operator.
 func (c *GRPCClient) AdminListCheckoutRecovery(ctx context.Context, r *purserpb.AdminListCheckoutRecoveryRequest) (*purserpb.AdminListCheckoutRecoveryResponse, error) {
 	return c.prepaid.AdminListCheckoutRecovery(ctx, r)

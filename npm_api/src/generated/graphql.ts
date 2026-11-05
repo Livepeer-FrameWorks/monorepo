@@ -1202,6 +1202,8 @@ export type UpdateBillingDetailsInput = {
   address?: BillingAddressInput | null | undefined;
   /** Company name for invoices. */
   company?: string | null | undefined;
+  /** consumer or business. Omitted preserves the saved classification. */
+  customerType?: string | null | undefined;
   /** Billing contact email. */
   email?: string | null | undefined;
   /** Customer legal or person name shown on full invoices. */
@@ -1792,7 +1794,8 @@ referenceType: string | null, /** When the transaction occurred. */
 createdAt: string };
 
 /** Billing details for a tenant. These are optional for Free and small simplified top-ups, and required when paid postpaid collection or a full invoice needs them. */
-export type BillingDetailsDefaultFieldsFragment = { /** Billing contact email. */
+export type BillingDetailsDefaultFieldsFragment = { /** Personal or business billing; unspecified for an unclassified historical profile. */
+customerType: string, /** Billing contact email. */
 email: string | null, /** Customer legal or person name shown on full invoices. */
 name: string | null, /** Company name for invoices. */
 company: string | null, /** VAT number (EU format: XX123456789). */
@@ -5571,7 +5574,8 @@ export type UpdateBillingDetailsMutationVariables = Exact<{
 
 /** Update billing details for the current tenant. Required before any payment for VAT invoicing. */
 export type UpdateBillingDetailsMutation = { /** Update billing details for the current tenant. Required before any payment for VAT invoicing. */
-updateBillingDetails: { /** Billing contact email. */
+updateBillingDetails: { /** Personal or business billing; unspecified for an unclassified historical profile. */
+customerType: string, /** Billing contact email. */
 email: string | null, /** Customer legal or person name shown on full invoices. */
 name: string | null, /** Company name for invoices. */
 company: string | null, /** VAT number (EU format: XX123456789). */
@@ -5797,7 +5801,8 @@ export type GetBillingDetailsQueryVariables = Exact<{ [key: string]: never; }>;
 
 /** Get billing details for the current tenant. Email and address are required before funding or postpaid setup. A VAT/tax identifier is optional customer-supplied data and is not automatically verified. */
 export type GetBillingDetailsQuery = { /** Get billing details for the current tenant. Email and address are required before funding or postpaid setup. A VAT/tax identifier is optional customer-supplied data and is not automatically verified. */
-billingDetails: { /** Billing contact email. */
+billingDetails: { /** Personal or business billing; unspecified for an unclassified historical profile. */
+customerType: string, /** Billing contact email. */
 email: string | null, /** Customer legal or person name shown on full invoices. */
 name: string | null, /** Company name for invoices. */
 company: string | null, /** VAT number (EU format: XX123456789). */
@@ -10835,6 +10840,7 @@ export const BalanceTransactionDefaultFieldsFragmentDoc = /*#__PURE__*/ new Type
 /** Billing details for a tenant. These are optional for Free and small simplified top-ups, and required when paid postpaid collection or a full invoice needs them. */
 export const BillingDetailsDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment BillingDetailsDefaultFields on BillingDetails {
+  customerType
   email
   name
   company
@@ -19000,6 +19006,7 @@ export const UpdateBillingDetailsDocument = /*#__PURE__*/ new TypedDocumentStrin
   }
 }
     fragment BillingDetailsDefaultFields on BillingDetails {
+  customerType
   email
   name
   company
@@ -19654,6 +19661,7 @@ export const GetBillingDetailsDocument = /*#__PURE__*/ new TypedDocumentString(`
   }
 }
     fragment BillingDetailsDefaultFields on BillingDetails {
+  customerType
   email
   name
   company
