@@ -20,6 +20,7 @@ import (
 )
 
 func TestTierUpgradeStartsFreshMonth_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	db := startOperatorGrantDatabase(t)
 	assertSelfServiceUpgradePriceBounds(t, db)
 	assertSelfServiceCheckoutEligibility(t, db)
@@ -40,6 +41,7 @@ VALUES ($1,$3,'Old',2,20,'EUR',false),($2,$4,'New',3,50,'EUR',false)`, oldTier, 
 billing_name,billing_email,billing_address,presentment_currency,billing_period_start,billing_period_end,next_billing_date)
 VALUES ($1,$2,'active','postpaid','stripe','cus_upgrade','Customer','billing@example.com',
 '{"street":"Street 1","city":"Leiden","postal_code":"2332ED","country":"NL"}','USD',$3,$4,$4)`, tenant, oldTier, start, end)
+	seedRPCTaxBuyer(t, db, tenant)
 	exec(`INSERT INTO purser.fx_rates (currency,reference_date,units_per_eur,source) VALUES ('USD',CURRENT_DATE,1.25,'ecb') ON CONFLICT DO NOTHING`)
 	exec(`INSERT INTO purser.billing_invoices (tenant_id,status,amount,base_amount,due_date,
 base_fee_period_start,base_fee_period_end,presentment_amount_cents,presentment_currency,presentment_units_per_eur,presentment_reference_date,finalized_at)
@@ -66,8 +68,16 @@ WHERE i.tenant_id=$1 AND i.base_fee_period_start=$2`, tenant, actualStart).Scan(
 		t.Fatal(err)
 	}
 	// A paid €20 month exactly half unused offsets €10 of the €50 fee.
-	if credit != "10.00" || amount != "40.00" {
-		t.Fatalf("new base fee/credit=%s/%s, expected 40.00/10.00", amount, credit)
+	if credit != "10.00" || amount != "48.40" {
+		t.Fatalf("new gross fee/credit=%s/%s, expected48.40/10.00", amount, credit)
+	}
+
+	var docNet, docVAT, docGross int64
+	if err = db.QueryRowContext(ctx, `SELECT document_net_minor,document_vat_minor,document_gross_minor FROM purser.billing_invoices WHERE tenant_id=$1 AND base_fee_period_start=$2`, tenant, actualStart).Scan(&docNet, &docVAT, &docGross); err != nil {
+		t.Fatal(err)
+	}
+	if docNet != 5000 || docVAT != 1050 || docGross != 6050 {
+		t.Fatalf("Dutch replacement USDtax: net%d VAT%d gross%d, want5000/1050/6050", docNet, docVAT, docGross)
 	}
 
 	var invoices int

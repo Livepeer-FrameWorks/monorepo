@@ -1,7 +1,8 @@
 # Build stage
 FROM golang:1.27.0-alpine AS builder
 
-ENV GOFLAGS="-tags=nomsgpack"
+ARG GO_BUILD_TAGS=nomsgpack
+ENV GOFLAGS="-tags=${GO_BUILD_TAGS}"
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata

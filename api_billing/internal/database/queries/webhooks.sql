@@ -289,7 +289,9 @@ WHERE status = 'succeeded'
 -- Locks the top-up so a reversal and the checkout credit path serialize.
 -- Credit state is read by GetPendingTopupCreditState in a later statement,
 -- which sees a credit committed while this lock was waited on.
-SELECT id::text AS topup_id, tenant_id::text AS tenant_id, currency, status, amount_cents,
+SELECT net_eur_cents,vat_eur_cents,gross_eur_cents,tax_document_id,
+       COALESCE(tax_assessment,'{}'::jsonb)::jsonb AS tax_assessment,
+       id::text AS topup_id, tenant_id::text AS tenant_id, currency, status, amount_cents,
        COALESCE(original_amount_cents, 0)::bigint AS original_amount_cents,
        COALESCE(original_currency, '')::text AS original_currency,
        COALESCE(eur_amount_cents, 0)::bigint AS eur_amount_cents,
@@ -668,3 +670,22 @@ INSERT INTO purser.mollie_mandates (
 ON CONFLICT (mollie_mandate_id) DO UPDATE SET
     status = EXCLUDED.status, method = EXCLUDED.method,
     details = EXCLUDED.details, updated_at = NOW();
+
+-- name: InsertPrepaidAdvanceRefundCreditNote :one
+INSERT INTO purser.credit_notes(credit_note_number,tenant_id,source_document_type,source_document_id,
+ reversal_reference_type,reversal_reference_id,amount_cents,currency,reason,evidence_json)
+SELECT 'CN-'||lpad(nextval('purser.credit_note_number_seq')::text,10,'0'),invoice.tenant_id,'invoice',invoice.id,
+ 'payment_reversal',sqlc.arg(reversal_id)::text,sqlc.arg(amount_cents)::bigint,sqlc.arg(currency)::text,
+ 'Prepaid advance refunded',jsonb_build_object('provider_reversal_id',sqlc.arg(provider_reversal_id)::text)
+FROM purser.billing_invoices invoice
+WHERE invoice.tenant_id=sqlc.arg(tenant_id)::text::uuid AND invoice.id=sqlc.arg(invoice_id)::text::uuid
+ AND invoice.tax_status='ready' AND invoice.source_reference_type='prepaid_topup'
+RETURNING net_eur_cents::bigint AS net_eur_cents,vat_eur_cents::bigint AS vat_eur_cents,gross_eur_cents::bigint AS gross_eur_cents;
+
+-- name: RevokePrepaidAdvanceFundingLot :execrows
+UPDATE purser.prepaid_funding_lots
+SET remaining_net_eur_cents=GREATEST(remaining_net_eur_cents-sqlc.arg(net_eur_cents)::bigint,0),
+ remaining_vat_eur_cents=GREATEST(remaining_vat_eur_cents-sqlc.arg(vat_eur_cents)::bigint,0),
+ revoked_net_eur_cents=revoked_net_eur_cents+sqlc.arg(net_eur_cents)::bigint,
+ revoked_vat_eur_cents=revoked_vat_eur_cents+sqlc.arg(vat_eur_cents)::bigint
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND source_document_id=sqlc.arg(invoice_id)::text::uuid;

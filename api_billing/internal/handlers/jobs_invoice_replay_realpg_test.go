@@ -49,6 +49,7 @@ func TestMonthlyInvoiceReplaysAfterSerializationFailure_RealPG(t *testing.T) {
 		}
 	}
 
+	seedContractBillingIdentity(t, db, tenantID)
 	logger := logging.NewLogger()
 	jm := &JobManager{db: db, logger: logger, billing: &Service{db: db, logger: logger}}
 	jm.generateMonthlyInvoices(ctx)

@@ -28,17 +28,20 @@ func (c *Client) FinancialEvidencePage(ctx context.Context, source, after string
 	if c == nil {
 		return nil, errors.New("stripe financial evidence reader is unavailable")
 	}
-	paths := map[string]string{"stripe_invoices": "/v1/invoices", "stripe_charges": "/v1/charges", "stripe_balance_transactions": "/v1/balance_transactions", "stripe_payouts": "/v1/payouts", "stripe_balance_snapshot": "/v1/balance", "stripe_account": "/v1/account"}
+	paths := map[string]string{"stripe_invoices": "/v1/invoices", "stripe_charges": "/v1/charges", "stripe_balance_transactions": "/v1/balance_transactions", "stripe_payouts": "/v1/payouts", "stripe_balance_snapshot": "/v1/balance", "stripe_account": "/v1/account", "stripe_tax_settings": "/v1/tax/settings", "stripe_subscriptions": "/v1/subscriptions", "stripe_customers": "/v1/customers"}
 	path, ok := paths[source]
 	if !ok {
 		return nil, errors.New("unsupported Stripe financial evidence source")
 	}
 	params := &stripe.Params{Context: ctx}
-	snapshot := source == "stripe_balance_snapshot" || source == "stripe_account"
+	snapshot := source == "stripe_balance_snapshot" || source == "stripe_account" || source == "stripe_tax_settings"
 	if snapshot && after != "" {
 		return nil, errors.New("snapshot source has no cursor")
 	}
 	if !snapshot {
+		if source == "stripe_subscriptions" {
+			params.AddExtra("status", "all")
+		}
 		params.AddExtra("limit", "100")
 		params.AddExtra("created[gte]", strconv.FormatInt(from.Unix(), 10))
 		params.AddExtra("created[lt]", strconv.FormatInt(through.Unix(), 10))

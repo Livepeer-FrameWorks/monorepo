@@ -4,28 +4,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/countries"
-	"github.com/shopspring/decimal"
 )
 
 type CustomerType string
 
 const (
-	Consumer                  CustomerType = "consumer"
-	Business                  CustomerType = "business"
-	PolicyVersion                          = "digital-services-v1"
-	CrossBorderThresholdCents int64        = 1_000_000
+	Consumer      CustomerType = "consumer"
+	Business      CustomerType = "business"
+	PolicyVersion              = "digital-services-v1"
 )
 
 type ConsumerMode string
 
 const (
-	Destination     ConsumerMode = "destination"
-	OriginThreshold ConsumerMode = "origin_threshold"
+	Destination ConsumerMode = "destination"
 )
 
 type Evidence struct {
@@ -50,6 +46,8 @@ type Rate struct {
 }
 
 type Jurisdiction struct {
+	TaxLabel          string
+	Wording           string
 	Rate              Rate
 	EvidenceReference string
 }
@@ -58,15 +56,12 @@ type Policy struct {
 	SupplierCountry                  string
 	EUConsumerMode                   ConsumerMode
 	DestinationRegistrationConfirmed bool
-	SingleEUEstablishment            bool
-	ThresholdTotalsKnown             bool
-	PreviousYearCrossBorderNetCents  int64
-	CurrentYearCrossBorderNetCents   int64
 	NonEUConsumers                   map[string]Jurisdiction
 	NonEUBusinesses                  map[string]Jurisdiction
 }
 
 type Decision struct {
+	TaxLabel      string       `json:"tax_label,omitempty"`
 	PolicyVersion string       `json:"policy_version"`
 	CustomerType  CustomerType `json:"customer_type"`
 	Country       string       `json:"country"`
@@ -127,12 +122,8 @@ func Evaluate(ctx context.Context, policy Policy, profile Profile, netCents int6
 	}
 	if profile.Type == Business {
 		if IsEU(profile.Country) && IsEU(policy.SupplierCountry) {
-			prefix := profile.Country
-			if prefix == "GR" {
-				prefix = "EL"
-			}
-			vat := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(profile.VATNumber), " ", ""))
-			if !strings.HasPrefix(vat, prefix) || len(vat) <= 2 {
+			vat, vatErr := CanonicalVATNumber(profile.Country, profile.VATNumber)
+			if vatErr != nil {
 				return d, Review("vat_number_required", "enter a VAT number matching the business billing country")
 			}
 			if validate == nil {
@@ -158,16 +149,10 @@ func Evaluate(ctx context.Context, policy Policy, profile Profile, netCents int6
 		return d, err
 	}
 	if IsEU(profile.Country) {
-		if policy.EUConsumerMode == OriginThreshold {
-			if !IsEU(policy.SupplierCountry) || !policy.SingleEUEstablishment || !policy.ThresholdTotalsKnown || policy.PreviousYearCrossBorderNetCents < 0 || policy.CurrentYearCrossBorderNetCents < 0 {
-				return d, Review("consumer_threshold_unproven", "the supplier-country consumer VAT exception needs verified establishment and annual totals")
-			}
-			if policy.PreviousYearCrossBorderNetCents <= CrossBorderThresholdCents && policy.CurrentYearCrossBorderNetCents <= CrossBorderThresholdCents && netCents <= CrossBorderThresholdCents-policy.CurrentYearCrossBorderNetCents {
-				return load(policy.SupplierCountry, "eu_b2c_origin_threshold")
-			}
-		} else if policy.EUConsumerMode != Destination {
+		if policy.EUConsumerMode != Destination {
 			return d, Review("consumer_vat_regime_required", "configure the supplier's cross-border consumer VAT regime")
 		}
+
 		if !policy.DestinationRegistrationConfirmed {
 			return d, Review("destination_registration_required", "confirm OSS or destination VAT registration before collection")
 		}
@@ -176,18 +161,90 @@ func Evaluate(ctx context.Context, policy Policy, profile Profile, netCents int6
 	return applyJurisdiction(d, policy.NonEUConsumers[profile.Country], "non_eu_b2c")
 }
 
+// NormalizeVATCountry accepts the VAT alias EL at validation boundaries while
+// billing addresses continue to use ISO GR.
+func NormalizeVATCountry(country string) string {
+	country = countries.Normalize(country)
+	if country == "EL" {
+		return "GR"
+	}
+	return country
+}
+
+// VIESCountryCode maps the address country's ISO code to the VAT identifier.
+func VIESCountryCode(country string) string {
+	if NormalizeVATCountry(country) == "GR" {
+		return "EL"
+	}
+	return NormalizeVATCountry(country)
+}
+
+// CanonicalVATNumber accepts a national number in a known billing country and
+// both Greek prefixes. A different member state's explicit prefix is a conflict.
+func CanonicalVATNumber(country, raw string) (string, error) {
+	country = NormalizeVATCountry(country)
+	prefix := VIESCountryCode(country)
+	vat := strings.ToUpper(strings.Join(strings.Fields(raw), ""))
+	if !IsEU(country) || len(vat) < 3 {
+		return "", errors.New("an EU country and VAT number are required")
+	}
+	// The French two-character national key can itself spell an EU country
+	// code. Shape and billing country disambiguate it; VIES decides validity.
+	// https://entreprise.api.gouv.fr/catalogue/dgfip/numero_tva
+	if country == "FR" && isFrenchNationalVATNumber(vat) {
+		return prefix + vat, nil
+	}
+	if strings.HasPrefix(vat, prefix) {
+		vat = strings.TrimPrefix(vat, prefix)
+	} else if country == "GR" && strings.HasPrefix(vat, "GR") {
+		vat = strings.TrimPrefix(vat, "GR")
+	} else if IsEU(vat[:2]) || vat[:2] == "EL" {
+		return "", errors.New("VAT prefix conflicts with billing country")
+	}
+	if len(vat) < 3 || len(vat) > 14 {
+		return "", errors.New("invalid national VAT number length")
+	}
+	for _, c := range vat {
+		if (c < '0' || c > '9') && (c < 'A' || c > 'Z') {
+			return "", errors.New("VAT number must be alphanumeric")
+		}
+	}
+	return prefix + vat, nil
+}
+
+func isFrenchNationalVATNumber(vat string) bool {
+	if len(vat) != 11 {
+		return false
+	}
+	for i, c := range vat {
+		if i < 2 {
+			if (c < '0' || c > '9') && (c < 'A' || c > 'Z') {
+				return false
+			}
+		} else if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func applyJurisdiction(d Decision, rule Jurisdiction, treatment string) (Decision, error) {
 	if strings.TrimSpace(rule.EvidenceReference) == "" || strings.TrimSpace(rule.Rate.Source) == "" || rule.Rate.BPS < 0 || rule.Rate.BPS > 10000 {
 		return d, Review("foreign_tax_policy_required", "this destination needs a reviewed tax and registration policy")
 	}
 	d.Treatment, d.Rate = treatment, rule.Rate
+	d.TaxLabel, d.Wording = rule.TaxLabel, rule.Wording
 	return d, nil
 }
 
 func validateConsumerEvidence(profile Profile) error {
 	sources := map[string]bool{}
 	for _, e := range profile.Evidence {
-		if strings.TrimSpace(e.Reference) == "" || strings.TrimSpace(e.Source) == "" {
+		// A review of tax liability does not locate this particular customer.
+		if e.Source != "billing_address" && e.Source != "ip_country" && e.Source != "payment_provider" {
+			return Review("consumer_location_source_unsupported", "Location verification is unavailable for this evidence source; contact support before paying")
+		}
+		if strings.TrimSpace(e.Reference) == "" {
 			continue
 		}
 		if countries.Normalize(e.Country) != profile.Country {
@@ -208,21 +265,4 @@ func IsEU(country string) bool {
 	default:
 		return false
 	}
-}
-
-type Totals struct {
-	Net   int64 `json:"net_minor"`
-	VAT   int64 `json:"vat_minor"`
-	Gross int64 `json:"gross_minor"`
-}
-
-func Exclusive(net int64, rateBPS int) (Totals, error) {
-	if net < 0 || rateBPS < 0 || rateBPS > 10000 {
-		return Totals{}, errors.New("invalid net amount or tax rate")
-	}
-	vat := decimal.NewFromInt(net).Mul(decimal.NewFromInt(int64(rateBPS))).Div(decimal.NewFromInt(10000)).Round(0)
-	if vat.GreaterThan(decimal.NewFromInt(math.MaxInt64 - net)) {
-		return Totals{}, errors.New("gross amount exceeds supported money range")
-	}
-	return Totals{Net: net, VAT: vat.IntPart(), Gross: net + vat.IntPart()}, nil
 }

@@ -10,6 +10,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const addBillingInvoiceReversedAmount = `-- name: AddBillingInvoiceReversedAmount :exec
@@ -572,7 +574,9 @@ func (q *Queries) GetPendingTopupCreditState(ctx context.Context, arg GetPending
 }
 
 const getPendingTopupForReversal = `-- name: GetPendingTopupForReversal :one
-SELECT id::text AS topup_id, tenant_id::text AS tenant_id, currency, status, amount_cents,
+SELECT net_eur_cents,vat_eur_cents,gross_eur_cents,tax_document_id,
+       COALESCE(tax_assessment,'{}'::jsonb)::jsonb AS tax_assessment,
+       id::text AS topup_id, tenant_id::text AS tenant_id, currency, status, amount_cents,
        COALESCE(original_amount_cents, 0)::bigint AS original_amount_cents,
        COALESCE(original_currency, '')::text AS original_currency,
        COALESCE(eur_amount_cents, 0)::bigint AS eur_amount_cents,
@@ -588,17 +592,22 @@ FOR UPDATE
 `
 
 type GetPendingTopupForReversalRow struct {
-	TopupID             string    `db:"topup_id" json:"topup_id"`
-	TenantID            string    `db:"tenant_id" json:"tenant_id"`
-	Currency            string    `db:"currency" json:"currency"`
-	Status              string    `db:"status" json:"status"`
-	AmountCents         int64     `db:"amount_cents" json:"amount_cents"`
-	OriginalAmountCents int64     `db:"original_amount_cents" json:"original_amount_cents"`
-	OriginalCurrency    string    `db:"original_currency" json:"original_currency"`
-	EurAmountCents      int64     `db:"eur_amount_cents" json:"eur_amount_cents"`
-	FxUnitsPerEur       string    `db:"fx_units_per_eur" json:"fx_units_per_eur"`
-	FxSource            string    `db:"fx_source" json:"fx_source"`
-	FxReferenceDate     time.Time `db:"fx_reference_date" json:"fx_reference_date"`
+	NetEurCents         sql.NullInt64   `db:"net_eur_cents" json:"net_eur_cents"`
+	VatEurCents         sql.NullInt64   `db:"vat_eur_cents" json:"vat_eur_cents"`
+	GrossEurCents       sql.NullInt64   `db:"gross_eur_cents" json:"gross_eur_cents"`
+	TaxDocumentID       uuid.NullUUID   `db:"tax_document_id" json:"tax_document_id"`
+	TaxAssessment       json.RawMessage `db:"tax_assessment" json:"tax_assessment"`
+	TopupID             string          `db:"topup_id" json:"topup_id"`
+	TenantID            string          `db:"tenant_id" json:"tenant_id"`
+	Currency            string          `db:"currency" json:"currency"`
+	Status              string          `db:"status" json:"status"`
+	AmountCents         int64           `db:"amount_cents" json:"amount_cents"`
+	OriginalAmountCents int64           `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency    string          `db:"original_currency" json:"original_currency"`
+	EurAmountCents      int64           `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur       string          `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource            string          `db:"fx_source" json:"fx_source"`
+	FxReferenceDate     time.Time       `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 // Locks the top-up so a reversal and the checkout credit path serialize.
@@ -608,6 +617,11 @@ func (q *Queries) GetPendingTopupForReversal(ctx context.Context, providerPaymen
 	row := q.db.QueryRowContext(ctx, getPendingTopupForReversal, providerPaymentID)
 	var i GetPendingTopupForReversalRow
 	err := row.Scan(
+		&i.NetEurCents,
+		&i.VatEurCents,
+		&i.GrossEurCents,
+		&i.TaxDocumentID,
+		&i.TaxAssessment,
 		&i.TopupID,
 		&i.TenantID,
 		&i.Currency,
@@ -878,6 +892,47 @@ func (q *Queries) InsertPendingStripeDispute(ctx context.Context, arg InsertPend
 		arg.PaymentIntentID,
 	)
 	return err
+}
+
+const insertPrepaidAdvanceRefundCreditNote = `-- name: InsertPrepaidAdvanceRefundCreditNote :one
+INSERT INTO purser.credit_notes(credit_note_number,tenant_id,source_document_type,source_document_id,
+ reversal_reference_type,reversal_reference_id,amount_cents,currency,reason,evidence_json)
+SELECT 'CN-'||lpad(nextval('purser.credit_note_number_seq')::text,10,'0'),invoice.tenant_id,'invoice',invoice.id,
+ 'payment_reversal',$1::text,$2::bigint,$3::text,
+ 'Prepaid advance refunded',jsonb_build_object('provider_reversal_id',$4::text)
+FROM purser.billing_invoices invoice
+WHERE invoice.tenant_id=$5::text::uuid AND invoice.id=$6::text::uuid
+ AND invoice.tax_status='ready' AND invoice.source_reference_type='prepaid_topup'
+RETURNING net_eur_cents::bigint AS net_eur_cents,vat_eur_cents::bigint AS vat_eur_cents,gross_eur_cents::bigint AS gross_eur_cents
+`
+
+type InsertPrepaidAdvanceRefundCreditNoteParams struct {
+	ReversalID         string `db:"reversal_id" json:"reversal_id"`
+	AmountCents        int64  `db:"amount_cents" json:"amount_cents"`
+	Currency           string `db:"currency" json:"currency"`
+	ProviderReversalID string `db:"provider_reversal_id" json:"provider_reversal_id"`
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	InvoiceID          string `db:"invoice_id" json:"invoice_id"`
+}
+
+type InsertPrepaidAdvanceRefundCreditNoteRow struct {
+	NetEurCents   int64 `db:"net_eur_cents" json:"net_eur_cents"`
+	VatEurCents   int64 `db:"vat_eur_cents" json:"vat_eur_cents"`
+	GrossEurCents int64 `db:"gross_eur_cents" json:"gross_eur_cents"`
+}
+
+func (q *Queries) InsertPrepaidAdvanceRefundCreditNote(ctx context.Context, arg InsertPrepaidAdvanceRefundCreditNoteParams) (InsertPrepaidAdvanceRefundCreditNoteRow, error) {
+	row := q.db.QueryRowContext(ctx, insertPrepaidAdvanceRefundCreditNote,
+		arg.ReversalID,
+		arg.AmountCents,
+		arg.Currency,
+		arg.ProviderReversalID,
+		arg.TenantID,
+		arg.InvoiceID,
+	)
+	var i InsertPrepaidAdvanceRefundCreditNoteRow
+	err := row.Scan(&i.NetEurCents, &i.VatEurCents, &i.GrossEurCents)
+	return i, err
 }
 
 const insertPrepaidTopupReversalTransaction = `-- name: InsertPrepaidTopupReversalTransaction :exec
@@ -1345,6 +1400,35 @@ type ResolvePendingTopupReviewHoldsParams struct {
 // the provider has fully returned; evidence_ref names the closing reversal.
 func (q *Queries) ResolvePendingTopupReviewHolds(ctx context.Context, arg ResolvePendingTopupReviewHoldsParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, resolvePendingTopupReviewHolds, arg.EvidenceRef, arg.TenantID, arg.TopupID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const revokePrepaidAdvanceFundingLot = `-- name: RevokePrepaidAdvanceFundingLot :execrows
+UPDATE purser.prepaid_funding_lots
+SET remaining_net_eur_cents=GREATEST(remaining_net_eur_cents-$1::bigint,0),
+ remaining_vat_eur_cents=GREATEST(remaining_vat_eur_cents-$2::bigint,0),
+ revoked_net_eur_cents=revoked_net_eur_cents+$1::bigint,
+ revoked_vat_eur_cents=revoked_vat_eur_cents+$2::bigint
+WHERE tenant_id=$3::text::uuid AND source_document_id=$4::text::uuid
+`
+
+type RevokePrepaidAdvanceFundingLotParams struct {
+	NetEurCents int64  `db:"net_eur_cents" json:"net_eur_cents"`
+	VatEurCents int64  `db:"vat_eur_cents" json:"vat_eur_cents"`
+	TenantID    string `db:"tenant_id" json:"tenant_id"`
+	InvoiceID   string `db:"invoice_id" json:"invoice_id"`
+}
+
+func (q *Queries) RevokePrepaidAdvanceFundingLot(ctx context.Context, arg RevokePrepaidAdvanceFundingLotParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, revokePrepaidAdvanceFundingLot,
+		arg.NetEurCents,
+		arg.VatEurCents,
+		arg.TenantID,
+		arg.InvoiceID,
+	)
 	if err != nil {
 		return 0, err
 	}

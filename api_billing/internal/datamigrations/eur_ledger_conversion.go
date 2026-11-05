@@ -45,6 +45,7 @@ type Settings struct {
 // Register adds Purser's data migrations to the datamigrate registry.
 func Register(settings Settings) {
 	datamigrate.Register(EURLedgerConversion(settings))
+	datamigrate.Register(PaymentTenantBackfill())
 }
 
 // EURLedgerConversion converts every non-EUR prepaid balance row into the

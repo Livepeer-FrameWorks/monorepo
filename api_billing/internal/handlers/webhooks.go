@@ -151,12 +151,13 @@ type StripeInvoiceObject struct {
 	// payload carries the subscription id under
 	// parent.subscription_details.subscription instead; resolveSubscriptionID
 	// reads that with this field as the fallback.
-	SubscriptionID string `json:"subscription"`
-	Status         string `json:"status"` // paid, open, draft, uncollectible, void
-	AmountDue      int64  `json:"amount_due"`
-	AmountPaid     int64  `json:"amount_paid"`
-	Currency       string `json:"currency"`
-	AttemptCount   int    `json:"attempt_count"`
+	SubscriptionID    string `json:"subscription"`
+	Status            string `json:"status"` // paid, open, draft, uncollectible, void
+	AmountDue         int64  `json:"amount_due"`
+	AmountPaid        int64  `json:"amount_paid"`
+	TotalExcludingTax *int64 `json:"total_excluding_tax"`
+	Currency          string `json:"currency"`
+	AttemptCount      int    `json:"attempt_count"`
 	// Subscription invoices carry the billing period directly. Used by
 	// the operator credit ledger writer to record the period the payment
 	// covered.
@@ -484,6 +485,13 @@ func (s *Service) processStripeWebhookPayload(ctx context.Context, payload Strip
 		err = s.handleStripeSubscriptionEvent(payload)
 	case payload.Type == "invoice.paid":
 		err = s.handleStripeInvoicePaid(payload)
+		if err == nil {
+			err = s.importStripeTaxDocument(ctx, "provider_invoice", payload.Data.Object)
+		}
+	case payload.Type == "invoice.finalized":
+		err = s.importStripeTaxDocument(ctx, "provider_invoice", payload.Data.Object)
+	case payload.Type == "credit_note.created" || payload.Type == "credit_note.updated" || payload.Type == "credit_note.voided":
+		err = s.importStripeTaxDocument(ctx, "provider_credit_note", payload.Data.Object)
 	case payload.Type == "invoice.payment_failed":
 		err = s.handleStripeInvoiceFailed(payload)
 	case payload.Type == "invoice.payment_action_required":
@@ -1043,7 +1051,11 @@ func (s *Service) recordMonthlyClusterCredit(ctx context.Context, obj *StripeInv
 		if _, err := subscriptions.LockChange(ctx, tx, consumingTenantID, subscriptions.PreservePricing); err != nil {
 			return err
 		}
-		if err := operator.PersistStripeSubscriptionCredit(ctx, tx, obj.ID, ownerUUID, clusterID, strings.ToUpper(obj.Currency), obj.AmountPaid, periodStart, periodEnd, "cluster_monthly"); err != nil {
+		credit := obj.AmountPaid
+		if obj.TotalExcludingTax != nil {
+			credit = *obj.TotalExcludingTax
+		}
+		if err := operator.PersistStripeSubscriptionCredit(ctx, tx, obj.ID, ownerUUID, clusterID, strings.ToUpper(obj.Currency), credit, periodStart, periodEnd, "cluster_monthly"); err != nil {
 			return err
 		}
 		return purserdb.New(tx).ApplyCompensatedStripeInvoiceCredit(ctx, purserdb.ApplyCompensatedStripeInvoiceCreditParams{TenantID: consumingTenantID, InvoiceID: obj.ID, Currency: strings.ToUpper(obj.Currency)})
@@ -1620,6 +1632,9 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 			}
 			return eventID, completionErr
 		}
+		if invoiceErr := s.issueMollieNativeTaxInvoice(ctx, tenantID, payment); invoiceErr != nil {
+			return eventID, invoiceErr
+		}
 		return eventID, nil
 	}
 
@@ -1669,6 +1684,17 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 			if graceErr := s.startGraceIfMollieSubscriptionEnded(ctx, tenantID, payment); graceErr != nil {
 				return eventID, graceErr
 			}
+		}
+		if mollieMetadataString(payment.Metadata, "frameworks_tax_profile") != "" {
+			if newStatus == "confirmed" {
+				if invoiceErr := s.issueMollieNativeTaxInvoice(ctx, tenantID, payment); invoiceErr != nil {
+					return eventID, invoiceErr
+				}
+				if rewindErr := s.rewindMollieSettlementCursor(ctx, tenantID, payment); rewindErr != nil {
+					return eventID, rewindErr
+				}
+			}
+			return eventID, nil
 		}
 		resolvedInvoiceID, resolveErr := s.resolveMollieSubscriptionInvoice(ctx, payment.SubscriptionID, payment)
 		if resolveErr != nil {
@@ -2332,6 +2358,23 @@ func (s *Service) applyPrepaidTopupReversalTx(ctx context.Context, tx *sql.Tx, t
 		return nil
 	}
 
+	if topup.NetEurCents.Valid {
+		if !topup.TaxDocumentID.Valid {
+			return fmt.Errorf("credited taxed advance has no source invoice")
+		}
+		note, noteErr := queries.InsertPrepaidAdvanceRefundCreditNote(ctx, purserdb.InsertPrepaidAdvanceRefundCreditNoteParams{TenantID: topup.TenantID, InvoiceID: topup.TaxDocumentID.UUID.String(), ReversalID: reversalID, AmountCents: in.amountCents, Currency: in.currency, ProviderReversalID: in.providerReversalID})
+		if noteErr != nil {
+			return fmt.Errorf("issue original-tax advance refund credit note: %w", noteErr)
+		}
+		debitEURCents = note.NetEurCents
+		revoked, revokeErr := queries.RevokePrepaidAdvanceFundingLot(ctx, purserdb.RevokePrepaidAdvanceFundingLotParams{TenantID: topup.TenantID, InvoiceID: topup.TaxDocumentID.UUID.String(), NetEurCents: note.NetEurCents, VatEurCents: note.VatEurCents})
+		if revokeErr != nil {
+			return revokeErr
+		}
+		if revoked != 1 {
+			return fmt.Errorf("refunded taxed advance has no unique funding lot")
+		}
+	}
 	fields["debit_eur_cents"] = debitEURCents
 	currentBalance, err := queries.GetX402CurrentBalance(ctx, purserdb.GetX402CurrentBalanceParams{
 		TenantID: topup.TenantID, Currency: billing.LedgerCurrency,

@@ -64,7 +64,8 @@ WHERE id = sqlc.arg(id)::text::uuid
 -- amount and currency are the EUR invoice total; the presentment fields are
 -- the total charged in the tenant's presentment currency, empty until the
 -- invoice is finalized.
-SELECT amount::float8 AS amount,
+SELECT net_eur_cents,vat_eur_cents,gross_eur_cents,tax_status,COALESCE(tax_summary,'[]'::jsonb)::jsonb AS tax_summary,
+       amount::float8 AS amount,
        metered_amount::float8 AS metered_amount,
        gross_metered_amount::float8 AS gross_metered_amount,
        currency, due_date, status,

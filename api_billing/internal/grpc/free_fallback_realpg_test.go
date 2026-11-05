@@ -31,6 +31,7 @@ import (
 // Service keeps running there, the invoice stays owed with reminders, and a
 // paid tier needs it settled first.
 func TestPaymentFailureMovesToFreeWithFinalInvoice_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	appconfigtest.Set(t, "WAIVE_USAGE_CHARGES", "false")
 	db := startOperatorGrantDatabase(t)
 	ctx := context.Background()
@@ -47,9 +48,9 @@ func TestPaymentFailureMovesToFreeWithFinalInvoice_RealPG(t *testing.T) {
 		VALUES ($1, 'free', 'Free', 0, 'EUR', 1, true, true), ($2, 'supporter', 'Supporter', 79.00, 'EUR', 2, false, true)`, freeID, supporterID)
 	exec(t, `INSERT INTO purser.tier_pricing_rules (tier_id, meter, model, currency, included_quantity, unit_price, config)
 		VALUES ($1, 'egress_gb', 'all_usage', 'EUR', 0, 0.02, '{}')`, supporterID)
-	exec(t, `INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model, billing_email, billing_period_start, billing_period_end, presentment_currency,
+	exec(t, `INSERT INTO purser.tenant_subscriptions (billing_customer_type,billing_name,billing_company,billing_address,tenant_id, tier_id, status, billing_model, billing_email, billing_period_start, billing_period_end, presentment_currency,
 			payment_method, stripe_customer_id, stripe_subscription_id, stripe_subscription_status)
-		VALUES ($1, $2, 'active', 'postpaid', 'billing@example.com', $3, $4, 'EUR', 'stripe', 'cus_fallback', 'sub_fallback', 'active')`, tenantID, supporterID, periodStart, periodEnd)
+		VALUES ('business','Fixture Buyer','Fixture Ltd','{"street":"1 Main Street","city":"Toronto","postal_code":"M5V1J1","country":"CA"}'::jsonb,$1, $2, 'active', 'postpaid', 'billing@example.com', $3, $4, 'EUR', 'stripe', 'cus_fallback', 'sub_fallback', 'active')`, tenantID, supporterID, periodStart, periodEnd)
 	exec(t, `INSERT INTO purser.metering_sources (source_id, region, active_from, required) VALUES ('periscope-default', '', $1, TRUE)`, periodStart.AddDate(0, -1, 0))
 	exec(t, `INSERT INTO purser.metering_windows (source_id, period_start, period_end, complete)
 		SELECT 'periscope-default', window_start, window_start + INTERVAL '5 minutes', TRUE
@@ -146,6 +147,7 @@ func TestPaymentFailureMovesToFreeWithFinalInvoice_RealPG(t *testing.T) {
 
 // An operator arrangement made during the grace period stays until it ends.
 func TestOperatorGrantHoldsTheMoveToFree_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	db := startOperatorGrantDatabase(t)
 	ctx := context.Background()
 	tenantID, freeID, supporterID := uuid.NewString(), uuid.NewString(), uuid.NewString()
@@ -153,8 +155,8 @@ func TestOperatorGrantHoldsTheMoveToFree_RealPG(t *testing.T) {
 		VALUES ($1, 'free', 'Free', 0, 'EUR', 1, false), ($2, 'supporter', 'Supporter', 79.00, 'EUR', 2, false)`, freeID, supporterID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model, free_fallback_reason, free_fallback_at, free_fallback_notified_at)
-		VALUES ($1, $2, 'past_due', 'postpaid', 'payment_failed', NOW() - INTERVAL '1 minute', NOW())`, tenantID, supporterID); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO purser.tenant_subscriptions (billing_customer_type,billing_name,billing_company,billing_email,billing_address,tenant_id, tier_id, status, billing_model, free_fallback_reason, free_fallback_at, free_fallback_notified_at)
+		VALUES ('business','Fixture Buyer','Fixture Ltd','billing@example.test','{"street":"1 Main Street","city":"Toronto","postal_code":"M5V1J1","country":"CA"}'::jsonb,$1, $2, 'past_due', 'postpaid', 'payment_failed', NOW() - INTERVAL '1 minute', NOW())`, tenantID, supporterID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO purser.subscription_operator_grants (subscription_id, assigned_tier_id, collection, reason, granted_by)
@@ -174,6 +176,7 @@ func TestOperatorGrantHoldsTheMoveToFree_RealPG(t *testing.T) {
 
 // A failed final invoice must not monopolize the worker's first batch.
 func TestFreeFallbackFailuresDoNotStarveLaterTenants_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	db := startOperatorGrantDatabase(t)
 	ctx := t.Context()
 	free, metered, unmetered := uuid.NewString(), uuid.NewString(), uuid.NewString()
@@ -184,15 +187,15 @@ func TestFreeFallbackFailuresDoNotStarveLaterTenants_RealPG(t *testing.T) {
 	}
 	// Their required metering is missing, so all hundred oldest rows fail.
 	if _, err := db.ExecContext(ctx, `INSERT INTO purser.tenant_subscriptions
-		(tenant_id,tier_id,status,billing_model,presentment_currency,billing_period_start,billing_period_end,free_fallback_at,free_fallback_reason)
-		SELECT gen_random_uuid(),$1,'past_due','postpaid','EUR',NOW()-INTERVAL '20 days',NOW()+INTERVAL '10 days',NOW()-INTERVAL '2 days','payment_failed'
+		(billing_customer_type,billing_name,billing_company,billing_email,billing_address,tenant_id,tier_id,status,billing_model,presentment_currency,billing_period_start,billing_period_end,free_fallback_at,free_fallback_reason)
+		SELECT 'business','Fixture Buyer','Fixture Ltd','billing@example.test','{"street":"1 Main Street","city":"Toronto","postal_code":"M5V1J1","country":"CA"}'::jsonb,gen_random_uuid(),$1,'past_due','postpaid','EUR',NOW()-INTERVAL '20 days',NOW()+INTERVAL '10 days',NOW()-INTERVAL '2 days','payment_failed'
 		FROM generate_series(1,100)`, metered); err != nil {
 		t.Fatal(err)
 	}
 	tenant := uuid.NewString()
 	if _, err := db.ExecContext(ctx, `INSERT INTO purser.tenant_subscriptions
-		(tenant_id,tier_id,status,billing_model,presentment_currency,billing_period_start,billing_period_end,free_fallback_at,free_fallback_reason)
-		VALUES ($1,$2,'past_due','postpaid','EUR',NOW()-INTERVAL '20 days',NOW()+INTERVAL '10 days',NOW()-INTERVAL '1 day','payment_failed')`, tenant, unmetered); err != nil {
+		(billing_customer_type,billing_name,billing_company,billing_email,billing_address,tenant_id,tier_id,status,billing_model,presentment_currency,billing_period_start,billing_period_end,free_fallback_at,free_fallback_reason)
+		VALUES ('business','Fixture Buyer','Fixture Ltd','billing@example.test','{"street":"1 Main Street","city":"Toronto","postal_code":"M5V1J1","country":"CA"}'::jsonb,$1,$2,'past_due','postpaid','EUR',NOW()-INTERVAL '20 days',NOW()+INTERVAL '10 days',NOW()-INTERVAL '1 day','payment_failed')`, tenant, unmetered); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE purser.billing_tiers SET is_default_postpaid=true WHERE tier_name='free'`); err != nil {
@@ -213,6 +216,7 @@ func TestFreeFallbackFailuresDoNotStarveLaterTenants_RealPG(t *testing.T) {
 // A recoverable unpaid Stripe subscription must stop billing before its local
 // identity is discarded; otherwise neither a retry nor later closure owns it.
 func TestFreeFallbackStopsUnpaidProviderSubscription_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	db := startOperatorGrantDatabase(t)
 	ctx := t.Context()
 	free, paid, tenant := uuid.NewString(), uuid.NewString(), uuid.NewString()
@@ -222,9 +226,9 @@ func TestFreeFallbackStopsUnpaidProviderSubscription_RealPG(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO purser.tenant_subscriptions
-		(tenant_id,tier_id,status,billing_model,presentment_currency,billing_period_start,billing_period_end,
+		(billing_customer_type,billing_name,billing_company,billing_email,billing_address,tenant_id,tier_id,status,billing_model,presentment_currency,billing_period_start,billing_period_end,
 		stripe_customer_id,stripe_subscription_id,stripe_subscription_status,free_fallback_at,free_fallback_reason)
-		VALUES ($1,$2,'past_due','postpaid','EUR',NOW()-INTERVAL '20 days',NOW()+INTERVAL '10 days',
+		VALUES ('business','Fixture Buyer','Fixture Ltd','billing@example.test','{"street":"1 Main Street","city":"Toronto","postal_code":"M5V1J1","country":"CA"}'::jsonb,$1,$2,'past_due','postpaid','EUR',NOW()-INTERVAL '20 days',NOW()+INTERVAL '10 days',
 		'customer','unpaid-subscription','unpaid',NOW()-INTERVAL '1 hour','payment_failed')`, tenant, paid); err != nil {
 		t.Fatal(err)
 	}
@@ -265,6 +269,7 @@ func (f *fallbackUnpaidStripe) EndSubscriptionForFallback(ctx context.Context, r
 }
 
 func TestFreeFallbackKeepsMissedMonthsSeparate_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	appconfigtest.Set(t, "WAIVE_USAGE_CHARGES", "false")
 	db := startOperatorGrantDatabase(t)
 	ctx := t.Context()
@@ -285,7 +290,7 @@ func TestFreeFallbackKeepsMissedMonthsSeparate_RealPG(t *testing.T) {
 	}
 	exec(`INSERT INTO purser.billing_tiers(id,tier_name,display_name,base_price,currency,tier_level,metering_enabled) VALUES($1,'free','Free',0,'EUR',0,true),($2,'paid','Paid',79,'EUR',1,true)`, free, paid)
 	exec(`INSERT INTO purser.tier_pricing_rules(tier_id,meter,model,currency,included_quantity,unit_price,config) VALUES($1,'egress_gb','tiered_graduated','EUR',50,0.02,'{}')`, paid)
-	exec(`INSERT INTO purser.tenant_subscriptions(tenant_id,tier_id,status,billing_model,billing_email,payment_method,stripe_customer_id,stripe_subscription_id,billing_period_start,billing_period_end,next_billing_date,presentment_currency,free_fallback_at,free_fallback_reason,free_fallback_notified_at) VALUES($1,$2,'past_due','postpaid','billing@example.com','stripe','cus','sub',$3,$4,$4,'EUR',$5,'payment_failed',NOW())`, tenant, paid, start, start.AddDate(0, 1, 0), cutoff)
+	exec(`INSERT INTO purser.tenant_subscriptions(billing_customer_type,billing_name,billing_company,billing_address,tenant_id,tier_id,status,billing_model,billing_email,payment_method,stripe_customer_id,stripe_subscription_id,billing_period_start,billing_period_end,next_billing_date,presentment_currency,free_fallback_at,free_fallback_reason,free_fallback_notified_at) VALUES('business','Fixture Buyer','Fixture Ltd','{"street":"1 Main Street","city":"Toronto","postal_code":"M5V1J1","country":"CA"}'::jsonb,$1,$2,'past_due','postpaid','billing@example.com','stripe','cus','sub',$3,$4,$4,'EUR',$5,'payment_failed',NOW())`, tenant, paid, start, start.AddDate(0, 1, 0), cutoff)
 	exec(`INSERT INTO purser.metering_sources(source_id,region,active_from,required) VALUES('fallback-monthly','',$1,true)`, start)
 	exec(`INSERT INTO purser.metering_windows(source_id,period_start,period_end,complete) SELECT 'fallback-monthly',at,at+INTERVAL '5 minutes',true FROM generate_series($1::timestamptz,$2::timestamptz,INTERVAL '5 minutes') at`, start, cutoff)
 	for i, quantity := range []float64{100, 150, 100} {
@@ -306,7 +311,13 @@ func TestFreeFallbackKeepsMissedMonthsSeparate_RealPG(t *testing.T) {
 	if err := db.QueryRow(`SELECT tier.tier_name FROM purser.tenant_subscriptions subscription JOIN purser.billing_tiers tier ON tier.id=subscription.tier_id WHERE subscription.tenant_id=$1`, tenant).Scan(&tier); err != nil || tier != "free" {
 		t.Fatalf("fallback tier=%s err=%v", tier, err)
 	}
-	rows, err := db.Query(`SELECT period_start,period_end,metered_amount::text,base_amount::text FROM purser.billing_invoices WHERE tenant_id=$1 AND document_kind='invoice' ORDER BY period_start`, tenant)
+	rows, err := db.Query(`SELECT invoice.period_start,invoice.period_end,invoice.metered_amount::text,invoice.base_amount::text,
+ invoice.tax_status,invoice.net_eur_cents,invoice.vat_eur_cents,invoice.gross_eur_cents,
+ (SELECT COALESCE(SUM(line.net_eur_cents),0) FROM purser.invoice_line_items line WHERE line.tenant_id=invoice.tenant_id AND line.invoice_id=invoice.id),
+ (SELECT COALESCE(SUM(line.vat_eur_cents),0) FROM purser.invoice_line_items line WHERE line.tenant_id=invoice.tenant_id AND line.invoice_id=invoice.id),
+ (SELECT COALESCE(SUM(line.gross_eur_cents),0) FROM purser.invoice_line_items line WHERE line.tenant_id=invoice.tenant_id AND line.invoice_id=invoice.id),
+ (SELECT COUNT(*) FROM purser.invoice_line_items line WHERE line.tenant_id=invoice.tenant_id AND line.invoice_id=invoice.id AND line.line_key IN ('collection_balance_deferred','collection_balance_opening'))
+ FROM purser.billing_invoices invoice WHERE invoice.tenant_id=$1 AND invoice.document_kind='invoice' ORDER BY invoice.period_start`, tenant)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,9 +327,14 @@ func TestFreeFallbackKeepsMissedMonthsSeparate_RealPG(t *testing.T) {
 			t.Fatalf("missing monthly invoice %d; catch-up must not merge allowances", i)
 		}
 		var from, to time.Time
-		var metered, base string
-		if err = rows.Scan(&from, &to, &metered, &base); err != nil {
+		var metered, base, taxStatus string
+		var net, vat, gross, lineNet, lineVAT, lineGross, collectionLines int64
+		if err = rows.Scan(&from, &to, &metered, &base, &taxStatus, &net, &vat, &gross, &lineNet, &lineVAT, &lineGross, &collectionLines); err != nil {
 			t.Fatal(err)
+		}
+		wantNet := []int64{100, 200, 100}[i]
+		if taxStatus != "ready" || net != wantNet || vat != 0 || gross != wantNet || lineNet != net || lineVAT != vat || lineGross != gross || collectionLines != 0 {
+			t.Fatalf("invoice%d re-taxed collection carry or changed issued supply: status=%s header=%d/%d/%d lines=%d/%d/%d financialcarrylines=%d", i, taxStatus, net, vat, gross, lineNet, lineVAT, lineGross, collectionLines)
 		}
 		wantStart, wantEnd := start.AddDate(0, i, 0), start.AddDate(0, i+1, 0)
 		if i == 2 {
@@ -333,6 +349,10 @@ func TestFreeFallbackKeepsMissedMonthsSeparate_RealPG(t *testing.T) {
 	}
 	if err = rows.Err(); err != nil {
 		t.Fatal(err)
+	}
+	var decisions, current, closing, collected, deferred int64
+	if err = db.QueryRowContext(ctx, `SELECT COUNT(*),SUM(current_charge_cents),MAX(closing_balance_cents),SUM(collected_cents),COUNT(*) FILTER(WHERE outcome='deferred') FROM purser.billing_collection_entries WHERE tenant_id=$1`, tenant).Scan(&decisions, &current, &closing, &collected, &deferred); err != nil || decisions != 3 || current != 400 || closing != 400 || collected != 0 || deferred != 3 {
+		t.Fatalf("collection carry missing its separate financial ledger: decisions=%d current=%d closing=%d collected=%d deferred=%d %v", decisions, current, closing, collected, deferred, err)
 	}
 }
 
@@ -390,6 +410,7 @@ func (s *PurserServer) sweepFreeFallbacksOnce(ctx context.Context) {
 // The move to Free ends the only collector, so the final invoice's sub-minimum
 // amount is written off rather than stranded on a tier with nothing to collect.
 func TestMoveToFreeWritesOffCollectionCarry_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	db := startOperatorGrantDatabase(t)
 	tenant, _, _ := seedFallbackLifecycle(t, db)
 	if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET stripe_subscription_status='canceled',free_fallback_provider_ended_at=NOW(),free_fallback_reason=$2 WHERE tenant_id=$1`, tenant, subscriptions.FallbackPaymentFailed); err != nil {

@@ -138,11 +138,13 @@ SET usage_details = usage_details || jsonb_build_object('unused_share_returned',
     updated_at = NOW()
 WHERE id = sqlc.arg(invoice_id)::text::uuid
   AND tenant_id = sqlc.arg(tenant_id)::text::uuid
-  AND base_fee_period_start IS NOT NULL;
+  AND (base_fee_period_start IS NOT NULL OR source_reference_type='mollie_native_payment');
 
 -- name: LockOverlappedBaseFeeInvoice :one
 -- Locks the base-fee invoice FindOverlappedBaseFeeInvoice found.
 SELECT invoice.id::text AS id, invoice.status, invoice.base_amount::text AS base_amount,
+ invoice.tax_status,invoice.gross_eur_cents,invoice.document_gross_minor,
+ COALESCE(invoice.presentment_currency,invoice.currency)::text AS document_currency,
        invoice.base_fee_period_start::timestamptz AS base_fee_period_start,
        invoice.base_fee_period_end::timestamptz AS base_fee_period_end,
        (SELECT COUNT(*) FROM purser.billing_payments payment
@@ -156,7 +158,8 @@ FOR UPDATE OF invoice;
 -- Lowers a payable base-fee invoice to the share of its period that was used,
 -- presented at the rate it was issued at.
 UPDATE purser.billing_invoices
-SET amount = sqlc.arg(amount)::text::numeric,
+SET prepaid_credit_applied=CASE WHEN tax_status='ready' THEN COALESCE(prepaid_credit_applied,0)+amount-sqlc.arg(amount)::text::numeric ELSE prepaid_credit_applied END,
+    amount = sqlc.arg(amount)::text::numeric,
     presentment_amount_cents = sqlc.arg(presentment_amount_cents)::bigint,
     usage_details = usage_details || sqlc.arg(details)::jsonb,
     updated_at = NOW()
@@ -361,3 +364,13 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND active_from < sqlc.arg(period_end)::timestamptz
   AND active_until > sqlc.arg(period_start)::timestamptz
 ORDER BY cluster_id;
+
+-- name: InsertUnusedBaseFeeCreditNote :exec
+INSERT INTO purser.credit_notes(credit_note_number,tenant_id,source_document_type,source_document_id,reversal_reference_type,reversal_reference_id,amount_cents,currency,reason,evidence_json)
+SELECT 'CN-'||lpad(nextval('purser.credit_note_number_seq')::text,10,'0'),i.tenant_id,'invoice',i.id,'unused_base_fee',sqlc.arg(reference_id)::text,sqlc.arg(amount_minor)::bigint,sqlc.arg(currency)::text,'Unused subscription period',jsonb_build_object('unused_from',sqlc.arg(unused_from)::timestamptz)
+FROM purser.billing_invoices i WHERE i.tenant_id=sqlc.arg(tenant_id)::text::uuid AND i.id=sqlc.arg(invoice_id)::text::uuid AND i.tax_status='ready'
+ON CONFLICT(source_document_type,source_document_id,reversal_reference_type,reversal_reference_id) DO NOTHING;
+
+-- name: ApplyUnusedBaseFeeFinancialCredit :exec
+UPDATE purser.billing_invoices SET prepaid_credit_applied=sqlc.arg(credit_eur_cents)::bigint/100.0
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND id=sqlc.arg(invoice_id)::text::uuid;

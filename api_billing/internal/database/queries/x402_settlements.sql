@@ -233,6 +233,11 @@ FROM (
     WHERE crypto.tenant_id = sqlc.arg(tenant_id)::text::uuid
       AND crypto.reference_type = sqlc.arg(document_reference_type)
       AND crypto.reference_id = sqlc.arg(document_reference_id)
+    UNION ALL
+    SELECT invoice.invoice_number, invoice.created_at AS issued_at FROM purser.billing_invoices invoice
+    WHERE invoice.tenant_id=sqlc.arg(tenant_id)::text::uuid
+      AND invoice.source_reference_type=sqlc.arg(document_reference_type)
+      AND invoice.source_reference_id=sqlc.arg(document_reference_id)
 ) documents
 ORDER BY issued_at ASC
 LIMIT 1;
@@ -251,7 +256,7 @@ INSERT INTO purser.crypto_invoices (
     currency, amount_eur_cents, net_eur_cents, vat_eur_cents,
     fx_units_per_eur, fx_reference_date, fx_rate_source, fx_rate_observed_at,
     evidence_ip_country, evidence_wallet_network, evidence_billing_country,
-    evidence_status, evidence_conflict, tax_policy_ref,
+    evidence_status, evidence_conflict, tax_policy_ref, tax_assessment,
     supplier_name, supplier_address, supplier_vat_number, supplier_registration_number,
     service_description, service_quantity, service_date,
     customer_email, customer_name, customer_company, customer_address,
@@ -269,7 +274,7 @@ INSERT INTO purser.crypto_invoices (
     sqlc.arg(fx_rate_source), sqlc.arg(fx_rate_observed_at),
     sqlc.arg(evidence_ip_country), sqlc.arg(evidence_wallet_network),
     sqlc.arg(evidence_billing_country), sqlc.arg(evidence_status),
-    sqlc.arg(evidence_conflict), sqlc.arg(tax_policy_ref),
+    sqlc.arg(evidence_conflict), sqlc.arg(tax_policy_ref), sqlc.arg(tax_assessment)::jsonb,
     sqlc.arg(supplier_name), sqlc.arg(supplier_address), sqlc.arg(supplier_vat_number),
     sqlc.arg(supplier_registration_number), sqlc.arg(service_description),
     sqlc.arg(service_quantity), CURRENT_DATE,
@@ -286,7 +291,7 @@ INSERT INTO purser.simplified_invoices (
     currency, amount_eur_cents, net_eur_cents, vat_eur_cents,
     fx_units_per_eur, fx_reference_date, fx_rate_source, fx_rate_observed_at,
     evidence_ip_country, evidence_wallet_network, evidence_billing_country,
-    evidence_status, evidence_conflict, tax_policy_ref,
+    evidence_status, evidence_conflict, tax_policy_ref, tax_assessment,
     supplier_name, supplier_address, supplier_vat_number, supplier_registration_number,
     service_description, service_quantity, service_date, customer_snapshot, issued_at
 ) VALUES (
@@ -302,11 +307,11 @@ INSERT INTO purser.simplified_invoices (
     sqlc.arg(fx_rate_source), sqlc.arg(fx_rate_observed_at),
     sqlc.arg(evidence_ip_country), sqlc.arg(evidence_wallet_network),
     sqlc.arg(evidence_billing_country), sqlc.arg(evidence_status),
-    sqlc.arg(evidence_conflict), sqlc.arg(tax_policy_ref),
+    sqlc.arg(evidence_conflict), sqlc.arg(tax_policy_ref), sqlc.arg(tax_assessment)::jsonb,
     sqlc.arg(supplier_name), sqlc.arg(supplier_address), sqlc.arg(supplier_vat_number),
     sqlc.arg(supplier_registration_number), sqlc.arg(service_description),
     sqlc.arg(service_quantity), CURRENT_DATE,
-    purser.billing_customer_snapshot(sqlc.arg(tenant_id)::text::uuid), NOW()
+    sqlc.arg(customer_snapshot)::jsonb, NOW()
 );
 
 -- name: LockX402SettlementRollup :one
@@ -357,15 +362,6 @@ WHERE country_code = sqlc.arg(country_code)
   AND effective_from <= sqlc.arg(effective_at)::date
   AND (effective_until IS NULL OR effective_until > sqlc.arg(effective_at)::date)
 ORDER BY effective_from DESC
-LIMIT 1;
-
--- name: GetActiveTenantTaxProfile :one
-SELECT tax_id, COALESCE(billing_address, '{}'::jsonb) AS billing_address,
-       billing_customer_type::text AS customer_type
-FROM purser.tenant_subscriptions
-WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
-  AND status != 'cancelled'
-ORDER BY created_at DESC
 LIMIT 1;
 
 -- name: GetX402TaxSnapshot :one

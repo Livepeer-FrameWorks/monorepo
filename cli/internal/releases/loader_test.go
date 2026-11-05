@@ -296,3 +296,15 @@ func TestCatalogRejectsUnknownAndDuplicateCapabilities(t *testing.T) {
 		}
 	}
 }
+
+func TestPaymentTenantBackfillGatesExistingReleasePostdeploy(t *testing.T) {
+	release := Lookup("v0.3.14")
+	if release == nil {
+		t.Fatal("existing release is missing")
+	}
+	if !slices.ContainsFunc(release.RequiredDataMigrations, func(m DataMigrationRequirement) bool {
+		return m.ID == "purser_payment_tenant_backfill_v0_3_14" && m.Service == "purser" && m.IntroducedIn == "v0.3.14" && m.RequiredBeforePhase == "postdeploy"
+	}) {
+		t.Fatal("payment ownership backfill does not gate same-release postdeploy validation")
+	}
+}

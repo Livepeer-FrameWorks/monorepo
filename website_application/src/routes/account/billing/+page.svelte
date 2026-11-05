@@ -90,7 +90,9 @@
       | "simplified_invoice"
       | "crypto_invoice"
       | "payment_receipt"
-      | "credit_note";
+      | "credit_note"
+      | "provider_invoice"
+      | "provider_credit_note";
     document_number: string;
     amount_cents: number;
     currency: string;
@@ -242,6 +244,8 @@
       crypto_invoice: "Crypto invoice",
       payment_receipt: "Payment receipt",
       credit_note: "Credit note",
+      provider_invoice: "Stripe invoice",
+      provider_credit_note: "Stripe credit note",
     }[kind];
   }
 

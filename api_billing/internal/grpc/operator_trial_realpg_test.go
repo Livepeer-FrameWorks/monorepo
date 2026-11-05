@@ -165,6 +165,7 @@ func TestOperatorTrialLifecycle_RealPG(t *testing.T) {
 }
 
 func TestOperatorGrantTierAtomic_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	db := startOperatorGrantDatabase(t)
 	testRetiredFallbackRecovery(t, db)
 	testCancelledGrantCanEnd(t, db)
@@ -202,6 +203,7 @@ func TestOperatorGrantTierAtomic_RealPG(t *testing.T) {
 }
 
 func TestOperatorGrantExpiryReplicas_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	db := startOperatorGrantDatabase(t)
 	ctx := context.Background()
 	tenantID, paygID, enterpriseID := uuid.NewString(), uuid.NewString(), uuid.NewString()
@@ -211,6 +213,7 @@ func TestOperatorGrantExpiryReplicas_RealPG(t *testing.T) {
 	if _, writeErr := db.ExecContext(ctx, `INSERT INTO purser.tenant_subscriptions(tenant_id,tier_id,billing_model,status,billing_period_start,billing_period_end,presentment_currency) VALUES($1,$2,'postpaid','active','2026-07-01T00:00:00Z','2026-07-31T00:00:00Z','EUR')`, tenantID, enterpriseID); writeErr != nil {
 		t.Fatal(writeErr)
 	}
+	seedRPCTaxBuyer(t, db, tenantID)
 	if _, writeErr := db.ExecContext(ctx, `INSERT INTO purser.subscription_operator_grants(subscription_id,base_price,waive_usage,collection,reason,granted_at,expires_at,assigned_tier_id,fallback_tier_id) SELECT id,12,true,'provider','late expiry',billing_period_start,'2026-07-16T00:00:00Z',tier_id,$2 FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenantID, paygID); writeErr != nil {
 		t.Fatal(writeErr)
 	}
@@ -245,6 +248,7 @@ func TestOperatorGrantExpiryReplicas_RealPG(t *testing.T) {
 }
 
 func TestOperatorGrantMidPeriodPricing_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	db := startOperatorGrantDatabase(t)
 	ctx := context.Background()
 	tenantID, tierID := uuid.NewString(), uuid.NewString()
@@ -254,6 +258,7 @@ func TestOperatorGrantMidPeriodPricing_RealPG(t *testing.T) {
 	if _, writeErr := db.ExecContext(ctx, `INSERT INTO purser.tenant_subscriptions(tenant_id,tier_id,billing_model,status,billing_period_start,billing_period_end,presentment_currency) VALUES($1,$2,'postpaid','active',NOW()-INTERVAL '15 days',NOW()+INTERVAL '15 days','EUR')`, tenantID, tierID); writeErr != nil {
 		t.Fatal(writeErr)
 	}
+	seedRPCTaxBuyer(t, db, tenantID)
 	server := &PurserServer{db: db, logger: logging.NewLogger(), tierReconciler: &assignTierReconciler{}, commodoreClient: &recordingCommodoreCache{}}
 	zero := "0"
 	op := operatorAssignCtx(uuid.NewString())

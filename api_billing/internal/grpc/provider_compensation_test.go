@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	billingmollie "frameworks/api_billing/internal/mollie"
 	billingstripe "frameworks/api_billing/internal/stripe"
 
@@ -33,6 +34,10 @@ func expectCollectionProfile(mock sqlmock.Sqlmock, tenantID, presentmentCurrency
 }
 
 func TestCreateCheckoutSessionExpiresStripeSessionWhenLocalStageFails(t *testing.T) {
+	for key, value := range map[string]string{"SUPPLIER_NAME": "DDVTech B.V.", "SUPPLIER_ADDRESS": "Amsterdam, NL", "SUPPLIER_VAT_NUMBER": "NL123456789B01", "SUPPLIER_REGISTRATION_NUMBER": "12345678", "SUPPLIER_COUNTRY": "NL"} {
+		appconfigtest.Set(t, key, value)
+	}
+
 	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -82,6 +87,9 @@ func TestCreateCheckoutSessionExpiresStripeSessionWhenLocalStageFails(t *testing
 	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET provider_customer_id`).
 		WithArgs("cus_123", "intent-tenant", "tenant-a").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("SELECT billing_email, billing_name, billing_company").WithArgs("tenant-a").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow("billing@example.com", "Example Customer", "Example", []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), nil, "consumer"))
+	mock.ExpectQuery("SELECT rate_bps, source, source_checked_on::text AS source_checked_on").WillReturnRows(sqlmock.NewRows([]string{"rate_bps", "source", "source_checked_on", "effective_from"}).AddRow(2100, "Dutch VAT", "2026-01-01", "2026-01-01"))
+	mock.ExpectExec("-- name: StoreProviderTaxProfile").WithArgs("tenant-a", sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	expectProviderRequestJournal(mock, "tenant-a", "stripe_checkout", "test-stripe")
 	// Record provider_session_id once Stripe returns the session.
 	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET provider_session_id`).
@@ -115,6 +123,9 @@ func TestCreateCheckoutSessionExpiresStripeSessionWhenLocalStageFails(t *testing
 }
 
 func TestCreateMollieSubscriptionCancelsProviderSubscriptionWhenLocalPersistFails(t *testing.T) {
+	for key, value := range map[string]string{"SUPPLIER_NAME": "DDVTech B.V.", "SUPPLIER_ADDRESS": "Amsterdam NL", "SUPPLIER_VAT_NUMBER": "NL123456789B01", "SUPPLIER_REGISTRATION_NUMBER": "12345678", "SUPPLIER_COUNTRY": "NL"} {
+		appconfigtest.Set(t, key, value)
+	}
 	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -165,6 +176,9 @@ func TestCreateMollieSubscriptionCancelsProviderSubscriptionWhenLocalPersistFail
 	mock.ExpectQuery("GetProviderCheckoutReservationKey").WillReturnRows(sqlmock.NewRows([]string{"idempotency_key"}).AddRow("reserved-key"))
 	mock.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationTestRows("intent", "tenant-a", "stripe", "tenant_subscription_checkout", nil, nil, nil, nil, "pending", time.Now().Add(24*time.Hour), 0))
 
+	mock.ExpectQuery("SELECT billing_email, billing_name, billing_company").WithArgs("tenant-a").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow("billing@example.com", "Example Customer", "Example", []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), nil, "consumer"))
+	mock.ExpectQuery("SELECT rate_bps, source, source_checked_on::text AS source_checked_on").WillReturnRows(sqlmock.NewRows([]string{"rate_bps", "source", "source_checked_on", "effective_from"}).AddRow(2100, "Dutch VAT", "2026-01-01", "2026-01-01"))
+	mock.ExpectExec("-- name: StoreProviderTaxProfile").WithArgs("tenant-a", sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	expectProviderRequestJournal(mock, "tenant-a", "mollie_subscription", "test-mollie")
 	// Record provider_subscription_id once Mollie returns the subscription.
 	mock.ExpectBegin()
@@ -205,6 +219,10 @@ type fakeStripeBillingClient struct {
 	session         *stripelib.CheckoutSession
 	expiredSessions []string
 	checkoutKey     string
+}
+
+func (f *fakeStripeBillingClient) PrepareCustomerTax(context.Context, string, string, billingstripe.TaxProfile) (string, error) {
+	return "txr_test", nil
 }
 
 func (f *fakeStripeBillingClient) CreateOrGetCustomer(context.Context, billingstripe.CustomerInfo) (*stripelib.Customer, error) {

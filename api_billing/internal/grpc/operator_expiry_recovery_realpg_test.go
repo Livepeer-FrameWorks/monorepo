@@ -145,6 +145,7 @@ func testGrantRefusesPendingProviderCheckout(t *testing.T, db *sql.DB) {
 			if _, err := db.Exec(`INSERT INTO purser.tenant_subscriptions(tenant_id,tier_id,status,billing_model,presentment_currency) VALUES($1,$2,'active','postpaid','EUR')`, tenant, tier); err != nil {
 				t.Fatal(err)
 			}
+			seedRPCTaxBuyer(t, db, tenant)
 			if _, err := db.Exec(`INSERT INTO purser.payment_provider_intents(tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,idempotency_key,expires_at) VALUES($1::text::uuid,$2,$3,'billing_tiers',$4,'provider_open','EUR',$1::text,NOW()+INTERVAL '24 hours')`, tenant, map[bool]string{true: "stripe", false: "mollie"}[purpose == "tenant_subscription_checkout"], purpose, tier); err != nil {
 				t.Fatal(err)
 			}

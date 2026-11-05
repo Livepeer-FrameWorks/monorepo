@@ -293,11 +293,48 @@ func invoiceTotals(document purserdb.GetInvoiceDocumentRow, lines []billingDocum
 	if len(lines) > 0 {
 		subtotal = linesCents
 	}
-	totals := []billingDocumentField{{Label: "Subtotal", Value: eur(subtotal)}}
-	if document.PrepaidCreditCents != 0 {
-		totals = append(totals, billingDocumentField{Label: "Prepaid credit applied", Value: eur(-document.PrepaidCreditCents)})
+	frozen := document.NetEurCents.Valid && document.VatEurCents.Valid && document.GrossEurCents.Valid
+	if frozen {
+		subtotal = document.NetEurCents.Int64
 	}
-	if carried := document.EurAmountCents - max(subtotal-document.PrepaidCreditCents, 0); carried != 0 && document.CollectionMinimumApplied {
+	totals := []billingDocumentField{{Label: "Subtotal", Value: eur(subtotal)}}
+	if frozen {
+		var groups []struct {
+			RateBPS int    `json:"rate_bps"`
+			VAT     int64  `json:"vat_eur_cents"`
+			Wording string `json:"wording"`
+		}
+		if json.Unmarshal(document.TaxSummary, &groups) == nil && len(groups) > 0 {
+			for _, group := range groups {
+				label := "VAT (" + decimal.New(int64(group.RateBPS), -2).String() + "%)"
+				totals = append(totals, billingDocumentField{Label: label, Value: eur(group.VAT)})
+				if group.Wording != "" {
+					totals = append(totals, billingDocumentField{Label: "Tax treatment", Value: group.Wording})
+				}
+			}
+		} else {
+			totals = append(totals, billingDocumentField{Label: "VAT", Value: eur(document.VatEurCents.Int64)})
+		}
+		totals = append(totals, billingDocumentField{Label: "Total including VAT", Value: eur(document.GrossEurCents.Int64)})
+		if currency != "EUR" && document.DocumentGrossMinor.Valid {
+			totals = append(totals, billingDocumentField{Label: "Net (" + currency + ")", Value: currency + " " + moneyString(document.DocumentNetMinor.Int64)}, billingDocumentField{Label: "VAT (" + currency + ")", Value: currency + " " + moneyString(document.DocumentVatMinor.Int64)}, billingDocumentField{Label: "Total (" + currency + ")", Value: currency + " " + moneyString(document.DocumentGrossMinor.Int64)})
+		}
+	}
+	financialCredit := document.PrepaidCreditCents
+	if frozen {
+		financialCredit = document.PrepaidFinancialCreditEurCents
+	}
+	if financialCredit != 0 {
+		totals = append(totals, billingDocumentField{Label: "Prepaid credit applied", Value: eur(-financialCredit)})
+	}
+	if frozen && document.AbsorbedVatEurCents != 0 {
+		totals = append(totals, billingDocumentField{Label: "VAT covered by supplier", Value: eur(-document.AbsorbedVatEurCents)})
+	}
+	beforeAllocations := subtotal
+	if frozen {
+		beforeAllocations = document.GrossEurCents.Int64
+	}
+	if carried := document.EurAmountCents - max(beforeAllocations-financialCredit-document.AbsorbedVatEurCents, 0); carried != 0 && document.CollectionMinimumApplied {
 		label := "Carried from earlier invoices (collection minimum)"
 		if carried < 0 {
 			label = "Carried to a later invoice (collection minimum)"
@@ -403,6 +440,9 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		return nil, status.Error(codes.InvalidArgument, "valid document_id required")
 	}
 	kind := strings.TrimSpace(req.GetKind())
+	if kind == "provider_invoice" || kind == "provider_credit_note" {
+		return s.getProviderBillingDocument(ctx, tenantID, documentID, kind)
+	}
 	configured := handlers.ConfiguredDocumentSupplier()
 	base := billingDocumentData{SupplierName: configured.Name, SupplierAddress: configured.Address, SupplierVAT: configured.VATNumber, SupplierRegistration: configured.RegistrationNumber}
 	var row billingDocumentRow
@@ -442,6 +482,10 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat, document.CustomerEmail)
 		setRecordedSupplier(document.HasSupplierSnapshot, document.SupplierName, document.SupplierAddress, document.SupplierVatNumber, document.SupplierRegistrationNumber)
 		base.Title = "Invoice"
+		row.netEURCents, row.vatEURCents = document.NetEurCents, document.VatEurCents
+		if document.TaxStatus == "no_supply" {
+			base.Title = "Usage statement"
+		}
 		base.Fields = append(base.Fields, billingPeriodField(document.PeriodStart, document.PeriodEnd)...)
 		base.Fields = append(base.Fields, billingDocumentField{Label: "Due", Value: document.DueDate.UTC().Format(time.DateOnly)})
 		if document.PresentmentUnitsPerEur != "" && document.PresentmentReferenceDate.Valid {
@@ -486,12 +530,13 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		base.SupplierVAT, base.SupplierRegistration = document.SupplierVatNumber, document.SupplierRegistrationNumber
 		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat, document.CustomerEmail)
 		base.Title = "Simplified invoice"
+		taxLabel, taxWording := cryptoDocumentTaxDescription(document.TaxAssessment)
 		base.Fields = append(base.Fields,
 			billingDocumentField{Label: "Net", Value: row.currency + " " + moneyString(document.NetAmountCents)},
-			billingDocumentField{Label: "VAT", Value: fmt.Sprintf("%s %s (%0.2f%%)", row.currency, moneyString(document.VatAmountCents), float64(document.VatRateBps)/100)},
+			billingDocumentField{Label: taxLabel, Value: fmt.Sprintf("%s %s (%0.2f%%)", row.currency, moneyString(document.VatAmountCents), float64(document.VatRateBps)/100)},
 			billingDocumentField{Label: "Total (EUR)", Value: "EUR " + moneyString(document.AmountEurCents)},
 			billingDocumentField{Label: "Net (EUR)", Value: "EUR " + moneyString(document.NetEurCents)},
-			billingDocumentField{Label: "VAT (EUR)", Value: "EUR " + moneyString(document.VatEurCents)},
+			billingDocumentField{Label: taxLabel + " (EUR)", Value: "EUR " + moneyString(document.VatEurCents)},
 		)
 		if document.FxUnitsPerEur != "" {
 			base.Fields = append(base.Fields, exchangeRateFields(row.currency, document.FxUnitsPerEur, document.FxReferenceDate)...)
@@ -503,7 +548,10 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 			billingDocumentField{Label: "Supply date", Value: document.ServiceDate.Time.Format("2006-01-02")},
 			billingDocumentField{Label: "Settlement reference", Value: document.ReferenceType + ":" + document.ReferenceID},
 		)
-		if document.TaxValidationStatus == "reverse_charge" {
+		if taxWording != "" {
+			base.Fields = append(base.Fields, billingDocumentField{Label: "Tax treatment", Value: taxWording})
+		}
+		if document.TaxValidationStatus == "reverse_charge" && taxWording == "" {
 			base.Fields = append(base.Fields, billingDocumentField{Label: "VAT treatment", Value: "Reverse charge — btw verlegd"})
 		}
 	case "crypto_invoice":
@@ -515,12 +563,13 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		base.SupplierVAT, base.SupplierRegistration = document.SupplierVatNumber, document.SupplierRegistrationNumber
 		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat, document.CustomerEmail)
 		base.Title = "Invoice"
+		taxLabel, taxWording := cryptoDocumentTaxDescription(document.TaxAssessment)
 		base.Fields = append(base.Fields,
 			billingDocumentField{Label: "Net", Value: row.currency + " " + moneyString(document.NetAmountCents)},
-			billingDocumentField{Label: "VAT", Value: fmt.Sprintf("%s %s (%0.2f%%)", row.currency, moneyString(document.VatAmountCents), float64(document.VatRateBps)/100)},
+			billingDocumentField{Label: taxLabel, Value: fmt.Sprintf("%s %s (%0.2f%%)", row.currency, moneyString(document.VatAmountCents), float64(document.VatRateBps)/100)},
 			billingDocumentField{Label: "Total (EUR)", Value: "EUR " + moneyString(document.AmountEurCents)},
 			billingDocumentField{Label: "Net (EUR)", Value: "EUR " + moneyString(document.NetEurCents)},
-			billingDocumentField{Label: "VAT (EUR)", Value: "EUR " + moneyString(document.VatEurCents)},
+			billingDocumentField{Label: taxLabel + " (EUR)", Value: "EUR " + moneyString(document.VatEurCents)},
 		)
 		if document.FxUnitsPerEur != "" {
 			base.Fields = append(base.Fields, exchangeRateFields(row.currency, document.FxUnitsPerEur, document.FxReferenceDate)...)
@@ -532,7 +581,10 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 			billingDocumentField{Label: "Supply date", Value: document.ServiceDate.Format("2006-01-02")},
 			billingDocumentField{Label: "Settlement reference", Value: document.ReferenceType + ":" + document.ReferenceID},
 		)
-		if document.TaxValidationStatus == "reverse_charge" {
+		if taxWording != "" {
+			base.Fields = append(base.Fields, billingDocumentField{Label: "Tax treatment", Value: taxWording})
+		}
+		if document.TaxValidationStatus == "reverse_charge" && taxWording == "" {
 			base.Fields = append(base.Fields, billingDocumentField{Label: "VAT treatment", Value: "Reverse charge — btw verlegd"})
 		}
 	case "payment_receipt":
@@ -558,11 +610,30 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		setRecordedSupplier(document.HasSupplierSnapshot, document.SupplierName, document.SupplierAddress, document.SupplierVatNumber, document.SupplierRegistrationNumber)
 		base.Title = "Credit note"
 		base.Fields = append(base.Fields,
-			billingDocumentField{Label: "Original document", Value: document.SourceDocumentType + ":" + document.SourceDocumentID},
+			billingDocumentField{Label: "Original document", Value: document.SourceDocumentNumber},
 			billingDocumentField{Label: "Reversal reference", Value: document.ReversalReferenceType + ":" + document.ReversalReferenceID},
 			billingDocumentField{Label: "Reason", Value: document.Reason},
 		)
-		base.Totals = []billingDocumentField{{Label: "Total credited", Value: row.currency + " " + moneyString(row.amountCents)}}
+		if document.DocumentNetMinor.Valid && document.DocumentVatMinor.Valid {
+			base.Totals = append(base.Totals, billingDocumentField{Label: "Net credited", Value: row.currency + " " + moneyString(document.DocumentNetMinor.Int64)}, billingDocumentField{Label: "VAT credited", Value: row.currency + " " + moneyString(document.DocumentVatMinor.Int64)})
+			row.setEUR(document.GrossEurCents.Int64, document.NetEurCents.Int64, document.VatEurCents.Int64, "", time.Time{})
+			var summary struct {
+				Groups []struct {
+					Rate      int    `json:"rate_bps"`
+					Treatment string `json:"treatment"`
+					Wording   string `json:"wording"`
+				} `json:"source_tax_groups"`
+			}
+			if json.Unmarshal(document.TaxSummary, &summary) == nil {
+				for _, group := range summary.Groups {
+					base.Fields = append(base.Fields, billingDocumentField{Label: "Original VAT rate", Value: decimal.New(int64(group.Rate), -2).String() + "%"})
+					if group.Wording != "" {
+						base.Fields = append(base.Fields, billingDocumentField{Label: "Tax treatment", Value: group.Wording})
+					}
+				}
+			}
+		}
+		base.Totals = append(base.Totals, billingDocumentField{Label: "Total credited", Value: row.currency + " " + moneyString(row.amountCents)})
 	default:
 		return nil, status.Error(codes.InvalidArgument, "unsupported billing document kind")
 	}
@@ -577,4 +648,23 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		return nil, status.Errorf(codes.FailedPrecondition, "supplier information is not configured for document rendering: %s", strings.Join(missing, ", "))
 	}
 	return renderBillingDocument(row, base)
+}
+
+// cryptoDocumentTaxDescription reads the wording issued with a reviewed foreign
+// assessment. Legacy documents retain their existing VAT labels and wording.
+func cryptoDocumentTaxDescription(raw json.RawMessage) (string, string) {
+	var assessment struct {
+		Decision struct {
+			TaxLabel string `json:"tax_label"`
+			Wording  string `json:"wording"`
+		} `json:"confirmed_decision"`
+	}
+	if err := json.Unmarshal(raw, &assessment); err != nil {
+		return "VAT", ""
+	}
+	label := strings.TrimSpace(assessment.Decision.TaxLabel)
+	if label == "" {
+		label = "VAT"
+	}
+	return label, assessment.Decision.Wording
 }

@@ -8,7 +8,10 @@ package purserdb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const activateTenantSubscriptionFromStripe = `-- name: ActivateTenantSubscriptionFromStripe :execrows
@@ -357,7 +360,7 @@ func (q *Queries) LinkStripeIntentSubscription(ctx context.Context, arg LinkStri
 }
 
 const lockPendingTopupForCheckout = `-- name: LockPendingTopupForCheckout :one
-SELECT status, tenant_id::text AS tenant_id, provider, amount_cents, currency,
+SELECT net_eur_cents,vat_eur_cents,gross_eur_cents,COALESCE(tax_assessment,'{}'::jsonb)::jsonb AS tax_assessment,tax_document_id,status, tenant_id::text AS tenant_id, provider, amount_cents, currency,
        checkout_id, provider_payment_id, refunded_amount_cents,
        COALESCE(original_amount_cents, 0)::bigint AS original_amount_cents,
        COALESCE(original_currency, '')::text AS original_currency,
@@ -371,26 +374,36 @@ FOR UPDATE
 `
 
 type LockPendingTopupForCheckoutRow struct {
-	Status              string         `db:"status" json:"status"`
-	TenantID            string         `db:"tenant_id" json:"tenant_id"`
-	Provider            string         `db:"provider" json:"provider"`
-	AmountCents         int64          `db:"amount_cents" json:"amount_cents"`
-	Currency            string         `db:"currency" json:"currency"`
-	CheckoutID          sql.NullString `db:"checkout_id" json:"checkout_id"`
-	ProviderPaymentID   sql.NullString `db:"provider_payment_id" json:"provider_payment_id"`
-	RefundedAmountCents int64          `db:"refunded_amount_cents" json:"refunded_amount_cents"`
-	OriginalAmountCents int64          `db:"original_amount_cents" json:"original_amount_cents"`
-	OriginalCurrency    string         `db:"original_currency" json:"original_currency"`
-	EurAmountCents      int64          `db:"eur_amount_cents" json:"eur_amount_cents"`
-	FxUnitsPerEur       string         `db:"fx_units_per_eur" json:"fx_units_per_eur"`
-	FxSource            string         `db:"fx_source" json:"fx_source"`
-	FxReferenceDate     time.Time      `db:"fx_reference_date" json:"fx_reference_date"`
+	NetEurCents         sql.NullInt64   `db:"net_eur_cents" json:"net_eur_cents"`
+	VatEurCents         sql.NullInt64   `db:"vat_eur_cents" json:"vat_eur_cents"`
+	GrossEurCents       sql.NullInt64   `db:"gross_eur_cents" json:"gross_eur_cents"`
+	TaxAssessment       json.RawMessage `db:"tax_assessment" json:"tax_assessment"`
+	TaxDocumentID       uuid.NullUUID   `db:"tax_document_id" json:"tax_document_id"`
+	Status              string          `db:"status" json:"status"`
+	TenantID            string          `db:"tenant_id" json:"tenant_id"`
+	Provider            string          `db:"provider" json:"provider"`
+	AmountCents         int64           `db:"amount_cents" json:"amount_cents"`
+	Currency            string          `db:"currency" json:"currency"`
+	CheckoutID          sql.NullString  `db:"checkout_id" json:"checkout_id"`
+	ProviderPaymentID   sql.NullString  `db:"provider_payment_id" json:"provider_payment_id"`
+	RefundedAmountCents int64           `db:"refunded_amount_cents" json:"refunded_amount_cents"`
+	OriginalAmountCents int64           `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency    string          `db:"original_currency" json:"original_currency"`
+	EurAmountCents      int64           `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur       string          `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource            string          `db:"fx_source" json:"fx_source"`
+	FxReferenceDate     time.Time       `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) LockPendingTopupForCheckout(ctx context.Context, topupID string) (LockPendingTopupForCheckoutRow, error) {
 	row := q.db.QueryRowContext(ctx, lockPendingTopupForCheckout, topupID)
 	var i LockPendingTopupForCheckoutRow
 	err := row.Scan(
+		&i.NetEurCents,
+		&i.VatEurCents,
+		&i.GrossEurCents,
+		&i.TaxAssessment,
+		&i.TaxDocumentID,
 		&i.Status,
 		&i.TenantID,
 		&i.Provider,

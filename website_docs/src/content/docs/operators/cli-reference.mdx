@@ -2372,7 +2372,7 @@ frameworks admin billing set-cluster-pricing \
 
 ### frameworks admin billing finance
 
-Read-only operator financial evidence collection. Requires a platform-operator
+Operator financial evidence collection and establishment reviews. Requires a platform-operator
 login. See [Billing financial evidence](/operators/billing-financials/) for the
 archive contents and accounting limitations.
 
@@ -2389,10 +2389,28 @@ frameworks admin billing finance audit --from inception --through now \
 - `--provider` - `stripe` (default) or `none`; omitted provider evidence is recorded.
 
 The archive contains paginated Purser/Stripe source records, hashes, capture
-timestamps and an exception report. It performs no collections, refunds,
+timestamps, grouped `exceptions.csv` and per-record `exception_records.csv`
+(schema version 2). Purser resolves `--through now` once for all pages. It performs no collections, refunds,
 payouts or corrections, supplies no journal import and remains
 `posting_ready: false`. Current status/balance observations are not reconstructed
 historical accounting snapshots.
+
+#### frameworks admin billing finance tax-profile
+
+`--tenant-id <uuid>` reads the complete saved business profile, its canonical
+SHA256 and the current `evidence_revision`. Inspect that identity before recording
+establishment evidence. This operation is read-only.
+
+#### frameworks admin billing finance record-business-evidence
+
+Record a retained non-EU business establishment review with `--tenant-id`,
+`--profile-sha256`, `--expected-revision`, `--reference` and `--valid-until` (RFC3339,
+within 366 days). The server refuses changed profiles and stale evidence
+revisions. `--revoke --tenant-id <uuid> --reference <reason>` instead appends a
+tenant-wide revocation, omitting fingerprint and expiry. Both require a
+platform-operator JWT. References do not upload the underlying evidence or set a
+tax rate; retain proof separately and configure the reviewed country policy.
+See [Billing financial evidence](/operators/billing-financials/).
 
 ### frameworks admin billing credit
 

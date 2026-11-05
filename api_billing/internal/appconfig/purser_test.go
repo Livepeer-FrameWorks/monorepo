@@ -26,6 +26,33 @@ var purserRequired = map[string]string{
 	"USAGE_HASH_SECRET":                     "usage-hash",
 }
 
+func TestFinancialAuditRequiresItsOwnStripeKey(t *testing.T) {
+	_, err := config.Load[appconfig.PurserFinancialAudit](config.Options{Service: "purser", Lookup: lookupFrom(nil)})
+	if err == nil || !strings.Contains(err.Error(), "STRIPE_SECRET_KEY") {
+		t.Fatalf("audit without key: %v", err)
+	}
+	_, err = config.Load[appconfig.PurserFinancialAudit](config.Options{Service: "purser", Lookup: lookupFrom(map[string]string{"STRIPE_SECRET_KEY": "sk_test_fixture"})})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPurserRejectsUnsupportedOriginThresholdConfiguration(t *testing.T) {
+	_, err := config.Load[appconfig.PurserRuntime](config.Options{Service: "purser", Lookup: lookupFrom(map[string]string{"EU_CONSUMER_VAT_MODE": "origin_threshold"})})
+	if err == nil || !strings.Contains(err.Error(), "must be destination or empty") {
+		t.Fatalf("an unwired turnover regime must fail configuration, got %v", err)
+	}
+}
+
+func TestPurserRejectsInvalidOperatorTaxPolicy(t *testing.T) {
+	for _, raw := range []string{`{"reference":`, `{"reference":"memo","supplier_country":"US"}`, `{"reference":"memo","supplier_country":"NL","non_eu_consumers":{"US":{"source":"review"}}}`} {
+		_, err := config.Load[appconfig.PurserRuntime](config.Options{Service: "purser", Lookup: lookupFrom(map[string]string{"SUPPLIER_COUNTRY": "NL", "CRYPTO_TAX_POLICY_JSON": raw})})
+		if err == nil {
+			t.Fatalf("invalid tax policy was silently accepted: %s", raw)
+		}
+	}
+}
+
 func TestPurserRequiresDatabaseAndSharedSecrets(t *testing.T) {
 	_, err := config.Load[appconfig.Purser](config.Options{Service: "purser", Lookup: lookupFrom(nil)})
 	var loadErr *config.LoadError

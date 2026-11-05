@@ -33,6 +33,7 @@ func (c *closingClusterStripeClient) CreateCheckoutSession(ctx context.Context, 
 }
 
 func TestClosedAccountRefusesMonthlyClusterPurchase_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	for _, tc := range []struct {
 		name, currency string
 		duringProvider bool
@@ -41,6 +42,7 @@ func TestClosedAccountRefusesMonthlyClusterPurchase_RealPG(t *testing.T) {
 			currency := tc.currency
 			db := startOperatorGrantDatabase(t)
 			tenant, _, _ := seedGrantRace(t, db)
+			seedRPCTaxBuyer(t, db, tenant)
 			owner := uuid.NewString()
 			cluster := "monthly-" + uuid.NewString()
 			if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.cluster_owners(tenant_id,status,payout_eligible) VALUES($1,'approved',true)`, owner); err != nil {

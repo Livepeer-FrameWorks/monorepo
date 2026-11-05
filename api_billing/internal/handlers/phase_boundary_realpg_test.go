@@ -92,6 +92,7 @@ func newPhaseTenant(t *testing.T, db *sql.DB, model string, periodStart, periodE
 		tenantID, balanceCents); err != nil {
 		t.Fatal(err)
 	}
+	seedContractBillingIdentity(t, db, tenantID)
 	logger := logging.NewLogger()
 	svc := &Service{db: db, logger: logger, qmClient: phaseQuartermaster{}}
 	return &phaseTenant{

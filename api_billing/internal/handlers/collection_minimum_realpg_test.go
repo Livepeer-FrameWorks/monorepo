@@ -92,15 +92,14 @@ func TestInvoiceCollectionMinimumSerializesAndPersists_RealPG(t *testing.T) { //
 	}
 
 	var lineCount int
-	var lineTotal string
 	if err := db.QueryRowContext(ctx, `
-		SELECT COUNT(*), SUM(amount)::text
+		SELECT COUNT(*)
 		FROM purser.invoice_line_items
 		WHERE tenant_id = $1 AND line_key IN ('collection_balance_deferred', 'collection_balance_opening')
-	`, tenantID).Scan(&lineCount, &lineTotal); err != nil {
+	`, tenantID).Scan(&lineCount); err != nil {
 		t.Fatal(err)
 	}
-	if lineCount != 2 || lineTotal != "0.00" {
-		t.Fatalf("collection lines count/total = %d/%s", lineCount, lineTotal)
+	if lineCount != 0 {
+		t.Fatalf("financial collection carry became %d supply lines", lineCount)
 	}
 }

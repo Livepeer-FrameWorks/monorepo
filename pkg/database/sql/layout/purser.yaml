@@ -57,7 +57,11 @@ distributed_tables:
   - purser.operator_credit_ledger
   - purser.operator_payouts
   - purser.balance_transactions
+  - purser.provider_tax_profiles
+  - purser.provider_billing_documents
   - purser.pending_topups
+  - purser.prepaid_funding_lots
+  - purser.prepaid_funding_allocations
   - purser.usage_records
   - purser.provider_usage_records
   - purser.usage_reports
@@ -79,6 +83,7 @@ distributed_tables:
   - purser.crypto_invoices
   - purser.credit_notes
   - purser.vat_validation_evidence
+  - purser.business_establishment_reviews
   - purser.payment_provider_intents
   - purser.provider_payment_objects
   - purser.provider_settlements

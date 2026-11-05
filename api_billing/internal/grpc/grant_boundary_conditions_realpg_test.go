@@ -14,6 +14,7 @@ import (
 )
 
 func testGrantBoundaryDataCondition(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	db := startOperatorGrantDatabase(t)
 	tenant, paid, free := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	if _, err := db.Exec(`INSERT INTO purser.billing_tiers(id,tier_name,display_name,tier_level,base_price,metering_enabled,is_default_prepaid) VALUES($1,'boundary-paid','Paid',2,50,false,false),($2,'boundary-free','Free',0,0,false,true)`, paid, free); err != nil {
@@ -22,6 +23,7 @@ func testGrantBoundaryDataCondition(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO purser.tenant_subscriptions(tenant_id,tier_id,status,billing_model,presentment_currency,billing_period_start,billing_period_end) VALUES($1,$2,'active','postpaid','EUR',NOW()-INTERVAL '1 hour',NOW()+INTERVAL '1 month')`, tenant, paid); err != nil {
 		t.Fatal(err)
 	}
+	seedRPCTaxBuyer(t, db, tenant)
 	server := &PurserServer{db: db, logger: logging.NewLogger(), tierReconciler: &assignTierReconciler{}, commodoreClient: &recordingCommodoreCache{}}
 	op := operatorAssignCtx(uuid.NewString())
 	if _, err := server.AdminSetBillingGrant(op, &purserpb.AdminSetBillingGrantRequest{TenantId: tenant, WaiveUsage: true, Collection: "invoice", Reason: "trial"}); err != nil {

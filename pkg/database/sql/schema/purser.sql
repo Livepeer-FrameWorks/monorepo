@@ -3848,3 +3848,423 @@ CREATE TABLE IF NOT EXISTS public._schema_baseline (
 );
 INSERT INTO public._schema_baseline (floor)
     SELECT 'v0.3.0' WHERE NOT EXISTS (SELECT 1 FROM public._schema_baseline);
+
+CREATE INDEX IF NOT EXISTS idx_billing_invoices_financial_audit
+ON purser.billing_invoices(tenant_id, id);
+
+CREATE INDEX IF NOT EXISTS idx_billing_payments_financial_audit
+ON purser.billing_payments(invoice_id, id);
+
+CREATE INDEX IF NOT EXISTS idx_simplified_invoices_financial_audit
+ON purser.simplified_invoices(tenant_id, id);
+
+CREATE INDEX IF NOT EXISTS idx_crypto_invoices_financial_audit
+ON purser.crypto_invoices(tenant_id, id);
+
+CREATE INDEX IF NOT EXISTS idx_credit_notes_financial_audit
+ON purser.credit_notes(tenant_id, id);
+
+CREATE INDEX IF NOT EXISTS idx_provider_settlements_financial_audit
+ON purser.provider_settlements(tenant_id, id);
+
+CREATE INDEX IF NOT EXISTS idx_pending_topups_financial_audit
+ON purser.pending_topups(tenant_id, id);
+
+CREATE INDEX IF NOT EXISTS idx_balance_transactions_financial_audit
+ON purser.balance_transactions(tenant_id, id);
+
+ALTER TABLE purser.simplified_invoices
+    ADD COLUMN IF NOT EXISTS tax_assessment JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE purser.simplified_invoices
+    DROP CONSTRAINT IF EXISTS chk_simplified_invoices_tax_assessment;
+ALTER TABLE purser.simplified_invoices
+    ADD CONSTRAINT chk_simplified_invoices_tax_assessment CHECK (jsonb_typeof(tax_assessment) = 'object');
+
+ALTER TABLE purser.crypto_invoices
+    ADD COLUMN IF NOT EXISTS tax_assessment JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE purser.crypto_invoices
+    DROP CONSTRAINT IF EXISTS chk_crypto_invoices_tax_assessment;
+ALTER TABLE purser.crypto_invoices
+    ADD CONSTRAINT chk_crypto_invoices_tax_assessment CHECK (jsonb_typeof(tax_assessment) = 'object');
+
+CREATE OR REPLACE FUNCTION purser.prevent_crypto_tax_assessment_change()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.tax_assessment IS DISTINCT FROM OLD.tax_assessment THEN
+        RAISE EXCEPTION 'issued crypto tax assessment is immutable; issue a correction document';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE OR REPLACE TRIGGER simplified_invoices_tax_assessment_guard
+    BEFORE UPDATE ON purser.simplified_invoices
+    FOR EACH ROW EXECUTE FUNCTION purser.prevent_crypto_tax_assessment_change();
+CREATE OR REPLACE TRIGGER crypto_invoices_tax_assessment_guard
+    BEFORE UPDATE ON purser.crypto_invoices
+    FOR EACH ROW EXECUTE FUNCTION purser.prevent_crypto_tax_assessment_change();
+
+CREATE TABLE IF NOT EXISTS purser.business_establishment_reviews (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    revision BIGINT NOT NULL CHECK (revision > 0),
+    UNIQUE (tenant_id, revision),
+    profile_sha256 VARCHAR(64),
+    is_revocation BOOLEAN NOT NULL DEFAULT FALSE,
+    country VARCHAR(2),
+    reference TEXT NOT NULL CHECK (length(btrim(reference)) BETWEEN 1 AND 1024),
+    reviewed_by UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    valid_until TIMESTAMPTZ NOT NULL,
+    retention_until TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '10 years'),
+    CONSTRAINT chk_business_establishment_review_window CHECK (
+        (is_revocation AND profile_sha256 IS NULL AND country IS NULL AND valid_until = created_at)
+        OR (NOT is_revocation AND profile_sha256 IS NOT NULL AND profile_sha256 ~ '^[0-9a-f]{64}$'
+            AND country IS NOT NULL AND length(country)=2
+            AND valid_until > created_at AND valid_until <= created_at + INTERVAL '366 days')
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_business_establishment_reviews_profile
+ON purser.business_establishment_reviews(tenant_id, profile_sha256, country, revision DESC);
+CREATE INDEX IF NOT EXISTS idx_business_establishment_reviews_audit
+ON purser.business_establishment_reviews(tenant_id, id);
+CREATE INDEX IF NOT EXISTS idx_business_establishment_reviews_latest
+ON purser.business_establishment_reviews(tenant_id, revision DESC);
+CREATE OR REPLACE FUNCTION purser.prevent_business_establishment_review_change()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'business establishment reviews are append-only; record a new review';
+END;
+$$;
+CREATE OR REPLACE TRIGGER business_establishment_reviews_update_guard
+    BEFORE UPDATE ON purser.business_establishment_reviews
+    FOR EACH ROW EXECUTE FUNCTION purser.prevent_business_establishment_review_change();
+CREATE OR REPLACE TRIGGER business_establishment_reviews_retention_guard
+    BEFORE DELETE ON purser.business_establishment_reviews
+    FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
+
+ALTER TABLE purser.billing_payments ADD COLUMN IF NOT EXISTS tenant_id UUID;
+
+CREATE OR REPLACE FUNCTION purser.set_payment_tenant()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE owner UUID;
+BEGIN
+    SELECT tenant_id INTO STRICT owner FROM purser.billing_invoices WHERE id=NEW.invoice_id;
+    IF NEW.tenant_id IS NOT NULL AND NEW.tenant_id IS DISTINCT FROM owner THEN
+        RAISE EXCEPTION 'payment tenant does not own the invoice';
+    END IF;
+    NEW.tenant_id := owner;
+    RETURN NEW;
+END;
+$$;
+CREATE OR REPLACE TRIGGER billing_payment_tenant_guard
+BEFORE INSERT OR UPDATE ON purser.billing_payments
+FOR EACH ROW EXECUTE FUNCTION purser.set_payment_tenant();
+
+ALTER TABLE purser.billing_payments DROP CONSTRAINT IF EXISTS billing_payment_tenant_required;
+ALTER TABLE purser.billing_payments ADD CONSTRAINT billing_payment_tenant_required CHECK(tenant_id IS NOT NULL);
+
+CREATE INDEX IF NOT EXISTS idx_billing_payments_tenant_id_uuid ON purser.billing_payments(tenant_id,id);
+
+ALTER TABLE purser.billing_invoices
+ADD COLUMN IF NOT EXISTS net_eur_cents BIGINT,
+ADD COLUMN IF NOT EXISTS vat_eur_cents BIGINT,
+ADD COLUMN IF NOT EXISTS gross_eur_cents BIGINT,
+ADD COLUMN IF NOT EXISTS document_net_minor BIGINT,
+ADD COLUMN IF NOT EXISTS document_vat_minor BIGINT,
+ADD COLUMN IF NOT EXISTS document_gross_minor BIGINT,
+ADD COLUMN IF NOT EXISTS tax_status TEXT NOT NULL DEFAULT 'legacy_unknown',
+ADD COLUMN IF NOT EXISTS tax_policy_version TEXT,
+ADD COLUMN IF NOT EXISTS tax_decision JSONB,
+ADD COLUMN IF NOT EXISTS tax_summary JSONB,
+ADD COLUMN IF NOT EXISTS tax_point_at TIMESTAMPTZ;
+ALTER TABLE purser.invoice_line_items
+ADD COLUMN IF NOT EXISTS net_eur_cents BIGINT,
+ADD COLUMN IF NOT EXISTS vat_eur_cents BIGINT,
+ADD COLUMN IF NOT EXISTS gross_eur_cents BIGINT,
+ADD COLUMN IF NOT EXISTS vat_rate_bps INTEGER,
+ADD COLUMN IF NOT EXISTS tax_treatment TEXT,
+ADD COLUMN IF NOT EXISTS tax_point_at TIMESTAMPTZ;
+ALTER TABLE purser.credit_notes
+ADD COLUMN IF NOT EXISTS net_eur_cents BIGINT,
+ADD COLUMN IF NOT EXISTS vat_eur_cents BIGINT,
+ADD COLUMN IF NOT EXISTS gross_eur_cents BIGINT,
+ADD COLUMN IF NOT EXISTS document_net_minor BIGINT,
+ADD COLUMN IF NOT EXISTS document_vat_minor BIGINT,
+ADD COLUMN IF NOT EXISTS document_gross_minor BIGINT,
+ADD COLUMN IF NOT EXISTS tax_policy_version TEXT,
+ADD COLUMN IF NOT EXISTS tax_summary JSONB;
+ALTER TABLE purser.billing_invoices DROP CONSTRAINT IF EXISTS invoice_tax_amounts;
+ALTER TABLE purser.billing_invoices ADD CONSTRAINT invoice_tax_amounts CHECK((
+ (tax_status IN ('legacy_unknown','review') AND net_eur_cents IS NULL AND vat_eur_cents IS NULL AND gross_eur_cents IS NULL)
+ OR (tax_status IN ('ready','no_supply') AND net_eur_cents>=0 AND vat_eur_cents>=0 AND gross_eur_cents=net_eur_cents+vat_eur_cents
+ AND document_net_minor>=0 AND document_vat_minor>=0 AND document_gross_minor=document_net_minor+document_vat_minor
+ AND tax_point_at IS NOT NULL AND tax_policy_version IS NOT NULL AND tax_decision IS NOT NULL AND tax_summary IS NOT NULL AND jsonb_typeof(tax_decision)='object' AND jsonb_typeof(tax_summary)='array')) IS TRUE);
+CREATE OR REPLACE FUNCTION purser.retain_issued_invoice_tax()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+ IF OLD.tax_status IN ('ready','no_supply') AND
+ ROW(NEW.net_eur_cents,NEW.vat_eur_cents,NEW.gross_eur_cents,NEW.document_net_minor,NEW.document_vat_minor,NEW.document_gross_minor,NEW.tax_status,NEW.tax_policy_version,NEW.tax_decision,NEW.tax_summary,NEW.tax_point_at,NEW.customer_snapshot,NEW.supplier_snapshot)
+ IS DISTINCT FROM ROW(OLD.net_eur_cents,OLD.vat_eur_cents,OLD.gross_eur_cents,OLD.document_net_minor,OLD.document_vat_minor,OLD.document_gross_minor,OLD.tax_status,OLD.tax_policy_version,OLD.tax_decision,OLD.tax_summary,OLD.tax_point_at,OLD.customer_snapshot,OLD.supplier_snapshot)
+ THEN RAISE EXCEPTION 'issued invoice tax facts are immutable; issue a credit note'; END IF;
+ RETURN NEW;
+END;
+$$;
+CREATE OR REPLACE TRIGGER billing_invoice_tax_guard BEFORE UPDATE ON purser.billing_invoices FOR EACH ROW EXECUTE FUNCTION purser.retain_issued_invoice_tax();
+
+CREATE OR REPLACE FUNCTION purser.freeze_credit_note_tax()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE original_net BIGINT; original_vat BIGINT; original_gross BIGINT;
+        original_doc_net BIGINT; original_doc_vat BIGINT; original_doc_gross BIGINT;
+        original_currency TEXT; original_policy TEXT; original_summary JSONB;
+        original_customer JSONB; original_supplier JSONB;
+        previous_gross BIGINT; cumulative_gross BIGINT;
+BEGIN
+    IF NEW.source_document_type='invoice' THEN
+        SELECT net_eur_cents,vat_eur_cents,gross_eur_cents,document_net_minor,document_vat_minor,document_gross_minor,
+               COALESCE(presentment_currency,currency),tax_policy_version,tax_summary,customer_snapshot,supplier_snapshot
+        INTO original_net,original_vat,original_gross,original_doc_net,original_doc_vat,original_doc_gross,original_currency,original_policy,original_summary,original_customer,original_supplier
+        FROM purser.billing_invoices WHERE tenant_id=NEW.tenant_id AND id=NEW.source_document_id FOR UPDATE;
+    ELSIF NEW.source_document_type='simplified_invoice' THEN
+        SELECT net_eur_cents,vat_eur_cents,amount_eur_cents,net_amount_cents,vat_amount_cents,gross_amount_cents,
+               currency,tax_policy_ref,jsonb_build_array(jsonb_build_object('rate_bps',vat_rate_bps,'treatment',tax_validation_status)),tax_assessment->'customer_profile',jsonb_build_object('name',supplier_name,'address',supplier_address,'vat_number',supplier_vat_number,'registration_number',supplier_registration_number)
+        INTO original_net,original_vat,original_gross,original_doc_net,original_doc_vat,original_doc_gross,original_currency,original_policy,original_summary,original_customer,original_supplier
+        FROM purser.simplified_invoices WHERE tenant_id=NEW.tenant_id AND id=NEW.source_document_id FOR UPDATE;
+    ELSIF NEW.source_document_type='crypto_invoice' THEN
+        SELECT net_eur_cents,vat_eur_cents,amount_eur_cents,net_amount_cents,vat_amount_cents,gross_amount_cents,
+               currency,tax_policy_ref,jsonb_build_array(jsonb_build_object('rate_bps',vat_rate_bps,'treatment',tax_validation_status)),tax_assessment->'customer_profile',jsonb_build_object('name',supplier_name,'address',supplier_address,'vat_number',supplier_vat_number,'registration_number',supplier_registration_number)
+        INTO original_net,original_vat,original_gross,original_doc_net,original_doc_vat,original_doc_gross,original_currency,original_policy,original_summary,original_customer,original_supplier
+        FROM purser.crypto_invoices WHERE tenant_id=NEW.tenant_id AND id=NEW.source_document_id FOR UPDATE;
+    END IF;
+    IF NOT FOUND THEN RAISE EXCEPTION 'credit source does not belong to tenant'; END IF;
+    IF EXISTS(SELECT 1 FROM purser.credit_notes WHERE tenant_id=NEW.tenant_id AND source_document_type=NEW.source_document_type AND source_document_id=NEW.source_document_id AND reversal_reference_type=NEW.reversal_reference_type AND reversal_reference_id=NEW.reversal_reference_id AND amount_cents=NEW.amount_cents AND currency=NEW.currency) THEN RETURN NEW; END IF;
+    IF original_customer IS NOT NULL THEN NEW.customer_snapshot:=original_customer; END IF;
+    IF original_supplier IS NOT NULL THEN NEW.supplier_snapshot:=original_supplier; END IF;
+    IF original_gross IS NULL OR original_doc_gross IS NULL THEN
+        NEW.evidence_json:=NEW.evidence_json||jsonb_build_object('tax_status','legacy_unknown');
+        RETURN NEW;
+    END IF;
+    IF NEW.currency<>original_currency THEN RAISE EXCEPTION 'credit currency differs from source'; END IF;
+    SELECT COALESCE(SUM(amount_cents),0) INTO previous_gross FROM purser.credit_notes
+    WHERE tenant_id=NEW.tenant_id AND source_document_type=NEW.source_document_type AND source_document_id=NEW.source_document_id;
+    cumulative_gross:=previous_gross+NEW.amount_cents;
+    IF cumulative_gross>original_doc_gross OR original_doc_gross<=0 THEN RAISE EXCEPTION 'cumulative credits exceed original supply'; END IF;
+    NEW.document_gross_minor:=NEW.amount_cents;
+    NEW.document_vat_minor:=ROUND(original_doc_vat::numeric*cumulative_gross/original_doc_gross)-ROUND(original_doc_vat::numeric*previous_gross/original_doc_gross);
+    NEW.document_net_minor:=NEW.document_gross_minor-NEW.document_vat_minor;
+    NEW.gross_eur_cents:=ROUND(original_gross::numeric*cumulative_gross/original_doc_gross)-ROUND(original_gross::numeric*previous_gross/original_doc_gross);
+    NEW.vat_eur_cents:=ROUND(original_vat::numeric*cumulative_gross/original_doc_gross)-ROUND(original_vat::numeric*previous_gross/original_doc_gross);
+    NEW.net_eur_cents:=NEW.gross_eur_cents-NEW.vat_eur_cents;
+    NEW.tax_policy_version:=original_policy;
+    NEW.tax_summary:=jsonb_build_object('source_tax_groups',original_summary,'net_eur_cents',NEW.net_eur_cents,'vat_eur_cents',NEW.vat_eur_cents,'gross_eur_cents',NEW.gross_eur_cents);
+    RETURN NEW;
+END;
+$$;
+CREATE OR REPLACE TRIGGER credit_note_tax_snapshot BEFORE INSERT ON purser.credit_notes FOR EACH ROW EXECUTE FUNCTION purser.freeze_credit_note_tax();
+
+CREATE OR REPLACE FUNCTION purser.retain_issued_invoice_line()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE issued BOOLEAN;
+BEGIN
+ IF TG_OP='INSERT' THEN
+ SELECT tax_status IN ('ready','no_supply') INTO issued FROM purser.billing_invoices WHERE tenant_id=NEW.tenant_id AND id=NEW.invoice_id;
+ ELSE
+ SELECT tax_status IN ('ready','no_supply') INTO issued FROM purser.billing_invoices WHERE tenant_id=OLD.tenant_id AND id=OLD.invoice_id;
+ END IF;
+ IF issued THEN
+  IF TG_OP IN ('DELETE','INSERT') THEN RAISE EXCEPTION 'issued invoice lines are immutable'; END IF;
+  IF ROW(NEW.tenant_id,NEW.invoice_id,NEW.line_key,NEW.amount,NEW.quantity,NEW.unit_price,NEW.description,NEW.currency,NEW.net_eur_cents,NEW.vat_eur_cents,NEW.gross_eur_cents,NEW.vat_rate_bps,NEW.tax_treatment,NEW.tax_point_at)
+  IS DISTINCT FROM ROW(OLD.tenant_id,OLD.invoice_id,OLD.line_key,OLD.amount,OLD.quantity,OLD.unit_price,OLD.description,OLD.currency,OLD.net_eur_cents,OLD.vat_eur_cents,OLD.gross_eur_cents,OLD.vat_rate_bps,OLD.tax_treatment,OLD.tax_point_at)
+  THEN RAISE EXCEPTION 'issued invoice lines are immutable'; END IF;
+ END IF;
+ IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+ RETURN NEW;
+END;
+$$;
+CREATE OR REPLACE TRIGGER invoice_line_tax_guard BEFORE INSERT OR UPDATE OR DELETE ON purser.invoice_line_items FOR EACH ROW EXECUTE FUNCTION purser.retain_issued_invoice_line();
+
+ALTER TABLE purser.pending_topups
+ADD COLUMN IF NOT EXISTS net_eur_cents BIGINT,
+ADD COLUMN IF NOT EXISTS vat_eur_cents BIGINT,
+ADD COLUMN IF NOT EXISTS gross_eur_cents BIGINT,
+ADD COLUMN IF NOT EXISTS tax_assessment JSONB,
+ADD COLUMN IF NOT EXISTS tax_document_id UUID;
+ALTER TABLE purser.billing_invoices
+ADD COLUMN IF NOT EXISTS source_reference_type TEXT,
+ADD COLUMN IF NOT EXISTS source_reference_id TEXT,
+ADD COLUMN IF NOT EXISTS prepaid_financial_credit_eur_cents BIGINT NOT NULL DEFAULT 0,
+ADD COLUMN IF NOT EXISTS absorbed_vat_eur_cents BIGINT NOT NULL DEFAULT 0;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_invoice_source_reference ON purser.billing_invoices(tenant_id,source_reference_type,source_reference_id) WHERE source_reference_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS purser.prepaid_funding_lots(
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(),tenant_id UUID NOT NULL,
+ source_reference_type TEXT NOT NULL,source_reference_id TEXT NOT NULL,
+ source_document_id UUID,
+ funding_balance_transaction_id UUID,
+ classification TEXT NOT NULL CHECK(classification IN ('taxed_advance','legacy_unknown')),
+ net_credit_eur_cents BIGINT NOT NULL CHECK(net_credit_eur_cents>=0),
+ remaining_net_eur_cents BIGINT NOT NULL CHECK(remaining_net_eur_cents>=0 AND remaining_net_eur_cents<=net_credit_eur_cents),
+ vat_eur_cents BIGINT, gross_eur_cents BIGINT,tax_assessment JSONB,
+ remaining_vat_eur_cents BIGINT NOT NULL DEFAULT 0,
+ revoked_net_eur_cents BIGINT NOT NULL DEFAULT 0,revoked_vat_eur_cents BIGINT NOT NULL DEFAULT 0,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),retention_until TIMESTAMPTZ NOT NULL DEFAULT NOW()+INTERVAL '10 years',
+ UNIQUE(tenant_id,source_reference_type,source_reference_id)
+);
+CREATE INDEX IF NOT EXISTS idx_prepaid_funding_lots_tenant_fifo ON purser.prepaid_funding_lots(tenant_id,created_at,id);
+CREATE TABLE IF NOT EXISTS purser.prepaid_funding_allocations(
+ tenant_id UUID NOT NULL, lot_id UUID NOT NULL,
+ reference_type TEXT NOT NULL,reference_id TEXT NOT NULL,net_eur_cents BIGINT NOT NULL CHECK(net_eur_cents>0),
+ vat_eur_cents BIGINT NOT NULL,returned_net_eur_cents BIGINT NOT NULL DEFAULT 0,returned_vat_eur_cents BIGINT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ PRIMARY KEY(tenant_id,reference_type,reference_id,lot_id)
+);
+
+CREATE TABLE IF NOT EXISTS purser.provider_billing_documents (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    provider TEXT NOT NULL CHECK(provider='stripe'),
+    provider_account_id TEXT NOT NULL,
+    livemode BOOLEAN NOT NULL,
+    document_kind TEXT NOT NULL CHECK(document_kind IN ('provider_invoice','provider_credit_note')),
+    provider_document_id TEXT NOT NULL,
+    original_number TEXT NOT NULL,
+    source_invoice_id TEXT,
+    status TEXT NOT NULL,
+    currency CHAR(3) NOT NULL,
+    net_minor BIGINT,
+    vat_minor BIGINT,
+    gross_minor BIGINT NOT NULL,
+    tax_status TEXT NOT NULL CHECK(tax_status IN ('ready','legacy_unknown')),
+    tax_groups JSONB NOT NULL,
+    supplier_snapshot JSONB NOT NULL,
+    customer_snapshot JSONB NOT NULL,
+    raw_facts JSONB NOT NULL,
+    original_pdf_url TEXT,
+    original_pdf BYTEA,
+    pdf_sha256 TEXT,
+    issued_at TIMESTAMPTZ NOT NULL,
+    captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    retention_until TIMESTAMPTZ NOT NULL DEFAULT NOW()+INTERVAL '10 years',
+    UNIQUE(provider,provider_account_id,livemode,document_kind,provider_document_id),
+    CONSTRAINT provider_document_tax_math CHECK(tax_status<>'ready' OR (net_minor IS NOT NULL AND vat_minor IS NOT NULL AND net_minor+vat_minor=gross_minor)),
+    CONSTRAINT provider_document_pdf_hash CHECK((original_pdf IS NULL AND pdf_sha256 IS NULL) OR (original_pdf IS NOT NULL AND length(pdf_sha256)=64))
+);
+CREATE INDEX IF NOT EXISTS idx_provider_billing_documents_tenant_issued ON purser.provider_billing_documents(tenant_id,issued_at DESC,id DESC);
+CREATE OR REPLACE FUNCTION purser.retain_provider_document_facts()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+ IF ROW(NEW.tenant_id,NEW.provider,NEW.provider_account_id,NEW.livemode,NEW.document_kind,NEW.provider_document_id,NEW.original_number,NEW.source_invoice_id,NEW.currency,NEW.net_minor,NEW.vat_minor,NEW.gross_minor,NEW.tax_status,NEW.tax_groups,NEW.supplier_snapshot,NEW.customer_snapshot,NEW.raw_facts,NEW.issued_at)
+ IS DISTINCT FROM ROW(OLD.tenant_id,OLD.provider,OLD.provider_account_id,OLD.livemode,OLD.document_kind,OLD.provider_document_id,OLD.original_number,OLD.source_invoice_id,OLD.currency,OLD.net_minor,OLD.vat_minor,OLD.gross_minor,OLD.tax_status,OLD.tax_groups,OLD.supplier_snapshot,OLD.customer_snapshot,OLD.raw_facts,OLD.issued_at)
+ THEN RAISE EXCEPTION 'original provider document facts are immutable'; END IF;
+ IF OLD.original_pdf IS NOT NULL AND ROW(NEW.original_pdf,NEW.pdf_sha256) IS DISTINCT FROM ROW(OLD.original_pdf,OLD.pdf_sha256)
+ THEN RAISE EXCEPTION 'original provider PDF is immutable'; END IF;
+ RETURN NEW;
+END;
+$$;
+CREATE OR REPLACE TRIGGER provider_document_facts_guard BEFORE UPDATE ON purser.provider_billing_documents FOR EACH ROW EXECUTE FUNCTION purser.retain_provider_document_facts();
+CREATE OR REPLACE TRIGGER provider_document_retention_guard BEFORE DELETE ON purser.provider_billing_documents FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
+
+ALTER TABLE purser.provider_billing_documents ADD COLUMN IF NOT EXISTS tax_assessment JSONB NOT NULL DEFAULT '{}'::jsonb;
+CREATE OR REPLACE FUNCTION purser.retain_provider_document_facts()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+ IF ROW(NEW.tenant_id,NEW.provider,NEW.provider_account_id,NEW.livemode,NEW.document_kind,NEW.provider_document_id,NEW.original_number,NEW.source_invoice_id,NEW.currency,NEW.net_minor,NEW.vat_minor,NEW.gross_minor,NEW.tax_status,NEW.tax_groups,NEW.supplier_snapshot,NEW.customer_snapshot,NEW.raw_facts,NEW.tax_assessment,NEW.issued_at)
+ IS DISTINCT FROM ROW(OLD.tenant_id,OLD.provider,OLD.provider_account_id,OLD.livemode,OLD.document_kind,OLD.provider_document_id,OLD.original_number,OLD.source_invoice_id,OLD.currency,OLD.net_minor,OLD.vat_minor,OLD.gross_minor,OLD.tax_status,OLD.tax_groups,OLD.supplier_snapshot,OLD.customer_snapshot,OLD.raw_facts,OLD.tax_assessment,OLD.issued_at)
+ THEN RAISE EXCEPTION 'original provider document facts are immutable'; END IF;
+ IF OLD.original_pdf IS NOT NULL AND ROW(NEW.original_pdf,NEW.pdf_sha256) IS DISTINCT FROM ROW(OLD.original_pdf,OLD.pdf_sha256)
+ THEN RAISE EXCEPTION 'original provider PDF is immutable'; END IF;
+ RETURN NEW;
+END;
+$$;
+CREATE OR REPLACE TRIGGER provider_document_facts_guard BEFORE UPDATE ON purser.provider_billing_documents FOR EACH ROW EXECUTE FUNCTION purser.retain_provider_document_facts();
+CREATE OR REPLACE TRIGGER provider_document_retention_guard BEFORE DELETE ON purser.provider_billing_documents FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
+CREATE TABLE IF NOT EXISTS purser.provider_tax_profiles (
+ tenant_id UUID NOT NULL,
+ profile_sha256 TEXT NOT NULL CHECK(length(profile_sha256)=64),
+ profile JSONB NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ retention_until TIMESTAMPTZ NOT NULL DEFAULT NOW()+INTERVAL '10 years',
+ PRIMARY KEY(tenant_id,profile_sha256)
+);
+CREATE OR REPLACE FUNCTION purser.retain_provider_tax_profile() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'provider tax assessments are immutable'; END;
+$$;
+CREATE OR REPLACE TRIGGER provider_tax_profile_guard BEFORE UPDATE ON purser.provider_tax_profiles FOR EACH ROW EXECUTE FUNCTION purser.retain_provider_tax_profile();
+CREATE OR REPLACE TRIGGER provider_tax_profile_retention_guard BEFORE DELETE ON purser.provider_tax_profiles FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
+
+
+ALTER TABLE purser.pending_topups DROP CONSTRAINT IF EXISTS pending_topups_tax_document_id_fkey;
+ALTER TABLE purser.pending_topups ADD CONSTRAINT pending_topups_tax_document_id_fkey FOREIGN KEY (tax_document_id) REFERENCES purser.billing_invoices(id);
+ALTER TABLE purser.prepaid_funding_lots DROP CONSTRAINT IF EXISTS prepaid_funding_lots_source_document_id_fkey;
+ALTER TABLE purser.prepaid_funding_lots ADD CONSTRAINT prepaid_funding_lots_source_document_id_fkey FOREIGN KEY (source_document_id) REFERENCES purser.billing_invoices(id);
+ALTER TABLE purser.prepaid_funding_lots DROP CONSTRAINT IF EXISTS prepaid_funding_lots_funding_balance_transaction_id_fkey;
+ALTER TABLE purser.prepaid_funding_lots ADD CONSTRAINT prepaid_funding_lots_funding_balance_transaction_id_fkey FOREIGN KEY (funding_balance_transaction_id) REFERENCES purser.balance_transactions(id);
+ALTER TABLE purser.prepaid_funding_allocations DROP CONSTRAINT IF EXISTS prepaid_funding_allocations_lot_id_fkey;
+ALTER TABLE purser.prepaid_funding_allocations ADD CONSTRAINT prepaid_funding_allocations_lot_id_fkey FOREIGN KEY (lot_id) REFERENCES purser.prepaid_funding_lots(id);
+
+CREATE OR REPLACE FUNCTION purser.allocate_prepaid_funding_inventory()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE before_balance BIGINT; remaining BIGINT; gap BIGINT; required BIGINT; take BIGINT; tax_take BIGINT; restore BIGINT; tax_restore BIGINT;
+        lot RECORD; allocation RECORD; applied_description TEXT;
+BEGIN
+ IF NEW.amount_cents=0 THEN RETURN NEW; END IF;
+ IF NEW.reference_type IN ('payment_reversal','x402_failed','crypto_reorg','x402_reorg') THEN RETURN NEW; END IF;
+ IF NEW.amount_cents>0 THEN
+  IF NEW.reference_type IS DISTINCT FROM 'invoice_credit' OR NEW.description NOT LIKE 'Invoice credit returned: %' THEN RETURN NEW; END IF;
+  required:=NEW.amount_cents;
+  applied_description:=REPLACE(NEW.description,'Invoice credit returned: ','Invoice credit: ');
+  FOR allocation IN
+   SELECT a.lot_id,a.net_eur_cents,a.returned_net_eur_cents,a.vat_eur_cents,a.returned_vat_eur_cents,a.reference_type,a.reference_id
+   FROM purser.prepaid_funding_allocations a JOIN purser.prepaid_funding_lots l ON l.id=a.lot_id AND l.tenant_id=a.tenant_id
+   JOIN purser.balance_transactions b ON b.tenant_id=a.tenant_id AND b.id::text=a.reference_id
+   WHERE a.tenant_id=NEW.tenant_id AND a.reference_type='balance_transaction' AND b.reference_type='invoice_credit'
+   AND b.description=applied_description AND a.returned_net_eur_cents<a.net_eur_cents
+   ORDER BY b.created_at DESC,b.id DESC,l.created_at DESC,l.id DESC FOR UPDATE OF a,l
+  LOOP
+   EXIT WHEN required<=0;
+   SELECT id,net_credit_eur_cents,vat_eur_cents,remaining_net_eur_cents,remaining_vat_eur_cents,revoked_net_eur_cents,revoked_vat_eur_cents INTO lot FROM purser.prepaid_funding_lots WHERE tenant_id=NEW.tenant_id AND id=allocation.lot_id FOR UPDATE;
+   take:=LEAST(required,allocation.net_eur_cents-allocation.returned_net_eur_cents);
+   tax_take:=ROUND(allocation.vat_eur_cents::numeric*(allocation.returned_net_eur_cents+take)/allocation.net_eur_cents)-allocation.returned_vat_eur_cents;
+   restore:=LEAST(take,GREATEST(lot.net_credit_eur_cents-lot.revoked_net_eur_cents-lot.remaining_net_eur_cents,0));
+   tax_restore:=LEAST(tax_take,GREATEST(COALESCE(lot.vat_eur_cents,0)-lot.revoked_vat_eur_cents-lot.remaining_vat_eur_cents,0));
+   UPDATE purser.prepaid_funding_lots SET remaining_net_eur_cents=remaining_net_eur_cents+restore,remaining_vat_eur_cents=remaining_vat_eur_cents+tax_restore WHERE tenant_id=NEW.tenant_id AND id=allocation.lot_id;
+   UPDATE purser.prepaid_funding_allocations SET returned_net_eur_cents=returned_net_eur_cents+take,returned_vat_eur_cents=returned_vat_eur_cents+tax_take WHERE tenant_id=NEW.tenant_id AND lot_id=allocation.lot_id AND reference_type=allocation.reference_type AND reference_id=allocation.reference_id;
+   required:=required-take;
+  END LOOP;
+  RETURN NEW;
+ END IF;
+ before_balance:=GREATEST(NEW.balance_after_cents-NEW.amount_cents,0);
+ SELECT COALESCE(SUM(remaining_net_eur_cents),0) INTO remaining FROM purser.prepaid_funding_lots WHERE tenant_id=NEW.tenant_id;
+ gap:=before_balance-remaining;
+ IF gap>0 THEN
+  INSERT INTO purser.prepaid_funding_lots(tenant_id,source_reference_type,source_reference_id,classification,net_credit_eur_cents,remaining_net_eur_cents,tax_assessment)
+  VALUES(NEW.tenant_id,'unclassified_balance',NEW.id::text,'legacy_unknown',gap,gap,'{"tax_status":"legacy_unknown"}') ON CONFLICT(tenant_id,source_reference_type,source_reference_id) DO NOTHING;
+ END IF;
+ required:=LEAST(-NEW.amount_cents,before_balance);
+ FOR lot IN SELECT id,net_credit_eur_cents,vat_eur_cents,remaining_net_eur_cents,remaining_vat_eur_cents,revoked_net_eur_cents,revoked_vat_eur_cents FROM purser.prepaid_funding_lots WHERE tenant_id=NEW.tenant_id AND remaining_net_eur_cents>0 ORDER BY created_at,id FOR UPDATE
+ LOOP
+  EXIT WHEN required<=0;
+  take:=LEAST(required,lot.remaining_net_eur_cents);
+  tax_take:=CASE WHEN take=lot.remaining_net_eur_cents THEN lot.remaining_vat_eur_cents ELSE ROUND(lot.remaining_vat_eur_cents::numeric*take/lot.remaining_net_eur_cents) END;
+  UPDATE purser.prepaid_funding_lots SET remaining_net_eur_cents=remaining_net_eur_cents-take,remaining_vat_eur_cents=remaining_vat_eur_cents-tax_take WHERE tenant_id=NEW.tenant_id AND id=lot.id;
+  INSERT INTO purser.prepaid_funding_allocations(tenant_id,lot_id,reference_type,reference_id,net_eur_cents,vat_eur_cents)
+  VALUES(NEW.tenant_id,lot.id,'balance_transaction',NEW.id::text,take,tax_take);
+  required:=required-take;
+ END LOOP;
+ RETURN NEW;
+END;
+$$;
+CREATE OR REPLACE TRIGGER prepaid_funding_inventory AFTER INSERT ON purser.balance_transactions FOR EACH ROW EXECUTE FUNCTION purser.allocate_prepaid_funding_inventory();
+
+ALTER TABLE purser.provider_tax_profiles ADD COLUMN IF NOT EXISTS id UUID NOT NULL DEFAULT gen_random_uuid() UNIQUE;
+CREATE INDEX IF NOT EXISTS idx_provider_documents_tenant_id ON purser.provider_billing_documents(tenant_id,id);
+CREATE INDEX IF NOT EXISTS idx_provider_tax_profiles_tenant_id ON purser.provider_tax_profiles(tenant_id,id);
+
+
+CREATE OR REPLACE FUNCTION purser.retain_issued_credit_note()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+ IF ROW(NEW.tenant_id,NEW.credit_note_number,NEW.source_document_type,NEW.source_document_id,NEW.reversal_reference_type,NEW.reversal_reference_id,NEW.amount_cents,NEW.currency,NEW.reason,NEW.issued_at,NEW.customer_snapshot,NEW.supplier_snapshot,NEW.net_eur_cents,NEW.vat_eur_cents,NEW.gross_eur_cents,NEW.document_net_minor,NEW.document_vat_minor,NEW.document_gross_minor,NEW.tax_policy_version,NEW.tax_summary)
+ IS DISTINCT FROM ROW(OLD.tenant_id,OLD.credit_note_number,OLD.source_document_type,OLD.source_document_id,OLD.reversal_reference_type,OLD.reversal_reference_id,OLD.amount_cents,OLD.currency,OLD.reason,OLD.issued_at,OLD.customer_snapshot,OLD.supplier_snapshot,OLD.net_eur_cents,OLD.vat_eur_cents,OLD.gross_eur_cents,OLD.document_net_minor,OLD.document_vat_minor,OLD.document_gross_minor,OLD.tax_policy_version,OLD.tax_summary)
+ THEN RAISE EXCEPTION 'issued credit note facts are immutable'; END IF;
+ RETURN NEW;
+END;
+$$;
+CREATE OR REPLACE TRIGGER issued_credit_note_guard BEFORE UPDATE ON purser.credit_notes FOR EACH ROW EXECUTE FUNCTION purser.retain_issued_credit_note();

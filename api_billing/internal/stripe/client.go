@@ -130,6 +130,8 @@ func PaymentMethodTypesForCurrency(currency string) []*string {
 
 // CheckoutSessionParams for creating a checkout session
 type CheckoutSessionParams struct {
+	TaxProfile        *TaxProfile
+	TaxRateID         string
 	CustomerID        string // Stripe customer ID
 	TenantID          string // For metadata
 	TierID            string // For metadata
@@ -170,9 +172,14 @@ func (c *Client) CreateCheckoutSession(ctx context.Context, params CheckoutSessi
 	if params.IdempotencyKey == "" {
 		return nil, fmt.Errorf("CreateCheckoutSession requires a deterministic IdempotencyKey")
 	}
+	if params.TaxProfile == nil || params.TaxRateID == "" {
+		return nil, fmt.Errorf("assessed customer profile and exclusive tax rate required for new subscription checkout")
+	}
+	rateID := params.TaxRateID
 	metadata := map[string]string{
 		"checkout_reservation_id": params.ReservationID,
 		"tenant_id":               params.TenantID,
+		"frameworks_tax_profile":  params.TaxProfile.Fingerprint(),
 	}
 	if params.Purpose != "" {
 		metadata["purpose"] = params.Purpose
@@ -188,8 +195,9 @@ func (c *Client) CreateCheckoutSession(ctx context.Context, params CheckoutSessi
 	}
 
 	sessionParams := &stripe.CheckoutSessionParams{
-		Customer: stripe.String(params.CustomerID),
-		Mode:     stripe.String(string(stripe.CheckoutSessionModeSubscription)),
+		Customer:     stripe.String(params.CustomerID),
+		Mode:         stripe.String(string(stripe.CheckoutSessionModeSubscription)),
+		AutomaticTax: &stripe.CheckoutSessionAutomaticTaxParams{Enabled: stripe.Bool(false)},
 		LineItems: []*stripe.CheckoutSessionLineItemParams{
 			{
 				Price:    stripe.String(params.PriceID),
@@ -208,7 +216,8 @@ func (c *Client) CreateCheckoutSession(ctx context.Context, params CheckoutSessi
 	sessionParams.Context = ctx
 	// Ensure subscription metadata is set on the created Stripe subscription.
 	subscriptionData := &stripe.CheckoutSessionSubscriptionDataParams{
-		Metadata: metadata,
+		Metadata:        metadata,
+		DefaultTaxRates: []*string{stripe.String(rateID)},
 	}
 	if params.TrialDays > 0 {
 		subscriptionData.TrialPeriodDays = stripe.Int64(params.TrialDays)
@@ -624,9 +633,10 @@ func (c *Client) FindOrCreatePrice(ctx context.Context, productID, replacedPrice
 	}
 
 	createParams := &stripe.PriceParams{
-		Product:    stripe.String(productID),
-		Currency:   stripe.String(strings.ToLower(currency)),
-		UnitAmount: stripe.Int64(amountCents),
+		TaxBehavior: stripe.String("exclusive"),
+		Product:     stripe.String(productID),
+		Currency:    stripe.String(strings.ToLower(currency)),
+		UnitAmount:  stripe.Int64(amountCents),
 		Recurring: &stripe.PriceRecurringParams{
 			Interval: stripe.String(interval),
 		},

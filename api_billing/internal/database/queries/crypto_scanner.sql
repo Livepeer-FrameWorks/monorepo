@@ -84,7 +84,7 @@ SET last_error = EXCLUDED.last_error,
 -- name: ListConfirmedCryptoDepositAllocations :many
 SELECT event.id::text AS event_id, event.tx_hash, event.block_number,
        event.amount_base_units::text AS amount_base_units,
-       wallet.id::text AS wallet_id, wallet.tenant_id::text AS tenant_id,
+       wallet.id::text AS wallet_id, wallet.tenant_id::text AS tenant_id, wallet.tax_profile_snapshot, wallet.tax_document_kind,
        wallet.purpose, COALESCE(wallet.invoice_id::text, '')::text AS invoice_id,
        wallet.expected_amount_cents, wallet.asset, wallet.network, wallet.wallet_address,
        COALESCE(wallet.expected_amount_base_units::text, '')::text AS expected_amount_base_units,

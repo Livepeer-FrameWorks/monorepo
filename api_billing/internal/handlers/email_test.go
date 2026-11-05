@@ -21,6 +21,18 @@ func TestIsConfigured_AllSet(t *testing.T) {
 	}
 }
 
+func TestInvoiceEmailDisplaysFrozenTaxTotals(t *testing.T) {
+	body, err := (&EmailService{}).renderTemplate("invoice_created", EmailData{InvoiceID: "INV-TAX", Amount: 121, Currency: "EUR", FX: EmailFX{Tax: &EmailTaxTotals{Net: "100.00", VAT: "21.00", Gross: "121.00"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"Net amount", "100.00 EUR", "VAT", "21.00 EUR", "Total including VAT", "121.00 EUR"} {
+		if !strings.Contains(body, value) {
+			t.Fatalf("invoice email missing %q", value)
+		}
+	}
+}
+
 func TestIsConfigured_MissingFields(t *testing.T) {
 	tests := []struct {
 		name string

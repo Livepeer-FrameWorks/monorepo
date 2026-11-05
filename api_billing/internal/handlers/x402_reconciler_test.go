@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -91,6 +92,7 @@ func TestReconcileConfirmedSettlementsHandlesReorg(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(-2000), int64(3000), "reversal",
 			sqlmock.AnyArg(), "nonce-2", "x402_failed", nil, nil, nil, nil, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("-- name: RevokeCryptoAdvanceFundingLot").WithArgs("tenant-1", "x402_payment", "0xreorg").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("INSERT INTO purser.credit_notes").
 		WithArgs("nonce-2", "0xreorg", sqlmock.AnyArg(), "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -159,6 +161,7 @@ func TestReconcilePendingSettlementCreditsMissingLedgerBeforeConfirm(t *testing.
 		WithArgs(int64(3500), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	expectDomainEvent(mock, "billing.topup_credited", webhookTenantID)
+	mock.ExpectQuery("-- name: GetX402TaxSnapshot").WithArgs(webhookTenantID, "0xcredit").WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("UPDATE purser.x402_nonces").
 		WithArgs(int64(16), int64(21000), "nonce-3").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -248,6 +251,7 @@ func TestRecoverReversedBalanceUsesDistinctIdempotencyReference(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(2500), int64(3500), "topup",
 			sqlmock.AnyArg(), "nonce-4", "x402_recovery", nil, nil, nil, nil, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("-- name: GetX402TaxSnapshot").WithArgs("tenant-1", "0xrecovered").WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
 		WithArgs(sqlmock.AnyArg(), eventX402LateRecovery, "tenant-1", "", "x402_nonce", "0xrecovered", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -281,6 +285,7 @@ func TestRecoverReversedBalanceRollsBackCreditWhenOutboxInsertFails(t *testing.T
 		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(3500)))
 	mock.ExpectExec("INSERT INTO purser.balance_transactions").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("-- name: GetX402TaxSnapshot").WithArgs("tenant-1", "0xrecovered").WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
 		WithArgs(sqlmock.AnyArg(), eventX402LateRecovery, "tenant-1", "", "x402_nonce", "0xrecovered", sqlmock.AnyArg()).
 		WillReturnError(errors.New("outbox unavailable"))

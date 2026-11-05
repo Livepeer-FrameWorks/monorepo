@@ -420,10 +420,24 @@ func (s *Service) providerTierUpgrade(ctx context.Context, row purserdb.GetTierU
 		if s.stripeClient == nil {
 			return billing.TierUpgradeReceipt{}, errors.New("stripe collection is not configured")
 		}
+		if !request.LocateOnly {
+			profile, taxErr := AssessStripeTaxProfile(ctx, s.db, row.TenantID, ctxkeys.GetClientIP(ctx))
+			if taxErr != nil {
+				return billing.TierUpgradeReceipt{}, fmt.Errorf("retain paid-upgrade tax assessment: %w", taxErr)
+			}
+			if taxErr = s.stripeClient.SyncSubscriptionTax(ctx, row.TenantID, request.CustomerID, request.SubscriptionID, *profile); taxErr != nil {
+				return billing.TierUpgradeReceipt{}, fmt.Errorf("synchronize paid-upgrade tax: %w", taxErr)
+			}
+		}
 		return s.stripeClient.UpgradeMonthlySubscription(ctx, request)
 	case "mollie":
 		if s.mollieClient == nil {
 			return billing.TierUpgradeReceipt{}, errors.New("mollie collection is not configured")
+		}
+		if !request.LocateOnly {
+			if err := s.syncMollieUpgradeTax(ctx, row.TenantID, request.CustomerID, request.SubscriptionID); err != nil {
+				return billing.TierUpgradeReceipt{}, fmt.Errorf("synchronize paid-upgrade tax: %w", err)
+			}
 		}
 		return s.mollieClient.UpgradeMonthlySubscription(ctx, request)
 	case "advance", "invoice":

@@ -179,6 +179,9 @@ func reverseCryptoPrepaidDepositTx(ctx context.Context, tx *sql.Tx, eventID, old
 	if !reversal.txHash.Valid {
 		return nil
 	}
+	if err = queries.RevokeCryptoAdvanceFundingLot(ctx, purserdb.RevokeCryptoAdvanceFundingLotParams{TenantID: reversal.tenantID, SourceReferenceType: "crypto_payment", SourceReferenceID: reversal.txHash.String}); err != nil {
+		return err
+	}
 	return queries.InsertReorgedCryptoTopupCreditNote(ctx, purserdb.InsertReorgedCryptoTopupCreditNoteParams{
 		EventID: eventID, TxHash: reversal.txHash.String, TenantID: reversal.tenantID,
 		SupplierSnapshot: DocumentSupplierSnapshot(),

@@ -162,7 +162,7 @@ WHERE payment.invoice_id = invoice.id
   AND payment.tx_id IN (sqlc.arg(session_id)::text, sqlc.arg(payment_intent_id)::text);
 
 -- name: LockPendingTopupForCheckout :one
-SELECT status, tenant_id::text AS tenant_id, provider, amount_cents, currency,
+SELECT net_eur_cents,vat_eur_cents,gross_eur_cents,COALESCE(tax_assessment,'{}'::jsonb)::jsonb AS tax_assessment,tax_document_id,status, tenant_id::text AS tenant_id, provider, amount_cents, currency,
        checkout_id, provider_payment_id, refunded_amount_cents,
        COALESCE(original_amount_cents, 0)::bigint AS original_amount_cents,
        COALESCE(original_currency, '')::text AS original_currency,

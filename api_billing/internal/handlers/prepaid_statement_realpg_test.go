@@ -89,6 +89,7 @@ func seedPrepaidTenant(t *testing.T, db *sql.DB, periodStart, periodEnd time.Tim
 			t.Fatalf("seed: %v\n%s", err, statement.sql)
 		}
 	}
+	seedContractBillingIdentity(t, db, tenantID)
 	return tenantID
 }
 

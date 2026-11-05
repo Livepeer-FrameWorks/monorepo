@@ -21,6 +21,9 @@ func TestTaxSetupFailureGivesCustomerAnActionAndRetainsMachineReason(t *testing.
 	for _, detail := range st.Details() {
 		if info, ok := detail.(*errdetails.ErrorInfo); ok && info.Reason == "DESTINATION_REGISTRATION_REQUIRED" {
 			found = true
+			if info.GetMetadata()["public_message"] != st.Message() {
+				t.Fatalf("gateway cannot present tax guidance without public_message: %+v", info)
+			}
 		}
 	}
 	if !found {

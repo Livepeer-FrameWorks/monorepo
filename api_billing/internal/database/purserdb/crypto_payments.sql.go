@@ -8,6 +8,7 @@ package purserdb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 )
 
@@ -170,6 +171,7 @@ WHERE wallet.purpose = 'prepaid' AND wallet.status IN ('completed', 'swept')
         AND invoice.reference_type = 'crypto_payment'
         AND invoice.reference_id = wallet.tx_hash
   )
+AND NOT EXISTS (SELECT 1 FROM purser.billing_invoices invoice WHERE invoice.tenant_id=wallet.tenant_id AND invoice.source_reference_type='crypto_payment' AND invoice.source_reference_id=wallet.tx_hash)
 ORDER BY wallet.completed_at
 LIMIT 100
 `
@@ -229,7 +231,7 @@ const listPendingCryptoWallets = `-- name: ListPendingCryptoWallets :many
 SELECT wallet.id::text AS id, wallet.tenant_id::text AS tenant_id, wallet.purpose,
        COALESCE(wallet.invoice_id::text, '')::text AS invoice_id,
        wallet.expected_amount_cents, wallet.asset, wallet.network, wallet.wallet_address,
-       wallet.status, COALESCE(wallet.tx_hash, '')::text AS tx_hash,
+       wallet.tax_profile_snapshot, wallet.tax_document_kind, wallet.status, COALESCE(wallet.tx_hash, '')::text AS tx_hash,
        COALESCE(wallet.expected_amount_base_units::text, '')::text AS expected_amount_base_units,
        COALESCE(wallet.quoted_price_usd::text, '')::text AS quoted_price_usd,
        COALESCE(wallet.original_amount_cents, 0)::bigint AS original_amount_cents,
@@ -252,30 +254,32 @@ WHERE wallet.status IN ('pending', 'confirming')
 `
 
 type ListPendingCryptoWalletsRow struct {
-	ID                      string        `db:"id" json:"id"`
-	TenantID                string        `db:"tenant_id" json:"tenant_id"`
-	Purpose                 string        `db:"purpose" json:"purpose"`
-	InvoiceID               string        `db:"invoice_id" json:"invoice_id"`
-	ExpectedAmountCents     sql.NullInt64 `db:"expected_amount_cents" json:"expected_amount_cents"`
-	Asset                   string        `db:"asset" json:"asset"`
-	Network                 string        `db:"network" json:"network"`
-	WalletAddress           string        `db:"wallet_address" json:"wallet_address"`
-	Status                  string        `db:"status" json:"status"`
-	TxHash                  string        `db:"tx_hash" json:"tx_hash"`
-	ExpectedAmountBaseUnits string        `db:"expected_amount_base_units" json:"expected_amount_base_units"`
-	QuotedPriceUsd          string        `db:"quoted_price_usd" json:"quoted_price_usd"`
-	OriginalAmountCents     int64         `db:"original_amount_cents" json:"original_amount_cents"`
-	OriginalCurrency        string        `db:"original_currency" json:"original_currency"`
-	EurAmountCents          int64         `db:"eur_amount_cents" json:"eur_amount_cents"`
-	FxUnitsPerEur           string        `db:"fx_units_per_eur" json:"fx_units_per_eur"`
-	FxSource                string        `db:"fx_source" json:"fx_source"`
-	FxReferenceDate         time.Time     `db:"fx_reference_date" json:"fx_reference_date"`
-	QuoteSource             string        `db:"quote_source" json:"quote_source"`
-	CreditedAmountCurrency  string        `db:"credited_amount_currency" json:"credited_amount_currency"`
-	ClientIp                string        `db:"client_ip" json:"client_ip"`
-	ExpiresAt               time.Time     `db:"expires_at" json:"expires_at"`
-	InvoiceAmount           float64       `db:"invoice_amount" json:"invoice_amount"`
-	InvoiceCurrency         string        `db:"invoice_currency" json:"invoice_currency"`
+	ID                      string          `db:"id" json:"id"`
+	TenantID                string          `db:"tenant_id" json:"tenant_id"`
+	Purpose                 string          `db:"purpose" json:"purpose"`
+	InvoiceID               string          `db:"invoice_id" json:"invoice_id"`
+	ExpectedAmountCents     sql.NullInt64   `db:"expected_amount_cents" json:"expected_amount_cents"`
+	Asset                   string          `db:"asset" json:"asset"`
+	Network                 string          `db:"network" json:"network"`
+	WalletAddress           string          `db:"wallet_address" json:"wallet_address"`
+	TaxProfileSnapshot      json.RawMessage `db:"tax_profile_snapshot" json:"tax_profile_snapshot"`
+	TaxDocumentKind         string          `db:"tax_document_kind" json:"tax_document_kind"`
+	Status                  string          `db:"status" json:"status"`
+	TxHash                  string          `db:"tx_hash" json:"tx_hash"`
+	ExpectedAmountBaseUnits string          `db:"expected_amount_base_units" json:"expected_amount_base_units"`
+	QuotedPriceUsd          string          `db:"quoted_price_usd" json:"quoted_price_usd"`
+	OriginalAmountCents     int64           `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency        string          `db:"original_currency" json:"original_currency"`
+	EurAmountCents          int64           `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur           string          `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource                string          `db:"fx_source" json:"fx_source"`
+	FxReferenceDate         time.Time       `db:"fx_reference_date" json:"fx_reference_date"`
+	QuoteSource             string          `db:"quote_source" json:"quote_source"`
+	CreditedAmountCurrency  string          `db:"credited_amount_currency" json:"credited_amount_currency"`
+	ClientIp                string          `db:"client_ip" json:"client_ip"`
+	ExpiresAt               time.Time       `db:"expires_at" json:"expires_at"`
+	InvoiceAmount           float64         `db:"invoice_amount" json:"invoice_amount"`
+	InvoiceCurrency         string          `db:"invoice_currency" json:"invoice_currency"`
 }
 
 func (q *Queries) ListPendingCryptoWallets(ctx context.Context) ([]ListPendingCryptoWalletsRow, error) {
@@ -296,6 +300,8 @@ func (q *Queries) ListPendingCryptoWallets(ctx context.Context) ([]ListPendingCr
 			&i.Asset,
 			&i.Network,
 			&i.WalletAddress,
+			&i.TaxProfileSnapshot,
+			&i.TaxDocumentKind,
 			&i.Status,
 			&i.TxHash,
 			&i.ExpectedAmountBaseUnits,

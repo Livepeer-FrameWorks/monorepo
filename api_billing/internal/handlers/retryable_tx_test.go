@@ -11,7 +11,7 @@ import (
 )
 
 func expectPrepaidTopupCreditBody(mock sqlmock.Sqlmock, balanceAfter int64) {
-	mock.ExpectQuery(`(?s)SELECT status, tenant_id::text AS tenant_id.*FROM purser.pending_topups.*FOR UPDATE`).
+	mock.ExpectQuery(`(?s)-- name: LockPendingTopupForCheckout.*FROM purser.pending_topups.*FOR UPDATE`).
 		WithArgs("topup-retry").
 		WillReturnRows(pendingTopupRows("pending", checkoutTenantID, "mollie", 1500, "EUR", "sess-retry", ""))
 	mock.ExpectExec("UPDATE purser.pending_topups").
@@ -58,7 +58,7 @@ func TestPrepaidCheckoutCreditReplaysSerializationFailure(t *testing.T) {
 		{
 			name: "statement",
 			firstAttempt: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(`(?s)SELECT status, tenant_id::text AS tenant_id.*FROM purser.pending_topups.*FOR UPDATE`).
+				mock.ExpectQuery(`(?s)-- name: LockPendingTopupForCheckout.*FROM purser.pending_topups.*FOR UPDATE`).
 					WithArgs("topup-retry").
 					WillReturnRows(pendingTopupRows("pending", checkoutTenantID, "mollie", 1500, "EUR", "sess-retry", ""))
 				mock.ExpectExec("UPDATE purser.pending_topups").

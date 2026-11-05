@@ -118,6 +118,11 @@ var billingEmailTemplates = map[string]string{
   {{if .FX.UnitsPerEUR}}<tr><td style="padding:12px 15px; color:#667085; font-size:13px; border-bottom:1px solid #ccdde5;">EUR total</td><td align="right" style="padding:12px 15px; color:#24283b; font-size:14px; font-weight:bold; border-bottom:1px solid #ccdde5;">{{.FX.EURAmount}} EUR at {{.FX.UnitsPerEUR}} {{.Currency}} per EUR (ECB reference rate of {{.FX.ReferenceDate}})</td></tr>{{end}}
   <tr><td style="padding:12px 15px; color:#667085; font-size:13px;">Due date</td><td align="right" style="padding:12px 15px; color:#24283b; font-size:14px; font-weight:bold;">{{.DueDate.Format "January 2, 2006"}}</td></tr>
 </table>
+{{if .FX.Tax}}<table role="presentation" style="width:100%; margin:16px 0; border-collapse:collapse; font-size:14px;">
+<tr><td>Net amount</td><td align="right">{{.FX.Tax.Net}} EUR</td></tr>
+<tr><td>VAT</td><td align="right">{{.FX.Tax.VAT}} EUR</td></tr>
+<tr><td>Total including VAT</td><td align="right">{{.FX.Tax.Gross}} EUR</td></tr>
+</table>{{if .FX.Tax.Wording}}<p>{{.FX.Tax.Wording}}</p>{{end}}{{end}}
 {{if .UsageWaived}}<div style="margin:20px 0; padding:13px 15px; border-left:3px solid #2f7d69; background:#edf8f4; color:#295f52; font-size:14px; line-height:21px;"><strong>{{.UsageWaiverLabel}}.</strong><br>Metered usage would have cost {{money .GrossMeteredAmount}} EUR. Your metered total is 0.00 EUR.</div>{{end}}
 {{if .LineItemGroups}}
 <h2 style="margin:28px 0 12px; color:#24283b; font-size:18px; line-height:24px;">Charges</h2>

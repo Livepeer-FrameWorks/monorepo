@@ -35,8 +35,8 @@ type X402PaymentQuote struct {
 	PayTo             string
 	AmountAtomic      string
 	CreditAmountCents int64
-	// FX is the USD amount the payer authorizes and the EUR it credits at the
-	// ECB reference rate locked when the quote was created.
+	// FX records gross cash at the locked ECB rate; CreditAmountCents is
+	// the net amount available for services after VAT.
 	FX                  fx.Record
 	ExpiresAt           time.Time
 	AcceptedRequirement []byte
@@ -65,8 +65,23 @@ func (h *X402Handler) loadPaymentQuote(ctx context.Context, tenantID, quoteID st
 		ExpiresAt: stored.ExpiresAt,
 	}
 	record, err := storedFXRecord(stored.OriginalAmountCents, stored.OriginalCurrency, stored.EurAmountCents, stored.FxUnitsPerEur, stored.FxSource, stored.FxReferenceDate)
-	if err != nil || record == nil || record.EURMinor != stored.CreditAmountCents {
+	if err != nil || record == nil {
 		return nil, "", fmt.Errorf("x402 quote has invalid FX fields")
+	}
+	profile, decodeErr := decodeCryptoAdvance(stored.TaxProfileSnapshot)
+	if decodeErr != nil {
+		return nil, "", decodeErr
+	}
+	expectedCredit := record.EURMinor
+	if profile.TaxAssessment != nil && profile.TaxAssessment.Advance != nil {
+		a, err := cryptoAdvanceAssessment(profile, stored.TaxDocumentKind, *record, time.Now().UTC())
+		if err != nil {
+			return nil, "", err
+		}
+		expectedCredit = a.Net
+	}
+	if expectedCredit != stored.CreditAmountCents {
+		return nil, "", fmt.Errorf("x402 quote net credit does not match cash assessment")
 	}
 	quote.FX = *record
 	return &quote, stored.Status, nil
@@ -149,10 +164,50 @@ func (h *X402Handler) ExpirePaymentQuote(ctx context.Context, quoteID string) er
 	return purserdb.New(h.db).ExpireOfferedX402PaymentQuote(ctx, quoteID)
 }
 
-func (h *X402Handler) CreatePaymentQuote(ctx context.Context, tenantID, resource, payTo string, network NetworkConfig) (*X402PaymentQuote, error) {
-	if tenantID == "" || payTo == "" {
-		return nil, fmt.Errorf("tenant and payTo are required")
+type preparedX402Quote struct {
+	FX                 fx.Record
+	CreditAmountCents  int64
+	Atomic             string
+	Requirement        CryptoDocumentRequirement
+	TaxProfileSnapshot []byte
+	ExpiresAt          time.Time
+}
+
+// CreatePaymentQuotes assesses the supply once, then binds identical financial
+// terms and tax evidence to each chain-specific payment option.
+func (h *X402Handler) CreatePaymentQuotes(ctx context.Context, tenantID, resource, payTo string, networks []NetworkConfig, clientIP string) ([]*X402PaymentQuote, CryptoDocumentRequirement, error) {
+	if tenantID == "" || payTo == "" || len(networks) == 0 {
+		return nil, CryptoDocumentRequirement{}, fmt.Errorf("tenant, payTo and networks are required")
 	}
+	for _, network := range networks {
+		if _, err := x402CAIP2Network(network); err != nil {
+			return nil, CryptoDocumentRequirement{}, err
+		}
+	}
+	prepared, err := h.preparePaymentQuote(ctx, tenantID, clientIP)
+	if err != nil {
+		return nil, CryptoDocumentRequirement{}, err
+	}
+	if prepared.Requirement.RequiresCompleteProfile {
+		return nil, prepared.Requirement, nil
+	}
+	quotes := make([]*X402PaymentQuote, 0, len(networks))
+	for _, network := range networks {
+		quote, quoteErr := h.createPreparedPaymentQuote(ctx, tenantID, resource, payTo, network, prepared)
+		if quoteErr != nil {
+			for _, previous := range quotes {
+				if expireErr := h.ExpirePaymentQuote(ctx, previous.ID); expireErr != nil && h.logger != nil {
+					h.logger.WithError(expireErr).WithField("quote_id", previous.ID).Warn("Failed to expire unadvertised quote")
+				}
+			}
+			return nil, prepared.Requirement, quoteErr
+		}
+		quotes = append(quotes, quote)
+	}
+	return quotes, prepared.Requirement, nil
+}
+
+func (h *X402Handler) preparePaymentQuote(ctx context.Context, tenantID, clientIP string) (*preparedX402Quote, error) {
 	usdRate, err := fx.Lookup(ctx, h.db, fx.USD, time.Now().UTC())
 	if err != nil {
 		return nil, fmt.Errorf("load ECB USD reference rate: %w", err)
@@ -197,17 +252,46 @@ func (h *X402Handler) CreatePaymentQuote(ctx context.Context, tenantID, resource
 		}
 	}
 	creditCents := record.EURMinor
-	atomic := new(big.Int).Mul(big.NewInt(usdCents), big.NewInt(10_000)).String()
-	documentRequirement, err := h.GetCryptoDocumentRequirement(ctx, tenantID, creditCents)
+	documentRequirement, err := h.GetCryptoDocumentRequirement(ctx, tenantID, creditCents, clientIP)
 	if err != nil {
 		return nil, fmt.Errorf("determine crypto tax-document requirement: %w", err)
 	}
+	if documentRequirement.RequiresCompleteProfile {
+		return &preparedX402Quote{Requirement: documentRequirement}, nil
+	}
+	if err = validateCryptoAdvanceSupplier(documentRequirement.Profile); err != nil {
+		return nil, err
+	}
+	money, cash, err := quoteAdvanceMoney(usdCents, documentRequirement.Profile.TaxAssessment.Decision.RateBPS, usdRate)
+	if err != nil {
+		return nil, err
+	}
+	for money.NetEUR < targetCreditCents {
+		usdCents++
+		money, cash, err = quoteAdvanceMoney(usdCents, documentRequirement.Profile.TaxAssessment.Decision.RateBPS, usdRate)
+		if err != nil {
+			return nil, err
+		}
+	}
+	record = cash
+	creditCents = money.NetEUR
+	atomic := new(big.Int).Mul(big.NewInt(money.GrossOriginal), big.NewInt(10000)).String()
+	documentRequirement = bindCryptoAdvance(documentRequirement, money)
 	taxProfileSnapshot, err := json.Marshal(documentRequirement.Profile)
 	if err != nil {
 		return nil, fmt.Errorf("marshal crypto tax profile: %w", err)
 	}
+	expiresAt, err := documentRequirement.Profile.TaxAssessment.QuoteExpiry(time.Now().UTC().Add(defaultX402QuoteTTL), time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	return &preparedX402Quote{FX: record, CreditAmountCents: creditCents, Atomic: atomic, Requirement: documentRequirement, TaxProfileSnapshot: taxProfileSnapshot, ExpiresAt: expiresAt}, nil
+}
+
+func (h *X402Handler) createPreparedPaymentQuote(ctx context.Context, tenantID, resource, payTo string, network NetworkConfig, prepared *preparedX402Quote) (*X402PaymentQuote, error) {
+	record, atomic, documentRequirement, taxProfileSnapshot, expiresAt := prepared.FX, prepared.Atomic, prepared.Requirement, prepared.TaxProfileSnapshot, prepared.ExpiresAt
+	creditCents := prepared.CreditAmountCents
 	quoteID := uuid.NewString()
-	expiresAt := time.Now().UTC().Add(defaultX402QuoteTTL)
 	caip2, err := x402CAIP2Network(network)
 	if err != nil {
 		return nil, err
@@ -244,8 +328,8 @@ func (h *X402Handler) CreatePaymentQuote(ctx context.Context, tenantID, resource
 		ID: quoteID, TenantID: tenantID, Resource: resource,
 		ResourceClass: classifyX402Resource(resource), Network: caip2,
 		Asset: network.USDCContract, PayTo: strings.ToLower(payTo), AmountAtomic: atomic,
-		CreditAmountCents: creditCents,
-		RequirementsJson:  acceptedJSON, TaxDocumentKind: documentRequirement.DocumentKind,
+		CreditAmountCents: creditCents, GrossEurCents: record.EURMinor,
+		RequirementsJson: acceptedJSON, TaxDocumentKind: documentRequirement.DocumentKind,
 		TaxProfileSnapshot: taxProfileSnapshot, ExpiresAt: expiresAt,
 		OriginalAmountCents: record.OriginalMinor, OriginalCurrency: record.OriginalCurrency,
 		FxUnitsPerEur: record.UnitsText(), FxSource: record.Source, FxReferenceDate: record.ReferenceDate,

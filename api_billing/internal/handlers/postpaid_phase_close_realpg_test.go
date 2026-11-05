@@ -170,6 +170,7 @@ func TestPostpaidToPrepaidSwitchBillsEachPhaseOnce_RealPG(t *testing.T) { //noli
 			t.Fatalf("seed: %v\n%s", err, statement.sql)
 		}
 	}
+	seedContractBillingIdentity(t, db, tenantID)
 	// The tenant was prepaid until postpaidFrom: that phase closed with its
 	// statement, and the balance paid its 200 GiB as they were reported.
 	seedClosingStatement(t, db, tenantID, periodStart, postpaidFrom)
@@ -362,6 +363,7 @@ func TestPostpaidPhaseCloseCollectsTheClosingInvoice_RealPG(t *testing.T) {
 					t.Fatalf("seed: %v\n%s", err, statement)
 				}
 			}
+			seedContractBillingIdentity(t, db, tenantID)
 			recordEgressReceived(t, db, tenantID, strings.Repeat("6", 64), periodStart.Add(time.Hour), tc.egressGiB, periodStart.Add(time.Hour+6*time.Minute))
 			svc := &Service{db: db, logger: logger, mollieClient: mollieClient}
 			closing, err := PreparePostpaidPhaseClose(ctx, db, logger, svc, tenantID)
@@ -430,6 +432,7 @@ func TestPostpaidPhaseCloseRetriesWhenThePhaseChangedSinceRating_RealPG(t *testi
 		tenantID, supporterID, periodStart, periodStart.AddDate(0, 1, 0)).Scan(&subscriptionID); err != nil {
 		t.Fatal(err)
 	}
+	seedContractBillingIdentity(t, db, tenantID)
 	if _, err := db.ExecContext(ctx, `INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency) VALUES ($1, 500, 'EUR')`, tenantID); err != nil {
 		t.Fatal(err)
 	}

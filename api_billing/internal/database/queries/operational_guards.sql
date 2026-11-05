@@ -1,14 +1,36 @@
 -- name: GetCachedVATValidation :one
-SELECT valid
-FROM purser.vat_validation_evidence
-WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
-  AND vat_number_hash = sqlc.arg(vat_number_hash)
-  AND expires_at > NOW()
-ORDER BY checked_at DESC
-LIMIT 1;
+WITH latest AS (
+    SELECT evidence.* FROM purser.vat_validation_evidence evidence
+    WHERE evidence.tenant_id = sqlc.arg(tenant_id)::text::uuid
+      AND evidence.vat_number_hash = sqlc.arg(vat_number_hash)
+    ORDER BY evidence.checked_at DESC, evidence.id DESC LIMIT 1
+)
+SELECT latest.valid, to_jsonb(latest)::jsonb AS validation_snapshot,
+       (latest.checked_at <= NOW() AND latest.expires_at > NOW())::boolean AS fresh,
+       (latest.checked_at <= NOW() AND latest.expires_at >= NOW() - sqlc.arg(outage_grace_hours)::integer * INTERVAL '1 hour')::boolean AS within_outage_grace
+FROM latest;
 
--- name: UpsertVATValidationEvidence :exec
-INSERT INTO purser.vat_validation_evidence (
+-- name: ListTenantVIESRevalidations :many
+SELECT id::text AS id, evidence_json
+FROM purser.crypto_accounting_anomalies
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid
+  AND kind='vies_revalidation' AND status='open'
+  AND last_seen_at < NOW()-INTERVAL '5 minutes'
+  AND NOT (evidence_json ? 'revalidation_outcome')
+ORDER BY last_seen_at,id LIMIT 20;
+
+-- name: RecordVIESRevalidationResult :exec
+UPDATE purser.crypto_accounting_anomalies
+SET last_seen_at=NOW(),
+    evidence_json=evidence_json || sqlc.arg(result)::jsonb,
+    status=CASE WHEN sqlc.arg(verified)::boolean THEN 'resolved' ELSE status END,
+    resolved_at=CASE WHEN sqlc.arg(verified)::boolean THEN NOW() ELSE resolved_at END,
+    resolution_note=CASE WHEN sqlc.arg(verified)::boolean THEN 'VIES revalidated retained outage evidence' ELSE resolution_note END
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND id=sqlc.arg(id)::text::uuid
+  AND kind='vies_revalidation' AND status='open';
+
+-- name: UpsertVATValidationEvidence :one
+INSERT INTO purser.vat_validation_evidence AS evidence (
     tenant_id, country_code, vat_number_hash, vat_number_masked,
     valid, request_date, trader_name, trader_address,
     checked_at, expires_at, raw_response
@@ -25,7 +47,14 @@ SET valid = EXCLUDED.valid,
     trader_address = EXCLUDED.trader_address,
     checked_at = NOW(),
     expires_at = NOW() + INTERVAL '24 hours',
-    raw_response = EXCLUDED.raw_response;
+    raw_response = EXCLUDED.raw_response
+RETURNING to_jsonb(evidence)::jsonb AS validation_snapshot;
+
+-- name: RecordPermanentVIESFault :exec
+INSERT INTO purser.vat_validation_evidence(tenant_id,country_code,vat_number_hash,vat_number_masked,valid,request_date,checked_at,expires_at,raw_response)
+VALUES(sqlc.arg(tenant_id)::text::uuid,sqlc.arg(country_code),sqlc.arg(vat_number_hash),sqlc.arg(vat_number_masked),false,CURRENT_DATE,NOW(),NOW(),sqlc.arg(raw_response)::jsonb)
+ON CONFLICT(tenant_id,vat_number_hash,request_date) DO UPDATE
+SET valid=false,checked_at=NOW(),expires_at=NOW(),raw_response=EXCLUDED.raw_response;
 
 -- name: GetActiveTenantBillingModel :one
 SELECT COALESCE(billing_model, 'postpaid') AS billing_model

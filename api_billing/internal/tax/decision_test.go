@@ -3,10 +3,33 @@ package tax
 import (
 	"context"
 	"errors"
-	"math"
 	"testing"
 	"time"
 )
+
+func TestBusinessVATCanonicalFormsReachValidation(t *testing.T) {
+	for _, tc := range []struct{ country, raw, want string }{
+		{"DE", "123456789", "DE123456789"},
+		{"GR", "GR123456789", "EL123456789"},
+		{"GR", "123456789", "EL123456789"},
+		{"GR", "EL123456789", "EL123456789"},
+	} {
+		t.Run(tc.country+tc.raw, func(t *testing.T) {
+			called := false
+			validate := func(_ context.Context, country, vat string) (bool, error) {
+				called = true
+				if country != tc.country || vat != tc.want {
+					t.Fatalf("validation received %s/%s, want %s/%s", country, vat, tc.country, tc.want)
+				}
+				return true, nil
+			}
+			d, err := Evaluate(context.Background(), Policy{SupplierCountry: "NL"}, Profile{Type: Business, Country: tc.country, VATNumber: tc.raw}, 100, time.Now(), nil, validate)
+			if err != nil || !called || !d.ReverseCharge {
+				t.Fatalf("valid national/Greek VAT form was blocked: decision=%+v err=%v", d, err)
+			}
+		})
+	}
+}
 
 func TestConsumerAndBusinessTaxDecisions(t *testing.T) {
 	evidence := []Evidence{{Source: "billing_address", Country: "DE", Reference: "profile-v1"}, {Source: "payment_provider", Country: "DE", Reference: "payment-country-1"}}
@@ -64,44 +87,6 @@ func TestConsumerAndBusinessTaxDecisions(t *testing.T) {
 	}
 }
 
-func TestConsumerThresholdIncludesCurrentPurchaseAndPreviousYear(t *testing.T) {
-	at := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
-	profile := Profile{Type: Consumer, Country: "DE", Evidence: []Evidence{{"billing_address", "DE", "profile"}, {"payment_provider", "DE", "provider"}}}
-	policy := Policy{SupplierCountry: "NL", EUConsumerMode: OriginThreshold, SingleEUEstablishment: true, ThresholdTotalsKnown: true, DestinationRegistrationConfirmed: true}
-	lookup := func(_ context.Context, c string, _ time.Time) (Rate, error) {
-		return Rate{BPS: map[string]int{"NL": 2100, "DE": 1900}[c], Source: "rate table"}, nil
-	}
-	for _, tt := range []struct {
-		name                        string
-		current, previous, purchase int64
-		known                       bool
-		want                        int
-		review                      string
-	}{
-		{"below threshold", 900_000, 900_000, 10_000, true, 2100, ""},
-		{"exactly threshold", 990_000, 900_000, 10_000, true, 2100, ""},
-		{"crossing purchase", 990_001, 900_000, 10_000, true, 1900, ""},
-		{"previous year exceeded", 0, 1_000_001, 10_000, true, 1900, ""},
-		{"unknown totals", 0, 0, 10_000, false, 0, "consumer_threshold_unproven"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			p := policy
-			p.CurrentYearCrossBorderNetCents, p.PreviousYearCrossBorderNetCents, p.ThresholdTotalsKnown = tt.current, tt.previous, tt.known
-			got, err := Evaluate(context.Background(), p, profile, tt.purchase, at, lookup, nil)
-			if tt.review != "" {
-				var review *ReviewError
-				if !errors.As(err, &review) || review.Code != tt.review {
-					t.Fatalf("error=%v", err)
-				}
-				return
-			}
-			if err != nil || got.Rate.BPS != tt.want {
-				t.Fatalf("decision=%+v error=%v", got, err)
-			}
-		})
-	}
-}
-
 func TestConsumerEvidenceMustBeIndependentAndConsistent(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
@@ -111,6 +96,7 @@ func TestConsumerEvidenceMustBeIndependentAndConsistent(t *testing.T) {
 		{"duplicate source", []Evidence{{"billing_address", "DE", "one"}, {"billing_address", "DE", "two"}}, "consumer_location_evidence_required"},
 		{"conflict", []Evidence{{"billing_address", "DE", "one"}, {"payment_provider", "NL", "two"}}, "consumer_location_conflict"},
 		{"unreferenced", []Evidence{{"billing_address", "DE", ""}, {"payment_provider", "DE", "two"}}, "consumer_location_evidence_required"},
+		{"jurisdiction review is not payer location", []Evidence{{"billing_address", "DE", "one"}, {"jurisdiction_review", "DE", "policy-memo"}}, "consumer_location_source_unsupported"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var review *ReviewError
@@ -122,23 +108,23 @@ func TestConsumerEvidenceMustBeIndependentAndConsistent(t *testing.T) {
 	}
 }
 
-func TestExclusiveMoneyUsesMinorUnitsAndRejectsOverflow(t *testing.T) {
-	for _, tt := range []struct {
-		net  int64
-		rate int
-		want Totals
-	}{
-		{10000, 2100, Totals{10000, 2100, 12100}},
-		{10000, 1900, Totals{10000, 1900, 11900}},
-		{10000, 0, Totals{10000, 0, 10000}},
-		{50, 2100, Totals{50, 11, 61}},
-	} {
-		got, err := Exclusive(tt.net, tt.rate)
-		if err != nil || got != tt.want {
-			t.Fatalf("Exclusive(%d,%d)=%+v,%v", tt.net, tt.rate, got, err)
+func TestFrenchNationalVATKeyIsNotACountryPrefix(t *testing.T) {
+	for _, national := range []string{"DE123456789", "FR123456789", "EL123456789", "A1123456789"} {
+		got, err := CanonicalVATNumber("FR", national)
+		if err != nil || got != "FR"+national {
+			t.Fatalf("French national key %s mistaken for country prefix: %q %v", national, got, err)
+		}
+		full, fullErr := CanonicalVATNumber("FR", "FR"+national)
+		if fullErr != nil || full != got {
+			t.Fatalf("French full/national forms disagree: %q %v", full, fullErr)
 		}
 	}
-	if _, err := Exclusive(math.MaxInt64, 2100); err == nil {
-		t.Fatal("overflow accepted")
+}
+
+func TestUnknownLocationEvidenceSourceIsExplicitlyRejected(t *testing.T) {
+	err := validateConsumerEvidence(Profile{Country: "DE", Evidence: []Evidence{{Source: "billing_address", Country: "DE", Reference: "profile"}, {Source: "unregistered_provider", Country: "DE", Reference: "claim"}}})
+	var review *ReviewError
+	if !errors.As(err, &review) || review.Code != "consumer_location_source_unsupported" {
+		t.Fatalf("new source silently discarded: %v", err)
 	}
 }

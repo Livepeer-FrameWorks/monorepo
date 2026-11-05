@@ -51,6 +51,7 @@ type freeDowngrade struct {
 }
 
 func newFreeDowngrade(t *testing.T, provider string) *freeDowngrade {
+	configureRPCTaxSupplier(t)
 	t.Helper()
 	db := startOperatorGrantDatabase(t)
 	f := &freeDowngrade{db: db, tenant: uuid.NewString(), paid: uuid.NewString(), low: uuid.NewString(), free: uuid.NewString()}
@@ -63,9 +64,9 @@ func newFreeDowngrade(t *testing.T, provider string) *freeDowngrade {
 		f.exec(t, `INSERT INTO purser.mollie_customers(tenant_id,mollie_customer_id) VALUES($1,'customer')`, f.tenant)
 		f.exec(t, `INSERT INTO purser.mollie_mandates (tenant_id,mollie_customer_id,mollie_mandate_id,status,method) VALUES ($1,'customer','mandate','valid','directdebit')`, f.tenant)
 	}
-	f.exec(t, `INSERT INTO purser.tenant_subscriptions (tenant_id,tier_id,status,billing_model,payment_method,stripe_customer_id,stripe_subscription_id,mollie_subscription_id,
+	f.exec(t, `INSERT INTO purser.tenant_subscriptions (billing_customer_type,billing_company,tenant_id,tier_id,status,billing_model,payment_method,stripe_customer_id,stripe_subscription_id,mollie_subscription_id,
 		billing_name,billing_email,billing_address,presentment_currency,billing_period_start,billing_period_end,next_billing_date)
-		VALUES ($1,$2,'active','postpaid',$3,'customer',NULLIF($4,''),NULLIF($5,''),'Customer','billing@example.com',
+		VALUES ('business','Fixture Ltd',$1,$2,'active','postpaid',$3,'customer',NULLIF($4,''),NULLIF($5,''),'Customer','billing@example.com',
 		'{"street":"Street 1","city":"Leiden","postal_code":"2332ED","country":"NL"}','EUR',NOW()-INTERVAL '10 days',NOW()+INTERVAL '20 days',NOW()+INTERVAL '20 days')`,
 		f.tenant, f.paid, provider, stripeID, mollieID)
 	logger := logging.NewLogger()
@@ -140,6 +141,7 @@ func (f *freeDowngrade) state(t *testing.T) freeDowngradeState {
 // The customer keeps the paid term, the provider stops before the renewal, and
 // the tenant moves to Free at the term's end, on either provider.
 func TestFreeDowngradeKeepsPaidTermThenMoves_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	for _, provider := range []string{"stripe", "mollie"} {
 		t.Run(provider, func(t *testing.T) {
 			f := newFreeDowngrade(t, provider)
@@ -179,6 +181,7 @@ func TestFreeDowngradeKeepsPaidTermThenMoves_RealPG(t *testing.T) {
 
 // Until the provider stop starts, a re-point or a cancel keeps the subscription.
 func TestFreeDowngradeRepointKeepsSubscriptionLive_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	for _, provider := range []string{"stripe", "mollie"} {
 		t.Run(provider, func(t *testing.T) {
 			f := newFreeDowngrade(t, provider)
@@ -218,6 +221,7 @@ func TestFreeDowngradeRepointKeepsSubscriptionLive_RealPG(t *testing.T) {
 
 // A provider outage keeps the fence and the paid tier, then the sweep retries.
 func TestFreeDowngradeProviderFailureRetries_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	for _, provider := range []string{"stripe", "mollie"} {
 		t.Run(provider, func(t *testing.T) {
 			f := newFreeDowngrade(t, provider)
@@ -249,6 +253,7 @@ func TestFreeDowngradeProviderFailureRetries_RealPG(t *testing.T) {
 // existing fallback keeps its date, reason and recovery check. Reason and status
 // each withhold the staged effective time on their own.
 func TestFreeDowngradeLeavesAPaymentFailureFallback_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	for _, tc := range []struct {
 		name, status, reason string
 		recovery             bool
@@ -291,6 +296,7 @@ func TestFreeDowngradeLeavesAPaymentFailureFallback_RealPG(t *testing.T) {
 // Re-pointing a staged Free downgrade withdraws only the move it scheduled. A
 // payment-failure fallback on an active subscription stays.
 func TestRepointKeepsAPaymentFailureFallback_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	f := newFreeDowngrade(t, "stripe")
 	grace := time.Now().UTC().Add(10 * 24 * time.Hour).Truncate(time.Second)
 	if _, err := f.change(t, f.free); err != nil {
@@ -308,6 +314,7 @@ func TestRepointKeepsAPaymentFailureFallback_RealPG(t *testing.T) {
 // Once a confirmed downgrade is effective the provider has renewed at its fee, so
 // the customer cannot step back onto the old tier for that paid-at-lower term.
 func TestConfirmedDowngradePastItsEffectiveTimeRefusesChanges_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	for _, provider := range []string{"stripe", "mollie"} {
 		t.Run(provider, func(t *testing.T) {
 			f := newFreeDowngrade(t, provider)

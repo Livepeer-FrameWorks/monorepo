@@ -64,7 +64,7 @@ func TestCreateStripeCheckoutRequiresIdempotencyBeforeIO(t *testing.T) {
 	backend := &stripeMoneyBackend{}
 	installBackend(t, backend)
 	client := NewClient(Config{SecretKey: "sk_test", Logger: logging.NewLogger()})
-	if _, err := client.CreateCheckoutSession(context.Background(), CheckoutSessionParams{}); err == nil {
+	if _, err := client.CreateCheckoutSession(context.Background(), CheckoutSessionParams{TaxProfile: &TaxProfile{}, TaxRateID: "txr_test"}); err == nil {
 		t.Fatal("missing idempotency key accepted")
 	}
 	if backend.calls != 0 {
@@ -77,7 +77,7 @@ func TestCreateStripeCheckoutBindsCommercialIdentityToSessionAndSubscription(t *
 	installBackend(t, backend)
 	client := NewClient(Config{SecretKey: "sk_test", Logger: logging.NewLogger()})
 
-	session, err := client.CreateCheckoutSession(context.Background(), CheckoutSessionParams{
+	session, err := client.CreateCheckoutSession(context.Background(), CheckoutSessionParams{TaxProfile: &TaxProfile{}, TaxRateID: "txr_test",
 		CustomerID: "cus_1", TenantID: "tenant-1", TierID: "pro", Purpose: "cluster_subscription",
 		ReferenceID: "cluster-1", ClusterID: "cluster-1", PriceID: "price_1", Currency: "EUR",
 		SuccessURL: "https://app/success", CancelURL: "https://app/cancel", TrialDays: 14,
@@ -89,6 +89,9 @@ func TestCreateStripeCheckoutBindsCommercialIdentityToSessionAndSubscription(t *
 	params := backend.checkoutParams
 	if params == nil {
 		t.Fatal("checkout params not captured")
+	}
+	if len(params.LineItems) != 1 || len(params.LineItems[0].TaxRates) != 0 || len(params.SubscriptionData.DefaultTaxRates) != 1 || *params.SubscriptionData.DefaultTaxRates[0] != "txr_test" {
+		t.Fatal("new Checkout item overrides its subscription tax default")
 	}
 	if params.IdempotencyKey == nil || *params.IdempotencyKey != "checkout:tenant-1:cluster-1" || params.Customer == nil || *params.Customer != "cus_1" || params.Mode == nil || *params.Mode != "subscription" {
 		t.Fatalf("identity params = %+v", params)

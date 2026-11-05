@@ -36,6 +36,7 @@ func (p *fallbackLifecycleProvider) EndSubscriptionForFallback(ctx context.Conte
 }
 
 func seedFallbackLifecycle(t *testing.T, db *sql.DB) (tenant, paid, free string) {
+	configureRPCTaxSupplier(t)
 	t.Helper()
 	tenant, paid, free = uuid.NewString(), uuid.NewString(), uuid.NewString()
 	if _, err := db.Exec(`INSERT INTO purser.billing_tiers(id,tier_name,display_name,base_price,currency,metering_enabled,tier_level) VALUES($1::text::uuid,$1::text,'Paid',20,'EUR',false,1),($2::text::uuid,$2::text,'Free fixture',0,'EUR',false,0)`, paid, free); err != nil {
@@ -44,7 +45,7 @@ func seedFallbackLifecycle(t *testing.T, db *sql.DB) (tenant, paid, free string)
 	if _, err := db.Exec(`UPDATE purser.billing_tiers SET tier_name='free',is_default_postpaid=true WHERE id=$1`, free); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO purser.tenant_subscriptions(tenant_id,tier_id,status,billing_model,payment_method,presentment_currency,billing_period_start,billing_period_end,stripe_customer_id,stripe_subscription_id,free_fallback_at,free_fallback_reason,free_fallback_notified_at) VALUES($1,$2,'past_due','postpaid','stripe','EUR',NOW()-INTERVAL '20 days',NOW()-INTERVAL '1 hour','customer','subscription',NOW()-INTERVAL '1 hour','payment_failed',NOW())`, tenant, paid); err != nil {
+	if _, err := db.Exec(`INSERT INTO purser.tenant_subscriptions(billing_customer_type,billing_name,billing_company,billing_email,billing_address,tenant_id,tier_id,status,billing_model,payment_method,presentment_currency,billing_period_start,billing_period_end,stripe_customer_id,stripe_subscription_id,free_fallback_at,free_fallback_reason,free_fallback_notified_at) VALUES('business','Fixture Buyer','Fixture Ltd','billing@example.test','{"street":"1 Main Street","city":"Toronto","postal_code":"M5V1J1","country":"CA"}'::jsonb,$1,$2,'past_due','postpaid','stripe','EUR',NOW()-INTERVAL '20 days',NOW()-INTERVAL '1 hour','customer','subscription',NOW()-INTERVAL '1 hour','payment_failed',NOW())`, tenant, paid); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO purser.tier_entitlements(tier_id,key,value) VALUES($1,'custom_domain_enabled','true'),($1,'custom_subdomain_enabled','true')`, paid); err != nil {
@@ -57,6 +58,7 @@ func fallbackLifecycleServer(db *sql.DB, p *fallbackLifecycleProvider) *PurserSe
 }
 
 func TestFreeFallbackProviderFailureKeepsDurableFence_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	testAbandonedFallbackNoticeRetry(t)
 	t.Run("postdeploy validates the notice retry index contract", func(t *testing.T) {
 		for _, defect := range []string{"key", "predicate", "covering"} {
@@ -271,6 +273,7 @@ SELECT $1,tenant_id,tier_id,$3,'customer',billing_period_start,billing_period_en
 }
 
 func TestFreeFallbackRetainsPendingAndPaidTerm_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	for _, kind := range []string{"pending", "paid", "recovered", "closure"} {
 		t.Run(kind, func(t *testing.T) {
 			db := startOperatorGrantDatabase(t)
@@ -355,11 +358,12 @@ func TestFreeFallbackRetainsPendingAndPaidTerm_RealPG(t *testing.T) {
 }
 
 func TestFreeFallbackOldRetriesCannotStarveUntouchedWork_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	db := startOperatorGrantDatabase(t)
 	tenant, paid, _ := seedFallbackLifecycle(t, db)
 	// Every older retry is eligible again after a slow batch. Untouched work
 	// must precede them even when its fallback date is newer.
-	if _, err := db.Exec(`INSERT INTO purser.tenant_subscriptions(tenant_id,tier_id,status,billing_model,free_fallback_at,free_fallback_reason,free_fallback_attempted_at,free_fallback_notice_attempted_at) SELECT gen_random_uuid(),$1,'past_due','postpaid',NOW()-INTERVAL '2 days','payment_failed',NOW()-INTERVAL '6 minutes',NOW()-INTERVAL '6 minutes' FROM generate_series(1,100)`, paid); err != nil {
+	if _, err := db.Exec(`INSERT INTO purser.tenant_subscriptions(billing_customer_type,billing_name,billing_company,billing_email,billing_address,tenant_id,tier_id,status,billing_model,free_fallback_at,free_fallback_reason,free_fallback_attempted_at,free_fallback_notice_attempted_at) SELECT 'business','Fixture Buyer','Fixture Ltd','billing@example.test','{"street":"1 Main Street","city":"Toronto","postal_code":"M5V1J1","country":"CA"}'::jsonb,gen_random_uuid(),$1,'past_due','postpaid',NOW()-INTERVAL '2 days','payment_failed',NOW()-INTERVAL '6 minutes',NOW()-INTERVAL '6 minutes' FROM generate_series(1,100)`, paid); err != nil {
 		t.Fatal(err)
 	}
 	q := purserdb.New(db)
@@ -393,6 +397,7 @@ func (p *fallbackMollieCancel) CancelSubscription(context.Context, string, strin
 }
 
 func TestMollieCancellationKeepsReplacementSubscription_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	db := startOperatorGrantDatabase(t)
 	tenant, _, _ := seedFallbackLifecycle(t, db)
 	if _, err := db.Exec(`INSERT INTO purser.mollie_customers(tenant_id,mollie_customer_id) VALUES($1,'customer')`, tenant); err != nil {
@@ -426,6 +431,7 @@ func TestMollieCancellationKeepsReplacementSubscription_RealPG(t *testing.T) {
 }
 
 func TestMollieFallbackFindsFundingThroughActualSubscriptionCreation_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	assertMollieFundingRecoveryOrdersWithActivation(t)
 	for _, history := range []string{"fresh", "already delivered", "rejected before provider", "compensated before activation"} {
 		t.Run(history, func(t *testing.T) {
@@ -500,6 +506,7 @@ func TestMollieFallbackFindsFundingThroughActualSubscriptionCreation_RealPG(t *t
 }
 
 func TestProviderFailureUnderGrantKeepsFallbackObligation_RealPG(t *testing.T) {
+	configureRPCTaxSupplier(t)
 	for _, provider := range []string{"stripe", "mollie"} {
 		t.Run(provider, func(t *testing.T) {
 			db := startOperatorGrantDatabase(t)

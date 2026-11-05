@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"frameworks/api_billing/internal/appconfig/appconfigtest"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -91,36 +90,20 @@ func TestRPCCall_DecodeAndErrorHandling(t *testing.T) {
 	})
 }
 
-func TestGetVATRateForTenant_MalformedBillingAddressDoesNotGuessCountry(t *testing.T) {
+func TestCryptoPreflightMalformedBillingAddressDoesNotGuessCountry(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
-		t.Fatalf("sqlmock.New: %v", err)
+		t.Fatal(err)
 	}
 	defer db.Close()
-
-	mock.ExpectQuery("SELECT tax_id, COALESCE\\(billing_address").
-		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"tax_id", "billing_address", "customer_type"}).
-			AddRow(sql.NullString{Valid: false}, []byte(`{"country":`), "unspecified"))
-
-	handler := &X402Handler{
-		db:     db,
-		logger: logging.NewLogger(),
+	mock.ExpectQuery("SELECT billing_email, billing_name, billing_company").WithArgs("tenant-1").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow(nil, nil, nil, []byte(`{"country":`), nil, "consumer"))
+	h := &X402Handler{db: db, supplierCountry: "NL"}
+	requirement, err := h.GetCryptoDocumentRequirement(context.Background(), "tenant-1", 500, "")
+	if err != nil || !requirement.RequiresBillingCountry || !requirement.RequiresCompleteProfile || requirement.Profile.TaxAssessment != nil {
+		t.Fatalf("malformed address produced payable tax terms: %+v %v", requirement, err)
 	}
-
-	rate, country, isB2B := handler.getVATRateForTenant(context.Background(), "tenant-1", "")
-	if country != "" {
-		t.Fatalf("country: got %q, want empty", country)
-	}
-	if rate != 0 {
-		t.Fatalf("rate: got %d, want 0 pending location review", rate)
-	}
-	if isB2B {
-		t.Fatal("isB2B: got true, want false")
-	}
-
 	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet sql expectations: %v", err)
+		t.Fatal(err)
 	}
 }
 

@@ -129,7 +129,7 @@ INSERT INTO purser.credit_notes (
     credit_note_number, tenant_id, source_document_type, source_document_id,
     reversal_reference_type, reversal_reference_id, amount_cents, currency,
     reason, evidence_json, customer_snapshot, supplier_snapshot
-) VALUES (
+) SELECT
     'CN-' || lpad(nextval('purser.credit_note_number_seq')::text, 10, '0'),
     $1::text::uuid, 'invoice', $2::text::uuid,
     'crypto_reorg', $3, $4, $5,
@@ -137,7 +137,9 @@ INSERT INTO purser.credit_notes (
     jsonb_build_object('payment_id', $6::text, 'transaction_hash', $7::text),
     purser.billing_customer_snapshot($1::text::uuid),
     NULLIF($8::text, '')::jsonb
-)
+FROM purser.billing_invoices source_invoice
+WHERE source_invoice.tenant_id=$1::text::uuid AND source_invoice.id=$2::text::uuid
+  AND (source_invoice.tax_status NOT IN ('ready','no_supply') OR source_invoice.source_reference_type IN ('crypto_payment','x402_payment'))
 ON CONFLICT (source_document_type, source_document_id, reversal_reference_type, reversal_reference_id)
 DO NOTHING
 `
@@ -188,6 +190,9 @@ FROM (
     SELECT id, tenant_id, reference_type, reference_id, gross_amount_cents, currency,
            'crypto_invoice'::text AS source_type
     FROM purser.crypto_invoices
+    UNION ALL
+    SELECT id,tenant_id,source_reference_type,source_reference_id,document_gross_minor,presentment_currency,'invoice'::text AS source_type
+    FROM purser.billing_invoices WHERE source_reference_type='crypto_payment' AND tax_status='ready'
 ) invoice
 WHERE invoice.tenant_id = $4::text::uuid
   AND invoice.reference_type = 'crypto_payment'
@@ -389,6 +394,24 @@ type MarkReorgedCryptoWalletForReviewParams struct {
 
 func (q *Queries) MarkReorgedCryptoWalletForReview(ctx context.Context, arg MarkReorgedCryptoWalletForReviewParams) error {
 	_, err := q.db.ExecContext(ctx, markReorgedCryptoWalletForReview, arg.WalletID, arg.TenantID)
+	return err
+}
+
+const revokeCryptoAdvanceFundingLot = `-- name: RevokeCryptoAdvanceFundingLot :exec
+UPDATE purser.prepaid_funding_lots SET remaining_net_eur_cents=0, remaining_vat_eur_cents=0, revoked_net_eur_cents=net_credit_eur_cents, revoked_vat_eur_cents=COALESCE(vat_eur_cents,0)
+WHERE tenant_id=$1::text::uuid
+ AND source_reference_type=$2
+ AND source_reference_id=$3
+`
+
+type RevokeCryptoAdvanceFundingLotParams struct {
+	TenantID            string `db:"tenant_id" json:"tenant_id"`
+	SourceReferenceType string `db:"source_reference_type" json:"source_reference_type"`
+	SourceReferenceID   string `db:"source_reference_id" json:"source_reference_id"`
+}
+
+func (q *Queries) RevokeCryptoAdvanceFundingLot(ctx context.Context, arg RevokeCryptoAdvanceFundingLotParams) error {
+	_, err := q.db.ExecContext(ctx, revokeCryptoAdvanceFundingLot, arg.TenantID, arg.SourceReferenceType, arg.SourceReferenceID)
 	return err
 }
 

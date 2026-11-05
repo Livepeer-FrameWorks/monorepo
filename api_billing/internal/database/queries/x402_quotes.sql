@@ -55,6 +55,6 @@ INSERT INTO purser.x402_payment_quotes (
     sqlc.arg(requirements_json), sqlc.arg(tax_document_kind),
     sqlc.arg(tax_profile_snapshot), sqlc.arg(expires_at),
     sqlc.arg(original_amount_cents)::bigint, sqlc.arg(original_currency)::text,
-    sqlc.arg(credit_amount_cents), sqlc.arg(fx_units_per_eur)::text::numeric,
+    sqlc.arg(gross_eur_cents)::bigint, sqlc.arg(fx_units_per_eur)::text::numeric,
     sqlc.arg(fx_source)::text, sqlc.arg(fx_reference_date)::date
 );

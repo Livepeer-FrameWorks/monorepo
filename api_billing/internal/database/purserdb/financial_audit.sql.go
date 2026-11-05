@@ -7,57 +7,172 @@ package purserdb
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
 
 const financialAuditPage = `-- name: FinancialAuditPage :many
 WITH records AS (
-    SELECT 'invoices'::text AS source, i.id::text AS id,
-           COALESCE(i.finalized_at, i.created_at) AS occurred_at, to_jsonb(i)::text AS payload
-    FROM purser.billing_invoices i WHERE i.tenant_id = $5::text::uuid
+    (SELECT 'invoices'::text AS source, i.id
+     FROM purser.billing_invoices i
+     WHERE i.tenant_id=$1::text::uuid
+       AND $2::text='invoices'
+       AND (COALESCE(i.finalized_at,i.created_at) IS NULL OR (COALESCE(i.finalized_at,i.created_at)>=$3::timestamptz AND COALESCE(i.finalized_at,i.created_at)<$4::timestamptz))
+       AND i.id>=COALESCE(NULLIF($5::text,''),'00000000-0000-0000-0000-000000000000')::uuid
+       AND i.id IS DISTINCT FROM NULLIF($5::text,'')::uuid
+     ORDER BY i.id LIMIT 101)
     UNION ALL
-    SELECT 'payments', p.id::text, p.created_at,
-           (to_jsonb(p) || jsonb_build_object('tenant_id', i.tenant_id))::text
-    FROM purser.billing_payments p
-    JOIN purser.billing_invoices i ON i.id = p.invoice_id
-    WHERE i.tenant_id = $5::text::uuid
+    (SELECT 'payments'::text AS source, p.id
+     FROM purser.billing_payments p
+     WHERE p.tenant_id=$1::text::uuid
+       AND $2::text='payments'
+       AND (p.created_at IS NULL OR (p.created_at>=$3::timestamptz AND p.created_at<$4::timestamptz))
+       AND p.id>=COALESCE(NULLIF($5::text,''),'00000000-0000-0000-0000-000000000000')::uuid
+       AND p.id IS DISTINCT FROM NULLIF($5::text,'')::uuid
+     ORDER BY p.id LIMIT 101)
     UNION ALL
-    SELECT 'simplified_invoices', i.id::text, i.issued_at, to_jsonb(i)::text
-    FROM purser.simplified_invoices i WHERE i.tenant_id = $5::text::uuid
+    (SELECT 'simplified_invoices'::text AS source, i.id
+     FROM purser.simplified_invoices i
+     WHERE i.tenant_id=$1::text::uuid
+       AND $2::text='simplified_invoices'
+       AND (i.issued_at IS NULL OR (i.issued_at>=$3::timestamptz AND i.issued_at<$4::timestamptz))
+       AND i.id>=COALESCE(NULLIF($5::text,''),'00000000-0000-0000-0000-000000000000')::uuid
+       AND i.id IS DISTINCT FROM NULLIF($5::text,'')::uuid
+     ORDER BY i.id LIMIT 101)
     UNION ALL
-    SELECT 'crypto_invoices', i.id::text, i.issued_at, to_jsonb(i)::text
-    FROM purser.crypto_invoices i WHERE i.tenant_id = $5::text::uuid
+    (SELECT 'crypto_invoices'::text AS source, i.id
+     FROM purser.crypto_invoices i
+     WHERE i.tenant_id=$1::text::uuid
+       AND $2::text='crypto_invoices'
+       AND (i.issued_at IS NULL OR (i.issued_at>=$3::timestamptz AND i.issued_at<$4::timestamptz))
+       AND i.id>=COALESCE(NULLIF($5::text,''),'00000000-0000-0000-0000-000000000000')::uuid
+       AND i.id IS DISTINCT FROM NULLIF($5::text,'')::uuid
+     ORDER BY i.id LIMIT 101)
     UNION ALL
-    SELECT 'credit_notes', n.id::text, n.issued_at, to_jsonb(n)::text
-    FROM purser.credit_notes n WHERE n.tenant_id = $5::text::uuid
+    (SELECT 'credit_notes'::text AS source, n.id
+     FROM purser.credit_notes n
+     WHERE n.tenant_id=$1::text::uuid
+       AND $2::text='credit_notes'
+       AND (n.issued_at IS NULL OR (n.issued_at>=$3::timestamptz AND n.issued_at<$4::timestamptz))
+       AND n.id>=COALESCE(NULLIF($5::text,''),'00000000-0000-0000-0000-000000000000')::uuid
+       AND n.id IS DISTINCT FROM NULLIF($5::text,'')::uuid
+     ORDER BY n.id LIMIT 101)
     UNION ALL
-    SELECT 'provider_settlements', p.id::text, p.created_at, to_jsonb(p)::text
-    FROM purser.provider_settlements p WHERE p.tenant_id = $5::text::uuid
+    (SELECT 'provider_settlements'::text AS source, p.id
+     FROM purser.provider_settlements p
+     WHERE p.tenant_id=$1::text::uuid
+       AND $2::text='provider_settlements'
+       AND (p.created_at IS NULL OR (p.created_at>=$3::timestamptz AND p.created_at<$4::timestamptz))
+       AND p.id>=COALESCE(NULLIF($5::text,''),'00000000-0000-0000-0000-000000000000')::uuid
+       AND p.id IS DISTINCT FROM NULLIF($5::text,'')::uuid
+     ORDER BY p.id LIMIT 101)
     UNION ALL
-    SELECT 'pending_topups', p.id::text, p.created_at, to_jsonb(p)::text
-    FROM purser.pending_topups p WHERE p.tenant_id = $5::text::uuid
+    (SELECT 'pending_topups'::text AS source, p.id
+     FROM purser.pending_topups p
+     WHERE p.tenant_id=$1::text::uuid
+       AND $2::text='pending_topups'
+       AND (p.created_at IS NULL OR (p.created_at>=$3::timestamptz AND p.created_at<$4::timestamptz))
+       AND p.id>=COALESCE(NULLIF($5::text,''),'00000000-0000-0000-0000-000000000000')::uuid
+       AND p.id IS DISTINCT FROM NULLIF($5::text,'')::uuid
+     ORDER BY p.id LIMIT 101)
     UNION ALL
-    SELECT 'balance_transactions', p.id::text, p.created_at, to_jsonb(p)::text
-    FROM purser.balance_transactions p WHERE p.tenant_id = $5::text::uuid
+    (SELECT 'balance_transactions'::text AS source, p.id
+     FROM purser.balance_transactions p
+     WHERE p.tenant_id=$1::text::uuid
+       AND $2::text='balance_transactions'
+       AND (p.created_at IS NULL OR (p.created_at>=$3::timestamptz AND p.created_at<$4::timestamptz))
+       AND p.id>=COALESCE(NULLIF($5::text,''),'00000000-0000-0000-0000-000000000000')::uuid
+       AND p.id IS DISTINCT FROM NULLIF($5::text,'')::uuid
+     ORDER BY p.id LIMIT 101)
+    UNION ALL
+    (SELECT 'business_establishment_reviews'::text AS source,r.id
+     FROM purser.business_establishment_reviews r
+     WHERE r.tenant_id=$1::text::uuid
+       AND $2::text='business_establishment_reviews'
+       AND r.created_at>=$3::timestamptz AND r.created_at<$4::timestamptz
+       AND r.id>=COALESCE(NULLIF($5::text,''),'00000000-0000-0000-0000-000000000000')::uuid
+       AND r.id IS DISTINCT FROM NULLIF($5::text,'')::uuid
+     ORDER BY r.id LIMIT 101)
+    UNION ALL
+    (SELECT 'provider_billing_documents'::text AS source,p.id FROM purser.provider_billing_documents p
+     WHERE p.tenant_id=$1::text::uuid AND $2::text='provider_billing_documents'
+       AND p.captured_at>=$3::timestamptz AND p.captured_at<$4::timestamptz
+       AND p.id>=COALESCE(NULLIF($5::text,''),'00000000-0000-0000-0000-000000000000')::uuid
+       AND p.id IS DISTINCT FROM NULLIF($5::text,'')::uuid
+     ORDER BY p.id LIMIT 101)
+    UNION ALL
+    (SELECT 'provider_tax_profiles'::text AS source,p.id FROM purser.provider_tax_profiles p
+     WHERE p.tenant_id=$1::text::uuid AND $2::text='provider_tax_profiles'
+       AND p.created_at>=$3::timestamptz AND p.created_at<$4::timestamptz
+       AND p.id>=COALESCE(NULLIF($5::text,''),'00000000-0000-0000-0000-000000000000')::uuid
+       AND p.id IS DISTINCT FROM NULLIF($5::text,'')::uuid
+     ORDER BY p.id LIMIT 101)
+), page AS MATERIALIZED (
+    SELECT source,id FROM records ORDER BY id LIMIT 101
 )
-SELECT id, payload
-FROM records
-WHERE source = $1::text
-  AND (occurred_at IS NULL OR (
-      occurred_at >= $2::timestamptz
-      AND occurred_at < $3::timestamptz
-  ))
-  AND id > $4::text
-ORDER BY id
-LIMIT 101
+SELECT page.id::text AS id,
+       COALESCE(CASE page.source
+           WHEN 'invoices' THEN (
+               SELECT (to_jsonb(i)||jsonb_build_object('vies_revalidation',
+                 (SELECT a.evidence_json->>'revalidation_outcome' FROM purser.crypto_accounting_anomalies a
+                  WHERE a.tenant_id=$1::text::uuid AND a.kind='vies_revalidation'
+                    AND a.reference_type='vat_validation' AND a.reference_id=$1::text||':'||(i.tax_decision->'vat_validation'->>'vat_number_hash')
+                  ORDER BY a.last_seen_at DESC,a.id DESC LIMIT 1)))::text
+               FROM purser.billing_invoices i
+               WHERE i.tenant_id = $1::text::uuid AND i.id = page.id
+           )
+           WHEN 'payments' THEN (
+               SELECT to_jsonb(p)::text
+               FROM purser.billing_payments p
+               WHERE p.tenant_id = $1::text::uuid AND p.id = page.id
+           )
+           WHEN 'simplified_invoices' THEN (
+               SELECT to_jsonb(i)::text FROM purser.simplified_invoices i
+               WHERE i.tenant_id = $1::text::uuid AND i.id = page.id
+           )
+           WHEN 'crypto_invoices' THEN (
+               SELECT to_jsonb(i)::text FROM purser.crypto_invoices i
+               WHERE i.tenant_id = $1::text::uuid AND i.id = page.id
+           )
+           WHEN 'credit_notes' THEN (
+               SELECT to_jsonb(n)::text FROM purser.credit_notes n
+               WHERE n.tenant_id = $1::text::uuid AND n.id = page.id
+           )
+           WHEN 'provider_settlements' THEN (
+               SELECT to_jsonb(p)::text FROM purser.provider_settlements p
+               WHERE p.tenant_id = $1::text::uuid AND p.id = page.id
+           )
+           WHEN 'pending_topups' THEN (
+               SELECT to_jsonb(p)::text FROM purser.pending_topups p
+               WHERE p.tenant_id = $1::text::uuid AND p.id = page.id
+           )
+           WHEN 'balance_transactions' THEN (
+               SELECT to_jsonb(p)::text FROM purser.balance_transactions p
+               WHERE p.tenant_id = $1::text::uuid AND p.id = page.id
+           )
+           WHEN 'business_establishment_reviews' THEN (
+               SELECT to_jsonb(r)::text FROM purser.business_establishment_reviews r
+               WHERE r.tenant_id=$1::text::uuid AND r.id=page.id
+           )
+           WHEN 'provider_billing_documents' THEN (
+             SELECT ((to_jsonb(p)-'original_pdf') || jsonb_build_object('vies_revalidation',
+               (SELECT a.evidence_json->>'revalidation_outcome' FROM purser.crypto_accounting_anomalies a
+                WHERE a.tenant_id=$1::text::uuid AND a.kind='vies_revalidation'
+                  AND a.reference_id=$1::text || ':' || (p.tax_assessment->'evidence'->'vat_validation'->>'vat_number_hash')
+                ORDER BY a.last_seen_at DESC,a.id DESC LIMIT 1)))::text
+             FROM purser.provider_billing_documents p WHERE p.tenant_id=$1::text::uuid AND p.id=page.id)
+           WHEN 'provider_tax_profiles' THEN (SELECT (to_jsonb(p))::text FROM purser.provider_tax_profiles p WHERE p.tenant_id=$1::text::uuid AND p.id=page.id)
+       END, '{}')::text AS payload
+FROM page
+ORDER BY page.id
 `
 
 type FinancialAuditPageParams struct {
+	TenantID  string    `db:"tenant_id" json:"tenant_id"`
 	Source    string    `db:"source" json:"source"`
 	FromAt    time.Time `db:"from_at" json:"from_at"`
 	ThroughAt time.Time `db:"through_at" json:"through_at"`
 	AfterID   string    `db:"after_id" json:"after_id"`
-	TenantID  string    `db:"tenant_id" json:"tenant_id"`
 }
 
 type FinancialAuditPageRow struct {
@@ -67,11 +182,11 @@ type FinancialAuditPageRow struct {
 
 func (q *Queries) FinancialAuditPage(ctx context.Context, arg FinancialAuditPageParams) ([]FinancialAuditPageRow, error) {
 	rows, err := q.db.QueryContext(ctx, financialAuditPage,
+		arg.TenantID,
 		arg.Source,
 		arg.FromAt,
 		arg.ThroughAt,
 		arg.AfterID,
-		arg.TenantID,
 	)
 	if err != nil {
 		return nil, err
@@ -92,4 +207,19 @@ func (q *Queries) FinancialAuditPage(ctx context.Context, arg FinancialAuditPage
 		return nil, err
 	}
 	return items, nil
+}
+
+const financialAuditPaymentOwnershipReady = `-- name: FinancialAuditPaymentOwnershipReady :one
+SELECT NOT EXISTS(
+ SELECT 1 FROM purser.billing_payments payment
+ JOIN purser.billing_invoices invoice ON invoice.id=payment.invoice_id
+ WHERE invoice.tenant_id=$1::text::uuid AND payment.tenant_id IS NULL
+)::boolean AS ready
+`
+
+func (q *Queries) FinancialAuditPaymentOwnershipReady(ctx context.Context, tenantID string) (sql.NullBool, error) {
+	row := q.db.QueryRowContext(ctx, financialAuditPaymentOwnershipReady, tenantID)
+	var ready sql.NullBool
+	err := row.Scan(&ready)
+	return ready, err
 }

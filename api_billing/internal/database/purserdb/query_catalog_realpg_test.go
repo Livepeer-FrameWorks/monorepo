@@ -41,6 +41,7 @@ func TestGeneratedQueryCatalogPrepares_RealPG(t *testing.T) {
 	assertStripeSyncPreservesBillingPhase(t, db)
 	assertDNSSweepMatchesTenantEntitlements(t, db)
 	assertFinancialAuditRetainsUndatedEvidence(t, db)
+	assertFinancialAuditSeeksBoundedUUIDPage(t, db)
 
 	ctx := context.Background()
 	t.Run("x402 intent replay is explicit", func(t *testing.T) {

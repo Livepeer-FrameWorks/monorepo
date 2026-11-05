@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/subscriptions"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
@@ -47,8 +48,15 @@ const (
 // halfway through a 30-day period whose base-fee invoice and usage draft
 // exist, with Stripe served by an in-process fixture. first decides whether
 // that base-fee invoice was paid before the change.
-func newTierChangeFixture(t *testing.T, fromBase string, first firstBaseFee) *tierChangeFixture {
+func newTierChangeFixture(t *testing.T, fromBase string, first firstBaseFee, countries ...string) *tierChangeFixture {
 	t.Helper()
+	for key, value := range map[string]string{"SUPPLIER_NAME": "DDVTech B.V.", "SUPPLIER_ADDRESS": "Leiden NL", "SUPPLIER_VAT_NUMBER": "NL853319145B01", "SUPPLIER_REGISTRATION_NUMBER": "59104694", "SUPPLIER_COUNTRY": "NL"} {
+		appconfigtest.Set(t, key, value)
+	}
+	country := "CA"
+	if len(countries) > 0 {
+		country = countries[0]
+	}
 	db := startProviderReservationDatabase(t)
 	ctx := context.Background()
 	stripe, stripeClient := installStripeFixture(t)
@@ -90,6 +98,9 @@ func newTierChangeFixture(t *testing.T, fromBase string, first firstBaseFee) *ti
 			billing_period_start, billing_period_end, next_billing_date, presentment_currency
 		) VALUES ($1, $2, 'active', 'postpaid', 'billing@example.com', 'stripe', 'cus_change', $3, $4, $4, 'USD')
 	`, tenantID, tierID, start, end); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET billing_customer_type='consumer',billing_name='Original Buyer',billing_address=jsonb_build_object('street','Main1','city','City','postal_code','1000','country',$2::text) WHERE tenant_id=$1::uuid`, tenantID, country); err != nil {
 		t.Fatal(err)
 	}
 	storeRate(t, db, "USD", now, "1.2500")
@@ -289,7 +300,7 @@ func TestAdvanceBilledTierUpgradeClosesThePeriodAndProratesTheBaseFee_RealPG(t *
 	credit := proratedCreditCents(2000, f.start, f.end, after.changeAt)
 	wantNet := decimal.New(5000-credit, -2).StringFixed(2)
 	wantPresentment := decimal.NewFromInt(5000 - credit).Mul(decimal.RequireFromString("1.25")).Round(0).IntPart()
-	if after.newBaseAmount != "50.00" || after.newAmount != wantNet || after.creditLineAmount != decimal.New(-credit, -2).StringFixed(2) {
+	if after.newBaseAmount != "50.00" || after.newAmount != wantNet || after.creditLineAmount != "0.00" {
 		t.Errorf("new base-fee invoice base %s amount %s credit line %s, want base 50.00 amount %s credit -%d cents",
 			after.newBaseAmount, after.newAmount, after.creditLineAmount, wantNet, credit)
 	}
@@ -455,7 +466,7 @@ func TestAdvanceBilledTierChangeReducesAnUnpaidPreviousBaseFeeInvoice_RealPG(t *
 			usedCents := tc.fromCents - unused
 			wantFirstPresentment := decimal.NewFromInt(usedCents).Mul(decimal.RequireFromString("1.25")).Round(0).IntPart()
 			if first.status == "paid" || first.amount != decimal.New(usedCents, -2).StringFixed(2) ||
-				first.presentmentCents != wantFirstPresentment || first.reductionLine != decimal.New(-unused, -2).StringFixed(2) {
+				first.presentmentCents != wantFirstPresentment || first.reductionLine != "0.00" {
 				t.Errorf("unpaid previous base-fee invoice = %+v, want amount %s presented %d with a -%d cent reduction line, still payable",
 					first, decimal.New(usedCents, -2).StringFixed(2), wantFirstPresentment, unused)
 			}
@@ -619,5 +630,55 @@ func TestReplacementBaseFeeCannotBeCreditedTwice_RealPG(t *testing.T) {
 	id, err := purserdb.New(f.db).FindOverlappedBaseFeeInvoice(t.Context(), purserdb.FindOverlappedBaseFeeInvoiceParams{TenantID: f.tenantID, PeriodStart: switchAt.Add(time.Hour)})
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("old invoice available for a duplicate unused-fee credit: invoice=%s err=%v", id, err)
+	}
+}
+
+func TestFrozenBaseFeeTierChangeUsesSourceCreditWithoutMutatingTax_RealPG(t *testing.T) {
+	for _, state := range []firstBaseFee{firstBaseFeePaid, firstBaseFeeDeclined} {
+		t.Run(map[firstBaseFee]string{firstBaseFeePaid: "paid", firstBaseFeeDeclined: "unpaid"}[state], func(t *testing.T) {
+			f := newTierChangeFixture(t, "20.00", state, "NL")
+			first := f.firstBaseFee(t)
+			var originalNet, originalVAT, originalGross, originalDocGross int64
+			var originalLines string
+			if err := f.db.QueryRow(`SELECT net_eur_cents,vat_eur_cents,gross_eur_cents,document_gross_minor,(SELECT jsonb_agg(to_jsonb(l) ORDER BY l.id)::text FROM purser.invoice_line_items l WHERE l.invoice_id=i.id) FROM purser.billing_invoices i WHERE i.tenant_id=$1::uuid AND i.id=$2::uuid`, f.tenantID, first.id).Scan(&originalNet, &originalVAT, &originalGross, &originalDocGross, &originalLines); err != nil {
+				t.Fatal(err)
+			}
+			f.changeTier(t, insertTierChangeTier(t, f.db, "50.00"))
+			after := f.state(t)
+			var net, vat, gross int64
+			var lines string
+			if err := f.db.QueryRow(`SELECT net_eur_cents,vat_eur_cents,gross_eur_cents,(SELECT jsonb_agg(to_jsonb(l) ORDER BY l.id)::text FROM purser.invoice_line_items l WHERE l.invoice_id=i.id) FROM purser.billing_invoices i WHERE i.tenant_id=$1::uuid AND i.id=$2::uuid`, f.tenantID, first.id).Scan(&net, &vat, &gross, &lines); err != nil {
+				t.Fatal(err)
+			}
+			if net != originalNet || vat != originalVAT || gross != originalGross || lines != originalLines {
+				t.Fatal("tier change rewrote issued tax totals or lines")
+			}
+			var count int
+			var creditNet, creditVAT, creditGross, creditOriginal int64
+			var currency string
+			if err := f.db.QueryRow(`SELECT count(*),min(net_eur_cents),min(vat_eur_cents),min(gross_eur_cents),min(amount_cents),min(currency) FROM purser.credit_notes WHERE tenant_id=$1::uuid AND source_document_id=$2::uuid AND reversal_reference_type='unused_base_fee'`, f.tenantID, first.id).Scan(&count, &creditNet, &creditVAT, &creditGross, &creditOriginal, &currency); err != nil {
+				t.Fatal(err)
+			}
+			if count != 1 || creditNet+creditVAT != creditGross || currency != "USD" || creditOriginal <= 0 || creditOriginal > originalDocGross {
+				t.Fatal("original-source credit note missing or wrong", count, creditNet, creditVAT, creditGross, currency, creditOriginal)
+			}
+			expectedOriginal := decimal.NewFromInt(originalDocGross).Mul(decimal.NewFromInt(f.end.Sub(after.changeAt).Microseconds())).Div(decimal.NewFromInt(f.end.Sub(f.start).Microseconds())).Round(0).IntPart()
+			if creditOriginal != expectedOriginal {
+				t.Fatal("credit did not retain source currency rounding", creditOriginal, expectedOriginal)
+			}
+			var newNet, newVAT, newGross, financialCredit int64
+			if err := f.db.QueryRow(`SELECT net_eur_cents,vat_eur_cents,gross_eur_cents,round(prepaid_credit_applied*100)::bigint FROM purser.billing_invoices WHERE tenant_id=$1::uuid AND base_fee_period_start=$2`, f.tenantID, after.changeAt).Scan(&newNet, &newVAT, &newGross, &financialCredit); err != nil {
+				t.Fatal(err)
+			}
+			if newNet != 5000 || newVAT != 1050 || newGross != 6050 || after.creditLineAmount != "0.00" {
+				t.Fatal("replacement fee tax was reduced a second time", newNet, newVAT, newGross, after.creditLineAmount)
+			}
+			if state == firstBaseFeePaid && financialCredit != creditGross {
+				t.Fatal("paid source credit not allocated financially")
+			}
+			if state == firstBaseFeeDeclined && financialCredit != 0 {
+				t.Fatal("unpaid old fee became spendable credit")
+			}
+		})
 	}
 }

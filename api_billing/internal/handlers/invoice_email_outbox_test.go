@@ -77,9 +77,10 @@ func TestInvoiceEmailDispatcherReadsPermanentHeaderAndLineItems(t *testing.T) {
 	mock.ExpectQuery(`FROM purser\.billing_invoices\s+WHERE id = \$1::text::uuid\s+AND tenant_id = \$2::text::uuid`).
 		WithArgs("invoice-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{
+			"net_eur_cents", "vat_eur_cents", "gross_eur_cents", "tax_status", "tax_summary",
 			"amount", "metered_amount", "gross_metered_amount", "currency", "due_date", "status",
 			"presentment_amount_cents", "presentment_currency", "presentment_units_per_eur", "presentment_reference_date",
-		}).AddRow(19.75, 9.75, 9.75, "EUR", dueDate, "pending", 2313, "USD", "1.1712000000", "2026-09-01"))
+		}).AddRow(nil, nil, nil, "legacy_unknown", []byte(`[]`), 19.75, 9.75, 9.75, "EUR", dueDate, "pending", 2313, "USD", "1.1712000000", "2026-09-01"))
 	mock.ExpectQuery(`FROM purser\.invoice_line_items\s+WHERE invoice_id = \$1::text::uuid\s+AND tenant_id = \$2::text::uuid`).
 		WithArgs("invoice-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{
