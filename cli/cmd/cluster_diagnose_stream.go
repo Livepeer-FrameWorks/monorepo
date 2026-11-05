@@ -61,13 +61,13 @@ func runStreamDiagnose(ctx context.Context, w io.Writer, src streamDiagnosisSour
 	if err := requireOperatorSession(jwt); err != nil {
 		return err
 	}
-	ctx, cancel := adminRPCContextTimeout(ctx, jwt, dvrDiagnoseRPCTimeout)
+	lookupCtx, cancel := adminRPCContextTimeout(ctx, jwt, dvrDiagnoseRPCTimeout)
 	defer cancel()
-	stream, err := src.ResolveStream(ctx, identifier)
+	stream, err := src.ResolveStream(lookupCtx, identifier)
 	if err != nil {
 		return fmt.Errorf("resolve stream: %w", err)
 	}
-	manifest, err := src.Manifest(ctx)
+	manifest, err := src.Manifest(lookupCtx)
 	if err != nil {
 		return err
 	}
@@ -116,7 +116,9 @@ func runStreamDiagnose(ctx context.Context, w io.Writer, src streamDiagnosisSour
 		item := streamCellDiagnosis{Service: entry}
 		if err == nil {
 			var runtime *foghornpb.DiagnoseStreamResponse
-			runtime, err = src.DiagnoseStream(fhclient.WithOperatorBearer(ctx, jwt), entry, &foghornpb.DiagnoseStreamRequest{TenantId: stream.GetTenantId(), StreamId: stream.GetStreamId(), InternalName: stream.GetInternalName()})
+			cellCtx, cancelCell := adminRPCContextTimeout(ctx, jwt, dvrDiagnoseRPCTimeout)
+			runtime, err = src.DiagnoseStream(fhclient.WithOperatorBearer(cellCtx, jwt), entry, &foghornpb.DiagnoseStreamRequest{TenantId: stream.GetTenantId(), StreamId: stream.GetStreamId(), InternalName: stream.GetInternalName()})
+			cancelCell()
 			if err == nil {
 				item.Diagnosis, err = protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true}.Marshal(runtime)
 				item.runtime = runtime

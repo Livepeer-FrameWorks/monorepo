@@ -12,6 +12,7 @@ import (
 	serviceexec "frameworks/cli/pkg/exec"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/system"
 	"github.com/spf13/cobra"
 )
 
@@ -50,13 +51,7 @@ func runReleaseDataPreflight(ctx context.Context, cmd *cobra.Command, rc *resolv
 		if container == "" {
 			return fmt.Errorf("purser container not found")
 		}
-		script = `set -euo pipefail
-umask 077
-preflight_tmp=$(mktemp -d)
-trap 'rm -rf "$preflight_tmp"' EXIT
-docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' ` + ssh.ShellQuote(container) + ` | sed -n '/^DATABASE_URL=/p' > "$preflight_tmp/env"
-docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges --network ` + ssh.ShellQuote("container:"+container) + ` --env-file "$preflight_tmp/env" --entrypoint /app/purser ` + ssh.ShellQuote(info.FullImage) + ` release-preflight
-`
+		script = dockerDataPreflightScript(container, info.FullImage)
 	case "native":
 		result, archErr := runner.Run(ctx, "uname -m")
 		if archErr != nil {
@@ -149,4 +144,14 @@ cd ` + ssh.ShellQuote(spec.WorkingDirectory) + `
 "$preflight_tmp/purser" release-preflight
 `
 	return "sudo -n -u " + ssh.ShellQuote(spec.User) + " /bin/bash -c " + ssh.ShellQuote(inner), nil
+}
+
+func dockerDataPreflightScript(container, image string) string {
+	return `set -euo pipefail
+umask 077
+preflight_tmp=$(mktemp -d)
+trap 'rm -rf "$preflight_tmp"' EXIT
+` + system.DockerCommand("inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "+ssh.ShellQuote(container)) + ` | sed -n '/^DATABASE_URL=/p' > "$preflight_tmp/env"
+` + system.DockerCommand("run --rm --read-only --cap-drop ALL --security-opt no-new-privileges --network "+ssh.ShellQuote("container:"+container)+` --env-file "$preflight_tmp/env" --entrypoint /app/purser `+ssh.ShellQuote(image)+" release-preflight") + `
+`
 }
