@@ -15,6 +15,7 @@ import (
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"strings"
 	"testing"
+	"testing/synctest"
 )
 
 type fakeBillingDiagnosis struct {
@@ -74,6 +75,7 @@ type fakeStreamDiagnosis struct {
 	entries  []string
 	badEU    bool
 	usOnline bool
+	waitEU   bool
 }
 
 func (f *fakeStreamDiagnosis) ResolveStream(context.Context, string) (*commodorepb.DiagnoseStreamResponse, error) {
@@ -82,8 +84,15 @@ func (f *fakeStreamDiagnosis) ResolveStream(context.Context, string) (*commodore
 func (f *fakeStreamDiagnosis) Manifest(context.Context) (*inventory.Manifest, error) {
 	return f.manifest, nil
 }
-func (f *fakeStreamDiagnosis) DiagnoseStream(_ context.Context, entry string, req *foghornpb.DiagnoseStreamRequest) (*foghornpb.DiagnoseStreamResponse, error) {
+func (f *fakeStreamDiagnosis) DiagnoseStream(ctx context.Context, entry string, req *foghornpb.DiagnoseStreamRequest) (*foghornpb.DiagnoseStreamResponse, error) {
 	f.entries = append(f.entries, entry)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if entry == "foghorn-eu" && f.waitEU {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	if req.GetTenantId() != "tenant" || req.GetStreamId() != "stream" {
 		return nil, errors.New("incorrect tenant or stream")
 	}
@@ -153,5 +162,31 @@ func TestStreamDiagnosisEncodingErrorKeepsOtherCellEvidence(t *testing.T) {
 	err := runStreamDiagnose(t.Context(), &out, src, "operator-jwt", "playback", "", false)
 	if err == nil || !strings.Contains(out.String(), "edge-us") {
 		t.Fatalf("lost healthy-cell evidence on an encoding error: %v\n%s", err, out.String())
+	}
+}
+
+func TestStreamDiagnosisCellTimeoutKeepsHealthyEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		jsonOutput bool
+	}{{"text", false}, {"json", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				manifest := perCellFoghornManifest()
+				manifest.Clusters = map[string]inventory.ClusterConfig{"media-eu": {Cell: "cell-eu"}, "media-us": {Cell: "cell-us"}}
+				src := &fakeStreamDiagnosis{manifest: manifest, waitEU: true, usOnline: true}
+				var out bytes.Buffer
+				err := runStreamDiagnose(t.Context(), &out, src, "operator-jwt", "playback", "", tc.jsonOutput)
+				if err == nil || !strings.Contains(err.Error(), "incomplete") {
+					t.Fatalf("expected partial diagnosis error, got %v", err)
+				}
+				if strings.Join(src.entries, ",") != "foghorn-eu,foghorn-us" {
+					t.Fatalf("queried %v, want each cell exactly once", src.entries)
+				}
+				if !strings.Contains(out.String(), "context deadline exceeded") || !strings.Contains(out.String(), "edge-us") {
+					t.Fatalf("lost healthy-cell evidence after first cell timed out: %s", out.String())
+				}
+			})
+		})
 	}
 }
