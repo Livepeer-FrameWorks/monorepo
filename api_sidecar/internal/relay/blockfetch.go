@@ -82,6 +82,8 @@ type blockFill struct {
 	// object is the identity of the object the fill copies. A reader of
 	// another object does not join the fill.
 	object string
+	// diskInfo pins the original fill file even after its pathname is reused.
+	diskInfo os.FileInfo
 
 	mu      sync.Mutex
 	written int64
@@ -140,14 +142,21 @@ func (f *blockFill) open() (fillReader, error) {
 	if f.mem != nil {
 		return memFillReader{bytes.NewReader(f.mem)}, nil
 	}
-	file, err := os.Open(f.tmpPath)
-	if err == nil {
-		return file, nil
+	var openErr error
+	for _, path := range []string{f.tmpPath, f.blockPath} {
+		file, err := os.Open(path)
+		if err != nil {
+			openErr = err
+			continue
+		}
+		info, err := file.Stat()
+		if err == nil && f.diskInfo != nil && os.SameFile(f.diskInfo, info) {
+			return file, nil
+		}
+		_ = file.Close()
+		openErr = errors.New("block fill pathname belongs to another file")
 	}
-	if file, blockErr := os.Open(f.blockPath); blockErr == nil {
-		return file, nil
-	}
-	return nil, fillDiskError{err: err}
+	return nil, fillDiskError{err: openErr}
 }
 
 // fillDiskError is a fill that could not write the block cache. The upstream
@@ -177,6 +186,9 @@ func (s *Server) claimBlockFill(ctx context.Context, store *BlockStore, span blo
 	key := blockFetchKey(store, span.Idx)
 	s.fills.mu.Lock()
 	defer s.fills.mu.Unlock()
+	if !store.matchesObject(src.object, totalSize) {
+		return nil, fillDiskError{err: errors.New("block cache belongs to another object")}
+	}
 	if f, ok := s.fills.inflight[key]; ok {
 		if !sameObject(f.object, src.object) {
 			return nil, fillDiskError{err: errors.New("block fill copies another object")}
@@ -197,8 +209,13 @@ func (s *Server) claimBlockFill(ctx context.Context, store *BlockStore, span blo
 	}
 	blockStart, blockEnd := store.BlockRange(span.Idx, totalSize)
 	expected := blockEnd - blockStart + 1
+	info, statErr := file.Stat()
+	if statErr != nil {
+		_ = file.Close()
+		return nil, fillDiskError{err: statErr}
+	}
 	var have int64
-	if info, statErr := file.Stat(); statErr == nil && info.Size() < expected {
+	if info.Size() < expected {
 		have = info.Size()
 	}
 	if err := file.Truncate(have); err != nil {
@@ -209,13 +226,13 @@ func (s *Server) claimBlockFill(ctx context.Context, store *BlockStore, span blo
 		_ = file.Close()
 		return nil, fillDiskError{err: err}
 	}
-	f := &blockFill{tmpPath: tmpPath, blockPath: store.BlockPath(span.Idx), sourceURL: src.target.url, object: src.object, written: have, changed: make(chan struct{})}
+	f := &blockFill{tmpPath: tmpPath, blockPath: store.BlockPath(span.Idx), diskInfo: info, sourceURL: src.target.url, object: src.object, written: have, changed: make(chan struct{})}
 	s.fills.inflight[key] = f
 	coldfetchCoalesced.WithLabelValues("leader").Inc()
 	s.fills.wg.Add(1)
 	go func() {
 		defer s.fills.wg.Done()
-		err := s.runBlockFill(context.WithoutCancel(ctx), f, file, span.Idx, blockStart, blockEnd, totalSize, have, src)
+		err := s.runBlockFill(context.WithoutCancel(ctx), f, file, store, span.Idx, blockStart, blockEnd, totalSize, have, src)
 		s.fills.mu.Lock()
 		delete(s.fills.inflight, key)
 		s.fills.mu.Unlock()
@@ -317,13 +334,13 @@ func (s *Server) runMemoryFill(ctx context.Context, f *blockFill, blockIdx, bloc
 // file and renames it to the block's path once the block is complete. When
 // the fill ends early on an upstream failure the tmp file keeps the bytes
 // written so far; a disk failure removes it.
-func (s *Server) runBlockFill(ctx context.Context, f *blockFill, file *os.File, blockIdx, blockStart, blockEnd, totalSize, have int64, src fillSource) error {
+func (s *Server) runBlockFill(ctx context.Context, f *blockFill, file *os.File, store *BlockStore, blockIdx, blockStart, blockEnd, totalSize, have int64, src fillSource) error {
 	source := upstreamSourceLabel(src.target.grantID)
 	writer := &fillWriter{file: file, fill: f}
 	n, err := s.fetchBlockInto(ctx, writer, blockIdx, blockStart, blockEnd, totalSize, have, src)
 	if writer.err != nil {
 		_ = file.Close()
-		_ = os.Remove(f.tmpPath)
+		s.discardBlockFillTmp(f)
 		defrostBlocks.WithLabelValues(source, "error").Inc()
 		return fillDiskError{err: writer.err}
 	}
@@ -335,15 +352,47 @@ func (s *Server) runBlockFill(ctx context.Context, f *blockFill, file *os.File, 
 	syncErr := file.Sync()
 	closeErr := file.Close()
 	if err := errors.Join(syncErr, closeErr); err != nil {
-		_ = os.Remove(f.tmpPath)
+		s.discardBlockFillTmp(f)
 		return fillDiskError{err: err}
 	}
-	if err := os.Rename(f.tmpPath, f.blockPath); err != nil {
-		_ = os.Remove(f.tmpPath)
+	if err := s.publishBlockFill(store, f, totalSize); err != nil {
 		return fillDiskError{err: err}
 	}
 	s.recordBlockFilled(source, src, n-have)
 	return nil
+}
+
+// Invalidation, claims and publication share the fills lock, so a completed
+// fill cannot restore an old object's block while its directory is replaced.
+func (s *Server) publishBlockFill(store *BlockStore, f *blockFill, totalSize int64) error {
+	s.fills.mu.Lock()
+	defer s.fills.mu.Unlock()
+	if !store.matchesObject(f.object, totalSize) {
+		f.removeOwnTmp()
+		return errors.New("completed block fill belongs to a superseded object")
+	}
+	info, err := os.Stat(f.tmpPath)
+	if err != nil || f.diskInfo == nil || !os.SameFile(f.diskInfo, info) {
+		return errors.New("completed block fill pathname no longer belongs to its file")
+	}
+	if err := os.Rename(f.tmpPath, f.blockPath); err != nil {
+		f.removeOwnTmp()
+		return err
+	}
+	return nil
+}
+
+func (s *Server) discardBlockFillTmp(f *blockFill) {
+	s.fills.mu.Lock()
+	defer s.fills.mu.Unlock()
+	f.removeOwnTmp()
+}
+
+func (f *blockFill) removeOwnTmp() {
+	info, err := os.Stat(f.tmpPath)
+	if err == nil && f.diskInfo != nil && os.SameFile(f.diskInfo, info) {
+		_ = os.Remove(f.tmpPath)
+	}
 }
 
 // recordBlockFilled counts a completed fill's upstream bytes.

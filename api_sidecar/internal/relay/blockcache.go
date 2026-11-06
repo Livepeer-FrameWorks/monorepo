@@ -27,7 +27,6 @@ package relay
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -63,6 +62,7 @@ type BlockMeta struct {
 type BlockStore struct {
 	assetPath string // <storagePath>/vod/<hash>.<ext>
 	blockSize int64
+	removeAll func(string) error
 }
 
 // NewBlockStore returns a store rooted at <assetPath>.blocks/.
@@ -71,7 +71,7 @@ func NewBlockStore(assetPath string, blockSize int64) *BlockStore {
 	if blockSize <= 0 {
 		blockSize = DefaultBlockSize
 	}
-	return &BlockStore{assetPath: assetPath, blockSize: blockSize}
+	return &BlockStore{assetPath: assetPath, blockSize: blockSize, removeAll: os.RemoveAll}
 }
 
 // Dir returns the .blocks/ directory path. The store does not create
@@ -151,12 +151,17 @@ func (s *BlockStore) EnsureMeta(assetHash, ext, object string, totalSize int64) 
 		}
 		return m, nil
 	}
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		// Unreadable meta — wipe and rebuild rather than refuse the cache.
-		_ = os.RemoveAll(s.Dir())
-	} else if err == nil {
+	if err != nil {
+		// Missing metadata can follow a failed partial invalidation; its
+		// remaining blocks have no trustworthy object identity.
+		if removeErr := s.removeAll(s.Dir()); removeErr != nil {
+			return nil, fmt.Errorf("remove unreadable block cache: %w", removeErr)
+		}
+	} else {
 		// Identity mismatch — drop the stale cache entirely.
-		_ = os.RemoveAll(s.Dir())
+		if removeErr := s.removeAll(s.Dir()); removeErr != nil {
+			return nil, fmt.Errorf("remove superseded block cache: %w", removeErr)
+		}
 	}
 	fresh := &BlockMeta{
 		AssetHash: assetHash,
@@ -169,6 +174,11 @@ func (s *BlockStore) EnsureMeta(assetHash, ext, object string, totalSize int64) 
 		return nil, err
 	}
 	return fresh, nil
+}
+
+func (s *BlockStore) matchesObject(object string, totalSize int64) bool {
+	meta, err := s.LoadMeta()
+	return err == nil && meta.TotalSize == totalSize && meta.BlockSize == s.blockSize && sameObject(meta.Object, object)
 }
 
 // HasBlock reports whether block idx is complete on disk.
