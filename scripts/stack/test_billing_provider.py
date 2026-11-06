@@ -55,6 +55,24 @@ class BillingProviderTest(unittest.TestCase):
         customer["invoice_settings"]["footer"] = "Changed later"
         self.assertEqual(invoice["footer"], legal_identity)
 
+    def test_draft_buyer_tracks_customer_until_finalization_then_freezes(self):
+        sub = self.subscription()
+        invoice = self.provider.invoice(sub, draft=True)
+        customer_id, invoice_id = sub["customer"], invoice["id"]
+        self.call("POST", "/v1/customers/" + customer_id, b"name=UpdatedBuyer&email=updated%40example.test&address[line1]=NewStreet&address[city]=Amsterdam&address[postal_code]=1000&address[country]=NL")
+        self.call("POST", "/v1/customers/" + customer_id + "/tax_ids", b"type=eu_vat&value=NL000000000B01")
+        draft = self.call("GET", "/v1/invoices/" + invoice_id)
+        self.assertEqual((draft["customer_name"], draft["customer_email"], draft["customer_address"]["country"]), ("UpdatedBuyer", "updated@example.test", "NL"))
+        self.assertEqual(draft["customer_tax_ids"][0]["value"], "NL000000000B01")
+        self.call("POST", "/v1/customers/" + customer_id, b"name=FinalBuyer&address[country]=DE")
+        finalized = self.call("POST", "/v1/invoices/" + invoice_id + "/finalize", b"auto_advance=true")
+        frozen = {key: json.loads(json.dumps(finalized[key])) for key in ("customer_name", "customer_email", "customer_address", "customer_tax_ids")}
+        self.assertEqual((frozen["customer_name"], frozen["customer_address"]["country"]), ("FinalBuyer", "DE"))
+        self.call("POST", "/v1/customers/" + customer_id, b"name=ChangedAfter&email=after%40example.test&address[country]=US")
+        self.call("POST", "/v1/customers/" + customer_id + "/tax_ids", b"type=eu_vat&value=DE123456789")
+        retained = self.call("GET", "/v1/invoices/" + invoice_id)
+        self.assertEqual({key: retained[key] for key in frozen}, frozen)
+
     def test_payment_outcomes_do_not_invent_success(self):
         for outcome, expected_status in (("declined", "requires_payment_method"), ("requires_action", "requires_action"), ("processing", "processing")):
             with self.subTest(outcome=outcome):
