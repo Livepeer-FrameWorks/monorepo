@@ -437,12 +437,7 @@ func TestStackDeployedStripeHeldRenewalRecovery(t *testing.T) {
 	}
 	manualID, adjustmentID, operatorID := idOf(manual), idOf(adjustment), idOf(operatorPaused)
 	financialSnapshot := func(raw json.RawMessage) []byte {
-		var invoice map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &invoice); err != nil {
-			t.Fatal(err)
-		}
-		delete(invoice, "metadata")
-		snapshot, err := json.Marshal(invoice)
+		snapshot, err := stackInvoiceFinancialSnapshot(raw)
 		if err != nil {
 			t.Fatal(err)
 		}
