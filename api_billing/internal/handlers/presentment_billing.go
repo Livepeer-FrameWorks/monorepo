@@ -98,6 +98,7 @@ func (s *Service) activateAdvanceBilledTenantWithMandate(ctx context.Context, te
 			PaymentMethod: provider, StripeCustomerID: stripeCustomerID, TierID: tierID,
 			PeriodStart: periodStart, PeriodEnd: billing.NextMonthlyAnniversary(periodStart), TenantID: tenantID,
 		}})
+	err = RecordBillingPhaseTaxReview(ctx, err)
 	if err != nil {
 		return fmt.Errorf("activate tenant %s without a provider subscription: %w", tenantID, err)
 	}

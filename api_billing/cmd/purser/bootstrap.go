@@ -187,6 +187,12 @@ func runBootstrapApply(args []string) int {
 		}
 		return nil
 	})
+	if !*dryRun {
+		txErr = handlers.RecordBillingPhaseTaxReview(ctx, txErr)
+		if reconcileErr != nil {
+			reconcileErr = txErr
+		}
+	}
 	if out != nil {
 		printPurserSection("billing_tier_catalog", out.BillingTierCatalog)
 		printPurserSection("cluster_pricing", out.ClusterPricing)

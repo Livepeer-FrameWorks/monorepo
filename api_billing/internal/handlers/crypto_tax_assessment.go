@@ -22,6 +22,7 @@ const frozenCryptoTaxPolicy = CryptoTopupTaxPolicyRef
 // CryptoTaxAssessment binds the customer, supplier and assessed tax treatment to
 // the payment instructions. Settlement does not require a new VIES response.
 type CryptoTaxAssessment struct {
+	CustomerType      string           `json:"customer_type,omitempty"`
 	Advance           *AdvanceMoney    `json:"advance_money,omitempty"`
 	VATValidationMode string           `json:"vat_validation_mode,omitempty"`
 	VATValidation     json.RawMessage  `json:"vat_validation,omitempty"`

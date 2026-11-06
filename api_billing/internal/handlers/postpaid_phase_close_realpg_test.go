@@ -95,6 +95,7 @@ func commitSwitchToPrepaid(ctx context.Context, db *sql.DB, closing *PostpaidPha
 		}
 		return purserdb.New(tx).EnsurePrepaidBalance(ctx, purserdb.EnsurePrepaidBalanceParams{TenantID: tenantID, Currency: billing.LedgerCurrency})
 	})
+	err = RecordBillingPhaseTaxReview(ctx, err)
 	if err == nil && closed {
 		closing.AfterCommit(ctx)
 	}

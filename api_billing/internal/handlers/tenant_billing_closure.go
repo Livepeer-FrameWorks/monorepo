@@ -201,6 +201,7 @@ func (s *Service) closeTenantBilling(ctx context.Context, tenantID string) error
 		}
 		return nil
 	})
+	commitErr = RecordBillingPhaseTaxReview(ctx, commitErr)
 	if commitErr == nil {
 		postpaid.AfterCommit(ctx)
 		return s.collectClosedTenantInvoices(ctx, tenantID)

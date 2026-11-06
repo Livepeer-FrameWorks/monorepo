@@ -7796,6 +7796,7 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *purserpb.U
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
+	req = normalizeBillingDetailsUpdate(req)
 
 	if req.CustomerType != nil && *req.CustomerType != "consumer" && *req.CustomerType != "business" {
 		return nil, status.Error(codes.InvalidArgument, "customer_type must be consumer or business")
@@ -7832,6 +7833,7 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *purserpb.U
 	// trigger refuses the change if one does.
 	var current purserdb.LockTenantPresentmentCurrencyRow
 	stage, err := runRetryableTx(ctx, s.db, func(tx *sql.Tx) error {
+		update := normalizeBillingDetailsUpdate(req)
 		queries := purserdb.New(tx)
 		var lockErr error
 		current, lockErr = queries.LockTenantPresentmentCurrency(ctx, tenantID)
@@ -7845,21 +7847,24 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *purserpb.U
 		if detailErr != nil {
 			return txStatusErrorf(detailErr, codes.Internal, "database error: %v", detailErr)
 		}
-		changedFields, detailErr := changedBillingDetailFields(before, req, addressJSON)
+		if normalizationErr := normalizeBillingUpdateVAT(update, before.BillingAddress); normalizationErr != nil {
+			return normalizationErr
+		}
+		changedFields, detailErr := changedBillingDetailFields(before, update, addressJSON)
 		if detailErr != nil {
 			return status.Errorf(codes.Internal, "compare billing details: %v", detailErr)
 		}
 		customerType, vatNumber := before.CustomerType, before.TaxID
-		if req.CustomerType != nil {
-			customerType = *req.CustomerType
+		if update.CustomerType != nil {
+			customerType = *update.CustomerType
 		}
-		if req.VatNumber != nil {
-			vatNumber = *req.VatNumber
+		if update.VatNumber != nil {
+			vatNumber = *update.VatNumber
 		}
 		if customerType == "consumer" && strings.TrimSpace(vatNumber) != "" {
 			return status.Error(codes.InvalidArgument, "personal billing cannot claim a business VAT number; clear it or select business billing")
 		}
-		if req.Address != nil {
+		if update.Address != nil {
 			desired := billing.PresentmentCurrencyForCountry(countryCode)
 			if desired != current.PresentmentCurrency {
 				if current.PresentmentLocked {
@@ -7877,12 +7882,12 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *purserpb.U
 			}
 		}
 		rowsAffected, updateErr := queries.UpdateTenantBillingDetails(ctx, purserdb.UpdateTenantBillingDetailsParams{
-			SetEmail: req.Email != nil, Email: derefString(req.Email),
-			SetName: req.Name != nil, Name: derefString(req.Name),
-			SetCompany: req.Company != nil, Company: derefString(req.Company),
-			SetVatNumber: req.VatNumber != nil, VatNumber: derefString(req.VatNumber),
-			SetAddress: req.Address != nil, Address: addressJSON, TenantID: tenantID,
-			SetCustomerType: req.CustomerType != nil, CustomerType: derefString(req.CustomerType),
+			SetEmail: update.Email != nil, Email: derefString(update.Email),
+			SetName: update.Name != nil, Name: derefString(update.Name),
+			SetCompany: update.Company != nil, Company: derefString(update.Company),
+			SetVatNumber: update.VatNumber != nil, VatNumber: derefString(update.VatNumber),
+			SetAddress: update.Address != nil, Address: addressJSON, TenantID: tenantID,
+			SetCustomerType: update.CustomerType != nil, CustomerType: derefString(update.CustomerType),
 		})
 		if updateErr != nil {
 			return txStatusErrorf(updateErr, codes.Internal, "database error: %v", updateErr)

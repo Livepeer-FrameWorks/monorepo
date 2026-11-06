@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	"frameworks/api_billing/internal/appconfig"
@@ -17,7 +16,7 @@ import (
 func AssessStripeTaxProfile(ctx context.Context, db *sql.DB, tenant, clientIP string) (*billingstripe.TaxProfile, error) {
 	rt := appconfig.Runtime()
 	if DocumentSupplierSnapshot() == "" {
-		return nil, fmt.Errorf("complete supplier identity required before checkout")
+		return nil, &supplierTaxConfigurationError{}
 	}
 	h := &X402Handler{db: db, supplierCountry: rt.SupplierCountry, supplierName: rt.SupplierName, supplierAddress: rt.SupplierAddress, supplierVAT: rt.SupplierVATNumber, supplierRegistration: rt.SupplierRegistrationNumber}
 	requirement, err := h.GetCryptoDocumentRequirement(ctx, tenant, 1, clientIP)
@@ -50,11 +49,20 @@ func AssessStripeTaxProfile(ctx context.Context, db *sql.DB, tenant, clientIP st
 		}
 	}
 	assessment := *profile.TaxAssessment
+	assessment.CustomerType = profile.effectiveCustomerType()
 	evidence, err := json.Marshal(assessment)
 	if err != nil {
 		return nil, err
 	}
 	p := &billingstripe.TaxProfile{Name: profile.Name, Company: profile.Company, Email: profile.Email, Street: address.Street, City: address.City, PostalCode: address.PostalCode, Country: address.Country, VATNumber: vatNumber, RateBPS: d.RateBPS, ReverseCharge: d.ReverseCharge, Wording: d.Wording, SupplierCountry: rt.SupplierCountry, SupplierIdentity: billingstripe.SupplierTaxIdentity(rt.SupplierName, rt.SupplierAddress, rt.SupplierVATNumber, rt.SupplierRegistrationNumber), Evidence: evidence}
+	normalized, err := normalizeProviderTaxProfile(*p)
+	if err != nil {
+		return nil, billingtax.Review("vat_number_invalid", "Check the VAT number in your billing details")
+	}
+	p = &normalized
+	if p.Name == "" || p.Email == "" || p.Street == "" || p.City == "" || p.PostalCode == "" {
+		return nil, billingtax.Review("billing_profile_required", "Complete your saved billing details before paying")
+	}
 	p.ProfileSHA = p.Fingerprint()
 	frozen, err := json.Marshal(p)
 	if err != nil {
@@ -80,7 +88,7 @@ func (jm *JobManager) reconcileStripeTaxTenant(ctx context.Context, tenant strin
 	assessed, err := AssessStripeTaxProfile(ctx, jm.db, tenant, "")
 	if err != nil {
 		var review *billingtax.ReviewError
-		if !errors.As(err, &review) {
+		if !errors.As(err, &review) || review.Code == "vat_validation_unavailable" {
 			return err
 		}
 		failure := err
@@ -102,22 +110,24 @@ func (jm *JobManager) reconcileStripeTaxTenant(ctx context.Context, tenant strin
 		}
 		return failure
 	}
+	var failures error
 	for _, subscription := range subscriptions {
 		if subscription.SubscriptionID != "" {
-			err = jm.billing.stripeClient.SyncSubscriptionTax(ctx, tenant, subscription.CustomerID, subscription.SubscriptionID, *assessed)
+			err = jm.billing.stripeClient.ReconcileSubscriptionTax(ctx, tenant, subscription.CustomerID, subscription.SubscriptionID, *assessed)
 		} else {
 			_, err = jm.billing.stripeClient.PrepareCustomerTax(ctx, tenant, subscription.CustomerID, *assessed)
 		}
 		if err != nil {
-			return err
+			failures = errors.Join(failures, err)
+			continue
 		}
 		refType, refID := "stripe_subscription", subscription.SubscriptionID
 		if refID == "" {
 			refType, refID = "stripe_customer", subscription.CustomerID
 		}
 		if _, err = purserdb.New(jm.db).ResolveProviderTaxReview(ctx, purserdb.ResolveProviderTaxReviewParams{TenantID: tenant, ReferenceType: refType, ReferenceID: refID, Note: "Current legal billing profile and exclusive tax terms synchronized"}); err != nil {
-			return err
+			failures = errors.Join(failures, err)
 		}
 	}
-	return nil
+	return failures
 }

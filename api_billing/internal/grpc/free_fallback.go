@@ -208,6 +208,7 @@ func (s *PurserServer) moveTenantToFree(ctx context.Context, tenantID string) (r
 		}, updated)
 		return enqueueErr
 	})
+	err = handlers.RecordBillingPhaseTaxReview(ctx, err)
 	if err != nil {
 		return err
 	}

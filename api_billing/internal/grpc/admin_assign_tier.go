@@ -452,6 +452,7 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 		}
 		return nil
 	})
+	err = handlers.RecordBillingPhaseTaxReview(ctx, err)
 	switch {
 	case err == nil:
 	case stage == txStageBegin:

@@ -40,9 +40,11 @@ func TestStripeTransientAssessmentRetriesWithoutFreezingReview_RealPG(t *testing
 		t.Fatal(err)
 	}
 	service := &Service{db: db, stripeClient: client, logger: logging.NewLogger()}
-	appconfigtest.Set(t, "SUPPLIER_NAME", "")
+	if _, err = db.Exec(`CREATE FUNCTION purser.fail_stripe_profile_assessment() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'temporary assessment storage failure' USING ERRCODE='08006'; END $$; CREATE TRIGGER fail_stripe_profile_assessment BEFORE INSERT ON purser.provider_tax_profiles FOR EACH ROW EXECUTE FUNCTION purser.fail_stripe_profile_assessment()`); err != nil {
+		t.Fatal(err)
+	}
 	if err = service.importStripeTaxDocument(t.Context(), "provider_invoice", raw); err == nil {
-		t.Error("temporary setup error was accepted as a permanent invoice assessment")
+		t.Error("temporary database error was accepted as a permanent invoice assessment")
 	}
 	var count int
 	if err = db.QueryRowContext(t.Context(), `SELECT count(*) FROM purser.provider_billing_documents WHERE tenant_id=$1::uuid AND provider_document_id='in_retry'`, tenant).Scan(&count); err != nil {
@@ -51,7 +53,9 @@ func TestStripeTransientAssessmentRetriesWithoutFreezingReview_RealPG(t *testing
 	if count != 0 {
 		t.Error("temporary assessment failure froze an immutable unknown verdict")
 	}
-	appconfigtest.Set(t, "SUPPLIER_NAME", "DDVTech B.V.")
+	if _, err = db.Exec(`DROP TRIGGER fail_stripe_profile_assessment ON purser.provider_tax_profiles; DROP FUNCTION purser.fail_stripe_profile_assessment()`); err != nil {
+		t.Fatal(err)
+	}
 	if err = service.importStripeTaxDocument(t.Context(), "provider_invoice", raw); err != nil {
 		t.Fatal(err)
 	}
