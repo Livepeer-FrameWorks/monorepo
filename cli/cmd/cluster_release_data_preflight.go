@@ -127,6 +127,10 @@ func nativeDataPreflightScript(artifact gitops.Artifact, spec serviceexec.Spec) 
 	if !preflightChecksum.MatchString(artifact.Checksum) || !strings.HasPrefix(artifact.URL, "https://") {
 		return "", fmt.Errorf("purser preflight requires an HTTPS artifact with a SHA-256 checksum")
 	}
+	if artifact.Arch != "linux-amd64" && artifact.Arch != "linux-arm64" {
+		return "", fmt.Errorf("purser preflight requires a supported Linux binary architecture")
+	}
+	member := "frameworks-purser-" + artifact.Arch
 	// The service account reads its existing env; no install path, service unit,
 	// or database state is changed by this temporary target binary.
 	inner := `set -euo pipefail
@@ -135,7 +139,7 @@ preflight_tmp=$(mktemp -d)
 trap 'rm -rf "$preflight_tmp"' EXIT
 curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-time 120 ` + ssh.ShellQuote(artifact.URL) + ` -o "$preflight_tmp/artifact.tar.gz"
 printf '%s  %s\n' ` + ssh.ShellQuote(strings.TrimPrefix(artifact.Checksum, "sha256:")) + ` "$preflight_tmp/artifact.tar.gz" | sha256sum --check --status
-tar -xOzf "$preflight_tmp/artifact.tar.gz" purser > "$preflight_tmp/purser"
+tar -xOzf "$preflight_tmp/artifact.tar.gz" ` + ssh.ShellQuote(member) + ` > "$preflight_tmp/purser"
 chmod 700 "$preflight_tmp/purser"
 set -a
 . ` + ssh.ShellQuote(spec.EnvFile) + `

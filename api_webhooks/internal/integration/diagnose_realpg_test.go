@@ -15,14 +15,14 @@ import (
 func TestWebhookDiagnosisTenantAndURLRedaction_RealPG(t *testing.T) {
 	store := newStore(t, startPostgres(t))
 	tenant, other := newTenant(), newTenant()
-	endpoint := createEndpoint(t, store, tenant, "https://user:secret-password@hooks.example/hook?token=secret-query#secret-fragment")
+	endpoint := createEndpoint(t, store, tenant, "https://user:secret-password@hooks.example/hook/secret-path?token=secret-query#secret-fragment")
 	createEndpoint(t, store, other, "https://other.example/hook")
 	ctx := context.WithValue(context.WithValue(context.WithValue(t.Context(), ctxkeys.KeyAuthType, "jwt"), ctxkeys.KeyUserID, "operator"), ctxkeys.KeyPlatformOperator, true)
 	out, err := (&grpcserver.Server{Store: store}).DiagnoseWebhooks(ctx, &bosunpb.DiagnoseWebhooksRequest{TenantId: tenant})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out.GetEndpoints()) != 1 || out.GetEndpoints()[0].GetEndpoint().GetId() != endpoint.ID || out.GetEndpoints()[0].GetEndpoint().GetUrl() != "https://hooks.example/hook" {
+	if len(out.GetEndpoints()) != 1 || out.GetEndpoints()[0].GetEndpoint().GetId() != endpoint.ID || out.GetEndpoints()[0].GetEndpoint().GetUrl() != "https://hooks.example" {
 		t.Fatalf("wrong endpoint: %v", out)
 	}
 	body, err := protojson.Marshal(out)

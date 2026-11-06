@@ -164,6 +164,33 @@ func (q *Queries) ListTenantStripeTaxSubscriptions(ctx context.Context, tenantID
 	return items, nil
 }
 
+const resolveProviderTaxReview = `-- name: ResolveProviderTaxReview :execrows
+UPDATE purser.crypto_accounting_anomalies
+SET status='resolved',resolved_at=NOW(),resolution_note=$1::text
+WHERE tenant_id=$2::text::uuid AND network='stripe' AND kind='provider_tax_review'
+  AND reference_type=$3::text AND reference_id=$4::text AND status='open'
+`
+
+type ResolveProviderTaxReviewParams struct {
+	Note          string `db:"note" json:"note"`
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
+	ReferenceType string `db:"reference_type" json:"reference_type"`
+	ReferenceID   string `db:"reference_id" json:"reference_id"`
+}
+
+func (q *Queries) ResolveProviderTaxReview(ctx context.Context, arg ResolveProviderTaxReviewParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, resolveProviderTaxReview,
+		arg.Note,
+		arg.TenantID,
+		arg.ReferenceType,
+		arg.ReferenceID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const resolveStripeTaxDocumentOwners = `-- name: ResolveStripeTaxDocumentOwners :many
 SELECT DISTINCT tenant_id::text AS tenant_id FROM (
  (SELECT DISTINCT tenant_id FROM purser.tenant_subscriptions WHERE stripe_customer_id=$1::text ORDER BY tenant_id LIMIT 2)

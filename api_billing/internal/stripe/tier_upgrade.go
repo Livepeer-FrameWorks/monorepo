@@ -2,11 +2,14 @@ package stripe
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
+	"github.com/shopspring/decimal"
 	"github.com/stripe/stripe-go/v85"
 	"github.com/stripe/stripe-go/v85/charge"
 	"github.com/stripe/stripe-go/v85/invoice"
@@ -14,6 +17,7 @@ import (
 	"github.com/stripe/stripe-go/v85/paymentintent"
 	stripeprice "github.com/stripe/stripe-go/v85/price"
 	"github.com/stripe/stripe-go/v85/subscription"
+	"github.com/stripe/stripe-go/v85/taxrate"
 )
 
 // UpgradeMonthlySubscription replaces the existing price, invoices the new
@@ -60,7 +64,8 @@ func (c *Client) UpgradeMonthlySubscription(ctx context.Context, request billing
 	if item.Price.UnitAmount > 0 && (sub.LatestInvoice == nil || sub.LatestInvoice.AmountPaid <= 0) {
 		return billing.TierUpgradeReceipt{}, fmt.Errorf("%w: the previous paid fee cannot be established from Stripe's latest invoice; reconcile its payment before upgrading", billing.ErrTierUpgradeRejected)
 	}
-	if err = validateStripePaidMonthlyBase(ctx, sub, item); err != nil {
+	paidBase, err := validateStripePaidMonthlyBase(ctx, sub, item)
+	if err != nil {
 		return billing.TierUpgradeReceipt{}, err
 	}
 	if sub.LatestInvoice != nil && sub.LatestInvoice.AmountPaid > 0 {
@@ -77,11 +82,18 @@ func (c *Client) UpgradeMonthlySubscription(ctx context.Context, request billing
 	if !target.Active || target.UnitAmount != request.BaseCents || target.Currency != stripe.CurrencyEUR || target.Recurring == nil || target.Recurring.Interval != stripe.PriceRecurringIntervalMonth || target.Recurring.IntervalCount != 1 {
 		return billing.TierUpgradeReceipt{}, fmt.Errorf("%w: Stripe monthly price differs from the accepted EUR fee", billing.ErrTierUpgradeRejected)
 	}
+	credit, err := originalStripeUpgradeCredit(ctx, request, sub, item, paidBase)
+	if err != nil {
+		return billing.TierUpgradeReceipt{}, err
+	}
 	params := &stripe.SubscriptionParams{
 		Items:                 []*stripe.SubscriptionItemsParams{{ID: stripe.String(item.ID), Price: stripe.String(request.PriceID)}},
 		BillingCycleAnchorNow: stripe.Bool(true),
-		ProrationBehavior:     stripe.String("always_invoice"),
+		ProrationBehavior:     stripe.String("none"),
 		PaymentBehavior:       stripe.String("error_if_incomplete"),
+	}
+	if credit != nil {
+		params.AddInvoiceItems = []*stripe.SubscriptionAddInvoiceItemParams{credit}
 	}
 	params.Context = ctx
 	params.SetIdempotencyKey("tier-upgrade:" + request.ID)
@@ -104,18 +116,18 @@ func (c *Client) UpgradeMonthlySubscription(ctx context.Context, request billing
 // than allowing an unpaid price edit or an unrelated usage payment as evidence.
 func validateStripePaidMonthlyBase(
 	ctx context.Context, sub *stripe.Subscription, item *stripe.SubscriptionItem,
-) error {
+) (*stripe.InvoiceLineItem, error) {
 	reject := func() error {
 		return fmt.Errorf("%w: the native monthly fee has no matching undiscounted paid base line; reconcile its invoice before upgrading", billing.ErrTierUpgradeRejected)
 	}
 	if len(sub.Discounts) > 0 || len(item.Discounts) > 0 {
-		return reject()
+		return nil, reject()
 	}
 	if item.Price.UnitAmount == 0 {
-		return nil
+		return nil, nil
 	}
 	if sub.LatestInvoice == nil || sub.LatestInvoice.ID == "" {
-		return reject()
+		return nil, reject()
 	}
 	lines := sub.LatestInvoice.Lines
 	if lines == nil || lines.HasMore {
@@ -127,10 +139,11 @@ func validateStripePaidMonthlyBase(
 			lines.Data = append(lines.Data, iter.InvoiceLineItem())
 		}
 		if err := iter.Err(); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	matches := 0
+	var matched *stripe.InvoiceLineItem
 	for _, line := range lines.Data {
 		// The item identifies the line: a restored price keeps its fee under a
 		// new price ID, so the amount below is what binds the two.
@@ -146,14 +159,125 @@ func validateStripePaidMonthlyBase(
 		}
 		if line.Quantity != 1 || line.Currency != stripe.CurrencyEUR || line.Amount != item.Price.UnitAmount ||
 			len(line.DiscountAmounts) > 0 || len(line.PretaxCreditAmounts) > 0 {
-			return reject()
+			return nil, reject()
 		}
 		matches++
+		matched = line
 	}
 	if matches != 1 {
-		return reject()
+		return nil, reject()
 	}
-	return nil
+	return matched, nil
+}
+
+func originalStripeUpgradeCredit(ctx context.Context, request billing.TierUpgradeRequest, sub *stripe.Subscription, item *stripe.SubscriptionItem, line *stripe.InvoiceLineItem) (*stripe.SubscriptionAddInvoiceItemParams, error) {
+	if line == nil || line.Amount == 0 {
+		return nil, nil
+	}
+	reject := func(reason string) (*stripe.SubscriptionAddInvoiceItemParams, error) {
+		return nil, fmt.Errorf("%w: original paid tax credit requires review: %s", billing.ErrTierUpgradeRejected, reason)
+	}
+	if sub.LatestInvoice.PostPaymentCreditNotesAmount > 0 || sub.LatestInvoice.PrePaymentCreditNotesAmount > 0 {
+		return reject("source invoice already has credit notes")
+	}
+	if !request.OldPeriodEnd.IsZero() && request.OldPeriodEnd.Unix() != line.Period.End {
+		return reject("provider paid period advanced beyond the accepted boundary")
+	}
+	if item.Price.Product == nil || item.Price.Product.ID == "" {
+		return reject("source product identity missing")
+	}
+	if request.RequestedAt.IsZero() {
+		return reject("accepted upgrade time missing")
+	}
+	at := request.RequestedAt.UTC().Unix()
+	if at < line.Period.Start || at >= line.Period.End {
+		return reject("accepted upgrade time is outside its paid source period")
+	}
+	whole := line.Period.End - line.Period.Start
+	remaining := min(max(line.Period.End-at, 0), whole)
+	if whole <= 0 || remaining <= 0 {
+		return reject("source paid month no longer overlaps the upgrade")
+	}
+	minor := decimal.NewFromInt(line.Amount).Mul(decimal.NewFromInt(remaining)).Div(decimal.NewFromInt(whole)).Round(0).IntPart()
+	if minor == 0 {
+		return nil, nil
+	}
+	var originalVAT int64
+	for _, tax := range line.Taxes {
+		if tax != nil {
+			originalVAT += tax.Amount
+		}
+	}
+	if originalVAT < 0 {
+		return reject("source tax amount is negative")
+	}
+	rates := []*string{}
+	rateEvidence := []providerCreditRate{}
+	if originalVAT > 0 {
+		for _, tax := range line.Taxes {
+			if tax == nil || tax.Amount == 0 {
+				continue
+			}
+			if tax.Amount < 0 || tax.TaxBehavior != stripe.InvoiceLineItemTaxTaxBehaviorExclusive || tax.TaxRateDetails == nil || tax.TaxRateDetails.TaxRate == "" {
+				return reject("original exclusive tax rate is not established")
+			}
+			p := &stripe.TaxRateParams{}
+			p.Context = ctx
+			rate, err := taxrate.Get(tax.TaxRateDetails.TaxRate, p)
+			if err != nil {
+				return nil, err
+			}
+			calculated := decimal.NewFromInt(line.Amount).Mul(decimal.NewFromFloat(rate.Percentage)).Div(decimal.NewFromInt(100)).Round(0).IntPart()
+			if rate.Inclusive || calculated != tax.Amount {
+				return reject("original tax amount differs from its retained rate")
+			}
+			bps := decimal.NewFromFloat(rate.Percentage).Mul(decimal.NewFromInt(100))
+			if !bps.IsInteger() {
+				return reject("original VAT precision is unsupported")
+			}
+			rateEvidence = append(rateEvidence, providerCreditRate{ID: rate.ID, RateBPS: bps.IntPart()})
+			rates = append(rates, stripe.String(rate.ID))
+		}
+	} else {
+		list := &stripe.TaxRateListParams{Active: stripe.Bool(true)}
+		list.Context = ctx
+		list.Limit = stripe.Int64(100)
+		iter := taxrate.List(list)
+		for iter.Next() {
+			rate := iter.TaxRate()
+			if !rate.Inclusive && rate.Percentage == 0 && rate.Metadata["frameworks_original_untaxed"] == "true" {
+				rates = []*string{stripe.String(rate.ID)}
+				break
+			}
+		}
+		if err := iter.Err(); err != nil {
+			return nil, err
+		}
+		if len(rates) == 0 {
+			p := &stripe.TaxRateParams{DisplayName: stripe.String("Original period VAT"), Inclusive: stripe.Bool(false), Percentage: stripe.Float64(0), TaxType: stripe.String("vat"), Metadata: map[string]string{"frameworks_original_untaxed": "true"}}
+			p.Context = ctx
+			p.SetIdempotencyKey("frameworks-original-untaxed-v1")
+			rate, err := taxrate.New(p)
+			if err != nil {
+				return nil, err
+			}
+			if rate.ID == "" || rate.Inclusive || rate.Percentage != 0 {
+				return reject("provider did not confirm the original zero-tax rate")
+			}
+			rates = []*string{stripe.String(rate.ID)}
+		}
+	}
+	if originalVAT == 0 {
+		rateEvidence = []providerCreditRate{{ID: stripe.StringValue(rates[0]), RateBPS: 0}}
+	}
+	evidence, err := json.Marshal(rateEvidence)
+	if err != nil {
+		return nil, err
+	}
+	if len(evidence) > 500 {
+		return reject("original tax evidence exceeds provider metadata limits")
+	}
+	return &stripe.SubscriptionAddInvoiceItemParams{Quantity: stripe.Int64(1), Discountable: stripe.Bool(false), PriceData: &stripe.InvoiceItemPriceDataParams{Currency: stripe.String("eur"), Product: stripe.String(item.Price.Product.ID), TaxBehavior: stripe.String("exclusive"), UnitAmount: stripe.Int64(-minor)}, TaxRates: rates, Period: &stripe.SubscriptionAddInvoiceItemPeriodParams{Start: &stripe.SubscriptionAddInvoiceItemPeriodStartParams{Type: stripe.String("timestamp"), Timestamp: stripe.Int64(at)}, End: &stripe.SubscriptionAddInvoiceItemPeriodEndParams{Type: stripe.String("timestamp"), Timestamp: stripe.Int64(line.Period.End)}}, Metadata: map[string]string{"frameworks_credit_invoice": sub.LatestInvoice.ID, "frameworks_credit_line": line.ID, "frameworks_credit_original_net": strconv.FormatInt(line.Amount, 10), "frameworks_credit_original_vat": strconv.FormatInt(originalVAT, 10), "frameworks_credit_rates": string(evidence)}}, nil
 }
 
 // Renewal changes latest_invoice and the subscription item's current period.

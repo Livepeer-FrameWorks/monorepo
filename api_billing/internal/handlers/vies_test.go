@@ -3,7 +3,9 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -154,5 +156,78 @@ func TestVIESAuthoritativeInvalidResponseDoesNotUseOutageGrace(t *testing.T) {
 	}
 	if err = mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestVIESRequestDateTimezonePreservesCalendarDate(t *testing.T) {
+	for _, date := range []string{"2026-08-20", "2026-08-20Z", "2026-08-20+01:00", "2026-08-20-05:30", "2026-08-20+14:00", "2026-08-20-14:00"} {
+		t.Run(date, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = fmt.Fprintf(w, `<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><checkVatResponse xmlns="urn:ec.europa.eu:taxud:vies:services:checkVat:types"><countryCode>NL</countryCode><vatNumber>123456789B01</vatNumber><requestDate>%s</requestDate><valid>true</valid></checkVatResponse></soap:Body></soap:Envelope>`, date)
+			}))
+			defer server.Close()
+			appconfigtest.Set(t, "VIES_ENDPOINT", server.URL)
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			mock.ExpectQuery("-- name: GetCachedVATValidation").WillReturnError(sql.ErrNoRows)
+			mock.ExpectQuery("INSERT INTO purser.vat_validation_evidence").WithArgs("tenant-1", "NL", sqlmock.AnyArg(), "NL********9B01", true, time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), "", "", viesWireDate(date)).WillReturnRows(sqlmock.NewRows([]string{"validation_snapshot"}).AddRow([]byte(`{"valid":true}`)))
+			got, err := (&X402Handler{db: db}).validateVIESVATEvidence(t.Context(), "tenant-1", "NL", "NL123456789B01")
+			if err != nil || !got.Valid {
+				t.Fatalf("xsd:date %q rejected or lost calendar date: %+v %v", date, got, err)
+			}
+			if err = mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+type viesWireDate string
+
+func (want viesWireDate) Match(value driver.Value) bool {
+	raw, ok := value.([]byte)
+	if !ok {
+		return false
+	}
+	var response viesResponse
+	return json.Unmarshal(raw, &response) == nil && response.RequestDate == string(want)
+}
+
+func TestVIESRequestDateRejectsMalformedValues(t *testing.T) {
+	for _, value := range []string{"", "2026-02-30Z", "2026-08-20+14:01", "2026-08-20-14:01", "2026-08-20+00:60", "2026-08-20+01", "2026-08-20+0100", "2026-08-20T00:00:00Z", "2026-08-20Zextra"} {
+		if _, err := parseVIESRequestDate(value); err == nil {
+			t.Errorf("malformed xsd:date accepted: %q", value)
+		}
+	}
+}
+
+func TestVIESConcurrencyFaultsUseOnlyRetainedPositiveProof(t *testing.T) {
+	for _, code := range []string{"GLOBAL_MAX_CONCURRENT_REQ", "GLOBAL_MAX_CONCURRENT_REQ_TIME", "MS_MAX_CONCURRENT_REQ", "MS_MAX_CONCURRENT_REQ_TIME"} {
+		t.Run(code, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = fmt.Fprintf(w, `<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><soap:Fault><faultcode>soap:Server</faultcode><faultstring>%s</faultstring></soap:Fault></soap:Body></soap:Envelope>`, code)
+			}))
+			defer server.Close()
+			appconfigtest.Set(t, "VIES_ENDPOINT", server.URL)
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			snapshot := []byte(`{"valid":true,"retained":"original"}`)
+			mock.ExpectQuery("-- name: GetCachedVATValidation").WillReturnRows(sqlmock.NewRows([]string{"valid", "validation_snapshot", "fresh", "within_outage_grace"}).AddRow(true, snapshot, false, true))
+			mock.ExpectExec("-- name: RecordCryptoAccountingAnomaly").WillReturnResult(sqlmock.NewResult(0, 1))
+			got, err := (&X402Handler{db: db}).validateVIESVATEvidence(t.Context(), "tenant-1", "NL", "NL123456789B01")
+			if err != nil || !got.Valid || got.Mode != "outage_grace" || string(got.Snapshot) != string(snapshot) {
+				t.Fatalf("transient capacity fault %s replaced or rejected retained proof: %+v %v", code, got, err)
+			}
+			if err = mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

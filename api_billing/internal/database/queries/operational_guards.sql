@@ -4,11 +4,18 @@ WITH latest AS (
     WHERE evidence.tenant_id = sqlc.arg(tenant_id)::text::uuid
       AND evidence.vat_number_hash = sqlc.arg(vat_number_hash)
     ORDER BY evidence.checked_at DESC, evidence.id DESC LIMIT 1
+), fault AS (
+    SELECT last_seen_at FROM purser.crypto_accounting_anomalies
+    WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND kind='vies_verification_fault'
+      AND reference_type='vat_validation'
+      AND reference_id=sqlc.arg(tenant_id)::text || ':' || sqlc.arg(vat_number_hash)::text
 )
 SELECT latest.valid, to_jsonb(latest)::jsonb AS validation_snapshot,
-       (latest.checked_at <= NOW() AND latest.expires_at > NOW())::boolean AS fresh,
-       (latest.checked_at <= NOW() AND latest.expires_at >= NOW() - sqlc.arg(outage_grace_hours)::integer * INTERVAL '1 hour')::boolean AS within_outage_grace
-FROM latest;
+       COALESCE(latest.checked_at <= NOW() AND latest.expires_at > NOW()
+         AND (fault.last_seen_at IS NULL OR latest.checked_at>fault.last_seen_at),false)::boolean AS fresh,
+       COALESCE(latest.checked_at <= NOW() AND latest.expires_at >= NOW() - sqlc.arg(outage_grace_hours)::integer * INTERVAL '1 hour'
+         AND (fault.last_seen_at IS NULL OR latest.checked_at>fault.last_seen_at),false)::boolean AS within_outage_grace
+FROM latest LEFT JOIN fault ON true;
 
 -- name: ListTenantVIESRevalidations :many
 SELECT id::text AS id, evidence_json
@@ -30,6 +37,7 @@ WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND id=sqlc.arg(id)::text::uuid
   AND kind='vies_revalidation' AND status='open';
 
 -- name: UpsertVATValidationEvidence :one
+WITH checked AS (
 INSERT INTO purser.vat_validation_evidence AS evidence (
     tenant_id, country_code, vat_number_hash, vat_number_masked,
     valid, request_date, trader_name, trader_address,
@@ -38,23 +46,38 @@ INSERT INTO purser.vat_validation_evidence AS evidence (
     sqlc.arg(tenant_id)::text::uuid, sqlc.arg(country_code),
     sqlc.arg(vat_number_hash), sqlc.arg(vat_number_masked),
     sqlc.arg(valid), sqlc.arg(request_date), sqlc.arg(trader_name),
-    sqlc.arg(trader_address), NOW(), NOW() + INTERVAL '24 hours',
+    sqlc.arg(trader_address), clock_timestamp(), clock_timestamp() + INTERVAL '24 hours',
     sqlc.arg(raw_response)::jsonb
 )
 ON CONFLICT (tenant_id, vat_number_hash, request_date) DO UPDATE
 SET valid = EXCLUDED.valid,
     trader_name = EXCLUDED.trader_name,
     trader_address = EXCLUDED.trader_address,
-    checked_at = NOW(),
-    expires_at = NOW() + INTERVAL '24 hours',
+    checked_at = clock_timestamp(),
+    expires_at = clock_timestamp() + INTERVAL '24 hours',
     raw_response = EXCLUDED.raw_response
-RETURNING to_jsonb(evidence)::jsonb AS validation_snapshot;
+RETURNING evidence.*
+), resolved_fault AS (
+ UPDATE purser.crypto_accounting_anomalies fault
+ SET status='resolved',resolved_at=clock_timestamp(),resolution_note='VIES request completed with authoritative validation'
+ FROM checked
+ WHERE fault.tenant_id=checked.tenant_id AND fault.kind='vies_verification_fault'
+  AND fault.reference_type='vat_validation'
+  AND fault.reference_id=checked.tenant_id::text || ':' || checked.vat_number_hash
+  AND fault.status='open' AND fault.last_seen_at<checked.checked_at
+ RETURNING fault.id
+)
+SELECT to_jsonb(checked)::jsonb AS validation_snapshot FROM checked;
 
 -- name: RecordPermanentVIESFault :exec
-INSERT INTO purser.vat_validation_evidence(tenant_id,country_code,vat_number_hash,vat_number_masked,valid,request_date,checked_at,expires_at,raw_response)
-VALUES(sqlc.arg(tenant_id)::text::uuid,sqlc.arg(country_code),sqlc.arg(vat_number_hash),sqlc.arg(vat_number_masked),false,CURRENT_DATE,NOW(),NOW(),sqlc.arg(raw_response)::jsonb)
-ON CONFLICT(tenant_id,vat_number_hash,request_date) DO UPDATE
-SET valid=false,checked_at=NOW(),expires_at=NOW(),raw_response=EXCLUDED.raw_response;
+INSERT INTO purser.crypto_accounting_anomalies AS fault(tenant_id,kind,network,reference_type,reference_id,detail,evidence_json,last_seen_at)
+VALUES(sqlc.arg(tenant_id)::text::uuid,'vies_verification_fault','vies','vat_validation',
+ sqlc.arg(tenant_id)::text || ':' || sqlc.arg(vat_number_hash)::text,
+ 'VIES request was rejected; successful verification is required before reusing retained proof',
+ jsonb_build_object('country',sqlc.arg(country_code)::text,'vat_number_masked',sqlc.arg(vat_number_masked)::text,'fault',sqlc.arg(raw_response)::jsonb),clock_timestamp())
+ON CONFLICT(kind,reference_type,reference_id) DO UPDATE
+SET last_seen_at=clock_timestamp(),occurrences=fault.occurrences+1,evidence_json=EXCLUDED.evidence_json,
+ status='open',resolved_at=NULL,resolved_by=NULL,resolution_note=NULL;
 
 -- name: GetActiveTenantBillingModel :one
 SELECT COALESCE(billing_model, 'postpaid') AS billing_model

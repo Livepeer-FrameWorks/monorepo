@@ -25,3 +25,9 @@ ORDER BY line_key,id;
 UPDATE purser.invoice_line_items SET net_eur_cents=sqlc.arg(net_eur_cents),vat_eur_cents=sqlc.arg(vat_eur_cents),
  gross_eur_cents=sqlc.arg(gross_eur_cents),vat_rate_bps=sqlc.arg(vat_rate_bps),tax_treatment=sqlc.arg(tax_treatment),tax_point_at=sqlc.arg(tax_point_at)
 WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND id=sqlc.arg(id)::text::uuid AND invoice_id=sqlc.arg(invoice_id)::text::uuid;
+-- name: ResolveInvoiceTaxReview :execrows
+UPDATE purser.crypto_accounting_anomalies
+SET status='resolved',resolved_at=NOW(),resolution_note='Invoice tax assessment completed'
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid
+  AND kind='invoice_tax_review' AND reference_type='invoice'
+  AND reference_id=sqlc.arg(invoice_id)::text AND status='open';

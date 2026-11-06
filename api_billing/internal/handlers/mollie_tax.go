@@ -149,6 +149,18 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 		if err != nil {
 			return err
 		}
+		reviewReason := ""
+		fresh, freshErr := AssessStripeTaxProfile(ctx, s.db, tenant, "")
+		if freshErr != nil {
+			reviewReason = "Current tax evidence could not be verified at issuance: " + freshErr.Error()
+		} else if fresh.Fingerprint() != profile.Fingerprint() {
+			reviewReason = "Accepted payment tax terms differ from the current legal billing profile"
+		} else {
+			profile = *fresh
+			if err = json.Unmarshal(profile.Evidence, &proof); err != nil {
+				return err
+			}
+		}
 		amount := decimal.New(net, -2)
 		lines := &clusterRatingResult{BaseLine: pricedLine{PricingSource: pricing.SourceTier, LineItem: rating.LineItem{LineKey: "native_subscription_base", Description: "Monthly subscription", Currency: "EUR", Quantity: decimal.NewFromInt(1), BillableQuantity: decimal.NewFromInt(1), UnitPrice: amount, Amount: amount}}}
 		if err = persistInvoiceLineItems(ctx, tx, row.ID, tenant, lines); err != nil {
@@ -159,6 +171,11 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 			return addressErr
 		}
 		assessment := invoiceTaxAssessment{Net: net, VAT: vat, Gross: gross, TaxPoint: at, Decision: proof.Decision, Supplier: proof.Supplier, Validation: proof.VATValidation, ValidationMode: proof.VATValidationMode, Customer: CryptoBillingProfile{Name: profile.Name, Company: profile.Company, Email: profile.Email, Address: address, VATNumber: profile.VATNumber}}
+		assessment.ProviderAssessment = append(json.RawMessage(nil), profile.Evidence...)
+		if reviewReason != "" {
+			assessment.ReviewRequired = true
+			assessment.ReviewReasons = append(assessment.ReviewReasons, "provider_tax_terms_changed")
+		}
 		if assessment.Supplier.Name == "" {
 			return fmt.Errorf("mollie tax terms lack frozen supplier identity")
 		}
@@ -171,6 +188,15 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 		}
 		if err = q.RecordNativeMollieInvoicePayment(ctx, purserdb.RecordNativeMollieInvoicePaymentParams{TenantID: tenant, InvoiceID: row.ID, GrossMinor: gross, PaymentID: sql.NullString{String: payment.ID, Valid: true}, PaidAt: sql.NullTime{Time: at, Valid: true}}); err != nil {
 			return err
+		}
+		if reviewReason != "" {
+			evidence, marshalErr := json.Marshal(map[string]any{"review_required": true, "payment_id": payment.ID, "accepted_profile": sha, "reason": reviewReason})
+			if marshalErr != nil {
+				return marshalErr
+			}
+			if err = q.RecordCryptoAccountingAnomaly(ctx, purserdb.RecordCryptoAccountingAnomalyParams{TenantID: tenant, Kind: "provider_tax_document_review", Network: "mollie", ReferenceType: "invoice", ReferenceID: row.ID, AmountCents: gross, Detail: reviewReason, EvidenceJson: evidence}); err != nil {
+				return err
+			}
 		}
 		return enqueueInvoiceEmailTx(ctx, tx, row.ID, tenant, profile.Email, "paid")
 	})

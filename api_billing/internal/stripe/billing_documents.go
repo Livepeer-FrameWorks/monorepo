@@ -10,9 +10,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/shopspring/decimal"
 	api "github.com/stripe/stripe-go/v85"
 )
 
@@ -35,6 +37,20 @@ type ProviderTaxDocument struct {
 	Raw             json.RawMessage
 	PDFURL          string
 	ProfileSHA      string
+	Lines           []ProviderTaxLine
+	MoreLines       bool
+}
+
+type providerCreditRate struct {
+	ID      string `json:"id"`
+	RateBPS int64  `json:"rate_bps"`
+}
+type ProviderTaxLine struct {
+	Amount   int64             `json:"amount"`
+	Metadata map[string]string `json:"metadata"`
+	Taxes    []struct {
+		Amount int64 `json:"amount"`
+	} `json:"taxes"`
 }
 
 type providerDocumentPayload struct {
@@ -61,6 +77,10 @@ type providerDocumentPayload struct {
 	CustomerAddress   json.RawMessage   `json:"customer_address"`
 	CustomerTaxIDs    json.RawMessage   `json:"customer_tax_ids"`
 	Metadata          map[string]string `json:"metadata"`
+	Lines             struct {
+		Data    []ProviderTaxLine `json:"data"`
+		HasMore bool              `json:"has_more"`
+	} `json:"lines"`
 	StatusTransitions struct {
 		FinalizedAt int64 `json:"finalized_at"`
 	} `json:"status_transitions"`
@@ -129,7 +149,71 @@ func ParseProviderTaxDocument(kind string, raw json.RawMessage) (ProviderTaxDocu
 		vat := doc.Gross - *doc.Net
 		doc.VAT = &vat
 	}
+	doc.Lines, doc.MoreLines = payload.Lines.Data, payload.Lines.HasMore
 	return doc, nil
+}
+
+// Mixed-rate upgrade invoices include an original-period credit. Its frozen
+// rate evidence is checked independently of the replacement month's VAT.
+func ValidateProviderTaxTerms(doc ProviderTaxDocument, p TaxProfile) error {
+	if doc.ProfileSHA == "" || p.Name == "" || p.Country == "" || p.SupplierIdentity == "" || doc.Net == nil || doc.VAT == nil {
+		return errors.New("provider invoice has no matching retained tax setup")
+	}
+	if doc.ProfileSHA != p.Fingerprint() && doc.ProfileSHA != p.ProfileSHA {
+		return errors.New("provider invoice tax setup identity differs from retained terms")
+	}
+	vat := func(net, bps int64) int64 {
+		return decimal.NewFromInt(net).Mul(decimal.NewFromInt(bps)).Div(decimal.NewFromInt(10000)).Round(0).IntPart()
+	}
+	if *doc.Net+*doc.VAT != doc.Gross {
+		return errors.New("provider invoice tax totals do not balance")
+	}
+	if len(doc.Lines) == 0 && !doc.MoreLines && vat(*doc.Net, int64(p.RateBPS)) == *doc.VAT {
+		return nil
+	}
+	if len(doc.Lines) == 0 || doc.MoreLines {
+		return errors.New("provider invoice VAT differs from retained terms; complete source lines require review")
+	}
+	var net, totalVAT int64
+	seen := map[string]bool{}
+	for _, line := range doc.Lines {
+		var lineVAT int64
+		for _, tax := range line.Taxes {
+			lineVAT += tax.Amount
+		}
+		if line.Amount >= 0 {
+			if lineVAT != vat(line.Amount, int64(p.RateBPS)) {
+				return errors.New("provider debit line VAT differs from retained terms")
+			}
+		} else {
+			invoice, lineID := line.Metadata["frameworks_credit_invoice"], line.Metadata["frameworks_credit_line"]
+			key := invoice + ":" + lineID
+			originalNet, netErr := strconv.ParseInt(line.Metadata["frameworks_credit_original_net"], 10, 64)
+			originalVAT, vatErr := strconv.ParseInt(line.Metadata["frameworks_credit_original_vat"], 10, 64)
+			var rates []providerCreditRate
+			if invoice == "" || invoice == doc.ID || lineID == "" || seen[key] || netErr != nil || vatErr != nil || originalNet <= 0 || originalVAT < 0 || -line.Amount > originalNet || lineVAT > 0 || -lineVAT > originalVAT || json.Unmarshal([]byte(line.Metadata["frameworks_credit_rates"]), &rates) != nil || len(rates) == 0 {
+				return errors.New("provider credit has no bounded original tax evidence")
+			}
+			seen[key] = true
+			var expected, sourceVAT int64
+			for _, rate := range rates {
+				if rate.ID == "" || rate.RateBPS < 0 || rate.RateBPS > 10000 {
+					return errors.New("provider credit original rate is invalid")
+				}
+				expected += vat(-line.Amount, rate.RateBPS)
+				sourceVAT += vat(originalNet, rate.RateBPS)
+			}
+			if sourceVAT != originalVAT || lineVAT != -expected {
+				return errors.New("provider credit repriced its original tax")
+			}
+		}
+		net += line.Amount
+		totalVAT += lineVAT
+	}
+	if net != *doc.Net || totalVAT != *doc.VAT {
+		return errors.New("provider invoice lines do not reconcile to original totals")
+	}
+	return nil
 }
 
 type providerDocumentResource struct{ api.APIResource }

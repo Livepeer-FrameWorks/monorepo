@@ -93,6 +93,7 @@ type Querier interface {
 	ClaimFreeFallbackNotice(ctx context.Context, tenantID string) (ClaimFreeFallbackNoticeRow, error)
 	ClaimInvoiceEmailCandidates(ctx context.Context, arg ClaimInvoiceEmailCandidatesParams) ([]ClaimInvoiceEmailCandidatesRow, error)
 	ClaimMediaAuthorityRefreshBatch(ctx context.Context, arg ClaimMediaAuthorityRefreshBatchParams) ([]ClaimMediaAuthorityRefreshBatchRow, error)
+	ClaimNativeMollieSubscriptionOutcome(ctx context.Context, arg ClaimNativeMollieSubscriptionOutcomeParams) (int64, error)
 	// The claim is committed before SMTP; no billing row lock spans external I/O.
 	// plan_name is the plan the account is on after the end: for an ending
 	// notice the grant's fallback when the grant assigned the current tier,
@@ -392,6 +393,7 @@ type Querier interface {
 	GetMollieFirstPaymentIntentCurrency(ctx context.Context, arg GetMollieFirstPaymentIntentCurrencyParams) (string, error)
 	GetMollieObservationDrainInvoice(ctx context.Context, invoiceID string) (GetMollieObservationDrainInvoiceRow, error)
 	GetMollieTierPrice(ctx context.Context, tierID string) (GetMollieTierPriceRow, error)
+	GetNativeMollieInvoiceID(ctx context.Context, arg GetNativeMollieInvoiceIDParams) (string, error)
 	GetNextDurableX402RelayerNonce(ctx context.Context, arg GetNextDurableX402RelayerNonceParams) (int64, error)
 	GetOpenInvoiceBillingPeriod(ctx context.Context, arg GetOpenInvoiceBillingPeriodParams) (GetOpenInvoiceBillingPeriodRow, error)
 	// Retained native identities exclude an already-paid fee from Purser invoices.
@@ -948,6 +950,7 @@ type Querier interface {
 	ResolveActiveStripeCustomer(ctx context.Context, tenantID uuid.UUID) (sql.NullString, error)
 	ResolveClusterSubscriptionByStripeID(ctx context.Context, subscriptionID string) (ResolveClusterSubscriptionByStripeIDRow, error)
 	ResolveCryptoAccountingAnomaly(ctx context.Context, arg ResolveCryptoAccountingAnomalyParams) (int64, error)
+	ResolveInvoiceTaxReview(ctx context.Context, arg ResolveInvoiceTaxReviewParams) (int64, error)
 	// Records the outcome of a Mollie first payment on its intent, which ends the
 	// presentment-currency lock the open intent holds.
 	ResolveMollieFirstPaymentIntent(ctx context.Context, arg ResolveMollieFirstPaymentIntentParams) error
@@ -956,6 +959,7 @@ type Querier interface {
 	// Closes the operator review holds of an uncredited top-up whose paid amount
 	// the provider has fully returned; evidence_ref names the closing reversal.
 	ResolvePendingTopupReviewHolds(ctx context.Context, arg ResolvePendingTopupReviewHoldsParams) (int64, error)
+	ResolveProviderTaxReview(ctx context.Context, arg ResolveProviderTaxReviewParams) (int64, error)
 	// Authenticated provider events locate only their existing tenant mapping.
 	ResolveStripeTaxDocumentOwners(ctx context.Context, customerID string) ([]string, error)
 	RetainDeliveredHistoricalMollieCheckout(ctx context.Context, arg RetainDeliveredHistoricalMollieCheckoutParams) (int64, error)

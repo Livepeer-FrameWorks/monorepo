@@ -477,6 +477,8 @@ services:
     image: python:3.13-alpine
     profiles: [stack]
     command: [python3, /app/billing-provider.py]
+    environment:
+      GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL}
     volumes:
       - ./scripts/stack/billing-provider.py:/app/billing-provider.py:ro
     networks: [frameworks]

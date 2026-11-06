@@ -453,8 +453,9 @@ sending a partial summary.
 - Stripe account and secret key (`STRIPE_SECRET_KEY`)
 - Stripe webhook signing secret (`STRIPE_WEBHOOK_SECRET`)
 - (Optional) Mollie API key (`MOLLIE_API_KEY`)
-- Public application URL (`WEBAPP_PUBLIC_URL`); Mollie also requires
-  `GATEWAY_PUBLIC_URL` so it can send authoritative payment callbacks
+- Public application URL (`WEBAPP_PUBLIC_URL`) and gateway URL (`GATEWAY_PUBLIC_URL`).
+  Purser uses the gateway URL to check Stripe's webhook endpoint; Mollie also uses
+  it to send authoritative payment callbacks.
 - `PAYMENT_CARD_PROVIDER=stripe|mollie` when both providers are configured
 
 **What's Automated:**
@@ -479,13 +480,17 @@ sending a partial summary.
      - `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
        `checkout.session.async_payment_failed`, `checkout.session.expired`
      - `customer.subscription.created`, `.updated`, `.deleted`, `.paused`, `.resumed`
-     - `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`
+     - `invoice.finalized`, `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`
+     - `credit_note.created`, `credit_note.updated`, `credit_note.voided`
      - `payment_intent.succeeded`, `payment_intent.payment_failed`
      - `charge.refunded`, `charge.updated`, `charge.dispute.created`, `.closed`, `.funds_withdrawn`, `.funds_reinstated`
    - Reveal the endpoint **Signing secret** (`whsec_…`)
    - `charge.updated` delivers the balance transaction Purser records as the settled EUR
      amount, fee, and exchange rate of each card payment; pending settlements are also
      re-read every 10 minutes.
+   - Purser checks the enabled endpoint and its required event subscriptions on startup
+     using read-only Stripe requests. A missing endpoint or event produces a warning;
+     update the endpoint in Stripe and restart Purser to verify the configuration.
 4. (Optional) If using Mollie, configure: `https://yourdomain.com/webhooks/billing/mollie`
 5. Enable payment methods (**Settings → Payment methods**). The hosted Checkout pins an
    explicit, currency-aware allowlist in code: `card` always, plus `sepa_debit`, `ideal`, and

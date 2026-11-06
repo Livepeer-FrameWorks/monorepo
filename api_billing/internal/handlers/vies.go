@@ -129,7 +129,7 @@ func (h *X402Handler) refreshVIESVAT(ctx context.Context, tenantID, countryCode,
 	// before deciding whether dated positive evidence can bridge an outage.
 	if parseErr == nil && resultEnvelope.Body.Fault != nil {
 		fault := strings.ToUpper(strings.TrimSpace(resultEnvelope.Body.Fault.String))
-		for _, code := range []string{"MS_UNAVAILABLE", "SERVICE_UNAVAILABLE", "TIMEOUT", "SERVER_BUSY", "MAX_CONCURRENT_REQ"} {
+		for _, code := range []string{"MS_UNAVAILABLE", "SERVICE_UNAVAILABLE", "TIMEOUT", "SERVER_BUSY", "MAX_CONCURRENT_REQ", "GLOBAL_MAX_CONCURRENT_REQ", "GLOBAL_MAX_CONCURRENT_REQ_TIME", "MS_MAX_CONCURRENT_REQ", "MS_MAX_CONCURRENT_REQ_TIME"} {
 			if fault == code {
 				return vatVerification{}, &viesUnavailableError{cause: fmt.Errorf("VIES service fault: %s", code)}
 			}
@@ -156,7 +156,7 @@ func (h *X402Handler) refreshVIESVAT(ctx context.Context, tenantID, countryCode,
 	if result.CountryCode != countryCode || result.VATNumber != vatNumber {
 		return vatVerification{}, fmt.Errorf("VIES response does not match the requested VAT number")
 	}
-	requestDate, err := time.Parse("2006-01-02", result.RequestDate)
+	requestDate, err := parseVIESRequestDate(result.RequestDate)
 	if err != nil {
 		return vatVerification{}, fmt.Errorf("VIES response has invalid request date")
 	}
@@ -172,6 +172,29 @@ func (h *X402Handler) refreshVIESVAT(ctx context.Context, tenantID, countryCode,
 		return vatVerification{}, err
 	}
 	return vatVerification{Valid: result.Valid, Snapshot: snapshot, Mode: "live_vies"}, nil
+}
+
+// VIES requestDate is an xsd:date. Its optional timezone belongs to the
+// service's calendar date; converting midnight to UTC could change that day.
+func parseVIESRequestDate(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	layout := time.DateOnly
+	if len(value) > len(time.DateOnly) {
+		layout += "Z07:00"
+	}
+	parsed, err := time.Parse(layout, value)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if len(value) == len(time.DateOnly)+6 && value[len(value)-2:] > "59" {
+		return time.Time{}, fmt.Errorf("invalid xsd:date timezone")
+	}
+	_, offset := parsed.Zone()
+	if offset < -14*60*60 || offset > 14*60*60 {
+		return time.Time{}, fmt.Errorf("invalid xsd:date timezone")
+	}
+	year, month, day := parsed.Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC), nil
 }
 
 func maskVATNumber(country, number string) string {

@@ -52,3 +52,9 @@ UNION
 SELECT stripe_customer_id::text AS customer_id,COALESCE(stripe_subscription_id,'')::text AS subscription_id
 FROM purser.cluster_subscriptions
 WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND stripe_customer_id IS NOT NULL AND stripe_customer_id<>'' AND status NOT IN ('cancelled','ended');
+
+-- name: ResolveProviderTaxReview :execrows
+UPDATE purser.crypto_accounting_anomalies
+SET status='resolved',resolved_at=NOW(),resolution_note=sqlc.arg(note)::text
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND network='stripe' AND kind='provider_tax_review'
+  AND reference_type=sqlc.arg(reference_type)::text AND reference_id=sqlc.arg(reference_id)::text AND status='open';
