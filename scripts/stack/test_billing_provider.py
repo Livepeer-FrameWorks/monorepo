@@ -115,12 +115,18 @@ class BillingProviderTest(unittest.TestCase):
         self.assertEqual(repriced["lines"]["data"][0]["taxes"][0]["amount"], 210)
         finalized = self.call("POST", "/v1/invoices/" + draft["id"] + "/finalize")
         self.assertEqual((finalized["status"], finalized["amount_paid"]), ("open", 0))
+        self.assertIs(finalized["auto_advance"], False)
         args = ("POST", "/v1/invoices/" + draft["id"] + "/pay", {}, b"", "fixture-test", {"Idempotency-Key": "pay-held-renewal"})
         status, paid = self.provider.dispatch(*args)
         self.assertEqual(status, 200)
         self.assertEqual(self.provider.dispatch(*args), (status, paid))
         self.assertEqual((paid["status"], paid["amount_paid"]), ("paid", 1210))
         self.assertEqual(sum(obj["object"] == "invoice_payment" and obj["invoice"] == draft["id"] for obj in self.provider.objects.values()), 1)
+        self.call("POST", "/v1/subscriptions/" + subscription, b"pause_collection[behavior]=keep_as_draft")
+        next_events = self.call("POST", "/__test/renew", json.dumps({"subscription_id": subscription}).encode())
+        next_draft = json.loads(next_events[0]["body"])["data"]["object"]
+        advancing = self.call("POST", "/v1/invoices/" + next_draft["id"] + "/finalize", b"auto_advance=true")
+        self.assertIs(advancing["auto_advance"], True)
 
     def test_idempotency_retries_do_not_duplicate_and_failures_do_not_poison_key(self):
         args = ("POST", "/v1/prices", {}, b"unit_amount=1000&currency=eur", "fixture-test")
@@ -148,6 +154,7 @@ class BillingProviderTest(unittest.TestCase):
         # The pinned Stripe subscription API explicitly permits signed inline
         # credit prices, unlike POST /v1/prices.
         inline = self.call("POST", "/v1/subscriptions/" + sub, ("billing_cycle_anchor=now&items[0][price]=" + new_price["id"] + "&default_tax_rates[0]=" + rate["id"] + "&add_invoice_items[0][quantity]=1&add_invoice_items[0][price_data][unit_amount]=-1000&add_invoice_items[0][price_data][currency]=eur&add_invoice_items[0][tax_rates][0]=" + zero["id"]).encode())
+        self.assertIsInstance(inline["billing_cycle_anchor"], int)
         credited_inline = self.provider.objects[inline["latest_invoice"]]
         self.assertEqual((credited_inline["status"], credited_inline["total_excluding_tax"], credited_inline["total"]), ("paid", 9000, 11100))
         self.assertEqual(credited_inline["lines"]["data"][1]["taxes"][0]["amount"], 0)

@@ -274,7 +274,7 @@ class Provider:
                 elif action == "finalize":
                     if invoice["status"] != "draft":
                         return self.invalid("only draft invoices can be finalized")
-                    invoice.update({"status": "open", "auto_advance": values.get("auto_advance", "false") == "true", "status_transitions": {"finalized_at": int(time.time())}})
+                    invoice.update({"status": "open", "auto_advance": values.get("auto_advance", False), "status_transitions": {"finalized_at": int(time.time())}})
                 elif action == "pay":
                     if invoice["status"] != "open":
                         return self.invalid("only open invoices can be paid")
@@ -348,6 +348,7 @@ class Provider:
                         self.objects[ident]["default_tax_rates"] = []
                     if form.get("billing_cycle_anchor", [""])[-1] == "now":
                         now = int(time.time())
+                        self.objects[ident]["billing_cycle_anchor"] = now
                         self.objects[ident]["items"]["data"][0].update({"current_period_start": now, "current_period_end": now + 2592000})
                         paused = self.objects[ident].get("pause_collection", {}).get("behavior") == "keep_as_draft"
                         invoice = self.invoice(self.objects[ident], draft=True)
