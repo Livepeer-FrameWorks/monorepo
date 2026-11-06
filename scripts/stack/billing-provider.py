@@ -100,6 +100,7 @@ class Provider:
         inv["invoice_pdf"] = "https://invoice.stripe.com/" + inv["id"] + ".pdf"
         inv["default_tax_rates"] = rates
         inv["footer"] = customer.get("invoice_settings", {}).get("footer", "")
+        self.snapshot_invoice_buyer(inv)
         item = sub["items"]["data"][0]
         inv["lines"]["data"][0].update({"id": "il_" + inv["id"], "quantity": 1, "pricing": {"type": "price_details", "price_details": {"price": price["id"], "product": price.get("product")}}, "parent": {"type": "subscription_item_details", "subscription_item_details": {"subscription": sub["id"], "subscription_item": item["id"], "proration": False}}, "period": {"start": item["current_period_start"], "end": item["current_period_end"]}})
         inv["metadata"] = dict(sub["metadata"])
@@ -112,6 +113,16 @@ class Provider:
             self.paid_invoice(inv)
         sub["latest_invoice"] = inv["id"]
         return inv
+
+    def snapshot_invoice_buyer(self, invoice):
+        customer = self.objects[invoice["customer"]]
+        invoice.update({"customer_name": customer.get("name", "Stack Buyer"), "customer_email": customer.get("email", "stack@example.test"), "customer_address": copy.deepcopy(customer.get("address", {})), "customer_tax_ids": copy.deepcopy(customer.get("tax_ids", {}).get("data", []))})
+
+    def refresh_draft_buyer(self, invoice):
+        # Stripe's customer_* fields follow the customer until finalization;
+        # finalized documents retain their own deep-copied buyer snapshot.
+        if invoice.get("object") == "invoice" and invoice.get("status") == "draft":
+            self.snapshot_invoice_buyer(invoice)
 
     def recalculate(self, invoice):
         groups = {}
@@ -256,6 +267,7 @@ class Provider:
                     return 200, []
                 events = []
                 if invoice["status"] == "draft":
+                    self.refresh_draft_buyer(invoice)
                     invoice.update({"status": "open", "status_transitions": {"finalized_at": int(time.time())}})
                     events.append(self.event("invoice.finalized", invoice))
                 intent = self.objects.get(invoice.get("payment_intent"), {})
@@ -399,6 +411,7 @@ class Provider:
                 elif action == "finalize":
                     if invoice["status"] != "draft":
                         return self.invalid("only draft invoices can be finalized")
+                    self.refresh_draft_buyer(invoice)
                     invoice.update({"status": "open", "auto_advance": values.get("auto_advance", False), "status_transitions": {"finalized_at": int(time.time())}})
                 elif action == "pay":
                     if invoice["status"] != "open":
@@ -429,6 +442,7 @@ class Provider:
                 return 200, {"object": "search_result", "data": candidates, "has_more": False}
             if method == "GET" and ident:
                 if ident in self.objects:
+                    self.refresh_draft_buyer(self.objects[ident])
                     obj = copy.deepcopy(self.objects[ident])
                     if len(parts) > 3 and parts[3] == "lines":
                         return 200, obj["lines"]
@@ -439,6 +453,8 @@ class Provider:
             kind = {"tax_rates": "tax_rate", "invoice_payments": "invoice_payment", "checkout": "checkout.session", "billing_portal": "billing_portal.session"}.get(collection, collection.rstrip("s"))
             if method == "GET":
                 candidates = [x for x in self.objects.values() if x["object"] == kind]
+                for candidate in candidates:
+                    self.refresh_draft_buyer(candidate)
                 for key in ("customer", "subscription", "status", "invoice"):
                     if key in query:
                         candidates = [x for x in candidates if x.get(key) == query[key][-1]]
