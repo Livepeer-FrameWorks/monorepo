@@ -260,20 +260,23 @@ func (s *Server) serveBlocksFrom(c *gin.Context, kind, hash, ext, localPath stri
 	// the cold preflight. Missing upstream sources should not leave a
 	// meta-only .blocks directory behind.
 	if cacheDecision == admission.CacheToDisk {
+		s.fills.mu.Lock()
 		// Tmp files left by an earlier process are removed once; later
 		// ones belong to block fetches of this process that may still be
 		// writing them.
 		if _, cleaned := s.cleanedBlockDirs.LoadOrStore(store.Dir(), struct{}{}); !cleaned {
 			store.CleanTmps()
 		}
-		if _, err := store.EnsureMeta(hash, ext, pin.current(), totalSize); err != nil {
+		_, initErr := store.EnsureMeta(hash, ext, pin.current(), totalSize)
+		s.fills.mu.Unlock()
+		if initErr != nil {
 			if strictCache {
 				c.Writer.Header().Set("Retry-After", "5")
-				s.serverError(c, "blockcache init", err)
+				s.serverError(c, "blockcache init", initErr)
 				return "error", nil
 			}
 			if s.logger != nil {
-				s.logger.WithError(err).WithField("local_path", localPath).Debug("blockcache: EnsureMeta failed; degrading to memory-only")
+				s.logger.WithError(initErr).WithField("local_path", localPath).Debug("blockcache: EnsureMeta failed; degrading to memory-only")
 			}
 			cacheDecision = admission.CacheMemoryOnly
 		}
@@ -395,7 +398,8 @@ func (s *Server) serveBlocksFrom(c *gin.Context, kind, hash, ext, localPath stri
 // same way, and streams from the upstream without a fill when maxMemoryFills
 // fills are running.
 func (s *Server) serveBlockSpan(ctx context.Context, httpc *http.Client, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision, strictCache bool, defrost func(int64), renewMidBlock func() (upstreamTarget, bool), fillFrom func() fillSource) error {
-	if served, err := s.serveWarmBlock(w, store, span); served || err != nil {
+	object := fillFrom().object
+	if served, err := s.serveWarmBlock(w, store, span, object, totalSize); served || err != nil {
 		return err
 	}
 	var (
@@ -409,7 +413,7 @@ func (s *Server) serveBlockSpan(ctx context.Context, httpc *http.Client, w io.Wr
 			fill, err = s.claimBlockFill(ctx, store, span, totalSize, fillFrom())
 			if err == nil && fill == nil {
 				// The block turned warm between the first look and the claim.
-				if served, warmErr := s.serveWarmBlock(w, store, span); served || warmErr != nil {
+				if served, warmErr := s.serveWarmBlock(w, store, span, object, totalSize); served || warmErr != nil {
 					return warmErr
 				}
 			}
@@ -507,11 +511,14 @@ func readBlockFill(ctx context.Context, w io.Writer, fill *blockFill, span block
 // exists, (false, err) on I/O failure. A successful read records a
 // HeatTracker touch on the .blocks dir so cleanup/pressure eviction
 // see repeated playback as recency, not stale mtime.
-func (s *Server) serveWarmBlock(w io.Writer, store *BlockStore, span blockSpan) (bool, error) {
-	if !store.HasBlock(span.Idx) {
+func (s *Server) serveWarmBlock(w io.Writer, store *BlockStore, span blockSpan, object string, totalSize int64) (bool, error) {
+	s.fills.mu.Lock()
+	if !store.matchesObject(object, totalSize) || !store.HasBlock(span.Idx) {
+		s.fills.mu.Unlock()
 		return false, nil
 	}
 	f, err := store.ReadBlock(span.Idx)
+	s.fills.mu.Unlock()
 	if err != nil {
 		return false, fmt.Errorf("open block %d: %w", span.Idx, err)
 	}
