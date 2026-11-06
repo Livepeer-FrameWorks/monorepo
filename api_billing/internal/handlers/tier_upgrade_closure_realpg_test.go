@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
 	internalv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
+	"github.com/shopspring/decimal"
 )
 
 func TestTenantClosureCancelsPendingTierUpgrade_RealPG(t *testing.T) {
@@ -46,6 +48,7 @@ billing_name='Customer',billing_address='{"street":"Street 1","city":"Leiden","p
 			cancelled := false
 			metadata := map[string]string{"tenant_id": tenant.id}
 			providerStart, providerEnd := start, end
+			var acceptedAt time.Time
 			resource := func() map[string]any {
 				state := "active"
 				if cancelled {
@@ -61,15 +64,21 @@ billing_name='Customer',billing_address='{"street":"Street 1","city":"Leiden","p
 					invoiceID = "upgrade-invoice"
 					fee = 5000
 				}
-				return map[string]any{"id": "subscription", "object": "subscription", "customer": "customer", "status": state, "metadata": metadata, "latest_invoice": map[string]any{"id": invoiceID, "status": "paid", "amount_paid": fee,
-					"lines": map[string]any{"data": []any{map[string]any{
-						"id": "paid-base", "amount": fee, "currency": "eur", "quantity": 1,
-						"parent":  map[string]any{"type": "subscription_item_details", "subscription_item_details": map[string]any{"subscription": "subscription", "subscription_item": "item", "proration": false}},
-						"pricing": map[string]any{"price_details": map[string]any{"price": price}},
-						"period":  map[string]any{"start": providerStart.Unix(), "end": providerEnd.Unix()},
-					}}},
-				},
-					"items": map[string]any{"data": []any{map[string]any{"id": "item", "quantity": 1, "price": map[string]any{"id": price, "unit_amount": fee, "currency": "eur", "recurring": map[string]any{"interval": "month", "interval_count": 1}}, "current_period_start": providerStart.Unix(), "current_period_end": providerEnd.Unix()}}}}
+				paid := fee
+				if metadata["billing_tier_upgrade_id"] != "" {
+					paid = 5050 // EUR50 plus 21% VAT, less the old untaxed EUR10 credit.
+				}
+				return map[string]any{"id": "subscription", "object": "subscription", "customer": "customer", "status": state, "metadata": metadata,
+					"default_tax_rates": []any{map[string]any{"id": "current21", "percentage": 21, "inclusive": false}},
+					"latest_invoice": map[string]any{"id": invoiceID, "status": "paid", "amount_paid": paid,
+						"lines": map[string]any{"data": []any{map[string]any{
+							"id": "paid-base", "amount": fee, "currency": "eur", "quantity": 1,
+							"parent":  map[string]any{"type": "subscription_item_details", "subscription_item_details": map[string]any{"subscription": "subscription", "subscription_item": "item", "proration": false}},
+							"pricing": map[string]any{"price_details": map[string]any{"price": price}},
+							"period":  map[string]any{"start": providerStart.Unix(), "end": providerEnd.Unix()},
+						}}},
+					},
+					"items": map[string]any{"data": []any{map[string]any{"id": "item", "quantity": 1, "price": map[string]any{"id": price, "unit_amount": fee, "currency": "eur", "product": "prod_supporter", "recurring": map[string]any{"interval": "month", "interval_count": 1}}, "current_period_start": providerStart.Unix(), "current_period_end": providerEnd.Unix()}}}}
 			}
 			fixture.route("GET", "/v1/customers/customer", func(recordedProviderRequest) (int, any) {
 				return 200, map[string]any{"id": "customer", "invoice_settings": map[string]any{"default_payment_method": "pm"}}
@@ -88,7 +97,7 @@ billing_name='Customer',billing_address='{"street":"Street 1","city":"Leiden","p
 			})
 			fixture.route("GET", "/v1/invoice_payments", func(r recordedProviderRequest) (int, any) {
 				if r.query.Get("invoice") == "upgrade-invoice" {
-					return 200, map[string]any{"object": "list", "data": []any{map[string]any{"id": "upgrade-payment", "amount_paid": 5000, "payment": map[string]any{"type": "charge", "charge": "upgrade-charge"}}}}
+					return 200, map[string]any{"object": "list", "data": []any{map[string]any{"id": "upgrade-payment", "amount_paid": 5050, "payment": map[string]any{"type": "charge", "charge": "upgrade-charge"}}}}
 				}
 
 				return 200, map[string]any{"object": "list", "data": []any{map[string]any{"id": "old-payment", "payment": map[string]any{"type": "charge", "charge": "old-charge"}}}}
@@ -97,7 +106,7 @@ billing_name='Customer',billing_address='{"street":"Street 1","city":"Leiden","p
 				return 200, map[string]any{"id": "old-charge", "amount": 2000, "refunded": false, "disputed": false}
 			})
 			fixture.route("GET", "/v1/charges/upgrade-charge", func(recordedProviderRequest) (int, any) {
-				return 200, map[string]any{"id": "upgrade-charge", "amount": 5000, "currency": "eur"}
+				return 200, map[string]any{"id": "upgrade-charge", "amount": 5050, "currency": "eur"}
 			})
 			fixture.route("GET", "/v1/refunds", func(r recordedProviderRequest) (int, any) {
 				if r.query.Get("charge") == "" {
@@ -106,15 +115,31 @@ billing_name='Customer',billing_address='{"street":"Street 1","city":"Leiden","p
 				return 200, map[string]any{"object": "list", "data": []any{}, "has_more": false}
 			})
 			fixture.route("POST", "/v1/refunds", func(r recordedProviderRequest) (int, any) {
-				if r.form.Get("charge") != "upgrade-charge" || r.form.Get("amount") != "5000" {
+				if r.form.Get("charge") != "upgrade-charge" || r.form.Get("amount") != "5050" {
 					t.Errorf("wrong closure compensation: %v", r.form)
 				}
-				return 200, map[string]any{"id": "refund", "status": "pending", "amount": 5000, "currency": "eur"}
+				return 200, map[string]any{"id": "refund", "status": "pending", "amount": 5050, "currency": "eur"}
 			})
 			fixture.route("GET", "/v1/prices/new-price", func(recordedProviderRequest) (int, any) {
-				return 200, map[string]any{"id": "new-price", "active": true, "currency": "eur", "unit_amount": 5000, "recurring": map[string]any{"interval": "month", "interval_count": 1}}
+				return 200, map[string]any{"id": "new-price", "active": true, "currency": "eur", "product": "prod_pro", "unit_amount": 5000, "recurring": map[string]any{"interval": "month", "interval_count": 1}}
+			})
+			fixture.route("GET", "/v1/tax_rates", func(recordedProviderRequest) (int, any) {
+				return 200, map[string]any{"object": "list", "data": []any{map[string]any{"id": "current21", "percentage": 21, "inclusive": false}}, "has_more": false}
+			})
+			fixture.route("POST", "/v1/tax_rates", func(r recordedProviderRequest) (int, any) {
+				percentage, parseErr := decimal.NewFromString(r.form.Get("percentage"))
+				if parseErr != nil || !percentage.IsZero() || r.form.Get("inclusive") != "false" || r.form.Get("metadata[frameworks_original_untaxed]") != "true" {
+					t.Errorf("original-period rate must remain exclusive zero VAT: %v", r.form)
+				}
+				return 200, map[string]any{"id": "original_zero", "percentage": 0, "inclusive": false, "active": true}
 			})
 			fixture.route("POST", "/v1/subscriptions/subscription", func(r recordedProviderRequest) (int, any) {
+				if r.form.Get("proration_behavior") != "none" || r.form.Get("billing_cycle_anchor") != "now" || r.form.Get("add_invoice_items[0][price_data][product]") != "prod_supporter" || r.form.Get("add_invoice_items[0][price_data][unit_amount]") != "-1000" || r.form.Get("add_invoice_items[0][tax_rates][0]") != "original_zero" || r.form.Get("add_invoice_items[0][metadata][frameworks_credit_invoice]") != "old-invoice" || r.form.Get("add_invoice_items[0][metadata][frameworks_credit_line]") != "paid-base" {
+					t.Errorf("upgrade changed the new period or original untaxed credit basis: %v", r.form)
+				}
+				if r.form.Get("add_invoice_items[0][period][start][timestamp]") != strconv.FormatInt(acceptedAt.Unix(), 10) {
+					t.Errorf("credit did not use persisted purchase time: %v", r.form)
+				}
 				metadata = map[string]string{"tenant_id": tenant.id, "billing_tier_upgrade_id": r.form.Get("metadata[billing_tier_upgrade_id]"), "tier_id": target}
 				providerStart = time.Now().UTC().Truncate(time.Second)
 				if name == "stripe_future_paid" {
@@ -161,7 +186,12 @@ VALUES($1,'paid',20,20,NOW(),$2,$3,2500,'USD',1.25,CURRENT_DATE,NOW())`, tenant.
 				exec(`UPDATE purser.subscription_tier_upgrades SET state='provider_applied',provider_receipt=$3 WHERE tenant_id=$1 AND id=$2`, tenant.id, id, encoded)
 			}
 			if name == "provider_applied" || name == "stripe_future_paid" || name == "stripe_lost_response" {
-				receipt, err := client.UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{ID: id, TenantID: tenant.id, TierID: target, CustomerID: "customer", SubscriptionID: "subscription", PriceID: "new-price", BaseCents: 5000, OldBaseCents: 2000})
+				purchase, readErr := purserdb.New(db).GetTierUpgrade(t.Context(), purserdb.GetTierUpgradeParams{TenantID: tenant.id, ID: id})
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				acceptedAt = purchase.RequestedAt
+				receipt, err := client.UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{ID: id, TenantID: tenant.id, TierID: target, CustomerID: "customer", SubscriptionID: "subscription", PriceID: "new-price", BaseCents: 5000, OldBaseCents: 2000, RequestedAt: acceptedAt, OldPeriodStart: start, OldPeriodEnd: end})
 				if err != nil {
 					t.Fatal(err)
 				}
