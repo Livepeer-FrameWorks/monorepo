@@ -174,18 +174,18 @@ type subscriptionTaxSyncState struct {
 
 // ReconcileSubscriptionTax lets the billing worker repair older tax-held
 // invoices independently of interactive checkout and upgrade preflights.
-func (c *Client) ReconcileSubscriptionTax(ctx context.Context, tenant, customerID, subscriptionID string, p TaxProfile) error {
+func (c *Client) ReconcileSubscriptionTax(ctx context.Context, tenant, customerID, subscriptionID string, p TaxProfile) (*TaxRecoveryReport, error) {
+	report := &TaxRecoveryReport{TenantID: tenant, CustomerID: customerID, SubscriptionID: subscriptionID, ProfileSHA: p.Fingerprint()}
 	state, err := c.syncSubscriptionTax(ctx, tenant, customerID, subscriptionID, p)
-	if err != nil || !state.RecoveryPending {
-		return err
+	if err != nil {
+		report.RetryPending = true
+		return report, err
 	}
-	if err = recoverStripeTaxInvoices(ctx, state.Subscription, p, state.RateID); err != nil {
-		return err
+	report.RecoveryPending = state.RecoveryPending
+	if !state.RecoveryPending {
+		return report, nil
 	}
-	clear := &api.SubscriptionParams{Metadata: map[string]string{"frameworks_tax_recovery_pending": ""}, ProrationBehavior: api.String("none")}
-	clear.Context = ctx
-	_, err = subscription.Update(subscriptionID, clear)
-	return err
+	return recoverStripeTaxInvoices(ctx, state.Subscription, p, state.RateID)
 }
 
 func (c *Client) syncSubscriptionTax(ctx context.Context, tenant, customerID, subscriptionID string, p TaxProfile) (*subscriptionTaxSyncState, error) {

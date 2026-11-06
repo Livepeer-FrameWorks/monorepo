@@ -88,7 +88,7 @@ func (jm *JobManager) reconcileStripeTaxTenant(ctx context.Context, tenant strin
 	assessed, err := AssessStripeTaxProfile(ctx, jm.db, tenant, "")
 	if err != nil {
 		var review *billingtax.ReviewError
-		if !errors.As(err, &review) || review.Code == "vat_validation_unavailable" {
+		if !errors.As(err, &review) || billingtax.IsTransient(err) {
 			return err
 		}
 		failure := err
@@ -102,9 +102,9 @@ func (jm *JobManager) reconcileStripeTaxTenant(ctx context.Context, tenant strin
 			if refID == "" {
 				refType, refID = "stripe_customer", sub.CustomerID
 			}
-			recordErr := purserdb.New(jm.db).RecordCryptoAccountingAnomaly(ctx, purserdb.RecordCryptoAccountingAnomalyParams{TenantID: tenant, Kind: "provider_tax_review", Network: "stripe", ReferenceType: refType, ReferenceID: refID, AmountCents: 0, Detail: "Recurring tax assessment failed; collection requires review", EvidenceJson: proof})
+			recordErr := purserdb.New(jm.db).RecordBillingTaxReview(ctx, purserdb.RecordBillingTaxReviewParams{TenantID: tenant, Kind: "provider_tax_review", Network: "stripe", ReferenceType: refType, ReferenceID: refID, Detail: "Recurring tax assessment requires billing review", EvidenceJson: proof})
 			failure = errors.Join(failure, recordErr)
-			if sub.SubscriptionID != "" {
+			if sub.SubscriptionID != "" && review.Code != "billing_profile_required" {
 				failure = errors.Join(failure, jm.billing.stripeClient.HoldSubscriptionTaxReview(ctx, tenant, sub.CustomerID, sub.SubscriptionID))
 			}
 		}
@@ -113,7 +113,20 @@ func (jm *JobManager) reconcileStripeTaxTenant(ctx context.Context, tenant strin
 	var failures error
 	for _, subscription := range subscriptions {
 		if subscription.SubscriptionID != "" {
-			err = jm.billing.stripeClient.ReconcileSubscriptionTax(ctx, tenant, subscription.CustomerID, subscription.SubscriptionID, *assessed)
+			var report *billingstripe.TaxRecoveryReport
+			report, err = jm.billing.stripeClient.ReconcileSubscriptionTax(ctx, tenant, subscription.CustomerID, subscription.SubscriptionID, *assessed)
+			persisted := true
+			if report != nil {
+				for _, review := range report.Reviews {
+					if recordErr := jm.recordStripeInvoiceTaxReview(ctx, tenant, review); recordErr != nil {
+						err = errors.Join(err, recordErr)
+						persisted = false
+					}
+				}
+				if persisted {
+					err = errors.Join(err, jm.billing.stripeClient.AckTaxRecoveryReport(ctx, report))
+				}
+			}
 		} else {
 			_, err = jm.billing.stripeClient.PrepareCustomerTax(ctx, tenant, subscription.CustomerID, *assessed)
 		}

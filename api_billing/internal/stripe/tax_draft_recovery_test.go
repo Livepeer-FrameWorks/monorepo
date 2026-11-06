@@ -105,7 +105,7 @@ func TestTaxHoldReleaseDoesNotWaitForPayment(t *testing.T) {
 			sub, inv := heldTaxFixture()
 			b := &heldDraftBackend{inv: inv, paymentState: state, rateID: "txr_exclusive", tax: &taxBackend{t: t, owner: "tenant", currentSub: sub}}
 			installBackend(t, b)
-			if err := (&Client{}).ReconcileSubscriptionTax(t.Context(), "tenant", "customer", "sub", assessedTaxProfile()); err != nil {
+			if _, err := (&Client{}).ReconcileSubscriptionTax(t.Context(), "tenant", "customer", "sub", assessedTaxProfile()); err != nil {
 				t.Fatalf("valid tax recovery was held by payment outcome: %v", err)
 			}
 			if b.paid != 0 || !inv.AutoAdvance || inv.Status != api.InvoiceStatusOpen {
@@ -135,7 +135,7 @@ func TestTaxHoldInvoiceFailureDoesNotPauseCorrectFutureRenewals(t *testing.T) {
 				inv.Lines.Data[0].Amount = -100
 			}
 			installBackend(t, b)
-			if err := (&Client{}).ReconcileSubscriptionTax(t.Context(), "tenant", "customer", "sub", assessedTaxProfile()); err == nil {
+			if report, err := (&Client{}).ReconcileSubscriptionTax(t.Context(), "tenant", "customer", "sub", assessedTaxProfile()); err == nil && (report == nil || len(report.Reviews) == 0) {
 				t.Fatal("past invoice failure was silently resolved")
 			}
 			resumed := false
@@ -165,12 +165,13 @@ func TestTaxHoldRecoveryIgnoresOtherInvoices(t *testing.T) {
 					inv.Parent.SubscriptionDetails.Metadata = map[string]string{}
 				case "manual":
 					inv.BillingReason = api.InvoiceBillingReasonManual
+					inv.Parent = nil
 				case "before hold":
 					inv.Created = 99
 				}
 				b := &heldDraftBackend{inv: inv}
 				installBackend(t, b)
-				if err := recoverStripeTaxInvoices(t.Context(), sub, assessedTaxProfile(), "vat21"); err != nil {
+				if report, err := recoverStripeTaxInvoices(t.Context(), sub, assessedTaxProfile(), "vat21"); err != nil || len(report.Reviews) != 0 {
 					t.Fatalf("unrelated invoice blocked owned tax recovery: %v", err)
 				}
 				if b.writes != 0 {
@@ -220,11 +221,57 @@ func TestOlderOwnedInvoiceRepairSurvivesANewerHoldEpisode(t *testing.T) {
 	sub.Metadata["frameworks_tax_hold_started"] = "200"
 	b := &heldDraftBackend{inv: inv}
 	installBackend(t, b)
-	if err := recoverStripeTaxInvoices(t.Context(), sub, assessedTaxProfile(), "vat21"); err != nil {
+	if _, err := recoverStripeTaxInvoices(t.Context(), sub, assessedTaxProfile(), "vat21"); err != nil {
 		t.Fatal(err)
 	}
 	if inv.Status != api.InvoiceStatusOpen || !inv.AutoAdvance || b.finalized != 1 || b.paid != 0 {
 		t.Fatal("older unfinished tax work was lost when a later hold began")
+	}
+}
+
+func TestOwnedNonRenewalHeldDraftRequiresExplicitReview(t *testing.T) {
+	for _, reason := range []api.InvoiceBillingReason{api.InvoiceBillingReasonSubscriptionCreate, api.InvoiceBillingReasonSubscriptionUpdate, api.InvoiceBillingReasonManual} {
+		t.Run(string(reason), func(t *testing.T) {
+			sub, inv := heldTaxFixture()
+			inv.BillingReason = reason
+			b := &heldDraftBackend{inv: inv}
+			installBackend(t, b)
+			var review *billingtax.ReviewError
+			if err := recoverStripeTaxInvoice(t.Context(), sub, inv, assessedTaxProfile(), "vat21"); !errors.As(err, &review) {
+				t.Fatalf("owned non-renewal invoice disappeared without review: %v", err)
+			}
+			if b.writes != 0 {
+				t.Fatal("unsupported owned supply was speculatively repriced")
+			}
+		})
+	}
+}
+
+func TestRecoveredOpenInvoicePreservesOperatorDisabledAutoAdvance(t *testing.T) {
+	sub, inv := heldTaxFixture()
+	inv.Status = api.InvoiceStatusOpen
+	inv.Metadata = map[string]string{"frameworks_tax_recovered_hold": "true", "frameworks_tax_profile": assessedTaxProfile().Fingerprint()}
+	b := &heldDraftBackend{inv: inv}
+	installBackend(t, b)
+	if err := recoverStripeTaxInvoice(t.Context(), sub, inv, assessedTaxProfile(), "vat21"); err != nil {
+		t.Fatal(err)
+	}
+	if b.writes != 0 || inv.AutoAdvance {
+		t.Fatal("recovery overrode operator-disabled automatic collection")
+	}
+}
+
+func TestNilHeldInvoiceLineRequiresReview(t *testing.T) {
+	sub, inv := heldTaxFixture()
+	inv.Lines.Data[0] = nil
+	b := &heldDraftBackend{inv: inv}
+	installBackend(t, b)
+	var review *billingtax.ReviewError
+	if err := recoverStripeTaxInvoice(t.Context(), sub, inv, assessedTaxProfile(), "vat21"); !errors.As(err, &review) {
+		t.Fatalf("nil provider line was not held for review: %v", err)
+	}
+	if b.writes != 0 {
+		t.Fatal("invalid provider invoice was modified")
 	}
 }
 
@@ -240,26 +287,18 @@ func heldTaxFixture() (*api.Subscription, *api.Invoice) {
 }
 
 func TestOwnedTaxHoldDraftRecoversSameInvoiceAfterEveryLostResponse(t *testing.T) {
-	for _, stage := range []string{"update", "lines", "finalize", "advance"} {
+	for _, stage := range []string{"update", "lines", "finalize"} {
 		t.Run(stage, func(t *testing.T) {
 			sub, inv := heldTaxFixture()
-			if stage == "advance" {
-				inv.Status = api.InvoiceStatusOpen
-				inv.Total = 12100
-				inv.Metadata = map[string]string{"frameworks_tax_recovered_hold": "true", "frameworks_tax_profile": "retained-earlier-legal-profile"}
-			}
 			b := &heldDraftBackend{inv: inv, failAfter: stage}
 			installBackend(t, b)
-			if err := recoverStripeTaxInvoices(t.Context(), sub, assessedTaxProfile(), "vat21"); err == nil {
+			if _, err := recoverStripeTaxInvoices(t.Context(), sub, assessedTaxProfile(), "vat21"); err == nil {
 				t.Fatal("lost committed response not exercised")
 			}
-			if err := recoverStripeTaxInvoices(t.Context(), sub, assessedTaxProfile(), "vat21"); err != nil {
+			if _, err := recoverStripeTaxInvoices(t.Context(), sub, assessedTaxProfile(), "vat21"); err != nil {
 				t.Fatal(err)
 			}
 			wantFinalized := 1
-			if stage == "advance" {
-				wantFinalized = 0
-			}
 			if inv.ID != "same-held-invoice" || inv.Status != api.InvoiceStatusOpen || !inv.AutoAdvance || inv.Lines.Data[0].Amount != 10000 || inv.Total != 12100 || b.finalized != wantFinalized || b.paid != 0 {
 				t.Fatalf("recovery changed invoice/credit/payment: %+v finalized%d paid%d", inv, b.finalized, b.paid)
 			}
@@ -281,7 +320,7 @@ func TestTaxHoldRecoveryRefusesOperatorChangedPauseAndUnsupportedOwnedInvoices(t
 			}
 			b := &heldDraftBackend{inv: inv}
 			installBackend(t, b)
-			err := recoverStripeTaxInvoices(t.Context(), sub, assessedTaxProfile(), "vat21")
+			err := recoverStripeTaxInvoice(t.Context(), sub, inv, assessedTaxProfile(), "vat21")
 			var review *billingtax.ReviewError
 			if !errors.As(err, &review) || !strings.Contains(review.Code, "held_invoice") || b.writes != 0 {
 				t.Fatalf("unproven invoice was collected instead of reviewed: writes%d err%v", b.writes, err)

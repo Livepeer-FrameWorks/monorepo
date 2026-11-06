@@ -80,7 +80,23 @@ type ReviewError struct {
 
 func (e *ReviewError) Error() string { return e.Code + ": " + e.Message }
 
-func Review(code, message string) error { return &ReviewError{Code: code, Message: message} }
+type TransientError struct{ Cause error }
+
+func (e *TransientError) Error() string { return e.Cause.Error() }
+func (e *TransientError) Unwrap() error { return e.Cause }
+
+func IsTransient(err error) bool {
+	var transient *TransientError
+	return errors.As(err, &transient)
+}
+
+func Review(code, message string) error {
+	err := &ReviewError{Code: code, Message: message}
+	if code == "vat_validation_unavailable" || code == "business_evidence_unavailable" {
+		return &TransientError{Cause: err}
+	}
+	return err
+}
 
 type RateLookup func(context.Context, string, time.Time) (Rate, error)
 type VATValidator func(context.Context, string, string) (bool, error)

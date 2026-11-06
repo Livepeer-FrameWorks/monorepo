@@ -265,5 +265,10 @@ func freezeInvoiceTaxTx(ctx context.Context, tx *sql.Tx, tenant, invoice string,
 	if rows != 1 {
 		return fmt.Errorf("invoice tax facts were already frozen or invoice is missing")
 	}
+	if a.ValidationMode == "outage_grace" && a.Decision.ReverseCharge {
+		if err = q.RecordBillingTaxReview(ctx, purserdb.RecordBillingTaxReviewParams{TenantID: tenant, Kind: "invoice_tax_evidence_review", Network: "", ReferenceType: "invoice", ReferenceID: invoice, AmountCents: a.Gross, Detail: "Review the invoice's retained reverse-charge evidence accepted during a VIES outage", EvidenceJson: decision}); err != nil {
+			return err
+		}
+	}
 	return nil
 }

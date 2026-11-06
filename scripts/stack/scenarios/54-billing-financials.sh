@@ -168,5 +168,5 @@ held_stripe_renewal() {
  json_has "$(profile consumer NL)" '.errors == null' || return 1
  deployed_stripe TestStackDeployedStripeHeldRenewalRecovery
 }
-check 'deployed tax-held renewal restores collection with correct VAT before its pending payment settles' held_stripe_renewal
+check 'deployed held-invoice matrix covers processing, decline, SCA, unrelated overdue and retained operator reviews' held_stripe_renewal
 finish

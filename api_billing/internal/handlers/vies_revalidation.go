@@ -63,9 +63,6 @@ func (jm *JobManager) revalidateTenantVATPages(ctx context.Context, lister billi
 			if err = jm.reconcileMollieTaxTenant(ctx, tenant.GetId()); err != nil {
 				jm.logger.WithError(err).WithField("tenant_id", tenant.GetId()).Warn("Mollie billing tax synchronization incomplete")
 			}
-			if err = jm.billing.reassessStripeTaxDocuments(ctx, tenant.GetId()); err != nil {
-				jm.logger.WithError(err).WithField("tenant_id", tenant.GetId()).Warn("Retained Stripe document tax review incomplete")
-			}
 		}
 		if !page.GetPagination().GetHasNextPage() {
 			return nil
