@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	billingtax "frameworks/api_billing/internal/tax"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
@@ -191,7 +193,7 @@ func (c *Client) SyncSubscriptionTax(ctx context.Context, tenant, customerID, su
 		return err
 	}
 	fingerprint := p.Fingerprint()
-	itemUpdates := []*api.SubscriptionItemsParams{}
+	var itemUpdates []*api.SubscriptionItemsParams
 	for _, item := range items {
 		if item == nil {
 			return fmt.Errorf("stripe subscription item identity missing")
@@ -210,22 +212,32 @@ func (c *Client) SyncSubscriptionTax(ctx context.Context, tenant, customerID, su
 	if len(itemUpdates) > 20 {
 		return fmt.Errorf("too many explicit subscription tax overrides for an atomic update")
 	}
-	if current.Metadata["frameworks_tax_review"] != "true" && len(itemUpdates) == 0 && len(current.DefaultTaxRates) == 1 && current.DefaultTaxRates[0] != nil && current.DefaultTaxRates[0].ID == rateID && current.AutomaticTax != nil && !current.AutomaticTax.Enabled && current.Metadata["frameworks_tax_profile"] == fingerprint {
-		return nil
-	}
 	// Item rates take precedence over defaults. Reconcile existing overrides
 	// in the same future-only update, without changing prices or quantities.
 	params := &api.SubscriptionParams{Items: itemUpdates, DefaultTaxRates: []*string{api.String(rateID)}, AutomaticTax: &api.SubscriptionAutomaticTaxParams{Enabled: api.Bool(false)}, ProrationBehavior: api.String("none"), Metadata: map[string]string{"frameworks_tax_profile": fingerprint}}
-	if current.Metadata["frameworks_tax_review"] == "true" {
-		params.Metadata["frameworks_tax_review"] = ""
-		params.Metadata["frameworks_tax_pause_owned"] = ""
-		if current.Metadata["frameworks_tax_pause_owned"] == "true" && current.PauseCollection != nil && current.PauseCollection.Behavior == api.SubscriptionPauseCollectionBehaviorKeepAsDraft && current.PauseCollection.ResumesAt == 0 {
-			params.UnsetFields = append(params.UnsetFields, api.SubscriptionParamsUnsetFieldPauseCollection)
+	matched := len(itemUpdates) == 0 && len(current.DefaultTaxRates) == 1 && current.DefaultTaxRates[0] != nil && current.DefaultTaxRates[0].ID == rateID && current.AutomaticTax != nil && !current.AutomaticTax.Enabled && current.Metadata["frameworks_tax_profile"] == fingerprint
+	if !matched {
+		params.Context = ctx
+		if _, err = subscription.Update(subscriptionID, params); err != nil {
+			return err
 		}
 	}
-	params.Context = ctx
-	_, err = subscription.Update(subscriptionID, params)
-	return err
+	if current.Metadata["frameworks_tax_review"] == "true" || current.Metadata["frameworks_tax_hold_started"] != "" {
+		if err = recoverStripeTaxInvoices(ctx, current, p, rateID); err != nil {
+			return err
+		}
+	}
+	if current.Metadata["frameworks_tax_review"] == "true" {
+		resume := &api.SubscriptionParams{Metadata: map[string]string{"frameworks_tax_review": "", "frameworks_tax_pause_owned": ""}, ProrationBehavior: api.String("none")}
+		if current.Metadata["frameworks_tax_pause_owned"] == "true" && current.PauseCollection != nil && current.PauseCollection.Behavior == api.SubscriptionPauseCollectionBehaviorKeepAsDraft && current.PauseCollection.ResumesAt == 0 {
+			resume.UnsetFields = []api.SubscriptionParamsUnsetField{api.SubscriptionParamsUnsetFieldPauseCollection}
+		}
+		resume.Context = ctx
+		if _, err = subscription.Update(subscriptionID, resume); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // HoldSubscriptionTaxReview prevents unproven recurring tax from being
@@ -240,7 +252,7 @@ func (c *Client) HoldSubscriptionTaxReview(ctx context.Context, tenant, customer
 	if current.Customer == nil || current.Customer.ID != customerID || current.Metadata["tenant_id"] != tenant {
 		return fmt.Errorf("stripe subscription tax owner mismatch")
 	}
-	items := []*api.SubscriptionItemsParams{}
+	var items []*api.SubscriptionItemsParams
 	if current.Items != nil {
 		for _, item := range current.Items.Data {
 			if item != nil && item.ID != "" && len(item.TaxRates) > 0 {
@@ -253,6 +265,11 @@ func (c *Client) HoldSubscriptionTaxReview(ctx context.Context, tenant, customer
 		batch = batch[:20]
 	}
 	p := &api.SubscriptionParams{Items: batch, AutomaticTax: &api.SubscriptionAutomaticTaxParams{Enabled: api.Bool(false)}, ProrationBehavior: api.String("none"), Metadata: map[string]string{"frameworks_tax_review": "true", "frameworks_tax_profile": "", "frameworks_tax_pause_owned": ""}, UnsetFields: []api.SubscriptionParamsUnsetField{api.SubscriptionParamsUnsetFieldDefaultTaxRates}}
+	started := current.Metadata["frameworks_tax_hold_started"]
+	if started == "" {
+		started = strconv.FormatInt(time.Now().UTC().Unix(), 10)
+	}
+	p.Metadata["frameworks_tax_hold_started"] = started
 	if current.PauseCollection == nil {
 		p.PauseCollection = &api.SubscriptionPauseCollectionParams{Behavior: api.String("keep_as_draft")}
 		p.Metadata["frameworks_tax_pause_owned"] = "true"

@@ -79,6 +79,10 @@ func (jm *JobManager) reconcileStripeTaxTenant(ctx context.Context, tenant strin
 	}
 	assessed, err := AssessStripeTaxProfile(ctx, jm.db, tenant, "")
 	if err != nil {
+		var review *billingtax.ReviewError
+		if !errors.As(err, &review) {
+			return err
+		}
 		failure := err
 		for _, sub := range subscriptions {
 			proof, marshalErr := json.Marshal(map[string]any{"review_required": true, "reason": err.Error(), "customer_id": sub.CustomerID, "subscription_id": sub.SubscriptionID})

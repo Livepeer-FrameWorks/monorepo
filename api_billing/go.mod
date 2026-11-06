@@ -11,6 +11,7 @@ require (
 	github.com/btcsuite/btcd/btcutil v1.1.6
 	github.com/coinbase/cdp-sdk/go v0.0.0-20260818020340-1e68a492df7a
 	github.com/ethereum/go-ethereum v1.17.2
+	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.12.3
 	github.com/prometheus/client_golang v1.23.2
@@ -50,7 +51,6 @@ require (
 	github.com/failsafe-go/failsafe-go v0.9.6 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
 	github.com/gin-contrib/sse v1.1.1 // indirect
-	github.com/gin-gonic/gin v1.12.0 // indirect
 	github.com/go-faster/city v1.0.1 // indirect
 	github.com/go-faster/errors v0.7.1 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect

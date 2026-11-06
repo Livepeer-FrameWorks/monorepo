@@ -1242,6 +1242,17 @@ func doctorSections(rc *resolvedCluster, pool *fwssh.Pool, sharedEnv map[string]
 				checks = append(checks, doctorCheck{name: label, run: func(ctx context.Context) doctorOutcome {
 					return doctorInfraOutcome(label, checkServiceEndpoint(ctx, pool, host, name, svc, port))
 				}})
+				deploy := svc.Deploy
+				if deploy == "" {
+					deploy = name
+				}
+				if deploy == "purser" {
+					checks = append(checks, doctorCheck{name: "Stripe billing webhooks (" + label + ")", run: func(ctx context.Context) doctorOutcome {
+						return doctorResultOutcome(checkServiceHTTPPath(ctx, pool, host, svc, port, "/health/billing-webhooks"), ux.NextStep{
+							Why: "Verify Purser supports the billing webhook diagnostic and Stripe's enabled gateway endpoint subscribes to all billing events, including invoice.finalized and credit_note.created/updated/voided.",
+						})
+					}})
+				}
 			}
 		}
 		return checks
@@ -1691,16 +1702,20 @@ func firstHealthyYugabyteHost(ctx context.Context, sshPool *fwssh.Pool, hosts []
 
 func checkServiceEndpoint(ctx context.Context, sshPool *fwssh.Pool, host inventory.Host, name string, svc inventory.ServiceConfig, port int) *health.CheckResult {
 	probe := doctorServiceProbe(name, svc)
-	address := doctorServiceProbeAddress(svc)
 	if probe.Protocol == "tcp" {
-		return checkHostLocalTCPAt(ctx, sshPool, host, address, port)
+		return checkHostLocalTCPAt(ctx, sshPool, host, doctorServiceProbeAddress(svc), port)
 	}
+	return checkServiceHTTPPath(ctx, sshPool, host, svc, port, probe.Path)
+}
+
+func checkServiceHTTPPath(ctx context.Context, sshPool *fwssh.Pool, host inventory.Host, svc inventory.ServiceConfig, port int, path string) *health.CheckResult {
+	address := doctorServiceProbeAddress(svc)
 	result := &health.CheckResult{
 		Name:      "http",
 		CheckedAt: time.Now(),
 		Metadata: map[string]string{
 			"access": "ssh-local-http",
-			"url":    "http://" + net.JoinHostPort(address, strconv.Itoa(port)) + probe.Path,
+			"url":    "http://" + net.JoinHostPort(address, strconv.Itoa(port)) + path,
 		},
 	}
 	if sshPool == nil {
@@ -1714,7 +1729,11 @@ func checkServiceEndpoint(ctx context.Context, sshPool *fwssh.Pool, host invento
 		result.Status, result.Error = "unhealthy", fmt.Sprintf("ssh connect: %v", err)
 		return result
 	}
-	command := doctorHTTPProbeCommandAt(address, port, probe.Path)
+	return checkServiceHTTPWithRunner(ctx, runner, address, port, path, result)
+}
+
+func checkServiceHTTPWithRunner(ctx context.Context, runner fwssh.Runner, address string, port int, path string, result *health.CheckResult) *health.CheckResult {
+	command := doctorHTTPProbeCommandAt(address, port, path)
 	start := time.Now()
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

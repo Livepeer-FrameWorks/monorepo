@@ -8,6 +8,8 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -30,8 +32,9 @@ func TestRegularInvoicesFreezeExclusiveVAT_RealPG(t *testing.T) {
 		country, kind, vat string
 		wantVAT            int64
 		carry              int64
+		grace              bool
 	}{
-		{"NL", "consumer", "", 2100, 0}, {"NL", "business", "", 2100, 25}, {"DE", "business", "DE123456789", 0, 0}, {"CA", "business", "", 0, 0}, {"DE", "consumer", "", 2100, 0},
+		{"NL", "consumer", "", 2100, 0, false}, {"NL", "business", "", 2100, 25, false}, {"DE", "business", "DE123456789", 0, 0, false}, {"CA", "business", "", 0, 0, false}, {"DE", "consumer", "", 2100, 0, false}, {"DE", "business", "DE123456789", 0, 0, true},
 	} {
 		t.Run(tc.country+tc.kind, func(t *testing.T) {
 			tenant, tier := uuid.NewString(), uuid.NewString()
@@ -46,6 +49,14 @@ func TestRegularInvoicesFreezeExclusiveVAT_RealPG(t *testing.T) {
 				hash := sha256.Sum256([]byte(tc.vat))
 				if _, err := db.ExecContext(ctx, `INSERT INTO purser.vat_validation_evidence(tenant_id,country_code,vat_number_hash,vat_number_masked,valid,request_date,expires_at,raw_response) VALUES($1,$2,$3,'DE*****6789',true,CURRENT_DATE,NOW()+INTERVAL '1 day','{}')`, tenant, tc.country, hex.EncodeToString(hash[:])); err != nil {
 					t.Fatal(err)
+				}
+				if tc.grace {
+					if _, err := db.ExecContext(ctx, `UPDATE purser.vat_validation_evidence SET expires_at=NOW()-INTERVAL '1 minute' WHERE tenant_id=$1::uuid`, tenant); err != nil {
+						t.Fatal(err)
+					}
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
+					defer server.Close()
+					appconfigtest.Set(t, "VIES_ENDPOINT", server.URL)
 				}
 			}
 			start := time.Now().UTC().Add(-time.Hour)
@@ -77,6 +88,22 @@ func TestRegularInvoicesFreezeExclusiveVAT_RealPG(t *testing.T) {
 			}
 			if tc.vat != "" && !strings.Contains(wording, "btw verlegd") {
 				t.Fatalf("missing reverse-charge wording: %q", wording)
+			}
+			var review bool
+			if err = db.QueryRowContext(ctx, `SELECT COALESCE((tax_decision->>'review_required')::boolean,false) FROM purser.billing_invoices WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenant, result.invoiceID).Scan(&review); err != nil {
+				t.Fatal(err)
+			}
+			if review != tc.grace {
+				t.Fatalf("regular invoice durable review=%v want=%v", review, tc.grace)
+			}
+			if tc.grace {
+				var pending int
+				if err = db.QueryRowContext(ctx, `SELECT count(*) FROM purser.crypto_accounting_anomalies WHERE tenant_id=$1::uuid AND kind='vies_revalidation' AND status='open'`, tenant).Scan(&pending); err != nil {
+					t.Fatal(err)
+				}
+				if pending != 1 {
+					t.Fatalf("regular grace invoice has%d operational VAT revalidation notices, want1", pending)
+				}
 			}
 			if _, err = db.ExecContext(ctx, `UPDATE purser.billing_invoices SET vat_eur_cents=vat_eur_cents+1,gross_eur_cents=gross_eur_cents+1 WHERE tenant_id=$1 AND id=$2`, tenant, result.invoiceID); err == nil {
 				t.Fatal("issued tax facts were mutable")

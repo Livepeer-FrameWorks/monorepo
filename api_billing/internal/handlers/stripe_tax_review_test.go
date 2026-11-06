@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"testing"
@@ -17,6 +18,50 @@ type taxReviewBackend struct {
 	stripeUpgradeTaxBackend
 	paused          bool
 	clearedCustomer bool
+}
+
+func TestStripeTaxOnlyBillingReviewHoldsCollection(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		hold bool
+	}{
+		{"missing billing profile", sql.ErrNoRows, true},
+		{"database unavailable", errors.New("database unavailable"), false},
+		{"deadline", context.DeadlineExceeded, false},
+		{"cancelled", context.Canceled, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for key, value := range map[string]string{"SUPPLIER_NAME": "DDVTech B.V.", "SUPPLIER_ADDRESS": "Leiden NL", "SUPPLIER_VAT_NUMBER": "NL853319145B01", "SUPPLIER_REGISTRATION_NUMBER": "59104694", "SUPPLIER_COUNTRY": "NL"} {
+				appconfigtest.Set(t, key, value)
+			}
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			mock.ExpectQuery("-- name: ListTenantStripeTaxSubscriptions").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"customer_id", "subscription_id"}).AddRow("customer", "sub"))
+			mock.ExpectQuery("-- name: GetCryptoDocumentBillingProfile").WithArgs("tenant").WillReturnError(tc.err)
+			if tc.hold {
+				mock.ExpectExec("-- name: RecordCryptoAccountingAnomaly").WillReturnResult(sqlmock.NewResult(0, 1))
+			}
+			b := &taxReviewBackend{}
+			previous := api.GetBackend(api.APIBackend)
+			api.SetBackend(api.APIBackend, b)
+			t.Cleanup(func() { api.SetBackend(api.APIBackend, previous) })
+			svc := &Service{db: db, logger: logging.NewLogger(), stripeClient: billingstripe.NewClient(billingstripe.Config{SecretKey: "sk_test", Logger: logging.NewLogger()})}
+			jm := &JobManager{db: db, billing: svc, logger: logging.NewLogger()}
+			if err = jm.reconcileStripeTaxTenant(t.Context(), "tenant"); err == nil {
+				t.Fatal("assessment failure disappeared")
+			}
+			if b.paused != tc.hold || b.clearedCustomer != tc.hold {
+				t.Fatalf("collection changed=%v/%v, want %v", b.paused, b.clearedCustomer, tc.hold)
+			}
+			if err = mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 
 func (b *taxReviewBackend) Call(method, path, key string, params api.ParamsContainer, out api.LastResponseSetter) error {
@@ -47,7 +92,7 @@ func (b *taxReviewBackend) Call(method, path, key string, params api.ParamsConta
 	return errors.New("unexpected tax-review provider request")
 }
 
-func TestFailedStripeTaxAssessmentHoldsCollectionAndRecordsReview(t *testing.T) {
+func TestStripeTaxConfigurationFailureDoesNotMutateProvider(t *testing.T) {
 	appconfigtest.Set(t, "SUPPLIER_NAME", "")
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -55,7 +100,6 @@ func TestFailedStripeTaxAssessmentHoldsCollectionAndRecordsReview(t *testing.T) 
 	}
 	defer db.Close()
 	mock.ExpectQuery("-- name: ListTenantStripeTaxSubscriptions").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"customer_id", "subscription_id"}).AddRow("customer", "sub"))
-	mock.ExpectExec("-- name: RecordCryptoAccountingAnomaly").WithArgs("tenant", "provider_tax_review", "stripe", "stripe_subscription", "sub", int64(0), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	b := &taxReviewBackend{}
 	previous := api.GetBackend(api.APIBackend)
 	api.SetBackend(api.APIBackend, b)
@@ -65,8 +109,8 @@ func TestFailedStripeTaxAssessmentHoldsCollectionAndRecordsReview(t *testing.T) 
 	if err = jm.reconcileStripeTaxTenant(context.Background(), "tenant"); err == nil {
 		t.Fatal("invalid tax policy unexpectedly accepted")
 	}
-	if !b.paused || !b.clearedCustomer {
-		t.Fatal("stale reverse charge left active after tax assessment failed")
+	if b.paused || b.clearedCustomer {
+		t.Fatal("configuration failure changed Stripe tax or collection state")
 	}
 	if err = mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

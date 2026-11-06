@@ -37,6 +37,14 @@ func TestProviderDocumentRetainsActualCurrencyTaxAndNumber(t *testing.T) {
 
 type documentRoundTripper func(*http.Request) (*http.Response, error)
 
+func TestRecoveredDraftUsesFinalInvoiceTaxProfile(t *testing.T) {
+	raw := json.RawMessage(`{"id":"in_recovered","number":"RECOVERED-1","status":"paid","currency":"eur","total":12100,"total_excluding_tax":10000,"created":1793876400,"parent":{"subscription_details":{"metadata":{"frameworks_tax_profile":"obsolete-at-creation"}}},"metadata":{"frameworks_tax_recovered_hold":"true","frameworks_tax_profile":"correct-at-finalization"}}`)
+	doc, err := ParseProviderTaxDocument("provider_invoice", raw)
+	if err != nil || doc.ProfileSHA != "correct-at-finalization" {
+		t.Fatalf("recovered invoice used obsolete parent profile: profile=%s err=%v", doc.ProfileSHA, err)
+	}
+}
+
 func (f documentRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestOriginalProviderPDFDownloadBoundariesAndHash(t *testing.T) {

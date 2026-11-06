@@ -19,6 +19,9 @@ import (
 // A native subscription's base-fee tax invoice is separate from its usage
 // invoice. Its payment outcome still updates collection health and events.
 func (s *Service) applyNativeMollieSubscriptionOutcome(ctx context.Context, tenant string, payment *mollieapi.Payment, status string) error {
+	if status != "confirmed" && status != "failed" {
+		return nil
+	}
 	owner, err := purserdb.New(s.db).GetMollieCustomerID(ctx, tenant)
 	if err != nil {
 		return err
@@ -49,11 +52,13 @@ func (s *Service) applyNativeMollieSubscriptionOutcome(ctx context.Context, tena
 			return fmt.Errorf("native Mollie subscription outcome requires positive EUR amount")
 		}
 	}
-	return database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+	notifyFailure := false
+	err = database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		notifyFailure = false
 		q := purserdb.New(tx)
 		if subscription.NextPaymentDate != nil {
-			if err := q.UpdateMollieNextPaymentDate(ctx, purserdb.UpdateMollieNextPaymentDateParams{TenantID: tenant, NextPaymentDate: subscription.NextPaymentDate.Format(time.DateOnly), MollieSubscriptionID: sql.NullString{String: payment.SubscriptionID, Valid: true}}); err != nil {
-				return err
+			if dateErr := q.UpdateMollieNextPaymentDate(ctx, purserdb.UpdateMollieNextPaymentDateParams{TenantID: tenant, NextPaymentDate: subscription.NextPaymentDate.Format(time.DateOnly), MollieSubscriptionID: sql.NullString{String: payment.SubscriptionID, Valid: true}}); dateErr != nil {
+				return dateErr
 			}
 		}
 		if status != "confirmed" && status != "failed" {
@@ -61,20 +66,21 @@ func (s *Service) applyNativeMollieSubscriptionOutcome(ctx context.Context, tena
 		}
 		// Refund observations have distinct webhook keys; the stable outcome
 		// key keeps them from resetting or incrementing dunning a second time.
-		rows, err := q.ClaimNativeMollieSubscriptionOutcome(ctx, purserdb.ClaimNativeMollieSubscriptionOutcomeParams{TenantID: tenant, OutcomeID: "subscription_outcome:" + tenant + ":" + payment.ID + ":" + status})
-		if err != nil || rows == 0 {
-			return err
+		rows, claimErr := q.ClaimNativeMollieSubscriptionOutcome(ctx, purserdb.ClaimNativeMollieSubscriptionOutcomeParams{TenantID: tenant, OutcomeID: "subscription_outcome:" + tenant + ":" + payment.ID + ":" + status})
+		if claimErr != nil || rows == 0 {
+			return claimErr
 		}
 		if status == "failed" {
+			notifyFailure = true
 			metadata, marshalErr := json.Marshal(map[string]any{"status": "failed", "amount_minor": amount, "currency": "EUR", "subscription_id": payment.SubscriptionID})
 			if marshalErr != nil {
 				return marshalErr
 			}
-			if err = q.UpsertProviderPaymentObject(ctx, purserdb.UpsertProviderPaymentObjectParams{Provider: "mollie", ObjectType: "payment", ProviderObjectID: payment.ID, TenantID: sql.NullString{String: tenant, Valid: true}, Metadata: metadata}); err != nil {
-				return err
+			if objectErr := q.UpsertProviderPaymentObject(ctx, purserdb.UpsertProviderPaymentObjectParams{Provider: "mollie", ObjectType: "payment", ProviderObjectID: payment.ID, TenantID: sql.NullString{String: tenant, Valid: true}, Metadata: metadata}); objectErr != nil {
+				return objectErr
 			}
-			if err = q.IncrementTenantDunningAttempts(ctx, tenant); err != nil {
-				return err
+			if dunningErr := q.IncrementTenantDunningAttempts(ctx, tenant); dunningErr != nil {
+				return dunningErr
 			}
 			failed, eventErr := billingevents.New(tenant, payment.ID, &publicv1.PaymentFailed{Amount: billingevents.EUR(amount), Provider: "mollie", ProviderReferenceId: payment.ID}, events.Actor{})
 			if eventErr != nil {
@@ -82,16 +88,20 @@ func (s *Service) applyNativeMollieSubscriptionOutcome(ctx context.Context, tena
 			}
 			return emitBillingEventsTx(ctx, tx, eventPaymentFailed, tenant, "payment", payment.ID, &ipcpb.BillingEvent{PaymentId: payment.ID, Amount: float64(amount) / 100, Currency: "EUR", Provider: "mollie", Status: "failed"}, failed)
 		}
-		invoice, err := q.GetNativeMollieInvoiceID(ctx, purserdb.GetNativeMollieInvoiceIDParams{TenantID: tenant, PaymentID: sql.NullString{String: payment.ID, Valid: true}})
-		if err != nil {
-			return err
+		invoice, invoiceErr := q.GetNativeMollieInvoiceID(ctx, purserdb.GetNativeMollieInvoiceIDParams{TenantID: tenant, PaymentID: sql.NullString{String: payment.ID, Valid: true}})
+		if invoiceErr != nil {
+			return invoiceErr
 		}
-		if err = q.ResetTenantDunningAttempts(ctx, tenant); err != nil {
-			return err
+		if resetErr := q.ResetTenantDunningAttempts(ctx, tenant); resetErr != nil {
+			return resetErr
 		}
-		if err = molliePaymentEventWriter(payment.ID, status, providerSettlementEvidence{TenantID: tenant, AmountCents: amount, Currency: "EUR"})(ctx, tx, resolvedInvoicePayment{TenantID: tenant, InvoiceID: invoice}); err != nil {
-			return err
+		if eventErr := molliePaymentEventWriter(payment.ID, status, providerSettlementEvidence{TenantID: tenant, AmountCents: amount, Currency: "EUR"})(ctx, tx, resolvedInvoicePayment{TenantID: tenant, InvoiceID: invoice}); eventErr != nil {
+			return eventErr
 		}
 		return enqueueInvoicePaidTx(ctx, tx, invoice, &legacyBillingEvent{eventType: eventInvoicePaid, resourceType: "invoice", resourceID: invoice, payload: &ipcpb.BillingEvent{InvoiceId: invoice, Amount: float64(amount) / 100, Currency: "EUR", Provider: "mollie", Status: "paid"}})
 	})
+	if err == nil && notifyFailure && s.emailService != nil {
+		go s.sendTenantPaymentStatusEmail(tenant, payment.ID, "mollie", "failed", float64(amount)/100, "EUR")
+	}
+	return err
 }

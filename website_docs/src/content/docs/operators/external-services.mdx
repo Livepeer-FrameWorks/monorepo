@@ -489,8 +489,11 @@ sending a partial summary.
      amount, fee, and exchange rate of each card payment; pending settlements are also
      re-read every 10 minutes.
    - Purser checks the enabled endpoint and its required event subscriptions on startup
-     using read-only Stripe requests. A missing endpoint or event produces a warning;
-     update the endpoint in Stripe and restart Purser to verify the configuration.
+     using read-only Stripe requests. `frameworks cluster doctor` also checks each
+     Purser's `/health/billing-webhooks` endpoint and fails if the configuration cannot
+     be verified or any required event is missing. The diagnostic is separate from
+     service liveness and readiness. A missing endpoint or event produces a startup warning;
+     update the endpoint in Stripe and run `frameworks cluster doctor` to verify it.
 4. (Optional) If using Mollie, configure: `https://yourdomain.com/webhooks/billing/mollie`
 5. Enable payment methods (**Settings → Payment methods**). The hosted Checkout pins an
    explicit, currency-aware allowlist in code: `card` always, plus `sepa_debit`, `ideal`, and

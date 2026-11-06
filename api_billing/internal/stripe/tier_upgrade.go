@@ -277,6 +277,10 @@ func originalStripeUpgradeCredit(ctx context.Context, request billing.TierUpgrad
 	if len(evidence) > 500 {
 		return reject("original tax evidence exceeds provider metadata limits")
 	}
+	// Unlike recurring Prices, inline invoice-item unit_amount accepts signed
+	// credits in Stripe API 2026-05-27.dahlia. Keeping it in this update makes
+	// the replacement charge and original-tax credit atomic.
+	// https://docs.stripe.com/api/subscriptions/update?api-version=2026-05-27.dahlia#update_subscription-add_invoice_items-price_data-unit_amount
 	return &stripe.SubscriptionAddInvoiceItemParams{Quantity: stripe.Int64(1), Discountable: stripe.Bool(false), PriceData: &stripe.InvoiceItemPriceDataParams{Currency: stripe.String("eur"), Product: stripe.String(item.Price.Product.ID), TaxBehavior: stripe.String("exclusive"), UnitAmount: stripe.Int64(-minor)}, TaxRates: rates, Period: &stripe.SubscriptionAddInvoiceItemPeriodParams{Start: &stripe.SubscriptionAddInvoiceItemPeriodStartParams{Type: stripe.String("timestamp"), Timestamp: stripe.Int64(at)}, End: &stripe.SubscriptionAddInvoiceItemPeriodEndParams{Type: stripe.String("timestamp"), Timestamp: stripe.Int64(line.Period.End)}}, Metadata: map[string]string{"frameworks_credit_invoice": sub.LatestInvoice.ID, "frameworks_credit_line": line.ID, "frameworks_credit_original_net": strconv.FormatInt(line.Amount, 10), "frameworks_credit_original_vat": strconv.FormatInt(originalVAT, 10), "frameworks_credit_rates": string(evidence)}}, nil
 }
 

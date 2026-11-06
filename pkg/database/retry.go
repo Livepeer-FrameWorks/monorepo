@@ -135,6 +135,13 @@ type PostgresTxBeginner interface {
 	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
 }
 
+// PostgresRollbackObserver records an actionable refusal after the transaction
+// has released its locks. It is not invoked for retryable database failures or
+// failed commits, whose external outcome may be uncertain.
+type PostgresRollbackObserver interface {
+	AfterRollback(context.Context) error
+}
+
 func WithRetryablePostgresTx(ctx context.Context, db *sql.DB, opts *sql.TxOptions, fn func(*sql.Tx) error) error {
 	return WithRetryablePostgresTxWithHook(ctx, db, opts, nil, fn)
 }
@@ -169,6 +176,13 @@ func WithPostgresTx(ctx context.Context, db PostgresTxBeginner, opts *sql.TxOpti
 		}
 	}()
 	if err := fn(tx); err != nil {
+		_ = tx.Rollback() //nolint:errcheck // the original body error remains authoritative
+		var observer PostgresRollbackObserver
+		if !IsRetryablePostgresError(err) && errors.As(err, &observer) {
+			if noticeErr := observer.AfterRollback(ctx); noticeErr != nil {
+				return errors.Join(err, noticeErr)
+			}
+		}
 		return err
 	}
 	if err := tx.Commit(); err != nil {

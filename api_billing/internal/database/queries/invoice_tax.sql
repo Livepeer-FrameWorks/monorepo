@@ -31,3 +31,10 @@ SET status='resolved',resolved_at=NOW(),resolution_note='Invoice tax assessment 
 WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid
   AND kind='invoice_tax_review' AND reference_type='invoice'
   AND reference_id=sqlc.arg(invoice_id)::text AND status='open';
+
+-- name: ResolveBillingPhaseTaxReview :execrows
+UPDATE purser.crypto_accounting_anomalies
+SET status='resolved',resolved_at=NOW(),resolution_note='Billing phase invoice tax assessment completed'
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid
+  AND kind='invoice_tax_review' AND reference_type='billing_phase'
+  AND reference_id=sqlc.arg(reference_id)::text AND status='open';

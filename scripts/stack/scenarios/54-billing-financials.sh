@@ -76,8 +76,11 @@ fi
 check 'NL consumer profile saved' json_has "$(profile consumer NL)" '.errors == null'
 check 'deployed NL consumer settles one invoice with 21% VAT on top and net credit' deployed_crypto 2100
 deployed_stripe() {
+ local timeout=120s
+ # Hold/recovery follows the deployed worker's real five-minute cadence.
+ [ "$1" != TestStackDeployedStripeHeldRenewalRecovery ] || timeout=16m
  STACK_BILLING_TENANT_ID="$tenant" STACK_BILLING_DATABASE_URL="$STACK_BILLING_DATABASE_URL" STACK_BILLING_DEPLOYED=1 \
-  "$STACK_REPO/bin/stack-billing-runner" -test.run "^$1$" -test.v -test.timeout 120s
+  "$STACK_REPO/bin/stack-billing-runner" -test.run "^$1$" -test.v -test.timeout "$timeout"
 }
 check 'deployed NL card top-up collects gross and credits net once' deployed_stripe TestStackDeployedCardTopupTax
 check 'deployed Stripe renewal retains exactly one original VAT invoice and PDF' deployed_stripe TestStackDeployedStripeRenewalTax
@@ -154,4 +157,16 @@ PY
 check 'deployed regular NL consumer invoice has 21% VAT on top' regular_invoice NL consumer '' 2100
 check 'deployed regular EU B2B invoice reverses charge with VIES proof' regular_invoice AT business ATU12345678 0
 check 'deployed regular non-EU business invoice has zero Dutch VAT' regular_invoice US business '' 0
+paid_stripe_upgrade() {
+ fresh_invoice_tenant stripe-upgrade || return 1
+ json_has "$(profile business AT ATU12345678)" '.errors == null' || return 1
+ deployed_stripe TestStackDeployedStripePaidUpgradeOriginalTax
+}
+check 'deployed paid Stripe upgrade credits original zero VAT and charges new 21 percent fee' paid_stripe_upgrade
+held_stripe_renewal() {
+ fresh_invoice_tenant stripe-hold || return 1
+ json_has "$(profile consumer NL)" '.errors == null' || return 1
+ deployed_stripe TestStackDeployedStripeHeldRenewalRecovery
+}
+check 'deployed tax-held renewal draft is corrected and collected before recurring billing resumes' held_stripe_renewal
 finish

@@ -16,6 +16,7 @@ import (
 	"frameworks/api_billing/internal/rating"
 	billingstripe "frameworks/api_billing/internal/stripe"
 	"frameworks/api_billing/internal/subscriptions"
+	billingtax "frameworks/api_billing/internal/tax"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	mollieapi "github.com/VictorAvelar/mollie-api-go/v4/mollie"
 	"github.com/shopspring/decimal"
@@ -113,6 +114,16 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 	if currency != "EUR" {
 		return fmt.Errorf("native Mollie subscription tax invoice requires EUR")
 	}
+	q := purserdb.New(s.db)
+	if _, existingErr := q.GetNativeMollieInvoiceID(ctx, purserdb.GetNativeMollieInvoiceIDParams{TenantID: tenant, PaymentID: sql.NullString{String: payment.ID, Valid: true}}); existingErr == nil {
+		return nil
+	} else if !errors.Is(existingErr, sql.ErrNoRows) {
+		return existingErr
+	}
+	// VIES and the assessment's database reads happen before taking the tenant
+	// lock. The saved profile is compared again under that lock before use.
+	before, beforeErr := q.GetInvoiceTaxProfile(ctx, tenant)
+	fresh, freshErr := AssessStripeTaxProfile(ctx, s.db, tenant, "")
 	return database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		if _, err := subscriptions.LockChange(ctx, tx, tenant, subscriptions.PreservePricing); err != nil {
 			return err
@@ -150,15 +161,22 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 			return err
 		}
 		reviewReason := ""
-		fresh, freshErr := AssessStripeTaxProfile(ctx, s.db, tenant, "")
 		if freshErr != nil {
 			reviewReason = "Current tax evidence could not be verified at issuance: " + freshErr.Error()
 		} else if fresh.Fingerprint() != profile.Fingerprint() {
 			reviewReason = "Accepted payment tax terms differ from the current legal billing profile"
 		} else {
-			profile = *fresh
-			if err = json.Unmarshal(profile.Evidence, &proof); err != nil {
-				return err
+			current, currentErr := q.GetInvoiceTaxProfile(ctx, tenant)
+			if currentErr != nil {
+				return currentErr
+			}
+			if beforeErr != nil || before.CustomerType != current.CustomerType || !mollieTaxProfileMatchesSavedBilling(*fresh, current) {
+				reviewReason = "Billing details changed while current tax evidence was assessed"
+			} else {
+				profile = *fresh
+				if err = json.Unmarshal(profile.Evidence, &proof); err != nil {
+					return err
+				}
 			}
 		}
 		amount := decimal.New(net, -2)
@@ -200,4 +218,19 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 		}
 		return enqueueInvoiceEmailTx(ctx, tx, row.ID, tenant, profile.Email, "paid")
 	})
+}
+
+func mollieTaxProfileMatchesSavedBilling(profile billingstripe.TaxProfile, current purserdb.GetInvoiceTaxProfileRow) bool {
+	address, err := parseBillingAddress(current.Address)
+	if err != nil {
+		return false
+	}
+	vat := current.VatNumber
+	if vat != "" && billingtax.IsEU(address.Country) {
+		vat, err = billingtax.CanonicalVATNumber(address.Country, vat)
+		if err != nil {
+			return false
+		}
+	}
+	return profile.Name == current.Name && profile.Company == current.Company && profile.Email == current.Email && profile.Street == address.Street && profile.City == address.City && profile.PostalCode == address.PostalCode && profile.Country == address.Country && profile.VATNumber == vat
 }
