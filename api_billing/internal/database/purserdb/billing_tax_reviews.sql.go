@@ -12,13 +12,27 @@ import (
 )
 
 const getBusinessEstablishmentReviewAtTaxPoint = `-- name: GetBusinessEstablishmentReviewAtTaxPoint :one
-SELECT to_jsonb(review)::jsonb AS review_snapshot
-FROM purser.business_establishment_reviews review
-WHERE review.tenant_id=$1::text::uuid
- AND review.created_at<=$2::timestamptz
- AND ((review.profile_sha256=$3::text AND review.country=$4::text)
-      OR review.is_revocation=true)
-ORDER BY review.revision DESC
+SELECT candidates.review_snapshot
+FROM (
+ (SELECT to_jsonb(review)::jsonb AS review_snapshot, review.revision
+  FROM purser.business_establishment_reviews review
+  WHERE review.tenant_id=$1::text::uuid
+   AND review.created_at<=$2::timestamptz
+   AND review.profile_sha256=$3::text
+   AND review.country=$4::text
+  ORDER BY review.revision DESC
+  LIMIT 1)
+ UNION ALL
+ (SELECT to_jsonb(review)::jsonb AS review_snapshot, review.revision
+  FROM purser.business_establishment_reviews review
+  WHERE review.tenant_id=$1::text::uuid
+   AND review.created_at<=$2::timestamptz
+   AND review.profile_sha256 IS NULL AND review.country IS NULL
+   AND review.is_revocation=true
+  ORDER BY review.profile_sha256, review.country, review.revision DESC
+  LIMIT 1)
+) candidates
+ORDER BY candidates.revision DESC
 LIMIT 1
 `
 

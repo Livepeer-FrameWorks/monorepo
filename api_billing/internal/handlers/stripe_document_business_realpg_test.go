@@ -14,7 +14,7 @@ import (
 
 func TestStripeBusinessEvidenceAtTaxPoint_RealPG(t *testing.T) {
 	db, service, _ := newStripeReassessmentService(t)
-	for _, name := range []string{"valid", "expired", "renewed_before_point", "revoked_before", "revoked_after"} {
+	for _, name := range []string{"valid", "expired", "renewed_before_point", "revoked_before", "revoked_after", "unrelated_newer_profile", "revoked_then_renewed"} {
 		t.Run(name, func(t *testing.T) {
 			tenant := seedPrepaidLedgerTenant(t, db)
 			point := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Second)
@@ -39,6 +39,16 @@ func TestStripeBusinessEvidenceAtTaxPoint_RealPG(t *testing.T) {
 			}
 			if name == "renewed_before_point" {
 				if _, err := db.Exec(`INSERT INTO purser.business_establishment_reviews(tenant_id,revision,profile_sha256,country,reference,reviewed_by,created_at,valid_until) VALUES($1::uuid,2,$2,'US','Renewed same full legal profile',$3::uuid,$4,$5)`, tenant, acceptedHash, uuid.NewString(), point.Add(-30*time.Minute), point.Add(12*time.Hour)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if name == "unrelated_newer_profile" {
+				if _, err := db.Exec(`INSERT INTO purser.business_establishment_reviews(tenant_id,revision,profile_sha256,country,reference,reviewed_by,created_at,valid_until) VALUES($1::uuid,2,$2,'CA','Different full legal profile',$3::uuid,$4,$5)`, tenant, strings.Repeat("b", 64), uuid.NewString(), point.Add(-20*time.Minute), point.Add(12*time.Hour)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if name == "revoked_then_renewed" {
+				if _, err := db.Exec(`INSERT INTO purser.business_establishment_reviews(tenant_id,revision,profile_sha256,country,reference,reviewed_by,created_at,valid_until) VALUES($1::uuid,3,$2,'US','Same full profile approved after revocation',$3::uuid,$4,$5)`, tenant, acceptedHash, uuid.NewString(), point.Add(-10*time.Minute), point.Add(12*time.Hour)); err != nil {
 					t.Fatal(err)
 				}
 			}
