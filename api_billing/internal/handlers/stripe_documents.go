@@ -63,13 +63,35 @@ func (s *Service) importStripeTaxDocument(ctx context.Context, kind string, raw 
 	assessment := json.RawMessage(`{}`)
 	taxReady := false
 	var reviewReasons []string
+	reassess := false
+	assessmentDoc := doc
+	var captured *purserdb.GetProviderBillingDocumentRow
 	if lookupErr == nil {
 		assessment = existing.TaxAssessment
 		retained, retainedErr := queries.GetProviderBillingDocument(ctx, purserdb.GetProviderBillingDocumentParams{TenantID: tenant, DocumentID: existing.ID, DocumentKind: kind})
 		if retainedErr != nil {
 			return retainedErr
 		}
+		captured = &retained
+		assessmentDoc, err = billingstripe.ParseProviderTaxDocument(kind, retained.RawFacts)
+		if err != nil {
+			return err
+		}
 		taxReady = retained.TaxStatus == "ready"
+		if !taxReady && kind == "provider_invoice" {
+			assessment, reviewReasons, err = s.assessImportedStripeInvoice(ctx, tenant, assessmentDoc)
+			if err != nil {
+				return err
+			}
+			if !retainedProviderTaxFactsMatch(assessmentDoc, retained) {
+				reviewReasons = append(reviewReasons, "captured_tax_facts_incomplete_or_mismatched")
+				assessment, err = stripeTaxAssessmentReview(assessment, reviewReasons)
+				if err != nil {
+					return err
+				}
+			}
+			taxReady, reassess = len(reviewReasons) == 0, true
+		}
 	} else if kind == "provider_invoice" {
 		assessment, reviewReasons, err = s.assessImportedStripeInvoice(ctx, tenant, doc)
 		if err != nil {
@@ -77,17 +99,17 @@ func (s *Service) importStripeTaxDocument(ctx context.Context, kind string, raw 
 		}
 		taxReady = len(reviewReasons) == 0
 	}
-	if kind == "provider_credit_note" && doc.SourceInvoiceID != "" {
-		parent, parentErr := queries.FindProviderBillingDocument(ctx, purserdb.FindProviderBillingDocumentParams{TenantID: tenant, ProviderDocumentID: doc.SourceInvoiceID, DocumentKind: "provider_invoice"})
+	if kind == "provider_credit_note" && assessmentDoc.SourceInvoiceID != "" {
+		parent, parentErr := queries.FindProviderBillingDocument(ctx, purserdb.FindProviderBillingDocumentParams{TenantID: tenant, ProviderDocumentID: assessmentDoc.SourceInvoiceID, DocumentKind: "provider_invoice"})
 		if errors.Is(parentErr, sql.ErrNoRows) {
-			facts, fetchErr := s.stripeClient.ProviderDocumentFacts(ctx, "provider_invoice", doc.SourceInvoiceID)
+			facts, fetchErr := s.stripeClient.ProviderDocumentFacts(ctx, "provider_invoice", assessmentDoc.SourceInvoiceID)
 			if fetchErr != nil {
 				return fetchErr
 			}
 			if err = s.importStripeTaxDocument(ctx, "provider_invoice", facts); err != nil {
 				return err
 			}
-			parent, parentErr = queries.FindProviderBillingDocument(ctx, purserdb.FindProviderBillingDocumentParams{TenantID: tenant, ProviderDocumentID: doc.SourceInvoiceID, DocumentKind: "provider_invoice"})
+			parent, parentErr = queries.FindProviderBillingDocument(ctx, purserdb.FindProviderBillingDocumentParams{TenantID: tenant, ProviderDocumentID: assessmentDoc.SourceInvoiceID, DocumentKind: "provider_invoice"})
 		}
 		if parentErr != nil {
 			return parentErr
@@ -98,6 +120,20 @@ func (s *Service) importStripeTaxDocument(ctx context.Context, kind string, raw 
 			return retainedErr
 		}
 		taxReady = retained.TaxStatus == "ready"
+		if !taxReady {
+			reviewReasons = append(reviewReasons, "source_invoice_tax_review")
+		}
+		if captured != nil && !retainedProviderTaxFactsMatch(assessmentDoc, *captured) {
+			taxReady = false
+			reviewReasons = append(reviewReasons, "captured_tax_facts_incomplete_or_mismatched")
+		}
+		if !taxReady {
+			assessment, err = stripeTaxAssessmentReview(assessment, reviewReasons)
+			if err != nil {
+				return err
+			}
+		}
+		reassess = lookupErr == nil
 	}
 	var pdf []byte
 	var sha string
@@ -115,9 +151,9 @@ func (s *Service) importStripeTaxDocument(ctx context.Context, kind string, raw 
 	}
 	taxStatus := "legacy_unknown"
 	var net, vat sql.NullInt64
-	if doc.Net != nil && doc.VAT != nil {
-		net = sql.NullInt64{Int64: *doc.Net, Valid: true}
-		vat = sql.NullInt64{Int64: *doc.VAT, Valid: true}
+	if assessmentDoc.Net != nil && assessmentDoc.VAT != nil {
+		net = sql.NullInt64{Int64: *assessmentDoc.Net, Valid: true}
+		vat = sql.NullInt64{Int64: *assessmentDoc.VAT, Valid: true}
 		if taxReady {
 			taxStatus = "ready"
 		}
@@ -134,14 +170,12 @@ func (s *Service) importStripeTaxDocument(ctx context.Context, kind string, raw 
 		if writeErr != nil {
 			return writeErr
 		}
-		if len(reviewReasons) == 0 {
-			return nil
+		if reassess {
+			if _, writeErr = q.UpdateProviderDocumentTaxReview(ctx, purserdb.UpdateProviderDocumentTaxReviewParams{TenantID: tenant, DocumentID: stored.ID, TaxStatus: taxStatus, TaxAssessment: assessment}); writeErr != nil {
+				return writeErr
+			}
 		}
-		retained, readErr := q.GetProviderBillingDocument(ctx, purserdb.GetProviderBillingDocumentParams{TenantID: tenant, DocumentID: stored.ID, DocumentKind: kind})
-		if readErr != nil || retained.TaxStatus == "ready" {
-			return readErr
-		}
-		return q.RecordCryptoAccountingAnomaly(ctx, purserdb.RecordCryptoAccountingAnomalyParams{TenantID: tenant, Kind: "provider_tax_document_review", Network: "stripe", ReferenceType: kind, ReferenceID: stored.ID, AmountCents: 0, Detail: "Original Stripe invoice has unverified tax setup; review the retained document and billing profile", EvidenceJson: retained.TaxAssessment})
+		return retainProviderDocumentTaxReview(ctx, q, tenant, stored.ID, kind)
 	})
 	if err != nil {
 		return err
@@ -150,6 +184,12 @@ func (s *Service) importStripeTaxDocument(ctx context.Context, kind string, raw 
 }
 
 func (s *Service) assessImportedStripeInvoice(ctx context.Context, tenant string, doc billingstripe.ProviderTaxDocument) (json.RawMessage, []string, error) {
+	return s.assessImportedStripeInvoiceWithCurrent(ctx, tenant, doc, func() (*billingstripe.TaxProfile, error) {
+		return AssessStripeTaxProfile(ctx, s.db, tenant, "")
+	})
+}
+
+func (s *Service) assessImportedStripeInvoiceWithCurrent(ctx context.Context, tenant string, doc billingstripe.ProviderTaxDocument, current func() (*billingstripe.TaxProfile, error)) (json.RawMessage, []string, error) {
 	retained := json.RawMessage(`{}`)
 	var reasons []string
 	if doc.ProfileSHA == "" {
@@ -168,18 +208,28 @@ func (s *Service) assessImportedStripeInvoice(ctx context.Context, tenant string
 	if len(reasons) == 0 {
 		if err := json.Unmarshal(retained, &profile); err != nil {
 			reasons = append(reasons, "provider_tax_profile_invalid")
-		} else if err = billingstripe.ValidateProviderTaxTerms(doc, profile); err != nil {
-			reasons = append(reasons, "provider_tax_terms_mismatch")
+		} else {
+			var normalizeErr error
+			profile, normalizeErr = normalizeProviderTaxProfile(profile)
+			if normalizeErr != nil {
+				reasons = append(reasons, "provider_tax_profile_invalid")
+			} else if err = billingstripe.ValidateProviderTaxTerms(doc, profile); err != nil {
+				reasons = append(reasons, "provider_tax_terms_mismatch")
+			}
 		}
 	}
 	if len(reasons) == 0 {
-		fresh, err := AssessStripeTaxProfile(ctx, s.db, tenant, "")
+		fresh, err := current()
 		if err != nil {
 			var review *billingtax.ReviewError
-			if !errors.As(err, &review) || review.Code == "vat_validation_unavailable" {
+			var configuration *supplierTaxConfigurationError
+			if errors.As(err, &configuration) {
+				reasons = append(reasons, "supplier_configuration_required")
+			} else if !errors.As(err, &review) || review.Code == "vat_validation_unavailable" {
 				return nil, nil, fmt.Errorf("defer Stripe invoice tax verification: %w", err)
+			} else {
+				reasons = append(reasons, "current_tax_assessment_required")
 			}
-			reasons = append(reasons, "current_tax_assessment_required")
 		} else if fresh.Fingerprint() != profile.Fingerprint() {
 			reasons = append(reasons, "provider_tax_profile_changed")
 		} else {
@@ -191,23 +241,46 @@ func (s *Service) assessImportedStripeInvoice(ctx context.Context, tenant string
 		}
 	}
 	if len(reasons) != 0 {
-		var review map[string]json.RawMessage
-		if err := json.Unmarshal(retained, &review); err != nil {
-			review = map[string]json.RawMessage{"retained_profile": retained}
-		}
-		if review == nil {
-			review = make(map[string]json.RawMessage)
-		}
-		review["review_required"] = json.RawMessage(`true`)
-		encoded, err := json.Marshal(reasons)
-		if err != nil {
-			return nil, nil, err
-		}
-		review["review_reasons"] = encoded
-		retained, err = json.Marshal(review)
+		var err error
+		retained, err = stripeTaxAssessmentReview(retained, reasons)
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 	return retained, reasons, nil
+}
+
+func stripeTaxAssessmentReview(retained json.RawMessage, reasons []string) (json.RawMessage, error) {
+	var review map[string]json.RawMessage
+	if err := json.Unmarshal(retained, &review); err != nil {
+		review = map[string]json.RawMessage{"retained_profile": retained}
+	}
+	if review == nil {
+		review = make(map[string]json.RawMessage)
+	}
+	review["review_required"] = json.RawMessage(`true`)
+	encoded, err := json.Marshal(reasons)
+	if err != nil {
+		return nil, err
+	}
+	review["review_reasons"] = encoded
+	return json.Marshal(review)
+}
+
+func retainProviderDocumentTaxReview(ctx context.Context, q *purserdb.Queries, tenant, id, kind string) error {
+	retained, err := q.GetProviderBillingDocument(ctx, purserdb.GetProviderBillingDocumentParams{TenantID: tenant, DocumentID: id, DocumentKind: kind})
+	if err != nil {
+		return err
+	}
+	if retained.TaxStatus == "ready" {
+		_, err = q.ResolveProviderDocumentTaxReview(ctx, purserdb.ResolveProviderDocumentTaxReviewParams{TenantID: tenant, DocumentID: id, DocumentKind: kind})
+		return err
+	}
+	return q.RecordCryptoAccountingAnomaly(ctx, purserdb.RecordCryptoAccountingAnomalyParams{TenantID: tenant, Kind: "provider_tax_document_review", Network: "stripe", ReferenceType: kind, ReferenceID: id, AmountCents: 0, Detail: "Original Stripe document has unverified tax setup; review the retained document and billing profile", EvidenceJson: retained.TaxAssessment})
+}
+
+func retainedProviderTaxFactsMatch(original billingstripe.ProviderTaxDocument, retained purserdb.GetProviderBillingDocumentRow) bool {
+	return original.Net != nil && original.VAT != nil && retained.NetMinor.Valid && retained.VatMinor.Valid &&
+		*original.Net == retained.NetMinor.Int64 && *original.VAT == retained.VatMinor.Int64 &&
+		original.Gross == retained.GrossMinor && original.Currency == retained.Currency
 }

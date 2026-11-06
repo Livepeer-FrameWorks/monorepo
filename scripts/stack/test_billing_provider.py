@@ -29,6 +29,87 @@ class BillingProviderTest(unittest.TestCase):
         self.assertEqual(status, 200, value)
         return value
 
+    def subscription(self):
+        customer = self.call("POST", "/v1/customers", b"name=ContractBuyer")
+        price = self.call("POST", "/v1/prices", b"unit_amount=1000&currency=eur")
+        checkout = self.call("POST", "/v1/checkout/sessions", ("mode=subscription&customer=" + customer["id"] + "&line_items[0][price]=" + price["id"]).encode())
+        self.call("POST", "/__test/complete", json.dumps({"session_id": checkout["id"]}).encode())
+        return self.provider.objects[checkout["subscription"]]
+
+    def open_invoice(self, sub):
+        self.call("POST", "/v1/subscriptions/" + sub["id"], b"pause_collection[behavior]=keep_as_draft")
+        events = self.call("POST", "/__test/renew", json.dumps({"subscription_id": sub["id"]}).encode())
+        invoice = json.loads(events[0]["body"])["data"]["object"]
+        self.call("POST", "/v1/invoices/" + invoice["id"] + "/finalize", b"auto_advance=true")
+        self.call("POST", "/v1/subscriptions/" + sub["id"], b"pause_collection=")
+        return invoice["id"]
+
+    def test_payment_outcomes_do_not_invent_success(self):
+        for outcome, expected_status in (("declined", "requires_payment_method"), ("requires_action", "requires_action"), ("processing", "processing")):
+            with self.subTest(outcome=outcome):
+                sub = self.subscription()
+                invoice = self.open_invoice(sub)
+                self.call("POST", "/__test/payment_behavior", json.dumps({"customer_id": sub["customer"], "outcome": outcome}).encode())
+                status, result = self.provider.dispatch("POST", "/v1/invoices/" + invoice + "/pay", {}, b"", "fixture-test")
+                self.assertEqual(status, 200 if outcome == "processing" else 402, result)
+                stored = self.provider.objects[invoice]
+                self.assertEqual((stored["status"], stored["amount_paid"]), ("open", 0))
+                self.assertTrue(stored["auto_advance"])
+                self.assertEqual(self.provider.objects[stored["payment_intent"]]["status"], expected_status)
+
+    def test_automatic_collection_is_async_and_processing_settles_once(self):
+        sub = self.subscription()
+        invoice = self.open_invoice(sub)
+        self.call("POST", "/__test/payment_behavior", json.dumps({"customer_id": sub["customer"], "outcome": "processing"}).encode())
+        self.assertEqual(self.provider.objects[invoice]["status"], "open")
+        self.call("POST", "/__test/collect", json.dumps({"invoice_id": invoice}).encode())
+        self.assertEqual((self.provider.objects[invoice]["status"], self.provider.objects[invoice]["amount_paid"]), ("open", 0))
+        attempts = self.provider.objects[invoice]["attempt_count"]
+        self.call("POST", "/__test/collect", json.dumps({"invoice_id": invoice}).encode())
+        self.assertEqual(self.provider.objects[invoice]["attempt_count"], attempts)
+        self.call("POST", "/__test/settle", json.dumps({"invoice_id": invoice}).encode())
+        self.assertEqual(self.provider.objects[invoice]["status"], "paid")
+        self.assertEqual(sum(o["object"] == "invoice_payment" and o["invoice"] == invoice and o["status"] == "paid" for o in self.provider.objects.values()), 1)
+
+    def test_executed_402_and_500_replay_but_preexecution_errors_do_not(self):
+        sub = self.subscription()
+        invoice = self.open_invoice(sub)
+        self.call("POST", "/__test/payment_behavior", json.dumps({"customer_id": sub["customer"], "outcome": "declined"}).encode())
+        args = ("POST", "/v1/invoices/" + invoice + "/pay", {}, b"", "fixture-test", {"Idempotency-Key": "declined-attempt"})
+        declined = self.provider.dispatch(*args)
+        self.assertEqual(declined[0], 402)
+        self.call("POST", "/__test/payment_behavior", json.dumps({"customer_id": sub["customer"], "outcome": "succeeded"}).encode())
+        self.assertEqual(self.provider.dispatch(*args), declined)
+        self.assertEqual(self.provider.objects[invoice]["status"], "open")
+        self.call("POST", "/__test/fault", json.dumps({"method": "POST", "path": "/v1/customers", "status": 500, "after_execution": True}).encode())
+        create = ("POST", "/v1/customers", {}, b"name=Uncertain", "fixture-test", {"Idempotency-Key": "uncertain-create"})
+        failure = self.provider.dispatch(*create)
+        self.assertEqual(failure[0], 500)
+        count = len(self.provider.objects)
+        self.assertEqual(self.provider.dispatch(*create), failure)
+        self.assertEqual(len(self.provider.objects), count)
+        self.call("POST", "/__test/fault", json.dumps({"method": "POST", "path": "/v1/customers", "status": 409, "after_execution": False}).encode())
+        conflict = ("POST", "/v1/customers", {}, b"name=Retry", "fixture-test", {"Idempotency-Key": "concurrent-attempt"})
+        self.assertEqual(self.provider.dispatch(*conflict)[0], 409)
+        self.assertEqual(self.provider.dispatch(*conflict)[0], 200)
+
+    def test_error_if_incomplete_does_not_apply_failed_upgrade(self):
+        sub = self.subscription()
+        before = json.loads(json.dumps(sub))
+        price = self.call("POST", "/v1/prices", b"unit_amount=5000&currency=eur")
+        self.call("POST", "/__test/payment_behavior", json.dumps({"customer_id": sub["customer"], "outcome": "requires_action"}).encode())
+        status, _ = self.provider.dispatch("POST", "/v1/subscriptions/" + sub["id"], {}, ("items[0][price]=" + price["id"] + "&billing_cycle_anchor=now&payment_behavior=error_if_incomplete&proration_behavior=none").encode(), "fixture-test")
+        self.assertEqual(status, 402)
+        self.assertEqual(sub, before)
+
+    def test_proration_none_suppresses_native_credit(self):
+        for proration, expected in (("none", 5000), ("create_prorations", 4000)):
+            with self.subTest(proration=proration):
+                sub = self.subscription()
+                price = self.call("POST", "/v1/prices", b"unit_amount=5000&currency=eur")
+                updated = self.call("POST", "/v1/subscriptions/" + sub["id"], ("items[0][price]=" + price["id"] + "&billing_cycle_anchor=now&proration_behavior=" + proration).encode())
+                self.assertEqual(self.provider.objects[updated["latest_invoice"]]["total_excluding_tax"], expected)
+
     def test_hosted_settlement_has_exact_finalized_transfer_receipt(self):
         auth = {"from": "0x" + "3" * 40, "to": "0x" + "4" * 40, "value": "1210000"}
         requirements = {"network": "eip155:8453", "asset": "0x" + "5" * 40}
@@ -55,6 +136,11 @@ class BillingProviderTest(unittest.TestCase):
         self.assertEqual(invoice["lines"]["data"][0]["taxes"][0]["tax_behavior"], "exclusive")
         self.assertEqual(invoice["lines"]["data"][0]["taxes"][0]["tax_rate_details"]["tax_rate"], rate["id"])
         renewed = self.call("POST", "/__test/renew", json.dumps({"subscription_id": session["subscription"]}).encode())
+        self.assertEqual(len(renewed), 1)
+        draft = json.loads(renewed[0]["body"])["data"]["object"]
+        self.assertEqual(draft["status"], "draft")
+        self.assertTrue(draft["auto_advance"])
+        renewed = self.call("POST", "/__test/collect", json.dumps({"invoice_id": draft["id"]}).encode())
         self.assertEqual(len(renewed), 2)
         event = renewed[-1]
         timestamp = event["signature"].split(",")[0][2:]
@@ -153,7 +239,7 @@ class BillingProviderTest(unittest.TestCase):
         sub = session["subscription"]
         # The pinned Stripe subscription API explicitly permits signed inline
         # credit prices, unlike POST /v1/prices.
-        inline = self.call("POST", "/v1/subscriptions/" + sub, ("billing_cycle_anchor=now&items[0][price]=" + new_price["id"] + "&default_tax_rates[0]=" + rate["id"] + "&add_invoice_items[0][quantity]=1&add_invoice_items[0][price_data][unit_amount]=-1000&add_invoice_items[0][price_data][currency]=eur&add_invoice_items[0][tax_rates][0]=" + zero["id"]).encode())
+        inline = self.call("POST", "/v1/subscriptions/" + sub, ("billing_cycle_anchor=now&proration_behavior=none&items[0][price]=" + new_price["id"] + "&default_tax_rates[0]=" + rate["id"] + "&add_invoice_items[0][quantity]=1&add_invoice_items[0][price_data][unit_amount]=-1000&add_invoice_items[0][price_data][currency]=eur&add_invoice_items[0][tax_rates][0]=" + zero["id"]).encode())
         self.assertIsInstance(inline["billing_cycle_anchor"], int)
         credited_inline = self.provider.objects[inline["latest_invoice"]]
         self.assertEqual((credited_inline["status"], credited_inline["total_excluding_tax"], credited_inline["total"]), ("paid", 9000, 11100))

@@ -38,19 +38,15 @@ func (s *Service) applyNativeMollieSubscriptionOutcome(ctx context.Context, tena
 	if err != nil {
 		return fmt.Errorf("read native Mollie subscription outcome: %w", err)
 	}
-	var amount int64
-	if status == "confirmed" || status == "failed" {
-		if payment.Amount == nil {
-			return fmt.Errorf("native Mollie payment has no amount")
-		}
-		var currency string
-		amount, currency, err = mollieAmountToCents(payment.Amount.Value, payment.Amount.Currency)
-		if err != nil {
-			return err
-		}
-		if currency != "EUR" || amount <= 0 {
-			return fmt.Errorf("native Mollie subscription outcome requires positive EUR amount")
-		}
+	if payment.Amount == nil {
+		return fmt.Errorf("native Mollie payment has no amount")
+	}
+	amount, currency, err := mollieAmountToCents(payment.Amount.Value, payment.Amount.Currency)
+	if err != nil {
+		return err
+	}
+	if currency != "EUR" || amount <= 0 {
+		return fmt.Errorf("native Mollie subscription outcome requires positive EUR amount")
 	}
 	notifyFailure := false
 	err = database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
@@ -60,9 +56,6 @@ func (s *Service) applyNativeMollieSubscriptionOutcome(ctx context.Context, tena
 			if dateErr := q.UpdateMollieNextPaymentDate(ctx, purserdb.UpdateMollieNextPaymentDateParams{TenantID: tenant, NextPaymentDate: subscription.NextPaymentDate.Format(time.DateOnly), MollieSubscriptionID: sql.NullString{String: payment.SubscriptionID, Valid: true}}); dateErr != nil {
 				return dateErr
 			}
-		}
-		if status != "confirmed" && status != "failed" {
-			return nil
 		}
 		// Refund observations have distinct webhook keys; the stable outcome
 		// key keeps them from resetting or incrementing dunning a second time.

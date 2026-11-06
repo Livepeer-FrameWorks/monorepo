@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Isolated Stripe, VIES and hosted-x402 wire simulator; never moves money."""
+"""Isolated billing wire fixture; never moves money.
+
+Server contracts:
+https://docs.stripe.com/api/idempotent_requests
+https://docs.stripe.com/billing/subscriptions/pause-payment
+https://docs.stripe.com/invoicing/integration/automatic-advancement-collection
+Collection and settlement advance only through explicit fixture clock controls.
+"""
 
 import hashlib
 import copy
@@ -23,6 +30,8 @@ class Provider:
         self.receipts = {}
         self.idempotency = {}
         self.vies_validity = {}
+        self.payment_outcomes = {}
+        self.faults = {}
 
     def create(self, prefix, kind, values):
         self.counter += 1
@@ -94,6 +103,7 @@ class Provider:
         inv["metadata"] = dict(sub["metadata"])
         inv["parent"]["subscription_details"]["metadata"] = dict(sub["metadata"])
         inv["billing_reason"] = "subscription_cycle"
+        inv["collection_method"] = "charge_automatically"
         if draft:
             inv.update({"status": "draft", "amount_paid": 0, "amount_due": inv["total"], "status_transitions": {"finalized_at": None}, "auto_advance": False})
         else:
@@ -119,9 +129,35 @@ class Provider:
         invoice["amount_due"] = max(0, invoice["total"] - invoice["amount_paid"])
 
     def paid_invoice(self, invoice):
-        invoice.update({"status": "paid", "amount_paid": invoice["total"], "amount_due": 0})
+        invoice.update({"status": "paid", "amount_paid": invoice["total"], "amount_due": 0, "amount_remaining": 0, "auto_advance": False, "next_payment_attempt": None})
+        if invoice.get("payment_intent"):
+            self.objects[invoice["payment_intent"]]["status"] = "succeeded"
+        if any(obj["object"] == "invoice_payment" and obj.get("invoice") == invoice["id"] and obj.get("status") == "paid" for obj in self.objects.values()):
+            return
         charge = self.create("ch", "charge", {"amount": invoice["total"], "currency": invoice["currency"], "refunded": False, "amount_refunded": 0, "disputed": False})
         self.create("inpay", "invoice_payment", {"invoice": invoice["id"], "status": "paid", "amount_paid": invoice["total"], "payment": {"type": "charge", "charge": charge["id"]}})
+
+    def attempt_payment(self, invoice):
+        invoice["attempt_count"] = invoice.get("attempt_count", 0) + 1
+        outcome = self.payment_outcomes.get(invoice["customer"], "succeeded")
+        if outcome == "succeeded":
+            self.paid_invoice(invoice)
+            return 200, invoice
+        state = "requires_payment_method" if outcome == "declined" else outcome
+        intent = self.objects.get(invoice.get("payment_intent"))
+        if intent is None:
+            intent = self.create("pi", "payment_intent", {"customer": invoice["customer"], "amount": invoice["total"], "currency": invoice["currency"], "metadata": invoice.get("metadata", {})})
+            invoice["payment_intent"] = intent["id"]
+        intent["status"] = state
+        # The fixture uses a deterministic retry deadline; real schedules are
+        # account settings. Clock controls must advance past it to retry.
+        invoice.update({"status": "open", "amount_paid": 0, "amount_remaining": invoice["total"], "next_payment_attempt": int(time.time()) + 86400 if outcome == "declined" and invoice.get("auto_advance") else None})
+        if outcome == "processing":
+            return 200, invoice
+        sub = self.objects.get(invoice.get("subscription"))
+        if sub:
+            sub["status"] = "past_due"
+        return 402, {"error": {"type": "card_error", "code": "card_declined" if outcome == "declined" else "authentication_required", "message": "Simulated payment requires a new payment method or customer authentication", "payment_intent": intent}}
 
     @staticmethod
     def invalid(message):
@@ -155,14 +191,26 @@ class Provider:
         with self.lock:
             key = (headers or {}).get("Idempotency-Key", "") if method == "POST" else ""
             self.requests.append({"method": method, "path": path, "host": host, "body": body.decode(errors="replace"), "idempotency_key": key})
-            identity = (method, path, body)
+            identity = (method, path, tuple((name, tuple(values)) for name, values in sorted(urllib.parse.parse_qs(body.decode(), keep_blank_values=True).items())))
             if key in self.idempotency:
                 prior, response = self.idempotency[key]
                 if prior != identity:
                     return self.invalid("idempotency key reused with different parameters")
                 return copy.deepcopy(response)
+            fault = self.faults.pop((method, path), None)
+            if fault and not fault["after_execution"]:
+                started = fault.get("execution_started", False)
+                response = fault["status"], {"error": {"type": "api_error" if started else "invalid_request_error", "message": "Simulated endpoint failure before state changes" if started else "Simulated conflict before endpoint execution"}}
+                if key and started:
+                    self.idempotency[key] = (identity, copy.deepcopy(response))
+                return response
             response = self._dispatch(method, path, query, body, host)
-            if key and 200 <= response[0] < 300:
+            executed = 200 <= response[0] < 300 or response[0] == 402
+            if fault and executed:
+                response = fault["status"], {"error": {"type": "api_error", "message": "Simulated failure after endpoint execution"}}
+            # API v1 retains the first executed result, including errors.
+            # Validation/conflict before execution does not reserve a key.
+            if key and executed:
                 self.idempotency[key] = (identity, copy.deepcopy(response))
             return response
 
@@ -178,21 +226,70 @@ class Provider:
                 data = json.loads(body)
                 self.vies_validity[data["vat_number"]] = bool(data["valid"])
                 return 200, {"configured": True}
+            if path == "/__test/payment_behavior":
+                data = json.loads(body)
+                if data["outcome"] not in ("succeeded", "declined", "requires_action", "processing"):
+                    return self.invalid("unsupported simulated payment outcome")
+                self.payment_outcomes[data["customer_id"]] = data["outcome"]
+                return 200, {"configured": True}
+            if path == "/__test/fault":
+                data = json.loads(body)
+                self.faults[(data["method"], data["path"])] = data
+                return 200, {"configured": True}
+            if path == "/__test/collect":
+                data = json.loads(body)
+                invoice = self.objects[data["invoice_id"]]
+                if not invoice.get("auto_advance") or invoice["status"] not in ("draft", "open"):
+                    return 200, []
+                sub = self.objects.get(invoice.get("subscription"))
+                if sub and sub.get("pause_collection"):
+                    return 200, []
+                if invoice.get("next_payment_attempt") and invoice["next_payment_attempt"] > data.get("at", int(time.time())):
+                    return 200, []
+                events = []
+                if invoice["status"] == "draft":
+                    invoice.update({"status": "open", "status_transitions": {"finalized_at": int(time.time())}})
+                    events.append(self.event("invoice.finalized", invoice))
+                intent = self.objects.get(invoice.get("payment_intent"), {})
+                if intent.get("status") in ("processing", "requires_action"):
+                    return 200, events
+                status, _ = self.attempt_payment(invoice)
+                intent = self.objects.get(invoice.get("payment_intent"), {})
+                event = "invoice.paid" if invoice["status"] == "paid" else "invoice.payment_action_required" if intent.get("status") == "requires_action" else "invoice.payment_failed" if status == 402 else None
+                if event:
+                    events.append(self.event(event, invoice))
+                return 200, events
+            if path == "/__test/settle":
+                invoice = self.objects[json.loads(body)["invoice_id"]]
+                intent = self.objects.get(invoice.get("payment_intent"), {})
+                if intent.get("status") not in ("processing", "requires_action"):
+                    return self.invalid("only an existing pending payment can settle")
+                self.paid_invoice(invoice)
+                return 200, [self.event("invoice.paid", invoice)]
+            if path == "/__test/unrelated_invoice":
+                sub = self.objects[json.loads(body)["subscription_id"]]
+                latest = sub["latest_invoice"]
+                manual = self.invoice(sub, draft=True)
+                manual.update({"billing_reason": "manual", "parent": None, "metadata": {"operator_manual": "true"}, "status": "open", "collection_method": "send_invoice", "due_date": int(time.time()) - 86400, "auto_advance": False, "status_transitions": {"finalized_at": int(time.time())}})
+                sub["latest_invoice"] = latest
+                return 200, manual
             if path == "/__test/invoice_events":
                 sub = self.objects[json.loads(body)["subscription_id"]]
                 invoice = self.objects[sub["latest_invoice"]]
-                if invoice["status"] != "paid":
-                    return self.invalid("invoice has not actually been finalized and paid")
-                return 200, [self.event("invoice.finalized", invoice), self.event("invoice.paid", invoice)]
+                if invoice["status"] not in ("open", "paid"):
+                    return self.invalid("invoice has not actually been finalized")
+                events = [self.event("invoice.finalized", invoice)]
+                if invoice["status"] == "paid":
+                    events.append(self.event("invoice.paid", invoice))
+                return 200, events
             if path == "/__test/complete":
                 return 200, self.complete(self.objects[json.loads(body)["session_id"]])
             if path == "/__test/renew":
                 sub = self.objects[json.loads(body)["subscription_id"]]
-                draft = sub.get("pause_collection", {}).get("behavior") == "keep_as_draft"
-                inv = self.invoice(sub, draft=draft)
-                if draft:
-                    return 200, [self.event("invoice.created", inv)]
-                return 200, [self.event("invoice.finalized", inv), self.event("invoice.paid", inv)]
+                paused = sub.get("pause_collection", {}).get("behavior") == "keep_as_draft"
+                inv = self.invoice(sub, draft=True)
+                inv["auto_advance"] = not paused
+                return 200, [self.event("invoice.created", inv)]
             if path.startswith("/rpc/"):
                 data = json.loads(body)
                 method_name = data["method"]
@@ -278,7 +375,7 @@ class Provider:
                 elif action == "pay":
                     if invoice["status"] != "open":
                         return self.invalid("only open invoices can be paid")
-                    self.paid_invoice(invoice)
+                    return self.attempt_payment(invoice)
                 elif action == "void":
                     if invoice["status"] not in ("open", "draft"):
                         return self.invalid("invoice cannot be voided")
@@ -322,9 +419,12 @@ class Provider:
                 if collection == "invoices" and self.objects[ident]["status"] != "draft" and "default_tax_rates" in values:
                     return self.invalid("finalized invoice tax rates are immutable")
                 if collection == "subscriptions":
+                    if form.get("billing_cycle_anchor", [""])[-1] == "now" and values.get("payment_behavior") == "error_if_incomplete" and self.payment_outcomes.get(self.objects[ident]["customer"], "succeeded") in ("declined", "requires_action"):
+                        return 402, {"error": {"type": "card_error", "code": "card_declined", "message": "Simulated required payment failed; subscription update was not applied"}}
                     # The update's item instructions are not the response's
                     # existing SubscriptionItemList, including an empty update.
                     values.pop("items", None)
+                    previous_subscription = copy.deepcopy(self.objects[ident])
                 for field in ("metadata", "invoice_settings", "address", "automatic_tax"):
                     if isinstance(values.get(field), dict):
                         values[field] = {**self.objects[ident].get(field, {}), **values[field]}
@@ -352,6 +452,13 @@ class Provider:
                         self.objects[ident]["items"]["data"][0].update({"current_period_start": now, "current_period_end": now + 2592000})
                         paused = self.objects[ident].get("pause_collection", {}).get("behavior") == "keep_as_draft"
                         invoice = self.invoice(self.objects[ident], draft=True)
+                        if values.get("proration_behavior", "create_prorations") != "none":
+                            old_item = previous_subscription["items"]["data"][0]
+                            whole = old_item["current_period_end"] - old_item["current_period_start"]
+                            remaining = max(0, min(old_item["current_period_end"] - now, whole))
+                            credit = int((Decimal(old_item["price"]["unit_amount"]) * Decimal(remaining) / Decimal(whole)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)) if whole > 0 else 0
+                            if credit:
+                                invoice["lines"]["data"].append({"id": "il_proration_" + invoice["id"], "object": "line_item", "amount": -credit, "currency": invoice["currency"], "quantity": 1, "tax_rates": old_item.get("tax_rates") or previous_subscription.get("default_tax_rates", []), "metadata": {}, "period": {"start": now, "end": old_item["current_period_end"]}, "parent": {"type": "subscription_item_details", "subscription_item_details": {"subscription": ident, "subscription_item": old_item["id"], "proration": True}}})
                         indexes = sorted({int(m[1]) for key in form if (m := re.match(r"add_invoice_items\[(\d+)\]", key))})
                         for index in indexes:
                             credit_form = {re.sub(r"^add_invoice_items\[\d+\]\[([^\]]+)\]", r"\1", key): entries for key, entries in form.items() if key.startswith(f"add_invoice_items[{index}][")}
@@ -364,7 +471,8 @@ class Provider:
                         self.recalculate(invoice)
                         if not paused:
                             invoice["status_transitions"] = {"finalized_at": now}
-                            self.paid_invoice(invoice)
+                            invoice["auto_advance"] = True
+                            self.attempt_payment(invoice)
                         invoice["billing_reason"] = "subscription_update"
                 if collection == "invoices":
                     self.recalculate(self.objects[ident])

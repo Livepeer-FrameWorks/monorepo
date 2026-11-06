@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -27,9 +28,21 @@ func billingPhaseTaxReviewReference(tenant string, start time.Time) string {
 	return tenant + ":" + start.UTC().Format(time.RFC3339Nano)
 }
 
-// AfterRollback retains the refusal independently of the arrangement change it
-// blocked. The period, rather than the rolled-back invoice ID, identifies retries.
-func (e *billingPhaseTaxReviewError) AfterRollback(ctx context.Context) error {
+// RecordBillingPhaseTaxReview retains a refused phase close after its caller's
+// transaction has rolled back, preserving the original failure.
+func RecordBillingPhaseTaxReview(ctx context.Context, err error) error {
+	var review *billingPhaseTaxReviewError
+	if !errors.As(err, &review) {
+		return err
+	}
+	if recordErr := review.record(ctx); recordErr != nil {
+		return errors.Join(err, recordErr)
+	}
+	return err
+}
+
+// The period, rather than the rolled-back invoice ID, identifies retries.
+func (e *billingPhaseTaxReviewError) record(ctx context.Context) error {
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	evidence, err := json.Marshal(map[string]any{"review_required": true, "code": e.review.Code, "message": e.review.Message, "period_start": e.start, "period_end": e.end})

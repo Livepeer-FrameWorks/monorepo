@@ -2,6 +2,7 @@ package stripe
 
 import (
 	"context"
+	"errors"
 	"strconv"
 
 	billingtax "frameworks/api_billing/internal/tax"
@@ -10,9 +11,10 @@ import (
 )
 
 // A subscription's captured hold metadata identifies drafts created by our
-// tax guard. Operator drafts and invoices with unsupported adjustments require
-// review instead of having their original money silently replaced.
+// tax guard. Operator invoices are outside this recovery; owned invoices with
+// unsupported adjustments require review before their money can change.
 func recoverStripeTaxInvoices(ctx context.Context, sub *api.Subscription, profile TaxProfile, rateID string) error {
+	var failures error
 	for _, status := range []string{"draft", "open"} {
 		p := &api.InvoiceListParams{Subscription: api.String(sub.ID), Status: api.String(status)}
 		p.Context = ctx
@@ -24,14 +26,14 @@ func recoverStripeTaxInvoices(ctx context.Context, sub *api.Subscription, profil
 				continue
 			}
 			if err := recoverStripeTaxInvoice(ctx, sub, inv, profile, rateID); err != nil {
-				return err
+				failures = errors.Join(failures, err)
 			}
 		}
 		if err := iter.Err(); err != nil {
-			return err
+			failures = errors.Join(failures, err)
 		}
 	}
-	return nil
+	return failures
 }
 
 func recoverStripeTaxInvoice(ctx context.Context, sub *api.Subscription, inv *api.Invoice, profile TaxProfile, rateID string) error {
@@ -43,17 +45,20 @@ func recoverStripeTaxInvoice(ctx context.Context, sub *api.Subscription, inv *ap
 		meta = inv.Parent.SubscriptionDetails.Metadata
 	}
 	started, parseErr := strconv.ParseInt(meta["frameworks_tax_hold_started"], 10, 64)
-	owned := parseErr == nil && started > 0 && inv.Created >= started && meta["frameworks_tax_hold_started"] == sub.Metadata["frameworks_tax_hold_started"] && meta["frameworks_tax_review"] == "true" && meta["frameworks_tax_pause_owned"] == "true" && meta["tenant_id"] == sub.Metadata["tenant_id"]
-	if !owned {
-		if sub.Metadata["frameworks_tax_review"] == "true" {
-			return review()
-		}
+	owned := parseErr == nil && started > 0 && inv.Created >= started && meta["frameworks_tax_review"] == "true" && meta["frameworks_tax_pause_owned"] == "true" && meta["tenant_id"] == sub.Metadata["tenant_id"] && inv.Parent.SubscriptionDetails.Subscription != nil && inv.Parent.SubscriptionDetails.Subscription.ID == sub.ID
+	if !owned || inv.BillingReason != api.InvoiceBillingReasonSubscriptionCycle {
 		return nil
 	}
-	if inv.Customer == nil || sub.Customer == nil || inv.Customer.ID != sub.Customer.ID || inv.BillingReason != api.InvoiceBillingReasonSubscriptionCycle || inv.AutoAdvance || (sub.PauseCollection != nil && (sub.Metadata["frameworks_tax_pause_owned"] != "true" || sub.PauseCollection.Behavior != api.SubscriptionPauseCollectionBehaviorKeepAsDraft || sub.PauseCollection.ResumesAt != 0)) {
+	if inv.Customer == nil || sub.Customer == nil || inv.Customer.ID != sub.Customer.ID || (sub.PauseCollection != nil && (sub.Metadata["frameworks_tax_pause_owned"] != "true" || sub.PauseCollection.Behavior != api.SubscriptionPauseCollectionBehaviorKeepAsDraft || sub.PauseCollection.ResumesAt != 0)) {
 		return review()
 	}
 	if inv.Status == api.InvoiceStatusDraft {
+		if inv.AutoAdvance {
+			if inv.Metadata["frameworks_tax_recovered_hold"] == "true" && inv.Metadata["frameworks_tax_profile"] != "" {
+				return nil
+			}
+			return review()
+		}
 		lines := inv.Lines
 		if lines == nil || lines.HasMore {
 			p := &api.InvoiceListLinesParams{Invoice: api.String(inv.ID)}
@@ -87,27 +92,28 @@ func recoverStripeTaxInvoice(ctx context.Context, sub *api.Subscription, inv *ap
 		if _, err := invoice.UpdateLines(inv.ID, updateLines); err != nil {
 			return err
 		}
-		finalize := &api.InvoiceFinalizeInvoiceParams{AutoAdvance: api.Bool(false)}
+		// Stripe's automatic advancement owns collection, dunning and SCA
+		// reminders. A declined or processing payment does not invalidate VAT.
+		// https://docs.stripe.com/invoicing/integration/automatic-advancement-collection
+		finalize := &api.InvoiceFinalizeInvoiceParams{AutoAdvance: api.Bool(true)}
 		finalize.Context = ctx
-		finalize.SetIdempotencyKey("tax-hold-finalize:" + inv.ID)
+		// The SDK reuses its request key for transport retries. A later sweep
+		// rereads this fixed invoice's state and needs a fresh key so an
+		// executed 500 cannot pin an unchanged draft to a cached failure.
 		var err error
 		if inv, err = invoice.FinalizeInvoice(inv.ID, finalize); err != nil {
 			return err
 		}
 	}
 	if inv.Status == api.InvoiceStatusOpen {
-		if inv.Metadata["frameworks_tax_recovered_hold"] != "true" || inv.Metadata["frameworks_tax_profile"] != profile.Fingerprint() {
+		if inv.Metadata["frameworks_tax_recovered_hold"] != "true" || inv.Metadata["frameworks_tax_profile"] == "" {
 			return review()
 		}
-		pay := &api.InvoicePayParams{}
-		pay.Context = ctx
-		pay.SetIdempotencyKey("tax-hold-pay:" + inv.ID)
-		paid, err := invoice.Pay(inv.ID, pay)
-		if err != nil {
+		if !inv.AutoAdvance {
+			update := &api.InvoiceParams{AutoAdvance: api.Bool(true)}
+			update.Context = ctx
+			_, err := invoice.Update(inv.ID, update)
 			return err
-		}
-		if paid.Status != api.InvoiceStatusPaid {
-			return review()
 		}
 	}
 	return nil

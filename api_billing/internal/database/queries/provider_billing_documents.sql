@@ -26,7 +26,8 @@ RETURNING id::text AS id,(original_pdf IS NOT NULL)::boolean AS has_pdf;
 
 -- name: GetProviderBillingDocument :one
 SELECT id::text AS id,document_kind,provider_document_id,original_number,source_invoice_id,status,currency,net_minor,vat_minor,gross_minor,
- tax_status,tax_groups,supplier_snapshot,customer_snapshot,raw_facts,tax_assessment,original_pdf,pdf_sha256,issued_at,retention_until
+ COALESCE(reviewed_tax_status,tax_status)::text AS tax_status,tax_groups,supplier_snapshot,customer_snapshot,raw_facts,
+ COALESCE(reviewed_tax_assessment,tax_assessment)::jsonb AS tax_assessment,original_pdf,pdf_sha256,issued_at,retention_until
 FROM purser.provider_billing_documents
 WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND id=sqlc.arg(document_id)::text::uuid AND document_kind=sqlc.arg(document_kind);
 
@@ -40,7 +41,8 @@ SELECT profile FROM purser.provider_tax_profiles
 WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND profile_sha256=sqlc.arg(profile_sha256);
 
 -- name: FindProviderBillingDocument :one
-SELECT id::text AS id, (original_pdf IS NOT NULL)::boolean AS has_pdf, supplier_snapshot,customer_snapshot,tax_assessment
+SELECT id::text AS id, (original_pdf IS NOT NULL)::boolean AS has_pdf, supplier_snapshot,customer_snapshot,
+ COALESCE(reviewed_tax_assessment,tax_assessment)::jsonb AS tax_assessment
 FROM purser.provider_billing_documents
 WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND provider='stripe' AND provider_document_id=sqlc.arg(provider_document_id) AND document_kind=sqlc.arg(document_kind);
 
@@ -58,3 +60,30 @@ UPDATE purser.crypto_accounting_anomalies
 SET status='resolved',resolved_at=NOW(),resolution_note=sqlc.arg(note)::text
 WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND network='stripe' AND kind='provider_tax_review'
   AND reference_type=sqlc.arg(reference_type)::text AND reference_id=sqlc.arg(reference_id)::text AND status='open';
+
+-- name: UpdateProviderDocumentTaxReview :execrows
+UPDATE purser.provider_billing_documents
+SET reviewed_tax_status=sqlc.arg(tax_status)::text,
+ reviewed_tax_assessment=sqlc.arg(tax_assessment)::jsonb,tax_reviewed_at=NOW()
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND id=sqlc.arg(document_id)::text::uuid
+ AND COALESCE(reviewed_tax_status,tax_status)='legacy_unknown';
+
+-- name: StampProviderDocumentTaxReviewAttempt :exec
+UPDATE purser.provider_billing_documents SET tax_reviewed_at=NOW()
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND id=sqlc.arg(document_id)::text::uuid
+ AND COALESCE(reviewed_tax_status,tax_status)='legacy_unknown';
+
+-- name: ListProviderDocumentsForTaxReview :many
+SELECT id::text AS id,document_kind
+FROM purser.provider_billing_documents
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid
+ AND COALESCE(reviewed_tax_status,tax_status)='legacy_unknown'
+ AND COALESCE(tax_reviewed_at,captured_at)<=NOW()-INTERVAL '5 minutes'
+ORDER BY COALESCE(tax_reviewed_at,captured_at),id
+LIMIT sqlc.arg(page_size)::int;
+
+-- name: ResolveProviderDocumentTaxReview :execrows
+UPDATE purser.crypto_accounting_anomalies
+SET status='resolved',resolved_at=NOW(),resolution_note='Retained original provider tax facts verified'
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND network='stripe' AND kind='provider_tax_document_review'
+ AND reference_type=sqlc.arg(document_kind)::text AND reference_id=sqlc.arg(document_id)::text AND status='open';

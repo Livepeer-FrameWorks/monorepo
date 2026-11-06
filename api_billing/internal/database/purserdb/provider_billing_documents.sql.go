@@ -13,7 +13,8 @@ import (
 )
 
 const findProviderBillingDocument = `-- name: FindProviderBillingDocument :one
-SELECT id::text AS id, (original_pdf IS NOT NULL)::boolean AS has_pdf, supplier_snapshot,customer_snapshot,tax_assessment
+SELECT id::text AS id, (original_pdf IS NOT NULL)::boolean AS has_pdf, supplier_snapshot,customer_snapshot,
+ COALESCE(reviewed_tax_assessment,tax_assessment)::jsonb AS tax_assessment
 FROM purser.provider_billing_documents
 WHERE tenant_id=$1::text::uuid AND provider='stripe' AND provider_document_id=$2 AND document_kind=$3
 `
@@ -47,7 +48,8 @@ func (q *Queries) FindProviderBillingDocument(ctx context.Context, arg FindProvi
 
 const getProviderBillingDocument = `-- name: GetProviderBillingDocument :one
 SELECT id::text AS id,document_kind,provider_document_id,original_number,source_invoice_id,status,currency,net_minor,vat_minor,gross_minor,
- tax_status,tax_groups,supplier_snapshot,customer_snapshot,raw_facts,tax_assessment,original_pdf,pdf_sha256,issued_at,retention_until
+ COALESCE(reviewed_tax_status,tax_status)::text AS tax_status,tax_groups,supplier_snapshot,customer_snapshot,raw_facts,
+ COALESCE(reviewed_tax_assessment,tax_assessment)::jsonb AS tax_assessment,original_pdf,pdf_sha256,issued_at,retention_until
 FROM purser.provider_billing_documents
 WHERE tenant_id=$1::text::uuid AND id=$2::text::uuid AND document_kind=$3
 `
@@ -126,6 +128,49 @@ func (q *Queries) GetProviderTaxProfile(ctx context.Context, arg GetProviderTaxP
 	return profile, err
 }
 
+const listProviderDocumentsForTaxReview = `-- name: ListProviderDocumentsForTaxReview :many
+SELECT id::text AS id,document_kind
+FROM purser.provider_billing_documents
+WHERE tenant_id=$1::text::uuid
+ AND COALESCE(reviewed_tax_status,tax_status)='legacy_unknown'
+ AND COALESCE(tax_reviewed_at,captured_at)<=NOW()-INTERVAL '5 minutes'
+ORDER BY COALESCE(tax_reviewed_at,captured_at),id
+LIMIT $2::int
+`
+
+type ListProviderDocumentsForTaxReviewParams struct {
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	PageSize int32  `db:"page_size" json:"page_size"`
+}
+
+type ListProviderDocumentsForTaxReviewRow struct {
+	ID           string `db:"id" json:"id"`
+	DocumentKind string `db:"document_kind" json:"document_kind"`
+}
+
+func (q *Queries) ListProviderDocumentsForTaxReview(ctx context.Context, arg ListProviderDocumentsForTaxReviewParams) ([]ListProviderDocumentsForTaxReviewRow, error) {
+	rows, err := q.db.QueryContext(ctx, listProviderDocumentsForTaxReview, arg.TenantID, arg.PageSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProviderDocumentsForTaxReviewRow{}
+	for rows.Next() {
+		var i ListProviderDocumentsForTaxReviewRow
+		if err := rows.Scan(&i.ID, &i.DocumentKind); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTenantStripeTaxSubscriptions = `-- name: ListTenantStripeTaxSubscriptions :many
 SELECT stripe_customer_id::text AS customer_id,COALESCE(stripe_subscription_id,'')::text AS subscription_id
 FROM purser.tenant_subscriptions
@@ -162,6 +207,27 @@ func (q *Queries) ListTenantStripeTaxSubscriptions(ctx context.Context, tenantID
 		return nil, err
 	}
 	return items, nil
+}
+
+const resolveProviderDocumentTaxReview = `-- name: ResolveProviderDocumentTaxReview :execrows
+UPDATE purser.crypto_accounting_anomalies
+SET status='resolved',resolved_at=NOW(),resolution_note='Retained original provider tax facts verified'
+WHERE tenant_id=$1::text::uuid AND network='stripe' AND kind='provider_tax_document_review'
+ AND reference_type=$2::text AND reference_id=$3::text AND status='open'
+`
+
+type ResolveProviderDocumentTaxReviewParams struct {
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+	DocumentKind string `db:"document_kind" json:"document_kind"`
+	DocumentID   string `db:"document_id" json:"document_id"`
+}
+
+func (q *Queries) ResolveProviderDocumentTaxReview(ctx context.Context, arg ResolveProviderDocumentTaxReviewParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, resolveProviderDocumentTaxReview, arg.TenantID, arg.DocumentKind, arg.DocumentID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const resolveProviderTaxReview = `-- name: ResolveProviderTaxReview :execrows
@@ -223,6 +289,22 @@ func (q *Queries) ResolveStripeTaxDocumentOwners(ctx context.Context, customerID
 		return nil, err
 	}
 	return items, nil
+}
+
+const stampProviderDocumentTaxReviewAttempt = `-- name: StampProviderDocumentTaxReviewAttempt :exec
+UPDATE purser.provider_billing_documents SET tax_reviewed_at=NOW()
+WHERE tenant_id=$1::text::uuid AND id=$2::text::uuid
+ AND COALESCE(reviewed_tax_status,tax_status)='legacy_unknown'
+`
+
+type StampProviderDocumentTaxReviewAttemptParams struct {
+	TenantID   string `db:"tenant_id" json:"tenant_id"`
+	DocumentID string `db:"document_id" json:"document_id"`
+}
+
+func (q *Queries) StampProviderDocumentTaxReviewAttempt(ctx context.Context, arg StampProviderDocumentTaxReviewAttemptParams) error {
+	_, err := q.db.ExecContext(ctx, stampProviderDocumentTaxReviewAttempt, arg.TenantID, arg.DocumentID)
+	return err
 }
 
 const storeProviderBillingDocument = `-- name: StoreProviderBillingDocument :one
@@ -317,4 +399,32 @@ type StoreProviderTaxProfileParams struct {
 func (q *Queries) StoreProviderTaxProfile(ctx context.Context, arg StoreProviderTaxProfileParams) error {
 	_, err := q.db.ExecContext(ctx, storeProviderTaxProfile, arg.TenantID, arg.ProfileSha256, arg.Profile)
 	return err
+}
+
+const updateProviderDocumentTaxReview = `-- name: UpdateProviderDocumentTaxReview :execrows
+UPDATE purser.provider_billing_documents
+SET reviewed_tax_status=$1::text,
+ reviewed_tax_assessment=$2::jsonb,tax_reviewed_at=NOW()
+WHERE tenant_id=$3::text::uuid AND id=$4::text::uuid
+ AND COALESCE(reviewed_tax_status,tax_status)='legacy_unknown'
+`
+
+type UpdateProviderDocumentTaxReviewParams struct {
+	TaxStatus     string          `db:"tax_status" json:"tax_status"`
+	TaxAssessment json.RawMessage `db:"tax_assessment" json:"tax_assessment"`
+	TenantID      string          `db:"tenant_id" json:"tenant_id"`
+	DocumentID    string          `db:"document_id" json:"document_id"`
+}
+
+func (q *Queries) UpdateProviderDocumentTaxReview(ctx context.Context, arg UpdateProviderDocumentTaxReviewParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateProviderDocumentTaxReview,
+		arg.TaxStatus,
+		arg.TaxAssessment,
+		arg.TenantID,
+		arg.DocumentID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

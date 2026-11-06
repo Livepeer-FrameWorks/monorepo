@@ -15,6 +15,9 @@ type heldDraftBackend struct {
 	inv                     *api.Invoice
 	failAfter               string
 	writes, finalized, paid int
+	paymentState            string
+	rateID                  string
+	tax                     *taxBackend
 }
 
 func (b *heldDraftBackend) CallRaw(method, path, key string, body []byte, p *api.Params, out api.LastResponseSetter) error {
@@ -22,41 +25,68 @@ func (b *heldDraftBackend) CallRaw(method, path, key string, body []byte, p *api
 		list.Data = []*api.Invoice{b.inv}
 		return nil
 	}
+	if b.tax != nil {
+		return b.tax.CallRaw(method, path, key, body, p, out)
+	}
 	return b.fakeBackend.CallRaw(method, path, key, body, p, out)
 }
 
 func (b *heldDraftBackend) Call(method, path, key string, params api.ParamsContainer, out api.LastResponseSetter) error {
+	if _, ok := out.(*api.Invoice); !ok && b.tax != nil {
+		return b.tax.Call(method, path, key, params, out)
+	}
 	if method != http.MethodPost {
 		return errors.New("unexpected non-mutating invoice request")
 	}
 	b.writes++
 	stage := ""
+	rateID := b.rateID
+	if rateID == "" {
+		rateID = "vat21"
+	}
 	switch p := params.(type) {
 	case *api.InvoiceParams:
 		stage = "update"
-		if api.BoolValue(p.AutoAdvance) || len(p.DefaultTaxRates) != 1 || api.StringValue(p.DefaultTaxRates[0]) != "vat21" {
+		if api.BoolValue(p.AutoAdvance) && len(p.DefaultTaxRates) == 0 {
+			stage = "advance"
+			if p.Metadata != nil || p.AutomaticTax != nil || p.Footer != nil {
+				return errors.New("finalized invoice tax facts were rewritten")
+			}
+			b.inv.AutoAdvance = true
+			break
+		}
+		if api.BoolValue(p.AutoAdvance) || len(p.DefaultTaxRates) != 1 || api.StringValue(p.DefaultTaxRates[0]) != rateID {
 			return errors.New("recovery enabled automatic collection or lost current exclusive rate")
 		}
 		b.inv.Metadata = p.Metadata
 	case *api.InvoiceUpdateLinesParams:
 		stage = "lines"
-		if len(p.Lines) != 1 || api.StringValue(p.Lines[0].ID) != "base" || len(p.Lines[0].TaxRates) != 1 || api.StringValue(p.Lines[0].TaxRates[0]) != "vat21" || p.Lines[0].Amount != nil {
+		if len(p.Lines) != 1 || api.StringValue(p.Lines[0].ID) != "base" || len(p.Lines[0].TaxRates) != 1 || api.StringValue(p.Lines[0].TaxRates[0]) != rateID || p.Lines[0].Amount != nil {
 			return errors.New("recovery changed original net or omitted explicit line rate")
 		}
 		b.inv.Total = 12100
 	case *api.InvoiceFinalizeInvoiceParams:
 		stage = "finalize"
-		if api.BoolValue(p.AutoAdvance) || b.inv.Total != 12100 || b.inv.Metadata["frameworks_tax_profile"] == "" {
+		if b.inv.Total != 12100 || b.inv.Metadata["frameworks_tax_profile"] == "" {
 			return errors.New("recovery finalized without retained tax setup")
 		}
 		b.finalized++
 		b.inv.Status = api.InvoiceStatusOpen
+		b.inv.AutoAdvance = api.BoolValue(p.AutoAdvance)
 	case *api.InvoicePayParams:
 		stage = "pay"
 		if b.inv.Status != api.InvoiceStatusOpen || b.inv.Total != 12100 {
 			return errors.New("recovery collected wrong invoice or gross")
 		}
 		b.paid++
+		if b.paymentState == "declined" {
+			return &api.Error{HTTPStatusCode: 402, Msg: "card_declined"}
+		}
+		if b.paymentState != "" {
+			b.inv.Status = api.InvoiceStatusOpen
+			*out.(*api.Invoice) = *b.inv
+			return nil
+		}
 		b.inv.Status = api.InvoiceStatusPaid
 	default:
 		return errors.New("unexpected invoice recovery mutation " + path)
@@ -69,17 +99,155 @@ func (b *heldDraftBackend) Call(method, path, key string, params api.ParamsConta
 	return nil
 }
 
+func TestTaxHoldReleaseDoesNotWaitForPayment(t *testing.T) {
+	for _, state := range []string{"declined", "requires_action", "processing"} {
+		t.Run(state, func(t *testing.T) {
+			sub, inv := heldTaxFixture()
+			b := &heldDraftBackend{inv: inv, paymentState: state, rateID: "txr_exclusive", tax: &taxBackend{t: t, owner: "tenant", currentSub: sub}}
+			installBackend(t, b)
+			if err := (&Client{}).ReconcileSubscriptionTax(t.Context(), "tenant", "customer", "sub", assessedTaxProfile()); err != nil {
+				t.Fatalf("valid tax recovery was held by payment outcome: %v", err)
+			}
+			if b.paid != 0 || !inv.AutoAdvance || inv.Status != api.InvoiceStatusOpen {
+				t.Fatalf("recovery did not hand unpaid invoice to Stripe dunning: paidCalls%d autoAdvance%v status%s", b.paid, inv.AutoAdvance, inv.Status)
+			}
+			resumed := false
+			for _, update := range b.tax.subUpdates {
+				for _, field := range update.UnsetFields {
+					resumed = resumed || field == api.SubscriptionParamsUnsetFieldPauseCollection
+				}
+			}
+			if !resumed {
+				t.Fatal("valid tax profile retained its owned pause while payment was pending")
+			}
+		})
+	}
+}
+
+func TestTaxHoldInvoiceFailureDoesNotPauseCorrectFutureRenewals(t *testing.T) {
+	for _, failure := range []string{"invoice API", "unsupported adjustment"} {
+		t.Run(failure, func(t *testing.T) {
+			sub, inv := heldTaxFixture()
+			b := &heldDraftBackend{inv: inv, rateID: "txr_exclusive", tax: &taxBackend{t: t, owner: "tenant", currentSub: sub}}
+			if failure == "invoice API" {
+				b.failAfter = "update"
+			} else {
+				inv.Lines.Data[0].Amount = -100
+			}
+			installBackend(t, b)
+			if err := (&Client{}).ReconcileSubscriptionTax(t.Context(), "tenant", "customer", "sub", assessedTaxProfile()); err == nil {
+				t.Fatal("past invoice failure was silently resolved")
+			}
+			resumed := false
+			if b.tax.updatedSub != nil {
+				for _, f := range b.tax.updatedSub.UnsetFields {
+					resumed = resumed || f == api.SubscriptionParamsUnsetFieldPauseCollection
+				}
+			}
+			if !resumed {
+				t.Fatal("past invoice failure kept future tax-correct renewals paused")
+			}
+			if b.paid != 0 {
+				t.Fatal("tax recovery performed a synchronous charge")
+			}
+		})
+	}
+}
+
+func TestTaxHoldRecoveryIgnoresOtherInvoices(t *testing.T) {
+	for _, state := range []api.InvoiceStatus{api.InvoiceStatusDraft, api.InvoiceStatusOpen} {
+		for _, kind := range []string{"unrelated", "manual", "before hold"} {
+			t.Run(string(state)+"/"+kind, func(t *testing.T) {
+				sub, inv := heldTaxFixture()
+				inv.Status = state
+				switch kind {
+				case "unrelated":
+					inv.Parent.SubscriptionDetails.Metadata = map[string]string{}
+				case "manual":
+					inv.BillingReason = api.InvoiceBillingReasonManual
+				case "before hold":
+					inv.Created = 99
+				}
+				b := &heldDraftBackend{inv: inv}
+				installBackend(t, b)
+				if err := recoverStripeTaxInvoices(t.Context(), sub, assessedTaxProfile(), "vat21"); err != nil {
+					t.Fatalf("unrelated invoice blocked owned tax recovery: %v", err)
+				}
+				if b.writes != 0 {
+					t.Fatal("recovery changed an unrelated invoice")
+				}
+			})
+		}
+	}
+}
+
+func TestTaxPreflightLeavesPendingInvoiceWorkToBillingWorker(t *testing.T) {
+	sub, inv := heldTaxFixture()
+	inv.Lines.Data[0].Amount = -100
+	b := &taxBackend{t: t, owner: "tenant", currentSub: sub, drafts: []*api.Invoice{inv}}
+	installBackend(t, b)
+	if err := (&Client{}).SyncSubscriptionTax(t.Context(), "tenant", "customer", "sub", assessedTaxProfile()); err != nil {
+		t.Fatal(err)
+	}
+	if b.invoiceListCalls != 0 {
+		t.Fatal("interactive tax preflight scanned or repaired old invoice debt")
+	}
+	if b.updatedSub == nil || b.updatedSub.Metadata["frameworks_tax_recovery_pending"] != "true" || b.updatedSub.Metadata["frameworks_tax_hold_started"] != "" {
+		t.Fatal("resumed tax preflight lost pending worker repair or retained active hold")
+	}
+}
+
+func TestLaterTaxHoldStartsFreshEpisodeWithoutLosingPendingRepair(t *testing.T) {
+	sub, _ := heldTaxFixture()
+	sub.Metadata["frameworks_tax_review"] = ""
+	sub.Metadata["frameworks_tax_recovery_pending"] = "true"
+	sub.PauseCollection = nil
+	b := &taxBackend{t: t, owner: "tenant", currentSub: sub}
+	installBackend(t, b)
+	if err := (&Client{}).HoldSubscriptionTaxReview(t.Context(), "tenant", "customer", "sub"); err != nil {
+		t.Fatal(err)
+	}
+	if b.updatedSub == nil || b.updatedSub.Metadata["frameworks_tax_hold_started"] == "100" || b.updatedSub.Metadata["frameworks_tax_hold_started"] == "" {
+		t.Fatal("new tax hold reused the old episode timestamp")
+	}
+	if _, cleared := b.updatedSub.Metadata["frameworks_tax_recovery_pending"]; cleared {
+		t.Fatal("new hold erased older unfinished invoice repair")
+	}
+}
+
+func TestOlderOwnedInvoiceRepairSurvivesANewerHoldEpisode(t *testing.T) {
+	sub, inv := heldTaxFixture()
+	sub.Metadata["frameworks_tax_hold_started"] = "200"
+	b := &heldDraftBackend{inv: inv}
+	installBackend(t, b)
+	if err := recoverStripeTaxInvoices(t.Context(), sub, assessedTaxProfile(), "vat21"); err != nil {
+		t.Fatal(err)
+	}
+	if inv.Status != api.InvoiceStatusOpen || !inv.AutoAdvance || b.finalized != 1 || b.paid != 0 {
+		t.Fatal("older unfinished tax work was lost when a later hold began")
+	}
+}
+
 func heldTaxFixture() (*api.Subscription, *api.Invoice) {
 	meta := map[string]string{"tenant_id": "tenant", "frameworks_tax_review": "true", "frameworks_tax_pause_owned": "true", "frameworks_tax_hold_started": "100"}
 	sub := &api.Subscription{ID: "sub", Customer: &api.Customer{ID: "customer"}, Metadata: meta, PauseCollection: &api.SubscriptionPauseCollection{Behavior: api.SubscriptionPauseCollectionBehaviorKeepAsDraft}}
-	inv := &api.Invoice{ID: "same-held-invoice", Customer: sub.Customer, Created: 101, Currency: api.CurrencyEUR, Status: api.InvoiceStatusDraft, BillingReason: api.InvoiceBillingReasonSubscriptionCycle, Parent: &api.InvoiceParent{SubscriptionDetails: &api.InvoiceParentSubscriptionDetails{Metadata: meta}}, Lines: &api.InvoiceLineItemList{Data: []*api.InvoiceLineItem{{ID: "base", Amount: 10000, Currency: api.CurrencyEUR, Parent: &api.InvoiceLineItemParent{SubscriptionItemDetails: &api.InvoiceLineItemParentSubscriptionItemDetails{Subscription: "sub", SubscriptionItem: "item"}}}}}}
+	snapshot := map[string]string{}
+	for key, value := range meta {
+		snapshot[key] = value
+	}
+	inv := &api.Invoice{ID: "same-held-invoice", Customer: sub.Customer, Created: 101, Currency: api.CurrencyEUR, Status: api.InvoiceStatusDraft, BillingReason: api.InvoiceBillingReasonSubscriptionCycle, Parent: &api.InvoiceParent{SubscriptionDetails: &api.InvoiceParentSubscriptionDetails{Metadata: snapshot, Subscription: &api.Subscription{ID: sub.ID}}}, Lines: &api.InvoiceLineItemList{Data: []*api.InvoiceLineItem{{ID: "base", Amount: 10000, Currency: api.CurrencyEUR, Parent: &api.InvoiceLineItemParent{SubscriptionItemDetails: &api.InvoiceLineItemParentSubscriptionItemDetails{Subscription: "sub", SubscriptionItem: "item"}}}}}}
 	return sub, inv
 }
 
 func TestOwnedTaxHoldDraftRecoversSameInvoiceAfterEveryLostResponse(t *testing.T) {
-	for _, stage := range []string{"update", "lines", "finalize", "pay"} {
+	for _, stage := range []string{"update", "lines", "finalize", "advance"} {
 		t.Run(stage, func(t *testing.T) {
 			sub, inv := heldTaxFixture()
+			if stage == "advance" {
+				inv.Status = api.InvoiceStatusOpen
+				inv.Total = 12100
+				inv.Metadata = map[string]string{"frameworks_tax_recovered_hold": "true", "frameworks_tax_profile": "retained-earlier-legal-profile"}
+			}
 			b := &heldDraftBackend{inv: inv, failAfter: stage}
 			installBackend(t, b)
 			if err := recoverStripeTaxInvoices(t.Context(), sub, assessedTaxProfile(), "vat21"); err == nil {
@@ -88,27 +256,28 @@ func TestOwnedTaxHoldDraftRecoversSameInvoiceAfterEveryLostResponse(t *testing.T
 			if err := recoverStripeTaxInvoices(t.Context(), sub, assessedTaxProfile(), "vat21"); err != nil {
 				t.Fatal(err)
 			}
-			if inv.ID != "same-held-invoice" || inv.Status != api.InvoiceStatusPaid || inv.Lines.Data[0].Amount != 10000 || inv.Total != 12100 || b.finalized != 1 || b.paid != 1 {
+			wantFinalized := 1
+			if stage == "advance" {
+				wantFinalized = 0
+			}
+			if inv.ID != "same-held-invoice" || inv.Status != api.InvoiceStatusOpen || !inv.AutoAdvance || inv.Lines.Data[0].Amount != 10000 || inv.Total != 12100 || b.finalized != wantFinalized || b.paid != 0 {
 				t.Fatalf("recovery changed invoice/credit/payment: %+v finalized%d paid%d", inv, b.finalized, b.paid)
 			}
 		})
 	}
 }
 
-func TestTaxHoldRecoveryRefusesUnownedAdjustedAndChangedFinalizedInvoices(t *testing.T) {
-	for _, mode := range []string{"operator pause", "missing ownership", "unrelated credit", "changed finalized terms"} {
+func TestTaxHoldRecoveryRefusesOperatorChangedPauseAndUnsupportedOwnedInvoices(t *testing.T) {
+	for _, mode := range []string{"operator pause", "unrelated credit", "missing finalized proof"} {
 		t.Run(mode, func(t *testing.T) {
 			sub, inv := heldTaxFixture()
 			switch mode {
 			case "operator pause":
 				sub.PauseCollection = &api.SubscriptionPauseCollection{Behavior: api.SubscriptionPauseCollectionBehaviorVoid}
-			case "missing ownership":
-				inv.Parent.SubscriptionDetails.Metadata = map[string]string{}
 			case "unrelated credit":
 				inv.Lines.Data[0].Amount = -100
-			case "changed finalized terms":
+			case "missing finalized proof":
 				inv.Status = api.InvoiceStatusOpen
-				inv.Metadata = map[string]string{"frameworks_tax_recovered_hold": "true", "frameworks_tax_profile": "different-legal-terms"}
 			}
 			b := &heldDraftBackend{inv: inv}
 			installBackend(t, b)

@@ -23,7 +23,7 @@ func (e *rollbackObservedError) Error() string                           { retur
 func (e *rollbackObservedError) Unwrap() error                           { return e.cause }
 func (e *rollbackObservedError) AfterRollback(ctx context.Context) error { return e.observe(ctx) }
 
-func TestPostgresRollbackObserverRunsAfterRollbackAndPreservesErrors(t *testing.T) {
+func TestPostgresTransactionDoesNotRunBusinessCallbacks(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -33,18 +33,14 @@ func TestPostgresRollbackObserverRunsAfterRollbackAndPreservesErrors(t *testing.
 	cause, noticeFailure := errors.New("billing review"), errors.New("notice failed")
 	mock.ExpectBegin()
 	mock.ExpectRollback()
-	mock.ExpectExec("INSERT durable_review").WillReturnResult(sqlmock.NewResult(0, 1))
 	observed := 0
-	failure := &rollbackObservedError{cause: cause, observe: func(ctx context.Context) error {
+	failure := &rollbackObservedError{cause: cause, observe: func(context.Context) error {
 		observed++
-		if _, noticeErr := db.ExecContext(ctx, "INSERT durable_review"); noticeErr != nil {
-			return noticeErr
-		}
 		return noticeFailure
 	}}
 	err = WithPostgresTx(t.Context(), db, nil, func(*sql.Tx) error { return fixedTextStatus{cause: failure} })
-	if observed != 1 || !errors.Is(err, cause) || !errors.Is(err, noticeFailure) {
-		t.Fatalf("observer count=%d error=%v; want one post-rollback notice preserving both causes", observed, err)
+	if observed != 0 || !errors.Is(err, cause) || errors.Is(err, noticeFailure) {
+		t.Fatalf("generic transaction invoked business callback %d times: %v", observed, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

@@ -89,23 +89,26 @@ func TestSubscriptionTaxWireOmitsUnchangedItemsAndKeepsExplicitOverrides(t *test
 
 type taxBackend struct {
 	fakeBackend
-	t               *testing.T
-	owner           string
-	profile         TaxProfile
-	deleted         []string
-	createdVAT      string
-	updatedCustomer *api.CustomerParams
-	updatedSub      *api.SubscriptionParams
-	currentVAT      string
-	inclusive       bool
-	currentSub      *api.Subscription
-	listedItems     []*api.SubscriptionItem
-	itemListCalls   int
-	drafts          []*api.Invoice
+	t                *testing.T
+	owner            string
+	profile          TaxProfile
+	deleted          []string
+	createdVAT       string
+	updatedCustomer  *api.CustomerParams
+	updatedSub       *api.SubscriptionParams
+	subUpdates       []*api.SubscriptionParams
+	currentVAT       string
+	inclusive        bool
+	currentSub       *api.Subscription
+	listedItems      []*api.SubscriptionItem
+	itemListCalls    int
+	invoiceListCalls int
+	drafts           []*api.Invoice
 }
 
 func (b *taxBackend) CallRaw(method, path, key string, body []byte, params *api.Params, out api.LastResponseSetter) error {
 	if list, ok := out.(*api.InvoiceList); ok {
+		b.invoiceListCalls++
 		list.Data = b.drafts
 		return nil
 	}
@@ -117,18 +120,17 @@ func (b *taxBackend) CallRaw(method, path, key string, body []byte, params *api.
 	return b.fakeBackend.CallRaw(method, path, key, body, params, out)
 }
 
-func TestTaxReviewDraftsStayPausedAndVisibleAfterProfileRecovery(t *testing.T) {
+func TestUnsupportedOwnedTaxInvoiceKeepsReviewAfterFutureRenewalsResume(t *testing.T) {
 	p := assessedTaxProfile()
-	current := &api.Subscription{ID: "sub_owned", Customer: &api.Customer{ID: "cus_owned"}, Metadata: map[string]string{"tenant_id": "tenant-owned", "frameworks_tax_review": "true", "frameworks_tax_pause_owned": "true"}, PauseCollection: &api.SubscriptionPauseCollection{Behavior: api.SubscriptionPauseCollectionBehaviorKeepAsDraft}}
-	b := &taxBackend{t: t, owner: "tenant-owned", currentSub: current, drafts: []*api.Invoice{{ID: "held-renewal", Status: api.InvoiceStatusDraft}}}
+	current, unsupported := heldTaxFixture()
+	unsupported.Lines.Data[0].Amount = -100
+	b := &taxBackend{t: t, owner: "tenant", currentSub: current, drafts: []*api.Invoice{unsupported}}
 	installBackend(t, b)
-	if err := (&Client{}).SyncSubscriptionTax(t.Context(), "tenant-owned", "cus_owned", "sub_owned", p); err == nil {
+	if err := (&Client{}).ReconcileSubscriptionTax(t.Context(), "tenant", "customer", "sub", p); err == nil {
 		t.Fatal("held renewal debt silently cleared from review after profile recovery")
 	}
-	if b.updatedSub != nil && (len(b.updatedSub.UnsetFields) > 0 || b.updatedSub.Metadata["frameworks_tax_review"] == "") {
-		if _, clearing := b.updatedSub.Metadata["frameworks_tax_review"]; clearing || len(b.updatedSub.UnsetFields) > 0 {
-			t.Fatal("held draft released or review silently cleared")
-		}
+	if b.updatedSub == nil || len(b.updatedSub.UnsetFields) != 1 || b.updatedSub.UnsetFields[0] != api.SubscriptionParamsUnsetFieldPauseCollection {
+		t.Fatal("past invoice review kept future tax-correct renewals paused")
 	}
 }
 
@@ -227,6 +229,7 @@ func (b *taxBackend) Call(method, path, key string, params api.ParamsContainer, 
 			}
 		} else {
 			b.updatedSub = params.(*api.SubscriptionParams)
+			b.subUpdates = append(b.subUpdates, b.updatedSub)
 		}
 	}
 	return nil

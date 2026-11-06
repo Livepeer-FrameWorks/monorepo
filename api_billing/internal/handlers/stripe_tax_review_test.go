@@ -9,6 +9,7 @@ import (
 
 	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	billingstripe "frameworks/api_billing/internal/stripe"
+	billingtax "frameworks/api_billing/internal/tax"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	api "github.com/stripe/stripe-go/v85"
@@ -18,6 +19,54 @@ type taxReviewBackend struct {
 	stripeUpgradeTaxBackend
 	paused          bool
 	clearedCustomer bool
+}
+
+type multipleTaxSubscriptionsBackend struct {
+	stripeUpgradeTaxBackend
+	failed error
+	reads  []string
+}
+
+func (b *multipleTaxSubscriptionsBackend) Call(method, path, key string, params api.ParamsContainer, out api.LastResponseSetter) error {
+	if _, ok := out.(*api.Subscription); ok && method == http.MethodGet {
+		b.reads = append(b.reads, path)
+		if path == "/v1/subscriptions/broken" {
+			return b.failed
+		}
+	}
+	return b.stripeUpgradeTaxBackend.Call(method, path, key, params, out)
+}
+
+func TestStripeTaxReconciliationContinuesOtherTenantSubscriptions(t *testing.T) {
+	for key, value := range map[string]string{"SUPPLIER_NAME": "DDVTech B.V.", "SUPPLIER_ADDRESS": "Leiden NL", "SUPPLIER_VAT_NUMBER": "NL853319145B01", "SUPPLIER_REGISTRATION_NUMBER": "59104694", "SUPPLIER_COUNTRY": "NL", "CRYPTO_TAX_POLICY_JSON": ""} {
+		appconfigtest.Set(t, key, value)
+	}
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("-- name: ListTenantStripeTaxSubscriptions").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"customer_id", "subscription_id"}).AddRow("customer", "broken").AddRow("customer", "sub"))
+	mock.ExpectQuery("-- name: GetCryptoDocumentBillingProfile").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow("buyer@example.test", "Buyer", "Buyer Ltd", []byte(`{"street":"Main1","city":"Toronto","postal_code":"M5V1A1","country":"CA"}`), nil, "business"))
+	retained := &billingstripe.TaxProfile{}
+	mock.ExpectExec("-- name: StoreProviderTaxProfile").WithArgs("tenant", sqlmock.AnyArg(), retainedUpgradeTaxArg{profile: retained}).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("-- name: ResolveProviderTaxReview").WithArgs(sqlmock.AnyArg(), "tenant", "stripe_subscription", "sub").WillReturnResult(sqlmock.NewResult(0, 1))
+	failure := errors.New("first provider subscription unavailable")
+	b := &multipleTaxSubscriptionsBackend{stripeUpgradeTaxBackend: stripeUpgradeTaxBackend{profile: retained}, failed: failure}
+	previous := api.GetBackend(api.APIBackend)
+	api.SetBackend(api.APIBackend, b)
+	t.Cleanup(func() { api.SetBackend(api.APIBackend, previous) })
+	svc := &Service{db: db, logger: logging.NewLogger(), stripeClient: billingstripe.NewClient(billingstripe.Config{SecretKey: "sk_test", Logger: logging.NewLogger()})}
+	jm := &JobManager{db: db, billing: svc, logger: logging.NewLogger()}
+	if err = jm.reconcileStripeTaxTenant(t.Context(), "tenant"); !errors.Is(err, failure) {
+		t.Fatalf("first failure was lost: %v", err)
+	}
+	if len(b.reads) != 2 || b.taxUpdates != 1 {
+		t.Fatalf("one failed subscription skipped the remaining tenant: reads%v updates%d", b.reads, b.taxUpdates)
+	}
+	if err = mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestStripeTaxOnlyBillingReviewHoldsCollection(t *testing.T) {
@@ -30,6 +79,7 @@ func TestStripeTaxOnlyBillingReviewHoldsCollection(t *testing.T) {
 		{"database unavailable", errors.New("database unavailable"), false},
 		{"deadline", context.DeadlineExceeded, false},
 		{"cancelled", context.Canceled, false},
+		{"VIES temporarily unavailable", billingtax.Review("vat_validation_unavailable", "VAT validation is temporarily unavailable"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for key, value := range map[string]string{"SUPPLIER_NAME": "DDVTech B.V.", "SUPPLIER_ADDRESS": "Leiden NL", "SUPPLIER_VAT_NUMBER": "NL853319145B01", "SUPPLIER_REGISTRATION_NUMBER": "59104694", "SUPPLIER_COUNTRY": "NL"} {

@@ -739,6 +739,7 @@ type Querier interface {
 	// listed. usage_amount is the invoice's usage lines without base and monthly
 	// cluster fees.
 	ListPrepaidDoubleCharges(ctx context.Context, arg ListPrepaidDoubleChargesParams) ([]ListPrepaidDoubleChargesRow, error)
+	ListProviderDocumentsForTaxReview(ctx context.Context, arg ListProviderDocumentsForTaxReviewParams) ([]ListProviderDocumentsForTaxReviewRow, error)
 	ListProviderPaymentAttemptsForRetry(ctx context.Context, maxAttempts int32) ([]ListProviderPaymentAttemptsForRetryRow, error)
 	// Monthly clusters billed on Purser invoices that were active at any point of
 	// the period, with the time they were active from and their cancellation.
@@ -960,6 +961,7 @@ type Querier interface {
 	// Closes the operator review holds of an uncredited top-up whose paid amount
 	// the provider has fully returned; evidence_ref names the closing reversal.
 	ResolvePendingTopupReviewHolds(ctx context.Context, arg ResolvePendingTopupReviewHoldsParams) (int64, error)
+	ResolveProviderDocumentTaxReview(ctx context.Context, arg ResolveProviderDocumentTaxReviewParams) (int64, error)
 	ResolveProviderTaxReview(ctx context.Context, arg ResolveProviderTaxReviewParams) (int64, error)
 	// Authenticated provider events locate only their existing tenant mapping.
 	ResolveStripeTaxDocumentOwners(ctx context.Context, customerID string) ([]string, error)
@@ -1008,6 +1010,7 @@ type Querier interface {
 	// Its prospective subscription lives on the provider intent until activation.
 	StageTenantSubscriptionPendingStripe(ctx context.Context, arg StageTenantSubscriptionPendingStripeParams) error
 	StageTierUpgrade(ctx context.Context, arg StageTierUpgradeParams) error
+	StampProviderDocumentTaxReviewAttempt(ctx context.Context, arg StampProviderDocumentTaxReviewAttemptParams) error
 	// A switch between prepaid and postpaid closed the current phase at
 	// period_start: the next phase's period runs from there.
 	StartBillingPhase(ctx context.Context, arg StartBillingPhaseParams) (int64, error)
@@ -1057,6 +1060,7 @@ type Querier interface {
 	UpdatePendingX402Receipt(ctx context.Context, arg UpdatePendingX402ReceiptParams) error
 	UpdatePrepaidBalance(ctx context.Context, arg UpdatePrepaidBalanceParams) error
 	UpdatePrepaidBalanceWithRemainder(ctx context.Context, arg UpdatePrepaidBalanceWithRemainderParams) error
+	UpdateProviderDocumentTaxReview(ctx context.Context, arg UpdateProviderDocumentTaxReviewParams) (int64, error)
 	UpdateReleasedCryptoSweepItem(ctx context.Context, arg UpdateReleasedCryptoSweepItemParams) error
 	UpdateTenantBillingDetails(ctx context.Context, arg UpdateTenantBillingDetailsParams) (int64, error)
 	UpdateTenantStripeSubscriptionStatus(ctx context.Context, arg UpdateTenantStripeSubscriptionStatusParams) (int64, error)

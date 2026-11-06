@@ -165,6 +165,7 @@ func (s *PurserServer) commitRetainedProviderMonth(ctx context.Context, tenantID
 		closed, closeErr = commitPostpaidPhaseClose(ctx, tx, closing)
 		return closeErr
 	})
+	commitErr = handlers.RecordBillingPhaseTaxReview(ctx, commitErr)
 	if commitErr != nil {
 		return commitErr
 	}

@@ -162,15 +162,45 @@ func (c *Client) PrepareCustomerTax(ctx context.Context, tenant, customerID stri
 // SyncSubscriptionTax changes future invoices only. It neither prorates nor
 // adjusts a paid invoice, and it refuses subscriptions owned by another tenant.
 func (c *Client) SyncSubscriptionTax(ctx context.Context, tenant, customerID, subscriptionID string, p TaxProfile) error {
+	_, err := c.syncSubscriptionTax(ctx, tenant, customerID, subscriptionID, p)
+	return err
+}
+
+type subscriptionTaxSyncState struct {
+	Subscription    *api.Subscription
+	RateID          string
+	RecoveryPending bool
+}
+
+// ReconcileSubscriptionTax lets the billing worker repair older tax-held
+// invoices independently of interactive checkout and upgrade preflights.
+func (c *Client) ReconcileSubscriptionTax(ctx context.Context, tenant, customerID, subscriptionID string, p TaxProfile) error {
+	state, err := c.syncSubscriptionTax(ctx, tenant, customerID, subscriptionID, p)
+	if err != nil || !state.RecoveryPending {
+		return err
+	}
+	if err = recoverStripeTaxInvoices(ctx, state.Subscription, p, state.RateID); err != nil {
+		return err
+	}
+	clear := &api.SubscriptionParams{Metadata: map[string]string{"frameworks_tax_recovery_pending": ""}, ProrationBehavior: api.String("none")}
+	clear.Context = ctx
+	_, err = subscription.Update(subscriptionID, clear)
+	return err
+}
+
+func (c *Client) syncSubscriptionTax(ctx context.Context, tenant, customerID, subscriptionID string, p TaxProfile) (*subscriptionTaxSyncState, error) {
 	get := &api.SubscriptionParams{}
 	get.Context = ctx
 	current, err := subscription.Get(subscriptionID, get)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if current.Customer == nil || current.Customer.ID != customerID || current.Metadata["tenant_id"] != tenant {
-		return fmt.Errorf("stripe subscription tax owner mismatch")
+		return nil, fmt.Errorf("stripe subscription tax owner mismatch")
 	}
+	activeReview := current.Metadata["frameworks_tax_review"] == "true"
+	legacyHoldMarker := current.Metadata["frameworks_tax_hold_started"] != ""
+	recoveryPending := activeReview || legacyHoldMarker || current.Metadata["frameworks_tax_recovery_pending"] == "true"
 	var items []*api.SubscriptionItem
 	if current.Items != nil {
 		items = current.Items.Data
@@ -184,19 +214,19 @@ func (c *Client) SyncSubscriptionTax(ctx context.Context, tenant, customerID, su
 				items = append(items, iter.SubscriptionItem())
 			}
 			if err = iter.Err(); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
 	rateID, err := c.PrepareCustomerTax(ctx, tenant, customerID, p)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	fingerprint := p.Fingerprint()
 	var itemUpdates []*api.SubscriptionItemsParams
 	for _, item := range items {
 		if item == nil {
-			return fmt.Errorf("stripe subscription item identity missing")
+			return nil, fmt.Errorf("stripe subscription item identity missing")
 		}
 		if len(item.TaxRates) == 0 {
 			continue
@@ -205,12 +235,12 @@ func (c *Client) SyncSubscriptionTax(ctx context.Context, tenant, customerID, su
 			continue
 		}
 		if item.ID == "" {
-			return fmt.Errorf("stripe subscription item identity missing")
+			return nil, fmt.Errorf("stripe subscription item identity missing")
 		}
 		itemUpdates = append(itemUpdates, &api.SubscriptionItemsParams{ID: api.String(item.ID), TaxRates: []*string{api.String(rateID)}})
 	}
 	if len(itemUpdates) > 20 {
-		return fmt.Errorf("too many explicit subscription tax overrides for an atomic update")
+		return nil, fmt.Errorf("too many explicit subscription tax overrides for an atomic update")
 	}
 	// Item rates take precedence over defaults. Reconcile existing overrides
 	// in the same future-only update, without changing prices or quantities.
@@ -219,25 +249,23 @@ func (c *Client) SyncSubscriptionTax(ctx context.Context, tenant, customerID, su
 	if !matched {
 		params.Context = ctx
 		if _, err = subscription.Update(subscriptionID, params); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	if current.Metadata["frameworks_tax_review"] == "true" || current.Metadata["frameworks_tax_hold_started"] != "" {
-		if err = recoverStripeTaxInvoices(ctx, current, p, rateID); err != nil {
-			return err
-		}
-	}
-	if current.Metadata["frameworks_tax_review"] == "true" {
-		resume := &api.SubscriptionParams{Metadata: map[string]string{"frameworks_tax_review": "", "frameworks_tax_pause_owned": ""}, ProrationBehavior: api.String("none")}
+	// Correct future renewals can resume independently of older invoice debt.
+	// A pending marker retains crash-safe worker repair without repeatedly
+	// scanning every clean subscription or keeping an active hold forever.
+	if activeReview || legacyHoldMarker {
+		resume := &api.SubscriptionParams{Metadata: map[string]string{"frameworks_tax_review": "", "frameworks_tax_pause_owned": "", "frameworks_tax_hold_started": "", "frameworks_tax_recovery_pending": "true"}, ProrationBehavior: api.String("none")}
 		if current.Metadata["frameworks_tax_pause_owned"] == "true" && current.PauseCollection != nil && current.PauseCollection.Behavior == api.SubscriptionPauseCollectionBehaviorKeepAsDraft && current.PauseCollection.ResumesAt == 0 {
 			resume.UnsetFields = []api.SubscriptionParamsUnsetField{api.SubscriptionParamsUnsetFieldPauseCollection}
 		}
 		resume.Context = ctx
 		if _, err = subscription.Update(subscriptionID, resume); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return &subscriptionTaxSyncState{Subscription: current, RateID: rateID, RecoveryPending: recoveryPending}, nil
 }
 
 // HoldSubscriptionTaxReview prevents unproven recurring tax from being
@@ -266,7 +294,7 @@ func (c *Client) HoldSubscriptionTaxReview(ctx context.Context, tenant, customer
 	}
 	p := &api.SubscriptionParams{Items: batch, AutomaticTax: &api.SubscriptionAutomaticTaxParams{Enabled: api.Bool(false)}, ProrationBehavior: api.String("none"), Metadata: map[string]string{"frameworks_tax_review": "true", "frameworks_tax_profile": "", "frameworks_tax_pause_owned": ""}, UnsetFields: []api.SubscriptionParamsUnsetField{api.SubscriptionParamsUnsetFieldDefaultTaxRates}}
 	started := current.Metadata["frameworks_tax_hold_started"]
-	if started == "" {
+	if current.Metadata["frameworks_tax_review"] != "true" || started == "" {
 		started = strconv.FormatInt(time.Now().UTC().Unix(), 10)
 	}
 	p.Metadata["frameworks_tax_hold_started"] = started

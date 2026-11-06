@@ -308,6 +308,7 @@ func (s *Service) ProcessTierUpgrade(ctx context.Context, tenantID, id string) (
 			row.State = "pricing_applied"
 			return setTierUpgradeProgress(ctx, q, row, receipt)
 		})
+		err = RecordBillingPhaseTaxReview(ctx, err)
 		if err != nil {
 			return false, err
 		}

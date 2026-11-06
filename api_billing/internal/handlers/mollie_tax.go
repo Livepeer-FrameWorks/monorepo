@@ -122,8 +122,13 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 	}
 	// VIES and the assessment's database reads happen before taking the tenant
 	// lock. The saved profile is compared again under that lock before use.
-	before, beforeErr := q.GetInvoiceTaxProfile(ctx, tenant)
 	fresh, freshErr := AssessStripeTaxProfile(ctx, s.db, tenant, "")
+	if freshErr != nil {
+		var review *billingtax.ReviewError
+		if !errors.As(freshErr, &review) || review.Code == "vat_validation_unavailable" {
+			return fmt.Errorf("defer Mollie invoice tax verification: %w", freshErr)
+		}
+	}
 	return database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		if _, err := subscriptions.LockChange(ctx, tx, tenant, subscriptions.PreservePricing); err != nil {
 			return err
@@ -161,16 +166,19 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 			return err
 		}
 		reviewReason := ""
-		if freshErr != nil {
+		accepted, normalizationErr := normalizeProviderTaxProfile(profile)
+		if normalizationErr != nil {
+			reviewReason = "Accepted payment tax profile requires verification: " + normalizationErr.Error()
+		} else if freshErr != nil {
 			reviewReason = "Current tax evidence could not be verified at issuance: " + freshErr.Error()
-		} else if fresh.Fingerprint() != profile.Fingerprint() {
+		} else if fresh.Fingerprint() != accepted.Fingerprint() {
 			reviewReason = "Accepted payment tax terms differ from the current legal billing profile"
 		} else {
 			current, currentErr := q.GetInvoiceTaxProfile(ctx, tenant)
 			if currentErr != nil {
 				return currentErr
 			}
-			if beforeErr != nil || before.CustomerType != current.CustomerType || !mollieTaxProfileMatchesSavedBilling(*fresh, current) {
+			if !mollieTaxProfileMatchesSavedBilling(*fresh, current) {
 				reviewReason = "Billing details changed while current tax evidence was assessed"
 			} else {
 				profile = *fresh
@@ -188,7 +196,7 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 		if addressErr != nil {
 			return addressErr
 		}
-		assessment := invoiceTaxAssessment{Net: net, VAT: vat, Gross: gross, TaxPoint: at, Decision: proof.Decision, Supplier: proof.Supplier, Validation: proof.VATValidation, ValidationMode: proof.VATValidationMode, Customer: CryptoBillingProfile{Name: profile.Name, Company: profile.Company, Email: profile.Email, Address: address, VATNumber: profile.VATNumber}}
+		assessment := invoiceTaxAssessment{Net: net, VAT: vat, Gross: gross, TaxPoint: at, Decision: proof.Decision, Supplier: proof.Supplier, Validation: proof.VATValidation, ValidationMode: proof.VATValidationMode, Customer: CryptoBillingProfile{CustomerType: proof.CustomerType, Name: profile.Name, Company: profile.Company, Email: profile.Email, Address: address, VATNumber: profile.VATNumber}}
 		assessment.ProviderAssessment = append(json.RawMessage(nil), profile.Evidence...)
 		if reviewReason != "" {
 			assessment.ReviewRequired = true
@@ -221,16 +229,28 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 }
 
 func mollieTaxProfileMatchesSavedBilling(profile billingstripe.TaxProfile, current purserdb.GetInvoiceTaxProfileRow) bool {
+	var proof CryptoTaxAssessment
+	if err := json.Unmarshal(profile.Evidence, &proof); err != nil {
+		return false
+	}
+	effectiveType := (CryptoBillingProfile{CustomerType: current.CustomerType, VATNumber: current.VatNumber}).effectiveCustomerType()
+	if effectiveType == "" && (current.CustomerType == "" || current.CustomerType == "unspecified") {
+		effectiveType = "consumer"
+	}
+	if proof.CustomerType == "" || proof.CustomerType != effectiveType {
+		return false
+	}
 	address, err := parseBillingAddress(current.Address)
 	if err != nil {
 		return false
 	}
-	vat := current.VatNumber
-	if vat != "" && billingtax.IsEU(address.Country) {
-		vat, err = billingtax.CanonicalVATNumber(address.Country, vat)
-		if err != nil {
-			return false
-		}
+	profile, err = normalizeProviderTaxProfile(profile)
+	if err != nil {
+		return false
 	}
-	return profile.Name == current.Name && profile.Company == current.Company && profile.Email == current.Email && profile.Street == address.Street && profile.City == address.City && profile.PostalCode == address.PostalCode && profile.Country == address.Country && profile.VATNumber == vat
+	saved, err := normalizeProviderTaxProfile(billingstripe.TaxProfile{Name: current.Name, Company: current.Company, Email: current.Email, Street: address.Street, City: address.City, PostalCode: address.PostalCode, Country: address.Country, VATNumber: current.VatNumber})
+	if err != nil {
+		return false
+	}
+	return profile.Name == saved.Name && profile.Company == saved.Company && profile.Email == saved.Email && profile.Street == saved.Street && profile.City == saved.City && profile.PostalCode == saved.PostalCode && profile.Country == saved.Country && profile.VATNumber == saved.VATNumber
 }

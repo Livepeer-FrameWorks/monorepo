@@ -61,6 +61,13 @@ billing-document list. Downloads return the retained original PDF. Purser keeps
 the provider's document number and does not issue another invoice for the same
 Stripe subscription supply.
 
+Missing local supplier configuration does not discard an already-issued Stripe
+document. Purser retains the original with an operator exception and reassesses
+unverified documents in bounded, tenant-scoped batches. The archive distinguishes
+the captured tax assessment from its later verification result. Original amounts,
+parties, document numbers, PDF bytes and issued facts remain unchanged. Missing
+original tax amounts are never invented to clear an exception.
+
 Use this archive to investigate the opening records and prepare corrections with
 the bookkeeper. It is not a journal import, reconciled close or payout approval.
 The export intentionally supplies no `journal.csv` and never marks itself
@@ -128,6 +135,34 @@ Each use of dated evidence records durable, tenant-scoped revalidation work.
 The billing worker rechecks it when VIES is available. A successful check retains
 the later response beside the accepted claim; an invalid result remains an
 operator exception. Issued facts and already-paid amounts remain unchanged.
+
+## Tax holds and payment retries
+
+Stripe collection holds require a definite tax-review condition. Temporary
+database, configuration or VIES failures are retried without creating a new
+collection hold. After billing details are corrected, Purser synchronizes future
+tax rates and releases its own pause. Older invoices that still need review do
+not prevent correctly taxed future renewals or other subscriptions from running.
+Checkout and tier-upgrade preflights synchronize future tax settings; background
+workers handle older held invoices. Completed recovery clears its pending marker,
+so ordinary reconciliations do not keep listing historical invoices.
+
+Draft renewals created during the tax hold receive the verified tax treatment
+and return to Stripe's automatic collection. Stripe handles declined payments,
+authentication requests and payments still processing through its normal
+collection flow. Restoring tax settings does not require immediate payment
+success. Unrelated invoices and operator-created pauses remain untouched;
+finalized invoices retain their original tax facts.
+
+For native Mollie payments, temporary assessment failures leave the webhook
+available for retry before an invoice is issued. Definitive mismatches retain
+the accepted payment terms and an operator review. Issuance checks the billing
+identity and personal/business classification used by the assessment against
+the saved profile before freezing the document.
+
+A tax refusal during a billing-phase change leaves the arrangement unchanged
+and records an operator exception after rollback. Bootstrap dry runs do not
+persist these exceptions.
 
 ## Reviewed non-EU tax policy
 

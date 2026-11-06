@@ -78,6 +78,7 @@ func ReconcileCustomerBilling(ctx context.Context, exec DBTX, entries []Customer
 			result, post, err = ReconcileCustomerBilling(ctx, tx, entries, qm, prepared)
 			return err
 		})
+		err = handlers.RecordBillingPhaseTaxReview(ctx, err)
 		return result, post, err
 	}
 	tx, ok := exec.(*sql.Tx)

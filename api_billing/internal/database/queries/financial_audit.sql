@@ -142,10 +142,13 @@ SELECT page.id::text AS id,
                WHERE r.tenant_id=sqlc.arg(tenant_id)::text::uuid AND r.id=page.id
            )
            WHEN 'provider_billing_documents' THEN (
-             SELECT ((to_jsonb(p)-'original_pdf') || jsonb_build_object('vies_revalidation',
+             SELECT ((to_jsonb(p)-'original_pdf') || jsonb_build_object(
+               'captured_tax_status',p.tax_status,'captured_tax_assessment',p.tax_assessment,
+               'tax_status',COALESCE(p.reviewed_tax_status,p.tax_status),
+               'tax_assessment',COALESCE(p.reviewed_tax_assessment,p.tax_assessment),'vies_revalidation',
                (SELECT a.evidence_json->>'revalidation_outcome' FROM purser.crypto_accounting_anomalies a
                 WHERE a.tenant_id=sqlc.arg(tenant_id)::text::uuid AND a.kind='vies_revalidation'
-                  AND a.reference_id=sqlc.arg(tenant_id)::text || ':' || (p.tax_assessment->'evidence'->'vat_validation'->>'vat_number_hash')
+                  AND a.reference_id=sqlc.arg(tenant_id)::text || ':' || (COALESCE(p.reviewed_tax_assessment,p.tax_assessment)->'evidence'->'vat_validation'->>'vat_number_hash')
                 ORDER BY a.last_seen_at DESC,a.id DESC LIMIT 1)))::text
              FROM purser.provider_billing_documents p WHERE p.tenant_id=sqlc.arg(tenant_id)::text::uuid AND p.id=page.id)
            WHEN 'provider_tax_profiles' THEN (SELECT (to_jsonb(p))::text FROM purser.provider_tax_profiles p WHERE p.tenant_id=sqlc.arg(tenant_id)::text::uuid AND p.id=page.id)
