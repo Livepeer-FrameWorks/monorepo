@@ -18,6 +18,7 @@ import (
 	"frameworks/api_billing/internal/fx"
 	"frameworks/api_billing/internal/operator"
 	billingstripe "frameworks/api_billing/internal/stripe"
+	billingtax "frameworks/api_billing/internal/tax"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
@@ -187,14 +188,21 @@ func writePostpaidInvoiceTx(ctx context.Context, tx *sql.Tx, run *postpaidInvoic
 	issuedAt := time.Now().UTC()
 	netDec := ratingResult.TotalAmount.Round(2)
 	var taxAssessment invoiceTaxAssessment
+	var taxReview *billingtax.ReviewError
 	grossDec := netDec
 	if !heldForReview {
 		var taxErr error
 		taxAssessment, taxErr = assessInvoiceTaxTx(ctx, tx, tenantID, netDec.Shift(2).IntPart(), issuedAt)
 		if taxErr != nil {
-			return result, fmt.Errorf("assess invoice tax: %w", taxErr)
+			if !errors.As(taxErr, &taxReview) {
+				return result, fmt.Errorf("assess invoice tax: %w", taxErr)
+			}
+			heldForReview = true
+			result.status = "manual_review"
+			usageDetails["tax_review"] = map[string]any{"code": taxReview.Code, "message": taxReview.Message}
+		} else {
+			grossDec = decimal.New(taxAssessment.Gross, -2)
 		}
-		grossDec = decimal.New(taxAssessment.Gross, -2)
 	}
 	result.total = grossDec
 
@@ -288,6 +296,15 @@ func writePostpaidInvoiceTx(ctx context.Context, tx *sql.Tx, run *postpaidInvoic
 	if err = persistInvoiceLineItems(ctx, tx, result.invoiceID, tenantID, &invoiceRating); err != nil {
 		return result, err
 	}
+	if taxReview != nil {
+		evidence, marshalErr := json.Marshal(usageDetails["tax_review"])
+		if marshalErr != nil {
+			return result, marshalErr
+		}
+		if err = queries.RecordCryptoAccountingAnomaly(ctx, purserdb.RecordCryptoAccountingAnomalyParams{TenantID: tenantID, Kind: "invoice_tax_review", Network: "tax", ReferenceType: "invoice", ReferenceID: result.invoiceID, AmountCents: netDec.Shift(2).IntPart(), Detail: taxReview.Error(), EvidenceJson: evidence}); err != nil {
+			return result, fmt.Errorf("record invoice tax review: %w", err)
+		}
+	}
 	if financialCredit != 0 || absorbedVAT != 0 {
 		if _, err = tx.ExecContext(ctx, `UPDATE purser.billing_invoices SET prepaid_financial_credit_eur_cents=$3,absorbed_vat_eur_cents=$4 WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, result.invoiceID, financialCredit, absorbedVAT); err != nil {
 			return result, err
@@ -303,6 +320,9 @@ func writePostpaidInvoiceTx(ctx context.Context, tx *sql.Tx, run *postpaidInvoic
 		}
 		if err = freezeInvoiceTaxTx(ctx, tx, tenantID, result.invoiceID, taxAssessment, result.presentment); err != nil {
 			return result, err
+		}
+		if _, err = queries.ResolveInvoiceTaxReview(ctx, purserdb.ResolveInvoiceTaxReviewParams{TenantID: tenantID, InvoiceID: result.invoiceID}); err != nil {
+			return result, fmt.Errorf("resolve invoice tax review: %w", err)
 		}
 	}
 	if collectionDecision != nil {
@@ -721,6 +741,9 @@ func (c *PostpaidPhaseClose) CommitTx(ctx context.Context, tx *sql.Tx) (bool, er
 	c.result, err = writePostpaidInvoiceTx(ctx, tx, &run)
 	if err != nil {
 		return false, err
+	}
+	if c.result.status == "manual_review" {
+		return false, billingBoundaryConditionf("the closing invoice requires tax review; complete the billing details before changing the billing phase")
 	}
 	if c.toPrepaid {
 		if c.carriedCents, c.balanceAfter, err = settleCollectionCarryTx(ctx, tx, c.tenantID, c.result.invoiceID); err != nil {

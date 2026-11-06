@@ -4,11 +4,13 @@
 import hashlib
 import hmac
 import json
+import os
 import re
 import threading
 import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from decimal import Decimal, ROUND_HALF_UP
 
 
 class Provider:
@@ -74,9 +76,10 @@ class Provider:
         price = self.objects[sub["items"]["data"][0]["price"]["id"]]
         net = price["unit_amount"]
         rates = sub.get("default_tax_rates", [])
-        vat = round(net * sum(x["percentage"] for x in rates) / 100)
+        taxes = [{"amount": int((Decimal(net) * Decimal(str(rate["percentage"])) / 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP)), "taxable_amount": net, "tax_behavior": "exclusive", "tax_rate_details": {"tax_rate": rate["id"], "percentage_decimal": str(rate["percentage"])}} for rate in rates]
+        vat = sum(tax["amount"] for tax in taxes)
         now = int(time.time())
-        inv = self.create("in", "invoice", {"customer": customer["id"], "subscription": sub["id"], "parent": {"type": "subscription_details", "subscription_details": {"subscription": sub["id"], "metadata": sub["metadata"]}}, "status": "paid", "currency": "eur", "subtotal": net, "total": net + vat, "amount_paid": net + vat, "amount_due": 0, "total_excluding_tax": net, "total_taxes": [{"amount": vat, "taxable_amount": net, "tax_behavior": "exclusive", "tax_rate_details": {"tax_rate": rates[0]["id"] if rates else "", "percentage_decimal": str(rates[0]["percentage"] if rates else 0)}}], "created": now, "status_transitions": {"finalized_at": now}, "account_name": "FrameWorks-Stack-Test", "account_country": "NL", "account_tax_ids": [{"type": "eu_vat", "value": "NL000000000B01"}], "customer_name": customer.get("name", "Stack Buyer"), "customer_email": customer.get("email", "stack@example.test"), "customer_address": customer.get("address", {}), "customer_tax_ids": customer.get("tax_ids", {}).get("data", []), "lines": self.listing([{"id": "il_stack", "object": "line_item", "amount": net, "currency": "eur", "period": {"start": now, "end": now + 2592000}, "price": price}]), "metadata": sub["metadata"]})
+        inv = self.create("in", "invoice", {"customer": customer["id"], "subscription": sub["id"], "parent": {"type": "subscription_details", "subscription_details": {"subscription": sub["id"], "metadata": sub["metadata"]}}, "status": "paid", "currency": "eur", "subtotal": net, "total": net + vat, "amount_paid": net + vat, "amount_due": 0, "total_excluding_tax": net, "total_taxes": taxes, "created": now, "status_transitions": {"finalized_at": now}, "account_name": "FrameWorks-Stack-Test", "account_country": "NL", "account_tax_ids": [{"type": "eu_vat", "value": "NL000000000B01"}], "customer_name": customer.get("name", "Stack Buyer"), "customer_email": customer.get("email", "stack@example.test"), "customer_address": customer.get("address", {}), "customer_tax_ids": customer.get("tax_ids", {}).get("data", []), "lines": self.listing([{"id": "il_stack", "object": "line_item", "amount": net, "currency": "eur", "taxes": taxes, "period": {"start": now, "end": now + 2592000}, "price": price}]), "metadata": sub["metadata"]})
         inv["number"] = "STACK-" + inv["id"]
         inv["invoice_pdf"] = "https://invoice.stripe.com/" + inv["id"] + ".pdf"
         sub["latest_invoice"] = inv["id"]
@@ -155,11 +158,15 @@ class Provider:
                 text = body.decode()
                 country = re.search(r"<(?:\w+:)?countryCode>([^<]+)", text)
                 number = re.search(r"<(?:\w+:)?vatNumber>([^<]+)", text)
-                return 200, ('<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><checkVatResponse xmlns="urn:ec.europa.eu:taxud:vies:services:checkVat:types"><countryCode>' + (country[1] if country else "AT") + '</countryCode><vatNumber>' + (number[1] if number else "U12345678") + '</vatNumber><requestDate>' + time.strftime("%Y-%m-%d") + '</requestDate><valid>true</valid><name>Stack Business</name><address>Vienna</address></checkVatResponse></soap:Body></soap:Envelope>').encode()
+                return 200, ('<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><checkVatResponse xmlns="urn:ec.europa.eu:taxud:vies:services:checkVat:types"><countryCode>' + (country[1] if country else "AT") + '</countryCode><vatNumber>' + (number[1] if number else "U12345678") + '</vatNumber><requestDate>' + time.strftime("%Y-%m-%d", time.gmtime()) + 'Z</requestDate><valid>true</valid><name>Stack Business</name><address>Vienna</address></checkVatResponse></soap:Body></soap:Envelope>').encode()
             if path.endswith(".pdf"):
                 return 200, self.original_pdf(path)
             if path == "/v1/account":
                 return 200, {"id": "acct_stack", "object": "account", "country": "NL", "business_profile": {"name": "FrameWorks Stack"}}
+            if path == "/v1/webhook_endpoints" and method == "GET":
+                gateway = os.environ.get("GATEWAY_PUBLIC_URL", "").rstrip("/")
+                endpoints = [{"id": "we_stack", "object": "webhook_endpoint", "status": "enabled", "url": gateway + "/webhooks/billing/stripe", "enabled_events": ["*"]}] if gateway else []
+                return 200, self.listing(endpoints)
             form = urllib.parse.parse_qs(body.decode(), keep_blank_values=True)
             values = self.fields(form)
             parts = path.strip("/").split("/")

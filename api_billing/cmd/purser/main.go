@@ -278,6 +278,11 @@ func main() {
 			Logger:        logger,
 		})
 		logger.Info("Stripe client initialized")
+		webhookCtx, cancelWebhookCheck := context.WithTimeout(context.Background(), 15*time.Second)
+		if err := stripeClient.CheckBillingWebhookEndpoint(webhookCtx, cfg.GatewayPublicBaseURL()); err != nil {
+			logger.WithError(err).Warn("Stripe billing webhook configuration needs attention; invoice and payment events may be missing")
+		}
+		cancelWebhookCheck()
 
 		if err := syncBillingTiersWithStripe(context.Background(), db, stripeClient, logger); err != nil {
 			logger.WithError(err).Warn("Stripe tier sync failed - checkout will be unavailable until tiers are configured")

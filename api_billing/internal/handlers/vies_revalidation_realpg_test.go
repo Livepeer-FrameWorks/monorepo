@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"frameworks/api_billing/internal/database/purserdb"
 	"github.com/google/uuid"
 	"net/http"
@@ -29,7 +30,7 @@ func TestVIESGraceExpiryRevalidationAndPermanentFaultBarrier_RealPG(t *testing.T
 			w.WriteHeader(500)
 			_, _ = w.Write([]byte(`<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><soap:Fault><faultcode>soap:Server</faultcode><faultstring>VAT_BLOCKED</faultstring></soap:Fault></soap:Body></soap:Envelope>`))
 		case 2:
-			_, _ = w.Write([]byte(`<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><checkVatResponse xmlns="urn:ec.europa.eu:taxud:vies:services:checkVat:types"><countryCode>DE</countryCode><vatNumber>123456789</vatNumber><requestDate>2026-11-05</requestDate><valid>true</valid><name>Buyer</name></checkVatResponse></soap:Body></soap:Envelope>`))
+			_, _ = fmt.Fprintf(w, `<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><checkVatResponse xmlns="urn:ec.europa.eu:taxud:vies:services:checkVat:types"><countryCode>DE</countryCode><vatNumber>123456789</vatNumber><requestDate>%sZ</requestDate><valid>true</valid><name>Buyer</name></checkVatResponse></soap:Body></soap:Envelope>`, time.Now().UTC().Format(time.DateOnly))
 		default:
 			w.WriteHeader(503)
 		}
@@ -47,6 +48,41 @@ func TestVIESGraceExpiryRevalidationAndPermanentFaultBarrier_RealPG(t *testing.T
 		}
 		return tenant
 	}
+	t.Run("permanent fault keeps positive same-day evidence", func(t *testing.T) {
+		defer mode.Store(0)
+		tenant := seedPrepaidLedgerTenant(t, db)
+		if _, err := db.ExecContext(ctx, `INSERT INTO purser.vat_validation_evidence(tenant_id,country_code,vat_number_hash,vat_number_masked,valid,request_date,checked_at,expires_at,raw_response) VALUES($1,'DE',$2,'DE*****6789',true,CURRENT_DATE,NOW()-INTERVAL '2 hours',NOW()-INTERVAL '1 hour','{"original":true}')`, tenant, hash); err != nil {
+			t.Fatal(err)
+		}
+		readProof := func() string {
+			t.Helper()
+			var raw string
+			if err := db.QueryRowContext(ctx, `SELECT to_jsonb(evidence)::text FROM purser.vat_validation_evidence evidence WHERE tenant_id=$1 AND request_date=CURRENT_DATE`, tenant).Scan(&raw); err != nil {
+				t.Fatal(err)
+			}
+			return raw
+		}
+		before := readProof()
+		mode.Store(1)
+		if proof, err := h.validateVIESVATEvidence(ctx, tenant, "DE", "DE123456789"); err == nil || proof.Valid {
+			t.Fatalf("permanent request fault allowed a VAT claim: %+v %v", proof, err)
+		}
+		if after := readProof(); after != before {
+			t.Fatalf("SOAP fault overwrote authoritative positive evidence: before=%s after=%s", before, after)
+		}
+		mode.Store(0)
+		if proof, err := h.validateVIESVATEvidence(ctx, tenant, "DE", "DE123456789"); err == nil || proof.Valid {
+			t.Fatalf("later outage ignored permanent request-fault barrier: %+v %v", proof, err)
+		}
+		mode.Store(2)
+		if proof, err := h.validateVIESVATEvidence(ctx, tenant, "DE", "DE123456789"); err != nil || !proof.Valid || proof.Mode != "live_vies" {
+			t.Fatalf("successful verification did not clear request fault: %+v %v", proof, err)
+		}
+		var open int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM purser.crypto_accounting_anomalies WHERE tenant_id=$1 AND kind='vies_verification_fault' AND status='open'`, tenant).Scan(&open); err != nil || open != 0 {
+			t.Fatalf("successful verification left permanent request-fault barrier open: count=%d err=%v", open, err)
+		}
+	})
 	tenant := seed()
 	proof, err := h.validateVIESVATEvidence(ctx, tenant, "DE", "DE123456789")
 	if err != nil || !proof.Valid || proof.Mode != "outage_grace" {

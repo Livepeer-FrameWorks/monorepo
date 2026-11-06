@@ -68,11 +68,18 @@ WITH latest AS (
     WHERE evidence.tenant_id = $2::text::uuid
       AND evidence.vat_number_hash = $3
     ORDER BY evidence.checked_at DESC, evidence.id DESC LIMIT 1
+), fault AS (
+    SELECT last_seen_at FROM purser.crypto_accounting_anomalies
+    WHERE tenant_id=$2::text::uuid AND kind='vies_verification_fault'
+      AND reference_type='vat_validation'
+      AND reference_id=$2::text || ':' || $3::text
 )
 SELECT latest.valid, to_jsonb(latest)::jsonb AS validation_snapshot,
-       (latest.checked_at <= NOW() AND latest.expires_at > NOW())::boolean AS fresh,
-       (latest.checked_at <= NOW() AND latest.expires_at >= NOW() - $1::integer * INTERVAL '1 hour')::boolean AS within_outage_grace
-FROM latest
+       COALESCE(latest.checked_at <= NOW() AND latest.expires_at > NOW()
+         AND (fault.last_seen_at IS NULL OR latest.checked_at>fault.last_seen_at),false)::boolean AS fresh,
+       COALESCE(latest.checked_at <= NOW() AND latest.expires_at >= NOW() - $1::integer * INTERVAL '1 hour'
+         AND (fault.last_seen_at IS NULL OR latest.checked_at>fault.last_seen_at),false)::boolean AS within_outage_grace
+FROM latest LEFT JOIN fault ON true
 `
 
 type GetCachedVATValidationParams struct {
@@ -154,16 +161,20 @@ func (q *Queries) ListTenantVIESRevalidations(ctx context.Context, tenantID stri
 }
 
 const recordPermanentVIESFault = `-- name: RecordPermanentVIESFault :exec
-INSERT INTO purser.vat_validation_evidence(tenant_id,country_code,vat_number_hash,vat_number_masked,valid,request_date,checked_at,expires_at,raw_response)
-VALUES($1::text::uuid,$2,$3,$4,false,CURRENT_DATE,NOW(),NOW(),$5::jsonb)
-ON CONFLICT(tenant_id,vat_number_hash,request_date) DO UPDATE
-SET valid=false,checked_at=NOW(),expires_at=NOW(),raw_response=EXCLUDED.raw_response
+INSERT INTO purser.crypto_accounting_anomalies AS fault(tenant_id,kind,network,reference_type,reference_id,detail,evidence_json,last_seen_at)
+VALUES($1::text::uuid,'vies_verification_fault','vies','vat_validation',
+ $1::text || ':' || $2::text,
+ 'VIES request was rejected; successful verification is required before reusing retained proof',
+ jsonb_build_object('country',$3::text,'vat_number_masked',$4::text,'fault',$5::jsonb),clock_timestamp())
+ON CONFLICT(kind,reference_type,reference_id) DO UPDATE
+SET last_seen_at=clock_timestamp(),occurrences=fault.occurrences+1,evidence_json=EXCLUDED.evidence_json,
+ status='open',resolved_at=NULL,resolved_by=NULL,resolution_note=NULL
 `
 
 type RecordPermanentVIESFaultParams struct {
 	TenantID        string          `db:"tenant_id" json:"tenant_id"`
-	CountryCode     string          `db:"country_code" json:"country_code"`
 	VatNumberHash   string          `db:"vat_number_hash" json:"vat_number_hash"`
+	CountryCode     string          `db:"country_code" json:"country_code"`
 	VatNumberMasked string          `db:"vat_number_masked" json:"vat_number_masked"`
 	RawResponse     json.RawMessage `db:"raw_response" json:"raw_response"`
 }
@@ -171,8 +182,8 @@ type RecordPermanentVIESFaultParams struct {
 func (q *Queries) RecordPermanentVIESFault(ctx context.Context, arg RecordPermanentVIESFaultParams) error {
 	_, err := q.db.ExecContext(ctx, recordPermanentVIESFault,
 		arg.TenantID,
-		arg.CountryCode,
 		arg.VatNumberHash,
+		arg.CountryCode,
 		arg.VatNumberMasked,
 		arg.RawResponse,
 	)
@@ -223,6 +234,7 @@ func (q *Queries) SuspendActiveTenantSubscriptions(ctx context.Context, tenantID
 }
 
 const upsertVATValidationEvidence = `-- name: UpsertVATValidationEvidence :one
+WITH checked AS (
 INSERT INTO purser.vat_validation_evidence AS evidence (
     tenant_id, country_code, vat_number_hash, vat_number_masked,
     valid, request_date, trader_name, trader_address,
@@ -231,17 +243,28 @@ INSERT INTO purser.vat_validation_evidence AS evidence (
     $1::text::uuid, $2,
     $3, $4,
     $5, $6, $7,
-    $8, NOW(), NOW() + INTERVAL '24 hours',
+    $8, clock_timestamp(), clock_timestamp() + INTERVAL '24 hours',
     $9::jsonb
 )
 ON CONFLICT (tenant_id, vat_number_hash, request_date) DO UPDATE
 SET valid = EXCLUDED.valid,
     trader_name = EXCLUDED.trader_name,
     trader_address = EXCLUDED.trader_address,
-    checked_at = NOW(),
-    expires_at = NOW() + INTERVAL '24 hours',
+    checked_at = clock_timestamp(),
+    expires_at = clock_timestamp() + INTERVAL '24 hours',
     raw_response = EXCLUDED.raw_response
-RETURNING to_jsonb(evidence)::jsonb AS validation_snapshot
+RETURNING evidence.id, evidence.tenant_id, evidence.country_code, evidence.vat_number_hash, evidence.vat_number_masked, evidence.provider, evidence.valid, evidence.request_date, evidence.trader_name, evidence.trader_address, evidence.checked_at, evidence.expires_at, evidence.raw_response
+), resolved_fault AS (
+ UPDATE purser.crypto_accounting_anomalies fault
+ SET status='resolved',resolved_at=clock_timestamp(),resolution_note='VIES request completed with authoritative validation'
+ FROM checked
+ WHERE fault.tenant_id=checked.tenant_id AND fault.kind='vies_verification_fault'
+  AND fault.reference_type='vat_validation'
+  AND fault.reference_id=checked.tenant_id::text || ':' || checked.vat_number_hash
+  AND fault.status='open' AND fault.last_seen_at<checked.checked_at
+ RETURNING fault.id
+)
+SELECT to_jsonb(checked)::jsonb AS validation_snapshot FROM checked
 `
 
 type UpsertVATValidationEvidenceParams struct {

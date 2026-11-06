@@ -2,10 +2,28 @@ package stripe
 
 import (
 	"context"
+	"encoding/json"
 	api "github.com/stripe/stripe-go/v85"
 	"net/http"
 	"testing"
 )
+
+func TestTaxProfileIdentityTracksTermsWithoutEvidenceChurn(t *testing.T) {
+	p := assessedTaxProfile()
+	p.Evidence = json.RawMessage(`{"assessed_at":"2026-11-05T00:00:00Z","vat_validation":{"checked_at":"2026-11-05","raw_response":"first"},"decision":{"checked_on":"2026-11-05","ip_country":"NL"}}`)
+	first := p.Fingerprint()
+	p.Evidence = json.RawMessage(`{"assessed_at":"2026-11-06T00:00:00Z","vat_validation":{"checked_at":"2026-11-06","raw_response":"second"},"decision":{"checked_on":"2026-11-06","ip_country":"BE"}}`)
+	if p.Fingerprint() != first {
+		t.Fatal("daily evidence changed retained legal/rate identity")
+	}
+	if string(p.Evidence) == "" {
+		t.Fatal("fingerprinting removed immutable proof payload")
+	}
+	p.RateBPS = 0
+	if p.Fingerprint() == first {
+		t.Fatal("changed charged VAT rate reused old terms")
+	}
+}
 
 type taxBackend struct {
 	fakeBackend
@@ -160,6 +178,9 @@ func TestStripeTaxSyncReconcilesItemOverridesBeforeNoOp(t *testing.T) {
 			if (b.updatedSub != nil) != tc.wantUpdate {
 				t.Fatalf("subscription update=%v want%v despite item rates%v", b.updatedSub != nil, tc.wantUpdate, tc.itemRates)
 			}
+			if b.updatedCustomer == nil || api.StringValue(b.updatedCustomer.TaxExempt) != "none" {
+				t.Fatal("customer-global reverse exemption would suppress original taxed credits; explicit current zero rate must drive reverse charge")
+			}
 			if !tc.wantUpdate {
 				return
 			}
@@ -171,6 +192,53 @@ func TestStripeTaxSyncReconcilesItemOverridesBeforeNoOp(t *testing.T) {
 			}
 			if b.updatedSub.ProrationBehavior == nil || *b.updatedSub.ProrationBehavior != "none" || len(b.updatedSub.DefaultTaxRates) != 1 || *b.updatedSub.DefaultTaxRates[0] != "txr_exclusive" {
 				t.Fatal("tax sync changed paid terms or omitted future default")
+			}
+		})
+	}
+}
+
+func TestTaxReviewPreservesManualPauseAndOnlyResumesOwnedHold(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		pause  *api.SubscriptionPauseCollection
+		owned  bool
+		resume bool
+	}{
+		{"manual pause", &api.SubscriptionPauseCollection{Behavior: api.SubscriptionPauseCollectionBehaviorVoid}, false, false},
+		{"owned hold", &api.SubscriptionPauseCollection{Behavior: api.SubscriptionPauseCollectionBehaviorKeepAsDraft}, true, true},
+		{"operator changed owned hold", &api.SubscriptionPauseCollection{Behavior: api.SubscriptionPauseCollectionBehaviorKeepAsDraft, ResumesAt: 12345}, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := assessedTaxProfile()
+			meta := map[string]string{"tenant_id": "tenant-owned", "frameworks_tax_review": "true"}
+			if tc.owned {
+				meta["frameworks_tax_pause_owned"] = "true"
+			}
+			current := &api.Subscription{ID: "sub_owned", Customer: &api.Customer{ID: "cus_owned"}, Metadata: meta, PauseCollection: tc.pause, Items: &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item"}}}}
+			b := &taxBackend{t: t, owner: "tenant-owned", currentSub: current, currentVAT: p.VATNumber}
+			installBackend(t, b)
+			if err := (&Client{}).HoldSubscriptionTaxReview(t.Context(), "tenant-owned", "cus_owned", "sub_owned"); err != nil {
+				t.Fatal(err)
+			}
+			if b.updatedSub == nil || b.updatedSub.PauseCollection != nil {
+				t.Fatal("tax hold overwrote existing operator pause")
+			}
+			if tc.owned && tc.resume {
+				current.Metadata["frameworks_tax_pause_owned"] = "true"
+			} else {
+				current.Metadata["frameworks_tax_pause_owned"] = ""
+			}
+			if err := (&Client{}).SyncSubscriptionTax(t.Context(), "tenant-owned", "cus_owned", "sub_owned", p); err != nil {
+				t.Fatal(err)
+			}
+			resumed := false
+			for _, f := range b.updatedSub.UnsetFields {
+				if f == api.SubscriptionParamsUnsetFieldPauseCollection {
+					resumed = true
+				}
+			}
+			if resumed != tc.resume {
+				t.Fatalf("manual/changed pause resumed=%v, want%v", resumed, tc.resume)
 			}
 		})
 	}

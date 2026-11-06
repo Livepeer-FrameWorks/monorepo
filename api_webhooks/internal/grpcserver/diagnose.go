@@ -36,14 +36,7 @@ func (s *Server) DiagnoseWebhooks(ctx context.Context, req *bosunpb.DiagnoseWebh
 		}
 		endpoint := endpointProto(ep)
 		// Endpoint URLs can contain signing tokens unrelated to Bosun's own secret.
-		if u, err := url.Parse(endpoint.Url); err == nil {
-			u.User = nil
-			u.RawQuery = ""
-			u.Fragment = ""
-			endpoint.Url = u.String()
-		} else {
-			endpoint.Url = "[invalid URL]"
-		}
+		endpoint.Url = diagnosticEndpointURL(endpoint.Url)
 		endpoint.Description = ""
 		item := &bosunpb.WebhookEndpointDiagnosis{Endpoint: endpoint, DeliveryCount: int32(total)}
 		for _, d := range deliveries {
@@ -52,4 +45,11 @@ func (s *Server) DiagnoseWebhooks(ctx context.Context, req *bosunpb.DiagnoseWebh
 		out.Endpoints = append(out.Endpoints, item)
 	}
 	return out, nil
+}
+
+func diagnosticEndpointURL(raw string) string {
+	if u, err := url.Parse(raw); err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" {
+		return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
+	}
+	return "[invalid URL]"
 }

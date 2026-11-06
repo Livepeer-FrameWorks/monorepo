@@ -6,10 +6,13 @@ import ast
 import hmac
 import importlib.util
 import json
+import os
 import pathlib
 import http.client
 import threading
 import unittest
+from unittest.mock import patch
+import xml.etree.ElementTree as ET
 
 SPEC = importlib.util.spec_from_file_location("billing_provider", pathlib.Path(__file__).with_name("billing-provider.py"))
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -46,20 +49,35 @@ class BillingProviderTest(unittest.TestCase):
         events = self.call("POST", "/__test/complete", json.dumps({"session_id": session["id"]}).encode())
         invoice = json.loads(events[-1]["body"])["data"]["object"]
         self.assertEqual((invoice["total_excluding_tax"], invoice["total"]), (1000, 1210))
+        self.assertEqual(invoice["lines"]["data"][0]["taxes"], invoice["total_taxes"])
+        self.assertEqual(invoice["lines"]["data"][0]["taxes"][0]["amount"], 210)
+        self.assertEqual(invoice["lines"]["data"][0]["taxes"][0]["tax_behavior"], "exclusive")
+        self.assertEqual(invoice["lines"]["data"][0]["taxes"][0]["tax_rate_details"]["tax_rate"], rate["id"])
         renewed = self.call("POST", "/__test/renew", json.dumps({"subscription_id": session["subscription"]}).encode())
         self.assertEqual(len(renewed), 2)
         event = renewed[-1]
         timestamp = event["signature"].split(",")[0][2:]
         digest = hmac.new(b"whsec_stack_fixture", (timestamp + "." + event["body"]).encode(), hashlib.sha256).hexdigest()
         self.assertEqual(event["signature"], "t=" + timestamp + ",v1=" + digest)
-        self.assertEqual(json.loads(event["body"])["data"]["object"]["total"], 1210)
+        renewal = json.loads(event["body"])["data"]["object"]
+        self.assertEqual(renewal["total"], 1210)
+        self.assertEqual(renewal["lines"]["data"][0]["taxes"], renewal["total_taxes"])
         self.assertFalse(rate["inclusive"])
 
     def test_vies_is_wire_soap_and_pdf_is_original_bytes(self):
         soap = self.call("POST", "/vies", b"<countryCode>AT</countryCode><vatNumber>U12345678</vatNumber>")
         self.assertIn(b"<valid>true</valid>", soap)
         self.assertIn(b"<countryCode>AT</countryCode>", soap)
+        date = ET.fromstring(soap).find(".//{urn:ec.europa.eu:taxud:vies:services:checkVat:types}requestDate").text
+        self.assertRegex(date, r"^\d{4}-\d{2}-\d{2}(Z|[+-]\d{2}:\d{2})$")
         self.assertTrue(self.call("GET", "/in_stack1.pdf").startswith(b"%PDF-"))
+
+    def test_read_only_webhook_endpoint_matches_gateway(self):
+        with patch.dict(os.environ, {"GATEWAY_PUBLIC_URL": "https://gateway.stack.test/"}):
+            endpoints = self.call("GET", "/v1/webhook_endpoints")["data"]
+        self.assertEqual(endpoints, [{"id": "we_stack", "object": "webhook_endpoint", "status": "enabled", "url": "https://gateway.stack.test/webhooks/billing/stripe", "enabled_events": ["*"]}])
+        self.assertEqual(self.provider.objects, {})
+        self.assertEqual([r["method"] for r in self.provider.requests], ["GET"])
 
     def test_compose_installs_a_single_valid_policy_object(self):
         compose = pathlib.Path(__file__).parents[2].joinpath("docker-compose.stack.yml").read_text()

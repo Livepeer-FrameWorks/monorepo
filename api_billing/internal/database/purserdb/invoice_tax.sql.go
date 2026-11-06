@@ -173,3 +173,24 @@ func (q *Queries) ListInvoiceTaxLines(ctx context.Context, arg ListInvoiceTaxLin
 	}
 	return items, nil
 }
+
+const resolveInvoiceTaxReview = `-- name: ResolveInvoiceTaxReview :execrows
+UPDATE purser.crypto_accounting_anomalies
+SET status='resolved',resolved_at=NOW(),resolution_note='Invoice tax assessment completed'
+WHERE tenant_id=$1::text::uuid
+  AND kind='invoice_tax_review' AND reference_type='invoice'
+  AND reference_id=$2::text AND status='open'
+`
+
+type ResolveInvoiceTaxReviewParams struct {
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+	InvoiceID string `db:"invoice_id" json:"invoice_id"`
+}
+
+func (q *Queries) ResolveInvoiceTaxReview(ctx context.Context, arg ResolveInvoiceTaxReviewParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, resolveInvoiceTaxReview, arg.TenantID, arg.InvoiceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

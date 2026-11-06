@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -38,6 +39,9 @@ type TaxProfile struct {
 
 func (p TaxProfile) Fingerprint() string {
 	p.ProfileSHA = ""
+	// Validation history is retained separately and copied at issuance. Only
+	// legal parties and charged terms identify the recurring provider setup.
+	p.Evidence = nil
 	encoded, err := json.Marshal(p)
 	if err != nil {
 		return ""
@@ -83,9 +87,6 @@ func (c *Client) PrepareCustomerTax(ctx context.Context, tenant, customerID stri
 		footer += "\n" + p.Wording
 	}
 	exempt := "none"
-	if p.ReverseCharge {
-		exempt = "reverse"
-	}
 	addressMatches := current.Address != nil && current.Address.Line1 == p.Street && current.Address.City == p.City && current.Address.PostalCode == p.PostalCode && current.Address.Country == p.Country
 	footerMatches := current.InvoiceSettings != nil && current.InvoiceSettings.Footer == footer
 	if current.Name != legalName || current.Email != p.Email || !addressMatches || string(current.TaxExempt) != exempt || !footerMatches {
@@ -209,15 +210,100 @@ func (c *Client) SyncSubscriptionTax(ctx context.Context, tenant, customerID, su
 	if len(itemUpdates) > 20 {
 		return fmt.Errorf("too many explicit subscription tax overrides for an atomic update")
 	}
-	if len(itemUpdates) == 0 && len(current.DefaultTaxRates) == 1 && current.DefaultTaxRates[0] != nil && current.DefaultTaxRates[0].ID == rateID && current.AutomaticTax != nil && !current.AutomaticTax.Enabled && current.Metadata["frameworks_tax_profile"] == fingerprint {
+	if current.Metadata["frameworks_tax_review"] != "true" && len(itemUpdates) == 0 && len(current.DefaultTaxRates) == 1 && current.DefaultTaxRates[0] != nil && current.DefaultTaxRates[0].ID == rateID && current.AutomaticTax != nil && !current.AutomaticTax.Enabled && current.Metadata["frameworks_tax_profile"] == fingerprint {
 		return nil
 	}
 	// Item rates take precedence over defaults. Reconcile existing overrides
 	// in the same future-only update, without changing prices or quantities.
 	params := &api.SubscriptionParams{Items: itemUpdates, DefaultTaxRates: []*string{api.String(rateID)}, AutomaticTax: &api.SubscriptionAutomaticTaxParams{Enabled: api.Bool(false)}, ProrationBehavior: api.String("none"), Metadata: map[string]string{"frameworks_tax_profile": fingerprint}}
+	if current.Metadata["frameworks_tax_review"] == "true" {
+		params.Metadata["frameworks_tax_review"] = ""
+		params.Metadata["frameworks_tax_pause_owned"] = ""
+		if current.Metadata["frameworks_tax_pause_owned"] == "true" && current.PauseCollection != nil && current.PauseCollection.Behavior == api.SubscriptionPauseCollectionBehaviorKeepAsDraft && current.PauseCollection.ResumesAt == 0 {
+			params.UnsetFields = append(params.UnsetFields, api.SubscriptionParamsUnsetFieldPauseCollection)
+		}
+	}
 	params.Context = ctx
 	_, err = subscription.Update(subscriptionID, params)
 	return err
+}
+
+// HoldSubscriptionTaxReview prevents unproven recurring tax from being
+// collected. Drafts and existing paid invoices retain their original facts.
+func (c *Client) HoldSubscriptionTaxReview(ctx context.Context, tenant, customerID, subscriptionID string) error {
+	get := &api.SubscriptionParams{}
+	get.Context = ctx
+	current, err := subscription.Get(subscriptionID, get)
+	if err != nil {
+		return err
+	}
+	if current.Customer == nil || current.Customer.ID != customerID || current.Metadata["tenant_id"] != tenant {
+		return fmt.Errorf("stripe subscription tax owner mismatch")
+	}
+	items := []*api.SubscriptionItemsParams{}
+	if current.Items != nil {
+		for _, item := range current.Items.Data {
+			if item != nil && item.ID != "" && len(item.TaxRates) > 0 {
+				items = append(items, &api.SubscriptionItemsParams{ID: api.String(item.ID), UnsetFields: []api.SubscriptionItemsParamsUnsetField{api.SubscriptionItemsParamsUnsetFieldTaxRates}})
+			}
+		}
+	}
+	batch := items
+	if len(batch) > 20 {
+		batch = batch[:20]
+	}
+	p := &api.SubscriptionParams{Items: batch, AutomaticTax: &api.SubscriptionAutomaticTaxParams{Enabled: api.Bool(false)}, ProrationBehavior: api.String("none"), Metadata: map[string]string{"frameworks_tax_review": "true", "frameworks_tax_profile": "", "frameworks_tax_pause_owned": ""}, UnsetFields: []api.SubscriptionParamsUnsetField{api.SubscriptionParamsUnsetFieldDefaultTaxRates}}
+	if current.PauseCollection == nil {
+		p.PauseCollection = &api.SubscriptionPauseCollectionParams{Behavior: api.String("keep_as_draft")}
+		p.Metadata["frameworks_tax_pause_owned"] = "true"
+	} else if current.Metadata["frameworks_tax_pause_owned"] == "true" && current.PauseCollection.Behavior == api.SubscriptionPauseCollectionBehaviorKeepAsDraft && current.PauseCollection.ResumesAt == 0 {
+		p.Metadata["frameworks_tax_pause_owned"] = "true"
+	}
+	p.Context = ctx
+	if _, err = subscription.Update(subscriptionID, p); err != nil {
+		return err
+	}
+	var result error
+	if current.Items != nil && current.Items.HasMore {
+		list := &api.SubscriptionItemListParams{Subscription: api.String(subscriptionID)}
+		list.Context = ctx
+		list.Limit = api.Int64(100)
+		iter := subscriptionitem.List(list)
+		items = nil
+		for iter.Next() {
+			item := iter.SubscriptionItem()
+			if item != nil && item.ID != "" && len(item.TaxRates) > 0 {
+				items = append(items, &api.SubscriptionItemsParams{ID: api.String(item.ID), UnsetFields: []api.SubscriptionItemsParamsUnsetField{api.SubscriptionItemsParamsUnsetFieldTaxRates}})
+			}
+		}
+		result = errors.Join(result, iter.Err())
+	} else {
+		items = items[len(batch):]
+	}
+	for len(items) > 0 {
+		n := min(len(items), 20)
+		update := &api.SubscriptionParams{Items: items[:n], ProrationBehavior: api.String("none")}
+		update.Context = ctx
+		_, updateErr := subscription.Update(subscriptionID, update)
+		result = errors.Join(result, updateErr)
+		items = items[n:]
+	}
+	customerGet := &api.CustomerParams{}
+	customerGet.Context = ctx
+	buyer, buyerErr := customer.Get(customerID, customerGet)
+	if buyerErr != nil {
+		return errors.Join(result, buyerErr)
+	}
+	if buyer.Metadata["tenant_id"] != tenant {
+		return errors.Join(result, fmt.Errorf("stripe customer tax owner mismatch"))
+	}
+	if buyer.TaxExempt != api.CustomerTaxExemptNone {
+		update := &api.CustomerParams{TaxExempt: api.String("none")}
+		update.Context = ctx
+		_, buyerErr = customer.Update(customerID, update)
+		result = errors.Join(result, buyerErr)
+	}
+	return result
 }
 
 func SupplierTaxIdentity(name, address, vat, registration string) string {

@@ -1686,10 +1686,10 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 			}
 		}
 		if mollieMetadataString(payment.Metadata, "frameworks_tax_profile") != "" {
+			if outcomeErr := s.applyNativeMollieSubscriptionOutcome(ctx, tenantID, payment, newStatus); outcomeErr != nil {
+				return eventID, outcomeErr
+			}
 			if newStatus == "confirmed" {
-				if invoiceErr := s.issueMollieNativeTaxInvoice(ctx, tenantID, payment); invoiceErr != nil {
-					return eventID, invoiceErr
-				}
 				if rewindErr := s.rewindMollieSettlementCursor(ctx, tenantID, payment); rewindErr != nil {
 					return eventID, rewindErr
 				}

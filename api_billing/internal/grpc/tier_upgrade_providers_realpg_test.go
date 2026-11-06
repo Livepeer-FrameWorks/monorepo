@@ -24,6 +24,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 	stripeapi "github.com/stripe/stripe-go/v85"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -84,6 +85,16 @@ func (f *upgradeProviderFixture) serve(t *testing.T, w http.ResponseWriter, r *h
 		respond(map[string]any{"id": "customer", "object": "customer", "metadata": map[string]string{"tenant_id": f.tenant}, "invoice_settings": map[string]any{"default_payment_method": map[string]any{"id": "pm", "object": "payment_method"}}})
 	case "GET /v1/tax_rates":
 		respond(map[string]any{"object": "list", "data": []any{map[string]any{"id": "txr_fixture21", "object": "tax_rate", "active": true, "country": "NL", "display_name": "VAT", "percentage": 21, "inclusive": false, "metadata": map[string]string{"frameworks_policy": billing.CurrentInvoiceTaxPolicy}}}, "has_more": false})
+	case "POST /v1/tax_rates":
+		if err := r.ParseForm(); err != nil {
+			t.Error(err)
+			return
+		}
+		percentage, parseErr := decimal.NewFromString(r.Form.Get("percentage"))
+		if parseErr != nil || !percentage.IsZero() || r.Form.Get("inclusive") != "false" || r.Form.Get("metadata[frameworks_original_untaxed]") != "true" {
+			t.Errorf("unexpected original-period tax rate: %v", r.Form)
+		}
+		respond(map[string]any{"id": "original_zero", "object": "tax_rate", "active": true, "percentage": 0, "inclusive": false})
 	case "GET /v1/subscriptions/sub", "POST /v1/subscriptions/sub":
 		price := "old-price"
 		invoiceStatus := "paid"
@@ -95,7 +106,7 @@ func (f *upgradeProviderFixture) serve(t *testing.T, w http.ResponseWriter, r *h
 				t.Error(err)
 				return
 			}
-			if r.Form.Get("proration_behavior") == "none" {
+			if r.Form.Get("proration_behavior") == "none" && r.Form.Get("billing_cycle_anchor") != "now" {
 				f.taxRateID = r.Form.Get("default_tax_rates[0]")
 				f.stripeMetadata["frameworks_tax_profile"] = r.Form.Get("metadata[frameworks_tax_profile]")
 			} else {
@@ -138,7 +149,7 @@ func (f *upgradeProviderFixture) serve(t *testing.T, w http.ResponseWriter, r *h
 			return []any{map[string]string{"id": f.taxRateID}}
 		}(),
 			"latest_invoice": map[string]any{"id": invoiceID, "object": "invoice", "status": invoiceStatus, "amount_paid": fee, "lines": map[string]any{"data": []any{baseLine}}},
-			"items":          map[string]any{"object": "list", "data": []any{map[string]any{"id": "item", "object": "subscription_item", "quantity": 1, "price": map[string]any{"id": price, "object": "price", "unit_amount": fee, "currency": "eur", "recurring": map[string]any{"interval": "month", "interval_count": 1}}, "current_period_start": f.start.Unix(), "current_period_end": f.end.Unix()}}}})
+			"items":          map[string]any{"object": "list", "data": []any{map[string]any{"id": "item", "object": "subscription_item", "quantity": 1, "price": map[string]any{"id": price, "object": "price", "unit_amount": fee, "currency": "eur", "product": "prod_base", "recurring": map[string]any{"interval": "month", "interval_count": 1}}, "current_period_start": f.start.Unix(), "current_period_end": f.end.Unix()}}}})
 	case "POST /v1/payment_intents":
 		if err := r.ParseForm(); err != nil {
 			t.Error(err)
@@ -636,7 +647,7 @@ SELECT 'upgrade-source',w,w+INTERVAL '5 minutes',true FROM generate_series($1::t
 				if mode == "fixed Mollie" && (amount != "48.40" || chargedCurrency != "EUR") {
 					t.Fatalf("wrong net Mollie charge: %s %s", amount, chargedCurrency)
 				}
-			} else if params.Get("billing_cycle_anchor") != "now" || params.Get("proration_behavior") != "always_invoice" || params.Get("items[0][id]") != "item" {
+			} else if params.Get("billing_cycle_anchor") != "now" || params.Get("proration_behavior") != "none" || params.Get("items[0][id]") != "item" {
 				t.Fatalf("Stripe failed to reset and credit its subscription: %v", params)
 			}
 			if stripeSub != "" {

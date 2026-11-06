@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -49,7 +50,6 @@ func AssessStripeTaxProfile(ctx context.Context, db *sql.DB, tenant, clientIP st
 		}
 	}
 	assessment := *profile.TaxAssessment
-	assessment.AssessedAt = time.Time{}
 	evidence, err := json.Marshal(assessment)
 	if err != nil {
 		return nil, err
@@ -79,7 +79,24 @@ func (jm *JobManager) reconcileStripeTaxTenant(ctx context.Context, tenant strin
 	}
 	assessed, err := AssessStripeTaxProfile(ctx, jm.db, tenant, "")
 	if err != nil {
-		return err
+		failure := err
+		for _, sub := range subscriptions {
+			proof, marshalErr := json.Marshal(map[string]any{"review_required": true, "reason": err.Error(), "customer_id": sub.CustomerID, "subscription_id": sub.SubscriptionID})
+			if marshalErr != nil {
+				failure = errors.Join(failure, marshalErr)
+				continue
+			}
+			refType, refID := "stripe_subscription", sub.SubscriptionID
+			if refID == "" {
+				refType, refID = "stripe_customer", sub.CustomerID
+			}
+			recordErr := purserdb.New(jm.db).RecordCryptoAccountingAnomaly(ctx, purserdb.RecordCryptoAccountingAnomalyParams{TenantID: tenant, Kind: "provider_tax_review", Network: "stripe", ReferenceType: refType, ReferenceID: refID, AmountCents: 0, Detail: "Recurring tax assessment failed; collection requires review", EvidenceJson: proof})
+			failure = errors.Join(failure, recordErr)
+			if sub.SubscriptionID != "" {
+				failure = errors.Join(failure, jm.billing.stripeClient.HoldSubscriptionTaxReview(ctx, tenant, sub.CustomerID, sub.SubscriptionID))
+			}
+		}
+		return failure
 	}
 	for _, subscription := range subscriptions {
 		if subscription.SubscriptionID != "" {
@@ -88,6 +105,13 @@ func (jm *JobManager) reconcileStripeTaxTenant(ctx context.Context, tenant strin
 			_, err = jm.billing.stripeClient.PrepareCustomerTax(ctx, tenant, subscription.CustomerID, *assessed)
 		}
 		if err != nil {
+			return err
+		}
+		refType, refID := "stripe_subscription", subscription.SubscriptionID
+		if refID == "" {
+			refType, refID = "stripe_customer", subscription.CustomerID
+		}
+		if _, err = purserdb.New(jm.db).ResolveProviderTaxReview(ctx, purserdb.ResolveProviderTaxReviewParams{TenantID: tenant, ReferenceType: refType, ReferenceID: refID, Note: "Current legal billing profile and exclusive tax terms synchronized"}); err != nil {
 			return err
 		}
 	}

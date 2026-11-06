@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -53,7 +54,10 @@ instead. Requires a platform-operator login.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := recordDiagnosticRead(cmd.Context(), "dvr", args[0], service); err != nil {
-				return err
+				if !errors.Is(err, errDiagnosticAuditUnsupported) {
+					return err
+				}
+				ux.Warn(cmd.ErrOrStderr(), "Commodore does not support diagnostic access records; continuing the authorized DVR read")
 			}
 			ctxCfg, err := activeContextWithAuth(cmd.Context())
 			if err != nil {

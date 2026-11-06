@@ -30,6 +30,7 @@ type invoiceTaxAssessment struct {
 	ReviewRequired             bool                    `json:"review_required,omitempty"`
 	ReviewReasons              []string                `json:"review_reasons,omitempty"`
 	ConfirmationBusinessReview json.RawMessage         `json:"confirmation_business_review,omitempty"`
+	ProviderAssessment         json.RawMessage         `json:"provider_tax_assessment,omitempty"`
 	Advances                   []advanceTaxApplication `json:"advances_applied,omitempty"`
 	Advance                    *AdvanceMoney           `json:"advance_money,omitempty"`
 	DocumentKind               string                  `json:"document_kind,omitempty"`
@@ -96,7 +97,21 @@ func assessInvoiceTaxTx(ctx context.Context, tx *sql.Tx, tenant string, net int6
 	a.VAT, a.Gross = exclusiveTax(a.Net, a.Decision.RateBPS)
 	a.Validation = a.Decision.verification.Snapshot
 	a.ValidationMode = a.Decision.verification.Mode
+	a.retainOutageReview()
 	return a, nil
+}
+
+func (a *invoiceTaxAssessment) retainOutageReview() {
+	if a.ValidationMode != "outage_grace" || !a.Decision.ReverseCharge {
+		return
+	}
+	a.ReviewRequired = true
+	for _, reason := range a.ReviewReasons {
+		if reason == "vies_outage_grace" {
+			return
+		}
+	}
+	a.ReviewReasons = append(a.ReviewReasons, "vies_outage_grace")
 }
 
 // Each line uses the group rate. Residual cents are assigned by fractional
@@ -143,6 +158,7 @@ func allocateInvoiceLineVATToTotal(net []int64, rate int, target int64) []int64 
 }
 
 func freezeInvoiceTaxTx(ctx context.Context, tx *sql.Tx, tenant, invoice string, a invoiceTaxAssessment, record fx.Record) error {
+	a.retainOutageReview()
 	q := purserdb.New(tx)
 	lines, err := q.ListInvoiceTaxLines(ctx, purserdb.ListInvoiceTaxLinesParams{TenantID: tenant, InvoiceID: invoice})
 	if err != nil {

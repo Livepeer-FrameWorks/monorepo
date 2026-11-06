@@ -102,6 +102,82 @@ func TestNativeMolliePaymentsFreezeOneExclusiveTaxInvoice_RealPG(t *testing.T) {
 	}
 }
 
+func TestTaxedMollieRecurringWebhookKeepsPaymentLifecycle_RealPG(t *testing.T) {
+	db := startPurserUsageRealPG(t)
+	fixture, client := installMollieFixture(t)
+	for key, value := range map[string]string{"SUPPLIER_NAME": "DDVTech B.V.", "SUPPLIER_ADDRESS": "Leiden NL", "SUPPLIER_VAT_NUMBER": "NL853319145B01", "SUPPLIER_REGISTRATION_NUMBER": "59104694", "SUPPLIER_COUNTRY": "NL"} {
+		appconfigtest.Set(t, key, value)
+	}
+	tenant := seedPrepaidLedgerTenant(t, db)
+	if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET billing_model='postpaid',mollie_subscription_id='subscription',dunning_attempts=2,billing_name='Buyer',billing_email='buyer@example.test',billing_customer_type='consumer',billing_address='{"street":"Main1","city":"Leiden","postal_code":"2332ED","country":"NL"}' WHERE tenant_id=$1::uuid`, tenant); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO purser.mollie_customers(tenant_id,mollie_customer_id) VALUES($1::uuid,'customer')`, tenant); err != nil {
+		t.Fatal(err)
+	}
+	terms, err := AssessMollieTaxTerms(t.Context(), db, tenant, 10000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := map[string]any{"tenant_id": tenant}
+	terms.Metadata(meta)
+	at := time.Now().UTC().Truncate(time.Second)
+	next := at.AddDate(0, 1, 0).Format(time.DateOnly)
+	fixture.route("GET", "/v2/customers/customer/subscriptions/subscription", func(recordedProviderRequest) (int, any) {
+		return 200, map[string]any{"id": "subscription", "status": "active", "nextPaymentDate": next}
+	})
+	svc := &Service{db: db, mollieClient: client, logger: logging.NewLogger()}
+	for _, tc := range []struct {
+		id, status string
+		dunning    int
+	}{{"failed-payment", "failed", 3}, {"paid-payment", "paid", 0}} {
+		fixture.route("GET", "/v2/payments/"+tc.id, func(recordedProviderRequest) (int, any) {
+			payment := map[string]any{"id": tc.id, "status": tc.status, "subscriptionId": "subscription", "customerId": "customer", "amount": map[string]string{"currency": "EUR", "value": "121.00"}, "metadata": meta, "createdAt": at.Format(time.RFC3339)}
+			if tc.status == "paid" {
+				payment["paidAt"] = at.Format(time.RFC3339)
+			}
+			return 200, payment
+		})
+		for repeat := 0; repeat < 2; repeat++ {
+			if _, err = svc.handleMolliePaymentWebhook(t.Context(), tc.id, []byte("id="+tc.id)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		payment, readErr := client.GetPayment(t.Context(), tc.id)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		mapped, _ := mapMolliePaymentStatus(tc.status)
+		if err = svc.applyNativeMollieSubscriptionOutcome(t.Context(), tenant, payment, mapped); err != nil {
+			t.Fatal(err)
+		}
+		var dunning int
+		var nextDate string
+		if err = db.QueryRow(`SELECT dunning_attempts,COALESCE(mollie_next_payment_date::text,'') FROM purser.tenant_subscriptions WHERE tenant_id=$1::uuid`, tenant).Scan(&dunning, &nextDate); err != nil {
+			t.Fatal(err)
+		}
+		if dunning != tc.dunning || nextDate != next {
+			t.Fatalf("native tax branch dropped payment lifecycle: %s dunning=%d want=%d next=%s want=%s", tc.status, dunning, tc.dunning, nextDate, next)
+		}
+	}
+	var invoices, failed, paid, events int
+	if err = db.QueryRow(`SELECT count(*) FROM purser.billing_invoices WHERE tenant_id=$1::uuid`, tenant).Scan(&invoices); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow(`SELECT count(*) FROM purser.billing_payments WHERE tenant_id=$1::uuid AND status='confirmed'`, tenant).Scan(&paid); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow(`SELECT count(*) FROM purser.provider_payment_objects WHERE tenant_id=$1::uuid AND provider='mollie' AND object_type='payment' AND provider_object_id='failed-payment' AND metadata->>'status'='failed' AND (metadata->>'amount_minor')::bigint=12100`, tenant).Scan(&failed); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow(`SELECT count(*) FROM purser.billing_event_outbox WHERE tenant_id=$1::uuid AND event_type IN ('payment_failed','payment_succeeded','invoice_paid')`, tenant).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if invoices != 1 || failed != 1 || paid != 1 || events != 3 {
+		t.Fatalf("native payment outcomes missing or duplicated: invoices=%d failed=%d paid=%d events=%d", invoices, failed, paid, events)
+	}
+}
+
 func TestNativeMollieUpgradeCreditsOriginalSourceTax_RealPG(t *testing.T) {
 	db := startPurserUsageRealPG(t)
 	for key, value := range map[string]string{"SUPPLIER_NAME": "DDVTech B.V.", "SUPPLIER_ADDRESS": "Leiden NL", "SUPPLIER_VAT_NUMBER": "NL853319145B01", "SUPPLIER_REGISTRATION_NUMBER": "59104694", "SUPPLIER_COUNTRY": "NL"} {
