@@ -61,12 +61,17 @@ billing-document list. Downloads return the retained original PDF. Purser keeps
 the provider's document number and does not issue another invoice for the same
 Stripe subscription supply.
 
-Missing local supplier configuration does not discard an already-issued Stripe
-document. Purser retains the original with an operator exception and reassesses
-unverified documents in bounded, tenant-scoped batches. The archive distinguishes
-the captured tax assessment from its later verification result. Original amounts,
-parties, document numbers, PDF bytes and issued facts remain unchanged. Missing
-original tax amounts are never invented to clear an exception.
+Stripe imports use the accepted supplier and customer snapshot and tax evidence
+valid at the document's tax point. They do not depend on today's billing profile,
+supplier configuration or a new VIES request. Original amounts, parties, document
+numbers, PDF bytes and issued facts remain unchanged. Missing original tax
+amounts are never invented to clear an exception.
+
+An already-retained unverified document keeps that classification. Webhook
+redelivery and the recurring tax worker do not reassess it. An operator can
+resolve its review without the same facts reopening it or increasing its count.
+Documents issued using provisional VAT evidence have their own retained review,
+separate from the tenant's later VIES revalidation notice.
 
 Use this archive to investigate the opening records and prepare corrections with
 the bookkeeper. It is not a journal import, reconciled close or payout approval.
@@ -154,11 +159,23 @@ collection flow. Restoring tax settings does not require immediate payment
 success. Unrelated invoices and operator-created pauses remain untouched;
 finalized invoices retain their original tax facts.
 
+Owned held drafts with prorations, discounts or a supply other than a regular
+renewal receive a durable review for that invoice. Purser records the review
+before acknowledging it to Stripe and completing the recovery scan. They are
+not silently abandoned or retried by every tax sweep. Operators can correct the
+invoice through Stripe and resolve its review. A deliberate `auto_advance=false`
+on a finalized invoice is preserved.
+
 For native Mollie payments, temporary assessment failures leave the webhook
 available for retry before an invoice is issued. Definitive mismatches retain
 the accepted payment terms and an operator review. Issuance checks the billing
 identity and personal/business classification used by the assessment against
 the saved profile before freezing the document.
+Missing current supplier configuration uses the complete supplier evidence
+already accepted with a confirmed payment, records a document review, and lets
+the payment lifecycle proceed. Incomplete accepted evidence cannot be used to
+invent an invoice supplier. Grace-based VAT evidence has a document-specific
+review that remains independent of the tenant's later revalidation notice.
 
 A tax refusal during a billing-phase change leaves the arrangement unchanged
 and records an operator exception after rollback. Bootstrap dry runs do not

@@ -13,8 +13,13 @@ import (
 // A subscription's captured hold metadata identifies drafts created by our
 // tax guard. Operator invoices are outside this recovery; owned invoices with
 // unsupported adjustments require review before their money can change.
-func recoverStripeTaxInvoices(ctx context.Context, sub *api.Subscription, profile TaxProfile, rateID string) error {
+func recoverStripeTaxInvoices(ctx context.Context, sub *api.Subscription, profile TaxProfile, rateID string) (*TaxRecoveryReport, error) {
+	report := &TaxRecoveryReport{TenantID: sub.Metadata["tenant_id"], SubscriptionID: sub.ID, ProfileSHA: profile.Fingerprint(), RecoveryPending: true}
+	if sub.Customer != nil {
+		report.CustomerID = sub.Customer.ID
+	}
 	var failures error
+	reported := map[string]bool{}
 	for _, status := range []string{"draft", "open"} {
 		p := &api.InvoiceListParams{Subscription: api.String(sub.ID), Status: api.String(status)}
 		p.Context = ctx
@@ -25,60 +30,77 @@ func recoverStripeTaxInvoices(ctx context.Context, sub *api.Subscription, profil
 			if inv.Status != api.InvoiceStatusDraft && inv.Status != api.InvoiceStatusOpen {
 				continue
 			}
+			if ownedTaxHeldInvoice(sub, inv) {
+				if lineErr := completeTaxRecoveryInvoiceLines(ctx, inv); lineErr != nil {
+					failures = errors.Join(failures, lineErr)
+					report.RetryPending = true
+					continue
+				}
+			}
+			evidence, fingerprint, inputErr := taxRecoveryInvoiceInputs(inv, report.ProfileSHA)
+			if inputErr != nil {
+				failures = errors.Join(failures, inputErr)
+				report.RetryPending = true
+				continue
+			}
+			if inv.Metadata[taxTerminalCode] != "" && inv.Metadata[taxTerminalInput] == fingerprint {
+				continue
+			}
 			if err := recoverStripeTaxInvoice(ctx, sub, inv, profile, rateID); err != nil {
-				failures = errors.Join(failures, err)
+				var review *billingtax.ReviewError
+				if errors.As(err, &review) && !billingtax.IsTransient(err) {
+					if !reported[inv.ID] {
+						report.Reviews = append(report.Reviews, TaxInvoiceReview{InvoiceID: inv.ID, SubscriptionID: sub.ID, CustomerID: report.CustomerID, Code: review.Code, Message: review.Message, InputFingerprint: fingerprint, Evidence: evidence})
+						reported[inv.ID] = true
+					}
+				} else {
+					failures = errors.Join(failures, err)
+					report.RetryPending = true
+				}
 			}
 		}
 		if err := iter.Err(); err != nil {
 			failures = errors.Join(failures, err)
+			report.RetryPending = true
 		}
 	}
-	return failures
+	return report, failures
 }
 
 func recoverStripeTaxInvoice(ctx context.Context, sub *api.Subscription, inv *api.Invoice, profile TaxProfile, rateID string) error {
-	review := func() error {
-		return billingtax.Review("stripe_held_invoice_review", "A held Stripe invoice requires billing review before collection resumes")
+	review := func(code, message string) error {
+		return billingtax.Review(code, message)
 	}
-	var meta map[string]string
-	if inv.Parent != nil && inv.Parent.SubscriptionDetails != nil {
-		meta = inv.Parent.SubscriptionDetails.Metadata
-	}
-	started, parseErr := strconv.ParseInt(meta["frameworks_tax_hold_started"], 10, 64)
-	owned := parseErr == nil && started > 0 && inv.Created >= started && meta["frameworks_tax_review"] == "true" && meta["frameworks_tax_pause_owned"] == "true" && meta["tenant_id"] == sub.Metadata["tenant_id"] && inv.Parent.SubscriptionDetails.Subscription != nil && inv.Parent.SubscriptionDetails.Subscription.ID == sub.ID
-	if !owned || inv.BillingReason != api.InvoiceBillingReasonSubscriptionCycle {
+	if !ownedTaxHeldInvoice(sub, inv) {
 		return nil
 	}
-	if inv.Customer == nil || sub.Customer == nil || inv.Customer.ID != sub.Customer.ID || (sub.PauseCollection != nil && (sub.Metadata["frameworks_tax_pause_owned"] != "true" || sub.PauseCollection.Behavior != api.SubscriptionPauseCollectionBehaviorKeepAsDraft || sub.PauseCollection.ResumesAt != 0)) {
-		return review()
+	if inv.BillingReason != api.InvoiceBillingReasonSubscriptionCycle {
+		return review("stripe_held_invoice_nonrenewal", "Owned held invoice is not a regular renewal; review its original supply before correction")
+	}
+	if inv.Customer == nil || sub.Customer == nil || inv.Customer.ID != sub.Customer.ID {
+		return review("stripe_held_invoice_owner_mismatch", "Held invoice customer ownership requires review")
+	}
+	if sub.PauseCollection != nil && (sub.Metadata["frameworks_tax_pause_owned"] != "true" || sub.PauseCollection.Behavior != api.SubscriptionPauseCollectionBehaviorKeepAsDraft || sub.PauseCollection.ResumesAt != 0) {
+		return review("stripe_held_invoice_operator_pause", "An operator changed collection policy for this held invoice")
 	}
 	if inv.Status == api.InvoiceStatusDraft {
 		if inv.AutoAdvance {
 			if inv.Metadata["frameworks_tax_recovered_hold"] == "true" && inv.Metadata["frameworks_tax_profile"] != "" {
 				return nil
 			}
-			return review()
+			return review("stripe_held_invoice_unproven_collection", "Held draft has automatic collection enabled without retained tax proof")
+		}
+		if err := completeTaxRecoveryInvoiceLines(ctx, inv); err != nil {
+			return err
 		}
 		lines := inv.Lines
-		if lines == nil || lines.HasMore {
-			p := &api.InvoiceListLinesParams{Invoice: api.String(inv.ID)}
-			p.Context = ctx
-			all := invoice.ListLines(p)
-			lines = &api.InvoiceLineItemList{}
-			for all.Next() {
-				lines.Data = append(lines.Data, all.InvoiceLineItem())
-			}
-			if err := all.Err(); err != nil {
-				return err
-			}
-		}
-		if len(lines.Data) == 0 || len(lines.Data) > 250 || len(inv.Discounts) > 0 {
-			return review()
+		if lines.HasMore || len(lines.Data) == 0 || len(lines.Data) > 250 || len(inv.Discounts) > 0 {
+			return review("stripe_held_invoice_unsupported_lines", "Held invoice has unsupported discounts or an incomplete line set")
 		}
 		updates := []*api.InvoiceUpdateLinesLineParams{}
 		for _, line := range lines.Data {
-			if line.ID == "" || line.Amount < 0 || line.Currency != inv.Currency || line.Parent == nil || line.Parent.SubscriptionItemDetails == nil || line.Parent.SubscriptionItemDetails.Subscription != sub.ID || line.Parent.SubscriptionItemDetails.Proration || len(line.DiscountAmounts) > 0 || len(line.PretaxCreditAmounts) > 0 {
-				return review()
+			if line == nil || line.ID == "" || line.Amount < 0 || line.Currency != inv.Currency || line.Parent == nil || line.Parent.SubscriptionItemDetails == nil || line.Parent.SubscriptionItemDetails.Subscription != sub.ID || line.Parent.SubscriptionItemDetails.Proration || len(line.DiscountAmounts) > 0 || len(line.PretaxCreditAmounts) > 0 {
+				return review("stripe_held_invoice_unsupported_line", "Held invoice contains adjustments requiring original-source tax review")
 			}
 			updates = append(updates, &api.InvoiceUpdateLinesLineParams{ID: api.String(line.ID), TaxRates: []*string{api.String(rateID)}})
 		}
@@ -107,14 +129,37 @@ func recoverStripeTaxInvoice(ctx context.Context, sub *api.Subscription, inv *ap
 	}
 	if inv.Status == api.InvoiceStatusOpen {
 		if inv.Metadata["frameworks_tax_recovered_hold"] != "true" || inv.Metadata["frameworks_tax_profile"] == "" {
-			return review()
-		}
-		if !inv.AutoAdvance {
-			update := &api.InvoiceParams{AutoAdvance: api.Bool(true)}
-			update.Context = ctx
-			_, err := invoice.Update(inv.ID, update)
-			return err
+			return review("stripe_held_invoice_missing_frozen_tax", "Finalized held invoice lacks frozen tax proof; preserve its original money for review")
 		}
 	}
 	return nil
+}
+
+func ownedTaxHeldInvoice(sub *api.Subscription, inv *api.Invoice) bool {
+	if sub == nil || inv == nil || inv.Parent == nil || inv.Parent.SubscriptionDetails == nil {
+		return false
+	}
+	details := inv.Parent.SubscriptionDetails
+	meta := details.Metadata
+	started, err := strconv.ParseInt(meta["frameworks_tax_hold_started"], 10, 64)
+	return err == nil && started > 0 && inv.Created >= started && meta["frameworks_tax_review"] == "true" && meta["frameworks_tax_pause_owned"] == "true" && meta["tenant_id"] == sub.Metadata["tenant_id"] && details.Subscription != nil && details.Subscription.ID == sub.ID
+}
+
+func completeTaxRecoveryInvoiceLines(ctx context.Context, inv *api.Invoice) error {
+	if inv.Lines != nil && !inv.Lines.HasMore {
+		return nil
+	}
+	p := &api.InvoiceListLinesParams{Invoice: api.String(inv.ID)}
+	p.Context = ctx
+	p.Limit = api.Int64(100)
+	all := invoice.ListLines(p)
+	inv.Lines = &api.InvoiceLineItemList{}
+	for all.Next() {
+		inv.Lines.Data = append(inv.Lines.Data, all.InvoiceLineItem())
+		if len(inv.Lines.Data) > 250 {
+			inv.Lines.HasMore = true
+			return nil
+		}
+	}
+	return all.Err()
 }

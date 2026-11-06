@@ -58,7 +58,8 @@ func TestStripeRenewalRequiresMatchingTaxSetup_RealPG(t *testing.T) {
 				"id": "in_" + tc.name, "customer": "cus_tax_review", "number": "DDV-" + tc.name, "status": "paid", "currency": "eur",
 				"total": tc.net + tc.vat, "total_excluding_tax": tc.net, "total_taxes": []any{map[string]any{"amount": tc.vat}},
 				"created": time.Now().Unix(), "invoice_pdf": "https://invoice.stripe.com/in_" + tc.name + ".pdf",
-				"account_name": "DDVTech B.V.", "customer_name": "Original Buyer",
+				"account_name": "DDVTech B.V.", "account_country": "NL", "footer": profile.SupplierIdentity,
+				"customer_name": "Original Buyer", "customer_email": "buyer@example.test", "customer_address": map[string]string{"line1": "Main 1", "city": "Leiden", "postal_code": "2332ED", "country": "NL"},
 				"parent": map[string]any{"subscription_details": map[string]any{"metadata": map[string]any{"frameworks_tax_profile": tc.sha}}},
 			}
 			if tc.mixed {
@@ -101,8 +102,8 @@ func TestStripeRenewalRequiresMatchingTaxSetup_RealPG(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tc.ready {
-				if retained.ReviewRequired || !retained.Evidence.AssessedAt.After(initial.AssessedAt) {
-					t.Fatal("invoice did not freeze fresh issuance proof")
+				if retained.ReviewRequired || !retained.Evidence.AssessedAt.Equal(initial.AssessedAt) || retained.Evidence.AssessedAt.After(doc.IssuedAt.Add(time.Second-time.Nanosecond)) {
+					t.Fatal("invoice lost retained acceptance proof or postdated its tax point")
 				}
 			} else {
 				var anomalies int

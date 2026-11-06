@@ -44,6 +44,17 @@ class BillingProviderTest(unittest.TestCase):
         self.call("POST", "/v1/subscriptions/" + sub["id"], b"pause_collection=")
         return invoice["id"]
 
+    def test_invoice_retains_legal_footer_and_brand_alias(self):
+        sub = self.subscription()
+        customer = self.provider.objects[sub["customer"]]
+        legal_identity = "DDVTech B.V.; Example Street 1\nAmsterdam; NL000000000B01"
+        customer["invoice_settings"] = {"footer": legal_identity}
+        invoice = self.provider.invoice(sub)
+        self.assertEqual(invoice.get("footer"), legal_identity)
+        self.assertEqual(invoice["account_name"], "FrameWorks-Stack-Test")
+        customer["invoice_settings"]["footer"] = "Changed later"
+        self.assertEqual(invoice["footer"], legal_identity)
+
     def test_payment_outcomes_do_not_invent_success(self):
         for outcome, expected_status in (("declined", "requires_payment_method"), ("requires_action", "requires_action"), ("processing", "processing")):
             with self.subTest(outcome=outcome):
@@ -110,6 +121,26 @@ class BillingProviderTest(unittest.TestCase):
                 updated = self.call("POST", "/v1/subscriptions/" + sub["id"], ("items[0][price]=" + price["id"] + "&billing_cycle_anchor=now&proration_behavior=" + proration).encode())
                 self.assertEqual(self.provider.objects[updated["latest_invoice"]]["total_excluding_tax"], expected)
 
+    def test_mixed_invoice_fixtures_preserve_ownership_and_payment_outcomes(self):
+        sub = self.subscription()
+        self.call("POST", "/v1/subscriptions/" + sub["id"], b"metadata[frameworks_tax_profile]=paid-profile&pause_collection[behavior]=keep_as_draft&metadata[frameworks_tax_review]=true&metadata[frameworks_tax_pause_owned]=true&metadata[frameworks_tax_hold_started]=123")
+        source = self.provider.objects[sub["latest_invoice"]]
+        source["metadata"]["frameworks_tax_profile"] = "paid-profile"
+        manual = self.call("POST", "/__test/unrelated_invoice", json.dumps({"subscription_id": sub["id"]}).encode())
+        adjustment = self.call("POST", "/__test/held_adjustment", json.dumps({"subscription_id": sub["id"]}).encode())
+        stopped = self.call("POST", "/__test/operator_paused_invoice", json.dumps({"subscription_id": sub["id"]}).encode())
+        self.assertIsNone(manual["parent"])
+        self.assertEqual(adjustment["billing_reason"], "subscription_update")
+        self.assertEqual(adjustment["parent"]["subscription_details"]["metadata"]["frameworks_tax_review"], "true")
+        self.assertEqual((stopped["status"], stopped["auto_advance"], stopped["metadata"]["frameworks_tax_recovered_hold"]), ("open", False, "true"))
+        invoices = [self.open_invoice(sub), self.open_invoice(sub)]
+        for invoice, outcome in zip(invoices, ("declined", "requires_action")):
+            self.call("POST", "/__test/payment_behavior", json.dumps({"invoice_id": invoice, "outcome": outcome}).encode())
+        for invoice, expected in zip(invoices, ("requires_payment_method", "requires_action")):
+            self.call("POST", "/__test/collect", json.dumps({"invoice_id": invoice}).encode())
+            self.assertEqual(self.provider.objects[self.provider.objects[invoice]["payment_intent"]]["status"], expected)
+        self.assertEqual((manual["status"], adjustment["status"], stopped["auto_advance"]), ("open", "draft", False))
+
     def test_hosted_settlement_has_exact_finalized_transfer_receipt(self):
         auth = {"from": "0x" + "3" * 40, "to": "0x" + "4" * 40, "value": "1210000"}
         requirements = {"network": "eip155:8453", "asset": "0x" + "5" * 40}
@@ -140,6 +171,7 @@ class BillingProviderTest(unittest.TestCase):
         draft = json.loads(renewed[0]["body"])["data"]["object"]
         self.assertEqual(draft["status"], "draft")
         self.assertTrue(draft["auto_advance"])
+        self.assertEqual(draft["lines"]["data"][0]["period"]["start"], invoice["lines"]["data"][0]["period"]["end"])
         renewed = self.call("POST", "/__test/collect", json.dumps({"invoice_id": draft["id"]}).encode())
         self.assertEqual(len(renewed), 2)
         event = renewed[-1]

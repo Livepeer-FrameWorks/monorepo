@@ -126,7 +126,7 @@ func TestUnsupportedOwnedTaxInvoiceKeepsReviewAfterFutureRenewalsResume(t *testi
 	unsupported.Lines.Data[0].Amount = -100
 	b := &taxBackend{t: t, owner: "tenant", currentSub: current, drafts: []*api.Invoice{unsupported}}
 	installBackend(t, b)
-	if err := (&Client{}).ReconcileSubscriptionTax(t.Context(), "tenant", "customer", "sub", p); err == nil {
+	if report, err := (&Client{}).ReconcileSubscriptionTax(t.Context(), "tenant", "customer", "sub", p); err != nil || len(report.Reviews) != 1 {
 		t.Fatal("held renewal debt silently cleared from review after profile recovery")
 	}
 	if b.updatedSub == nil || len(b.updatedSub.UnsetFields) != 1 || b.updatedSub.UnsetFields[0] != api.SubscriptionParamsUnsetFieldPauseCollection {

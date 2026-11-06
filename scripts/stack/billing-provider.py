@@ -31,6 +31,7 @@ class Provider:
         self.idempotency = {}
         self.vies_validity = {}
         self.payment_outcomes = {}
+        self.invoice_outcomes = {}
         self.faults = {}
 
     def create(self, prefix, kind, values):
@@ -98,6 +99,7 @@ class Provider:
         inv["number"] = "STACK-" + inv["id"]
         inv["invoice_pdf"] = "https://invoice.stripe.com/" + inv["id"] + ".pdf"
         inv["default_tax_rates"] = rates
+        inv["footer"] = customer.get("invoice_settings", {}).get("footer", "")
         item = sub["items"]["data"][0]
         inv["lines"]["data"][0].update({"id": "il_" + inv["id"], "quantity": 1, "pricing": {"type": "price_details", "price_details": {"price": price["id"], "product": price.get("product")}}, "parent": {"type": "subscription_item_details", "subscription_item_details": {"subscription": sub["id"], "subscription_item": item["id"], "proration": False}}, "period": {"start": item["current_period_start"], "end": item["current_period_end"]}})
         inv["metadata"] = dict(sub["metadata"])
@@ -130,6 +132,9 @@ class Provider:
 
     def paid_invoice(self, invoice):
         invoice.update({"status": "paid", "amount_paid": invoice["total"], "amount_due": 0, "amount_remaining": 0, "auto_advance": False, "next_payment_attempt": None})
+        sub = self.objects.get(invoice.get("subscription"))
+        if sub and sub.get("latest_invoice") == invoice["id"]:
+            sub["status"] = "active"
         if invoice.get("payment_intent"):
             self.objects[invoice["payment_intent"]]["status"] = "succeeded"
         if any(obj["object"] == "invoice_payment" and obj.get("invoice") == invoice["id"] and obj.get("status") == "paid" for obj in self.objects.values()):
@@ -139,7 +144,7 @@ class Provider:
 
     def attempt_payment(self, invoice):
         invoice["attempt_count"] = invoice.get("attempt_count", 0) + 1
-        outcome = self.payment_outcomes.get(invoice["customer"], "succeeded")
+        outcome = self.invoice_outcomes.get(invoice["id"], self.payment_outcomes.get(invoice["customer"], "succeeded"))
         if outcome == "succeeded":
             self.paid_invoice(invoice)
             return 200, invoice
@@ -230,7 +235,10 @@ class Provider:
                 data = json.loads(body)
                 if data["outcome"] not in ("succeeded", "declined", "requires_action", "processing"):
                     return self.invalid("unsupported simulated payment outcome")
-                self.payment_outcomes[data["customer_id"]] = data["outcome"]
+                if data.get("invoice_id"):
+                    self.invoice_outcomes[data["invoice_id"]] = data["outcome"]
+                else:
+                    self.payment_outcomes[data["customer_id"]] = data["outcome"]
                 return 200, {"configured": True}
             if path == "/__test/fault":
                 data = json.loads(body)
@@ -273,9 +281,25 @@ class Provider:
                 manual.update({"billing_reason": "manual", "parent": None, "metadata": {"operator_manual": "true"}, "status": "open", "collection_method": "send_invoice", "due_date": int(time.time()) - 86400, "auto_advance": False, "status_transitions": {"finalized_at": int(time.time())}})
                 sub["latest_invoice"] = latest
                 return 200, manual
-            if path == "/__test/invoice_events":
+            if path in ("/__test/held_adjustment", "/__test/operator_paused_invoice"):
                 sub = self.objects[json.loads(body)["subscription_id"]]
-                invoice = self.objects[sub["latest_invoice"]]
+                latest = sub["latest_invoice"]
+                paid = [invoice for invoice in self.objects.values() if invoice["object"] == "invoice" and invoice.get("subscription") == sub["id"] and invoice["status"] == "paid"]
+                original = paid[-1] if paid else None
+                if original is None:
+                    return self.invalid("fixture requires an actual paid source period")
+                extra = self.invoice(sub, draft=True)
+                if path.endswith("held_adjustment"):
+                    extra["billing_reason"] = "subscription_update"
+                else:
+                    extra.update({"status": "open", "default_tax_rates": copy.deepcopy(original["default_tax_rates"]), "status_transitions": {"finalized_at": int(time.time())}})
+                    extra["metadata"].update({"frameworks_tax_recovered_hold": "true", "frameworks_tax_profile": original["metadata"]["frameworks_tax_profile"]})
+                    self.recalculate(extra)
+                sub["latest_invoice"] = latest
+                return 200, extra
+            if path == "/__test/invoice_events":
+                data = json.loads(body)
+                invoice = self.objects[data["invoice_id"]] if data.get("invoice_id") else self.objects[self.objects[data["subscription_id"]]["latest_invoice"]]
                 if invoice["status"] not in ("open", "paid"):
                     return self.invalid("invoice has not actually been finalized")
                 events = [self.event("invoice.finalized", invoice)]
@@ -286,6 +310,10 @@ class Provider:
                 return 200, self.complete(self.objects[json.loads(body)["session_id"]])
             if path == "/__test/renew":
                 sub = self.objects[json.loads(body)["subscription_id"]]
+                for item in sub["items"]["data"]:
+                    duration = item["current_period_end"] - item["current_period_start"]
+                    item["current_period_start"] = item["current_period_end"]
+                    item["current_period_end"] += duration
                 paused = sub.get("pause_collection", {}).get("behavior") == "keep_as_draft"
                 inv = self.invoice(sub, draft=True)
                 inv["auto_advance"] = not paused

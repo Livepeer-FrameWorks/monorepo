@@ -35,14 +35,20 @@ func TestStripeTransientAssessmentRetriesWithoutFreezingReview_RealPG(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := json.Marshal(map[string]any{"id": "in_retry", "customer": "cus_retry", "number": "DDV-RETRY", "status": "paid", "currency": "eur", "total": 12100, "total_excluding_tax": 10000, "total_taxes": []any{map[string]any{"amount": 2100}}, "created": time.Now().Unix(), "invoice_pdf": "https://invoice.stripe.com/in_retry.pdf", "metadata": map[string]string{"frameworks_tax_profile": profile.ProfileSHA}})
+	raw, err := json.Marshal(map[string]any{"id": "in_retry", "customer": "cus_retry", "number": "DDV-RETRY", "status": "paid", "currency": "eur", "total": 12100, "total_excluding_tax": 10000, "total_taxes": []any{map[string]any{"amount": 2100}}, "created": time.Now().Unix(), "invoice_pdf": "https://invoice.stripe.com/in_retry.pdf", "account_name": "DDVTech B.V.", "account_country": "NL", "footer": profile.SupplierIdentity, "customer_name": "Buyer", "customer_email": "buyer@example.test", "customer_address": map[string]string{"line1": "Main1", "city": "Leiden", "postal_code": "2332ED", "country": "NL"}, "metadata": map[string]string{"frameworks_tax_profile": profile.ProfileSHA}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	service := &Service{db: db, stripeClient: client, logger: logging.NewLogger()}
-	if _, err = db.Exec(`CREATE FUNCTION purser.fail_stripe_profile_assessment() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'temporary assessment storage failure' USING ERRCODE='08006'; END $$; CREATE TRIGGER fail_stripe_profile_assessment BEFORE INSERT ON purser.provider_tax_profiles FOR EACH ROW EXECUTE FUNCTION purser.fail_stripe_profile_assessment()`); err != nil {
+	if _, err = db.Exec(`ALTER TABLE purser.provider_tax_profiles RENAME TO provider_tax_profiles_unavailable`); err != nil {
 		t.Fatal(err)
 	}
+	profileTableRestored := false
+	t.Cleanup(func() {
+		if !profileTableRestored {
+			_, _ = db.Exec(`ALTER TABLE purser.provider_tax_profiles_unavailable RENAME TO provider_tax_profiles`)
+		}
+	})
 	if err = service.importStripeTaxDocument(t.Context(), "provider_invoice", raw); err == nil {
 		t.Error("temporary database error was accepted as a permanent invoice assessment")
 	}
@@ -53,9 +59,10 @@ func TestStripeTransientAssessmentRetriesWithoutFreezingReview_RealPG(t *testing
 	if count != 0 {
 		t.Error("temporary assessment failure froze an immutable unknown verdict")
 	}
-	if _, err = db.Exec(`DROP TRIGGER fail_stripe_profile_assessment ON purser.provider_tax_profiles; DROP FUNCTION purser.fail_stripe_profile_assessment()`); err != nil {
+	if _, err = db.Exec(`ALTER TABLE purser.provider_tax_profiles_unavailable RENAME TO provider_tax_profiles`); err != nil {
 		t.Fatal(err)
 	}
+	profileTableRestored = true
 	if err = service.importStripeTaxDocument(t.Context(), "provider_invoice", raw); err != nil {
 		t.Fatal(err)
 	}

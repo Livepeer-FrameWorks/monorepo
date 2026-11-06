@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -34,10 +35,18 @@ func TestProviderWireActualSDKTaxUpgradeAndRecovery(t *testing.T) {
 	}
 }
 
+func TestProviderWireOperatorPausedInvoiceIsNotRestarted(t *testing.T) {
+	providerWireTaxUpgradeAndRecovery(t, "operator_paused_invoice")
+}
+
+func TestProviderWireOwnedNonRenewalIsNotSilentlyIgnored(t *testing.T) {
+	providerWireTaxUpgradeAndRecovery(t, "nonrenewal_review")
+}
+
 func providerWireTaxUpgradeAndRecovery(t *testing.T, outcome string) {
 	paymentOutcome := outcome
 	pastFailure := outcome == "past_invoice_failure" || outcome == "past_finalize_failure"
-	if pastFailure {
+	if pastFailure || outcome == "operator_paused_invoice" || outcome == "nonrenewal_review" {
 		paymentOutcome = "succeeded"
 	}
 	baseURL := startPythonBillingProvider(t)
@@ -122,6 +131,13 @@ func providerWireTaxUpgradeAndRecovery(t *testing.T, outcome string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var operatorPaused, adjustment api.Invoice
+	if outcome == "operator_paused_invoice" {
+		providerWireControl(t, baseURL, "/__test/operator_paused_invoice", map[string]string{"subscription_id": sub.ID}, &operatorPaused)
+	}
+	if outcome == "nonrenewal_review" {
+		providerWireControl(t, baseURL, "/__test/held_adjustment", map[string]string{"subscription_id": sub.ID}, &adjustment)
+	}
 	providerWireControl(t, baseURL, "/__test/payment_behavior", map[string]string{"customer_id": buyer.ID, "outcome": paymentOutcome}, nil)
 	providerWireCleanSync(t, baseURL, func() error { return c.SyncSubscriptionTax(ctx, "wire-tenant", buyer.ID, sub.ID, profile) })
 	futureReady, err := c.GetSubscription(ctx, sub.ID)
@@ -138,7 +154,13 @@ func providerWireTaxUpgradeAndRecovery(t *testing.T, outcome string) {
 	if outcome == "past_finalize_failure" {
 		providerWireControl(t, baseURL, "/__test/fault", map[string]any{"method": "POST", "path": "/v1/invoices/" + heldID + "/finalize", "status": 500, "after_execution": false, "execution_started": true}, nil)
 	}
-	err = c.ReconcileSubscriptionTax(ctx, "wire-tenant", buyer.ID, sub.ID, profile)
+	report, err := c.ReconcileSubscriptionTax(ctx, "wire-tenant", buyer.ID, sub.ID, profile)
+	if outcome == "operator_paused_invoice" {
+		preserved, readErr := invoice.Get(operatorPaused.ID, nil)
+		if readErr != nil || preserved.AutoAdvance {
+			t.Fatalf("worker restarted operator-paused collection: %+v %v", preserved, readErr)
+		}
+	}
 	if pastFailure {
 		if err == nil {
 			t.Fatal("old invoice recovery failure disappeared")
@@ -156,10 +178,64 @@ func providerWireTaxUpgradeAndRecovery(t *testing.T, outcome string) {
 				t.Fatalf("executed failure unexpectedly finalized invoice: %+v %v", draft, draftErr)
 			}
 		}
-		err = c.ReconcileSubscriptionTax(ctx, "wire-tenant", buyer.ID, sub.ID, profile)
+		report, err = c.ReconcileSubscriptionTax(ctx, "wire-tenant", buyer.ID, sub.ID, profile)
 	}
 	if err != nil {
 		t.Fatal(err)
+	}
+	if report == nil {
+		t.Fatal("tax recovery omitted its persistence report")
+	}
+	expectedReview := ""
+	if outcome == "nonrenewal_review" {
+		expectedReview = adjustment.ID
+	}
+	if expectedReview != "" {
+		if len(report.Reviews) != 1 || report.Reviews[0].InvoiceID != expectedReview || report.Reviews[0].Code == "" || len(report.Reviews[0].InputFingerprint) != 64 || !json.Valid(report.Reviews[0].Evidence) {
+			t.Fatalf("owned exception omitted its structured review: %+v", report)
+		}
+		unmarked, readErr := invoice.Get(expectedReview, nil)
+		if readErr != nil || unmarked.Metadata[taxTerminalCode] != "" || unmarked.Metadata[taxTerminalInput] != "" {
+			t.Fatalf("provider review was hidden before persistence: %+v %v", unmarked, readErr)
+		}
+	} else if len(report.Reviews) != 0 {
+		t.Fatalf("unrelated manual invoice became an owned review: %+v", report.Reviews)
+	}
+	// This wire test supplies the caller's persistence boundary. PostgreSQL
+	// transaction/idempotency behavior is exercised by the billing worker tests.
+	journal, err := os.OpenFile(filepath.Join(t.TempDir(), "tax-recovery-report.json"), os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = json.NewEncoder(journal).Encode(report); err != nil {
+		t.Fatal(err)
+	}
+	if err = journal.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err = journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.AckTaxRecoveryReport(ctx, report); err != nil {
+		t.Fatal(err)
+	}
+	if outcome == "operator_paused_invoice" {
+		preserved, readErr := invoice.Get(operatorPaused.ID, nil)
+		if readErr != nil || preserved.AutoAdvance || preserved.Total != operatorPaused.Total || preserved.Status != operatorPaused.Status || preserved.Metadata[taxTerminalCode] != "" {
+			t.Fatalf("operator payment pause was altered or became an invented tax exception: %+v %v", preserved, readErr)
+		}
+	}
+	if expectedReview != "" {
+		marked, readErr := invoice.Get(expectedReview, nil)
+		if readErr != nil || marked.Metadata[taxTerminalCode] != report.Reviews[0].Code || marked.Metadata[taxTerminalInput] != report.Reviews[0].InputFingerprint {
+			t.Fatalf("persisted terminal review was not acknowledged: %+v %v", marked, readErr)
+		}
+		if outcome == "operator_paused_invoice" && (marked.AutoAdvance || marked.Total != operatorPaused.Total || marked.Status != operatorPaused.Status) {
+			t.Fatal("acknowledgement restarted operator collection or changed its money")
+		}
+		if outcome == "nonrenewal_review" && (marked.Status != api.InvoiceStatusDraft || marked.AutoAdvance || marked.Total != adjustment.Total) {
+			t.Fatal("unsupported owned draft was mutated instead of visibly reviewed")
+		}
 	}
 	held, err := invoice.Get(heldID, nil)
 	if err != nil {
@@ -176,7 +252,16 @@ func providerWireTaxUpgradeAndRecovery(t *testing.T, outcome string) {
 		t.Fatal("completed tax recovery retained an active or pending marker")
 	}
 	providerWireCleanSync(t, baseURL, func() error { return c.SyncSubscriptionTax(ctx, "wire-tenant", buyer.ID, sub.ID, profile) })
-	providerWireCleanSync(t, baseURL, func() error { return c.ReconcileSubscriptionTax(ctx, "wire-tenant", buyer.ID, sub.ID, profile) })
+	providerWireCleanSync(t, baseURL, func() error {
+		clean, readErr := c.ReconcileSubscriptionTax(ctx, "wire-tenant", buyer.ID, sub.ID, profile)
+		if readErr != nil {
+			return readErr
+		}
+		if clean.RecoveryPending || len(clean.Reviews) > 0 {
+			t.Fatal("acknowledged recovery remained pending")
+		}
+		return c.AckTaxRecoveryReport(ctx, clean)
+	})
 	providerWireControl(t, baseURL, "/__test/collect", map[string]string{"invoice_id": heldID}, nil)
 	pending, err := invoice.Get(heldID, nil)
 	if err != nil {

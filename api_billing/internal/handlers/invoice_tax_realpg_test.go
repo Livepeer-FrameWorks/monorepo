@@ -104,6 +104,15 @@ func TestRegularInvoicesFreezeExclusiveVAT_RealPG(t *testing.T) {
 				if pending != 1 {
 					t.Fatalf("regular grace invoice has%d operational VAT revalidation notices, want1", pending)
 				}
+				if _, err = db.ExecContext(ctx, `UPDATE purser.crypto_accounting_anomalies SET status='resolved' WHERE tenant_id=$1::uuid AND kind='vies_revalidation'`, tenant); err != nil {
+					t.Fatal(err)
+				}
+				if err = db.QueryRowContext(ctx, `SELECT count(*) FROM purser.crypto_accounting_anomalies WHERE tenant_id=$1::uuid AND kind='invoice_tax_evidence_review' AND reference_type='invoice' AND reference_id=$2 AND status='open'`, tenant, result.invoiceID).Scan(&pending); err != nil {
+					t.Fatal(err)
+				}
+				if pending != 1 {
+					t.Fatalf("regular invoice lost document-specific grace review after VIES notice closed: %d", pending)
+				}
 			}
 			if _, err = db.ExecContext(ctx, `UPDATE purser.billing_invoices SET vat_eur_cents=vat_eur_cents+1,gross_eur_cents=gross_eur_cents+1 WHERE tenant_id=$1 AND id=$2`, tenant, result.invoiceID); err == nil {
 				t.Fatal("issued tax facts were mutable")

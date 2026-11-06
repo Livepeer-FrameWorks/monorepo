@@ -22,7 +22,7 @@ func TestNativeMollieTransientAssessmentRetriesBeforeIssuance_RealPG(t *testing.
 	for key, value := range map[string]string{"SUPPLIER_NAME": "DDVTech B.V.", "SUPPLIER_ADDRESS": "Leiden NL", "SUPPLIER_VAT_NUMBER": "NL853319145B01", "SUPPLIER_REGISTRATION_NUMBER": "59104694", "SUPPLIER_COUNTRY": "NL"} {
 		appconfigtest.Set(t, key, value)
 	}
-	for _, mode := range []string{"configuration", "database", "VIES"} {
+	for _, mode := range []string{"database", "VIES"} {
 		t.Run(mode, func(t *testing.T) {
 			tenant := seedPrepaidLedgerTenant(t, db)
 			country, vat := "NL", ""
@@ -56,8 +56,6 @@ func TestNativeMollieTransientAssessmentRetriesBeforeIssuance_RealPG(t *testing.
 			payment := &mollieapi.Payment{ID: "paid-" + tenant, CustomerID: customer, SubscriptionID: "subscription", Status: "paid", PaidAt: &at, Amount: &mollieapi.Amount{Currency: "EUR", Value: fmt.Sprintf("%d.%02d", terms.GrossMinor/100, terms.GrossMinor%100)}, Metadata: meta}
 			trigger := "fail_mollie_profile_" + strings.ReplaceAll(tenant, "-", "")
 			switch mode {
-			case "configuration":
-				appconfigtest.Set(t, "SUPPLIER_NAME", "")
 			case "database":
 				if _, err = db.Exec(`CREATE FUNCTION purser.` + trigger + `() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.tenant_id='` + tenant + `'::uuid THEN RAISE EXCEPTION 'temporary assessment storage failure' USING ERRCODE='08006'; END IF; RETURN NEW; END $$; CREATE TRIGGER ` + trigger + ` BEFORE INSERT ON purser.provider_tax_profiles FOR EACH ROW EXECUTE FUNCTION purser.` + trigger + `()`); err != nil {
 					t.Fatal(err)
@@ -82,8 +80,6 @@ func TestNativeMollieTransientAssessmentRetriesBeforeIssuance_RealPG(t *testing.
 				t.Errorf("transient assessment froze documents%d reviews%d payments%d", documents, reviews, payments)
 			}
 			switch mode {
-			case "configuration":
-				appconfigtest.Set(t, "SUPPLIER_NAME", "DDVTech B.V.")
 			case "database":
 				if _, err = db.Exec(`DROP TRIGGER ` + trigger + ` ON purser.provider_tax_profiles; DROP FUNCTION purser.` + trigger + `() `); err != nil {
 					t.Fatal(err)
@@ -148,5 +144,14 @@ func TestNativeMollieOutageGraceRetainsVisibleReview_RealPG(t *testing.T) {
 	}
 	if !reviewed || mode != "outage_grace" || notices != 1 {
 		t.Fatalf("native Mollie grace review invisible: review%v mode%s notices%d", reviewed, mode, notices)
+	}
+	if _, err = db.Exec(`UPDATE purser.crypto_accounting_anomalies SET status='resolved' WHERE tenant_id=$1::uuid AND kind='vies_revalidation'`, tenant); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow(`SELECT count(*) FROM purser.crypto_accounting_anomalies a JOIN purser.billing_invoices i ON i.tenant_id=a.tenant_id AND i.id::text=a.reference_id WHERE a.tenant_id=$1::uuid AND a.kind='invoice_tax_evidence_review' AND a.reference_type='invoice' AND a.status='open'`, tenant).Scan(&notices); err != nil {
+		t.Fatal(err)
+	}
+	if notices != 1 {
+		t.Fatalf("native Mollie invoice lost document-specific grace review after VIES notice closed: %d", notices)
 	}
 }

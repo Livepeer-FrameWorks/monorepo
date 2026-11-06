@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
@@ -125,7 +126,8 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 	fresh, freshErr := AssessStripeTaxProfile(ctx, s.db, tenant, "")
 	if freshErr != nil {
 		var review *billingtax.ReviewError
-		if !errors.As(freshErr, &review) || review.Code == "vat_validation_unavailable" {
+		var configuration *supplierTaxConfigurationError
+		if !errors.As(freshErr, &configuration) && (!errors.As(freshErr, &review) || billingtax.IsTransient(freshErr)) {
 			return fmt.Errorf("defer Mollie invoice tax verification: %w", freshErr)
 		}
 	}
@@ -152,6 +154,17 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 		var proof CryptoTaxAssessment
 		if err = json.Unmarshal(profile.Evidence, &proof); err != nil {
 			return err
+		}
+		if _, err = proof.validatedDecision(); err != nil {
+			return fmt.Errorf("native Mollie payment has no authoritative accepted tax decision: %w", err)
+		}
+		for _, value := range []string{proof.Supplier.Name, proof.Supplier.Address, proof.Supplier.VATNumber, proof.Supplier.RegistrationNumber} {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("native Mollie payment lacks complete accepted supplier identity")
+			}
+		}
+		if profile.RateBPS != proof.Decision.RateBPS || profile.ReverseCharge != proof.Decision.ReverseCharge || profile.SupplierIdentity != billingstripe.SupplierTaxIdentity(proof.Supplier.Name, proof.Supplier.Address, proof.Supplier.VATNumber, proof.Supplier.RegistrationNumber) {
+			return fmt.Errorf("native Mollie payment tax terms disagree with accepted evidence")
 		}
 		vat, expected := exclusiveTax(net, profile.RateBPS)
 		if expected != gross {
@@ -220,7 +233,7 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 			if marshalErr != nil {
 				return marshalErr
 			}
-			if err = q.RecordCryptoAccountingAnomaly(ctx, purserdb.RecordCryptoAccountingAnomalyParams{TenantID: tenant, Kind: "provider_tax_document_review", Network: "mollie", ReferenceType: "invoice", ReferenceID: row.ID, AmountCents: gross, Detail: reviewReason, EvidenceJson: evidence}); err != nil {
+			if err = q.RecordBillingTaxReview(ctx, purserdb.RecordBillingTaxReviewParams{TenantID: tenant, Kind: "provider_tax_document_review", Network: "mollie", ReferenceType: "invoice", ReferenceID: row.ID, AmountCents: gross, Detail: reviewReason, EvidenceJson: evidence}); err != nil {
 				return err
 			}
 		}

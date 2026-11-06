@@ -71,15 +71,18 @@ func TestStripeTaxReconciliationContinuesOtherTenantSubscriptions(t *testing.T) 
 
 func TestStripeTaxOnlyBillingReviewHoldsCollection(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		err  error
-		hold bool
+		name   string
+		err    error
+		hold   bool
+		report bool
 	}{
-		{"missing billing profile", sql.ErrNoRows, true},
-		{"database unavailable", errors.New("database unavailable"), false},
-		{"deadline", context.DeadlineExceeded, false},
-		{"cancelled", context.Canceled, false},
-		{"VIES temporarily unavailable", billingtax.Review("vat_validation_unavailable", "VAT validation is temporarily unavailable"), false},
+		{"missing billing profile", sql.ErrNoRows, false, true},
+		{"invalid VAT claim", billingtax.Review("vat_number_invalid", "Business VAT number is invalid"), true, true},
+		{"database unavailable", errors.New("database unavailable"), false, false},
+		{"deadline", context.DeadlineExceeded, false, false},
+		{"cancelled", context.Canceled, false, false},
+		{"VIES temporarily unavailable", billingtax.Review("vat_validation_unavailable", "VAT validation is temporarily unavailable"), false, false},
+		{"business evidence store unavailable", billingtax.Review("business_evidence_unavailable", "Business verification is temporarily unavailable; retry before paying"), false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for key, value := range map[string]string{"SUPPLIER_NAME": "DDVTech B.V.", "SUPPLIER_ADDRESS": "Leiden NL", "SUPPLIER_VAT_NUMBER": "NL853319145B01", "SUPPLIER_REGISTRATION_NUMBER": "59104694", "SUPPLIER_COUNTRY": "NL"} {
@@ -92,8 +95,8 @@ func TestStripeTaxOnlyBillingReviewHoldsCollection(t *testing.T) {
 			defer db.Close()
 			mock.ExpectQuery("-- name: ListTenantStripeTaxSubscriptions").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"customer_id", "subscription_id"}).AddRow("customer", "sub"))
 			mock.ExpectQuery("-- name: GetCryptoDocumentBillingProfile").WithArgs("tenant").WillReturnError(tc.err)
-			if tc.hold {
-				mock.ExpectExec("-- name: RecordCryptoAccountingAnomaly").WillReturnResult(sqlmock.NewResult(0, 1))
+			if tc.report {
+				mock.ExpectExec("-- name: RecordBillingTaxReview").WillReturnResult(sqlmock.NewResult(0, 1))
 			}
 			b := &taxReviewBackend{}
 			previous := api.GetBackend(api.APIBackend)
@@ -111,6 +114,37 @@ func TestStripeTaxOnlyBillingReviewHoldsCollection(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestLegacyWhitespaceOnlyBillingIdentityReportsWithoutPausingCollection(t *testing.T) {
+	for key, value := range map[string]string{"SUPPLIER_NAME": "DDVTech B.V.", "SUPPLIER_ADDRESS": "Leiden NL", "SUPPLIER_VAT_NUMBER": "NL853319145B01", "SUPPLIER_REGISTRATION_NUMBER": "59104694", "SUPPLIER_COUNTRY": "NL", "CRYPTO_TAX_POLICY_JSON": ""} {
+		appconfigtest.Set(t, key, value)
+	}
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("-- name: ListTenantStripeTaxSubscriptions").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"customer_id", "subscription_id"}).AddRow("customer", "sub"))
+	mock.ExpectQuery("-- name: GetCryptoDocumentBillingProfile").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow(" buyer@example.test ", " Buyer ", " Buyer Ltd ", []byte(`{"street":" \t ","city":" Toronto ","postal_code":" M5V1A1 ","country":" CA "}`), nil, "business"))
+	mock.ExpectExec("-- name: RecordBillingTaxReview").WillReturnResult(sqlmock.NewResult(0, 1))
+	b := &taxReviewBackend{}
+	previous := api.GetBackend(api.APIBackend)
+	api.SetBackend(api.APIBackend, b)
+	t.Cleanup(func() { api.SetBackend(api.APIBackend, previous) })
+	svc := &Service{db: db, logger: logging.NewLogger(), stripeClient: billingstripe.NewClient(billingstripe.Config{SecretKey: "sk_test", Logger: logging.NewLogger()})}
+	jm := &JobManager{db: db, billing: svc, logger: logging.NewLogger()}
+	err = jm.reconcileStripeTaxTenant(t.Context(), "tenant")
+	var review *billingtax.ReviewError
+	if !errors.As(err, &review) || review.Code != "billing_profile_required" {
+		t.Fatalf("missing normalized legacy identity did not produce actionable review: %v", err)
+	}
+	if b.paused || b.clearedCustomer {
+		t.Fatal("legacy whitespace-only fields paused a working provider subscription")
+	}
+	if err = mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
