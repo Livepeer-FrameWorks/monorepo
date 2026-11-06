@@ -9,6 +9,7 @@ import (
 
 	"frameworks/api_billing/internal/database/purserdb"
 	billingstripe "frameworks/api_billing/internal/stripe"
+	billingtax "frameworks/api_billing/internal/tax"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
@@ -174,6 +175,10 @@ func (s *Service) assessImportedStripeInvoice(ctx context.Context, tenant string
 	if len(reasons) == 0 {
 		fresh, err := AssessStripeTaxProfile(ctx, s.db, tenant, "")
 		if err != nil {
+			var review *billingtax.ReviewError
+			if !errors.As(err, &review) || review.Code == "vat_validation_unavailable" {
+				return nil, nil, fmt.Errorf("defer Stripe invoice tax verification: %w", err)
+			}
 			reasons = append(reasons, "current_tax_assessment_required")
 		} else if fresh.Fingerprint() != profile.Fingerprint() {
 			reasons = append(reasons, "provider_tax_profile_changed")

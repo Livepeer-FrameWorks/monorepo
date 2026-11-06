@@ -29,6 +29,30 @@ func TestBillingWebhookConfigurationRejectsMissingDocumentEvents(t *testing.T) {
 	}
 }
 
+func TestBillingWebhookConfigurationChecksEveryDocumentEvent(t *testing.T) {
+	for _, absent := range []string{"", "invoice.finalized", "credit_note.created", "credit_note.updated", "credit_note.voided"} {
+		t.Run("missing_"+absent, func(t *testing.T) {
+			var events []string
+			for _, event := range requiredBillingWebhookEvents {
+				if event != absent {
+					events = append(events, event)
+				}
+			}
+			installBackend(t, &financialAuditBackend{call: func(method, path, _ string, _ api.ParamsContainer, out api.LastResponseSetter) error {
+				if method != "GET" || path != "/v1/webhook_endpoints" {
+					t.Fatalf("non-read-only webhook check: %s %s", method, path)
+				}
+				out.(*billingWebhookEndpoints).Data = []*api.WebhookEndpoint{{URL: "https://gateway.example/webhooks/billing/stripe", Status: "enabled", EnabledEvents: events}}
+				return nil
+			}})
+			err := (&Client{}).CheckBillingWebhookEndpoint(context.Background(), "https://gateway.example")
+			if absent == "" && err != nil || absent != "" && (err == nil || !strings.Contains(err.Error(), absent)) {
+				t.Fatalf("absent=%q check=%v", absent, err)
+			}
+		})
+	}
+}
+
 func TestBillingWebhookConfigurationRequiresMatchingEnabledEndpoint(t *testing.T) {
 	for _, endpoint := range []*api.WebhookEndpoint{
 		{URL: "https://other.example/webhooks/billing/stripe", Status: "enabled", EnabledEvents: []string{"*"}},

@@ -361,6 +361,14 @@ func main() {
 		DebugConfigOptions: configOptions,
 	})
 
+	var webhookCheck func(context.Context) error
+	if stripeClient != nil {
+		webhookCheck = func(ctx context.Context) error {
+			return stripeClient.CheckBillingWebhookEndpoint(ctx, appconfig.Runtime().GatewayPublicBaseURL())
+		}
+	}
+	router.GET("/health/billing-webhooks", billingWebhookHealth(webhookCheck))
+
 	grpcServerConfig := pursergrpc.GRPCServerConfig{
 		DB:                  db,
 		Logger:              logger,

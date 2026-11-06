@@ -58,6 +58,7 @@ type postpaidInvoiceResult struct {
 	credit       decimal.Decimal
 	presentment  fx.Record
 	creditChange invoiceCreditChange
+	taxReview    *billingtax.ReviewError
 }
 
 // ratePostpaidInvoice rates the postpaid invoice of a phase: its usage, the
@@ -198,6 +199,7 @@ func writePostpaidInvoiceTx(ctx context.Context, tx *sql.Tx, run *postpaidInvoic
 				return result, fmt.Errorf("assess invoice tax: %w", taxErr)
 			}
 			heldForReview = true
+			result.taxReview = taxReview
 			result.status = "manual_review"
 			usageDetails["tax_review"] = map[string]any{"code": taxReview.Code, "message": taxReview.Message}
 		} else {
@@ -323,6 +325,9 @@ func writePostpaidInvoiceTx(ctx context.Context, tx *sql.Tx, run *postpaidInvoic
 		}
 		if _, err = queries.ResolveInvoiceTaxReview(ctx, purserdb.ResolveInvoiceTaxReviewParams{TenantID: tenantID, InvoiceID: result.invoiceID}); err != nil {
 			return result, fmt.Errorf("resolve invoice tax review: %w", err)
+		}
+		if _, err = queries.ResolveBillingPhaseTaxReview(ctx, purserdb.ResolveBillingPhaseTaxReviewParams{TenantID: tenantID, ReferenceID: billingPhaseTaxReviewReference(tenantID, run.periodStart)}); err != nil {
+			return result, fmt.Errorf("resolve billing phase tax review: %w", err)
 		}
 	}
 	if collectionDecision != nil {
@@ -742,8 +747,8 @@ func (c *PostpaidPhaseClose) CommitTx(ctx context.Context, tx *sql.Tx) (bool, er
 	if err != nil {
 		return false, err
 	}
-	if c.result.status == "manual_review" {
-		return false, billingBoundaryConditionf("the closing invoice requires tax review; complete the billing details before changing the billing phase")
+	if c.result.taxReview != nil {
+		return false, &billingPhaseTaxReviewError{BillingBoundaryCondition: &BillingBoundaryCondition{Reason: "the closing invoice requires tax review; complete the billing details before changing the billing phase"}, db: c.jobs.db, tenant: c.tenantID, start: c.phase.start, end: c.phase.end, net: c.run.rating.TotalAmount.Round(2).Shift(2).IntPart(), review: *c.result.taxReview}
 	}
 	if c.toPrepaid {
 		if c.carriedCents, c.balanceAfter, err = settleCollectionCarryTx(ctx, tx, c.tenantID, c.result.invoiceID); err != nil {

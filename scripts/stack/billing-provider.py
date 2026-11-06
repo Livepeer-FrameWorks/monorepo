@@ -2,6 +2,7 @@
 """Isolated Stripe, VIES and hosted-x402 wire simulator; never moves money."""
 
 import hashlib
+import copy
 import hmac
 import json
 import os
@@ -20,6 +21,8 @@ class Provider:
         self.requests = []
         self.counter = 0
         self.receipts = {}
+        self.idempotency = {}
+        self.vies_validity = {}
 
     def create(self, prefix, kind, values):
         self.counter += 1
@@ -40,7 +43,10 @@ class Provider:
         for name in ("automatic_tax",):
             if name in out and "enabled" in out[name]:
                 out[name]["enabled"] = out[name]["enabled"] == "true"
-        for name in ("payment_method_types", "expand", "default_tax_rates"):
+        for name in ("auto_advance", "cancel_at_period_end", "discountable", "active"):
+            if name in out:
+                out[name] = out[name] == "true"
+        for name in ("payment_method_types", "expand", "default_tax_rates", "tax_rates"):
             if isinstance(out.get(name), dict) and all(key.isdigit() for key in out[name]):
                 out[name] = [out[name][key] for key in sorted(out[name], key=int)]
         return out
@@ -71,7 +77,7 @@ class Provider:
         digest = hmac.new(b"whsec_stack_fixture", f"{timestamp}.{payload}".encode(), hashlib.sha256).hexdigest()
         return {"body": payload, "signature": f"t={timestamp},v1={digest}"}
 
-    def invoice(self, sub):
+    def invoice(self, sub, draft=False):
         customer = self.objects[sub["customer"]]
         price = self.objects[sub["items"]["data"][0]["price"]["id"]]
         net = price["unit_amount"]
@@ -82,8 +88,44 @@ class Provider:
         inv = self.create("in", "invoice", {"customer": customer["id"], "subscription": sub["id"], "parent": {"type": "subscription_details", "subscription_details": {"subscription": sub["id"], "metadata": sub["metadata"]}}, "status": "paid", "currency": "eur", "subtotal": net, "total": net + vat, "amount_paid": net + vat, "amount_due": 0, "total_excluding_tax": net, "total_taxes": taxes, "created": now, "status_transitions": {"finalized_at": now}, "account_name": "FrameWorks-Stack-Test", "account_country": "NL", "account_tax_ids": [{"type": "eu_vat", "value": "NL000000000B01"}], "customer_name": customer.get("name", "Stack Buyer"), "customer_email": customer.get("email", "stack@example.test"), "customer_address": customer.get("address", {}), "customer_tax_ids": customer.get("tax_ids", {}).get("data", []), "lines": self.listing([{"id": "il_stack", "object": "line_item", "amount": net, "currency": "eur", "taxes": taxes, "period": {"start": now, "end": now + 2592000}, "price": price}]), "metadata": sub["metadata"]})
         inv["number"] = "STACK-" + inv["id"]
         inv["invoice_pdf"] = "https://invoice.stripe.com/" + inv["id"] + ".pdf"
+        inv["default_tax_rates"] = rates
+        item = sub["items"]["data"][0]
+        inv["lines"]["data"][0].update({"id": "il_" + inv["id"], "quantity": 1, "pricing": {"type": "price_details", "price_details": {"price": price["id"], "product": price.get("product")}}, "parent": {"type": "subscription_item_details", "subscription_item_details": {"subscription": sub["id"], "subscription_item": item["id"], "proration": False}}, "period": {"start": item["current_period_start"], "end": item["current_period_end"]}})
+        inv["metadata"] = dict(sub["metadata"])
+        inv["parent"]["subscription_details"]["metadata"] = dict(sub["metadata"])
+        inv["billing_reason"] = "subscription_cycle"
+        if draft:
+            inv.update({"status": "draft", "amount_paid": 0, "amount_due": inv["total"], "status_transitions": {"finalized_at": None}, "auto_advance": False})
+        else:
+            self.paid_invoice(inv)
         sub["latest_invoice"] = inv["id"]
         return inv
+
+    def recalculate(self, invoice):
+        groups = {}
+        for line in invoice["lines"]["data"]:
+            rates = line.get("tax_rates", invoice.get("default_tax_rates", []))
+            line["taxes"] = []
+            for rate in rates:
+                amount = int((Decimal(line["amount"]) * Decimal(str(rate["percentage"])) / 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+                tax = {"amount": amount, "taxable_amount": line["amount"], "tax_behavior": "exclusive", "tax_rate_details": {"tax_rate": rate["id"], "percentage_decimal": str(rate["percentage"])}}
+                line["taxes"].append(tax)
+                group = groups.setdefault(rate["id"], {**tax, "amount": 0, "taxable_amount": 0})
+                group["amount"] += amount
+                group["taxable_amount"] += line["amount"]
+        invoice["total_taxes"] = list(groups.values())
+        invoice["subtotal"] = invoice["total_excluding_tax"] = sum(line["amount"] for line in invoice["lines"]["data"])
+        invoice["total"] = invoice["subtotal"] + sum(tax["amount"] for tax in invoice["total_taxes"])
+        invoice["amount_due"] = max(0, invoice["total"] - invoice["amount_paid"])
+
+    def paid_invoice(self, invoice):
+        invoice.update({"status": "paid", "amount_paid": invoice["total"], "amount_due": 0})
+        charge = self.create("ch", "charge", {"amount": invoice["total"], "currency": invoice["currency"], "refunded": False, "amount_refunded": 0, "disputed": False})
+        self.create("inpay", "invoice_payment", {"invoice": invoice["id"], "status": "paid", "amount_paid": invoice["total"], "payment": {"type": "charge", "charge": charge["id"]}})
+
+    @staticmethod
+    def invalid(message):
+        return 400, {"error": {"message": message, "type": "invalid_request_error"}}
 
     def complete(self, session):
         now = int(time.time())
@@ -94,7 +136,7 @@ class Provider:
             price = self.objects[form["line_items[0][price]"][0]]
             rate_ids = form.get("subscription_data[default_tax_rates][0]", [])
             metadata = {m[1]: v[-1] for k, v in form.items() if (m := re.fullmatch(r"subscription_data\[metadata\]\[([^\]]+)\]", k))}
-            sub = self.create("sub", "subscription", {"customer": session["customer"], "status": "active", "metadata": metadata, "default_tax_rates": [self.objects[x] for x in rate_ids], "automatic_tax": {"enabled": False}, "items": self.listing([{"id": "si_stack", "object": "subscription_item", "price": price, "current_period_start": now, "current_period_end": now + 2592000}])})
+            sub = self.create("sub", "subscription", {"customer": session["customer"], "status": "active", "metadata": metadata, "default_tax_rates": [self.objects[x] for x in rate_ids], "automatic_tax": {"enabled": False}, "items": self.listing([{"id": "si_stack", "object": "subscription_item", "quantity": 1, "price": price, "current_period_start": now, "current_period_end": now + 2592000}])})
             session["subscription"] = sub["id"]
             inv = self.invoice(sub)
             return [self.event("checkout.session.completed", session), self.event("customer.subscription.created", sub), self.event("invoice.finalized", inv), self.event("invoice.paid", inv)]
@@ -109,20 +151,47 @@ class Provider:
             session.update({"payment_intent": intent["id"], "amount_total": amount, "currency": currency})
         return [self.event("checkout.session.completed", session)]
 
-    def dispatch(self, method, path, query, body, host):
+    def dispatch(self, method, path, query, body, host, headers=None):
         with self.lock:
-            self.requests.append({"method": method, "path": path, "host": host, "body": body.decode(errors="replace")})
+            key = (headers or {}).get("Idempotency-Key", "") if method == "POST" else ""
+            self.requests.append({"method": method, "path": path, "host": host, "body": body.decode(errors="replace"), "idempotency_key": key})
+            identity = (method, path, body)
+            if key in self.idempotency:
+                prior, response = self.idempotency[key]
+                if prior != identity:
+                    return self.invalid("idempotency key reused with different parameters")
+                return copy.deepcopy(response)
+            response = self._dispatch(method, path, query, body, host)
+            if key and 200 <= response[0] < 300:
+                self.idempotency[key] = (identity, copy.deepcopy(response))
+            return response
+
+    def _dispatch(self, method, path, query, body, host):
+        with self.lock:
             if path == "/health":
                 return 200, {"ready": True, "simulated": True}
             if path == "/__test/requests":
                 return 200, self.requests
             if path == "/__test/objects":
                 return 200, self.objects
+            if path == "/__test/vies":
+                data = json.loads(body)
+                self.vies_validity[data["vat_number"]] = bool(data["valid"])
+                return 200, {"configured": True}
+            if path == "/__test/invoice_events":
+                sub = self.objects[json.loads(body)["subscription_id"]]
+                invoice = self.objects[sub["latest_invoice"]]
+                if invoice["status"] != "paid":
+                    return self.invalid("invoice has not actually been finalized and paid")
+                return 200, [self.event("invoice.finalized", invoice), self.event("invoice.paid", invoice)]
             if path == "/__test/complete":
                 return 200, self.complete(self.objects[json.loads(body)["session_id"]])
             if path == "/__test/renew":
                 sub = self.objects[json.loads(body)["subscription_id"]]
-                inv = self.invoice(sub)
+                draft = sub.get("pause_collection", {}).get("behavior") == "keep_as_draft"
+                inv = self.invoice(sub, draft=draft)
+                if draft:
+                    return 200, [self.event("invoice.created", inv)]
                 return 200, [self.event("invoice.finalized", inv), self.event("invoice.paid", inv)]
             if path.startswith("/rpc/"):
                 data = json.loads(body)
@@ -158,14 +227,16 @@ class Provider:
                 text = body.decode()
                 country = re.search(r"<(?:\w+:)?countryCode>([^<]+)", text)
                 number = re.search(r"<(?:\w+:)?vatNumber>([^<]+)", text)
-                return 200, ('<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><checkVatResponse xmlns="urn:ec.europa.eu:taxud:vies:services:checkVat:types"><countryCode>' + (country[1] if country else "AT") + '</countryCode><vatNumber>' + (number[1] if number else "U12345678") + '</vatNumber><requestDate>' + time.strftime("%Y-%m-%d", time.gmtime()) + 'Z</requestDate><valid>true</valid><name>Stack Business</name><address>Vienna</address></checkVatResponse></soap:Body></soap:Envelope>').encode()
+                valid = self.vies_validity.get(number[1] if number else "", True)
+                return 200, ('<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><checkVatResponse xmlns="urn:ec.europa.eu:taxud:vies:services:checkVat:types"><countryCode>' + (country[1] if country else "AT") + '</countryCode><vatNumber>' + (number[1] if number else "U12345678") + '</vatNumber><requestDate>' + time.strftime("%Y-%m-%d", time.gmtime()) + '+01:00</requestDate><valid>' + str(valid).lower() + '</valid><name>Stack Business</name><address>Vienna</address></checkVatResponse></soap:Body></soap:Envelope>').encode()
             if path.endswith(".pdf"):
                 return 200, self.original_pdf(path)
             if path == "/v1/account":
                 return 200, {"id": "acct_stack", "object": "account", "country": "NL", "business_profile": {"name": "FrameWorks Stack"}}
             if path == "/v1/webhook_endpoints" and method == "GET":
                 gateway = os.environ.get("GATEWAY_PUBLIC_URL", "").rstrip("/")
-                endpoints = [{"id": "we_stack", "object": "webhook_endpoint", "status": "enabled", "url": gateway + "/webhooks/billing/stripe", "enabled_events": ["*"]}] if gateway else []
+                events = ["checkout.session.completed", "checkout.session.async_payment_succeeded", "checkout.session.async_payment_failed", "checkout.session.expired", "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted", "customer.subscription.paused", "customer.subscription.resumed", "invoice.finalized", "invoice.paid", "invoice.payment_failed", "invoice.payment_action_required", "credit_note.created", "credit_note.updated", "credit_note.voided", "payment_intent.succeeded", "payment_intent.payment_failed", "charge.refunded", "charge.updated", "charge.dispute.created", "charge.dispute.closed", "charge.dispute.funds_withdrawn", "charge.dispute.funds_reinstated"]
+                endpoints = [{"id": "we_stack", "object": "webhook_endpoint", "status": "enabled", "url": gateway + "/webhooks/billing/stripe", "enabled_events": events}] if gateway else []
                 return 200, self.listing(endpoints)
             form = urllib.parse.parse_qs(body.decode(), keep_blank_values=True)
             values = self.fields(form)
@@ -174,6 +245,47 @@ class Provider:
                 parts.pop(2)
             collection = parts[1] if len(parts) > 1 else ""
             ident = parts[2] if len(parts) > 2 else ""
+            for name, entries in form.items():
+                if name.endswith("[unit_amount]") or name == "unit_amount":
+                    inline_subscription_credit = collection == "subscriptions" and name.startswith("add_invoice_items[")
+                    if int(entries[-1]) < 0 and not inline_subscription_credit:
+                        return self.invalid("ordinary price unit_amount must be nonnegative")
+            if method == "POST" and collection == "invoices" and ident in self.objects and len(parts) > 3:
+                invoice = self.objects[ident]
+                action = parts[3]
+                if action == "update_lines":
+                    if invoice["status"] != "draft":
+                        return self.invalid("lines can only be changed on draft invoices")
+                    indexes = sorted({int(m[1]) for key in form if (m := re.match(r"lines\[(\d+)\]", key))})
+                    pending = []
+                    for index in indexes:
+                        # Strip only the outer line index; nested Stripe field names remain intact.
+                        line_form = {re.sub(r"^lines\[\d+\]\[([^\]]+)\]", r"\1", key): entries for key, entries in form.items() if key.startswith(f"lines[{index}][")}
+                        fields = self.fields(line_form)
+                        rates = [self.objects[r] for r in fields.get("tax_rates", [])]
+                        source = next((line for line in invoice["lines"]["data"] if line["id"] == fields.get("id")), None)
+                        if source is None:
+                            return self.invalid("unknown invoice line")
+                        line = {**source, "tax_rates": rates}
+                        pending.append(line)
+                    for line in pending:
+                        invoice["lines"]["data"] = [line if previous["id"] == line["id"] else previous for previous in invoice["lines"]["data"]]
+                    self.recalculate(invoice)
+                elif action == "finalize":
+                    if invoice["status"] != "draft":
+                        return self.invalid("only draft invoices can be finalized")
+                    invoice.update({"status": "open", "auto_advance": values.get("auto_advance", "false") == "true", "status_transitions": {"finalized_at": int(time.time())}})
+                elif action == "pay":
+                    if invoice["status"] != "open":
+                        return self.invalid("only open invoices can be paid")
+                    self.paid_invoice(invoice)
+                elif action == "void":
+                    if invoice["status"] not in ("open", "draft"):
+                        return self.invalid("invoice cannot be voided")
+                    invoice.update({"status": "void", "amount_due": 0})
+                else:
+                    return self.invalid("unsupported invoice action")
+                return 200, invoice
             if collection == "customers" and len(parts) > 3 and parts[3] == "tax_ids":
                 customer = self.objects[ident]
                 ids = customer.setdefault("tax_ids", self.listing([]))["data"]
@@ -192,19 +304,72 @@ class Provider:
                 return 200, {"object": "search_result", "data": candidates, "has_more": False}
             if method == "GET" and ident:
                 if ident in self.objects:
-                    return 200, self.objects[ident]
+                    obj = copy.deepcopy(self.objects[ident])
+                    if len(parts) > 3 and parts[3] == "lines":
+                        return 200, obj["lines"]
+                    if "latest_invoice" in query.get("expand[]", []) + query.get("expand[0]", []):
+                        obj["latest_invoice"] = copy.deepcopy(self.objects.get(obj.get("latest_invoice")))
+                    return 200, obj
                 return 404, {"error": {"message": "unknown simulated object", "type": "invalid_request_error"}}
-            kind = {"tax_rates": "tax_rate", "checkout": "checkout.session", "billing_portal": "billing_portal.session"}.get(collection, collection.rstrip("s"))
+            kind = {"tax_rates": "tax_rate", "invoice_payments": "invoice_payment", "checkout": "checkout.session", "billing_portal": "billing_portal.session"}.get(collection, collection.rstrip("s"))
             if method == "GET":
-                return 200, self.listing(x for x in self.objects.values() if x["object"] == kind)
+                candidates = [x for x in self.objects.values() if x["object"] == kind]
+                for key in ("customer", "subscription", "status", "invoice"):
+                    if key in query:
+                        candidates = [x for x in candidates if x.get(key) == query[key][-1]]
+                return 200, self.listing(candidates)
             if method == "POST" and ident in self.objects:
+                if collection == "invoices" and self.objects[ident]["status"] != "draft" and "default_tax_rates" in values:
+                    return self.invalid("finalized invoice tax rates are immutable")
+                if collection == "subscriptions":
+                    # The update's item instructions are not the response's
+                    # existing SubscriptionItemList, including an empty update.
+                    values.pop("items", None)
                 for field in ("metadata", "invoice_settings", "address", "automatic_tax"):
                     if isinstance(values.get(field), dict):
                         values[field] = {**self.objects[ident].get(field, {}), **values[field]}
                 self.objects[ident].update(values)
                 if "default_tax_rates[0]" in form:
                     self.objects[ident]["default_tax_rates"] = [self.objects[form["default_tax_rates[0]"][0]]]
+                if collection == "subscriptions":
+                    if values.get("pause_collection") == "":
+                        self.objects[ident].pop("pause_collection", None)
+                    price_id = form.get("items[0][price]", [None])[-1]
+                    if price_id:
+                        self.objects[ident]["items"]["data"][0]["price"] = self.objects[price_id]
+                    for index, item in enumerate(self.objects[ident]["items"]["data"]):
+                        prefix = f"items[{index}][tax_rates]"
+                        rate_keys = sorted(key for key in form if key.startswith(prefix + "["))
+                        if rate_keys:
+                            item["tax_rates"] = [self.objects[form[key][-1]] for key in rate_keys]
+                        elif prefix in form and form[prefix][-1] == "":
+                            item["tax_rates"] = []
+                    if values.get("default_tax_rates") == "":
+                        self.objects[ident]["default_tax_rates"] = []
+                    if form.get("billing_cycle_anchor", [""])[-1] == "now":
+                        now = int(time.time())
+                        self.objects[ident]["items"]["data"][0].update({"current_period_start": now, "current_period_end": now + 2592000})
+                        paused = self.objects[ident].get("pause_collection", {}).get("behavior") == "keep_as_draft"
+                        invoice = self.invoice(self.objects[ident], draft=True)
+                        indexes = sorted({int(m[1]) for key in form if (m := re.match(r"add_invoice_items\[(\d+)\]", key))})
+                        for index in indexes:
+                            credit_form = {re.sub(r"^add_invoice_items\[\d+\]\[([^\]]+)\]", r"\1", key): entries for key, entries in form.items() if key.startswith(f"add_invoice_items[{index}][")}
+                            credit = self.fields(credit_form)
+                            amount = int(credit.get("price_data", {}).get("unit_amount", 0)) * int(credit.get("quantity", 1))
+                            rates = [self.objects[r] for r in credit.get("tax_rates", [])]
+                            line = {"id": "il_" + str(self.counter + 1), "object": "line_item", "amount": amount, "currency": credit.get("price_data", {}).get("currency", "eur"), "quantity": int(credit.get("quantity", 1)), "tax_rates": rates, "metadata": credit.get("metadata", {}), "period": {"start": int(credit_form.get("period[start][timestamp]", [str(now)])[-1]), "end": int(credit_form.get("period[end][timestamp]", [str(now + 2592000)])[-1])}}
+                            self.counter += 1
+                            invoice["lines"]["data"].append(line)
+                        self.recalculate(invoice)
+                        if not paused:
+                            invoice["status_transitions"] = {"finalized_at": now}
+                            self.paid_invoice(invoice)
+                        invoice["billing_reason"] = "subscription_update"
+                if collection == "invoices":
+                    self.recalculate(self.objects[ident])
                 return 200, self.objects[ident]
+            if ident:
+                return 404, {"error": {"message": "unknown simulated object", "type": "invalid_request_error"}}
             prefix = {"customers": "cus", "products": "prod", "prices": "price", "tax_rates": "txr", "checkout": "cs", "payment_intents": "pi", "setup_intents": "seti", "subscriptions": "sub"}.get(collection, "obj")
             if collection == "customers":
                 values.setdefault("tax_ids", self.listing([]))
@@ -216,6 +381,8 @@ class Provider:
             if collection == "prices":
                 values["unit_amount"] = int(values.get("unit_amount", 0))
                 values["active"] = True
+                if "recurring" in values:
+                    values["recurring"]["interval_count"] = int(values["recurring"].get("interval_count", 1))
             if collection == "payment_intents":
                 amount = int(values.get("amount", 0))
                 values.update({"amount": amount, "amount_received": amount, "status": "succeeded"})
@@ -248,7 +415,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlsplit(self.path)
         try:
             body = self.request_body()
-            status, result = STATE.dispatch(self.command, parsed.path, urllib.parse.parse_qs(parsed.query), body, self.headers.get("X-Stack-Provider-Host", "fixture-control"))
+            status, result = STATE.dispatch(self.command, parsed.path, urllib.parse.parse_qs(parsed.query), body, self.headers.get("X-Stack-Provider-Host", "fixture-control"), self.headers)
         except (ValueError, KeyError, TypeError) as exc:
             status, result = 400, {"error": {"message": str(exc), "type": "invalid_request_error"}}
         self.send_response(status)

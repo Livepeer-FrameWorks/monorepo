@@ -174,6 +174,27 @@ func (q *Queries) ListInvoiceTaxLines(ctx context.Context, arg ListInvoiceTaxLin
 	return items, nil
 }
 
+const resolveBillingPhaseTaxReview = `-- name: ResolveBillingPhaseTaxReview :execrows
+UPDATE purser.crypto_accounting_anomalies
+SET status='resolved',resolved_at=NOW(),resolution_note='Billing phase invoice tax assessment completed'
+WHERE tenant_id=$1::text::uuid
+  AND kind='invoice_tax_review' AND reference_type='billing_phase'
+  AND reference_id=$2::text AND status='open'
+`
+
+type ResolveBillingPhaseTaxReviewParams struct {
+	TenantID    string `db:"tenant_id" json:"tenant_id"`
+	ReferenceID string `db:"reference_id" json:"reference_id"`
+}
+
+func (q *Queries) ResolveBillingPhaseTaxReview(ctx context.Context, arg ResolveBillingPhaseTaxReviewParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, resolveBillingPhaseTaxReview, arg.TenantID, arg.ReferenceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const resolveInvoiceTaxReview = `-- name: ResolveInvoiceTaxReview :execrows
 UPDATE purser.crypto_accounting_anomalies
 SET status='resolved',resolved_at=NOW(),resolution_note='Invoice tax assessment completed'

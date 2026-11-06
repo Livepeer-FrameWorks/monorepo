@@ -948,6 +948,7 @@ type Querier interface {
 	ResetClaimingX402Quote(ctx context.Context, quoteID string) error
 	ResetTenantDunningAttempts(ctx context.Context, tenantID string) error
 	ResolveActiveStripeCustomer(ctx context.Context, tenantID uuid.UUID) (sql.NullString, error)
+	ResolveBillingPhaseTaxReview(ctx context.Context, arg ResolveBillingPhaseTaxReviewParams) (int64, error)
 	ResolveClusterSubscriptionByStripeID(ctx context.Context, subscriptionID string) (ResolveClusterSubscriptionByStripeIDRow, error)
 	ResolveCryptoAccountingAnomaly(ctx context.Context, arg ResolveCryptoAccountingAnomalyParams) (int64, error)
 	ResolveInvoiceTaxReview(ctx context.Context, arg ResolveInvoiceTaxReviewParams) (int64, error)

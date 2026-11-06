@@ -100,4 +100,42 @@ func TestPostpaidTaxReviewCannotAdvanceBillingPhase_RealPG(t *testing.T) {
 	if model != "postpaid" || !actualStart.Equal(start) {
 		t.Fatalf("held tax phase advanced: model=%s start=%s", model, actualStart)
 	}
+	var reviews int
+	if err = db.QueryRow(`SELECT count(*) FROM purser.crypto_accounting_anomalies WHERE tenant_id=$1::uuid AND kind='invoice_tax_review' AND reference_type='billing_phase' AND status='open'`, tenant.id).Scan(&reviews); err != nil {
+		t.Fatal(err)
+	}
+	if reviews != 1 {
+		t.Fatalf("tax-held phase has %d durable reviews after arrangement rollback, want 1", reviews)
+	}
+	if _, err = db.Exec(`UPDATE purser.tenant_subscriptions SET billing_name='Corrected Buyer' WHERE tenant_id=$1::uuid`, tenant.id); err != nil {
+		t.Fatal(err)
+	}
+	closing, err = PreparePostpaidPhaseClose(t.Context(), db, logging.NewLogger(), tenant.svc, tenant.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed, err = commitSwitchToPrepaid(t.Context(), db, closing, tenant.id, tenant.paygID); err != nil || !closed {
+		t.Fatalf("corrected tax phase failed: closed=%v err=%v", closed, err)
+	}
+	if err = db.QueryRow(`SELECT count(*) FROM purser.crypto_accounting_anomalies WHERE tenant_id=$1::uuid AND kind='invoice_tax_review' AND reference_type='billing_phase' AND status='open'`, tenant.id).Scan(&reviews); err != nil {
+		t.Fatal(err)
+	}
+	if reviews != 0 {
+		t.Fatalf("corrected tax phase left %d unresolved reviews", reviews)
+	}
+}
+
+func TestPostpaidPricingReviewIsNotReportedAsTaxReview_RealPG(t *testing.T) {
+	db := startPurserUsageRealPG(t)
+	start := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Microsecond)
+	tenant := newPhaseTenant(t, db, "postpaid", start, start.AddDate(0, 1, 0), 1000)
+	closing, err := PreparePostpaidPhaseClose(t.Context(), db, logging.NewLogger(), tenant.svc, tenant.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closing.run.rating.ManualReviewReasons = []string{"pricing attribution needs review"}
+	closed, err := commitSwitchToPrepaid(t.Context(), db, closing, tenant.id, tenant.paygID)
+	if err != nil || !closed {
+		t.Fatalf("pricing review was incorrectly rejected as tax hold: closed=%v err=%v", closed, err)
+	}
 }

@@ -7,6 +7,7 @@ import hmac
 import importlib.util
 import json
 import os
+import re
 import pathlib
 import http.client
 import threading
@@ -69,15 +70,88 @@ class BillingProviderTest(unittest.TestCase):
         self.assertIn(b"<valid>true</valid>", soap)
         self.assertIn(b"<countryCode>AT</countryCode>", soap)
         date = ET.fromstring(soap).find(".//{urn:ec.europa.eu:taxud:vies:services:checkVat:types}requestDate").text
-        self.assertRegex(date, r"^\d{4}-\d{2}-\d{2}(Z|[+-]\d{2}:\d{2})$")
+        self.assertRegex(date, r"^\d{4}-\d{2}-\d{2}\+01:00$")
         self.assertTrue(self.call("GET", "/in_stack1.pdf").startswith(b"%PDF-"))
 
     def test_read_only_webhook_endpoint_matches_gateway(self):
         with patch.dict(os.environ, {"GATEWAY_PUBLIC_URL": "https://gateway.stack.test/"}):
             endpoints = self.call("GET", "/v1/webhook_endpoints")["data"]
-        self.assertEqual(endpoints, [{"id": "we_stack", "object": "webhook_endpoint", "status": "enabled", "url": "https://gateway.stack.test/webhooks/billing/stripe", "enabled_events": ["*"]}])
+        self.assertEqual(endpoints[0]["url"], "https://gateway.stack.test/webhooks/billing/stripe")
+        self.assertNotIn("*", endpoints[0]["enabled_events"])
+        self.assertTrue({"invoice.finalized", "credit_note.created", "credit_note.updated", "credit_note.voided"}.issubset(endpoints[0]["enabled_events"]))
+        checker = pathlib.Path(__file__).parents[2].joinpath("api_billing/internal/stripe/webhook_configuration.go").read_text()
+        required = re.search(r"var requiredBillingWebhookEvents = \[\]string\{(.*?)\n\}", checker, re.S)[1]
+        self.assertEqual(set(endpoints[0]["enabled_events"]), set(re.findall(r'"([^"]+)"', required)))
         self.assertEqual(self.provider.objects, {})
         self.assertEqual([r["method"] for r in self.provider.requests], ["GET"])
+
+    def test_negative_ordinary_price_rejected_without_creating_object(self):
+        before = dict(self.provider.objects)
+        status, error = self.provider.dispatch("POST", "/v1/prices", {}, b"unit_amount=-100&currency=eur", "fixture-test")
+        self.assertEqual(status, 400, error)
+        self.assertEqual(self.provider.objects, before)
+
+    def test_keep_as_draft_requires_explicit_recovery(self):
+        customer = self.call("POST", "/v1/customers", b"name=Stack")
+        price = self.call("POST", "/v1/prices", b"unit_amount=1000&currency=eur")
+        rate = self.call("POST", "/v1/tax_rates", b"percentage=21&inclusive=false")
+        session = self.call("POST", "/v1/checkout/sessions", ("mode=subscription&customer=" + customer["id"] + "&line_items[0][price]=" + price["id"]).encode())
+        self.call("POST", "/__test/complete", json.dumps({"session_id": session["id"]}).encode())
+        subscription = session["subscription"]
+        synced = self.call("POST", "/v1/subscriptions/" + subscription, ("items=&default_tax_rates[0]=" + rate["id"]).encode())
+        self.assertIsInstance(synced["items"], dict)
+        self.assertEqual(len(synced["items"]["data"]), 1)
+        self.call("POST", "/v1/subscriptions/" + subscription, b"pause_collection[behavior]=keep_as_draft")
+        events = self.call("POST", "/__test/renew", json.dumps({"subscription_id": subscription}).encode())
+        self.assertEqual([json.loads(e["body"])["type"] for e in events], ["invoice.created"])
+        draft = json.loads(events[0]["body"])["data"]["object"]
+        self.assertEqual((draft["status"], draft["amount_paid"]), ("draft", 0))
+        self.call("POST", "/v1/subscriptions/" + subscription, b"pause_collection=")
+        self.assertEqual(self.provider.objects[draft["id"]]["status"], "draft")
+        updated = self.call("POST", "/v1/invoices/" + draft["id"], ("auto_advance=false&default_tax_rates[0]=" + rate["id"]).encode())
+        self.assertEqual((updated["status"], updated["total"]), ("draft", 1210))
+        self.assertIs(updated["auto_advance"], False)
+        repriced = self.call("POST", "/v1/invoices/" + draft["id"] + "/update_lines", ("lines[0][id]=" + updated["lines"]["data"][0]["id"] + "&lines[0][tax_rates][0]=" + rate["id"]).encode())
+        self.assertEqual(repriced["lines"]["data"][0]["taxes"][0]["amount"], 210)
+        finalized = self.call("POST", "/v1/invoices/" + draft["id"] + "/finalize")
+        self.assertEqual((finalized["status"], finalized["amount_paid"]), ("open", 0))
+        args = ("POST", "/v1/invoices/" + draft["id"] + "/pay", {}, b"", "fixture-test", {"Idempotency-Key": "pay-held-renewal"})
+        status, paid = self.provider.dispatch(*args)
+        self.assertEqual(status, 200)
+        self.assertEqual(self.provider.dispatch(*args), (status, paid))
+        self.assertEqual((paid["status"], paid["amount_paid"]), ("paid", 1210))
+        self.assertEqual(sum(obj["object"] == "invoice_payment" and obj["invoice"] == draft["id"] for obj in self.provider.objects.values()), 1)
+
+    def test_idempotency_retries_do_not_duplicate_and_failures_do_not_poison_key(self):
+        args = ("POST", "/v1/prices", {}, b"unit_amount=1000&currency=eur", "fixture-test")
+        headers = {"Idempotency-Key": "same-price"}
+        first = self.provider.dispatch(*args, headers)
+        second = self.provider.dispatch(*args, headers)
+        self.assertEqual(first, second)
+        self.assertEqual(len(self.provider.objects), 1)
+        status, _ = self.provider.dispatch("POST", "/v1/prices", {}, b"unit_amount=2000", "fixture-test", headers)
+        self.assertEqual(status, 400)
+        status, _ = self.provider.dispatch("POST", "/v1/prices", {}, b"unit_amount=-1", "fixture-test", {"Idempotency-Key": "retry-after-validation"})
+        self.assertEqual(status, 400)
+        status, _ = self.provider.dispatch("POST", "/v1/prices", {}, b"unit_amount=1", "fixture-test", {"Idempotency-Key": "retry-after-validation"})
+        self.assertEqual(status, 200)
+
+    def test_paid_upgrade_inline_credit_keeps_original_zero_tax(self):
+        customer = self.call("POST", "/v1/customers", b"name=Stack")
+        price = self.call("POST", "/v1/prices", b"unit_amount=1000&currency=eur")
+        new_price = self.call("POST", "/v1/prices", b"unit_amount=10000&currency=eur")
+        zero = self.call("POST", "/v1/tax_rates", b"percentage=0&inclusive=false")
+        rate = self.call("POST", "/v1/tax_rates", b"percentage=21&inclusive=false")
+        session = self.call("POST", "/v1/checkout/sessions", ("mode=subscription&customer=" + customer["id"] + "&line_items[0][price]=" + price["id"]).encode())
+        self.call("POST", "/__test/complete", json.dumps({"session_id": session["id"]}).encode())
+        sub = session["subscription"]
+        # The pinned Stripe subscription API explicitly permits signed inline
+        # credit prices, unlike POST /v1/prices.
+        inline = self.call("POST", "/v1/subscriptions/" + sub, ("billing_cycle_anchor=now&items[0][price]=" + new_price["id"] + "&default_tax_rates[0]=" + rate["id"] + "&add_invoice_items[0][quantity]=1&add_invoice_items[0][price_data][unit_amount]=-1000&add_invoice_items[0][price_data][currency]=eur&add_invoice_items[0][tax_rates][0]=" + zero["id"]).encode())
+        credited_inline = self.provider.objects[inline["latest_invoice"]]
+        self.assertEqual((credited_inline["status"], credited_inline["total_excluding_tax"], credited_inline["total"]), ("paid", 9000, 11100))
+        self.assertEqual(credited_inline["lines"]["data"][1]["taxes"][0]["amount"], 0)
+        self.assertEqual(self.call("GET", "/v1/invoices/" + credited_inline["id"] + "/lines"), credited_inline["lines"])
 
     def test_compose_installs_a_single_valid_policy_object(self):
         compose = pathlib.Path(__file__).parents[2].joinpath("docker-compose.stack.yml").read_text()

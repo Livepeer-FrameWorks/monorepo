@@ -14,6 +14,81 @@ import (
 // fixedTextStatus mimics a gRPC status wrapper whose text omits its database cause.
 type fixedTextStatus struct{ cause error }
 
+type rollbackObservedError struct {
+	cause   error
+	observe func(context.Context) error
+}
+
+func (e *rollbackObservedError) Error() string                           { return e.cause.Error() }
+func (e *rollbackObservedError) Unwrap() error                           { return e.cause }
+func (e *rollbackObservedError) AfterRollback(ctx context.Context) error { return e.observe(ctx) }
+
+func TestPostgresRollbackObserverRunsAfterRollbackAndPreservesErrors(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	cause, noticeFailure := errors.New("billing review"), errors.New("notice failed")
+	mock.ExpectBegin()
+	mock.ExpectRollback()
+	mock.ExpectExec("INSERT durable_review").WillReturnResult(sqlmock.NewResult(0, 1))
+	observed := 0
+	failure := &rollbackObservedError{cause: cause, observe: func(ctx context.Context) error {
+		observed++
+		if _, noticeErr := db.ExecContext(ctx, "INSERT durable_review"); noticeErr != nil {
+			return noticeErr
+		}
+		return noticeFailure
+	}}
+	err = WithPostgresTx(t.Context(), db, nil, func(*sql.Tx) error { return fixedTextStatus{cause: failure} })
+	if observed != 1 || !errors.Is(err, cause) || !errors.Is(err, noticeFailure) {
+		t.Fatalf("observer count=%d error=%v; want one post-rollback notice preserving both causes", observed, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresRollbackObserverDoesNotRunForCommitFailure(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	observed := 0
+	failure := &rollbackObservedError{cause: errors.New("commit failed"), observe: func(context.Context) error { observed++; return nil }}
+	mock.ExpectBegin()
+	mock.ExpectCommit().WillReturnError(failure)
+	err = WithPostgresTx(t.Context(), db, nil, func(*sql.Tx) error { return nil })
+	if !errors.Is(err, failure) || observed != 0 {
+		t.Fatalf("commit error=%v observer=%d", err, observed)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPostgresRollbackObserverSkipsRetryableBodyFailure(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	observed := 0
+	failure := &rollbackObservedError{cause: &pq.Error{Code: "40001"}, observe: func(context.Context) error { observed++; return nil }}
+	mock.ExpectBegin()
+	mock.ExpectRollback()
+	err = WithPostgresTx(t.Context(), db, nil, func(*sql.Tx) error { return failure })
+	if !IsRetryablePostgresError(err) || observed != 0 {
+		t.Fatalf("retryable failure=%v observer=%d", err, observed)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (e fixedTextStatus) Error() string { return "rpc error: code = Internal desc = database error" }
 func (e fixedTextStatus) Unwrap() error { return e.cause }
 

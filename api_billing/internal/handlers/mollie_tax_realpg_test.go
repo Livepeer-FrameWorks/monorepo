@@ -126,7 +126,10 @@ func TestTaxedMollieRecurringWebhookKeepsPaymentLifecycle_RealPG(t *testing.T) {
 	fixture.route("GET", "/v2/customers/customer/subscriptions/subscription", func(recordedProviderRequest) (int, any) {
 		return 200, map[string]any{"id": "subscription", "status": "active", "nextPaymentDate": next}
 	})
-	svc := &Service{db: db, mollieClient: client, logger: logging.NewLogger()}
+	mailLog := logging.NewLogger()
+	emailAttempts := &failedNativePaymentEmailHook{}
+	mailLog.AddHook(emailAttempts)
+	svc := &Service{db: db, mollieClient: client, logger: logging.NewLogger(), emailService: &EmailService{logger: mailLog}}
 	for _, tc := range []struct {
 		id, status string
 		dunning    int
@@ -175,6 +178,13 @@ func TestTaxedMollieRecurringWebhookKeepsPaymentLifecycle_RealPG(t *testing.T) {
 	}
 	if invoices != 1 || failed != 1 || paid != 1 || events != 3 {
 		t.Fatalf("native payment outcomes missing or duplicated: invoices=%d failed=%d paid=%d events=%d", invoices, failed, paid, events)
+	}
+	deadline := time.Now().Add(time.Second)
+	for emailAttempts.count.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := emailAttempts.count.Load(); got != 1 {
+		t.Fatalf("native failed payment notification attempts=%d, want exactly one across webhook/outcome replays", got)
 	}
 }
 

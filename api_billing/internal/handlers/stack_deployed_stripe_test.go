@@ -21,12 +21,16 @@ import (
 )
 
 func stackBillingConnection(t *testing.T) (context.Context, *grpc.ClientConn, *sql.DB, string) {
+	return stackBillingConnectionTimeout(t, 90*time.Second)
+}
+
+func stackBillingConnectionTimeout(t *testing.T, timeout time.Duration) (context.Context, *grpc.ClientConn, *sql.DB, string) {
 	t.Helper()
 	tenant := os.Getenv("STACK_BILLING_TENANT_ID")
 	if tenant == "" || os.Getenv("STACK_BILLING_DEPLOYED") != "1" {
 		t.Skip("run through stack scenario 54")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	t.Cleanup(cancel)
 	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+os.Getenv("SERVICE_TOKEN"))
 	conn, err := grpc.NewClient("purser:19003", grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -202,4 +206,239 @@ func TestStackDeployedStripeRenewalTax(t *testing.T) {
 		t.Fatalf("renewal documents provider=%d duplicatePurser=%d net=%d vat=%d gross=%d pdf=%v proof=%v", count, ownedCount, net, vat, gross, hasPDF, hasProof)
 	}
 	t.Logf("deployed Stripe renewal %s retained one original tax document/PDF with21%%exclusiveVAT", invoice.Data.Object.ID)
+}
+
+func TestStackDeployedStripePaidUpgradeOriginalTax(t *testing.T) {
+	ctx, conn, db, tenant := stackBillingConnection(t)
+	var oldTier, newTier string
+	if err := db.QueryRowContext(ctx, `SELECT id::text FROM purser.billing_tiers WHERE tier_name='supporter'`).Scan(&oldTier); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT id::text FROM purser.billing_tiers WHERE tier_name='production'`).Scan(&newTier); err != nil {
+		t.Fatal(err)
+	}
+	checkout, err := purserpb.NewStripeServiceClient(conn).CreateCheckoutSession(ctx, &purserpb.CreateStripeCheckoutRequest{TenantId: tenant, TierId: oldTier, BillingPeriod: "monthly", SuccessUrl: "https://app.stack.test/billing/success", CancelUrl: "https://app.stack.test/billing/cancel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []stackProviderEvent
+	stackProviderControl(t, ctx, "complete", map[string]string{"session_id": checkout.SessionId}, &events)
+	deliverStackProviderEvents(t, ctx, conn, db, tenant, events)
+	var subscription, originalInvoice string
+	if err = db.QueryRowContext(ctx, `SELECT stripe_subscription_id FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&subscription); err != nil {
+		t.Fatal(err)
+	}
+	var source struct {
+		Data struct {
+			Object struct {
+				ID  string `json:"id"`
+				VAT []struct {
+					Amount int64 `json:"amount"`
+				} `json:"total_taxes"`
+			} `json:"object"`
+		} `json:"data"`
+	}
+	if err = json.Unmarshal([]byte(events[len(events)-1].Body), &source); err != nil {
+		t.Fatal(err)
+	}
+	originalInvoice = source.Data.Object.ID
+	for _, tax := range source.Data.Object.VAT {
+		if tax.Amount != 0 {
+			t.Fatal("paid upgrade fixture must start with an actually zero-tax source invoice")
+		}
+	}
+	typeName, vatNumber := "consumer", ""
+	_, err = purserpb.NewSubscriptionServiceClient(conn).UpdateBillingDetails(ctx, &purserpb.UpdateBillingDetailsRequest{TenantId: tenant, CustomerType: &typeName, VatNumber: &vatNumber, Address: &purserpb.BillingAddress{Street: "1 Main Street", City: "Amsterdam", PostalCode: "1000AA", Country: "NL"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := purserpb.NewPrepaidServiceClient(conn).ChangeBillingTier(ctx, &purserpb.ChangeBillingTierRequest{TenantId: tenant, TierId: newTier})
+	if err != nil || !changed.GetSuccess() {
+		t.Fatalf("deployed paid upgrade was not applied: %+v %v", changed, err)
+	}
+	if changed.GetAppliedTierId() != newTier {
+		if changed.GetPendingTierId() != newTier {
+			t.Fatalf("accepted upgrade has neither the requested applied nor pending tier: %+v", changed)
+		}
+		deadline := time.NewTimer(time.Minute)
+		defer deadline.Stop()
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			var applied bool
+			if err = db.QueryRowContext(ctx, `SELECT tier_id=$2 FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant, newTier).Scan(&applied); err != nil {
+				t.Fatal(err)
+			}
+			if applied {
+				break
+			}
+			select {
+			case <-ticker.C:
+			case <-deadline.C:
+				var state, receipt string
+				_ = db.QueryRowContext(ctx, `SELECT state,provider_receipt::text FROM purser.subscription_tier_upgrades WHERE tenant_id=$1 ORDER BY requested_at DESC LIMIT 1`, tenant).Scan(&state, &receipt)
+				t.Fatalf("accepted upgrade did not apply within one minute: state=%s receipt=%s response=%+v", state, receipt, changed)
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+		}
+	}
+	stackProviderControl(t, ctx, "invoice_events", map[string]string{"subscription_id": subscription}, &events)
+	deliverStackProviderEvents(t, ctx, conn, db, tenant, events)
+	var upgraded struct {
+		Data struct {
+			Object struct {
+				ID    string `json:"id"`
+				Net   int64  `json:"total_excluding_tax"`
+				Total int64  `json:"total"`
+				Lines struct {
+					Data []struct {
+						Amount   int64             `json:"amount"`
+						Metadata map[string]string `json:"metadata"`
+						Taxes    []struct {
+							Amount int64 `json:"amount"`
+						} `json:"taxes"`
+					} `json:"data"`
+				} `json:"lines"`
+			} `json:"object"`
+		} `json:"data"`
+	}
+	if err = json.Unmarshal([]byte(events[len(events)-1].Body), &upgraded); err != nil {
+		t.Fatal(err)
+	}
+	var credit, positive, positiveVAT int64
+	for _, line := range upgraded.Data.Object.Lines.Data {
+		if line.Amount < 0 {
+			if line.Metadata["frameworks_credit_invoice"] != originalInvoice {
+				t.Fatal("upgrade credit lost original paid invoice identity")
+			}
+			credit += line.Amount
+			for _, tax := range line.Taxes {
+				if tax.Amount != 0 {
+					t.Fatal("old zero-tax fee credit was retaxed")
+				}
+			}
+		} else {
+			positive += line.Amount
+			for _, tax := range line.Taxes {
+				positiveVAT += tax.Amount
+			}
+		}
+	}
+	if credit >= 0 || positive <= 0 || positiveVAT != (positive*2100+5000)/10000 || upgraded.Data.Object.Net != positive+credit || upgraded.Data.Object.Total != positive+credit+positiveVAT {
+		t.Fatalf("paid upgrade original0/new21 credit=%d replacement=%d replacementVAT=%d net=%d total=%d", credit, positive, positiveVAT, upgraded.Data.Object.Net, upgraded.Data.Object.Total)
+	}
+	var retained int
+	if err = db.QueryRowContext(ctx, `SELECT count(*) FROM purser.provider_billing_documents WHERE tenant_id=$1 AND provider_document_id=$2 AND net_minor=$3 AND vat_minor=$4 AND gross_minor=$5 AND original_pdf IS NOT NULL`, tenant, upgraded.Data.Object.ID, positive+credit, positiveVAT, positive+credit+positiveVAT).Scan(&retained); err != nil || retained != 1 {
+		t.Fatalf("paid upgrade did not retain exactly one original taxed document: %d %v", retained, err)
+	}
+	t.Logf("deployed paid upgrade retained original zero-tax credit %d and new 21%% VAT %d", credit, positiveVAT)
+}
+
+func TestStackDeployedStripeHeldRenewalRecovery(t *testing.T) {
+	// The deployed reconciliation worker runs every five minutes. Exercise its
+	// real cadence instead of replacing it with a test-only production trigger.
+	ctx, conn, db, tenant := stackBillingConnectionTimeout(t, 15*time.Minute)
+	var tier string
+	if err := db.QueryRowContext(ctx, `SELECT id::text FROM purser.billing_tiers WHERE tier_name='supporter'`).Scan(&tier); err != nil {
+		t.Fatal(err)
+	}
+	checkout, err := purserpb.NewStripeServiceClient(conn).CreateCheckoutSession(ctx, &purserpb.CreateStripeCheckoutRequest{TenantId: tenant, TierId: tier, BillingPeriod: "monthly", SuccessUrl: "https://app.stack.test/billing/success", CancelUrl: "https://app.stack.test/billing/cancel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []stackProviderEvent
+	stackProviderControl(t, ctx, "complete", map[string]string{"session_id": checkout.SessionId}, &events)
+	deliverStackProviderEvents(t, ctx, conn, db, tenant, events)
+	var subscription string
+	if err = db.QueryRowContext(ctx, `SELECT stripe_subscription_id FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&subscription); err != nil {
+		t.Fatal(err)
+	}
+	var configured map[string]bool
+	stackProviderControl(t, ctx, "vies", map[string]any{"vat_number": "U99999999", "valid": false}, &configured)
+	typeName, vat := "business", "ATU99999999"
+	_, err = purserpb.NewSubscriptionServiceClient(conn).UpdateBillingDetails(ctx, &purserpb.UpdateBillingDetailsRequest{TenantId: tenant, CustomerType: &typeName, VatNumber: &vat, Address: &purserpb.BillingAddress{Street: "1 Main Street", City: "Vienna", PostalCode: "1000", Country: "AT"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type subscriptionSnapshot struct {
+		Metadata map[string]string `json:"metadata"`
+		Pause    *struct {
+			Behavior string `json:"behavior"`
+		} `json:"pause_collection"`
+		Latest string `json:"latest_invoice"`
+	}
+	read := func() (subscriptionSnapshot, map[string]json.RawMessage) {
+		var objects map[string]json.RawMessage
+		stackProviderControl(t, ctx, "objects", nil, &objects)
+		var sub subscriptionSnapshot
+		if err := json.Unmarshal(objects[subscription], &sub); err != nil {
+			t.Fatal(err)
+		}
+		return sub, objects
+	}
+	wait := func(label string, condition func(subscriptionSnapshot, map[string]json.RawMessage) bool) {
+		t.Helper()
+		deadline := time.NewTimer(7 * time.Minute)
+		defer deadline.Stop()
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		for {
+			sub, objects := read()
+			if condition(sub, objects) {
+				return
+			}
+			select {
+			case <-ticker.C:
+			case <-deadline.C:
+				t.Fatalf("deployed worker did not %s", label)
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+		}
+	}
+	wait("hold unproven VAT subscription", func(sub subscriptionSnapshot, _ map[string]json.RawMessage) bool {
+		return sub.Pause != nil && sub.Pause.Behavior == "keep_as_draft" && sub.Metadata["frameworks_tax_review"] == "true" && sub.Metadata["frameworks_tax_pause_owned"] == "true"
+	})
+	stackProviderControl(t, ctx, "renew", map[string]string{"subscription_id": subscription}, &events)
+	var draftEvent struct {
+		Data struct {
+			Object struct {
+				ID, Status string
+				AmountPaid int64 `json:"amount_paid"`
+			} `json:"object"`
+		} `json:"data"`
+	}
+	if len(events) != 1 || json.Unmarshal([]byte(events[0].Body), &draftEvent) != nil || draftEvent.Data.Object.Status != "draft" || draftEvent.Data.Object.AmountPaid != 0 {
+		t.Fatalf("held renewal unexpectedly finalized/collected: %+v", events)
+	}
+	draftID := draftEvent.Data.Object.ID
+	var premature int
+	if err = db.QueryRowContext(ctx, `SELECT count(*) FROM purser.provider_billing_documents WHERE tenant_id=$1 AND provider_document_id=$2`, tenant, draftID).Scan(&premature); err != nil || premature != 0 {
+		t.Fatalf("uncollected draft became an issued tax document: %d %v", premature, err)
+	}
+	typeName, vat = "consumer", ""
+	_, err = purserpb.NewSubscriptionServiceClient(conn).UpdateBillingDetails(ctx, &purserpb.UpdateBillingDetailsRequest{TenantId: tenant, CustomerType: &typeName, VatNumber: &vat, Address: &purserpb.BillingAddress{Street: "1 Main Street", City: "Amsterdam", PostalCode: "1000AA", Country: "NL"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait("reprice, finalize and collect the original held renewal before resuming", func(sub subscriptionSnapshot, objects map[string]json.RawMessage) bool {
+		var invoice struct {
+			Status string
+			Net    int64 `json:"total_excluding_tax"`
+			Total  int64
+			Paid   int64 `json:"amount_paid"`
+		}
+		if err := json.Unmarshal(objects[draftID], &invoice); err != nil {
+			t.Fatal(err)
+		}
+		return sub.Pause == nil && sub.Metadata["frameworks_tax_review"] != "true" && invoice.Status == "paid" && invoice.Net > 0 && invoice.Total == invoice.Net+(invoice.Net*2100+5000)/10000 && invoice.Paid == invoice.Total
+	})
+	stackProviderControl(t, ctx, "invoice_events", map[string]string{"subscription_id": subscription}, &events)
+	deliverStackProviderEvents(t, ctx, conn, db, tenant, events)
+	var retained int
+	if err = db.QueryRowContext(ctx, `SELECT count(*) FROM purser.provider_billing_documents WHERE tenant_id=$1 AND provider_document_id=$2 AND vat_minor=(net_minor*2100+5000)/10000 AND gross_minor=net_minor+vat_minor AND original_pdf IS NOT NULL`, tenant, draftID).Scan(&retained); err != nil || retained != 1 {
+		t.Fatalf("recovered held renewal document: %d %v", retained, err)
+	}
+	t.Logf("deployed worker recovered original held draft %s with 21%% VAT, paid once and resumed collection", draftID)
 }

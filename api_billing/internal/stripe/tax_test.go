@@ -3,8 +3,11 @@ package stripe
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	api "github.com/stripe/stripe-go/v85"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"testing"
 )
 
@@ -25,6 +28,65 @@ func TestTaxProfileIdentityTracksTermsWithoutEvidenceChurn(t *testing.T) {
 	}
 }
 
+func TestSubscriptionTaxWireOmitsUnchangedItemsAndKeepsExplicitOverrides(t *testing.T) {
+	for _, operation := range []string{"sync", "hold"} {
+		for _, override := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/override=%t", operation, override), func(t *testing.T) {
+				item := &api.SubscriptionItem{ID: "item"}
+				if override {
+					item.TaxRates = []*api.TaxRate{{ID: "stale_rate"}}
+				}
+				current := &api.Subscription{ID: "sub_owned", Customer: &api.Customer{ID: "cus_owned"}, Metadata: map[string]string{"tenant_id": "tenant-owned"}, Items: &api.SubscriptionItemList{Data: []*api.SubscriptionItem{item}}}
+				b := &taxBackend{t: t, owner: "tenant-owned", currentSub: current}
+				installBackend(t, b)
+				var err error
+				if operation == "sync" {
+					err = (&Client{}).SyncSubscriptionTax(t.Context(), "tenant-owned", "cus_owned", "sub_owned", assessedTaxProfile())
+				} else {
+					err = (&Client{}).HoldSubscriptionTaxReview(t.Context(), "tenant-owned", "cus_owned", "sub_owned")
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if b.updatedSub == nil {
+					t.Fatal("expected a future-only tax update")
+				}
+				var wire url.Values
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if err := r.ParseForm(); err != nil {
+						t.Error(err)
+					}
+					wire = r.PostForm
+					w.Header().Set("Content-Type", "application/json")
+					if _, err := w.Write([]byte(`{"id":"sub_owned"}`)); err != nil {
+						t.Error(err)
+					}
+				}))
+				t.Cleanup(server.Close)
+				backend := api.GetBackendWithConfig(api.APIBackend, &api.BackendConfig{URL: api.String(server.URL), MaxNetworkRetries: api.Int64(0)})
+				if err := backend.Call(http.MethodPost, "/v1/subscriptions/sub_owned", "sk_test", b.updatedSub, &api.Subscription{}); err != nil {
+					t.Fatal(err)
+				}
+				if values := wire["items"]; len(values) > 0 {
+					t.Fatalf("unchanged items were sent as an array-clear request: %s", wire.Encode())
+				}
+				if override {
+					if values := wire["items[0][id]"]; len(values) != 1 || values[0] != "item" {
+						t.Fatalf("explicit item identity missing from wire: %s", wire.Encode())
+					}
+					values := wire["items[0][tax_rates][0]"]
+					if operation == "sync" && (len(values) != 1 || values[0] != "txr_exclusive") {
+						t.Fatalf("explicit tax override missing from wire: %s", wire.Encode())
+					}
+					if operation == "hold" && len(wire["items[0][tax_rates]"]) != 1 {
+						t.Fatalf("explicit tax override was not cleared: %s", wire.Encode())
+					}
+				}
+			})
+		}
+	}
+}
+
 type taxBackend struct {
 	fakeBackend
 	t               *testing.T
@@ -39,15 +101,35 @@ type taxBackend struct {
 	currentSub      *api.Subscription
 	listedItems     []*api.SubscriptionItem
 	itemListCalls   int
+	drafts          []*api.Invoice
 }
 
 func (b *taxBackend) CallRaw(method, path, key string, body []byte, params *api.Params, out api.LastResponseSetter) error {
+	if list, ok := out.(*api.InvoiceList); ok {
+		list.Data = b.drafts
+		return nil
+	}
 	if list, ok := out.(*api.SubscriptionItemList); ok {
 		b.itemListCalls++
 		list.Data = b.listedItems
 		return nil
 	}
 	return b.fakeBackend.CallRaw(method, path, key, body, params, out)
+}
+
+func TestTaxReviewDraftsStayPausedAndVisibleAfterProfileRecovery(t *testing.T) {
+	p := assessedTaxProfile()
+	current := &api.Subscription{ID: "sub_owned", Customer: &api.Customer{ID: "cus_owned"}, Metadata: map[string]string{"tenant_id": "tenant-owned", "frameworks_tax_review": "true", "frameworks_tax_pause_owned": "true"}, PauseCollection: &api.SubscriptionPauseCollection{Behavior: api.SubscriptionPauseCollectionBehaviorKeepAsDraft}}
+	b := &taxBackend{t: t, owner: "tenant-owned", currentSub: current, drafts: []*api.Invoice{{ID: "held-renewal", Status: api.InvoiceStatusDraft}}}
+	installBackend(t, b)
+	if err := (&Client{}).SyncSubscriptionTax(t.Context(), "tenant-owned", "cus_owned", "sub_owned", p); err == nil {
+		t.Fatal("held renewal debt silently cleared from review after profile recovery")
+	}
+	if b.updatedSub != nil && (len(b.updatedSub.UnsetFields) > 0 || b.updatedSub.Metadata["frameworks_tax_review"] == "") {
+		if _, clearing := b.updatedSub.Metadata["frameworks_tax_review"]; clearing || len(b.updatedSub.UnsetFields) > 0 {
+			t.Fatal("held draft released or review silently cleared")
+		}
+	}
 }
 
 func TestStripeTaxSyncIncludesPaginatedItemOverrides(t *testing.T) {
