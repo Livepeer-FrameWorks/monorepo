@@ -260,15 +260,7 @@ func (s *Server) serveBlocksFrom(c *gin.Context, kind, hash, ext, localPath stri
 	// the cold preflight. Missing upstream sources should not leave a
 	// meta-only .blocks directory behind.
 	if cacheDecision == admission.CacheToDisk {
-		s.fills.mu.Lock()
-		// Tmp files left by an earlier process are removed once; later
-		// ones belong to block fetches of this process that may still be
-		// writing them.
-		if _, cleaned := s.cleanedBlockDirs.LoadOrStore(store.Dir(), struct{}{}); !cleaned {
-			store.CleanTmps()
-		}
-		_, initErr := store.EnsureMeta(hash, ext, pin.current(), totalSize)
-		s.fills.mu.Unlock()
+		initErr := s.prepareBlockStore(store, hash, ext, pin.current(), totalSize)
 		if initErr != nil {
 			if strictCache {
 				c.Writer.Header().Set("Retry-After", "5")
@@ -384,6 +376,18 @@ func (s *Server) serveBlocksFrom(c *gin.Context, kind, hash, ext, localPath stri
 		return "error", nil
 	}
 	return "served", nil
+}
+
+func (s *Server) prepareBlockStore(store *BlockStore, hash, ext, object string, totalSize int64) error {
+	unlock := s.fills.lockStore(store)
+	defer unlock()
+	// Tmp files left by an earlier process are removed once; later ones
+	// belong to this process's fills, which may still be writing them.
+	if _, cleaned := s.cleanedBlockDirs.LoadOrStore(store.Dir(), struct{}{}); !cleaned {
+		store.CleanTmps()
+	}
+	_, err := store.EnsureMeta(hash, ext, object, totalSize)
+	return err
 }
 
 // serveBlockSpan serves a single block's worth of bytes (clipped to
@@ -512,13 +516,13 @@ func readBlockFill(ctx context.Context, w io.Writer, fill *blockFill, span block
 // HeatTracker touch on the .blocks dir so cleanup/pressure eviction
 // see repeated playback as recency, not stale mtime.
 func (s *Server) serveWarmBlock(w io.Writer, store *BlockStore, span blockSpan, object string, totalSize int64) (bool, error) {
-	s.fills.mu.Lock()
+	unlock := s.fills.lockStore(store)
 	if !store.matchesObject(object, totalSize) || !store.HasBlock(span.Idx) {
-		s.fills.mu.Unlock()
+		unlock()
 		return false, nil
 	}
 	f, err := store.ReadBlock(span.Idx)
-	s.fills.mu.Unlock()
+	unlock()
 	if err != nil {
 		return false, fmt.Errorf("open block %d: %w", span.Idx, err)
 	}
