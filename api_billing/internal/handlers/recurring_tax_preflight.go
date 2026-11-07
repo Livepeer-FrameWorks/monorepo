@@ -58,7 +58,7 @@ func (h *X402Handler) recurringTaxRequirement(ctx context.Context, tenant, clien
 		var claim *billingtax.ReviewError
 		if errors.As(err, &claim) && !billingtax.IsTransient(err) {
 			switch claim.Code {
-			case "billing_profile_required", "vat_number_invalid", "vat_number_required", "consumer_vat_claim":
+			case "billing_profile_required", "vat_number_invalid", "vat_number_required", "consumer_vat_claim", "business_evidence_required":
 				return review(claim.Code)
 			}
 		}

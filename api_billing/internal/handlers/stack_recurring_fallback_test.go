@@ -49,9 +49,9 @@ func stackFallbackObjects(t *testing.T, ctx context.Context, fixture stackRecurr
 func prepareStackRecurringFallbacks(t *testing.T, ctx context.Context, conn *grpc.ClientConn, db *sql.DB) []stackRecurringFallback {
 	t.Helper()
 	tenants := strings.Split(os.Getenv("STACK_BILLING_FALLBACK_TENANT_IDS"), ",")
-	scenarios := []string{"incomplete business", "incomplete EU consumer", "incomplete foreign consumer", "invalid complete VAT claim"}
+	scenarios := []string{"incomplete business", "incomplete EU consumer", "incomplete foreign consumer", "invalid complete VAT claim", "unproven foreign business"}
 	if len(tenants) != len(scenarios) {
-		t.Fatal("scenario54 must supply four separate recurring fallback tenants")
+		t.Fatal("scenario54 must supply a separate tenant for every recurring fallback case")
 	}
 	fixtures := make([]stackRecurringFallback, len(scenarios))
 	for i, scenario := range scenarios {
@@ -102,6 +102,9 @@ func prepareStackRecurringFallback(t *testing.T, ctx context.Context, conn *grpc
 	case "invalid complete VAT claim":
 		name, street, fixture.knownName = "Updated Buyer", "Updated Street", "Updated Buyer"
 		fixture.claimedVAT, fixture.reason = "ATU99999999", "vat_number_invalid"
+	case "unproven foreign business":
+		name = fixture.knownName
+		fixture.country, fixture.claimedVAT, fixture.reason = "US", "", "business_evidence_required"
 	}
 	// Each disposable customer starts with a valid reverse-charge checkout.
 	// Mutating only its fixture row exercises historical saved claims as well
@@ -183,7 +186,7 @@ func verifyStackRecurringFallback(t *testing.T, ctx context.Context, conn *grpc.
 		}
 	}
 	details, err := purserpb.NewSubscriptionServiceClient(conn).GetBillingDetails(ctx, &purserpb.GetBillingDetailsRequest{TenantId: fixture.tenant})
-	if err != nil || !details.GetTaxReviewRequired() || details.GetIsComplete() != (fixture.scenario == "invalid complete VAT claim") {
+	if err != nil || !details.GetTaxReviewRequired() || details.GetIsComplete() != (fixture.scenario == "invalid complete VAT claim" || fixture.scenario == "unproven foreign business") {
 		t.Fatalf("%s lost customer-visible profile/VAT review: details=%+v err=%v", fixture.scenario, details, err)
 	}
 	var firstInvoice, firstDocument, firstReview, firstSnapshot, firstEvidence, secondDocument string
