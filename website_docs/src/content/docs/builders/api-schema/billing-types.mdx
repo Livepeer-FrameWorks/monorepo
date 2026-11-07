@@ -91,6 +91,7 @@ Billing details for a tenant. These are optional for Free and small simplified t
 - **vatNumber**: `String` — VAT number (EU format: XX123456789).
 - **address**: `BillingAddress` ([BillingAddress](/builders/api-schema/billing-types/#billingaddress)) — Structured billing address.
 - **isComplete**: `Boolean!` — True if all full-invoice fields are present (legal name + email + address).
+- **taxReviewRequired**: `Boolean!` — True while recurring invoices use domestic VAT because saved billing details require review.
 - **updatedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When billing details were last updated.
 - **presentmentCurrency**: `Currency` ([Currency](/builders/api-schema/billing-types/#currency)) — Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing address country. It cannot change while a provider subscription, an open invoice, or a card first payment started in the last day exists.
 

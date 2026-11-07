@@ -463,6 +463,7 @@ type ComplexityRoot struct {
 		IsComplete          func(childComplexity int) int
 		Name                func(childComplexity int) int
 		PresentmentCurrency func(childComplexity int) int
+		TaxReviewRequired   func(childComplexity int) int
 		UpdatedAt           func(childComplexity int) int
 		VatNumber           func(childComplexity int) int
 	}
@@ -6968,6 +6969,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.BillingDetails.PresentmentCurrency(childComplexity), true
+	case "BillingDetails.taxReviewRequired":
+		if e.ComplexityRoot.BillingDetails.TaxReviewRequired == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BillingDetails.TaxReviewRequired(childComplexity), true
 	case "BillingDetails.updatedAt":
 		if e.ComplexityRoot.BillingDetails.UpdatedAt == nil {
 			break
@@ -30791,6 +30798,8 @@ type BillingDetails {
   address: BillingAddress
   "True if all full-invoice fields are present (legal name + email + address)."
   isComplete: Boolean!
+  "True while recurring invoices use domestic VAT because saved billing details require review."
+  taxReviewRequired: Boolean!
   "When billing details were last updated."
   updatedAt: Time
   "Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing address country. It cannot change while a provider subscription, an open invoice, or a card first payment started in the last day exists."
@@ -45532,6 +45541,35 @@ func (ec *executionContext) _BillingDetails_isComplete(ctx context.Context, fiel
 }
 
 func (ec *executionContext) fieldContext_BillingDetails_isComplete(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BillingDetails",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BillingDetails_taxReviewRequired(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingDetails) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BillingDetails_taxReviewRequired,
+		func(ctx context.Context) (any, error) {
+			return obj.TaxReviewRequired, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_BillingDetails_taxReviewRequired(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "BillingDetails",
 		Field:      field,
@@ -78143,6 +78181,8 @@ func (ec *executionContext) fieldContext_Mutation_updateBillingDetails(ctx conte
 				return ec.fieldContext_BillingDetails_address(ctx, field)
 			case "isComplete":
 				return ec.fieldContext_BillingDetails_isComplete(ctx, field)
+			case "taxReviewRequired":
+				return ec.fieldContext_BillingDetails_taxReviewRequired(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_BillingDetails_updatedAt(ctx, field)
 			case "presentmentCurrency":
@@ -97227,6 +97267,8 @@ func (ec *executionContext) fieldContext_Query_billingDetails(_ context.Context,
 				return ec.fieldContext_BillingDetails_address(ctx, field)
 			case "isComplete":
 				return ec.fieldContext_BillingDetails_isComplete(ctx, field)
+			case "taxReviewRequired":
+				return ec.fieldContext_BillingDetails_taxReviewRequired(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_BillingDetails_updatedAt(ctx, field)
 			case "presentmentCurrency":
@@ -150330,6 +150372,11 @@ func (ec *executionContext) _BillingDetails(ctx context.Context, sel ast.Selecti
 			out.Values[i] = ec._BillingDetails_address(ctx, field, obj)
 		case "isComplete":
 			out.Values[i] = ec._BillingDetails_isComplete(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "taxReviewRequired":
+			out.Values[i] = ec._BillingDetails_taxReviewRequired(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
 			}

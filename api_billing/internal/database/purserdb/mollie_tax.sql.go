@@ -175,3 +175,22 @@ func (q *Queries) RecordNativeMollieInvoicePayment(ctx context.Context, arg Reco
 	)
 	return err
 }
+
+const resolveMollieSubscriptionTaxReview = `-- name: ResolveMollieSubscriptionTaxReview :exec
+UPDATE purser.crypto_accounting_anomalies
+SET status='resolved',resolved_at=NOW(),resolution_note='Current legal billing profile and exclusive tax terms synchronized',
+    evidence_json=evidence_json || '{"provider_tax_sync_complete":true}'::jsonb
+WHERE tenant_id=$1::text::uuid AND network='mollie' AND kind='provider_tax_review'
+  AND reference_type='mollie_subscription' AND reference_id=$2::text
+  AND (status='open' OR NOT evidence_json @> '{"provider_tax_sync_complete":true}'::jsonb)
+`
+
+type ResolveMollieSubscriptionTaxReviewParams struct {
+	TenantID       string `db:"tenant_id" json:"tenant_id"`
+	SubscriptionID string `db:"subscription_id" json:"subscription_id"`
+}
+
+func (q *Queries) ResolveMollieSubscriptionTaxReview(ctx context.Context, arg ResolveMollieSubscriptionTaxReviewParams) error {
+	_, err := q.db.ExecContext(ctx, resolveMollieSubscriptionTaxReview, arg.TenantID, arg.SubscriptionID)
+	return err
+}

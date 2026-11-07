@@ -126,6 +126,7 @@ func TestStripeTaxOnlyBillingReviewHoldsCollection(t *testing.T) {
 			mock.ExpectQuery("-- name: ListTenantStripeTaxSubscriptions").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"customer_id", "subscription_id"}).AddRow("customer", "sub"))
 			mock.ExpectQuery("-- name: GetCryptoDocumentBillingProfile").WithArgs("tenant").WillReturnError(tc.err)
 			if tc.fallback {
+				mock.ExpectQuery("-- name: GetEffectiveVATRate").WillReturnError(sql.ErrNoRows)
 				mock.ExpectExec("-- name: StoreProviderTaxProfile").WillReturnResult(sqlmock.NewResult(0, 1))
 			}
 			if tc.report {
@@ -171,6 +172,7 @@ func TestLegacyWhitespaceOnlyBillingIdentityReportsWithoutPausingCollection(t *t
 	defer db.Close()
 	mock.ExpectQuery("-- name: ListTenantStripeTaxSubscriptions").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"customer_id", "subscription_id"}).AddRow("customer", "sub"))
 	mock.ExpectQuery("-- name: GetCryptoDocumentBillingProfile").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow(" buyer@example.test ", " Buyer ", " Buyer Ltd ", []byte(`{"street":" \t ","city":" Toronto ","postal_code":" M5V1A1 ","country":" CA "}`), nil, "business"))
+	mock.ExpectQuery("-- name: GetEffectiveVATRate").WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("-- name: StoreProviderTaxProfile").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("-- name: RecordBillingTaxReview").WillReturnResult(sqlmock.NewResult(0, 1))
 	b := &recurringFallbackBackend{}

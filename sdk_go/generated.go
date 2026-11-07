@@ -6832,6 +6832,8 @@ type BillingDetailsDefaultFields struct {
 	Address *BillingDetailsDefaultFieldsAddressBillingAddress `json:"address"`
 	// True if all full-invoice fields are present (legal name + email + address).
 	IsComplete bool `json:"isComplete"`
+	// True while recurring invoices use domestic VAT because saved billing details require review.
+	TaxReviewRequired bool `json:"taxReviewRequired"`
 	// When billing details were last updated.
 	UpdatedAt *time.Time `json:"updatedAt"`
 	// Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing address country. It cannot change while a provider subscription, an open invoice, or a card first payment started in the last day exists.
@@ -6860,6 +6862,9 @@ func (v *BillingDetailsDefaultFields) GetAddress() *BillingDetailsDefaultFieldsA
 
 // GetIsComplete returns BillingDetailsDefaultFields.IsComplete, and is useful for accessing the field via an interface.
 func (v *BillingDetailsDefaultFields) GetIsComplete() bool { return v.IsComplete }
+
+// GetTaxReviewRequired returns BillingDetailsDefaultFields.TaxReviewRequired, and is useful for accessing the field via an interface.
+func (v *BillingDetailsDefaultFields) GetTaxReviewRequired() bool { return v.TaxReviewRequired }
 
 // GetUpdatedAt returns BillingDetailsDefaultFields.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *BillingDetailsDefaultFields) GetUpdatedAt() *time.Time { return v.UpdatedAt }
@@ -31317,6 +31322,11 @@ func (v *GetBillingDetailsBillingDetails) GetIsComplete() bool {
 	return v.BillingDetailsDefaultFields.IsComplete
 }
 
+// GetTaxReviewRequired returns GetBillingDetailsBillingDetails.TaxReviewRequired, and is useful for accessing the field via an interface.
+func (v *GetBillingDetailsBillingDetails) GetTaxReviewRequired() bool {
+	return v.BillingDetailsDefaultFields.TaxReviewRequired
+}
+
 // GetUpdatedAt returns GetBillingDetailsBillingDetails.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *GetBillingDetailsBillingDetails) GetUpdatedAt() *time.Time {
 	return v.BillingDetailsDefaultFields.UpdatedAt
@@ -31367,6 +31377,8 @@ type __premarshalGetBillingDetailsBillingDetails struct {
 
 	IsComplete bool `json:"isComplete"`
 
+	TaxReviewRequired bool `json:"taxReviewRequired"`
+
 	UpdatedAt *time.Time `json:"updatedAt"`
 
 	PresentmentCurrency *string `json:"presentmentCurrency"`
@@ -31390,6 +31402,7 @@ func (v *GetBillingDetailsBillingDetails) __premarshalJSON() (*__premarshalGetBi
 	retval.VatNumber = v.BillingDetailsDefaultFields.VatNumber
 	retval.Address = v.BillingDetailsDefaultFields.Address
 	retval.IsComplete = v.BillingDetailsDefaultFields.IsComplete
+	retval.TaxReviewRequired = v.BillingDetailsDefaultFields.TaxReviewRequired
 	retval.UpdatedAt = v.BillingDetailsDefaultFields.UpdatedAt
 	retval.PresentmentCurrency = v.BillingDetailsDefaultFields.PresentmentCurrency
 	return &retval, nil
@@ -113545,6 +113558,11 @@ func (v *UpdateBillingDetailsUpdateBillingDetails) GetIsComplete() bool {
 	return v.BillingDetailsDefaultFields.IsComplete
 }
 
+// GetTaxReviewRequired returns UpdateBillingDetailsUpdateBillingDetails.TaxReviewRequired, and is useful for accessing the field via an interface.
+func (v *UpdateBillingDetailsUpdateBillingDetails) GetTaxReviewRequired() bool {
+	return v.BillingDetailsDefaultFields.TaxReviewRequired
+}
+
 // GetUpdatedAt returns UpdateBillingDetailsUpdateBillingDetails.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *UpdateBillingDetailsUpdateBillingDetails) GetUpdatedAt() *time.Time {
 	return v.BillingDetailsDefaultFields.UpdatedAt
@@ -113595,6 +113613,8 @@ type __premarshalUpdateBillingDetailsUpdateBillingDetails struct {
 
 	IsComplete bool `json:"isComplete"`
 
+	TaxReviewRequired bool `json:"taxReviewRequired"`
+
 	UpdatedAt *time.Time `json:"updatedAt"`
 
 	PresentmentCurrency *string `json:"presentmentCurrency"`
@@ -113618,6 +113638,7 @@ func (v *UpdateBillingDetailsUpdateBillingDetails) __premarshalJSON() (*__premar
 	retval.VatNumber = v.BillingDetailsDefaultFields.VatNumber
 	retval.Address = v.BillingDetailsDefaultFields.Address
 	retval.IsComplete = v.BillingDetailsDefaultFields.IsComplete
+	retval.TaxReviewRequired = v.BillingDetailsDefaultFields.TaxReviewRequired
 	retval.UpdatedAt = v.BillingDetailsDefaultFields.UpdatedAt
 	retval.PresentmentCurrency = v.BillingDetailsDefaultFields.PresentmentCurrency
 	return &retval, nil
@@ -129392,6 +129413,7 @@ fragment BillingDetailsDefaultFields on BillingDetails {
 		country
 	}
 	isComplete
+	taxReviewRequired
 	updatedAt
 	presentmentCurrency
 }
@@ -145899,6 +145921,7 @@ fragment BillingDetailsDefaultFields on BillingDetails {
 		country
 	}
 	isComplete
+	taxReviewRequired
 	updatedAt
 	presentmentCurrency
 }

@@ -17,7 +17,7 @@ func TestConsumerBillingProfileDoesNotRequireCompanyOrVAT(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	mock.ExpectQuery(`-- name: GetTenantBillingDetails`).WithArgs("tenant-1").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type"}).AddRow("person@example.test", "A Person", nil, nil, []byte(`{"street":"Street 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "EUR", "consumer"))
+	mock.ExpectQuery(`-- name: GetTenantBillingDetails`).WithArgs("tenant-1").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type", "tax_review_required"}).AddRow("person@example.test", "A Person", nil, nil, []byte(`{"street":"Street 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "EUR", "consumer", false))
 	got, err := (&PurserServer{db: db}).GetBillingDetails(context.Background(), &purserpb.GetBillingDetailsRequest{TenantId: "tenant-1"})
 	if err != nil || !got.GetIsComplete() || got.GetCustomerType() != "consumer" || got.GetCompany() != "" || got.GetVatNumber() != "" {
 		t.Fatalf("profile=%+v error=%v", got, err)

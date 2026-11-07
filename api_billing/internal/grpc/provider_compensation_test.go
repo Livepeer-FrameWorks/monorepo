@@ -58,8 +58,8 @@ func TestCreateCheckoutSessionExpiresStripeSessionWhenLocalStageFails(t *testing
 	tierID := "11111111-1111-1111-1111-111111111111"
 	mock.ExpectQuery(`SELECT billing_email, billing_name, billing_company, tax_id,\s+COALESCE\(billing_address`).
 		WithArgs("tenant-a").
-		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type"}).
-			AddRow("billing@example.com", "Example Customer", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "EUR", "unspecified"))
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type", "tax_review_required"}).
+			AddRow("billing@example.com", "Example Customer", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "EUR", "unspecified", false))
 	expectProviderCheckoutWithoutGrant(mock, "tenant-a")
 	expectSelfServiceCheckout(mock, "tenant-a", tierID, "stripe")
 	mock.ExpectQuery(`SELECT tier_name, COALESCE\(currency, 'EUR'\)::text AS currency`).
@@ -144,8 +144,8 @@ func TestCreateMollieSubscriptionCancelsProviderSubscriptionWhenLocalPersistFail
 	tierID := "11111111-1111-1111-1111-111111111111"
 	mock.ExpectQuery(`SELECT billing_email, billing_name, billing_company, tax_id,\s+COALESCE\(billing_address`).
 		WithArgs("tenant-a").
-		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type"}).
-			AddRow("billing@example.com", "Example Customer", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "EUR", "unspecified"))
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type", "tax_review_required"}).
+			AddRow("billing@example.com", "Example Customer", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "EUR", "unspecified", false))
 	expectCollectionProfile(mock, "tenant-a", "EUR")
 	expectProviderCheckoutWithoutGrant(mock, "tenant-a")
 	expectSelfServiceCheckout(mock, "tenant-a", tierID, "mollie")
@@ -333,7 +333,7 @@ func TestCreateMollieSubscriptionRefusesOutstandingGrantBeforeProvider(t *testin
 			}
 			defer db.Close()
 			server := &PurserServer{db: db, logger: logging.NewLogger(), mollieClient: &fakeMollieBillingClient{}}
-			mock.ExpectQuery(`SELECT billing_email, billing_name, billing_company, tax_id,\s+COALESCE\(billing_address`).WithArgs("tenant-a").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type"}).AddRow("billing@example.com", "Example", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "EUR", "unspecified"))
+			mock.ExpectQuery(`SELECT billing_email, billing_name, billing_company, tax_id,\s+COALESCE\(billing_address`).WithArgs("tenant-a").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type", "tax_review_required"}).AddRow("billing@example.com", "Example", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "EUR", "unspecified", false))
 			expectCollectionProfile(mock, "tenant-a", "EUR")
 			mock.ExpectBegin()
 			expectProviderSubscriptionLock(mock, "tenant-a")
@@ -363,7 +363,7 @@ func TestStripeCheckoutRefusesOutstandingGrantBeforeProvider(t *testing.T) {
 			}
 			defer db.Close()
 			server := &PurserServer{db: db, logger: logging.NewLogger(), stripeClient: &fakeStripeBillingClient{}}
-			mock.ExpectQuery(`SELECT billing_email, billing_name, billing_company, tax_id,\s+COALESCE\(billing_address`).WithArgs("tenant-a").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type"}).AddRow("billing@example.com", "Example", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "EUR", "unspecified"))
+			mock.ExpectQuery(`SELECT billing_email, billing_name, billing_company, tax_id,\s+COALESCE\(billing_address`).WithArgs("tenant-a").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type", "tax_review_required"}).AddRow("billing@example.com", "Example", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "EUR", "unspecified", false))
 			mock.ExpectBegin()
 			expectProviderSubscriptionLock(mock, "tenant-a")
 			mock.ExpectQuery(`-- name: GetSubscriptionOperatorGrant`).WithArgs("tenant-a").WillReturnRows(sqlmock.NewRows([]string{"subscription_id", "base_price", "waive_usage", "collection", "expires_at", "reason", "granted_by", "granted_at", "fallback_tier_id", "assigned_tier_id", "fallback_tier_name", "active", "expiry_error", "expiry_failures"}).AddRow("sub", nil, true, "provider", time.Now().Add(-time.Minute), "trial", nil, time.Now().Add(-time.Hour), "fallback", "tier", "payg", active, nil, int32(0)))
@@ -399,7 +399,7 @@ func TestCreateFirstPaymentRefusesOutstandingGrantBeforeProvider(t *testing.T) {
 	}
 	defer db.Close()
 	server := &PurserServer{db: db, logger: logging.NewLogger(), mollieClient: &fakeMollieBillingClient{}}
-	mock.ExpectQuery(`SELECT billing_email, billing_name, billing_company, tax_id,\s+COALESCE\(billing_address`).WithArgs("tenant-a").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type"}).AddRow("billing@example.com", "Example", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "USD", "unspecified"))
+	mock.ExpectQuery(`SELECT billing_email, billing_name, billing_company, tax_id,\s+COALESCE\(billing_address`).WithArgs("tenant-a").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type", "tax_review_required"}).AddRow("billing@example.com", "Example", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "USD", "unspecified", false))
 	mock.ExpectBegin()
 	expectProviderSubscriptionLock(mock, "tenant-a")
 	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs("tenant-a").WillReturnRows(sqlmock.NewRows([]string{"subscription_id", "base_price", "waive_usage", "collection", "expires_at", "reason", "granted_by", "granted_at", "fallback_tier_id", "assigned_tier_id", "fallback_tier_name", "active", "expiry_error", "expiry_failures"}).AddRow("sub", nil, true, "provider", nil, "trial", nil, time.Now(), "", "tier", "", true, nil, int32(0)))

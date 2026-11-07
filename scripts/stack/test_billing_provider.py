@@ -36,6 +36,26 @@ class BillingProviderTest(unittest.TestCase):
         self.call("POST", "/__test/complete", json.dumps({"session_id": checkout["id"]}).encode())
         return self.provider.objects[checkout["subscription"]]
 
+    def test_metadata_merges_deletes_and_enforces_capacity_before_mutation(self):
+        sub = self.subscription()
+        path = "/v1/subscriptions/" + sub["id"]
+        self.call("POST", path, b"metadata[older]=pending&metadata[newer]=pending")
+        self.call("POST", path, b"metadata[older]=&metadata[context]=stable")
+        self.assertNotIn("older", sub["metadata"])
+        self.assertEqual(sub["metadata"]["newer"], "pending")
+        sub["metadata"] = {"key" + str(index): "value" for index in range(50)}
+        before = dict(sub["metadata"])
+        status, _ = self.provider.dispatch("POST", path, {}, b"metadata[overflow]=value", "fixture-test")
+        self.assertEqual(status, 400)
+        self.assertEqual(sub["metadata"], before)
+        self.call("POST", path, b"metadata[key0]=&metadata[replacement]=pending")
+        self.assertEqual(len(sub["metadata"]), 50)
+        for key, value in (("k" * 41, "v"), ("normal", "v" * 501)):
+            before = dict(sub["metadata"])
+            status, _ = self.provider.dispatch("POST", path, {}, ("metadata[" + key + "]=" + value).encode(), "fixture-test")
+            self.assertEqual(status, 400)
+            self.assertEqual(sub["metadata"], before)
+
     def open_invoice(self, sub):
         self.call("POST", "/v1/subscriptions/" + sub["id"], b"pause_collection[behavior]=keep_as_draft")
         events = self.call("POST", "/__test/renew", json.dumps({"subscription_id": sub["id"]}).encode())

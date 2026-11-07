@@ -31,13 +31,19 @@ func assessStripeTaxProfile(ctx context.Context, db *sql.DB, tenant, clientIP st
 		return nil, &supplierTaxConfigurationError{}
 	}
 	h := &X402Handler{db: db, supplierCountry: rt.SupplierCountry, supplierName: rt.SupplierName, supplierAddress: rt.SupplierAddress, supplierVAT: rt.SupplierVATNumber, supplierRegistration: rt.SupplierRegistrationNumber}
-	requirement, err := h.GetCryptoDocumentRequirement(ctx, tenant, 1, clientIP)
+	var requirement CryptoDocumentRequirement
+	var err error
+	if recurring {
+		requirement, err = h.recurringTaxRequirement(ctx, tenant, clientIP)
+	} else {
+		requirement, err = h.GetCryptoDocumentRequirement(ctx, tenant, 1, clientIP)
+	}
 	if err != nil {
 		return nil, err
 	}
 	profile := requirement.Profile
-	if recurring && !profile.Complete() {
-		return retainIncompleteRecurringTaxProfile(ctx, db, tenant, profile)
+	if recurring && profile.TaxAssessment != nil && profile.TaxAssessment.ReviewRequired {
+		return retainRecurringDomesticTaxProfile(ctx, db, tenant, profile, profile.TaxAssessment.ReviewReasons)
 	}
 	if requirement.RequiresCustomerType && !requirement.RequiresBillingCountry && profile.Complete() {
 		profile.CustomerType = "consumer"
@@ -98,12 +104,23 @@ func retainProviderTaxProfile(ctx context.Context, db *sql.DB, tenant string, p 
 	return p, nil
 }
 
-func retainIncompleteRecurringTaxProfile(ctx context.Context, db *sql.DB, tenant string, claimed CryptoBillingProfile) (*billingstripe.TaxProfile, error) {
+func retainRecurringDomesticTaxProfile(ctx context.Context, db *sql.DB, tenant string, claimed CryptoBillingProfile, reasons []string) (*billingstripe.TaxProfile, error) {
 	rt := appconfig.Runtime()
 	supplierCountry := countries.Normalize(rt.SupplierCountry)
 	if supplierCountry != "NL" {
 		return nil, billingtax.Review("billing_profile_required", "Complete your saved billing details before recurring tax can be assessed")
 	}
+	at := time.Now().UTC()
+	decision, err := (&X402Handler{db: db}).loadEffectiveVATRate(ctx, supplierCountry, at)
+	if err != nil {
+		return nil, err
+	}
+	if decision.RateBPS <= 0 {
+		return nil, errors.New("recurring domestic fallback requires a positive VAT rate")
+	}
+	decision.TaxLabel = "VAT"
+	decision.Treatment = reasons[0]
+	decision.Wording = "Dutch VAT applies while the billing tax claim requires review"
 	claimed.TaxAssessment = nil
 	rawClaim, err := json.Marshal(claimed)
 	if err != nil {
@@ -117,12 +134,12 @@ func retainIncompleteRecurringTaxProfile(ctx context.Context, db *sql.DB, tenant
 	if !countries.IsValid(country) {
 		country = ""
 	}
-	proof := CryptoTaxAssessment{ReviewRequired: true, ReviewReasons: []string{incompleteRecurringProfileReview}, ClaimedProfile: rawClaim, CustomerType: claimed.effectiveCustomerType(), PolicyVersion: frozenCryptoTaxPolicy, AssessedAt: time.Now().UTC(), SupplierCountry: supplierCountry, Supplier: ConfiguredDocumentSupplier(), Decision: vatDecision{Country: "NL", RateBPS: 2100, TaxLabel: "VAT", Treatment: incompleteRecurringProfileReview, Source: "Dutch recurring VAT fallback pending complete billing details", Wording: "Dutch VAT 21% applies while billing details are incomplete"}}
+	proof := CryptoTaxAssessment{ReviewRequired: true, ReviewReasons: reasons, ClaimedProfile: rawClaim, CustomerType: claimed.effectiveCustomerType(), PolicyVersion: frozenCryptoTaxPolicy, AssessedAt: at, SupplierCountry: supplierCountry, Supplier: ConfiguredDocumentSupplier(), Decision: decision}
 	evidence, err := json.Marshal(proof)
 	if err != nil {
 		return nil, err
 	}
-	p := &billingstripe.TaxProfile{Name: strings.TrimSpace(claimed.Name), Company: strings.TrimSpace(claimed.Company), Email: strings.TrimSpace(claimed.Email), Street: strings.TrimSpace(address.Street), City: strings.TrimSpace(address.City), PostalCode: strings.TrimSpace(address.PostalCode), Country: country, RateBPS: 2100, Wording: proof.Decision.Wording, SupplierCountry: supplierCountry, SupplierIdentity: billingstripe.SupplierTaxIdentity(rt.SupplierName, rt.SupplierAddress, rt.SupplierVATNumber, rt.SupplierRegistrationNumber), IncompleteProfile: true, Evidence: evidence}
+	p := &billingstripe.TaxProfile{Name: strings.TrimSpace(claimed.Name), Company: strings.TrimSpace(claimed.Company), Email: strings.TrimSpace(claimed.Email), Street: strings.TrimSpace(address.Street), City: strings.TrimSpace(address.City), PostalCode: strings.TrimSpace(address.PostalCode), Country: country, RateBPS: decision.RateBPS, Wording: proof.Decision.Wording, SupplierCountry: supplierCountry, SupplierIdentity: billingstripe.SupplierTaxIdentity(rt.SupplierName, rt.SupplierAddress, rt.SupplierVATNumber, rt.SupplierRegistrationNumber), IncompleteProfile: true, Evidence: evidence}
 	return retainProviderTaxProfile(ctx, db, tenant, p)
 }
 
@@ -191,12 +208,12 @@ func (jm *JobManager) reconcileStripeTaxTenant(ctx context.Context, tenant strin
 			refType, refID = "stripe_customer", subscription.CustomerID
 		}
 		if assessed.IncompleteProfile {
-			proof, encodeErr := json.Marshal(map[string]any{"review_required": true, "reason": incompleteRecurringProfileReview, "fallback_rate_bps": 2100, "profile_sha": assessed.Fingerprint(), "customer_id": subscription.CustomerID, "subscription_id": subscription.SubscriptionID})
+			proof, encodeErr := recurringTaxReviewEvidence(assessed, subscription.CustomerID, subscription.SubscriptionID)
 			if encodeErr != nil {
 				failures = errors.Join(failures, encodeErr)
 				continue
 			}
-			failures = errors.Join(failures, purserdb.New(jm.db).RecordBillingTaxReview(ctx, purserdb.RecordBillingTaxReviewParams{TenantID: tenant, Kind: "provider_tax_review", Network: "stripe", ReferenceType: refType, ReferenceID: refID, Detail: "Recurring invoices use Dutch VAT while billing details require completion", EvidenceJson: proof}))
+			failures = errors.Join(failures, purserdb.New(jm.db).RecordBillingTaxReview(ctx, purserdb.RecordBillingTaxReviewParams{TenantID: tenant, Kind: "provider_tax_review", Network: "stripe", ReferenceType: refType, ReferenceID: refID, Detail: "Recurring invoices use domestic VAT while billing tax claims require review", EvidenceJson: proof}))
 			continue
 		}
 		if _, err = purserdb.New(jm.db).ResolveProviderTaxReview(ctx, purserdb.ResolveProviderTaxReviewParams{TenantID: tenant, ReferenceType: refType, ReferenceID: refID, Note: "Current legal billing profile and exclusive tax terms synchronized"}); err != nil {

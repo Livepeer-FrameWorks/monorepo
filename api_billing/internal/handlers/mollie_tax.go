@@ -30,14 +30,6 @@ func AssessMollieTaxTerms(ctx context.Context, db *sql.DB, tenant string, net in
 	return billingmollie.NewTaxTerms(profile.ProfileSHA, net, profile.RateBPS)
 }
 
-func assessRecurringMollieTaxTerms(ctx context.Context, db *sql.DB, tenant string, net int64) (*billingmollie.TaxTerms, error) {
-	profile, err := AssessRecurringProviderTaxProfile(ctx, db, tenant, "")
-	if err != nil {
-		return nil, err
-	}
-	return billingmollie.NewTaxTerms(profile.ProfileSHA, net, profile.RateBPS)
-}
-
 func mollieSubscriptionNet(tenant string, sub *mollieapi.Subscription) (int64, error) {
 	if mollieMetadataString(sub.Metadata, "tenant_id") != tenant {
 		return 0, errors.New("mollie subscription tax owner mismatch")
@@ -90,12 +82,30 @@ func (jm *JobManager) reconcileMollieTaxTenant(ctx context.Context, tenant strin
 		if err != nil {
 			return err
 		}
-		terms, err := assessRecurringMollieTaxTerms(ctx, jm.db, tenant, net)
+		profile, err := AssessRecurringProviderTaxProfile(ctx, jm.db, tenant, "")
 		if err != nil {
 			return err
 		}
+		terms, err := billingmollie.NewTaxTerms(profile.ProfileSHA, net, profile.RateBPS)
+		if err != nil {
+			return err
+		}
+		if profile.IncompleteProfile {
+			evidence, marshalErr := recurringTaxReviewEvidence(profile, row.CustomerID, row.SubscriptionID)
+			if marshalErr != nil {
+				return marshalErr
+			}
+			if err = purserdb.New(jm.db).RecordBillingTaxReview(ctx, purserdb.RecordBillingTaxReviewParams{TenantID: tenant, Kind: "provider_tax_review", Network: "mollie", ReferenceType: "mollie_subscription", ReferenceID: row.SubscriptionID, Detail: "Recurring invoices use domestic VAT while billing tax claims require review", EvidenceJson: evidence}); err != nil {
+				return err
+			}
+		}
 		if err = jm.billing.mollieClient.SyncSubscriptionTax(ctx, tenant, row.CustomerID, row.SubscriptionID, *terms); err != nil {
 			return err
+		}
+		if !profile.IncompleteProfile {
+			if err = purserdb.New(jm.db).ResolveMollieSubscriptionTaxReview(ctx, purserdb.ResolveMollieSubscriptionTaxReviewParams{TenantID: tenant, SubscriptionID: row.SubscriptionID}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -199,7 +209,7 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 		}
 		reviewReason := ""
 		if profile.IncompleteProfile {
-			reviewReason = "Recurring payment charged Dutch VAT while its incomplete billing profile requires review"
+			reviewReason = "Recurring payment charged Dutch VAT while its billing tax claim requires review"
 		}
 		accepted, normalizationErr := normalizeProviderTaxProfile(profile)
 		if normalizationErr != nil {
@@ -264,9 +274,6 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 			if err = q.RecordBillingTaxReview(ctx, purserdb.RecordBillingTaxReviewParams{TenantID: tenant, Kind: "provider_tax_document_review", Network: "mollie", ReferenceType: "invoice", ReferenceID: row.ID, AmountCents: gross, Detail: reviewReason, EvidenceJson: evidence}); err != nil {
 				return err
 			}
-		}
-		if profile.IncompleteProfile {
-			return nil
 		}
 		return enqueueInvoiceEmailTx(ctx, tx, row.ID, tenant, profile.Email, "paid")
 	})

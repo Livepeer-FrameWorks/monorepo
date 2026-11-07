@@ -379,6 +379,7 @@ fragment BillingDetailsDefaultFields on BillingDetails {
     country
   }
   isComplete
+  taxReviewRequired
   updatedAt
   presentmentCurrency
 }

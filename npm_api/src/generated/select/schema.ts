@@ -510,6 +510,8 @@ export interface BillingDetails {
     address: (BillingAddress | null)
     /** True if all full-invoice fields are present (legal name + email + address). */
     isComplete: Scalars['Boolean']
+    /** True while recurring invoices use domestic VAT because saved billing details require review. */
+    taxReviewRequired: Scalars['Boolean']
     /** When billing details were last updated. */
     updatedAt: (Scalars['Time'] | null)
     /** Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing address country. It cannot change while a provider subscription, an open invoice, or a card first payment started in the last day exists. */
@@ -7446,6 +7448,8 @@ export interface BillingDetailsGenqlSelection{
     address?: BillingAddressGenqlSelection
     /** True if all full-invoice fields are present (legal name + email + address). */
     isComplete?: boolean | number
+    /** True while recurring invoices use domestic VAT because saved billing details require review. */
+    taxReviewRequired?: boolean | number
     /** When billing details were last updated. */
     updatedAt?: boolean | number
     /** Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing address country. It cannot change while a provider subscription, an open invoice, or a card first payment started in the last day exists. */

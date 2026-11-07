@@ -14,7 +14,7 @@ import (
 // tax guard. Operator invoices are outside this recovery; owned invoices with
 // unsupported adjustments require review before their money can change.
 func recoverStripeTaxInvoices(ctx context.Context, sub *api.Subscription, profile TaxProfile, rateID string) (*TaxRecoveryReport, error) {
-	report := &TaxRecoveryReport{TenantID: sub.Metadata["tenant_id"], SubscriptionID: sub.ID, ProfileSHA: profile.Fingerprint(), RecoveryPending: true}
+	report := &TaxRecoveryReport{TenantID: sub.Metadata["tenant_id"], SubscriptionID: sub.ID, ProfileSHA: profile.Fingerprint(), RecoveryPending: true, WorkKeys: taxRecoveryWorkKeys(sub.Metadata)}
 	if sub.Customer != nil {
 		report.CustomerID = sub.Customer.ID
 	}

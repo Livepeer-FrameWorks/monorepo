@@ -3095,6 +3095,7 @@ class GraphQLClient(BaseClient):
                 country
               }
               isComplete
+              taxReviewRequired
               updatedAt
               presentmentCurrency
             }
@@ -4006,6 +4007,7 @@ class GraphQLClient(BaseClient):
                 country
               }
               isComplete
+              taxReviewRequired
               updatedAt
               presentmentCurrency
             }

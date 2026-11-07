@@ -500,6 +500,7 @@ message BillingDetails {
   string name = 8;                      // Customer legal/person name for full invoices
   string presentment_currency = 9;      // EUR, USD, or GBP, derived from the billing country
   string customer_type = 10;            // unspecified, consumer, or business; never inferred from company name
+  bool tax_review_required = 11;        // Recurring invoices use domestic VAT pending billing-profile correction
 }
 
 // Conversion of one money amount into the EUR ledger. units_per_eur is the ECB

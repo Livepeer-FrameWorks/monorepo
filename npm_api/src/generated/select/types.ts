@@ -1433,6 +1433,9 @@ const types: CompressedTypeMap<number> = {
             "isComplete": [
                 2
             ],
+            "taxReviewRequired": [
+                2
+            ],
             "updatedAt": [
                 531
             ],

@@ -1800,7 +1800,8 @@ email: string | null, /** Customer legal or person name shown on full invoices. 
 name: string | null, /** Company name for invoices. */
 company: string | null, /** VAT number (EU format: XX123456789). */
 vatNumber: string | null, /** True if all full-invoice fields are present (legal name + email + address). */
-isComplete: boolean, /** When billing details were last updated. */
+isComplete: boolean, /** True while recurring invoices use domestic VAT because saved billing details require review. */
+taxReviewRequired: boolean, /** When billing details were last updated. */
 updatedAt: string | null, /** Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing address country. It cannot change while a provider subscription, an open invoice, or a card first payment started in the last day exists. */
 presentmentCurrency: string | null, /** Structured billing address. */
 address: { /** Street address line 1. */
@@ -5580,7 +5581,8 @@ email: string | null, /** Customer legal or person name shown on full invoices. 
 name: string | null, /** Company name for invoices. */
 company: string | null, /** VAT number (EU format: XX123456789). */
 vatNumber: string | null, /** True if all full-invoice fields are present (legal name + email + address). */
-isComplete: boolean, /** When billing details were last updated. */
+isComplete: boolean, /** True while recurring invoices use domestic VAT because saved billing details require review. */
+taxReviewRequired: boolean, /** When billing details were last updated. */
 updatedAt: string | null, /** Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing address country. It cannot change while a provider subscription, an open invoice, or a card first payment started in the last day exists. */
 presentmentCurrency: string | null, /** Structured billing address. */
 address: { /** Street address line 1. */
@@ -5807,7 +5809,8 @@ email: string | null, /** Customer legal or person name shown on full invoices. 
 name: string | null, /** Company name for invoices. */
 company: string | null, /** VAT number (EU format: XX123456789). */
 vatNumber: string | null, /** True if all full-invoice fields are present (legal name + email + address). */
-isComplete: boolean, /** When billing details were last updated. */
+isComplete: boolean, /** True while recurring invoices use domestic VAT because saved billing details require review. */
+taxReviewRequired: boolean, /** When billing details were last updated. */
 updatedAt: string | null, /** Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing address country. It cannot change while a provider subscription, an open invoice, or a card first payment started in the last day exists. */
 presentmentCurrency: string | null, /** Structured billing address. */
 address: { /** Street address line 1. */
@@ -10853,6 +10856,7 @@ export const BillingDetailsDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDoc
     country
   }
   isComplete
+  taxReviewRequired
   updatedAt
   presentmentCurrency
 }
@@ -19019,6 +19023,7 @@ export const UpdateBillingDetailsDocument = /*#__PURE__*/ new TypedDocumentStrin
     country
   }
   isComplete
+  taxReviewRequired
   updatedAt
   presentmentCurrency
 }`) as unknown as TypedDocumentString<UpdateBillingDetailsMutation, UpdateBillingDetailsMutationVariables>;
@@ -19674,6 +19679,7 @@ export const GetBillingDetailsDocument = /*#__PURE__*/ new TypedDocumentString(`
     country
   }
   isComplete
+  taxReviewRequired
   updatedAt
   presentmentCurrency
 }`) as unknown as TypedDocumentString<GetBillingDetailsQuery, GetBillingDetailsQueryVariables>;

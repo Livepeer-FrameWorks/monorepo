@@ -11,12 +11,13 @@ import (
 
 type recoveryReportBackend struct {
 	taxBackend
-	inv               *api.Invoice
-	allLines          []*api.InvoiceLineItem
-	invoiceWrites     int
-	repairs           *heldDraftBackend
-	subscriptionReads int
-	afterInvoiceAck   func()
+	inv                     *api.Invoice
+	allLines                []*api.InvoiceLineItem
+	invoiceWrites           int
+	repairs                 *heldDraftBackend
+	subscriptionReads       int
+	afterInvoiceAck         func()
+	beforeSubscriptionWrite func(*api.SubscriptionParams)
 }
 
 func (b *recoveryReportBackend) CallRaw(method, path, key string, body []byte, p *api.Params, out api.LastResponseSetter) error {
@@ -28,6 +29,9 @@ func (b *recoveryReportBackend) CallRaw(method, path, key string, body []byte, p
 }
 
 func (b *recoveryReportBackend) Call(method, path, key string, params api.ParamsContainer, out api.LastResponseSetter) error {
+	if p, ok := params.(*api.SubscriptionParams); ok && method == http.MethodPost && b.beforeSubscriptionWrite != nil {
+		b.beforeSubscriptionWrite(p)
+	}
 	if inv, ok := out.(*api.Invoice); ok {
 		if method == http.MethodGet {
 			*inv = *b.inv
@@ -78,6 +82,38 @@ func (b *recoveryReportBackend) Call(method, path, key string, params api.Params
 	return nil
 }
 
+func TestTaxRecoveryStaleAckCannotEraseConcurrentResume(t *testing.T) {
+	c, b, p := terminalReviewFixture(t)
+	report, err := c.ReconcileSubscriptionTax(t.Context(), "tenant", "customer", "sub", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interleaved := false
+	b.beforeSubscriptionWrite = func(params *api.SubscriptionParams) {
+		if params.Metadata[taxRecoveryContext] == "" || interleaved {
+			return
+		}
+		interleaved = true
+		// Cross the actual final acknowledgement write after all its reads.
+		if holdErr := c.HoldSubscriptionTaxReview(t.Context(), "tenant", "customer", "sub"); holdErr != nil {
+			t.Fatal(holdErr)
+		}
+		if syncErr := c.SyncSubscriptionTax(t.Context(), "tenant", "customer", "sub", p); syncErr != nil {
+			t.Fatal(syncErr)
+		}
+	}
+	if err = c.AckTaxRecoveryReport(t.Context(), report); err != nil {
+		t.Fatal(err)
+	}
+	if !interleaved {
+		t.Fatal("test did not cross acknowledgement write")
+	}
+	next, err := c.ReconcileSubscriptionTax(t.Context(), "tenant", "customer", "sub", p)
+	if err != nil || !next.RecoveryPending {
+		t.Fatalf("stale acknowledgement erased newer same-profile recovery: %+v %v", next, err)
+	}
+}
+
 func TestTaxRecoveryAckWithoutInvoiceWritesReadsSubscriptionOnce(t *testing.T) {
 	c, b, p := terminalReviewFixture(t)
 	b.inv.Status = api.InvoiceStatusOpen
@@ -95,7 +131,7 @@ func TestTaxRecoveryAckWithoutInvoiceWritesReadsSubscriptionOnce(t *testing.T) {
 	}
 }
 
-func TestTaxRecoveryAckKeepsPostWriteFenceForChangedCollectionContext(t *testing.T) {
+func TestTaxRecoveryAckKeepsConcurrentWorkWithoutSecondRead(t *testing.T) {
 	c, b, p := terminalReviewFixture(t)
 	report, err := c.ReconcileSubscriptionTax(t.Context(), "tenant", "customer", "sub", p)
 	if err != nil || len(report.Reviews) != 1 {
@@ -103,8 +139,10 @@ func TestTaxRecoveryAckKeepsPostWriteFenceForChangedCollectionContext(t *testing
 	}
 	b.afterInvoiceAck = func() {
 		b.currentSub.PauseCollection = &api.SubscriptionPauseCollection{Behavior: api.SubscriptionPauseCollectionBehaviorKeepAsDraft}
+		b.currentSub.Metadata[taxRecoveryWorkPrefix+strings.Repeat("b", 32)] = "pending"
 	}
-	if err = c.AckTaxRecoveryReport(t.Context(), report); err == nil || b.currentSub.Metadata["frameworks_tax_recovery_pending"] != "true" {
+	before := b.subscriptionReads
+	if err = c.AckTaxRecoveryReport(t.Context(), report); err != nil || len(taxRecoveryWorkKeys(b.currentSub.Metadata)) != 1 || b.subscriptionReads-before != 1 {
 		t.Fatalf("invoice acknowledgement cleared newer subscription collection work: %v", err)
 	}
 }
@@ -301,7 +339,7 @@ func TestTaxReviewEvidenceAndAckUseCompletePaginatedInputs(t *testing.T) {
 			}
 			err = c.AckTaxRecoveryReport(t.Context(), report)
 			if changedPage {
-				if err == nil || b.invoiceWrites != 0 || b.currentSub.Metadata["frameworks_tax_recovery_pending"] != "true" {
+				if err == nil || b.invoiceWrites != 0 || len(taxRecoveryWorkKeys(b.currentSub.Metadata)) == 0 {
 					t.Fatal("changed page-two facts received a stale terminal acknowledgement")
 				}
 			} else if err != nil || b.invoiceWrites != 1 {

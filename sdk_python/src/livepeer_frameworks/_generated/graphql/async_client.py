@@ -3128,6 +3128,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 country
               }
               isComplete
+              taxReviewRequired
               updatedAt
               presentmentCurrency
             }
@@ -4041,6 +4042,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 country
               }
               isComplete
+              taxReviewRequired
               updatedAt
               presentmentCurrency
             }

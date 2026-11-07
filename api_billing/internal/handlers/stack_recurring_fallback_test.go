@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 
 type stackRecurringFallback struct {
 	tenant, subscription, customer, knownName string
+	scenario, reason, claimedVAT, country     string
 }
 
 type stackFallbackSubscription struct {
@@ -44,9 +46,23 @@ func stackFallbackObjects(t *testing.T, ctx context.Context, fixture stackRecurr
 	return subscription, objects
 }
 
-func prepareStackRecurringFallback(t *testing.T, ctx context.Context, conn *grpc.ClientConn, db *sql.DB) stackRecurringFallback {
+func prepareStackRecurringFallbacks(t *testing.T, ctx context.Context, conn *grpc.ClientConn, db *sql.DB) []stackRecurringFallback {
 	t.Helper()
-	fixture := stackRecurringFallback{tenant: os.Getenv("STACK_BILLING_FALLBACK_TENANT_ID")}
+	tenants := strings.Split(os.Getenv("STACK_BILLING_FALLBACK_TENANT_IDS"), ",")
+	scenarios := []string{"incomplete business", "incomplete EU consumer", "incomplete foreign consumer", "invalid complete VAT claim"}
+	if len(tenants) != len(scenarios) {
+		t.Fatal("scenario54 must supply four separate recurring fallback tenants")
+	}
+	fixtures := make([]stackRecurringFallback, len(scenarios))
+	for i, scenario := range scenarios {
+		fixtures[i] = prepareStackRecurringFallback(t, ctx, conn, db, tenants[i], scenario)
+	}
+	return fixtures
+}
+
+func prepareStackRecurringFallback(t *testing.T, ctx context.Context, conn *grpc.ClientConn, db *sql.DB, tenant, scenario string) stackRecurringFallback {
+	t.Helper()
+	fixture := stackRecurringFallback{tenant: tenant, scenario: scenario, reason: "billing_profile_incomplete_domestic_vat", claimedVAT: "invalid VAT claim", country: "AT"}
 	if _, err := uuid.Parse(fixture.tenant); err != nil {
 		t.Fatal("scenario54 must supply a separate fallback fixture tenant")
 	}
@@ -77,9 +93,20 @@ func prepareStackRecurringFallback(t *testing.T, ctx context.Context, conn *grpc
 	if !initialProof || fixture.knownName != "Stack Buyer" || len(subscription.Rates) != 1 || subscription.Rates[0].Percentage != 0 || subscription.Rates[0].Inclusive {
 		t.Fatalf("fallback fixture did not start from complete VIES-validated reverse charge: %+v knownName=%q initialProof=%v", subscription, fixture.knownName, initialProof)
 	}
-	// This disposable customer's saved profile becomes incomplete after a real
-	// valid checkout. Its invalid VAT claim must not bypass the domestic fallback.
-	changed, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET billing_name='   ',tax_id='invalid VAT claim' WHERE tenant_id=$1 AND stripe_subscription_id=$2 AND billing_name='Stack Buyer'`, fixture.tenant, fixture.subscription)
+	name, customerType, street := "   ", "business", "1 Main Street"
+	switch scenario {
+	case "incomplete EU consumer":
+		customerType, fixture.country, fixture.claimedVAT = "consumer", "DE", ""
+	case "incomplete foreign consumer":
+		customerType, fixture.country, fixture.claimedVAT = "consumer", "US", ""
+	case "invalid complete VAT claim":
+		name, street, fixture.knownName = "Updated Buyer", "Updated Street", "Updated Buyer"
+		fixture.claimedVAT, fixture.reason = "ATU99999999", "vat_number_invalid"
+	}
+	// Each disposable customer starts with a valid reverse-charge checkout.
+	// Mutating only its fixture row exercises historical saved claims as well
+	// as incomplete addresses without weakening the public profile validator.
+	changed, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET billing_name=$3,tax_id=$4,billing_customer_type=$5,billing_address=jsonb_build_object('street',$6::text,'city','Stack City','postal_code','1000','country',$7::text) WHERE tenant_id=$1 AND stripe_subscription_id=$2 AND billing_name='Stack Buyer'`, fixture.tenant, fixture.subscription, name, fixture.claimedVAT, customerType, street, fixture.country)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,6 +129,13 @@ func verifyStackRecurringFallback(t *testing.T, ctx context.Context, conn *grpc.
 		var customer struct {
 			Name      string `json:"name"`
 			TaxExempt string `json:"tax_exempt"`
+			Address   struct {
+				Country string `json:"country"`
+				Street  string `json:"line1"`
+			} `json:"address"`
+			TaxIDs struct {
+				Data []struct{ Type string } `json:"data"`
+			} `json:"tax_ids"`
 		}
 		if err := json.Unmarshal(objects[fixture.customer], &customer); err != nil {
 			t.Fatal(err)
@@ -116,6 +150,12 @@ func verifyStackRecurringFallback(t *testing.T, ctx context.Context, conn *grpc.
 				Claimed struct {
 					VAT string `json:"vat_number"`
 				} `json:"claimed_profile"`
+				Decision struct {
+					RateBPS       int
+					Source        string
+					CheckedOn     string
+					EffectiveFrom string
+				} `json:"decision"`
 			} `json:"evidence"`
 		}
 		var raw []byte
@@ -126,7 +166,12 @@ func verifyStackRecurringFallback(t *testing.T, ctx context.Context, conn *grpc.
 			t.Fatal(err)
 		}
 		noPause := len(subscription.Pause) == 0 || bytes.Equal(subscription.Pause, []byte("null"))
-		if profile.Incomplete && profile.Rate == 2100 && !profile.Reverse && profile.Evidence.Review && slices.Contains(profile.Evidence.Reasons, "billing_profile_incomplete_domestic_vat") && profile.Evidence.Claimed.VAT == "invalid VAT claim" && len(subscription.Rates) == 1 && subscription.Rates[0].Percentage == 21 && !subscription.Rates[0].Inclusive && noPause && subscription.Metadata["frameworks_tax_review"] != "true" && customer.TaxExempt == "none" && customer.Name == fixture.knownName {
+		noEUVAT := true
+		for _, id := range customer.TaxIDs.Data {
+			noEUVAT = noEUVAT && id.Type != "eu_vat"
+		}
+		proof := profile.Evidence.Decision
+		if profile.Incomplete && profile.Rate == 2100 && !profile.Reverse && profile.Evidence.Review && slices.Contains(profile.Evidence.Reasons, fixture.reason) && profile.Evidence.Claimed.VAT == fixture.claimedVAT && proof.RateBPS == profile.Rate && proof.Source != "" && proof.CheckedOn != "" && proof.EffectiveFrom != "" && len(subscription.Rates) == 1 && subscription.Rates[0].Percentage == 21 && !subscription.Rates[0].Inclusive && noPause && subscription.Metadata["frameworks_tax_review"] != "true" && customer.TaxExempt == "none" && customer.Name == fixture.knownName && customer.Address.Country == fixture.country && noEUVAT {
 			break
 		}
 		select {
@@ -136,6 +181,10 @@ func verifyStackRecurringFallback(t *testing.T, ctx context.Context, conn *grpc.
 		case <-ctx.Done():
 			t.Fatal(ctx.Err())
 		}
+	}
+	details, err := purserpb.NewSubscriptionServiceClient(conn).GetBillingDetails(ctx, &purserpb.GetBillingDetailsRequest{TenantId: fixture.tenant})
+	if err != nil || !details.GetTaxReviewRequired() || details.GetIsComplete() != (fixture.scenario == "invalid complete VAT claim") {
+		t.Fatalf("%s lost customer-visible profile/VAT review: details=%+v err=%v", fixture.scenario, details, err)
 	}
 	var firstInvoice, firstDocument, firstReview, firstSnapshot, firstEvidence, secondDocument string
 	var resolvedAt time.Time

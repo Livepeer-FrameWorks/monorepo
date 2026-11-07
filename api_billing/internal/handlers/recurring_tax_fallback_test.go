@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -50,8 +51,15 @@ func (b *recurringFallbackBackend) Call(method, path, key string, params api.Par
 	case *api.Customer:
 		if method == http.MethodPost {
 			p := params.(*api.CustomerParams)
-			if p.Name != nil || p.Email != nil || p.Address != nil || api.StringValue(p.TaxExempt) != "none" {
-				return errors.New("fallback overwrote known parties or kept exemption")
+			if p.Name != nil && strings.TrimSpace(api.StringValue(p.Name)) == "" || p.Email != nil && strings.TrimSpace(api.StringValue(p.Email)) == "" || api.StringValue(p.TaxExempt) != "none" {
+				return errors.New("fallback erased known parties or kept exemption")
+			}
+			if p.Address != nil {
+				for _, field := range []*string{p.Address.Line1, p.Address.City, p.Address.PostalCode, p.Address.Country} {
+					if field != nil && strings.TrimSpace(api.StringValue(field)) == "" {
+						return errors.New("fallback erased an address component")
+					}
+				}
 			}
 		}
 		*result = api.Customer{ID: "customer", Name: "Known Buyer", Email: "buyer@example.test", Metadata: map[string]string{"tenant_id": "tenant"}}
@@ -78,6 +86,7 @@ func TestIncompleteRecurringProfileUsesDutchVATWithoutZeroTaxClaim(t *testing.T)
 	defer db.Close()
 	mock.ExpectQuery("-- name: GetCryptoDocumentBillingProfile").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow("buyer@example.test", "Buyer", "Buyer B.V.", []byte(`{"street":" ","city":"Leiden","postal_code":"2332ED","country":"NL"}`), "unverified VAT claim", "business"))
 	stored := &billingstripe.TaxProfile{}
+	mock.ExpectQuery("-- name: GetEffectiveVATRate").WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("-- name: StoreProviderTaxProfile").WithArgs("tenant", sqlmock.AnyArg(), retainedUpgradeTaxArg{profile: stored}).WillReturnResult(sqlmock.NewResult(0, 1))
 	profile, err := AssessRecurringProviderTaxProfile(t.Context(), db, "tenant", "")
 	if err != nil {
@@ -108,6 +117,7 @@ func TestMalformedStructuredRecurringAddressRetainsClaimWithoutInventingFields(t
 	}
 	defer db.Close()
 	mock.ExpectQuery("-- name: GetCryptoDocumentBillingProfile").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow("buyer@example.test", "Buyer", "", []byte(`["not","a billing object"]`), "unverified", "business"))
+	mock.ExpectQuery("-- name: GetEffectiveVATRate").WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("-- name: StoreProviderTaxProfile").WillReturnResult(sqlmock.NewResult(0, 1))
 	profile, err := AssessRecurringProviderTaxProfile(t.Context(), db, "tenant", "")
 	if err != nil || !profile.IncompleteProfile || profile.RateBPS != 2100 || profile.Country != "" || profile.Street != "" || profile.City != "" || profile.PostalCode != "" {
