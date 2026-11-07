@@ -102,6 +102,9 @@ func prepareStackRecurringFallback(t *testing.T, ctx context.Context, conn *grpc
 	case "invalid complete VAT claim":
 		name, street, fixture.knownName = "Updated Buyer", "Updated Street", "Updated Buyer"
 		fixture.claimedVAT, fixture.reason = "ATU99999999", "vat_number_invalid"
+		// The deployed worker can assess the row as soon as it is saved.
+		var configured map[string]bool
+		stackProviderControl(t, ctx, "vies", map[string]any{"vat_number": "U99999999", "valid": false}, &configured)
 	case "unproven foreign business":
 		name = fixture.knownName
 		fixture.country, fixture.claimedVAT, fixture.reason = "US", "", "business_evidence_required"

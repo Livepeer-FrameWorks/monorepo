@@ -334,7 +334,7 @@ Read by `api_billing/cmd/purser`.
 | `LIVEPEER_TOPUP_AMOUNT` | string | `0.2` |  | v0.3.0 | ETH amount the Livepeer deposit monitor sends per TicketBroker funding. An unparsable value logs a warning and uses 0.2. |
 | `LIVEPEER_FUNDING_DAILY_CAP` | string | `1` |  | v0.3.0 | Maximum ETH the Livepeer deposit monitor spends on TicketBroker funding per day. An unparsable or non-positive value logs a warning and uses 1. |
 | `CRYPTO_SWEEP_ETH_DUST_WEI` | string | `100000000000000` |  | v0.3.0 | Wei left in each ETH source address when a custody sweep is planned. An unparsable or negative value uses 100000000000000. Re-read after an env-file reload. |
-| `SMTP_HOST` | string |  |  | v0.3.0 | SMTP server for billing notification emails. Emails are sent only when SMTP_HOST, SMTP_USER, SMTP_PASSWORD, and FROM_EMAIL are set. |
+| `SMTP_HOST` | string |  |  | v0.3.0 | SMTP server for billing notifications. SMTP_HOST and FROM_EMAIL are required. Set both SMTP_USER and SMTP_PASSWORD, or leave both empty with SMTP_ALLOW_INSECURE=true for an isolated relay. |
 | `SMTP_PORT` | integer | `587` |  | v0.3.0 | SMTP server port for billing notification emails. 0 uses 587. |
 | `SMTP_USER` | string |  |  | v0.3.0 | SMTP user for billing notification emails. |
 | `SMTP_PASSWORD` | string |  | secret | v0.3.0 | Password for SMTP_USER. |
