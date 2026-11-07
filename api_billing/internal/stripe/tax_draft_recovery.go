@@ -18,16 +18,21 @@ func recoverStripeTaxInvoices(ctx context.Context, sub *api.Subscription, profil
 	if sub.Customer != nil {
 		report.CustomerID = sub.Customer.ID
 	}
+	_, contextSHA, err := taxRecoverySubscriptionInputs(sub, report.ProfileSHA)
+	if err != nil {
+		return report, err
+	}
+	report.ContextSHA = contextSHA
 	var failures error
 	reported := map[string]bool{}
-	for _, status := range []string{"draft", "open"} {
+	for _, status := range []string{"draft"} {
 		p := &api.InvoiceListParams{Subscription: api.String(sub.ID), Status: api.String(status)}
 		p.Context = ctx
 		p.Limit = api.Int64(100)
 		iter := invoice.List(p)
 		for iter.Next() {
 			inv := iter.Invoice()
-			if inv.Status != api.InvoiceStatusDraft && inv.Status != api.InvoiceStatusOpen {
+			if inv.Status != api.InvoiceStatusDraft || !ownedTaxHeldInvoice(sub, inv) {
 				continue
 			}
 			if ownedTaxHeldInvoice(sub, inv) {
@@ -37,7 +42,7 @@ func recoverStripeTaxInvoices(ctx context.Context, sub *api.Subscription, profil
 					continue
 				}
 			}
-			evidence, fingerprint, inputErr := taxRecoveryInvoiceInputs(inv, report.ProfileSHA)
+			evidence, fingerprint, inputErr := taxRecoveryInvoiceInputs(inv, sub, report.ProfileSHA)
 			if inputErr != nil {
 				failures = errors.Join(failures, inputErr)
 				report.RetryPending = true
@@ -136,7 +141,7 @@ func recoverStripeTaxInvoice(ctx context.Context, sub *api.Subscription, inv *ap
 }
 
 func ownedTaxHeldInvoice(sub *api.Subscription, inv *api.Invoice) bool {
-	if sub == nil || inv == nil || inv.Parent == nil || inv.Parent.SubscriptionDetails == nil {
+	if sub == nil || sub.Customer == nil || inv == nil || inv.Customer == nil || inv.Customer.ID != sub.Customer.ID || inv.Parent == nil || inv.Parent.SubscriptionDetails == nil {
 		return false
 	}
 	details := inv.Parent.SubscriptionDetails

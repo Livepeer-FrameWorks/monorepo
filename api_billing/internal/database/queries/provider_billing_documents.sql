@@ -26,8 +26,8 @@ RETURNING id::text AS id,(original_pdf IS NOT NULL)::boolean AS has_pdf;
 
 -- name: GetProviderBillingDocument :one
 SELECT id::text AS id,document_kind,provider_document_id,original_number,source_invoice_id,status,currency,net_minor,vat_minor,gross_minor,
- COALESCE(reviewed_tax_status,tax_status)::text AS tax_status,tax_groups,supplier_snapshot,customer_snapshot,raw_facts,
- COALESCE(reviewed_tax_assessment,tax_assessment)::jsonb AS tax_assessment,original_pdf,pdf_sha256,issued_at,retention_until
+ tax_status::text AS tax_status,tax_groups,supplier_snapshot,customer_snapshot,raw_facts,
+ tax_assessment::jsonb AS tax_assessment,original_pdf,pdf_sha256,issued_at,retention_until
 FROM purser.provider_billing_documents
 WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND id=sqlc.arg(document_id)::text::uuid AND document_kind=sqlc.arg(document_kind);
 
@@ -41,15 +41,15 @@ SELECT profile FROM purser.provider_tax_profiles
 WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND profile_sha256=sqlc.arg(profile_sha256);
 
 -- name: FindProviderBillingDocument :one
-SELECT id::text AS id,provider_account_id,COALESCE(reviewed_tax_status,tax_status)::text AS tax_status,
+SELECT id::text AS id,provider_account_id,tax_status::text AS tax_status,
  (original_pdf IS NOT NULL)::boolean AS has_pdf, supplier_snapshot,customer_snapshot,
- COALESCE(reviewed_tax_assessment,tax_assessment)::jsonb AS tax_assessment
+ tax_assessment::jsonb AS tax_assessment
 FROM purser.provider_billing_documents
 WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND provider='stripe' AND provider_document_id=sqlc.arg(provider_document_id) AND document_kind=sqlc.arg(document_kind);
 
 -- name: GetProviderBillingDocumentTaxState :one
-SELECT COALESCE(reviewed_tax_status,tax_status)::text AS tax_status,
- COALESCE(reviewed_tax_assessment,tax_assessment)::jsonb AS tax_assessment
+SELECT tax_status::text AS tax_status,
+ tax_assessment::jsonb AS tax_assessment
 FROM purser.provider_billing_documents
 WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND id=sqlc.arg(document_id)::text::uuid AND document_kind=sqlc.arg(document_kind);
 

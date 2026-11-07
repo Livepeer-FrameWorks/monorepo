@@ -87,15 +87,24 @@ func TestNativeMolliePaymentsFreezeOneExclusiveTaxInvoice_RealPG(t *testing.T) {
 			}
 			payment.ID = "bad-" + tenant
 			payment.Amount.Value = "1.00"
-			if err = svc.issueMollieNativeTaxInvoice(ctx, tenant, payment); err == nil {
-				t.Fatal("payment differing from frozen gross terms accepted")
+			if err = svc.issueMollieNativeTaxInvoice(ctx, tenant, payment); err != nil {
+				t.Fatalf("confirmed cash mismatch stranded instead of retaining review: %v", err)
+			}
+			var mismatchStatus, mismatchCode string
+			var actual, expected int64
+			var split bool
+			if err = db.QueryRow(`SELECT tax_status,tax_decision->>'code',presentment_amount_cents,(tax_decision->>'expected_gross_minor')::bigint,net_eur_cents IS NOT NULL OR vat_eur_cents IS NOT NULL OR gross_eur_cents IS NOT NULL FROM purser.billing_invoices WHERE tenant_id=$1::uuid AND source_reference_id=$2`, tenant, payment.ID).Scan(&mismatchStatus, &mismatchCode, &actual, &expected, &split); err != nil {
+				t.Fatal(err)
+			}
+			if mismatchStatus != "review" || mismatchCode != "accepted_tax_gross_mismatch" || actual != 100 || expected != terms.GrossMinor || split {
+				t.Fatalf("cash discrepancy disappeared or became valid tax: %s %s actual%d expected%d split%v", mismatchStatus, mismatchCode, actual, expected, split)
 			}
 			payment.ID = "legacy-" + tenant
 			payment.Metadata = map[string]any{}
 			if err = svc.issueMollieNativeTaxInvoice(ctx, tenant, payment); err != nil {
 				t.Fatal(err)
 			}
-			if err = db.QueryRow(`SELECT count(*) FROM purser.billing_invoices WHERE tenant_id=$1::uuid`, tenant).Scan(&count); err != nil || count != 1 {
+			if err = db.QueryRow(`SELECT count(*) FROM purser.billing_invoices WHERE tenant_id=$1::uuid`, tenant).Scan(&count); err != nil || count != 2 {
 				t.Fatal("historical payment re-invoiced", err)
 			}
 		})

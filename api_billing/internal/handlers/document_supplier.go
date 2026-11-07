@@ -15,6 +15,17 @@ type DocumentSupplier struct {
 	RegistrationNumber string `json:"registration_number"`
 }
 
+// Complete reports whether all legal seller fields needed by an issued
+// document are present in the retained supplier identity.
+func (s DocumentSupplier) Complete() bool {
+	for _, value := range []string{s.Name, s.Address, s.VATNumber, s.RegistrationNumber} {
+		if strings.TrimSpace(value) == "" {
+			return false
+		}
+	}
+	return true
+}
+
 // ConfiguredDocumentSupplier is the supplier identity Purser is configured
 // with.
 func ConfiguredDocumentSupplier() DocumentSupplier {
@@ -31,10 +42,8 @@ func ConfiguredDocumentSupplier() DocumentSupplier {
 // states the supplier configured when it is rendered.
 func DocumentSupplierSnapshot() string {
 	supplier := ConfiguredDocumentSupplier()
-	for _, value := range []string{supplier.Name, supplier.Address, supplier.VATNumber, supplier.RegistrationNumber} {
-		if strings.TrimSpace(value) == "" {
-			return ""
-		}
+	if !supplier.Complete() {
+		return ""
 	}
 	encoded, err := json.Marshal(supplier)
 	if err != nil {

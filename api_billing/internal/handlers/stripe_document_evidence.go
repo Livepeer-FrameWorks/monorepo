@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"strings"
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
@@ -31,7 +30,7 @@ func (s *Service) stripeTaxEvidenceAtIssue(ctx context.Context, tenant string, d
 		return profile, []string{"tax_evidence_after_tax_point"}, nil
 	}
 	supplier := proof.Supplier
-	if strings.TrimSpace(supplier.Name) == "" || strings.TrimSpace(supplier.Address) == "" || strings.TrimSpace(supplier.VATNumber) == "" || strings.TrimSpace(supplier.RegistrationNumber) == "" ||
+	if !supplier.Complete() ||
 		billingstripe.SupplierTaxIdentity(supplier.Name, supplier.Address, supplier.VATNumber, supplier.RegistrationNumber) != profile.SupplierIdentity || proof.SupplierCountry != profile.SupplierCountry {
 		return profile, []string{"retained_supplier_evidence_invalid"}, nil
 	}

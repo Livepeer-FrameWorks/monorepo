@@ -23,16 +23,44 @@ type taxReviewBackend struct {
 
 type multipleTaxSubscriptionsBackend struct {
 	stripeUpgradeTaxBackend
-	failed error
-	reads  []string
+	failed  error
+	reads   []string
+	current *api.Subscription
 }
 
 func (b *multipleTaxSubscriptionsBackend) Call(method, path, key string, params api.ParamsContainer, out api.LastResponseSetter) error {
-	if _, ok := out.(*api.Subscription); ok && method == http.MethodGet {
-		b.reads = append(b.reads, path)
-		if path == "/v1/subscriptions/broken" {
-			return b.failed
+	if result, ok := out.(*api.Subscription); ok {
+		if method == http.MethodGet {
+			b.reads = append(b.reads, path)
+			if path == "/v1/subscriptions/broken" {
+				return b.failed
+			}
+			if b.current != nil {
+				*result = *b.current
+				return nil
+			}
+		} else if update := params.(*api.SubscriptionParams); len(update.DefaultTaxRates) == 0 {
+			if b.current == nil || api.StringValue(update.ProrationBehavior) != "none" || len(update.Items) != 0 || update.PauseCollection != nil {
+				return errors.New("recovery metadata changed subscription money or collection")
+			}
+			for key, value := range update.Metadata {
+				b.current.Metadata[key] = value
+			}
+			*result = *b.current
+			return nil
 		}
+		if err := b.stripeUpgradeTaxBackend.Call(method, path, key, params, out); err != nil {
+			return err
+		}
+		if method == http.MethodGet {
+			copy := *result
+			b.current = &copy
+		} else {
+			for key, value := range params.(*api.SubscriptionParams).Metadata {
+				b.current.Metadata[key] = value
+			}
+		}
+		return nil
 	}
 	return b.stripeUpgradeTaxBackend.Call(method, path, key, params, out)
 }
@@ -61,7 +89,7 @@ func TestStripeTaxReconciliationContinuesOtherTenantSubscriptions(t *testing.T) 
 	if err = jm.reconcileStripeTaxTenant(t.Context(), "tenant"); !errors.Is(err, failure) {
 		t.Fatalf("first failure was lost: %v", err)
 	}
-	if len(b.reads) != 2 || b.taxUpdates != 1 {
+	if len(b.reads) < 2 || b.reads[0] != "/v1/subscriptions/broken" || b.reads[1] != "/v1/subscriptions/sub" || b.taxUpdates != 1 {
 		t.Fatalf("one failed subscription skipped the remaining tenant: reads%v updates%d", b.reads, b.taxUpdates)
 	}
 	if err = mock.ExpectationsWereMet(); err != nil {

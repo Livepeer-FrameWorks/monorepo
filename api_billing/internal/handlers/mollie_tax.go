@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
@@ -148,27 +147,26 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 			return err
 		}
 		var profile billingstripe.TaxProfile
-		if err = json.Unmarshal(frozen, &profile); err != nil {
-			return err
-		}
 		var proof CryptoTaxAssessment
-		if err = json.Unmarshal(profile.Evidence, &proof); err != nil {
-			return err
+		acceptedReview := ""
+		if json.Unmarshal(frozen, &profile) != nil || json.Unmarshal(profile.Evidence, &proof) != nil {
+			acceptedReview = "accepted_tax_assessment_invalid"
+		} else if _, validationErr := proof.validatedDecision(); validationErr != nil {
+			acceptedReview = "accepted_tax_assessment_invalid"
+		} else if !proof.Supplier.Complete() {
+			acceptedReview = "accepted_supplier_identity_incomplete"
+		} else if profile.RateBPS != proof.Decision.RateBPS || profile.ReverseCharge != proof.Decision.ReverseCharge || profile.SupplierIdentity != billingstripe.SupplierTaxIdentity(proof.Supplier.Name, proof.Supplier.Address, proof.Supplier.VATNumber, proof.Supplier.RegistrationNumber) {
+			acceptedReview = "accepted_tax_terms_mismatch"
 		}
-		if _, err = proof.validatedDecision(); err != nil {
-			return fmt.Errorf("native Mollie payment has no authoritative accepted tax decision: %w", err)
-		}
-		for _, value := range []string{proof.Supplier.Name, proof.Supplier.Address, proof.Supplier.VATNumber, proof.Supplier.RegistrationNumber} {
-			if strings.TrimSpace(value) == "" {
-				return fmt.Errorf("native Mollie payment lacks complete accepted supplier identity")
+		var vat int64
+		var acceptedGross sql.NullInt64
+		if acceptedReview == "" {
+			var expected int64
+			vat, expected = exclusiveTax(net, profile.RateBPS)
+			acceptedGross = sql.NullInt64{Int64: expected, Valid: true}
+			if expected != gross {
+				acceptedReview = "accepted_tax_gross_mismatch"
 			}
-		}
-		if profile.RateBPS != proof.Decision.RateBPS || profile.ReverseCharge != proof.Decision.ReverseCharge || profile.SupplierIdentity != billingstripe.SupplierTaxIdentity(proof.Supplier.Name, proof.Supplier.Address, proof.Supplier.VATNumber, proof.Supplier.RegistrationNumber) {
-			return fmt.Errorf("native Mollie payment tax terms disagree with accepted evidence")
-		}
-		vat, expected := exclusiveTax(net, profile.RateBPS)
-		if expected != gross {
-			return fmt.Errorf("mollie subscription payment differs from frozen gross tax terms")
 		}
 		at := *payment.PaidAt
 		row, err := q.InsertNativeMollieTaxInvoice(ctx, purserdb.InsertNativeMollieTaxInvoiceParams{TenantID: tenant, GrossMinor: gross, NetMinor: net, TaxPoint: at, PaymentID: sql.NullString{String: payment.ID, Valid: true}})
@@ -177,6 +175,12 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 		}
 		if err != nil {
 			return err
+		}
+		if acceptedReview != "" {
+			if err = retainNativeMollieTaxReviewTx(ctx, tx, tenant, row.ID, payment.ID, sha, profile, proof, frozen, net, gross, acceptedGross, at, acceptedReview); err != nil {
+				return err
+			}
+			return q.RecordNativeMollieInvoicePayment(ctx, purserdb.RecordNativeMollieInvoicePaymentParams{TenantID: tenant, InvoiceID: row.ID, GrossMinor: gross, PaymentID: sql.NullString{String: payment.ID, Valid: true}, PaidAt: sql.NullTime{Time: at, Valid: true}})
 		}
 		reviewReason := ""
 		accepted, normalizationErr := normalizeProviderTaxProfile(profile)

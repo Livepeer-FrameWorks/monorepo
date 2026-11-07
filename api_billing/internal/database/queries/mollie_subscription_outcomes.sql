@@ -9,3 +9,10 @@ ON CONFLICT(provider,event_id) DO NOTHING;
 SELECT id::text FROM purser.billing_invoices
 WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid
   AND source_reference_type='mollie_native_payment' AND source_reference_id=sqlc.arg(payment_id);
+
+-- name: NativeMollieInvoiceHasAmountReview :one
+SELECT EXISTS (
+ SELECT 1 FROM purser.billing_invoices
+ WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND id=sqlc.arg(invoice_id)::text::uuid
+  AND tax_decision->>'code'='accepted_tax_gross_mismatch'
+)::boolean AS amount_review;

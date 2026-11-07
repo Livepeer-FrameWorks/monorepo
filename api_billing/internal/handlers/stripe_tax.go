@@ -55,6 +55,7 @@ func AssessStripeTaxProfile(ctx context.Context, db *sql.DB, tenant, clientIP st
 		return nil, err
 	}
 	p := &billingstripe.TaxProfile{Name: profile.Name, Company: profile.Company, Email: profile.Email, Street: address.Street, City: address.City, PostalCode: address.PostalCode, Country: address.Country, VATNumber: vatNumber, RateBPS: d.RateBPS, ReverseCharge: d.ReverseCharge, Wording: d.Wording, SupplierCountry: rt.SupplierCountry, SupplierIdentity: billingstripe.SupplierTaxIdentity(rt.SupplierName, rt.SupplierAddress, rt.SupplierVATNumber, rt.SupplierRegistrationNumber), Evidence: evidence}
+	p.PolicyReference, p.PolicyValidFrom, p.PolicyValidUntil = d.PolicyReference, d.PolicyValidFrom, d.PolicyValidUntil
 	normalized, err := normalizeProviderTaxProfile(*p)
 	if err != nil {
 		return nil, billingtax.Review("vat_number_invalid", "Check the VAT number in your billing details")

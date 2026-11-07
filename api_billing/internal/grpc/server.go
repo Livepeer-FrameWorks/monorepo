@@ -7639,23 +7639,30 @@ func (s *PurserServer) GetBillingDetails(ctx context.Context, req *purserpb.GetB
 	}
 
 	if row.BillingEmail.Valid {
-		details.Email = row.BillingEmail.String
+		details.Email = strings.TrimSpace(row.BillingEmail.String)
 	}
 	if row.BillingName.Valid {
-		details.Name = row.BillingName.String
+		details.Name = strings.TrimSpace(row.BillingName.String)
 	}
 	if row.BillingCompany.Valid {
-		details.Company = row.BillingCompany.String
+		details.Company = strings.TrimSpace(row.BillingCompany.String)
 	}
 	if row.TaxID.Valid {
-		details.VatNumber = row.TaxID.String
+		details.VatNumber = strings.TrimSpace(row.TaxID.String)
 	}
 	details.Address = scanBillingAddress(row.BillingAddress)
+	if address := details.Address; address != nil {
+		address.Street = strings.TrimSpace(address.Street)
+		address.City = strings.TrimSpace(address.City)
+		address.State = strings.TrimSpace(address.State)
+		address.PostalCode = strings.TrimSpace(address.PostalCode)
+		address.Country = countries.Normalize(address.Country)
+	}
 
 	// IsComplete means the profile can be used for a full customer invoice.
 	details.IsComplete = details.Name != "" && details.Email != "" && details.Address != nil &&
 		details.Address.Street != "" && details.Address.City != "" &&
-		details.Address.PostalCode != "" && details.Address.Country != ""
+		details.Address.PostalCode != "" && countries.IsValid(details.Address.Country)
 
 	return details, nil
 }

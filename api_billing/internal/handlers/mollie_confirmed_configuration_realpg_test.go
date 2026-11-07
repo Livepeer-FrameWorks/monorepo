@@ -97,10 +97,19 @@ func TestNativeMollieConfirmedPaymentRetainsAcceptedSupplier_RealPG(t *testing.T
 	}
 	payment.ID = "confirmed-with-incomplete-supplier"
 	meta["frameworks_tax_profile"] = missingSHA
-	if err = svc.issueMollieNativeTaxInvoice(t.Context(), tenant, payment); err == nil {
-		t.Fatal("incomplete accepted supplier identity was invented at issuance")
+	if err = svc.issueMollieNativeTaxInvoice(t.Context(), tenant, payment); err != nil {
+		t.Fatalf("incomplete accepted supplier stranded confirmed cash instead of retaining review: %v", err)
 	}
-	if _, err = purserdb.New(db).GetNativeMollieInvoiceID(t.Context(), purserdb.GetNativeMollieInvoiceIDParams{TenantID: tenant, PaymentID: sql.NullString{String: payment.ID, Valid: true}}); err != sql.ErrNoRows {
-		t.Fatalf("incomplete accepted proof produced a tax invoice: %v", err)
+	invoice, err := purserdb.New(db).GetNativeMollieInvoiceID(t.Context(), purserdb.GetNativeMollieInvoiceIDParams{TenantID: tenant, PaymentID: sql.NullString{String: payment.ID, Valid: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status, retainedRegistration string
+	var taxSplit bool
+	if err = db.QueryRow(`SELECT tax_status,COALESCE(supplier_snapshot->>'registration_number',''),net_eur_cents IS NOT NULL OR vat_eur_cents IS NOT NULL OR gross_eur_cents IS NOT NULL FROM purser.billing_invoices WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenant, invoice).Scan(&status, &retainedRegistration, &taxSplit); err != nil {
+		t.Fatal(err)
+	}
+	if status != "review" || retainedRegistration != "" || taxSplit {
+		t.Fatalf("incomplete accepted proof invented seller/tax facts: status%s registration%q taxSplit%v", status, retainedRegistration, taxSplit)
 	}
 }
