@@ -64,9 +64,11 @@ WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND stripe_customer_id IS NOT NU
 
 -- name: ResolveProviderTaxReview :execrows
 UPDATE purser.crypto_accounting_anomalies
-SET status='resolved',resolved_at=NOW(),resolution_note=sqlc.arg(note)::text
+SET status='resolved',resolved_at=NOW(),resolution_note=sqlc.arg(note)::text,
+    evidence_json=evidence_json || '{"provider_tax_sync_complete":true}'::jsonb
 WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND network='stripe' AND kind='provider_tax_review'
-  AND reference_type=sqlc.arg(reference_type)::text AND reference_id=sqlc.arg(reference_id)::text AND status='open';
+  AND reference_type=sqlc.arg(reference_type)::text AND reference_id=sqlc.arg(reference_id)::text
+  AND (status='open' OR NOT evidence_json @> '{"provider_tax_sync_complete":true}'::jsonb);
 
 -- name: ResolveProviderDocumentTaxReview :execrows
 UPDATE purser.crypto_accounting_anomalies

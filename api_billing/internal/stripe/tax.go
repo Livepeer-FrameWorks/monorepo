@@ -13,6 +13,7 @@ import (
 
 	billingtax "frameworks/api_billing/internal/tax"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/countries"
 	api "github.com/stripe/stripe-go/v85"
 	"github.com/stripe/stripe-go/v85/customer"
 	"github.com/stripe/stripe-go/v85/subscription"
@@ -57,21 +58,41 @@ func (p TaxProfile) Fingerprint() string {
 	return hex.EncodeToString(digest[:])
 }
 
-func (p TaxProfile) incompleteDutchVATFallback() bool {
-	return p.IncompleteProfile && p.SupplierCountry == "NL" && p.RateBPS == 2100 && !p.ReverseCharge
+func (p TaxProfile) recurringTaxFallback() bool {
+	if !p.IncompleteProfile || !countries.IsValid(p.SupplierCountry) || p.RateBPS <= 0 || p.RateBPS > 10000 || p.ReverseCharge {
+		return false
+	}
+	var proof struct {
+		ReviewRequired  bool   `json:"review_required"`
+		SupplierCountry string `json:"supplier_country"`
+		Decision        struct {
+			Country                          string
+			RateBPS                          int
+			ReverseCharge                    bool
+			Source, CheckedOn, EffectiveFrom string
+		} `json:"decision"`
+	}
+	if json.Unmarshal(p.Evidence, &proof) != nil {
+		return false
+	}
+	if _, err := time.Parse(time.DateOnly, proof.Decision.CheckedOn); err != nil {
+		return false
+	}
+	if _, err := time.Parse(time.DateOnly, proof.Decision.EffectiveFrom); err != nil {
+		return false
+	}
+	return proof.ReviewRequired && proof.SupplierCountry == p.SupplierCountry && proof.Decision.Country == p.SupplierCountry && proof.Decision.RateBPS == p.RateBPS && !proof.Decision.ReverseCharge && strings.TrimSpace(proof.Decision.Source) != "" && proof.Decision.CheckedOn != "" && proof.Decision.EffectiveFrom != ""
 }
 
 func (c *Client) PrepareCustomerTax(ctx context.Context, tenant, customerID string, p TaxProfile) (string, error) {
 	identityComplete := p.Name != "" && p.Email != "" && p.Street != "" && p.City != "" && p.PostalCode != "" && p.Country != ""
-	fallback := p.incompleteDutchVATFallback()
+	fallback := p.recurringTaxFallback()
 	if tenant == "" || customerID == "" || (!identityComplete && !fallback) || (p.IncompleteProfile && !fallback) || p.SupplierCountry == "" || p.SupplierIdentity == "" || p.RateBPS < 0 || p.RateBPS > 10000 || (p.ReverseCharge && (p.RateBPS != 0 || p.VATNumber == "")) {
 		return "", fmt.Errorf("complete assessed Stripe tax profile required")
 	}
 	get := &api.CustomerParams{}
 	get.Context = ctx
-	if !fallback {
-		get.AddExpand("tax_ids")
-	}
+	get.AddExpand("tax_ids")
 	current, err := customer.Get(customerID, get)
 	if err != nil {
 		return "", err
@@ -79,7 +100,7 @@ func (c *Client) PrepareCustomerTax(ctx context.Context, tenant, customerID stri
 	if current.Metadata["tenant_id"] != tenant {
 		return "", fmt.Errorf("stripe customer does not belong to the tenant")
 	}
-	if !fallback && current.TaxIDs != nil && current.TaxIDs.HasMore {
+	if current.TaxIDs != nil && current.TaxIDs.HasMore {
 		list := &api.TaxIDListParams{Customer: api.String(customerID)}
 		list.Context = ctx
 		list.Limit = api.Int64(100)
@@ -102,22 +123,46 @@ func (c *Client) PrepareCustomerTax(ctx context.Context, tenant, customerID stri
 		footer += "\n" + p.Wording
 	}
 	exempt := "none"
-	addressMatches := fallback || current.Address != nil && current.Address.Line1 == p.Street && current.Address.City == p.City && current.Address.PostalCode == p.PostalCode && current.Address.Country == p.Country
+	address := &api.Address{}
+	if current.Address != nil {
+		address = current.Address
+	}
+	fieldMatches := func(saved, provider string) bool {
+		return fallback && strings.TrimSpace(saved) == "" || saved == provider
+	}
+	addressMatches := fieldMatches(p.Street, address.Line1) && fieldMatches(p.City, address.City) && fieldMatches(p.PostalCode, address.PostalCode) && fieldMatches(p.Country, address.Country)
 	footerMatches := current.InvoiceSettings != nil && current.InvoiceSettings.Footer == footer
-	if (!fallback && (current.Name != legalName || current.Email != p.Email)) || !addressMatches || string(current.TaxExempt) != exempt || !footerMatches {
+	if !fieldMatches(legalName, current.Name) || !fieldMatches(p.Email, current.Email) || !addressMatches || string(current.TaxExempt) != exempt || !footerMatches {
 		params := &api.CustomerParams{TaxExempt: api.String(exempt), InvoiceSettings: &api.CustomerInvoiceSettingsParams{Footer: api.String(footer)}}
-		if !fallback {
-			params.Name, params.Email = api.String(legalName), api.String(p.Email)
-			params.Address = &api.AddressParams{Line1: api.String(p.Street), City: api.String(p.City), PostalCode: api.String(p.PostalCode), Country: api.String(p.Country)}
+		if !fallback || strings.TrimSpace(legalName) != "" {
+			params.Name = api.String(legalName)
+		}
+		if !fallback || strings.TrimSpace(p.Email) != "" {
+			params.Email = api.String(p.Email)
+		}
+		if !addressMatches {
+			params.Address = &api.AddressParams{}
+			if !fallback || strings.TrimSpace(p.Street) != "" {
+				params.Address.Line1 = api.String(p.Street)
+			}
+			if !fallback || strings.TrimSpace(p.City) != "" {
+				params.Address.City = api.String(p.City)
+			}
+			if !fallback || strings.TrimSpace(p.PostalCode) != "" {
+				params.Address.PostalCode = api.String(p.PostalCode)
+			}
+			if !fallback || strings.TrimSpace(p.Country) != "" {
+				params.Address.Country = api.String(p.Country)
+			}
 		}
 		params.Context = ctx
 		if _, err = customer.Update(customerID, params); err != nil {
 			return "", err
 		}
 	}
-	if !fallback && current.TaxIDs != nil {
+	if current.TaxIDs != nil {
 		for _, id := range current.TaxIDs.Data {
-			if id.Type == api.TaxIDTypeEUVAT && (!billingtax.IsEU(p.Country) || id.Value != p.VATNumber) {
+			if id.Type == api.TaxIDTypeEUVAT && (fallback || !billingtax.IsEU(p.Country) || id.Value != p.VATNumber) {
 				params := &api.TaxIDParams{Customer: api.String(customerID)}
 				params.Context = ctx
 				if _, err = taxid.Del(id.ID, params); err != nil {
@@ -204,13 +249,18 @@ func (c *Client) ReconcileSubscriptionTax(ctx context.Context, tenant, customerI
 		return report, err
 	}
 	if prior := state.Subscription.Metadata[taxRecoveryContext]; !state.RecoveryPending && prior != contextSHA {
-		pending := &api.SubscriptionParams{Metadata: map[string]string{"frameworks_tax_recovery_pending": "true"}, ProrationBehavior: api.String("none")}
+		changes := map[string]string{}
+		if _, err = newTaxRecoveryWork(state.Subscription.Metadata, changes); err != nil {
+			return report, err
+		}
+		pending := &api.SubscriptionParams{Metadata: changes, ProrationBehavior: api.String("none")}
 		pending.Context = ctx
 		if _, err = subscription.Update(subscriptionID, pending); err != nil {
 			report.RetryPending = true
 			return report, err
 		}
 		report.RecoveryPending = true
+		state.Subscription.Metadata = mergeTaxMetadata(state.Subscription.Metadata, changes)
 	}
 	if !report.RecoveryPending {
 		return report, nil
@@ -230,7 +280,19 @@ func (c *Client) syncSubscriptionTax(ctx context.Context, tenant, customerID, su
 	}
 	activeReview := current.Metadata["frameworks_tax_review"] == "true"
 	legacyHoldMarker := current.Metadata["frameworks_tax_hold_started"] != ""
-	recoveryPending := activeReview || legacyHoldMarker || current.Metadata["frameworks_tax_recovery_pending"] == "true"
+	workKeys := taxRecoveryWorkKeys(current.Metadata)
+	legacyPending := current.Metadata[legacyTaxRecoveryPending] == "true"
+	recoveryPending := activeReview || legacyHoldMarker || legacyPending || len(workKeys) > 0
+	var resumeMetadata map[string]string
+	if activeReview || legacyHoldMarker || legacyPending {
+		resumeMetadata = map[string]string{"frameworks_tax_review": "", "frameworks_tax_pause_owned": "", "frameworks_tax_hold_started": "", legacyTaxRecoveryPending: ""}
+		if activeReview || legacyHoldMarker || len(workKeys) == 0 {
+			futureMetadata := mergeTaxMetadata(current.Metadata, map[string]string{"frameworks_tax_profile": p.Fingerprint()})
+			if _, err = newTaxRecoveryWork(futureMetadata, resumeMetadata); err != nil {
+				return nil, err
+			}
+		}
+	}
 	var items []*api.SubscriptionItem
 	if current.Items != nil {
 		items = current.Items.Data
@@ -285,8 +347,8 @@ func (c *Client) syncSubscriptionTax(ctx context.Context, tenant, customerID, su
 	// Correct future renewals can resume independently of older invoice debt.
 	// A pending marker retains crash-safe worker repair without repeatedly
 	// scanning every clean subscription or keeping an active hold forever.
-	if activeReview || legacyHoldMarker {
-		resume := &api.SubscriptionParams{Metadata: map[string]string{"frameworks_tax_review": "", "frameworks_tax_pause_owned": "", "frameworks_tax_hold_started": "", "frameworks_tax_recovery_pending": "true"}, ProrationBehavior: api.String("none")}
+	if resumeMetadata != nil {
+		resume := &api.SubscriptionParams{Metadata: resumeMetadata, ProrationBehavior: api.String("none")}
 		if current.Metadata["frameworks_tax_pause_owned"] == "true" && current.PauseCollection != nil && current.PauseCollection.Behavior == api.SubscriptionPauseCollectionBehaviorKeepAsDraft && current.PauseCollection.ResumesAt == 0 {
 			resume.UnsetFields = []api.SubscriptionParamsUnsetField{api.SubscriptionParamsUnsetFieldPauseCollection}
 		}
@@ -303,11 +365,8 @@ func (c *Client) syncSubscriptionTax(ctx context.Context, tenant, customerID, su
 		snapshot.Metadata[key] = value
 	}
 	snapshot.Metadata["frameworks_tax_profile"] = fingerprint
-	if activeReview || legacyHoldMarker {
-		delete(snapshot.Metadata, "frameworks_tax_review")
-		delete(snapshot.Metadata, "frameworks_tax_pause_owned")
-		delete(snapshot.Metadata, "frameworks_tax_hold_started")
-		snapshot.Metadata["frameworks_tax_recovery_pending"] = "true"
+	if resumeMetadata != nil {
+		snapshot.Metadata = mergeTaxMetadata(snapshot.Metadata, resumeMetadata)
 		if current.Metadata["frameworks_tax_pause_owned"] == "true" && current.PauseCollection != nil && current.PauseCollection.Behavior == api.SubscriptionPauseCollectionBehaviorKeepAsDraft && current.PauseCollection.ResumesAt == 0 {
 			snapshot.PauseCollection = nil
 		}

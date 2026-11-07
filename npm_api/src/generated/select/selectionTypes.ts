@@ -254,6 +254,7 @@ export const scalarFields = {
         "company",
         "vatNumber",
         "isComplete",
+        "taxReviewRequired",
         "updatedAt",
         "presentmentCurrency",
         "__typename"

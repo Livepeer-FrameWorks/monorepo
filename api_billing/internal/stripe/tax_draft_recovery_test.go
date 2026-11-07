@@ -193,7 +193,7 @@ func TestTaxPreflightLeavesPendingInvoiceWorkToBillingWorker(t *testing.T) {
 	if b.invoiceListCalls != 0 {
 		t.Fatal("interactive tax preflight scanned or repaired old invoice debt")
 	}
-	if b.updatedSub == nil || b.updatedSub.Metadata["frameworks_tax_recovery_pending"] != "true" || b.updatedSub.Metadata["frameworks_tax_hold_started"] != "" {
+	if b.updatedSub == nil || len(taxRecoveryWorkKeys(b.updatedSub.Metadata)) == 0 || b.updatedSub.Metadata["frameworks_tax_hold_started"] != "" {
 		t.Fatal("resumed tax preflight lost pending worker repair or retained active hold")
 	}
 }

@@ -469,7 +469,19 @@ class Provider:
                     # existing SubscriptionItemList, including an empty update.
                     values.pop("items", None)
                     previous_subscription = copy.deepcopy(self.objects[ident])
-                for field in ("metadata", "invoice_settings", "address", "automatic_tax"):
+                if isinstance(values.get("metadata"), dict):
+                    merged = dict(self.objects[ident].get("metadata", {}))
+                    for name, value in values["metadata"].items():
+                        if len(name) > 40 or "[" in name or "]" in name or len(str(value)) > 500:
+                            return self.invalid("invalid metadata key or value length")
+                        if value == "":
+                            merged.pop(name, None)
+                        else:
+                            merged[name] = value
+                    if len(merged) > 50:
+                        return self.invalid("metadata has more than 50 keys")
+                    values["metadata"] = merged
+                for field in ("invoice_settings", "address", "automatic_tax"):
                     if isinstance(values.get(field), dict):
                         values[field] = {**self.objects[ident].get(field, {}), **values[field]}
                 self.objects[ident].update(values)

@@ -44,6 +44,10 @@ func TestNativeMollieIncompleteRecurringProfileCollectsDutchVAT_RealPG(t *testin
 		return 200, copyState()
 	})
 	fixture.route("PATCH", path, func(request recordedProviderRequest) (int, any) {
+		var reviewsBeforeCollection int
+		if err := db.QueryRow(`SELECT count(*) FROM purser.crypto_accounting_anomalies WHERE tenant_id=$1::uuid AND kind='provider_tax_review' AND network='mollie' AND reference_type='mollie_subscription' AND reference_id='subscription' AND status='open'`, tenant).Scan(&reviewsBeforeCollection); err != nil || reviewsBeforeCollection != 1 {
+			t.Errorf("Mollie fallback synchronized collection before durable subscription review: count%d err%v", reviewsBeforeCollection, err)
+		}
 		var body map[string]any
 		if err := json.Unmarshal(request.body, &body); err != nil {
 			return 400, map[string]string{"error": "invalid request"}
@@ -86,15 +90,28 @@ func TestNativeMollieIncompleteRecurringProfileCollectsDutchVAT_RealPG(t *testin
 				t.Fatal(err)
 			}
 		}
-		var invoices, reviewed, notices, payments int
-		if err = db.QueryRow(`SELECT (SELECT count(*) FROM purser.billing_invoices WHERE tenant_id=$1::uuid AND net_eur_cents=10000 AND vat_eur_cents=2100 AND gross_eur_cents=12100),(SELECT count(*) FROM purser.billing_invoices WHERE tenant_id=$1::uuid AND COALESCE((tax_decision->>'review_required')::boolean,false)),(SELECT count(*) FROM purser.crypto_accounting_anomalies WHERE tenant_id=$1::uuid AND kind='provider_tax_document_review' AND status='open'),(SELECT count(*) FROM purser.billing_payments WHERE tenant_id=$1::uuid AND status='confirmed')`, tenant).Scan(&invoices, &reviewed, &notices, &payments); err != nil {
+		var invoices, reviewed, notices, payments, emails int
+		if err = db.QueryRow(`SELECT (SELECT count(*) FROM purser.billing_invoices WHERE tenant_id=$1::uuid AND net_eur_cents=10000 AND vat_eur_cents=2100 AND gross_eur_cents=12100),(SELECT count(*) FROM purser.billing_invoices WHERE tenant_id=$1::uuid AND COALESCE((tax_decision->>'review_required')::boolean,false)),(SELECT count(*) FROM purser.crypto_accounting_anomalies WHERE tenant_id=$1::uuid AND kind='provider_tax_document_review' AND status='open'),(SELECT count(*) FROM purser.billing_payments WHERE tenant_id=$1::uuid AND status='confirmed'),(SELECT count(*) FROM purser.invoice_email_outbox WHERE tenant_id=$1::uuid)`, tenant).Scan(&invoices, &reviewed, &notices, &payments, &emails); err != nil {
 			t.Fatal(err)
 		}
 		if invoices != renewal || reviewed != renewal || notices != 1 || payments != renewal {
 			t.Fatalf("new fallback renewal lost/reused review or money: invoices%d reviewed%d openNotices%d payments%d", invoices, reviewed, notices, payments)
 		}
+		if emails != renewal {
+			t.Errorf("fallback renewal omitted the requested invoice email: emails%d want%d", emails, renewal)
+		}
 		if _, err = db.Exec(`UPDATE purser.crypto_accounting_anomalies SET status='resolved',resolution_note='Original renewal reviewed' WHERE tenant_id=$1::uuid AND kind='provider_tax_document_review' AND status='open'`, tenant); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if _, err = db.Exec(`UPDATE purser.tenant_subscriptions SET billing_name='Verified Buyer',billing_customer_type='business',tax_id=NULL,billing_address='{"street":"Main1","city":"Leiden","postal_code":"2332ED","country":"NL"}' WHERE tenant_id=$1::uuid`, tenant); err != nil {
+		t.Fatal(err)
+	}
+	if err = jobs.reconcileMollieTaxTenant(t.Context(), tenant); err != nil {
+		t.Fatal(err)
+	}
+	var openSubscriptionReviews int
+	if err = db.QueryRow(`SELECT count(*) FROM purser.crypto_accounting_anomalies WHERE tenant_id=$1::uuid AND kind='provider_tax_review' AND network='mollie' AND reference_type='mollie_subscription' AND reference_id='subscription' AND status='open'`, tenant).Scan(&openSubscriptionReviews); err != nil || openSubscriptionReviews != 0 {
+		t.Fatalf("complete synchronized Mollie profile retained an obsolete subscription review: count %d err %v", openSubscriptionReviews, err)
 	}
 }

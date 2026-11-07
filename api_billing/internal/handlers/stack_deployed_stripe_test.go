@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -340,7 +341,7 @@ func TestStackDeployedStripeHeldRenewalRecovery(t *testing.T) {
 	// The deployed reconciliation worker runs every five minutes. Exercise its
 	// real cadence instead of replacing it with a test-only production trigger.
 	ctx, conn, db, tenant := stackBillingConnectionTimeout(t, 15*time.Minute)
-	fallback := prepareStackRecurringFallback(t, ctx, conn, db)
+	fallbacks := prepareStackRecurringFallbacks(t, ctx, conn, db)
 	var tier string
 	if err := db.QueryRowContext(ctx, `SELECT id::text FROM purser.billing_tiers WHERE tier_name='supporter'`).Scan(&tier); err != nil {
 		t.Fatal(err)
@@ -393,8 +394,8 @@ func TestStackDeployedStripeHeldRenewalRecovery(t *testing.T) {
 	}
 	stackProviderControl(t, ctx, "payment_behavior", map[string]string{"customer_id": beforeHold.Customer, "outcome": "succeeded"}, &configured)
 	stackProviderControl(t, ctx, "vies", map[string]any{"vat_number": "U99999999", "valid": false}, &configured)
-	typeName, vat := "business", "ATU99999999"
-	_, err = purserpb.NewSubscriptionServiceClient(conn).UpdateBillingDetails(ctx, &purserpb.UpdateBillingDetailsRequest{TenantId: tenant, CustomerType: &typeName, VatNumber: &vat, Address: &purserpb.BillingAddress{Street: "1 Main Street", City: "Vienna", PostalCode: "1000", Country: "AT"}})
+	typeName, vat := "consumer", ""
+	_, err = purserpb.NewSubscriptionServiceClient(conn).UpdateBillingDetails(ctx, &purserpb.UpdateBillingDetailsRequest{TenantId: tenant, CustomerType: &typeName, VatNumber: &vat, Address: &purserpb.BillingAddress{Street: "1 Main Street", City: "Oslo", PostalCode: "0150", Country: "NO"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,10 +419,12 @@ func TestStackDeployedStripeHeldRenewalRecovery(t *testing.T) {
 			}
 		}
 	}
-	wait("hold unproven VAT subscription", func(sub subscriptionSnapshot, _ map[string]json.RawMessage) bool {
+	wait("hold a complete profile lacking its destination policy", func(sub subscriptionSnapshot, _ map[string]json.RawMessage) bool {
 		return sub.Status == "past_due" && sub.Pause != nil && sub.Pause.Behavior == "keep_as_draft" && sub.Metadata["frameworks_tax_review"] == "true" && sub.Metadata["frameworks_tax_pause_owned"] == "true"
 	})
-	verifyStackRecurringFallback(t, ctx, conn, db, fallback)
+	for _, fallback := range fallbacks {
+		verifyStackRecurringFallback(t, ctx, conn, db, fallback)
+	}
 	stackProviderControl(t, ctx, "renew", map[string]string{"subscription_id": subscription}, &events)
 	var draftEvent struct {
 		Data struct {
@@ -500,7 +503,12 @@ func TestStackDeployedStripeHeldRenewalRecovery(t *testing.T) {
 		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM purser.crypto_accounting_anomalies WHERE tenant_id=$1 AND kind='provider_invoice_tax_review' AND network='stripe' AND reference_type='stripe_invoice' AND reference_id=$2 AND status='open' AND COALESCE(evidence_json->>'code','')<>'' AND length(COALESCE(evidence_json->>'input_fingerprint',''))=64`, tenant, adjustmentID).Scan(&reviews); err != nil {
 			t.Fatal(err)
 		}
-		return sub.Pause == nil && sub.Metadata["frameworks_tax_review"] != "true" && sub.Metadata["frameworks_tax_recovery_pending"] == "" && reviews == 1
+		for key, value := range sub.Metadata {
+			if value != "" && (key == "frameworks_tax_recovery_pending" || strings.HasPrefix(key, "fwtx_")) {
+				return false
+			}
+		}
+		return sub.Pause == nil && sub.Metadata["frameworks_tax_review"] != "true" && reviews == 1
 	})
 	var requests []struct{ Method, Path string }
 	stackProviderControl(t, ctx, "requests", nil, &requests)

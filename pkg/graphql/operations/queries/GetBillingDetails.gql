@@ -13,6 +13,7 @@ query GetBillingDetails {
       country
     }
     isComplete
+    taxReviewRequired
     updatedAt
     presentmentCurrency
   }

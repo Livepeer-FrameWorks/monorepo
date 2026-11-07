@@ -36,6 +36,7 @@ type TaxRecoveryReport struct {
 	RecoveryPending bool               `json:"recovery_pending"`
 	RetryPending    bool               `json:"retry_pending"`
 	Reviews         []TaxInvoiceReview `json:"reviews"`
+	WorkKeys        []string           `json:"work_keys"`
 }
 
 // Only inputs used to classify the invoice enter the fingerprint. Transport
@@ -203,25 +204,19 @@ func (c *Client) AckTaxRecoveryReport(ctx context.Context, report *TaxRecoveryRe
 	if failures != nil || report.RetryPending {
 		return failures
 	}
-	current := sub
-	if len(report.Reviews) > 0 {
-		// Invoice acknowledgement has no compare-and-swap with subscription
-		// metadata. Recheck after those writes so newer collection work stays
-		// pending; the normal no-review path already has a fresh owner check.
-		get := &api.SubscriptionParams{}
-		get.Context = ctx
-		current, err = subscription.Get(report.SubscriptionID, get)
-		if err != nil {
-			return err
+	// Metadata has no compare-and-swap. Each resume owns an immutable key;
+	// deleting only this report's keys leaves concurrent newer work intact,
+	// including work created after our last provider read.
+	changes := map[string]string{taxRecoveryContext: report.ContextSHA}
+	for _, key := range report.WorkKeys {
+		if !isTaxRecoveryWorkKey(key) {
+			return errors.New("invalid tax recovery work key")
 		}
-		if err = validateTaxRecoveryReportSubscription(report, current); err != nil {
-			return err
+		if sub.Metadata[key] != "" {
+			changes[key] = ""
 		}
 	}
-	if current.Metadata["frameworks_tax_recovery_pending"] != "true" {
-		return nil
-	}
-	clear := &api.SubscriptionParams{Metadata: map[string]string{"frameworks_tax_recovery_pending": "", taxRecoveryContext: report.ContextSHA}, ProrationBehavior: api.String("none")}
+	clear := &api.SubscriptionParams{Metadata: changes, ProrationBehavior: api.String("none")}
 	clear.Context = ctx
 	_, err = subscription.Update(report.SubscriptionID, clear)
 	return err

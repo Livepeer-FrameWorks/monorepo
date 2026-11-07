@@ -155,15 +155,23 @@ collection hold. After billing details are corrected, Purser synchronizes future
 tax rates and releases its own pause. Older invoices that still need review do
 not prevent correctly taxed future renewals or other subscriptions from running.
 Checkout and tier-upgrade preflights synchronize future tax settings; background
-workers handle older held invoices. Completed recovery clears its pending marker,
-so ordinary reconciliations do not keep listing historical invoices.
+workers handle older held invoices. Completed recovery acknowledges only its own
+pending work, so a concurrent hold cannot lose its recovery and ordinary
+reconciliations do not keep listing historical invoices.
 For a Dutch supplier, existing recurring subscriptions with incomplete billing
-profiles collect 21% VAT on top of the net price through Stripe and Mollie, without
-a collection hold. Reverse charge and non-EU zero VAT require a complete,
-validated profile. A completion prompt remains on the customer's Billing page,
-and every newly issued fallback renewal has its own operator review. Resolving
-an older document's review does not hide the next fallback renewal. Completing
-the legal name, email and address lets the worker use the validated treatment.
+profiles or an invalid VAT claim collect Dutch VAT on top of the net price through
+Stripe and Mollie, without a collection hold. Purser selects this treatment before
+location-policy checks for an incomplete profile. It loads the effective Dutch
+rate, currently 21%, and freezes the rate's source and effective date. Temporary
+database or VIES failures remain retryable.
+Reverse charge and non-EU zero VAT require a complete, validated profile. Stripe
+removes retained EU VAT IDs during this fallback and synchronizes the customer
+details that are present. A completion or VAT-review prompt remains on the
+customer's Billing page, and every newly issued fallback renewal has its own
+operator review. Mollie records the subscription review before updating collection
+terms and sends the issued invoice email. Resolving an older document's review
+does not hide the next fallback renewal. Correcting the saved details lets the
+worker use the validated treatment and clear the subscription notice.
 New Stripe/Mollie checkout and card top-up flows retain their existing
 billing-detail requirements.
 

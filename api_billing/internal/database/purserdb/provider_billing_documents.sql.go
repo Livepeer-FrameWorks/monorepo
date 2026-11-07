@@ -219,9 +219,11 @@ func (q *Queries) ResolveProviderDocumentTaxReview(ctx context.Context, arg Reso
 
 const resolveProviderTaxReview = `-- name: ResolveProviderTaxReview :execrows
 UPDATE purser.crypto_accounting_anomalies
-SET status='resolved',resolved_at=NOW(),resolution_note=$1::text
+SET status='resolved',resolved_at=NOW(),resolution_note=$1::text,
+    evidence_json=evidence_json || '{"provider_tax_sync_complete":true}'::jsonb
 WHERE tenant_id=$2::text::uuid AND network='stripe' AND kind='provider_tax_review'
-  AND reference_type=$3::text AND reference_id=$4::text AND status='open'
+  AND reference_type=$3::text AND reference_id=$4::text
+  AND (status='open' OR NOT evidence_json @> '{"provider_tax_sync_complete":true}'::jsonb)
 `
 
 type ResolveProviderTaxReviewParams struct {

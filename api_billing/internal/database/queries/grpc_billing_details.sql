@@ -3,10 +3,28 @@ SELECT billing_email, billing_name, billing_company, tax_id,
        COALESCE(billing_address, '{}'::jsonb) AS billing_address,
        COALESCE(updated_at, TIMESTAMP 'epoch') AS updated_at,
        presentment_currency::text AS presentment_currency,
-       billing_customer_type::text AS customer_type
-FROM purser.tenant_subscriptions
-WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND status != 'cancelled'
-ORDER BY created_at DESC
+       billing_customer_type::text AS customer_type,
+       EXISTS (
+           SELECT 1 FROM purser.crypto_accounting_anomalies a
+           WHERE a.tenant_id = s.tenant_id
+             AND s.status NOT IN ('cancelled', 'ended')
+             AND a.kind = 'provider_tax_review'
+             AND a.evidence_json @> '{"review_required":true}'::jsonb
+             AND a.evidence_json ? 'fallback_rate_bps'
+             AND NOT a.evidence_json @> '{"provider_tax_sync_complete":true}'::jsonb
+             AND (
+                 (a.network = 'stripe' AND a.reference_type = 'stripe_subscription'
+                   AND a.reference_id = s.stripe_subscription_id)
+                 OR (a.network = 'stripe' AND a.reference_type = 'stripe_customer'
+                   AND a.reference_id = s.stripe_customer_id
+                   AND COALESCE(s.stripe_subscription_id, '') = '')
+                 OR (a.network = 'mollie' AND a.reference_type = 'mollie_subscription'
+                   AND a.reference_id = s.mollie_subscription_id)
+             )
+       ) AS tax_review_required
+FROM purser.tenant_subscriptions s
+WHERE s.tenant_id = sqlc.arg(tenant_id)::text::uuid AND s.status != 'cancelled'
+ORDER BY s.created_at DESC
 LIMIT 1;
 
 -- name: UpdateTenantBillingDetails :execrows

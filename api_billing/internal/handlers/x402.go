@@ -2065,6 +2065,9 @@ func (h *X402Handler) loadEffectiveVATRate(ctx context.Context, country string, 
 			CheckedOn: row.SourceCheckedOn, EffectiveFrom: row.EffectiveFrom,
 		}, nil
 	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return vatDecision{}, fmt.Errorf("load effective VAT rate for %s: %w", country, err)
+	}
 	decision := vatDecision{Country: country}
 	if !appconfig.Runtime().IsProduction() {
 		if rate, ok := developmentVATRates[country]; ok {

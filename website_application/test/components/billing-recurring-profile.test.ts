@@ -5,6 +5,7 @@ const fixture = vi.hoisted(() => ({
   provider: "stripe",
   paymentMethod: "",
   complete: false,
+  taxReview: false,
   ready: true,
   status: "active",
   completeProfile: (_complete: boolean) => {},
@@ -66,9 +67,16 @@ vi.mock("$houdini", async () => {
     },
     GetBillingDetailsStore: class {
       constructor() {
-        const state = query(() => ({ billingDetails: { isComplete: fixture.complete } }));
+        const state = query(() => ({
+          billingDetails: { isComplete: fixture.complete, taxReviewRequired: fixture.taxReview },
+        }));
         fixture.completeProfile = (complete) =>
-          state.set({ fetching: false, data: { billingDetails: { isComplete: complete } } });
+          state.set({
+            fetching: false,
+            data: {
+              billingDetails: { isComplete: complete, taxReviewRequired: fixture.taxReview },
+            },
+          });
         return state;
       }
     },
@@ -96,6 +104,7 @@ beforeEach(() => {
   fixture.provider = "stripe";
   fixture.paymentMethod = "";
   fixture.complete = false;
+  fixture.taxReview = false;
   fixture.ready = true;
   fixture.status = "active";
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
@@ -106,6 +115,22 @@ afterEach(() => {
 });
 
 describe("recurring collection billing profile", () => {
+  it.each(["stripe", "mollie"])(
+    "shows a VAT review for a complete %s profile until the recorded review clears",
+    async (provider) => {
+      fixture.provider = provider;
+      fixture.complete = true;
+      fixture.taxReview = true;
+      render(BillingPage);
+      await screen.findByText("Check your VAT details");
+      expect(screen.queryByText("Activate a Paid Plan")).toBeNull();
+      expect(screen.getByRole("link", { name: "Update billing details" })).toBeTruthy();
+      fixture.taxReview = false;
+      fixture.completeProfile(true);
+      await waitFor(() => expect(screen.queryByText("Check your VAT details")).toBeNull());
+    }
+  );
+
   it.each(["ended", "cancelled"])(
     "keeps paid-plan setup guidance visible for a %s subscription",
     async (status) => {

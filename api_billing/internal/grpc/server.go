@@ -7636,6 +7636,7 @@ func (s *PurserServer) GetBillingDetails(ctx context.Context, req *purserpb.GetB
 		TenantId:            tenantID,
 		UpdatedAt:           timestamppb.New(row.UpdatedAt.Time),
 		PresentmentCurrency: strings.TrimSpace(row.PresentmentCurrency),
+		TaxReviewRequired:   row.TaxReviewRequired,
 	}
 
 	if row.BillingEmail.Valid {

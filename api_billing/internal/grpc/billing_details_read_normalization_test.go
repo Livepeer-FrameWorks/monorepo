@@ -40,7 +40,7 @@ func TestGetBillingDetailsNormalizesLegacyProfileBeforeCompleteness(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			mock.ExpectQuery("-- name: GetTenantBillingDetails").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type"}).AddRow(fields["email"], fields["name"], " Company ", " NL123456789B01 ", address, time.Now(), "EUR", "business"))
+			mock.ExpectQuery("-- name: GetTenantBillingDetails").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency", "customer_type", "tax_review_required"}).AddRow(fields["email"], fields["name"], " Company ", " NL123456789B01 ", address, time.Now(), "EUR", "business", false))
 			server := &PurserServer{db: db}
 			details, err := server.GetBillingDetails(context.Background(), &purserpb.GetBillingDetailsRequest{TenantId: "tenant"})
 			if err != nil {

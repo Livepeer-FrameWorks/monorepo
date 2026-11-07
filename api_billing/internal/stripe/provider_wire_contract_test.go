@@ -52,10 +52,28 @@ func TestProviderWireExternallyFinalizedHeldInvoiceKeepsOriginalReview(t *testin
 	providerWireTaxUpgradeAndRecovery(t, "externally_finalized_owned")
 }
 
+func TestProviderWireStaleAcknowledgementCannotClearConcurrentResume(t *testing.T) {
+	providerWireTaxUpgradeAndRecovery(t, "concurrent_resume")
+}
+
+type taxAckWireRaceBackend struct {
+	api.Backend
+	beforeClear func()
+	fired       bool
+}
+
+func (b *taxAckWireRaceBackend) Call(method, path, key string, params api.ParamsContainer, out api.LastResponseSetter) error {
+	if p, ok := params.(*api.SubscriptionParams); ok && method == http.MethodPost && p.Metadata[taxRecoveryContext] != "" && !b.fired {
+		b.fired = true
+		b.beforeClear()
+	}
+	return b.Backend.Call(method, path, key, params, out)
+}
+
 func providerWireTaxUpgradeAndRecovery(t *testing.T, outcome string) {
 	paymentOutcome := outcome
 	pastFailure := outcome == "past_invoice_failure" || outcome == "past_finalize_failure"
-	if pastFailure || outcome == "operator_paused_invoice" || outcome == "nonrenewal_review" || outcome == "operator_paused_subscription" || outcome == "externally_finalized_owned" {
+	if pastFailure || outcome == "operator_paused_invoice" || outcome == "nonrenewal_review" || outcome == "operator_paused_subscription" || outcome == "externally_finalized_owned" || outcome == "concurrent_resume" {
 		paymentOutcome = "succeeded"
 	}
 	baseURL := startPythonBillingProvider(t)
@@ -150,7 +168,7 @@ func providerWireTaxUpgradeAndRecovery(t *testing.T, outcome string) {
 	providerWireControl(t, baseURL, "/__test/payment_behavior", map[string]string{"customer_id": buyer.ID, "outcome": paymentOutcome}, nil)
 	providerWireCleanSync(t, baseURL, func() error { return c.SyncSubscriptionTax(ctx, "wire-tenant", buyer.ID, sub.ID, profile) })
 	futureReady, err := c.GetSubscription(ctx, sub.ID)
-	if err != nil || futureReady.PauseCollection != nil || futureReady.Metadata["frameworks_tax_hold_started"] != "" || futureReady.Metadata["frameworks_tax_recovery_pending"] == "" {
+	if err != nil || futureReady.PauseCollection != nil || futureReady.Metadata["frameworks_tax_hold_started"] != "" || len(taxRecoveryWorkKeys(futureReady.Metadata)) == 0 && futureReady.Metadata[legacyTaxRecoveryPending] != "true" {
 		t.Fatalf("future-only sync did not release owned hold and retain old tax work: %+v %v", futureReady, err)
 	}
 	untouched, err := invoice.Get(heldID, nil)
@@ -207,7 +225,7 @@ func providerWireTaxUpgradeAndRecovery(t *testing.T, outcome string) {
 		if readErr != nil || future.PauseCollection != nil || future.Metadata["frameworks_tax_review"] != "" {
 			t.Fatalf("past invoice failure paused correctly taxed future renewals: %+v %v", future, readErr)
 		}
-		if future.Metadata["frameworks_tax_hold_started"] != "" || future.Metadata["frameworks_tax_recovery_pending"] == "" {
+		if future.Metadata["frameworks_tax_hold_started"] != "" || len(taxRecoveryWorkKeys(future.Metadata)) == 0 {
 			t.Fatal("unfinished old tax work lost its bounded recovery marker or retained an active hold")
 		}
 		if outcome == "past_finalize_failure" {
@@ -245,8 +263,35 @@ func providerWireTaxUpgradeAndRecovery(t *testing.T, outcome string) {
 	// This wire test supplies the caller's persistence boundary. PostgreSQL
 	// transaction/idempotency behavior is exercised by the billing worker tests.
 	persistProviderWireTaxReport(t, report)
+	var race *taxAckWireRaceBackend
+	if outcome == "concurrent_resume" {
+		race = &taxAckWireRaceBackend{Backend: api.GetBackend(api.APIBackend)}
+		race.beforeClear = func() {
+			if holdErr := c.HoldSubscriptionTaxReview(ctx, "wire-tenant", buyer.ID, sub.ID); holdErr != nil {
+				t.Fatal(holdErr)
+			}
+			if syncErr := c.SyncSubscriptionTax(ctx, "wire-tenant", buyer.ID, sub.ID, profile); syncErr != nil {
+				t.Fatal(syncErr)
+			}
+		}
+		api.SetBackend(api.APIBackend, race)
+	}
 	if err = c.AckTaxRecoveryReport(ctx, report); err != nil {
 		t.Fatal(err)
+	}
+	if race != nil {
+		concurrent, readErr := c.GetSubscription(ctx, sub.ID)
+		if !race.fired || readErr != nil || len(taxRecoveryWorkKeys(concurrent.Metadata)) == 0 {
+			t.Fatalf("stale provider write erased newer same-profile/same-pause work: fired=%t subscription=%+v err=%v", race.fired, concurrent, readErr)
+		}
+		next, nextErr := c.ReconcileSubscriptionTax(ctx, "wire-tenant", buyer.ID, sub.ID, profile)
+		if nextErr != nil {
+			t.Fatal(nextErr)
+		}
+		persistProviderWireTaxReport(t, next)
+		if ackErr := c.AckTaxRecoveryReport(ctx, next); ackErr != nil {
+			t.Fatal(ackErr)
+		}
 	}
 	if outcome == "operator_paused_invoice" {
 		preserved, readErr := invoice.Get(operatorPaused.ID, nil)
@@ -298,7 +343,7 @@ func providerWireTaxUpgradeAndRecovery(t *testing.T, outcome string) {
 	if err != nil || resumed.PauseCollection != nil || resumed.Metadata["frameworks_tax_review"] != "" {
 		t.Fatalf("owned pause not released: %+v %v", resumed, err)
 	}
-	if resumed.Metadata["frameworks_tax_hold_started"] != "" || resumed.Metadata["frameworks_tax_recovery_pending"] != "" {
+	if resumed.Metadata["frameworks_tax_hold_started"] != "" || len(taxRecoveryWorkKeys(resumed.Metadata)) > 0 || resumed.Metadata[legacyTaxRecoveryPending] != "" {
 		t.Fatal("completed tax recovery retained an active or pending marker")
 	}
 	providerWireCleanSync(t, baseURL, func() error { return c.SyncSubscriptionTax(ctx, "wire-tenant", buyer.ID, sub.ID, profile) })

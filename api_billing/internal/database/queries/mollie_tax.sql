@@ -34,3 +34,11 @@ WHERE i.tenant_id=sqlc.arg(tenant_id)::text::uuid AND i.source_reference_type='m
   AND i.source_reference_id=ANY(sqlc.arg(payment_ids)::text[])
 ORDER BY i.source_reference_id
 FOR UPDATE OF i;
+
+-- name: ResolveMollieSubscriptionTaxReview :exec
+UPDATE purser.crypto_accounting_anomalies
+SET status='resolved',resolved_at=NOW(),resolution_note='Current legal billing profile and exclusive tax terms synchronized',
+    evidence_json=evidence_json || '{"provider_tax_sync_complete":true}'::jsonb
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND network='mollie' AND kind='provider_tax_review'
+  AND reference_type='mollie_subscription' AND reference_id=sqlc.arg(subscription_id)::text
+  AND (status='open' OR NOT evidence_json @> '{"provider_tax_sync_complete":true}'::jsonb);

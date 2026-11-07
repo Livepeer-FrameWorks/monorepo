@@ -1258,6 +1258,11 @@ class BillingDetailsDefault(BaseModel):
         description="True if all full-invoice fields are present (legal name + email + address).",
     )
     "True if all full-invoice fields are present (legal name + email + address)."
+    tax_review_required: bool = Field(
+        alias="taxReviewRequired",
+        description="True while recurring invoices use domestic VAT because saved billing details require review.",
+    )
+    "True while recurring invoices use domestic VAT because saved billing details require review."
     updated_at: Optional[datetime] = Field(
         alias="updatedAt", description="When billing details were last updated."
     )

@@ -1164,6 +1164,7 @@ enum GQL {
         country
       }
       isComplete
+      taxReviewRequired
       updatedAt
       presentmentCurrency
     }

@@ -2365,6 +2365,7 @@ type BillingDetails struct {
 	Name                string                 `protobuf:"bytes,8,opt,name=name,proto3" json:"name,omitempty"`                                                          // Customer legal/person name for full invoices
 	PresentmentCurrency string                 `protobuf:"bytes,9,opt,name=presentment_currency,json=presentmentCurrency,proto3" json:"presentment_currency,omitempty"` // EUR, USD, or GBP, derived from the billing country
 	CustomerType        string                 `protobuf:"bytes,10,opt,name=customer_type,json=customerType,proto3" json:"customer_type,omitempty"`                     // unspecified, consumer, or business; never inferred from company name
+	TaxReviewRequired   bool                   `protobuf:"varint,11,opt,name=tax_review_required,json=taxReviewRequired,proto3" json:"tax_review_required,omitempty"`   // Recurring invoices use domestic VAT pending billing-profile correction
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -2467,6 +2468,13 @@ func (x *BillingDetails) GetCustomerType() string {
 		return x.CustomerType
 	}
 	return ""
+}
+
+func (x *BillingDetails) GetTaxReviewRequired() bool {
+	if x != nil {
+		return x.TaxReviewRequired
+	}
+	return false
 }
 
 // Conversion of one money amount into the EUR ledger. units_per_eur is the ECB
@@ -16057,7 +16065,7 @@ const file_purser_proto_rawDesc = "" +
 	"\n" +
 	"\b_addressB\a\n" +
 	"\x05_nameB\x10\n" +
-	"\x0e_customer_type\"\xf6\x02\n" +
+	"\x0e_customer_type\"\xa6\x03\n" +
 	"\x0eBillingDetails\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12\x18\n" +
@@ -16072,7 +16080,8 @@ const file_purser_proto_rawDesc = "" +
 	"\x04name\x18\b \x01(\tR\x04name\x121\n" +
 	"\x14presentment_currency\x18\t \x01(\tR\x13presentmentCurrency\x12#\n" +
 	"\rcustomer_type\x18\n" +
-	" \x01(\tR\fcustomerType\"\xfc\x01\n" +
+	" \x01(\tR\fcustomerType\x12.\n" +
+	"\x13tax_review_required\x18\v \x01(\bR\x11taxReviewRequired\"\xfc\x01\n" +
 	"\fFxConversion\x122\n" +
 	"\x15original_amount_cents\x18\x01 \x01(\x03R\x13originalAmountCents\x12+\n" +
 	"\x11original_currency\x18\x02 \x01(\tR\x10originalCurrency\x12(\n" +

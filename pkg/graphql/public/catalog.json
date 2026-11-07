@@ -1593,9 +1593,9 @@
       "kind": "query",
       "target": "query.billingDetails",
       "since": "v0.3.14",
-      "hash": "sha256:bbc9dac16305674270aa178b8b62049ada9e7040ca48447516944badab7cb018",
-      "identity": "sha256:ed72a8d904049c717e2feef449783ebbedae862c0546536648779ab90ca6c56a",
-      "document": "query GetBillingDetails {\n  billingDetails {\n    ... BillingDetailsDefaultFields\n  }\n}\nfragment BillingDetailsDefaultFields on BillingDetails {\n  customerType\n  email\n  name\n  company\n  vatNumber\n  address {\n    street\n    city\n    state\n    postalCode\n    country\n  }\n  isComplete\n  updatedAt\n  presentmentCurrency\n}\n",
+      "hash": "sha256:c85f8355f02c9c04242969172a8d4f4ac2469d1c49adcbf8e66ee3bc9d55130e",
+      "identity": "sha256:5bdc99a75e663d8d19571d14627ded226f4e521bbe3262d232ce5338ec06743c",
+      "document": "query GetBillingDetails {\n  billingDetails {\n    ... BillingDetailsDefaultFields\n  }\n}\nfragment BillingDetailsDefaultFields on BillingDetails {\n  customerType\n  email\n  name\n  company\n  vatNumber\n  address {\n    street\n    city\n    state\n    postalCode\n    country\n  }\n  isComplete\n  taxReviewRequired\n  updatedAt\n  presentmentCurrency\n}\n",
       "variables": [],
       "result": {
         "field": "billingDetails",
@@ -7829,9 +7829,9 @@
       "kind": "mutation",
       "target": "mutation.updateBillingDetails",
       "since": "v0.3.14",
-      "hash": "sha256:2b1fb5f7aafd4a450dfdebc1b2cc3f10579d53a0b31a6995e79074bd040eab19",
-      "identity": "sha256:3a06589c208d59ff2d5e0619b327a028e76957edc6af8da4e6d3235efe15ba8d",
-      "document": "mutation UpdateBillingDetails ($input: UpdateBillingDetailsInput!) {\n  updateBillingDetails(input: $input) {\n    ... BillingDetailsDefaultFields\n  }\n}\nfragment BillingDetailsDefaultFields on BillingDetails {\n  customerType\n  email\n  name\n  company\n  vatNumber\n  address {\n    street\n    city\n    state\n    postalCode\n    country\n  }\n  isComplete\n  updatedAt\n  presentmentCurrency\n}\n",
+      "hash": "sha256:b5a8164a8900f340dff1a8c68cc99cbcb9d2840749ba9f28e193244e0554a17a",
+      "identity": "sha256:1938a2347f978dcd330823080e6cd30c2c5fbfedbe8c0426c9734786e3dcc3e6",
+      "document": "mutation UpdateBillingDetails ($input: UpdateBillingDetailsInput!) {\n  updateBillingDetails(input: $input) {\n    ... BillingDetailsDefaultFields\n  }\n}\nfragment BillingDetailsDefaultFields on BillingDetails {\n  customerType\n  email\n  name\n  company\n  vatNumber\n  address {\n    street\n    city\n    state\n    postalCode\n    country\n  }\n  isComplete\n  taxReviewRequired\n  updatedAt\n  presentmentCurrency\n}\n",
       "variables": [
         {
           "name": "input",

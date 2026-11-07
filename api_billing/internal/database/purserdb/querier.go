@@ -962,6 +962,7 @@ type Querier interface {
 	ResolveMollieFirstPaymentIntent(ctx context.Context, arg ResolveMollieFirstPaymentIntentParams) error
 	ResolveMolliePaymentObservation(ctx context.Context, arg ResolveMolliePaymentObservationParams) error
 	ResolveMollieSubscriptionInvoice(ctx context.Context, arg ResolveMollieSubscriptionInvoiceParams) (string, error)
+	ResolveMollieSubscriptionTaxReview(ctx context.Context, arg ResolveMollieSubscriptionTaxReviewParams) error
 	// Closes the operator review holds of an uncredited top-up whose paid amount
 	// the provider has fully returned; evidence_ref names the closing reversal.
 	ResolvePendingTopupReviewHolds(ctx context.Context, arg ResolvePendingTopupReviewHoldsParams) (int64, error)
