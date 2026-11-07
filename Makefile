@@ -1881,6 +1881,10 @@ EXPLAIN_AUDIT_OUT ?= $(CURDIR)/.explain-audit
 verify-yugabyte-explain-audit: test-explainaudit
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-yugabyte-explain-audit requires a running Docker daemon"; exit 1; }
 	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh bash -c 'cd "$(CURDIR)/scripts/explainaudit" && go run . -out "$(EXPLAIN_AUDIT_OUT)" $(EXPLAIN_AUDIT_ARGS)'
+	# Subset audits can omit this query or a layout; the full gate checks both.
+	@if [ -z "$(strip $(EXPLAIN_AUDIT_ARGS))" ]; then \
+		EXPLAIN_AUDIT_REPORT="$(EXPLAIN_AUDIT_OUT)/results.json" $(MAKE) --no-print-directory test-explainaudit; \
+	fi
 
 explain-audit-budget:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: explain-audit-budget requires a running Docker daemon"; exit 1; }
