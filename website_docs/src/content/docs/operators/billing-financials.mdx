@@ -72,6 +72,12 @@ redelivery and the recurring tax worker do not reassess it. An operator can
 resolve its review without the same facts reopening it or increasing its count.
 Documents issued using provisional VAT evidence have their own retained review,
 separate from the tenant's later VIES revalidation notice.
+A postdeploy reconciliation inserts missing document reviews without requiring
+webhook redelivery and preserves existing operator resolutions.
+
+Jurisdiction policy references and validity windows form part of the accepted
+provider assessment identity. Renewing that policy retains a new assessment for
+future collections; older documents keep the proof valid at their own tax point.
 
 Use this archive to investigate the opening records and prepare corrections with
 the bookkeeper. It is not a journal import, reconciled close or payout approval.
@@ -151,6 +157,9 @@ not prevent correctly taxed future renewals or other subscriptions from running.
 Checkout and tier-upgrade preflights synchronize future tax settings; background
 workers handle older held invoices. Completed recovery clears its pending marker,
 so ordinary reconciliations do not keep listing historical invoices.
+Incomplete recurring billing profiles remain visible as an operator review and
+a completion prompt on the customer's Billing page. Completing the legal name,
+email and address in Settings lets the worker synchronize future tax settings.
 
 Draft renewals created during the tax hold receive the verified tax treatment
 and return to Stripe's automatic collection. Stripe handles declined payments,
@@ -165,6 +174,8 @@ before acknowledging it to Stripe and completing the recovery scan. They are
 not silently abandoned or retried by every tax sweep. Operators can correct the
 invoice through Stripe and resolve its review. A deliberate `auto_advance=false`
 on a finalized invoice is preserved.
+Changing an operator pause or the subscription's customer rechecks outstanding
+drafts against that new context. Finalized invoices stay outside draft repair.
 
 For native Mollie payments, temporary assessment failures leave the webhook
 available for retry before an invoice is issued. Definitive mismatches retain
@@ -174,8 +185,15 @@ the saved profile before freezing the document.
 Missing current supplier configuration uses the complete supplier evidence
 already accepted with a confirmed payment, records a document review, and lets
 the payment lifecycle proceed. Incomplete accepted evidence cannot be used to
-invent an invoice supplier. Grace-based VAT evidence has a document-specific
+invent an invoice supplier. Confirmed payments with unusable accepted tax proof
+retain their actual received amount in a paid record requiring tax review,
+without an assessed net/VAT split or an emailed tax invoice. A received amount
+that differs from the accepted fee does not reset existing dunning attempts.
+Grace-based VAT evidence has a document-specific
 review that remains independent of the tenant's later revalidation notice.
+
+Temporary VIES failures during postpaid issuance roll back that attempt and use
+the normal job retry schedule, without a permanent manual-review invoice.
 
 A tax refusal during a billing-phase change leaves the arrangement unchanged
 and records an operator exception after rollback. Bootstrap dry runs do not

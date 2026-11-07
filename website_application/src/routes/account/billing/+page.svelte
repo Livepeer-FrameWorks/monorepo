@@ -885,6 +885,20 @@
   const showPaymentSetup = $derived(
     isPrepaid || !billingStatus?.collectionReady || (paymentGrace && !graceFixInPortal)
   );
+  const recurringBillingProfileIncomplete = $derived(
+    billingDetails !== null &&
+      !billingDetails.isComplete &&
+      !isPrepaid &&
+      billingStatus?.subscription != null &&
+      billingStatus.subscription.status !== "cancelled" &&
+      ["stripe", "mollie"].includes(
+        (
+          billingStatus.collectionProvider ||
+          billingStatus.subscription.paymentMethod ||
+          ""
+        ).toLowerCase()
+      )
+  );
 </script>
 
 <svelte:head>
@@ -921,6 +935,18 @@
       </div>
     {:else}
       <div class="page-transition">
+        {#if recurringBillingProfileIncomplete}
+          <div class="border-y border-warning/50 bg-warning/10 px-4 sm:px-6 lg:px-8 py-4">
+            <p class="font-semibold text-warning">Complete your billing profile</p>
+            <p class="mt-1 text-sm text-muted-foreground">
+              Add your legal name, billing email, and complete address for your recurring invoices.
+              A VAT or tax identifier is optional and is not treated as verified automatically.
+            </p>
+            <Button href={resolve("/settings")} variant="outline" size="sm" class="mt-3">
+              Update billing details
+            </Button>
+          </div>
+        {/if}
         <!-- Plan lifecycle banners (full-bleed) -->
         {#if freeFallback}
           <div
@@ -1327,7 +1353,7 @@
                       ? `Your last payment failed. Choose your plan and a provider to set up payment before ${formatDate(freeFallback?.at)}, and your plan continues.`
                       : "Your Free account does not need a payment method. To activate a paid tier, choose a provider and complete its hosted collection setup first."}
                 </p>
-                {#if !billingDetails?.isComplete}
+                {#if !billingDetails?.isComplete && !recurringBillingProfileIncomplete}
                   <div class="mb-4 border border-warning/50 bg-warning/10 p-3 text-sm">
                     <p class="font-medium text-warning">Billing details required</p>
                     <p class="mt-1 text-muted-foreground">

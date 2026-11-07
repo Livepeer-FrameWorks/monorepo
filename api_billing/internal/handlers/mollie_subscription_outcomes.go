@@ -85,8 +85,16 @@ func (s *Service) applyNativeMollieSubscriptionOutcome(ctx context.Context, tena
 		if invoiceErr != nil {
 			return invoiceErr
 		}
-		if resetErr := q.ResetTenantDunningAttempts(ctx, tenant); resetErr != nil {
-			return resetErr
+		amountReview, reviewErr := q.NativeMollieInvoiceHasAmountReview(ctx, purserdb.NativeMollieInvoiceHasAmountReviewParams{TenantID: tenant, InvoiceID: invoice})
+		if reviewErr != nil {
+			return reviewErr
+		}
+		// A received amount below the accepted fee is cash evidence, not proof
+		// that the subscription's collection problem has been settled.
+		if !amountReview {
+			if resetErr := q.ResetTenantDunningAttempts(ctx, tenant); resetErr != nil {
+				return resetErr
+			}
 		}
 		if eventErr := molliePaymentEventWriter(payment.ID, status, providerSettlementEvidence{TenantID: tenant, AmountCents: amount, Currency: "EUR"})(ctx, tx, resolvedInvoicePayment{TenantID: tenant, InvoiceID: invoice}); eventErr != nil {
 			return eventErr

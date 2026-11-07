@@ -888,6 +888,7 @@ type Querier interface {
 	// A checkout staged during the grace period keeps its pending state, so its
 	// settlement can still activate the paid tier.
 	MoveSubscriptionToFreeFallback(ctx context.Context, arg MoveSubscriptionToFreeFallbackParams) (int64, error)
+	NativeMollieInvoiceHasAmountReview(ctx context.Context, arg NativeMollieInvoiceHasAmountReviewParams) (bool, error)
 	NextCryptoInvoiceNumber(ctx context.Context) (int64, error)
 	NextSimplifiedInvoiceNumber(ctx context.Context) (int64, error)
 	OpenPrepaidTopupProviderIntent(ctx context.Context, arg OpenPrepaidTopupProviderIntentParams) error

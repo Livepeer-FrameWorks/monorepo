@@ -35,6 +35,9 @@ type TaxProfile struct {
 	Wording          string          `json:"wording"`
 	SupplierCountry  string          `json:"supplier_country"`
 	SupplierIdentity string          `json:"supplier_identity"`
+	PolicyReference  string          `json:"policy_reference,omitempty"`
+	PolicyValidFrom  *time.Time      `json:"policy_valid_from,omitempty"`
+	PolicyValidUntil *time.Time      `json:"policy_valid_until,omitempty"`
 	Evidence         json.RawMessage `json:"evidence,omitempty"`
 	ProfileSHA       string          `json:"profile_sha,omitempty"`
 }
@@ -42,7 +45,8 @@ type TaxProfile struct {
 func (p TaxProfile) Fingerprint() string {
 	p.ProfileSHA = ""
 	// Validation history is retained separately and copied at issuance. Only
-	// legal parties and charged terms identify the recurring provider setup.
+	// legal parties, charged terms and their accepted policy window identify
+	// the recurring provider setup.
 	p.Evidence = nil
 	encoded, err := json.Marshal(p)
 	if err != nil {
@@ -182,7 +186,20 @@ func (c *Client) ReconcileSubscriptionTax(ctx context.Context, tenant, customerI
 		return report, err
 	}
 	report.RecoveryPending = state.RecoveryPending
-	if !state.RecoveryPending {
+	_, contextSHA, err := taxRecoverySubscriptionInputs(state.Subscription, report.ProfileSHA)
+	if err != nil {
+		return report, err
+	}
+	if prior := state.Subscription.Metadata[taxRecoveryContext]; !state.RecoveryPending && prior != contextSHA {
+		pending := &api.SubscriptionParams{Metadata: map[string]string{"frameworks_tax_recovery_pending": "true"}, ProrationBehavior: api.String("none")}
+		pending.Context = ctx
+		if _, err = subscription.Update(subscriptionID, pending); err != nil {
+			report.RetryPending = true
+			return report, err
+		}
+		report.RecoveryPending = true
+	}
+	if !report.RecoveryPending {
 		return report, nil
 	}
 	return recoverStripeTaxInvoices(ctx, state.Subscription, p, state.RateID)
@@ -265,7 +282,24 @@ func (c *Client) syncSubscriptionTax(ctx context.Context, tenant, customerID, su
 			return nil, err
 		}
 	}
-	return &subscriptionTaxSyncState{Subscription: current, RateID: rateID, RecoveryPending: recoveryPending}, nil
+	// The accepted future-only writes determine these fields even when the
+	// provider embeds an older subscription snapshot in a later invoice.
+	snapshot := *current
+	snapshot.Metadata = make(map[string]string, len(current.Metadata)+1)
+	for key, value := range current.Metadata {
+		snapshot.Metadata[key] = value
+	}
+	snapshot.Metadata["frameworks_tax_profile"] = fingerprint
+	if activeReview || legacyHoldMarker {
+		delete(snapshot.Metadata, "frameworks_tax_review")
+		delete(snapshot.Metadata, "frameworks_tax_pause_owned")
+		delete(snapshot.Metadata, "frameworks_tax_hold_started")
+		snapshot.Metadata["frameworks_tax_recovery_pending"] = "true"
+		if current.Metadata["frameworks_tax_pause_owned"] == "true" && current.PauseCollection != nil && current.PauseCollection.Behavior == api.SubscriptionPauseCollectionBehaviorKeepAsDraft && current.PauseCollection.ResumesAt == 0 {
+			snapshot.PauseCollection = nil
+		}
+	}
+	return &subscriptionTaxSyncState{Subscription: &snapshot, RateID: rateID, RecoveryPending: recoveryPending}, nil
 }
 
 // HoldSubscriptionTaxReview prevents unproven recurring tax from being

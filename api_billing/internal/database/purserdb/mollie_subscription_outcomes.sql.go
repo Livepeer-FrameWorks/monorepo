@@ -48,3 +48,23 @@ func (q *Queries) GetNativeMollieInvoiceID(ctx context.Context, arg GetNativeMol
 	err := row.Scan(&id)
 	return id, err
 }
+
+const nativeMollieInvoiceHasAmountReview = `-- name: NativeMollieInvoiceHasAmountReview :one
+SELECT EXISTS (
+ SELECT 1 FROM purser.billing_invoices
+ WHERE tenant_id=$1::text::uuid AND id=$2::text::uuid
+  AND tax_decision->>'code'='accepted_tax_gross_mismatch'
+)::boolean AS amount_review
+`
+
+type NativeMollieInvoiceHasAmountReviewParams struct {
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+	InvoiceID string `db:"invoice_id" json:"invoice_id"`
+}
+
+func (q *Queries) NativeMollieInvoiceHasAmountReview(ctx context.Context, arg NativeMollieInvoiceHasAmountReviewParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, nativeMollieInvoiceHasAmountReview, arg.TenantID, arg.InvoiceID)
+	var amount_review bool
+	err := row.Scan(&amount_review)
+	return amount_review, err
+}

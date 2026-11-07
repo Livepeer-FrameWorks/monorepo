@@ -195,7 +195,7 @@ func writePostpaidInvoiceTx(ctx context.Context, tx *sql.Tx, run *postpaidInvoic
 		var taxErr error
 		taxAssessment, taxErr = assessInvoiceTaxTx(ctx, tx, tenantID, netDec.Shift(2).IntPart(), issuedAt)
 		if taxErr != nil {
-			if !errors.As(taxErr, &taxReview) {
+			if billingtax.IsTransient(taxErr) || !errors.As(taxErr, &taxReview) {
 				return result, fmt.Errorf("assess invoice tax: %w", taxErr)
 			}
 			heldForReview = true

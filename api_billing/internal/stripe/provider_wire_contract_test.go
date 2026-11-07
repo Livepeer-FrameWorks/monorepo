@@ -22,6 +22,7 @@ import (
 	"github.com/stripe/stripe-go/v85/invoice"
 	"github.com/stripe/stripe-go/v85/price"
 	"github.com/stripe/stripe-go/v85/product"
+	"github.com/stripe/stripe-go/v85/subscription"
 )
 
 // Decode the same Python wire fixture through the real SDK used by Purser.
@@ -43,10 +44,14 @@ func TestProviderWireOwnedNonRenewalIsNotSilentlyIgnored(t *testing.T) {
 	providerWireTaxUpgradeAndRecovery(t, "nonrenewal_review")
 }
 
+func TestProviderWireReviewedDraftResumesAfterOperatorPauseLifted(t *testing.T) {
+	providerWireTaxUpgradeAndRecovery(t, "operator_paused_subscription")
+}
+
 func providerWireTaxUpgradeAndRecovery(t *testing.T, outcome string) {
 	paymentOutcome := outcome
 	pastFailure := outcome == "past_invoice_failure" || outcome == "past_finalize_failure"
-	if pastFailure || outcome == "operator_paused_invoice" || outcome == "nonrenewal_review" {
+	if pastFailure || outcome == "operator_paused_invoice" || outcome == "nonrenewal_review" || outcome == "operator_paused_subscription" {
 		paymentOutcome = "succeeded"
 	}
 	baseURL := startPythonBillingProvider(t)
@@ -154,6 +159,28 @@ func providerWireTaxUpgradeAndRecovery(t *testing.T, outcome string) {
 	if outcome == "past_finalize_failure" {
 		providerWireControl(t, baseURL, "/__test/fault", map[string]any{"method": "POST", "path": "/v1/invoices/" + heldID + "/finalize", "status": 500, "after_execution": false, "execution_started": true}, nil)
 	}
+	if outcome == "operator_paused_subscription" {
+		_, err = subscription.Update(sub.ID, &api.SubscriptionParams{Params: api.Params{Context: ctx}, PauseCollection: &api.SubscriptionPauseCollectionParams{Behavior: api.String("keep_as_draft")}, ProrationBehavior: api.String("none")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pausedReport, pausedErr := c.ReconcileSubscriptionTax(ctx, "wire-tenant", buyer.ID, sub.ID, profile)
+		if pausedErr != nil || len(pausedReport.Reviews) != 1 || pausedReport.Reviews[0].Code != "stripe_held_invoice_operator_pause" {
+			t.Fatalf("operator pause did not retain its draft review: %+v %v", pausedReport, pausedErr)
+		}
+		persistProviderWireTaxReport(t, pausedReport)
+		if err = c.AckTaxRecoveryReport(ctx, pausedReport); err != nil {
+			t.Fatal(err)
+		}
+		stillDraft, readErr := invoice.Get(heldID, nil)
+		if readErr != nil || stillDraft.Status != api.InvoiceStatusDraft || stillDraft.AutoAdvance {
+			t.Fatalf("operator-held draft changed before pause was lifted: %+v %v", stillDraft, readErr)
+		}
+		_, err = subscription.Update(sub.ID, &api.SubscriptionParams{Params: api.Params{Context: ctx}, UnsetFields: []api.SubscriptionParamsUnsetField{api.SubscriptionParamsUnsetFieldPauseCollection}, ProrationBehavior: api.String("none")})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	report, err := c.ReconcileSubscriptionTax(ctx, "wire-tenant", buyer.ID, sub.ID, profile)
 	if outcome == "operator_paused_invoice" {
 		preserved, readErr := invoice.Get(operatorPaused.ID, nil)
@@ -203,19 +230,7 @@ func providerWireTaxUpgradeAndRecovery(t *testing.T, outcome string) {
 	}
 	// This wire test supplies the caller's persistence boundary. PostgreSQL
 	// transaction/idempotency behavior is exercised by the billing worker tests.
-	journal, err := os.OpenFile(filepath.Join(t.TempDir(), "tax-recovery-report.json"), os.O_CREATE|os.O_WRONLY, 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = json.NewEncoder(journal).Encode(report); err != nil {
-		t.Fatal(err)
-	}
-	if err = journal.Sync(); err != nil {
-		t.Fatal(err)
-	}
-	if err = journal.Close(); err != nil {
-		t.Fatal(err)
-	}
+	persistProviderWireTaxReport(t, report)
 	if err = c.AckTaxRecoveryReport(ctx, report); err != nil {
 		t.Fatal(err)
 	}
@@ -330,6 +345,23 @@ func providerWireTaxUpgradeAndRecovery(t *testing.T, outcome string) {
 		if parseErr != nil || laterStarted <= started {
 			t.Fatalf("later hold reused its completed cohort: previous=%s current=%+v error=%v", firstHold, later, readErr)
 		}
+	}
+}
+
+func persistProviderWireTaxReport(t *testing.T, report *TaxRecoveryReport) {
+	t.Helper()
+	journal, err := os.OpenFile(filepath.Join(t.TempDir(), "tax-recovery-report.json"), os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = json.NewEncoder(journal).Encode(report); err != nil {
+		t.Fatal(err)
+	}
+	if err = journal.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err = journal.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

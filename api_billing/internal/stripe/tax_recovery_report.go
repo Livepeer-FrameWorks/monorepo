@@ -15,6 +15,7 @@ import (
 
 const taxTerminalCode = "frameworks_tax_terminal_review"
 const taxTerminalInput = "frameworks_tax_terminal_input"
+const taxRecoveryContext = "frameworks_tax_recovery_context"
 
 type TaxInvoiceReview struct {
 	InvoiceID        string          `json:"invoice_id"`
@@ -31,6 +32,7 @@ type TaxRecoveryReport struct {
 	SubscriptionID  string             `json:"subscription_id"`
 	CustomerID      string             `json:"customer_id"`
 	ProfileSHA      string             `json:"profile_sha"`
+	ContextSHA      string             `json:"context_sha"`
 	RecoveryPending bool               `json:"recovery_pending"`
 	RetryPending    bool               `json:"retry_pending"`
 	Reviews         []TaxInvoiceReview `json:"reviews"`
@@ -39,7 +41,7 @@ type TaxRecoveryReport struct {
 // Only inputs used to classify the invoice enter the fingerprint. Transport
 // headers, validation timestamps, expanded mutable objects and our terminal
 // markers cannot turn an unchanged operator review into a fresh attempt.
-func taxRecoveryInvoiceInputs(inv *api.Invoice, profileSHA string) (json.RawMessage, string, error) {
+func taxRecoveryInvoiceInputs(inv *api.Invoice, sub *api.Subscription, profileSHA string) (json.RawMessage, string, error) {
 	parent := map[string]string{}
 	subscriptionID := ""
 	if inv.Parent != nil && inv.Parent.SubscriptionDetails != nil {
@@ -99,7 +101,28 @@ func taxRecoveryInvoiceInputs(inv *api.Invoice, profileSHA string) (json.RawMess
 			discounts = append(discounts, discount.ID)
 		}
 	}
-	facts := map[string]any{"invoice_id": inv.ID, "subscription_id": subscriptionID, "customer_id": customerID, "profile_sha": profileSHA, "status": inv.Status, "billing_reason": inv.BillingReason, "currency": inv.Currency, "created": inv.Created, "auto_advance": inv.AutoAdvance, "net": inv.TotalExcludingTax, "total": inv.Total, "captured_hold": parent, "recovered_hold": inv.Metadata["frameworks_tax_recovered_hold"], "recovered_profile": inv.Metadata["frameworks_tax_profile"], "discounts": discounts, "discount_count": len(inv.Discounts), "lines": lines, "lines_has_more": inv.Lines != nil && inv.Lines.HasMore}
+	context, _, err := taxRecoverySubscriptionInputs(sub, profileSHA)
+	if err != nil {
+		return nil, "", err
+	}
+	facts := map[string]any{"invoice_id": inv.ID, "subscription_id": subscriptionID, "customer_id": customerID, "profile_sha": profileSHA, "subscription_context": context, "status": inv.Status, "billing_reason": inv.BillingReason, "currency": inv.Currency, "created": inv.Created, "auto_advance": inv.AutoAdvance, "net": inv.TotalExcludingTax, "total": inv.Total, "captured_hold": parent, "recovered_hold": inv.Metadata["frameworks_tax_recovered_hold"], "recovered_profile": inv.Metadata["frameworks_tax_profile"], "discounts": discounts, "discount_count": len(inv.Discounts), "lines": lines, "lines_has_more": inv.Lines != nil && inv.Lines.HasMore}
+	evidence, err := json.Marshal(facts)
+	if err != nil {
+		return nil, "", err
+	}
+	digest := sha256.Sum256(evidence)
+	return evidence, hex.EncodeToString(digest[:]), nil
+}
+
+func taxRecoverySubscriptionInputs(sub *api.Subscription, profileSHA string) (json.RawMessage, string, error) {
+	if sub == nil || sub.Customer == nil {
+		return nil, "", errors.New("tax recovery subscription customer required")
+	}
+	pause := map[string]any{}
+	if sub.PauseCollection != nil {
+		pause["behavior"], pause["resumes_at"] = sub.PauseCollection.Behavior, sub.PauseCollection.ResumesAt
+	}
+	facts := map[string]any{"subscription_id": sub.ID, "customer_id": sub.Customer.ID, "tenant_id": sub.Metadata["tenant_id"], "profile_sha": profileSHA, "pause_collection": pause, "pause_owned": sub.Metadata["frameworks_tax_pause_owned"] == "true"}
 	evidence, err := json.Marshal(facts)
 	if err != nil {
 		return nil, "", err
@@ -118,6 +141,15 @@ func (c *Client) AckTaxRecoveryReport(ctx context.Context, report *TaxRecoveryRe
 	if report.TenantID == "" || report.CustomerID == "" || report.SubscriptionID == "" || report.ProfileSHA == "" {
 		return errors.New("complete tax recovery report ownership required")
 	}
+	getSub := &api.SubscriptionParams{}
+	getSub.Context = ctx
+	sub, err := subscription.Get(report.SubscriptionID, getSub)
+	if err != nil {
+		return err
+	}
+	if err = validateTaxRecoveryReportSubscription(report, sub); err != nil {
+		return err
+	}
 	var failures error
 	for _, review := range report.Reviews {
 		if review.InvoiceID == "" || review.SubscriptionID != report.SubscriptionID || review.CustomerID != report.CustomerID || review.InputFingerprint == "" || review.Code == "" {
@@ -126,22 +158,25 @@ func (c *Client) AckTaxRecoveryReport(ctx context.Context, report *TaxRecoveryRe
 		}
 		get := &api.InvoiceParams{}
 		get.Context = ctx
-		current, err := invoice.Get(review.InvoiceID, get)
-		if err != nil {
-			failures = errors.Join(failures, err)
+		current, invoiceErr := invoice.Get(review.InvoiceID, get)
+		if invoiceErr != nil {
+			failures = errors.Join(failures, invoiceErr)
 			continue
 		}
 		if current.Customer == nil || current.Customer.ID != report.CustomerID || current.Parent == nil || current.Parent.SubscriptionDetails == nil || current.Parent.SubscriptionDetails.Subscription == nil || current.Parent.SubscriptionDetails.Subscription.ID != report.SubscriptionID || current.Parent.SubscriptionDetails.Metadata["tenant_id"] != report.TenantID {
 			failures = errors.Join(failures, errors.New("tax invoice review owner changed before acknowledgement"))
 			continue
 		}
+		if current.Status != api.InvoiceStatusDraft {
+			continue
+		}
 		if err = completeTaxRecoveryInvoiceLines(ctx, current); err != nil {
 			failures = errors.Join(failures, err)
 			continue
 		}
-		_, fingerprint, err := taxRecoveryInvoiceInputs(current, report.ProfileSHA)
-		if err != nil {
-			failures = errors.Join(failures, err)
+		_, fingerprint, inputErr := taxRecoveryInvoiceInputs(current, sub, report.ProfileSHA)
+		if inputErr != nil {
+			failures = errors.Join(failures, inputErr)
 			continue
 		}
 		if fingerprint != review.InputFingerprint {
@@ -165,20 +200,34 @@ func (c *Client) AckTaxRecoveryReport(ctx context.Context, report *TaxRecoveryRe
 	if err != nil {
 		return err
 	}
-	if current.Customer == nil || current.Customer.ID != report.CustomerID || current.Metadata["tenant_id"] != report.TenantID {
-		return errors.New("tax recovery acknowledgement subscription owner mismatch")
-	}
-	if current.Metadata["frameworks_tax_review"] == "true" || current.Metadata["frameworks_tax_hold_started"] != "" {
-		return errors.New("a newer active tax hold must be reconciled before clearing pending recovery")
-	}
-	if current.Metadata["frameworks_tax_profile"] != report.ProfileSHA {
-		return errors.New("subscription tax profile changed before recovery acknowledgement")
+	if err = validateTaxRecoveryReportSubscription(report, current); err != nil {
+		return err
 	}
 	if current.Metadata["frameworks_tax_recovery_pending"] != "true" {
 		return nil
 	}
-	clear := &api.SubscriptionParams{Metadata: map[string]string{"frameworks_tax_recovery_pending": ""}, ProrationBehavior: api.String("none")}
+	clear := &api.SubscriptionParams{Metadata: map[string]string{"frameworks_tax_recovery_pending": "", taxRecoveryContext: report.ContextSHA}, ProrationBehavior: api.String("none")}
 	clear.Context = ctx
 	_, err = subscription.Update(report.SubscriptionID, clear)
 	return err
+}
+
+func validateTaxRecoveryReportSubscription(report *TaxRecoveryReport, sub *api.Subscription) error {
+	if sub.Customer == nil || sub.Customer.ID != report.CustomerID || sub.Metadata["tenant_id"] != report.TenantID {
+		return errors.New("tax recovery acknowledgement subscription owner mismatch")
+	}
+	if sub.Metadata["frameworks_tax_review"] == "true" || sub.Metadata["frameworks_tax_hold_started"] != "" {
+		return errors.New("a newer active tax hold must be reconciled before clearing pending recovery")
+	}
+	if sub.Metadata["frameworks_tax_profile"] != report.ProfileSHA {
+		return errors.New("subscription tax profile changed before recovery acknowledgement")
+	}
+	_, contextSHA, err := taxRecoverySubscriptionInputs(sub, report.ProfileSHA)
+	if err != nil {
+		return err
+	}
+	if contextSHA != report.ContextSHA {
+		return errors.New("subscription collection context changed before recovery acknowledgement")
+	}
+	return nil
 }

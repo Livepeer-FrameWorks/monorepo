@@ -113,8 +113,6 @@ func TestStripeAcceptedOriginalSurvivesCurrentConfigurationChanges_RealPG(t *tes
 		}
 	}
 	for _, statement := range []string{
-		`UPDATE purser.provider_billing_documents SET reviewed_tax_status='legacy_unknown',reviewed_tax_assessment='{}',tax_reviewed_at=NOW() WHERE tenant_id=$1::uuid AND id=$2::uuid`,
-		`UPDATE purser.provider_billing_documents SET tax_reviewed_at=NOW() WHERE tenant_id=$1::uuid AND id=$2::uuid`,
 		`UPDATE purser.provider_billing_documents SET net_minor=net_minor+1,gross_minor=gross_minor+1 WHERE tenant_id=$1::uuid AND id=$2::uuid`,
 		`UPDATE purser.provider_billing_documents SET raw_facts=jsonb_set(raw_facts,'{total}','99999'::jsonb) WHERE tenant_id=$1::uuid AND id=$2::uuid`,
 		`UPDATE purser.provider_billing_documents SET tax_assessment='{}'::jsonb WHERE tenant_id=$1::uuid AND id=$2::uuid`,
@@ -230,7 +228,7 @@ func TestStripeUnknownOriginalsRemainUnclassifiedAcrossRedelivery_RealPG(t *test
 		}
 	}
 	var unknown, reviews int
-	if err := db.QueryRow(`SELECT count(*) FROM purser.provider_billing_documents WHERE tenant_id=$1::uuid AND tax_status='legacy_unknown' AND reviewed_tax_status IS NULL AND tax_reviewed_at IS NULL`, tenant).Scan(&unknown); err != nil {
+	if err := db.QueryRow(`SELECT count(*) FROM purser.provider_billing_documents WHERE tenant_id=$1::uuid AND tax_status='legacy_unknown'`, tenant).Scan(&unknown); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.QueryRow(`SELECT count(*) FROM purser.crypto_accounting_anomalies WHERE tenant_id=$1::uuid AND kind='provider_tax_document_review' AND status='open' AND occurrences=1`, tenant).Scan(&reviews); err != nil {
