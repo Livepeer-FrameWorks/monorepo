@@ -33,6 +33,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // DefaultBlockSize is the fixed VOD block-cache granularity. 32 MiB
@@ -79,6 +80,17 @@ func NewBlockStore(assetPath string, blockSize int64) *BlockStore {
 // Dir returns the .blocks/ directory path. The store does not create
 // it until the first write attempt.
 func (s *BlockStore) Dir() string { return s.assetPath + ".blocks" }
+
+// IsRetiredBlockCache identifies detached cache generations, which contain no
+// current artifact placement and can be reclaimed without artifact lifecycle events.
+func IsRetiredBlockCache(path string) bool {
+	name, ok := strings.CutSuffix(filepath.Base(path), ".blocks")
+	if !ok {
+		return false
+	}
+	asset, suffix, found := strings.Cut(name, ".retired-")
+	return found && suffix != "" && filepath.Ext(asset) != ""
+}
 
 // MetaPath returns the meta.json path.
 func (s *BlockStore) MetaPath() string { return filepath.Join(s.Dir(), "meta.json") }
@@ -196,6 +208,9 @@ func (s *BlockStore) detachGeneration() (string, error) {
 		return "", fmt.Errorf("prepare retired block cache path: %w", removeErr)
 	}
 	if renameErr := s.renameDir(s.Dir(), retired); renameErr != nil {
+		if os.IsNotExist(renameErr) {
+			return "", nil
+		}
 		return "", fmt.Errorf("detach superseded block cache: %w", renameErr)
 	}
 	return retired, nil

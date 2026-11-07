@@ -13,6 +13,7 @@ import (
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/leases"
+	"frameworks/api_sidecar/internal/relay"
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -170,6 +171,9 @@ func (cm *CleanupMonitor) checkAndCleanup() error {
 
 	// Sort candidates by priority (lowest priority = first to delete)
 	sort.Slice(candidates, func(i, j int) bool {
+		if retiredI, retiredJ := relay.IsRetiredBlockCache(candidates[i].FilePath), relay.IsRetiredBlockCache(candidates[j].FilePath); retiredI != retiredJ {
+			return retiredI
+		}
 		return candidates[i].Priority < candidates[j].Priority
 	})
 
@@ -270,16 +274,17 @@ func (cm *CleanupMonitor) getCleanupCandidates(dir string, assetType string) ([]
 		// exist (cold-only cache or warm + cache coexisting). Size is
 		// the sum of block files inside.
 		if info.IsDir() && strings.HasSuffix(path, ".blocks") && (assetType == "vod" || assetType == "clip") {
-			parentExt := filepath.Ext(strings.TrimSuffix(path, ".blocks"))
-			artifactHash := cm.extractArtifactHashFromPath(strings.TrimSuffix(path, ".blocks"), assetType)
-			if parentExt == "" || artifactHash == "" {
-				return filepath.SkipDir
-			}
-			if info.ModTime().After(minAge) {
-				return filepath.SkipDir
-			}
-			if tracker := leases.GlobalTracker(); tracker != nil && tracker.IsPathLeased(path) {
-				return filepath.SkipDir
+			retired := relay.IsRetiredBlockCache(path)
+			var artifactHash string
+			if !retired {
+				parentExt := filepath.Ext(strings.TrimSuffix(path, ".blocks"))
+				artifactHash = cm.extractArtifactHashFromPath(strings.TrimSuffix(path, ".blocks"), assetType)
+				if parentExt == "" || artifactHash == "" || info.ModTime().After(minAge) {
+					return filepath.SkipDir
+				}
+				if tracker := leases.GlobalTracker(); tracker != nil && tracker.IsPathLeased(path) {
+					return filepath.SkipDir
+				}
 			}
 			var dirBytes uint64
 			_ = filepath.Walk(path, func(_ string, fi os.FileInfo, walkErr error) error { //nolint:errcheck // size defaults to 0 on walk failure
@@ -468,6 +473,14 @@ func (cm *CleanupMonitor) deleteArtifactFile(artifact ClipCleanupInfo, assetType
 
 // cleanupClip removes an artifact from storage (clip, dvr, or vod)
 func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
+	// A retired generation is detached garbage, not an artifact placement.
+	// Its deletion needs neither Foghorn authorization nor lifecycle events.
+	if relay.IsRetiredBlockCache(artifact.FilePath) {
+		if err := os.RemoveAll(artifact.FilePath); err != nil {
+			return fmt.Errorf("remove retired block cache: %w", err)
+		}
+		return nil
+	}
 	// Boot pause: destructive cleanup is disabled until lease state has been
 	// rebuilt (chapter registry rehydration + first Mist reconciliation).
 	if !leases.IsDestructiveCleanupAllowed() {

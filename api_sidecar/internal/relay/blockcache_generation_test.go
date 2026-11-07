@@ -64,7 +64,10 @@ func TestBlockCacheSlowRetiredDeletionDoesNotBlockSameAsset(t *testing.T) {
 			finished <- readErr
 			return
 		}
-		s.fills.wg.Wait()
+		if !eventuallyHasBlock(other, 0) {
+			finished <- fmt.Errorf("replacement fill did not publish")
+			return
+		}
 		var warm bytes.Buffer
 		served, readErr := s.serveWarmBlock(&warm, other, span, "new", 8)
 		if readErr != nil {
@@ -100,6 +103,7 @@ func TestBlockCacheSlowRetiredDeletionDoesNotBlockSameAsset(t *testing.T) {
 	if result != nil {
 		t.Fatal(result)
 	}
+	s.fills.wg.Wait()
 	if deleting == store.Dir() {
 		t.Fatal("cleanup targeted the active cache directory")
 	}

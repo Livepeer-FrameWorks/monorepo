@@ -37,7 +37,10 @@ type blockFills struct {
 	// mem holds the memory fills, running and lingering, at most
 	// maxMemoryFills of them.
 	mem map[string]*blockFill
-	// wg counts the fill goroutines still running.
+	// retiredCleanup bounds recursive deletions; overflow remains ordinary
+	// retired-cache garbage instead of queuing work behind a slow filesystem.
+	retiredCleanup chan struct{}
+	// wg counts fill and retired-cache cleanup goroutines still running.
 	wg sync.WaitGroup
 }
 
@@ -47,7 +50,7 @@ type blockStoreLock struct {
 }
 
 func newBlockFills() *blockFills {
-	return &blockFills{inflight: make(map[string]*blockFill), mem: make(map[string]*blockFill), stores: make(map[string]*blockStoreLock)}
+	return &blockFills{inflight: make(map[string]*blockFill), mem: make(map[string]*blockFill), stores: make(map[string]*blockStoreLock), retiredCleanup: make(chan struct{}, 2)}
 }
 
 // lockStore serializes identity changes and disk operations for one cache
