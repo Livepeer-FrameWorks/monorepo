@@ -27,6 +27,7 @@ package relay
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -63,6 +64,7 @@ type BlockStore struct {
 	assetPath string // <storagePath>/vod/<hash>.<ext>
 	blockSize int64
 	removeAll func(string) error
+	renameDir func(string, string) error
 }
 
 // NewBlockStore returns a store rooted at <assetPath>.blocks/.
@@ -71,7 +73,7 @@ func NewBlockStore(assetPath string, blockSize int64) *BlockStore {
 	if blockSize <= 0 {
 		blockSize = DefaultBlockSize
 	}
-	return &BlockStore{assetPath: assetPath, blockSize: blockSize, removeAll: os.RemoveAll}
+	return &BlockStore{assetPath: assetPath, blockSize: blockSize, removeAll: os.RemoveAll, renameDir: os.Rename}
 }
 
 // Dir returns the .blocks/ directory path. The store does not create
@@ -139,29 +141,30 @@ func (s *BlockStore) SaveMeta(m *BlockMeta) error {
 // size and upstream object, and rebuilds the dir from scratch when they
 // don't match (the blocks are another object's bytes). An unknown object on
 // either side matches; the first known one is recorded. Creates a fresh meta
-// when the dir is empty or unreadable.
+// when the dir is empty or unreadable. Cleanup errors leave the new identity
+// in place and the detached bytes eligible for ordinary cache eviction.
 func (s *BlockStore) EnsureMeta(assetHash, ext, object string, totalSize int64) (*BlockMeta, error) {
+	meta, retired, err := s.prepareMeta(assetHash, ext, object, totalSize)
+	return meta, errors.Join(err, s.removeRetired(retired))
+}
+
+// prepareMeta atomically detaches an untrusted generation before replacing its
+// metadata. Callers that serialize the directory remove retired after unlocking.
+func (s *BlockStore) prepareMeta(assetHash, ext, object string, totalSize int64) (*BlockMeta, string, error) {
 	m, err := s.LoadMeta()
 	if err == nil && m.AssetHash == assetHash && m.TotalSize == totalSize && m.BlockSize == s.blockSize && sameObject(m.Object, object) {
 		if m.Object == "" && object != "" {
 			m.Object = object
 			if saveErr := s.SaveMeta(m); saveErr != nil {
-				return nil, saveErr
+				return nil, "", saveErr
 			}
 		}
-		return m, nil
+		return m, "", nil
 	}
+	// Missing or unreadable metadata cannot bless leftover blocks either.
+	retired, err := s.detachGeneration()
 	if err != nil {
-		// Missing metadata can follow a failed partial invalidation; its
-		// remaining blocks have no trustworthy object identity.
-		if removeErr := s.removeAll(s.Dir()); removeErr != nil {
-			return nil, fmt.Errorf("remove unreadable block cache: %w", removeErr)
-		}
-	} else {
-		// Identity mismatch — drop the stale cache entirely.
-		if removeErr := s.removeAll(s.Dir()); removeErr != nil {
-			return nil, fmt.Errorf("remove superseded block cache: %w", removeErr)
-		}
+		return nil, "", err
 	}
 	fresh := &BlockMeta{
 		AssetHash: assetHash,
@@ -171,9 +174,41 @@ func (s *BlockStore) EnsureMeta(assetHash, ext, object string, totalSize int64) 
 		Object:    object,
 	}
 	if err := s.SaveMeta(fresh); err != nil {
-		return nil, err
+		return nil, retired, err
 	}
-	return fresh, nil
+	return fresh, retired, nil
+}
+
+func (s *BlockStore) detachGeneration() (string, error) {
+	if _, err := os.Lstat(s.Dir()); os.IsNotExist(err) {
+		return "", nil
+	} else if err != nil {
+		return "", fmt.Errorf("inspect superseded block cache: %w", err)
+	}
+	// The .blocks suffix keeps a failed deletion eligible for ordinary cache
+	// pressure eviction, including after a restart. The unique sibling stays
+	// on the same filesystem and is never another request's active directory.
+	retired, err := os.MkdirTemp(filepath.Dir(s.Dir()), filepath.Base(s.assetPath)+".retired-*.blocks")
+	if err != nil {
+		return "", fmt.Errorf("reserve retired block cache path: %w", err)
+	}
+	if removeErr := os.Remove(retired); removeErr != nil && !os.IsNotExist(removeErr) {
+		return "", fmt.Errorf("prepare retired block cache path: %w", removeErr)
+	}
+	if renameErr := s.renameDir(s.Dir(), retired); renameErr != nil {
+		return "", fmt.Errorf("detach superseded block cache: %w", renameErr)
+	}
+	return retired, nil
+}
+
+func (s *BlockStore) removeRetired(path string) error {
+	if path == "" {
+		return nil
+	}
+	if err := s.removeAll(path); err != nil {
+		return fmt.Errorf("remove retired block cache %s: %w", path, err)
+	}
+	return nil
 }
 
 func (s *BlockStore) matchesObject(object string, totalSize int64) bool {

@@ -143,10 +143,10 @@ func TestBlockCacheReplacementSerializesSeparateHandlesOfSameDirectory(t *testin
 		t.Fatal(err)
 	}
 	entered, release, invalidated := make(chan struct{}), make(chan struct{}), make(chan error, 1)
-	store.removeAll = func(dir string) error {
+	store.renameDir = func(from, to string) error {
 		close(entered)
 		<-release
-		return os.RemoveAll(dir)
+		return os.Rename(from, to)
 	}
 	go func() { invalidated <- s.prepareBlockStore(store, "h", ".mkv", "new", 8) }()
 	<-entered

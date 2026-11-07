@@ -379,15 +379,20 @@ func (s *Server) serveBlocksFrom(c *gin.Context, kind, hash, ext, localPath stri
 }
 
 func (s *Server) prepareBlockStore(store *BlockStore, hash, ext, object string, totalSize int64) error {
-	unlock := s.fills.lockStore(store)
-	defer unlock()
-	// Tmp files left by an earlier process are removed once; later ones
-	// belong to this process's fills, which may still be writing them.
-	if _, cleaned := s.cleanedBlockDirs.LoadOrStore(store.Dir(), struct{}{}); !cleaned {
-		store.CleanTmps()
-	}
-	_, err := store.EnsureMeta(hash, ext, object, totalSize)
-	return err
+	retired, err := func() (string, error) {
+		unlock := s.fills.lockStore(store)
+		defer unlock()
+		// Tmp files left by an earlier process are removed once; later ones
+		// belong to this process's fills, which may still be writing them.
+		if _, cleaned := s.cleanedBlockDirs.LoadOrStore(store.Dir(), struct{}{}); !cleaned {
+			store.CleanTmps()
+		}
+		_, retired, initErr := store.prepareMeta(hash, ext, object, totalSize)
+		return retired, initErr
+	}()
+	// Recursive deletion can be slow; the detached path cannot affect the
+	// replacement generation and needs no active-directory identity lock.
+	return errors.Join(err, store.removeRetired(retired))
 }
 
 // serveBlockSpan serves a single block's worth of bytes (clipped to
