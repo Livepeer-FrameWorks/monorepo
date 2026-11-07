@@ -22,14 +22,18 @@ func TestBlockCacheReplacementDoesNotBlessFailedInvalidation(t *testing.T) {
 	if err := store.WriteBlock(0, []byte("OLD-BODY")); err != nil {
 		t.Fatal(err)
 	}
-	removeErr := errors.New("directory not empty")
-	store.removeAll = func(string) error { return removeErr }
-	if _, err := store.EnsureMeta("h", ".mkv", "new", 8); !errors.Is(err, removeErr) {
-		t.Fatalf("invalidation error=%v, want %v", err, removeErr)
+	renameErr := errors.New("rename denied")
+	store.renameDir = func(string, string) error { return renameErr }
+	if _, err := store.EnsureMeta("h", ".mkv", "new", 8); !errors.Is(err, renameErr) {
+		t.Fatalf("invalidation error=%v, want %v", err, renameErr)
 	}
 	meta, err := store.LoadMeta()
 	if err != nil || meta.Object != "old" {
 		t.Fatalf("failed invalidation replaced source identity: meta=%+v err=%v", meta, err)
+	}
+	retired, globErr := filepath.Glob(store.assetPath + ".retired-*.blocks")
+	if globErr != nil || len(retired) != 0 {
+		t.Fatalf("failed rename left retired generations: %v err=%v", retired, globErr)
 	}
 }
 
@@ -41,17 +45,15 @@ func TestBlockCacheReplacementRetryDropsPartiallyInvalidatedBlocks(t *testing.T)
 	if err := store.WriteBlock(0, []byte("OLD-BODY")); err != nil {
 		t.Fatal(err)
 	}
-	removeErr := errors.New("directory not empty")
-	store.removeAll = func(string) error {
-		if err := os.Remove(store.MetaPath()); err != nil {
-			t.Fatal(err)
-		}
-		return removeErr
+	renameErr := errors.New("rename denied")
+	store.renameDir = func(string, string) error { return renameErr }
+	if _, err := store.EnsureMeta("h", ".mkv", "new", 8); !errors.Is(err, renameErr) {
+		t.Fatalf("first invalidation error=%v, want %v", err, renameErr)
 	}
-	if _, err := store.EnsureMeta("h", ".mkv", "new", 8); !errors.Is(err, removeErr) {
-		t.Fatalf("first invalidation error=%v, want %v", err, removeErr)
+	if err := os.Remove(store.MetaPath()); err != nil {
+		t.Fatal(err)
 	}
-	store.removeAll = os.RemoveAll
+	store.renameDir = os.Rename
 	meta, err := store.EnsureMeta("h", ".mkv", "new", 8)
 	if err != nil || meta.Object != "new" {
 		t.Fatalf("replacement retry: meta=%+v err=%v", meta, err)
