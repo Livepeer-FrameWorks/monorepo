@@ -165,7 +165,7 @@ paid_stripe_upgrade() {
 check 'deployed paid Stripe upgrade credits original zero VAT and charges new 21 percent fee' paid_stripe_upgrade
 held_stripe_renewal() {
  local fallback_tenants="" label
- for label in business eu-consumer foreign-consumer invalid-claim; do
+ for label in business eu-consumer foreign-consumer invalid-claim business-proof; do
   fresh_invoice_tenant "stripe-fallback-$label" || return 1
   json_has "$(profile business AT ATU12345678)" '.errors == null' || return 1
   fallback_tenants="${fallback_tenants:+$fallback_tenants,}$tenant"

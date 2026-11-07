@@ -159,7 +159,8 @@ workers handle older held invoices. Completed recovery acknowledges only its own
 pending work, so a concurrent hold cannot lose its recovery and ordinary
 reconciliations do not keep listing historical invoices.
 For a Dutch supplier, existing recurring subscriptions with incomplete billing
-profiles or an invalid VAT claim collect Dutch VAT on top of the net price through
+profiles, an invalid VAT claim, or missing business-establishment proof required by
+a configured country policy collect Dutch VAT on top of the net price through
 Stripe and Mollie, without a collection hold. Purser selects this treatment before
 location-policy checks for an incomplete profile. It loads the effective Dutch
 rate, currently 21%, and freezes the rate's source and effective date. Temporary
