@@ -150,8 +150,11 @@ func TestOperatorTierChangeCacheFailure_RealPG(t *testing.T) {
 				if _, err := db.Exec(`UPDATE purser.billing_tiers SET base_price=50,stripe_price_id_monthly='new-price' WHERE id=$1`, nextTier); err != nil {
 					t.Fatal(err)
 				}
-				start := time.Now().UTC().Truncate(time.Second)
-				fixture := &upgradeProviderFixture{tenant: tenant, oldTier: oldTier, start: start, end: start.AddDate(0, 1, 0), stripeMetadata: map[string]string{"tenant_id": tenant, "tier_id": oldTier}}
+				var start, end time.Time
+				if err := db.QueryRowContext(t.Context(), `SELECT billing_period_start,billing_period_end FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&start, &end); err != nil {
+					t.Fatal(err)
+				}
+				fixture := &upgradeProviderFixture{tenant: tenant, oldTier: oldTier, start: start, end: end, stripeMetadata: map[string]string{"tenant_id": tenant, "tier_id": oldTier}}
 				provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fixture.serve(t, w, r) }))
 				t.Cleanup(provider.Close)
 				previous := stripeapi.GetBackend(stripeapi.APIBackend)
