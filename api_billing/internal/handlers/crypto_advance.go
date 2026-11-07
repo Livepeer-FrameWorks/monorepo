@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"strings"
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
@@ -213,11 +212,8 @@ func validateCryptoAdvanceSupplier(profile CryptoBillingProfile) error {
 	if profile.TaxAssessment == nil {
 		return fmt.Errorf("crypto advance has no retained tax assessment")
 	}
-	supplier := profile.TaxAssessment.Supplier
-	for _, value := range []string{supplier.Name, supplier.Address, supplier.VATNumber, supplier.RegistrationNumber} {
-		if strings.TrimSpace(value) == "" {
-			return fmt.Errorf("complete supplier identity required before crypto payment instructions")
-		}
+	if !profile.TaxAssessment.Supplier.Complete() {
+		return fmt.Errorf("complete supplier identity required before crypto payment instructions")
 	}
 	return nil
 }

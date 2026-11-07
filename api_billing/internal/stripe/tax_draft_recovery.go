@@ -25,17 +25,20 @@ func recoverStripeTaxInvoices(ctx context.Context, sub *api.Subscription, profil
 	report.ContextSHA = contextSHA
 	var failures error
 	reported := map[string]bool{}
-	for _, status := range []string{"draft"} {
+	for _, status := range []string{"draft", "open"} {
 		p := &api.InvoiceListParams{Subscription: api.String(sub.ID), Status: api.String(status)}
 		p.Context = ctx
 		p.Limit = api.Int64(100)
 		iter := invoice.List(p)
 		for iter.Next() {
 			inv := iter.Invoice()
-			if inv.Status != api.InvoiceStatusDraft || !ownedTaxHeldInvoice(sub, inv) {
+			if (inv.Status != api.InvoiceStatusDraft && inv.Status != api.InvoiceStatusOpen) || !ownedTaxHeldInvoice(sub, inv) {
 				continue
 			}
-			if ownedTaxHeldInvoice(sub, inv) {
+			if inv.Status == api.InvoiceStatusOpen && inv.Metadata["frameworks_tax_recovered_hold"] == "true" && inv.Metadata["frameworks_tax_profile"] != "" {
+				continue
+			}
+			if inv.Status == api.InvoiceStatusDraft {
 				if lineErr := completeTaxRecoveryInvoiceLines(ctx, inv); lineErr != nil {
 					failures = errors.Join(failures, lineErr)
 					report.RetryPending = true
@@ -79,11 +82,14 @@ func recoverStripeTaxInvoice(ctx context.Context, sub *api.Subscription, inv *ap
 	if !ownedTaxHeldInvoice(sub, inv) {
 		return nil
 	}
+	if inv.Status == api.InvoiceStatusOpen {
+		if inv.Metadata["frameworks_tax_recovered_hold"] != "true" || inv.Metadata["frameworks_tax_profile"] == "" {
+			return review("stripe_held_invoice_missing_frozen_tax", "Finalized held invoice lacks frozen tax proof; preserve its original money for review")
+		}
+		return nil
+	}
 	if inv.BillingReason != api.InvoiceBillingReasonSubscriptionCycle {
 		return review("stripe_held_invoice_nonrenewal", "Owned held invoice is not a regular renewal; review its original supply before correction")
-	}
-	if inv.Customer == nil || sub.Customer == nil || inv.Customer.ID != sub.Customer.ID {
-		return review("stripe_held_invoice_owner_mismatch", "Held invoice customer ownership requires review")
 	}
 	if sub.PauseCollection != nil && (sub.Metadata["frameworks_tax_pause_owned"] != "true" || sub.PauseCollection.Behavior != api.SubscriptionPauseCollectionBehaviorKeepAsDraft || sub.PauseCollection.ResumesAt != 0) {
 		return review("stripe_held_invoice_operator_pause", "An operator changed collection policy for this held invoice")

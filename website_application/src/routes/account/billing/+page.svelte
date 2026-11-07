@@ -890,7 +890,7 @@
       !billingDetails.isComplete &&
       !isPrepaid &&
       billingStatus?.subscription != null &&
-      billingStatus.subscription.status !== "cancelled" &&
+      !["cancelled", "ended"].includes(billingStatus.subscription.status) &&
       ["stripe", "mollie"].includes(
         (
           billingStatus.collectionProvider ||

@@ -6,6 +6,7 @@ const fixture = vi.hoisted(() => ({
   paymentMethod: "",
   complete: false,
   ready: true,
+  status: "active",
   completeProfile: (_complete: boolean) => {},
 }));
 
@@ -55,7 +56,7 @@ vi.mock("$houdini", async () => {
             collectionProvider: fixture.provider,
             setupProviders: ["stripe", "mollie"],
             subscription: {
-              status: "active",
+              status: fixture.status,
               billingModel: "postpaid",
               paymentMethod: fixture.paymentMethod,
             },
@@ -96,6 +97,7 @@ beforeEach(() => {
   fixture.paymentMethod = "";
   fixture.complete = false;
   fixture.ready = true;
+  fixture.status = "active";
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
 });
 afterEach(() => {
@@ -104,6 +106,18 @@ afterEach(() => {
 });
 
 describe("recurring collection billing profile", () => {
+  it.each(["ended", "cancelled"])(
+    "keeps paid-plan setup guidance visible for a %s subscription",
+    async (status) => {
+      fixture.status = status;
+      fixture.ready = false;
+      render(BillingPage);
+      await screen.findByText("Activate a Paid Plan");
+      expect(screen.queryByText("Complete your billing profile")).toBeNull();
+      expect(screen.getByText("Billing details required")).toBeTruthy();
+    }
+  );
+
   it.each(["stripe", "mollie"])(
     "prompts an active %s customer outside payment setup until their profile is complete",
     async (provider) => {

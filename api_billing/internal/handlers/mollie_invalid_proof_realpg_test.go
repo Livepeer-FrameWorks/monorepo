@@ -27,7 +27,7 @@ func TestNativeMollieInvalidAcceptedProofKeepsConfirmedOutcome_RealPG(t *testing
 	fixture.route("GET", "/v2/customers/customer/subscriptions/subscription", func(recordedProviderRequest) (int, any) {
 		return 200, map[string]any{"id": "subscription", "status": "active", "nextPaymentDate": next}
 	})
-	for _, mode := range []string{"invalid_decision", "incomplete_supplier", "mismatched_rate", "gross_mismatch"} {
+	for _, mode := range []string{"invalid_decision", "incomplete_supplier", "mismatched_rate", "gross_mismatch", "overpayment", "missing_profile", "missing_net", "malformed_net", "negative_net"} {
 		t.Run(mode, func(t *testing.T) {
 			tenant := seedPrepaidLedgerTenant(t, db)
 			customer := "customer-" + tenant
@@ -68,17 +68,30 @@ func TestNativeMollieInvalidAcceptedProofKeepsConfirmedOutcome_RealPG(t *testing
 			digest := sha256.Sum256([]byte(tenant + mode))
 			sha := hex.EncodeToString(digest[:])
 			frozen, _ = json.Marshal(profile)
-			if err = purserdb.New(db).StoreProviderTaxProfile(t.Context(), purserdb.StoreProviderTaxProfileParams{TenantID: tenant, ProfileSha256: sha, Profile: frozen}); err != nil {
-				t.Fatal(err)
+			if mode != "missing_profile" {
+				if err = purserdb.New(db).StoreProviderTaxProfile(t.Context(), purserdb.StoreProviderTaxProfileParams{TenantID: tenant, ProfileSha256: sha, Profile: frozen}); err != nil {
+					t.Fatal(err)
+				}
 			}
 			metadata := map[string]any{"tenant_id": tenant}
 			terms.Metadata(metadata)
 			metadata["frameworks_tax_profile"] = sha
+			switch mode {
+			case "missing_net":
+				delete(metadata, "frameworks_net_minor")
+			case "malformed_net":
+				metadata["frameworks_net_minor"] = "not-cents"
+			case "negative_net":
+				metadata["frameworks_net_minor"] = "-100"
+			}
 			payment := &mollieapi.Payment{ID: "confirmed-" + tenant, CustomerID: customer, SubscriptionID: "subscription", Status: "paid", PaidAt: &now, Amount: &mollieapi.Amount{Currency: "EUR", Value: "121.00"}, Metadata: metadata}
 			wantGross, wantDunning := int64(12100), 0
 			if mode == "gross_mismatch" {
 				payment.Amount.Value = "1.00"
 				wantGross, wantDunning = 100, 2
+			} else if mode == "overpayment" {
+				payment.Amount.Value = "200.00"
+				wantGross = 20000
 			}
 			svc := &Service{db: db, mollieClient: client, logger: logging.NewLogger()}
 			for repeat := 0; repeat < 2; repeat++ {
@@ -101,6 +114,15 @@ func TestNativeMollieInvalidAcceptedProofKeepsConfirmedOutcome_RealPG(t *testing
 			}
 			if status != "review" || hasTaxSplit || !reviewed || gross != wantGross || (mode == "incomplete_supplier" && supplierAddress != "") {
 				t.Fatalf("unknown accepted tax facts invented: status%s split%v reviewed%v cash%d supplierAddress%q", status, hasTaxSplit, reviewed, gross, supplierAddress)
+			}
+			if mode == "missing_profile" && supplierAddress != "" {
+				t.Fatal("missing accepted profile was replaced by current supplier")
+			}
+			if mode == "missing_net" || mode == "malformed_net" || mode == "negative_net" {
+				var inventedNet bool
+				if err = db.QueryRow(`SELECT tax_decision->'accepted_net_minor'<>'null'::jsonb FROM purser.billing_invoices WHERE tenant_id=$1::uuid`, tenant).Scan(&inventedNet); err != nil || inventedNet {
+					t.Fatalf("unknown accepted net was fabricated: invented%v err%v", inventedNet, err)
+				}
 			}
 			documents, err := purserdb.New(db).ListBillingDocuments(t.Context(), tenant)
 			if err != nil {

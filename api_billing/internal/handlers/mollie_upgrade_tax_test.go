@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,6 +51,9 @@ func TestPaidMollieUpgradeRetainsCurrentTaxOnExistingNetBeforePurchase(t *testin
 				mock.ExpectQuery("-- name: GetEffectiveVATRate").WillReturnRows(sqlmock.NewRows([]string{"rate_bps", "source", "source_checked_on", "effective_from"}).AddRow(2100, "Dutch VAT", "2026-01-01", "2026-01-01"))
 			}
 			failure := errors.New("tax preflight unavailable")
+			if tc.country == "CA" {
+				mock.ExpectQuery("-- name: GetProviderTaxProfile").WithArgs("tenant", sqlmock.AnyArg()).WillReturnError(sql.ErrNoRows)
+			}
 			store := mock.ExpectExec("-- name: StoreProviderTaxProfile").WithArgs("tenant", sqlmock.AnyArg(), retainedUpgradeTaxArg{profile: retained})
 			if tc.retainFail {
 				store.WillReturnError(failure)

@@ -174,6 +174,9 @@ func (s *Service) assessImportedStripeInvoice(ctx context.Context, tenant string
 			}
 		}
 	}
+	if profile.IncompleteProfile {
+		reasons = append(reasons, "incomplete_recurring_billing_profile")
+	}
 	if len(reasons) == 0 {
 		reasons = append(reasons, stripeIssuedPartiesReview(doc, profile)...)
 	}

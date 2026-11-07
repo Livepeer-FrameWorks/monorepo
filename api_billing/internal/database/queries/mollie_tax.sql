@@ -2,7 +2,7 @@
 INSERT INTO purser.billing_invoices(tenant_id,status,currency,amount,base_amount,due_date,paid_at,finalized_at,
  usage_details,presentment_amount_cents,presentment_currency,presentment_units_per_eur,presentment_reference_date,
  source_reference_type,source_reference_id)
-VALUES(sqlc.arg(tenant_id)::text::uuid,'paid','EUR',sqlc.arg(gross_minor)::bigint/100.0,sqlc.arg(net_minor)::bigint/100.0,
+VALUES(sqlc.arg(tenant_id)::text::uuid,'paid','EUR',sqlc.arg(gross_minor)::bigint/100.0,COALESCE(sqlc.narg(net_minor)::bigint,0)/100.0,
  sqlc.arg(tax_point)::timestamptz,sqlc.arg(tax_point)::timestamptz,sqlc.arg(tax_point)::timestamptz,
  jsonb_build_object('supply','subscription_base','payment_reference',sqlc.arg(payment_id)::text),
  sqlc.arg(gross_minor)::bigint,'EUR',1,sqlc.arg(tax_point)::timestamptz::date,'mollie_native_payment',sqlc.arg(payment_id))

@@ -2368,7 +2368,7 @@ func isBillingDetailsComplete(billingEmail sql.NullString, billingAddress []byte
 	if err != nil {
 		return false
 	}
-	return addr.Street != "" && addr.City != "" && addr.PostalCode != "" && addr.Country != ""
+	return strings.TrimSpace(addr.Street) != "" && strings.TrimSpace(addr.City) != "" && strings.TrimSpace(addr.PostalCode) != "" && countries.IsValid(addr.Country)
 }
 
 func (h *X402Handler) getCountryFromIP(clientIP string) string {

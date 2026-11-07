@@ -17,7 +17,7 @@ const insertNativeMollieTaxInvoice = `-- name: InsertNativeMollieTaxInvoice :one
 INSERT INTO purser.billing_invoices(tenant_id,status,currency,amount,base_amount,due_date,paid_at,finalized_at,
  usage_details,presentment_amount_cents,presentment_currency,presentment_units_per_eur,presentment_reference_date,
  source_reference_type,source_reference_id)
-VALUES($1::text::uuid,'paid','EUR',$2::bigint/100.0,$3::bigint/100.0,
+VALUES($1::text::uuid,'paid','EUR',$2::bigint/100.0,COALESCE($3::bigint,0)/100.0,
  $4::timestamptz,$4::timestamptz,$4::timestamptz,
  jsonb_build_object('supply','subscription_base','payment_reference',$5::text),
  $2::bigint,'EUR',1,$4::timestamptz::date,'mollie_native_payment',$5)
@@ -28,7 +28,7 @@ RETURNING id::text AS id,invoice_number
 type InsertNativeMollieTaxInvoiceParams struct {
 	TenantID   string         `db:"tenant_id" json:"tenant_id"`
 	GrossMinor int64          `db:"gross_minor" json:"gross_minor"`
-	NetMinor   int64          `db:"net_minor" json:"net_minor"`
+	NetMinor   sql.NullInt64  `db:"net_minor" json:"net_minor"`
 	TaxPoint   time.Time      `db:"tax_point" json:"tax_point"`
 	PaymentID  sql.NullString `db:"payment_id" json:"payment_id"`
 }

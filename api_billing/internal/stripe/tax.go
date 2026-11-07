@@ -22,24 +22,25 @@ import (
 )
 
 type TaxProfile struct {
-	Name             string          `json:"name"`
-	Company          string          `json:"company,omitempty"`
-	Email            string          `json:"email"`
-	Street           string          `json:"street"`
-	City             string          `json:"city"`
-	PostalCode       string          `json:"postal_code"`
-	Country          string          `json:"country"`
-	VATNumber        string          `json:"vat_number,omitempty"`
-	RateBPS          int             `json:"rate_bps"`
-	ReverseCharge    bool            `json:"reverse_charge"`
-	Wording          string          `json:"wording"`
-	SupplierCountry  string          `json:"supplier_country"`
-	SupplierIdentity string          `json:"supplier_identity"`
-	PolicyReference  string          `json:"policy_reference,omitempty"`
-	PolicyValidFrom  *time.Time      `json:"policy_valid_from,omitempty"`
-	PolicyValidUntil *time.Time      `json:"policy_valid_until,omitempty"`
-	Evidence         json.RawMessage `json:"evidence,omitempty"`
-	ProfileSHA       string          `json:"profile_sha,omitempty"`
+	Name              string          `json:"name"`
+	Company           string          `json:"company,omitempty"`
+	Email             string          `json:"email"`
+	Street            string          `json:"street"`
+	City              string          `json:"city"`
+	PostalCode        string          `json:"postal_code"`
+	Country           string          `json:"country"`
+	VATNumber         string          `json:"vat_number,omitempty"`
+	RateBPS           int             `json:"rate_bps"`
+	ReverseCharge     bool            `json:"reverse_charge"`
+	Wording           string          `json:"wording"`
+	SupplierCountry   string          `json:"supplier_country"`
+	SupplierIdentity  string          `json:"supplier_identity"`
+	PolicyReference   string          `json:"policy_reference,omitempty"`
+	PolicyValidFrom   *time.Time      `json:"policy_valid_from,omitempty"`
+	PolicyValidUntil  *time.Time      `json:"policy_valid_until,omitempty"`
+	Evidence          json.RawMessage `json:"evidence,omitempty"`
+	ProfileSHA        string          `json:"profile_sha,omitempty"`
+	IncompleteProfile bool            `json:"incomplete_profile,omitempty"`
 }
 
 func (p TaxProfile) Fingerprint() string {
@@ -56,13 +57,21 @@ func (p TaxProfile) Fingerprint() string {
 	return hex.EncodeToString(digest[:])
 }
 
+func (p TaxProfile) incompleteDutchVATFallback() bool {
+	return p.IncompleteProfile && p.SupplierCountry == "NL" && p.RateBPS == 2100 && !p.ReverseCharge
+}
+
 func (c *Client) PrepareCustomerTax(ctx context.Context, tenant, customerID string, p TaxProfile) (string, error) {
-	if tenant == "" || customerID == "" || p.Name == "" || p.Email == "" || p.Street == "" || p.City == "" || p.PostalCode == "" || p.Country == "" || p.SupplierCountry == "" || p.SupplierIdentity == "" || p.RateBPS < 0 || p.RateBPS > 10000 || (p.ReverseCharge && (p.RateBPS != 0 || p.VATNumber == "")) {
+	identityComplete := p.Name != "" && p.Email != "" && p.Street != "" && p.City != "" && p.PostalCode != "" && p.Country != ""
+	fallback := p.incompleteDutchVATFallback()
+	if tenant == "" || customerID == "" || (!identityComplete && !fallback) || (p.IncompleteProfile && !fallback) || p.SupplierCountry == "" || p.SupplierIdentity == "" || p.RateBPS < 0 || p.RateBPS > 10000 || (p.ReverseCharge && (p.RateBPS != 0 || p.VATNumber == "")) {
 		return "", fmt.Errorf("complete assessed Stripe tax profile required")
 	}
 	get := &api.CustomerParams{}
 	get.Context = ctx
-	get.AddExpand("tax_ids")
+	if !fallback {
+		get.AddExpand("tax_ids")
+	}
 	current, err := customer.Get(customerID, get)
 	if err != nil {
 		return "", err
@@ -70,7 +79,7 @@ func (c *Client) PrepareCustomerTax(ctx context.Context, tenant, customerID stri
 	if current.Metadata["tenant_id"] != tenant {
 		return "", fmt.Errorf("stripe customer does not belong to the tenant")
 	}
-	if current.TaxIDs != nil && current.TaxIDs.HasMore {
+	if !fallback && current.TaxIDs != nil && current.TaxIDs.HasMore {
 		list := &api.TaxIDListParams{Customer: api.String(customerID)}
 		list.Context = ctx
 		list.Limit = api.Int64(100)
@@ -93,16 +102,20 @@ func (c *Client) PrepareCustomerTax(ctx context.Context, tenant, customerID stri
 		footer += "\n" + p.Wording
 	}
 	exempt := "none"
-	addressMatches := current.Address != nil && current.Address.Line1 == p.Street && current.Address.City == p.City && current.Address.PostalCode == p.PostalCode && current.Address.Country == p.Country
+	addressMatches := fallback || current.Address != nil && current.Address.Line1 == p.Street && current.Address.City == p.City && current.Address.PostalCode == p.PostalCode && current.Address.Country == p.Country
 	footerMatches := current.InvoiceSettings != nil && current.InvoiceSettings.Footer == footer
-	if current.Name != legalName || current.Email != p.Email || !addressMatches || string(current.TaxExempt) != exempt || !footerMatches {
-		params := &api.CustomerParams{Name: api.String(legalName), Email: api.String(p.Email), Address: &api.AddressParams{Line1: api.String(p.Street), City: api.String(p.City), PostalCode: api.String(p.PostalCode), Country: api.String(p.Country)}, TaxExempt: api.String(exempt), InvoiceSettings: &api.CustomerInvoiceSettingsParams{Footer: api.String(footer)}}
+	if (!fallback && (current.Name != legalName || current.Email != p.Email)) || !addressMatches || string(current.TaxExempt) != exempt || !footerMatches {
+		params := &api.CustomerParams{TaxExempt: api.String(exempt), InvoiceSettings: &api.CustomerInvoiceSettingsParams{Footer: api.String(footer)}}
+		if !fallback {
+			params.Name, params.Email = api.String(legalName), api.String(p.Email)
+			params.Address = &api.AddressParams{Line1: api.String(p.Street), City: api.String(p.City), PostalCode: api.String(p.PostalCode), Country: api.String(p.Country)}
+		}
 		params.Context = ctx
 		if _, err = customer.Update(customerID, params); err != nil {
 			return "", err
 		}
 	}
-	if current.TaxIDs != nil {
+	if !fallback && current.TaxIDs != nil {
 		for _, id := range current.TaxIDs.Data {
 			if id.Type == api.TaxIDTypeEUVAT && (!billingtax.IsEU(p.Country) || id.Value != p.VATNumber) {
 				params := &api.TaxIDParams{Customer: api.String(customerID)}
@@ -113,7 +126,7 @@ func (c *Client) PrepareCustomerTax(ctx context.Context, tenant, customerID stri
 			}
 		}
 	}
-	if p.VATNumber != "" && billingtax.IsEU(p.Country) {
+	if !fallback && p.VATNumber != "" && billingtax.IsEU(p.Country) {
 		found := false
 		if current.TaxIDs != nil {
 			for _, id := range current.TaxIDs.Data {
