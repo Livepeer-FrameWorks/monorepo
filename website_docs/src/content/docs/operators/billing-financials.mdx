@@ -157,9 +157,15 @@ not prevent correctly taxed future renewals or other subscriptions from running.
 Checkout and tier-upgrade preflights synchronize future tax settings; background
 workers handle older held invoices. Completed recovery clears its pending marker,
 so ordinary reconciliations do not keep listing historical invoices.
-Incomplete recurring billing profiles remain visible as an operator review and
-a completion prompt on the customer's Billing page. Completing the legal name,
-email and address in Settings lets the worker synchronize future tax settings.
+For a Dutch supplier, existing recurring subscriptions with incomplete billing
+profiles collect 21% VAT on top of the net price through Stripe and Mollie, without
+a collection hold. Reverse charge and non-EU zero VAT require a complete,
+validated profile. A completion prompt remains on the customer's Billing page,
+and every newly issued fallback renewal has its own operator review. Resolving
+an older document's review does not hide the next fallback renewal. Completing
+the legal name, email and address lets the worker use the validated treatment.
+New Stripe/Mollie checkout and card top-up flows retain their existing
+billing-detail requirements.
 
 Draft renewals created during the tax hold receive the verified tax treatment
 and return to Stripe's automatic collection. Stripe handles declined payments,
@@ -176,6 +182,9 @@ invoice through Stripe and resolve its review. A deliberate `auto_advance=false`
 on a finalized invoice is preserved.
 Changing an operator pause or the subscription's customer rechecks outstanding
 drafts against that new context. Finalized invoices stay outside draft repair.
+An owned held invoice finalized outside the worker is checked for its frozen
+tax proof and receives an invoice review if that proof is missing. Its issued
+amounts and collection settings remain unchanged.
 
 For native Mollie payments, temporary assessment failures leave the webhook
 available for retry before an invoice is issued. Definitive mismatches retain
@@ -187,9 +196,10 @@ already accepted with a confirmed payment, records a document review, and lets
 the payment lifecycle proceed. Incomplete accepted evidence cannot be used to
 invent an invoice supplier. Confirmed payments with unusable accepted tax proof
 retain their actual received amount in a paid record requiring tax review,
-without an assessed net/VAT split or an emailed tax invoice. A received amount
-that differs from the accepted fee does not reset existing dunning attempts.
-Grace-based VAT evidence has a document-specific
+without an assessed net/VAT split or an emailed tax invoice. This also applies
+when the accepted profile or net metadata is missing. A received amount below
+the accepted gross fee does not reset existing dunning attempts; a full payment
+or overpayment does. Grace-based VAT evidence has a document-specific
 review that remains independent of the tenant's later revalidation notice.
 
 Temporary VIES failures during postpaid issuance roll back that attempt and use

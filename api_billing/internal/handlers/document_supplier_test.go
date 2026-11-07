@@ -7,6 +7,9 @@ func TestDocumentSupplierCompleteRequiresEveryLegalField(t *testing.T) {
 	if !complete.Complete() {
 		t.Fatal("complete legal identity rejected")
 	}
+	if err := validateCryptoAdvanceSupplier(CryptoBillingProfile{TaxAssessment: &CryptoTaxAssessment{Supplier: complete}}); err != nil {
+		t.Fatalf("complete crypto supplier rejected: %v", err)
+	}
 	for _, field := range []string{"name", "address", "vat", "registration"} {
 		for _, value := range []string{"", " \t\n "} {
 			t.Run(field+value, func(t *testing.T) {
@@ -23,6 +26,9 @@ func TestDocumentSupplierCompleteRequiresEveryLegalField(t *testing.T) {
 				}
 				if incomplete.Complete() {
 					t.Fatal("incomplete retained legal identity accepted")
+				}
+				if err := validateCryptoAdvanceSupplier(CryptoBillingProfile{TaxAssessment: &CryptoTaxAssessment{Supplier: incomplete}}); err == nil {
+					t.Fatal("crypto payment instructions accepted an incomplete legal supplier")
 				}
 			})
 		}

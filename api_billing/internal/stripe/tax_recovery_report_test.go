@@ -11,10 +11,12 @@ import (
 
 type recoveryReportBackend struct {
 	taxBackend
-	inv           *api.Invoice
-	allLines      []*api.InvoiceLineItem
-	invoiceWrites int
-	repairs       *heldDraftBackend
+	inv               *api.Invoice
+	allLines          []*api.InvoiceLineItem
+	invoiceWrites     int
+	repairs           *heldDraftBackend
+	subscriptionReads int
+	afterInvoiceAck   func()
 }
 
 func (b *recoveryReportBackend) CallRaw(method, path, key string, body []byte, p *api.Params, out api.LastResponseSetter) error {
@@ -47,8 +49,14 @@ func (b *recoveryReportBackend) Call(method, path, key string, params api.Params
 		}
 		b.inv.Metadata = metadata
 		b.invoiceWrites++
+		if b.afterInvoiceAck != nil {
+			b.afterInvoiceAck()
+		}
 		*inv = *b.inv
 		return nil
+	}
+	if _, ok := out.(*api.Subscription); ok && method == http.MethodGet {
+		b.subscriptionReads++
 	}
 	if err := b.taxBackend.Call(method, path, key, params, out); err != nil {
 		return err
@@ -68,6 +76,37 @@ func (b *recoveryReportBackend) Call(method, path, key string, params api.Params
 		b.currentSub.Metadata = metadata
 	}
 	return nil
+}
+
+func TestTaxRecoveryAckWithoutInvoiceWritesReadsSubscriptionOnce(t *testing.T) {
+	c, b, p := terminalReviewFixture(t)
+	b.inv.Status = api.InvoiceStatusOpen
+	b.inv.Metadata = map[string]string{"frameworks_tax_recovered_hold": "true", "frameworks_tax_profile": p.Fingerprint()}
+	report, err := c.ReconcileSubscriptionTax(t.Context(), "tenant", "customer", "sub", p)
+	if err != nil || len(report.Reviews) != 0 {
+		t.Fatalf("unexpected recovered invoice review: %+v %v", report, err)
+	}
+	before := b.subscriptionReads
+	if err = c.AckTaxRecoveryReport(t.Context(), report); err != nil {
+		t.Fatal(err)
+	}
+	if reads := b.subscriptionReads - before; reads != 1 {
+		t.Fatalf("ordinary recovery acknowledgement fetched subscription %d times, want1", reads)
+	}
+}
+
+func TestTaxRecoveryAckKeepsPostWriteFenceForChangedCollectionContext(t *testing.T) {
+	c, b, p := terminalReviewFixture(t)
+	report, err := c.ReconcileSubscriptionTax(t.Context(), "tenant", "customer", "sub", p)
+	if err != nil || len(report.Reviews) != 1 {
+		t.Fatalf("missing review: %+v %v", report, err)
+	}
+	b.afterInvoiceAck = func() {
+		b.currentSub.PauseCollection = &api.SubscriptionPauseCollection{Behavior: api.SubscriptionPauseCollectionBehaviorKeepAsDraft}
+	}
+	if err = c.AckTaxRecoveryReport(t.Context(), report); err == nil || b.currentSub.Metadata["frameworks_tax_recovery_pending"] != "true" {
+		t.Fatalf("invoice acknowledgement cleared newer subscription collection work: %v", err)
+	}
 }
 
 func TestTerminalDraftResumesAfterSubscriptionPauseChanges(t *testing.T) {
@@ -120,6 +159,7 @@ func TestLegacyContextDiscoveryDoesNotReviewFinalizedInvoices(t *testing.T) {
 	c, b, p := terminalReviewFixture(t)
 	delete(b.currentSub.Metadata, "frameworks_tax_recovery_pending")
 	b.inv.Status = api.InvoiceStatusOpen
+	b.inv.Metadata = map[string]string{"frameworks_tax_recovered_hold": "true", "frameworks_tax_profile": p.Fingerprint()}
 	report, err := c.ReconcileSubscriptionTax(t.Context(), "tenant", "customer", "sub", p)
 	if err != nil || !report.RecoveryPending || len(report.Reviews) != 0 || b.invoiceWrites != 0 {
 		t.Fatalf("legacy discovery did not complete its read-only finalized-debt control: %+v err=%v writes=%d", report, err, b.invoiceWrites)
@@ -138,10 +178,34 @@ func TestFinalizedInvoicesAreNotReopenedByCurrentTaxProfile(t *testing.T) {
 	c, b, p := terminalReviewFixture(t)
 	b.inv.Status = api.InvoiceStatusOpen
 	b.inv.BillingReason = api.InvoiceBillingReasonSubscriptionCycle
+	b.inv.Metadata = map[string]string{"frameworks_tax_recovered_hold": "true", "frameworks_tax_profile": p.Fingerprint()}
 	p.RateBPS = 0
 	report, err := c.ReconcileSubscriptionTax(t.Context(), "tenant", "customer", "sub", p)
 	if err != nil || len(report.Reviews) != 0 || b.invoiceWrites != 0 {
 		t.Fatalf("current profile reopened finalized invoice facts: %+v %v writes=%d", report, err, b.invoiceWrites)
+	}
+}
+
+func TestExternallyFinalizedOwnedInvoiceRequiresFrozenTaxReview(t *testing.T) {
+	c, b, p := terminalReviewFixture(t)
+	b.inv.Status = api.InvoiceStatusOpen
+	b.inv.BillingReason = api.InvoiceBillingReasonSubscriptionCycle
+	b.inv.Total, b.inv.TotalExcludingTax = 10000, 10000
+	report, err := c.ReconcileSubscriptionTax(t.Context(), "tenant", "customer", "sub", p)
+	if err != nil || len(report.Reviews) != 1 || report.Reviews[0].Code != "stripe_held_invoice_missing_frozen_tax" {
+		t.Fatalf("externally finalized owned invoice escaped review: %+v %v", report, err)
+	}
+	if err = c.AckTaxRecoveryReport(t.Context(), report); err != nil {
+		t.Fatal(err)
+	}
+	if b.inv.Metadata[taxTerminalCode] != "stripe_held_invoice_missing_frozen_tax" || b.inv.Total != 10000 || b.inv.AutoAdvance || b.inv.Status != api.InvoiceStatusOpen {
+		t.Fatal("open invoice review changed original money or collection")
+	}
+	p.RateBPS = 0
+	b.currentSub.Metadata["frameworks_tax_recovery_pending"] = "true"
+	again, err := c.ReconcileSubscriptionTax(t.Context(), "tenant", "customer", "sub", p)
+	if err != nil || len(again.Reviews) != 0 {
+		t.Fatalf("current rate reopened the unchanged finalized-invoice review: %+v %v", again, err)
 	}
 }
 

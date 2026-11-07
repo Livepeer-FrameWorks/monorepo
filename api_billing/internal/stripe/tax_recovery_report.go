@@ -101,7 +101,14 @@ func taxRecoveryInvoiceInputs(inv *api.Invoice, sub *api.Subscription, profileSH
 			discounts = append(discounts, discount.ID)
 		}
 	}
-	context, _, err := taxRecoverySubscriptionInputs(sub, profileSHA)
+	var context json.RawMessage
+	var err error
+	if inv.Status == api.InvoiceStatusOpen {
+		profileSHA = ""
+		context, err = json.Marshal(map[string]string{"subscription_id": sub.ID, "tenant_id": sub.Metadata["tenant_id"], "customer_id": sub.Customer.ID})
+	} else {
+		context, _, err = taxRecoverySubscriptionInputs(sub, profileSHA)
+	}
 	if err != nil {
 		return nil, "", err
 	}
@@ -167,12 +174,14 @@ func (c *Client) AckTaxRecoveryReport(ctx context.Context, report *TaxRecoveryRe
 			failures = errors.Join(failures, errors.New("tax invoice review owner changed before acknowledgement"))
 			continue
 		}
-		if current.Status != api.InvoiceStatusDraft {
+		if current.Status != api.InvoiceStatusDraft && (current.Status != api.InvoiceStatusOpen || review.Code != "stripe_held_invoice_missing_frozen_tax") {
 			continue
 		}
-		if err = completeTaxRecoveryInvoiceLines(ctx, current); err != nil {
-			failures = errors.Join(failures, err)
-			continue
+		if current.Status == api.InvoiceStatusDraft {
+			if lineErr := completeTaxRecoveryInvoiceLines(ctx, current); lineErr != nil {
+				failures = errors.Join(failures, lineErr)
+				continue
+			}
 		}
 		_, fingerprint, inputErr := taxRecoveryInvoiceInputs(current, sub, report.ProfileSHA)
 		if inputErr != nil {
@@ -194,14 +203,20 @@ func (c *Client) AckTaxRecoveryReport(ctx context.Context, report *TaxRecoveryRe
 	if failures != nil || report.RetryPending {
 		return failures
 	}
-	get := &api.SubscriptionParams{}
-	get.Context = ctx
-	current, err := subscription.Get(report.SubscriptionID, get)
-	if err != nil {
-		return err
-	}
-	if err = validateTaxRecoveryReportSubscription(report, current); err != nil {
-		return err
+	current := sub
+	if len(report.Reviews) > 0 {
+		// Invoice acknowledgement has no compare-and-swap with subscription
+		// metadata. Recheck after those writes so newer collection work stays
+		// pending; the normal no-review path already has a fresh owner check.
+		get := &api.SubscriptionParams{}
+		get.Context = ctx
+		current, err = subscription.Get(report.SubscriptionID, get)
+		if err != nil {
+			return err
+		}
+		if err = validateTaxRecoveryReportSubscription(report, current); err != nil {
+			return err
+		}
 	}
 	if current.Metadata["frameworks_tax_recovery_pending"] != "true" {
 		return nil

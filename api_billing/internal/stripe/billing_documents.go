@@ -156,7 +156,8 @@ func ParseProviderTaxDocument(kind string, raw json.RawMessage) (ProviderTaxDocu
 // Mixed-rate upgrade invoices include an original-period credit. Its frozen
 // rate evidence is checked independently of the replacement month's VAT.
 func ValidateProviderTaxTerms(doc ProviderTaxDocument, p TaxProfile) error {
-	if doc.ProfileSHA == "" || p.Name == "" || p.Country == "" || p.SupplierIdentity == "" || doc.Net == nil || doc.VAT == nil {
+	fallback := p.incompleteDutchVATFallback()
+	if doc.ProfileSHA == "" || (!fallback && (p.Name == "" || p.Country == "")) || (p.IncompleteProfile && !fallback) || p.SupplierIdentity == "" || doc.Net == nil || doc.VAT == nil {
 		return errors.New("provider invoice has no matching retained tax setup")
 	}
 	if doc.ProfileSHA != p.Fingerprint() && doc.ProfileSHA != p.ProfileSHA {

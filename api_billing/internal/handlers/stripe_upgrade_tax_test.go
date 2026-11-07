@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
@@ -118,6 +119,7 @@ func TestPaidStripeUpgradeRetainsAndSyncsCurrentTaxBeforeProviderPurchase(t *tes
 			defer db.Close()
 			retained := &billingstripe.TaxProfile{}
 			mock.ExpectQuery("-- name: GetCryptoDocumentBillingProfile").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow("buyer@example.test", "Buyer", "Buyer Ltd", []byte(`{"street":"Main1","city":"Toronto","postal_code":"M5V1A1","country":"CA"}`), nil, "business"))
+			mock.ExpectQuery("-- name: GetProviderTaxProfile").WithArgs("tenant", sqlmock.AnyArg()).WillReturnError(sql.ErrNoRows)
 			store := mock.ExpectExec("-- name: StoreProviderTaxProfile").WithArgs("tenant", sqlmock.AnyArg(), retainedUpgradeTaxArg{profile: retained})
 			if tc.retainError != nil {
 				store.WillReturnError(tc.retainError)

@@ -11,12 +11,16 @@ import (
 	billingstripe "frameworks/api_billing/internal/stripe"
 )
 
-func retainNativeMollieTaxReviewTx(ctx context.Context, tx *sql.Tx, tenant, invoice, payment, sha string, profile billingstripe.TaxProfile, proof CryptoTaxAssessment, frozen json.RawMessage, net, gross int64, acceptedGross sql.NullInt64, at time.Time, reason string) error {
+func retainNativeMollieTaxReviewTx(ctx context.Context, tx *sql.Tx, tenant, invoice, payment, sha string, profile billingstripe.TaxProfile, proof CryptoTaxAssessment, frozen json.RawMessage, netInput string, net sql.NullInt64, gross int64, acceptedGross sql.NullInt64, at time.Time, reason string) error {
 	var expected any
 	if acceptedGross.Valid {
 		expected = acceptedGross.Int64
 	}
-	decision, err := json.Marshal(map[string]any{"review_required": true, "code": reason, "review_reasons": []string{reason}, "accepted_profile_sha256": sha, "accepted_provider_profile": frozen, "provider_tax_assessment": profile.Evidence, "accepted_net_minor": net, "expected_gross_minor": expected, "confirmed_payment": map[string]any{"id": payment, "gross_minor": gross, "currency": "EUR", "paid_at": at}})
+	var acceptedNet any
+	if net.Valid {
+		acceptedNet = net.Int64
+	}
+	decision, err := json.Marshal(map[string]any{"review_required": true, "code": reason, "review_reasons": []string{reason}, "accepted_profile_sha256": sha, "accepted_provider_profile": frozen, "provider_tax_assessment": profile.Evidence, "accepted_net_input": netInput, "accepted_net_minor": acceptedNet, "expected_gross_minor": expected, "confirmed_payment": map[string]any{"id": payment, "gross_minor": gross, "currency": "EUR", "paid_at": at}})
 	if err != nil {
 		return err
 	}

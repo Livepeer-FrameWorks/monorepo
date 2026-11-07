@@ -79,7 +79,7 @@ deployed_stripe() {
  local timeout=120s
  # Hold/recovery follows the deployed worker's real five-minute cadence.
  [ "$1" != TestStackDeployedStripeHeldRenewalRecovery ] || timeout=16m
- STACK_BILLING_TENANT_ID="$tenant" STACK_BILLING_DATABASE_URL="$STACK_BILLING_DATABASE_URL" STACK_BILLING_DEPLOYED=1 \
+ STACK_BILLING_TENANT_ID="$tenant" STACK_BILLING_FALLBACK_TENANT_ID="${STACK_BILLING_FALLBACK_TENANT_ID:-}" STACK_BILLING_DATABASE_URL="$STACK_BILLING_DATABASE_URL" STACK_BILLING_DEPLOYED=1 \
   "$STACK_REPO/bin/stack-billing-runner" -test.run "^$1$" -test.v -test.timeout "$timeout"
 }
 check 'deployed NL card top-up collects gross and credits net once' deployed_stripe TestStackDeployedCardTopupTax
@@ -164,9 +164,13 @@ paid_stripe_upgrade() {
 }
 check 'deployed paid Stripe upgrade credits original zero VAT and charges new 21 percent fee' paid_stripe_upgrade
 held_stripe_renewal() {
+ local fallback_tenant
+ fresh_invoice_tenant stripe-fallback || return 1
+ json_has "$(profile business AT ATU12345678)" '.errors == null' || return 1
+ fallback_tenant="$tenant"
  fresh_invoice_tenant stripe-hold || return 1
  json_has "$(profile consumer NL)" '.errors == null' || return 1
- deployed_stripe TestStackDeployedStripeHeldRenewalRecovery
+ STACK_BILLING_FALLBACK_TENANT_ID="$fallback_tenant" deployed_stripe TestStackDeployedStripeHeldRenewalRecovery
 }
 check 'deployed held-invoice matrix covers processing, decline, SCA, unrelated overdue and retained operator reviews' held_stripe_renewal
 finish

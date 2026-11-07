@@ -30,6 +30,14 @@ func AssessMollieTaxTerms(ctx context.Context, db *sql.DB, tenant string, net in
 	return billingmollie.NewTaxTerms(profile.ProfileSHA, net, profile.RateBPS)
 }
 
+func assessRecurringMollieTaxTerms(ctx context.Context, db *sql.DB, tenant string, net int64) (*billingmollie.TaxTerms, error) {
+	profile, err := AssessRecurringProviderTaxProfile(ctx, db, tenant, "")
+	if err != nil {
+		return nil, err
+	}
+	return billingmollie.NewTaxTerms(profile.ProfileSHA, net, profile.RateBPS)
+}
+
 func mollieSubscriptionNet(tenant string, sub *mollieapi.Subscription) (int64, error) {
 	if mollieMetadataString(sub.Metadata, "tenant_id") != tenant {
 		return 0, errors.New("mollie subscription tax owner mismatch")
@@ -82,7 +90,7 @@ func (jm *JobManager) reconcileMollieTaxTenant(ctx context.Context, tenant strin
 		if err != nil {
 			return err
 		}
-		terms, err := AssessMollieTaxTerms(ctx, jm.db, tenant, net)
+		terms, err := assessRecurringMollieTaxTerms(ctx, jm.db, tenant, net)
 		if err != nil {
 			return err
 		}
@@ -103,10 +111,9 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 	if payment.Amount == nil || payment.PaidAt == nil {
 		return fmt.Errorf("settled Mollie subscription payment lacks amount or tax point")
 	}
-	net, err := strconv.ParseInt(mollieMetadataString(payment.Metadata, "frameworks_net_minor"), 10, 64)
-	if err != nil {
-		return err
-	}
+	netInput := mollieMetadataString(payment.Metadata, "frameworks_net_minor")
+	net, netErr := strconv.ParseInt(netInput, 10, 64)
+	acceptedNet := sql.NullInt64{Int64: net, Valid: netErr == nil && net > 0}
 	gross, currency, err := mollieAmountToCents(payment.Amount.Value, payment.Amount.Currency)
 	if err != nil {
 		return err
@@ -122,7 +129,7 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 	}
 	// VIES and the assessment's database reads happen before taking the tenant
 	// lock. The saved profile is compared again under that lock before use.
-	fresh, freshErr := AssessStripeTaxProfile(ctx, s.db, tenant, "")
+	fresh, freshErr := AssessRecurringProviderTaxProfile(ctx, s.db, tenant, "")
 	if freshErr != nil {
 		var review *billingtax.ReviewError
 		var configuration *supplierTaxConfigurationError
@@ -143,20 +150,28 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 			return fmt.Errorf("mollie tax payment customer owner mismatch")
 		}
 		frozen, err := q.GetProviderTaxProfile(ctx, purserdb.GetProviderTaxProfileParams{TenantID: tenant, ProfileSha256: sha})
-		if err != nil {
+		acceptedReview := ""
+		if errors.Is(err, sql.ErrNoRows) {
+			frozen = json.RawMessage(`null`)
+			acceptedReview = "accepted_tax_profile_missing"
+		} else if err != nil {
 			return err
 		}
 		var profile billingstripe.TaxProfile
 		var proof CryptoTaxAssessment
-		acceptedReview := ""
-		if json.Unmarshal(frozen, &profile) != nil || json.Unmarshal(profile.Evidence, &proof) != nil {
+		if acceptedReview == "" && (json.Unmarshal(frozen, &profile) != nil || json.Unmarshal(profile.Evidence, &proof) != nil) {
 			acceptedReview = "accepted_tax_assessment_invalid"
-		} else if _, validationErr := proof.validatedDecision(); validationErr != nil {
-			acceptedReview = "accepted_tax_assessment_invalid"
-		} else if !proof.Supplier.Complete() {
-			acceptedReview = "accepted_supplier_identity_incomplete"
-		} else if profile.RateBPS != proof.Decision.RateBPS || profile.ReverseCharge != proof.Decision.ReverseCharge || profile.SupplierIdentity != billingstripe.SupplierTaxIdentity(proof.Supplier.Name, proof.Supplier.Address, proof.Supplier.VATNumber, proof.Supplier.RegistrationNumber) {
-			acceptedReview = "accepted_tax_terms_mismatch"
+		} else if acceptedReview == "" {
+			if _, validationErr := proof.validatedDecision(); validationErr != nil {
+				acceptedReview = "accepted_tax_assessment_invalid"
+			} else if !proof.Supplier.Complete() {
+				acceptedReview = "accepted_supplier_identity_incomplete"
+			} else if profile.RateBPS != proof.Decision.RateBPS || profile.ReverseCharge != proof.Decision.ReverseCharge || profile.SupplierIdentity != billingstripe.SupplierTaxIdentity(proof.Supplier.Name, proof.Supplier.Address, proof.Supplier.VATNumber, proof.Supplier.RegistrationNumber) {
+				acceptedReview = "accepted_tax_terms_mismatch"
+			}
+		}
+		if acceptedReview == "" && !acceptedNet.Valid {
+			acceptedReview = "accepted_net_amount_missing_or_invalid"
 		}
 		var vat int64
 		var acceptedGross sql.NullInt64
@@ -169,7 +184,7 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 			}
 		}
 		at := *payment.PaidAt
-		row, err := q.InsertNativeMollieTaxInvoice(ctx, purserdb.InsertNativeMollieTaxInvoiceParams{TenantID: tenant, GrossMinor: gross, NetMinor: net, TaxPoint: at, PaymentID: sql.NullString{String: payment.ID, Valid: true}})
+		row, err := q.InsertNativeMollieTaxInvoice(ctx, purserdb.InsertNativeMollieTaxInvoiceParams{TenantID: tenant, GrossMinor: gross, NetMinor: acceptedNet, TaxPoint: at, PaymentID: sql.NullString{String: payment.ID, Valid: true}})
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -177,18 +192,21 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 			return err
 		}
 		if acceptedReview != "" {
-			if err = retainNativeMollieTaxReviewTx(ctx, tx, tenant, row.ID, payment.ID, sha, profile, proof, frozen, net, gross, acceptedGross, at, acceptedReview); err != nil {
+			if err = retainNativeMollieTaxReviewTx(ctx, tx, tenant, row.ID, payment.ID, sha, profile, proof, frozen, netInput, acceptedNet, gross, acceptedGross, at, acceptedReview); err != nil {
 				return err
 			}
 			return q.RecordNativeMollieInvoicePayment(ctx, purserdb.RecordNativeMollieInvoicePaymentParams{TenantID: tenant, InvoiceID: row.ID, GrossMinor: gross, PaymentID: sql.NullString{String: payment.ID, Valid: true}, PaidAt: sql.NullTime{Time: at, Valid: true}})
 		}
 		reviewReason := ""
+		if profile.IncompleteProfile {
+			reviewReason = "Recurring payment charged Dutch VAT while its incomplete billing profile requires review"
+		}
 		accepted, normalizationErr := normalizeProviderTaxProfile(profile)
 		if normalizationErr != nil {
 			reviewReason = "Accepted payment tax profile requires verification: " + normalizationErr.Error()
 		} else if freshErr != nil {
 			reviewReason = "Current tax evidence could not be verified at issuance: " + freshErr.Error()
-		} else if fresh.Fingerprint() != accepted.Fingerprint() {
+		} else if !ProviderTaxTermsEquivalent(accepted, *fresh) {
 			reviewReason = "Accepted payment tax terms differ from the current legal billing profile"
 		} else {
 			current, currentErr := q.GetInvoiceTaxProfile(ctx, tenant)
@@ -215,9 +233,15 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 		}
 		assessment := invoiceTaxAssessment{Net: net, VAT: vat, Gross: gross, TaxPoint: at, Decision: proof.Decision, Supplier: proof.Supplier, Validation: proof.VATValidation, ValidationMode: proof.VATValidationMode, Customer: CryptoBillingProfile{CustomerType: proof.CustomerType, Name: profile.Name, Company: profile.Company, Email: profile.Email, Address: address, VATNumber: profile.VATNumber}}
 		assessment.ProviderAssessment = append(json.RawMessage(nil), profile.Evidence...)
+		assessment.ReviewRequired = proof.ReviewRequired
+		assessment.ReviewReasons = append([]string(nil), proof.ReviewReasons...)
 		if reviewReason != "" {
 			assessment.ReviewRequired = true
-			assessment.ReviewReasons = append(assessment.ReviewReasons, "provider_tax_terms_changed")
+			if !profile.IncompleteProfile {
+				assessment.ReviewReasons = append(assessment.ReviewReasons, "provider_tax_terms_changed")
+			} else if len(assessment.ReviewReasons) == 0 {
+				assessment.ReviewReasons = append(assessment.ReviewReasons, "billing_profile_incomplete_domestic_vat")
+			}
 		}
 		if assessment.Supplier.Name == "" {
 			return fmt.Errorf("mollie tax terms lack frozen supplier identity")
@@ -240,6 +264,9 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 			if err = q.RecordBillingTaxReview(ctx, purserdb.RecordBillingTaxReviewParams{TenantID: tenant, Kind: "provider_tax_document_review", Network: "mollie", ReferenceType: "invoice", ReferenceID: row.ID, AmountCents: gross, Detail: reviewReason, EvidenceJson: evidence}); err != nil {
 				return err
 			}
+		}
+		if profile.IncompleteProfile {
+			return nil
 		}
 		return enqueueInvoiceEmailTx(ctx, tx, row.ID, tenant, profile.Email, "paid")
 	})

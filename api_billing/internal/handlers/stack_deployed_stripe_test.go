@@ -340,6 +340,7 @@ func TestStackDeployedStripeHeldRenewalRecovery(t *testing.T) {
 	// The deployed reconciliation worker runs every five minutes. Exercise its
 	// real cadence instead of replacing it with a test-only production trigger.
 	ctx, conn, db, tenant := stackBillingConnectionTimeout(t, 15*time.Minute)
+	fallback := prepareStackRecurringFallback(t, ctx, conn, db)
 	var tier string
 	if err := db.QueryRowContext(ctx, `SELECT id::text FROM purser.billing_tiers WHERE tier_name='supporter'`).Scan(&tier); err != nil {
 		t.Fatal(err)
@@ -420,6 +421,7 @@ func TestStackDeployedStripeHeldRenewalRecovery(t *testing.T) {
 	wait("hold unproven VAT subscription", func(sub subscriptionSnapshot, _ map[string]json.RawMessage) bool {
 		return sub.Status == "past_due" && sub.Pause != nil && sub.Pause.Behavior == "keep_as_draft" && sub.Metadata["frameworks_tax_review"] == "true" && sub.Metadata["frameworks_tax_pause_owned"] == "true"
 	})
+	verifyStackRecurringFallback(t, ctx, conn, db, fallback)
 	stackProviderControl(t, ctx, "renew", map[string]string{"subscription_id": subscription}, &events)
 	var draftEvent struct {
 		Data struct {

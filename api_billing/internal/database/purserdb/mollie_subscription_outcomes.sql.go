@@ -54,6 +54,7 @@ SELECT EXISTS (
  SELECT 1 FROM purser.billing_invoices
  WHERE tenant_id=$1::text::uuid AND id=$2::text::uuid
   AND tax_decision->>'code'='accepted_tax_gross_mismatch'
+  AND document_gross_minor<(tax_decision->>'expected_gross_minor')::bigint
 )::boolean AS amount_review
 `
 

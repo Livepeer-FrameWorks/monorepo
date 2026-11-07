@@ -48,10 +48,14 @@ func TestProviderWireReviewedDraftResumesAfterOperatorPauseLifted(t *testing.T) 
 	providerWireTaxUpgradeAndRecovery(t, "operator_paused_subscription")
 }
 
+func TestProviderWireExternallyFinalizedHeldInvoiceKeepsOriginalReview(t *testing.T) {
+	providerWireTaxUpgradeAndRecovery(t, "externally_finalized_owned")
+}
+
 func providerWireTaxUpgradeAndRecovery(t *testing.T, outcome string) {
 	paymentOutcome := outcome
 	pastFailure := outcome == "past_invoice_failure" || outcome == "past_finalize_failure"
-	if pastFailure || outcome == "operator_paused_invoice" || outcome == "nonrenewal_review" || outcome == "operator_paused_subscription" {
+	if pastFailure || outcome == "operator_paused_invoice" || outcome == "nonrenewal_review" || outcome == "operator_paused_subscription" || outcome == "externally_finalized_owned" {
 		paymentOutcome = "succeeded"
 	}
 	baseURL := startPythonBillingProvider(t)
@@ -181,6 +185,13 @@ func providerWireTaxUpgradeAndRecovery(t *testing.T, outcome string) {
 			t.Fatal(err)
 		}
 	}
+	var externallyFinalized *api.Invoice
+	if outcome == "externally_finalized_owned" {
+		externallyFinalized, err = invoice.FinalizeInvoice(heldID, &api.InvoiceFinalizeInvoiceParams{Params: api.Params{Context: ctx}, AutoAdvance: api.Bool(false)})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	report, err := c.ReconcileSubscriptionTax(ctx, "wire-tenant", buyer.ID, sub.ID, profile)
 	if outcome == "operator_paused_invoice" {
 		preserved, readErr := invoice.Get(operatorPaused.ID, nil)
@@ -214,8 +225,11 @@ func providerWireTaxUpgradeAndRecovery(t *testing.T, outcome string) {
 		t.Fatal("tax recovery omitted its persistence report")
 	}
 	expectedReview := ""
-	if outcome == "nonrenewal_review" {
+	switch outcome {
+	case "nonrenewal_review":
 		expectedReview = adjustment.ID
+	case "externally_finalized_owned":
+		expectedReview = heldID
 	}
 	if expectedReview != "" {
 		if len(report.Reviews) != 1 || report.Reviews[0].InvoiceID != expectedReview || report.Reviews[0].Code == "" || len(report.Reviews[0].InputFingerprint) != 64 || !json.Valid(report.Reviews[0].Evidence) {
@@ -251,6 +265,27 @@ func providerWireTaxUpgradeAndRecovery(t *testing.T, outcome string) {
 		if outcome == "nonrenewal_review" && (marked.Status != api.InvoiceStatusDraft || marked.AutoAdvance || marked.Total != adjustment.Total) {
 			t.Fatal("unsupported owned draft was mutated instead of visibly reviewed")
 		}
+	}
+	if outcome == "externally_finalized_owned" {
+		original, readErr := invoice.Get(heldID, nil)
+		if readErr != nil || original.Status != api.InvoiceStatusOpen || original.AutoAdvance || original.Total != externallyFinalized.Total || original.TotalExcludingTax != externallyFinalized.TotalExcludingTax || original.AmountPaid != 0 {
+			t.Fatalf("external finalized invoice was repriced or collected: %+v %v", original, readErr)
+		}
+		changed := profile
+		changed.Country, changed.VATNumber, changed.RateBPS = "CA", "", 0
+		again, reconcileErr := c.ReconcileSubscriptionTax(ctx, "wire-tenant", buyer.ID, sub.ID, changed)
+		if reconcileErr != nil || len(again.Reviews) != 0 {
+			t.Fatalf("changed current profile reopened the same finalized review: %+v %v", again, reconcileErr)
+		}
+		persistProviderWireTaxReport(t, again)
+		if err = c.AckTaxRecoveryReport(ctx, again); err != nil {
+			t.Fatal(err)
+		}
+		preserved, readErr := invoice.Get(heldID, nil)
+		if readErr != nil || preserved.Total != original.Total || preserved.AutoAdvance || preserved.Status != original.Status {
+			t.Fatal("current tax synchronization changed original finalized debt")
+		}
+		return
 	}
 	held, err := invoice.Get(heldID, nil)
 	if err != nil {
