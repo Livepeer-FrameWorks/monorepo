@@ -202,7 +202,13 @@ func NewEmailService(logger logging.Logger) *EmailService {
 
 // IsConfigured checks if email service is properly configured
 func (es *EmailService) IsConfigured() bool {
-	return es.smtpHost != "" && es.smtpUser != "" && es.smtpPassword != "" && es.fromEmail != ""
+	if strings.TrimSpace(es.smtpHost) == "" || strings.TrimSpace(es.fromEmail) == "" {
+		return false
+	}
+	if es.smtpUser != "" || es.smtpPassword != "" {
+		return es.smtpUser != "" && es.smtpPassword != ""
+	}
+	return es.allowInsecure
 }
 
 // SendInvoiceCreatedEmail sends notification when a new invoice is created.

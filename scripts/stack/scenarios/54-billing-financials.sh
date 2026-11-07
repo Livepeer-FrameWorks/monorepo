@@ -127,6 +127,8 @@ PY
  )
  [ -n "$tenant" ]
 }
+grant_notice_tenants=()
+grant_notice_recipients=()
 regular_invoice() {
  local country=$1 type=$2 vat=$3 rate=$4 result proof inspection fingerprint
  fresh_invoice_tenant "$country" || return 1
@@ -152,7 +154,9 @@ if rate:assert r['vat']>0,r
 if sys.argv[3]=='AT':assert 'reverse' in r['treatment'],r
 print('    deployed phase invoice:',r)
 PY
- operator_cli admin billing grant revoke --tenant-id "$tenant" --reason 'stack tax invoice matrix complete' --output json >/dev/null
+ operator_cli admin billing grant revoke --tenant-id "$tenant" --reason 'stack tax invoice matrix complete' --output json >/dev/null || return 1
+ grant_notice_tenants+=("$tenant")
+ grant_notice_recipients+=("$email")
 }
 check 'deployed regular NL consumer invoice has 21% VAT on top' regular_invoice NL consumer '' 2100
 check 'deployed regular EU B2B invoice reverses charge with VIES proof' regular_invoice AT business ATU12345678 0
@@ -175,4 +179,17 @@ held_stripe_renewal() {
  STACK_BILLING_FALLBACK_TENANT_IDS="$fallback_tenants" deployed_stripe TestStackDeployedStripeHeldRenewalRecovery
 }
 check 'deployed held-invoice matrix covers processing, decline, SCA, unrelated overdue and retained operator reviews' held_stripe_renewal
+purser_grant_notices_delivered() {
+ local index result messages recipient
+ [ "${#grant_notice_tenants[@]}" = 3 ] && [ "${#grant_notice_recipients[@]}" = 3 ] || return 1
+ for index in "${!grant_notice_tenants[@]}"; do
+  recipient=${grant_notice_recipients[$index]}
+  result=$(pg purser "SELECT count(*)=1 AND bool_and(notified_at IS NOT NULL AND error IS NULL AND abandoned_at IS NULL) FROM purser.operator_grant_notices WHERE tenant_id='${grant_notice_tenants[$index]}' AND kind='ended'") || return 1
+  [ "$result" = t ] || { printf 'Purser grant-ended notice not acknowledged for tenant %s\n' "${grant_notice_tenants[$index]}" >&2; return 1; }
+  messages=$(curl -fsS -m 10 --get --data-urlencode "query=to:$recipient" "$MAILPIT_API/api/v1/search") || return 1
+  jq -e --arg recipient "$recipient" --arg subject 'Your FrameWorks arrangement has ended' \
+   'any(.messages[]?; .Subject == $subject and any(.To[]?; .Address == $recipient))' <<<"$messages" >/dev/null || return 1
+ done
+}
+check 'deployed Purser grant-ended notices reach all three invoice customers and retain acknowledged delivery' purser_grant_notices_delivered
 finish

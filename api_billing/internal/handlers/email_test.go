@@ -1,13 +1,136 @@
 package handlers
 
 import (
+	"bufio"
+	"fmt"
+	"net"
+	"net/textproto"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"frameworks/api_billing/internal/pricing"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
+
+func TestIsConfiguredExplicitUnauthenticatedRelay(t *testing.T) {
+	for _, tc := range []struct {
+		name, host, from, user, password string
+		insecure, want                   bool
+	}{
+		{"explicit isolated relay", "mailpit", "billing@example.test", "", "", true, true},
+		{"secure default requires credentials", "mailpit", "billing@example.test", "", "", false, false},
+		{"partial username", "mailpit", "billing@example.test", "user", "", true, false},
+		{"partial password", "mailpit", "billing@example.test", "", "password", true, false},
+		{"authenticated isolated relay", "mailpit", "billing@example.test", "user", "password", true, true},
+		{"missing host", "", "billing@example.test", "", "", true, false},
+		{"missing sender", "mailpit", "", "", "", true, false},
+		{"blank host", "  ", "billing@example.test", "", "", true, false},
+		{"blank sender", "mailpit", "  ", "", "", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			es := &EmailService{smtpHost: tc.host, fromEmail: tc.from, smtpUser: tc.user, smtpPassword: tc.password, allowInsecure: tc.insecure}
+			if got := es.IsConfigured(); got != tc.want {
+				t.Fatalf("configured=%t, want%t", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOperatorGrantNoticeDeliversThroughExplicitUnauthenticatedRelay(t *testing.T) {
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	delivered := make(chan string, 1)
+	serverErrors := make(chan error, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			serverErrors <- acceptErr
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		if deadlineErr := conn.SetDeadline(time.Now().Add(3 * time.Second)); deadlineErr != nil {
+			serverErrors <- deadlineErr
+			return
+		}
+		reader := textproto.NewReader(bufio.NewReader(conn))
+		respond := func(value string) bool {
+			_, writeErr := fmt.Fprint(conn, value)
+			if writeErr != nil {
+				serverErrors <- writeErr
+				return false
+			}
+			return true
+		}
+		if !respond("220 localhost ESMTP\r\n") {
+			return
+		}
+		for {
+			line, readErr := reader.ReadLine()
+			if readErr != nil {
+				serverErrors <- readErr
+				return
+			}
+			switch {
+			case strings.HasPrefix(line, "EHLO "):
+				if !respond("250 localhost\r\n") {
+					return
+				}
+			case strings.HasPrefix(line, "MAIL FROM:"), strings.HasPrefix(line, "RCPT TO:"):
+				if !respond("250 accepted\r\n") {
+					return
+				}
+			case line == "DATA":
+				if !respond("354 send message\r\n") {
+					return
+				}
+				body, dataErr := reader.ReadDotBytes()
+				if dataErr != nil {
+					serverErrors <- dataErr
+					return
+				}
+				delivered <- string(body)
+				if !respond("250 queued\r\n") {
+					return
+				}
+			case line == "QUIT":
+				respond("221 goodbye\r\n")
+				return
+			default:
+				serverErrors <- fmt.Errorf("unexpected SMTP command %q", line)
+				return
+			}
+		}
+	}()
+	host, portText, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	es := &EmailService{smtpHost: host, smtpPort: port, fromEmail: "billing@example.test", allowInsecure: true, logger: logging.NewLogger()}
+	service := &Service{emailService: es}
+	if err = service.SendOperatorGrantNotice(OperatorGrantNotice{Recipient: "buyer@example.test", TenantName: "Relay Tenant", Kind: OperatorGrantNoticeEnded, EndsAt: time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC), PlanName: "Developer"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case body := <-delivered:
+		if !strings.Contains(body, "Relay Tenant") || !strings.Contains(body, "Your FrameWorks arrangement has ended") {
+			t.Fatalf("wrong grant message delivered: %s", body)
+		}
+	case err = <-serverErrors:
+		t.Fatal(err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("configured isolated SMTP relay never received grant notice")
+	}
+}
 
 func TestIsConfigured_AllSet(t *testing.T) {
 	es := &EmailService{

@@ -107,7 +107,7 @@ type PurserRuntime struct {
 
 	CryptoSweepETHDustWei string `env:"CRYPTO_SWEEP_ETH_DUST_WEI" default:"100000000000000" desc:"Wei left in each ETH source address when a custody sweep is planned. An unparsable or negative value uses 100000000000000. Re-read after an env-file reload." introduced:"v0.3.0"`
 
-	SMTPHost     string `env:"SMTP_HOST" desc:"SMTP server for billing notification emails. Emails are sent only when SMTP_HOST, SMTP_USER, SMTP_PASSWORD, and FROM_EMAIL are set." introduced:"v0.3.0"`
+	SMTPHost     string `env:"SMTP_HOST" desc:"SMTP server for billing notifications. SMTP_HOST and FROM_EMAIL are required. Set both SMTP_USER and SMTP_PASSWORD, or leave both empty with SMTP_ALLOW_INSECURE=true for an isolated relay." introduced:"v0.3.0"`
 	SMTPPort     int    `env:"SMTP_PORT" default:"587" desc:"SMTP server port for billing notification emails. 0 uses 587." introduced:"v0.3.0"`
 	SMTPUser     string `env:"SMTP_USER" desc:"SMTP user for billing notification emails." introduced:"v0.3.0"`
 	SMTPPassword string `env:"SMTP_PASSWORD" secret:"true" desc:"Password for SMTP_USER." introduced:"v0.3.0"`

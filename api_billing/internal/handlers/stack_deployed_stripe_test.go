@@ -393,7 +393,6 @@ func TestStackDeployedStripeHeldRenewalRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	stackProviderControl(t, ctx, "payment_behavior", map[string]string{"customer_id": beforeHold.Customer, "outcome": "succeeded"}, &configured)
-	stackProviderControl(t, ctx, "vies", map[string]any{"vat_number": "U99999999", "valid": false}, &configured)
 	typeName, vat := "consumer", ""
 	_, err = purserpb.NewSubscriptionServiceClient(conn).UpdateBillingDetails(ctx, &purserpb.UpdateBillingDetailsRequest{TenantId: tenant, CustomerType: &typeName, VatNumber: &vat, Address: &purserpb.BillingAddress{Street: "1 Main Street", City: "Oslo", PostalCode: "0150", Country: "NO"}})
 	if err != nil {

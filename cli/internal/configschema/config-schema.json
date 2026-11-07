@@ -1889,7 +1889,7 @@
           "key": "SMTP_HOST",
           "type": "string",
           "introduced": "v0.3.0",
-          "description": "SMTP server for billing notification emails. Emails are sent only when SMTP_HOST, SMTP_USER, SMTP_PASSWORD, and FROM_EMAIL are set."
+          "description": "SMTP server for billing notifications. SMTP_HOST and FROM_EMAIL are required. Set both SMTP_USER and SMTP_PASSWORD, or leave both empty with SMTP_ALLOW_INSECURE=true for an isolated relay."
         },
         {
           "key": "SMTP_PORT",
