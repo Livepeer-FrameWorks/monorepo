@@ -20,6 +20,7 @@ import (
 	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/dtsh"
 	"frameworks/api_sidecar/internal/leases"
+	"frameworks/api_sidecar/internal/relay"
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/dvr"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -1267,7 +1268,12 @@ func (sm *StorageManager) evictBlockCaches(bytesTarget uint64) uint64 {
 			return filepath.SkipDir
 		})
 	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].modTime.Before(candidates[j].modTime) })
+	sort.Slice(candidates, func(i, j int) bool {
+		if retiredI, retiredJ := relay.IsRetiredBlockCache(candidates[i].path), relay.IsRetiredBlockCache(candidates[j].path); retiredI != retiredJ {
+			return retiredI
+		}
+		return candidates[i].modTime.Before(candidates[j].modTime)
+	})
 
 	localEvictionPasses.Inc()
 	var freed uint64

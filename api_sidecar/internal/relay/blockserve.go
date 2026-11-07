@@ -390,9 +390,28 @@ func (s *Server) prepareBlockStore(store *BlockStore, hash, ext, object string, 
 		_, retired, initErr := store.prepareMeta(hash, ext, object, totalSize)
 		return retired, initErr
 	}()
-	// Recursive deletion can be slow; the detached path cannot affect the
-	// replacement generation and needs no active-directory identity lock.
-	return errors.Join(err, store.removeRetired(retired))
+	s.cleanupRetiredBlockStore(store, retired)
+	return err
+}
+
+func (s *Server) cleanupRetiredBlockStore(store *BlockStore, retired string) {
+	if retired == "" {
+		return
+	}
+	select {
+	case s.fills.retiredCleanup <- struct{}{}:
+		s.fills.wg.Add(1)
+		go func() {
+			defer s.fills.wg.Done()
+			defer func() { <-s.fills.retiredCleanup }()
+			if err := store.removeRetired(retired); err != nil && s.logger != nil {
+				s.logger.WithError(err).WithField("path", retired).Warn("Failed to remove retired block cache")
+			}
+		}()
+	default:
+		// The detached path is priority garbage for ordinary pressure cleanup.
+		// Never hold a viewer or create an unbounded waiter for recursive deletion.
+	}
 }
 
 // serveBlockSpan serves a single block's worth of bytes (clipped to
