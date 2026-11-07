@@ -33,6 +33,7 @@ import (
 type blockFills struct {
 	mu       sync.Mutex
 	inflight map[string]*blockFill
+	stores   map[string]*blockStoreLock
 	// mem holds the memory fills, running and lingering, at most
 	// maxMemoryFills of them.
 	mem map[string]*blockFill
@@ -40,8 +41,39 @@ type blockFills struct {
 	wg sync.WaitGroup
 }
 
+type blockStoreLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
 func newBlockFills() *blockFills {
-	return &blockFills{inflight: make(map[string]*blockFill), mem: make(map[string]*blockFill)}
+	return &blockFills{inflight: make(map[string]*blockFill), mem: make(map[string]*blockFill), stores: make(map[string]*blockStoreLock)}
+}
+
+// lockStore serializes identity changes and disk operations for one cache
+// directory across request-local BlockStore handles. The global lock only
+// protects bookkeeping; it is never held while waiting on a store or disk.
+// Store operations may take the global lock, so the reverse order is forbidden.
+func (b *blockFills) lockStore(store *BlockStore) func() {
+	key := store.Dir()
+	b.mu.Lock()
+	lock := b.stores[key]
+	if lock == nil {
+		lock = &blockStoreLock{}
+		b.stores[key] = lock
+	}
+	lock.refs++
+	b.mu.Unlock()
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		b.mu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(b.stores, key)
+		}
+		b.mu.Unlock()
+	}
 }
 
 // maxMemoryFills bounds the blocks held in memory by memory fills, running or
@@ -184,12 +216,15 @@ type fillSource struct {
 // block's first bytes; the new fill keeps them and requests only the rest.
 func (s *Server) claimBlockFill(ctx context.Context, store *BlockStore, span blockSpan, totalSize int64, src fillSource) (*blockFill, error) {
 	key := blockFetchKey(store, span.Idx)
-	s.fills.mu.Lock()
-	defer s.fills.mu.Unlock()
+	unlock := s.fills.lockStore(store)
+	defer unlock()
 	if !store.matchesObject(src.object, totalSize) {
 		return nil, fillDiskError{err: errors.New("block cache belongs to another object")}
 	}
-	if f, ok := s.fills.inflight[key]; ok {
+	s.fills.mu.Lock()
+	f, ok := s.fills.inflight[key]
+	s.fills.mu.Unlock()
+	if ok {
 		if !sameObject(f.object, src.object) {
 			return nil, fillDiskError{err: errors.New("block fill copies another object")}
 		}
@@ -226,8 +261,10 @@ func (s *Server) claimBlockFill(ctx context.Context, store *BlockStore, span blo
 		_ = file.Close()
 		return nil, fillDiskError{err: err}
 	}
-	f := &blockFill{tmpPath: tmpPath, blockPath: store.BlockPath(span.Idx), diskInfo: info, sourceURL: src.target.url, object: src.object, written: have, changed: make(chan struct{})}
+	f = &blockFill{tmpPath: tmpPath, blockPath: store.BlockPath(span.Idx), diskInfo: info, sourceURL: src.target.url, object: src.object, written: have, changed: make(chan struct{})}
+	s.fills.mu.Lock()
 	s.fills.inflight[key] = f
+	s.fills.mu.Unlock()
 	coldfetchCoalesced.WithLabelValues("leader").Inc()
 	s.fills.wg.Add(1)
 	go func() {
@@ -340,7 +377,7 @@ func (s *Server) runBlockFill(ctx context.Context, f *blockFill, file *os.File, 
 	n, err := s.fetchBlockInto(ctx, writer, blockIdx, blockStart, blockEnd, totalSize, have, src)
 	if writer.err != nil {
 		_ = file.Close()
-		s.discardBlockFillTmp(f)
+		s.discardBlockFillTmp(store, f)
 		defrostBlocks.WithLabelValues(source, "error").Inc()
 		return fillDiskError{err: writer.err}
 	}
@@ -352,7 +389,7 @@ func (s *Server) runBlockFill(ctx context.Context, f *blockFill, file *os.File, 
 	syncErr := file.Sync()
 	closeErr := file.Close()
 	if err := errors.Join(syncErr, closeErr); err != nil {
-		s.discardBlockFillTmp(f)
+		s.discardBlockFillTmp(store, f)
 		return fillDiskError{err: err}
 	}
 	if err := s.publishBlockFill(store, f, totalSize); err != nil {
@@ -362,11 +399,11 @@ func (s *Server) runBlockFill(ctx context.Context, f *blockFill, file *os.File, 
 	return nil
 }
 
-// Invalidation, claims and publication share the fills lock, so a completed
+// Invalidation, claims and publication share the directory lock, so a completed
 // fill cannot restore an old object's block while its directory is replaced.
 func (s *Server) publishBlockFill(store *BlockStore, f *blockFill, totalSize int64) error {
-	s.fills.mu.Lock()
-	defer s.fills.mu.Unlock()
+	unlock := s.fills.lockStore(store)
+	defer unlock()
 	if !store.matchesObject(f.object, totalSize) {
 		f.removeOwnTmp()
 		return errors.New("completed block fill belongs to a superseded object")
@@ -382,9 +419,9 @@ func (s *Server) publishBlockFill(store *BlockStore, f *blockFill, totalSize int
 	return nil
 }
 
-func (s *Server) discardBlockFillTmp(f *blockFill) {
-	s.fills.mu.Lock()
-	defer s.fills.mu.Unlock()
+func (s *Server) discardBlockFillTmp(store *BlockStore, f *blockFill) {
+	unlock := s.fills.lockStore(store)
+	defer unlock()
 	f.removeOwnTmp()
 }
 
