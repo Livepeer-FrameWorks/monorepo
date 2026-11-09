@@ -100,6 +100,13 @@ compose profile `selfhosted`).
   `make stack-down` from another workspace refuse a slot that is up or coming up elsewhere and name
   the workspace holding it. Pick a different `STACK_SLOT`, or free it from that workspace.
 
+`make verify-mist-vod-idle` checks the first HLS segment across VOD input idle
+shutdown. Set `MIST_CONTRACT_IMAGE` to the immutable Mist image under test and
+`MEDIA_TOOLS_IMAGE` to an image with ffmpeg/libx264 for its generated clip. The
+contract includes a bounded process-scheduling barrier and verifies a fresh input
+generation after idle. Each case makes one first-segment request. For a retained
+clip, `MIST_IDLE_SOURCE_FILE` accepts its MKV path with a matching `.dtsh` sidecar.
+
 The manual Mist processing stress wrapper repeats the ten-clip scenario against
 the real stack under bounded CPU load. It checks each repetition's logs as well
 as the final log window:

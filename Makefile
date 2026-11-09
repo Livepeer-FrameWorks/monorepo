@@ -793,6 +793,10 @@ verify-mist-push-connector:
 verify-mist-finite-source:
 	@$(MAKE) --no-print-directory test-pkg GO_TAG_FLAGS=-tags=media_verify GO_TEST_PACKAGES=./mist GO_TEST_FLAGS='-run TestFiniteLiveSource_RealMist -v -timeout 180s'
 
+.PHONY: verify-mist-vod-idle
+verify-mist-vod-idle:
+	@$(MAKE) --no-print-directory test-pkg GO_TAG_FLAGS=-tags=media_verify GO_TEST_PACKAGES=./mist GO_TEST_FLAGS='-run TestVODFirstSegmentAcrossIdle_RealMist -v -timeout 180s'
+
 .PHONY: verify-mist-finite-source verify-mist-hls-realtime verify-mist-processing-recording
 verify-mist-processing-recording:
 	@$(MAKE) --no-print-directory test-pkg GO_TAG_FLAGS=-tags=media_verify GO_TEST_PACKAGES=./mist GO_TEST_FLAGS='-run TestProcessingRecording_RealMist -v -timeout 240s'
