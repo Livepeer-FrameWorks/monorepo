@@ -817,8 +817,11 @@ func (c *GRPCClient) AdminListBillingGrants(ctx context.Context, req *purserpb.A
 	return c.prepaid.AdminListBillingGrants(ctx, req)
 }
 
-func (c *GRPCClient) AdminRecordBusinessEvidence(ctx context.Context, req *purserpb.AdminRecordBusinessEvidenceRequest) (*purserpb.AdminRecordBusinessEvidenceResponse, error) {
-	return c.billing.AdminRecordBusinessEvidence(ctx, req)
+func (c *GRPCClient) AdminListBillingTaxReviews(ctx context.Context, req *purserpb.AdminListBillingTaxReviewsRequest) (*purserpb.AdminListBillingTaxReviewsResponse, error) {
+	return c.billing.AdminListBillingTaxReviews(ctx, req)
+}
+func (c *GRPCClient) AdminAcknowledgeBillingTaxReview(ctx context.Context, req *purserpb.AdminAcknowledgeBillingTaxReviewRequest) (*purserpb.AdminAcknowledgeBillingTaxReviewResponse, error) {
+	return c.billing.AdminAcknowledgeBillingTaxReview(ctx, req)
 }
 
 func (c *GRPCClient) AdminFinancialAuditPage(ctx context.Context, req *purserpb.AdminFinancialAuditPageRequest) (*purserpb.AdminFinancialAuditPageResponse, error) {

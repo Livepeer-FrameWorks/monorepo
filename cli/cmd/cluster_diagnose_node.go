@@ -80,9 +80,9 @@ func runNodeDiagnose(ctx context.Context, w io.Writer, qm nodeDiagnosisInventory
 	if err := requireOperatorSession(jwt); err != nil {
 		return err
 	}
-	ctx, cancel := adminRPCContextTimeout(ctx, jwt, dvrDiagnoseRPCTimeout)
-	defer cancel()
-	node, err := qm.GetNode(ctx, nodeID)
+	lookupCtx, cancel := adminRPCContextTimeout(ctx, jwt, dvrDiagnoseRPCTimeout)
+	node, err := qm.GetNode(lookupCtx, nodeID)
+	cancel()
 	if err != nil {
 		return fmt.Errorf("resolve node: %w", err)
 	}
@@ -105,7 +105,9 @@ func runNodeDiagnose(ctx context.Context, w io.Writer, qm nodeDiagnosisInventory
 	entry, healthErr := foghornEntryForDVR(manifest, n.GetClusterId(), service)
 	var h *controlpb.GetNodeHealthResponse
 	if healthErr == nil {
-		h, healthErr = health(ctx, entry, n.GetNodeId())
+		healthCtx, cancelHealth := adminRPCContextTimeout(ctx, jwt, dvrDiagnoseRPCTimeout)
+		h, healthErr = health(healthCtx, entry, n.GetNodeId())
+		cancelHealth()
 	}
 	failure := ""
 	if healthErr != nil {

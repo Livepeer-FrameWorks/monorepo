@@ -462,7 +462,6 @@ services:
       STRIPE_SECRET_KEY: sk_test_stack_fixture
       STRIPE_WEBHOOK_SECRET: whsec_stack_fixture
       VIES_ENDPOINT: https://vies.stack.test/vies
-      CRYPTO_TAX_POLICY_JSON: '{"reference":"stack-country-review","supplier_country":"NL","valid_from":"2020-01-01T00:00:00Z","valid_until":"2099-01-01T00:00:00Z","non_eu_businesses":{"US":{"rate_bps":0,"source":"Stack fixture business treatment","evidence_reference":"stack-country-memo","tax_label":"VAT","wording":"Outside Dutch VAT"}}}'
       X402_FACILITATOR_PROVIDER: hosted
       X402_FACILITATOR_URL: https://facilitator.stack.test
       BASE_RPC_ENDPOINT: http://billing-provider:18778/rpc/base

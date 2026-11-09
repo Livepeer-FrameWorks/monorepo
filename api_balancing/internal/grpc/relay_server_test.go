@@ -24,8 +24,11 @@ type fakeControlStream struct {
 
 func (f *fakeControlStream) Send(msg *ipcpb.ControlMessage) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.sent = append(f.sent, msg)
+	f.mu.Unlock()
+	if req := msg.GetStopSessionsRequest(); req != nil {
+		control.CompleteTestStopSessions(req.GetNodeId(), req, "")
+	}
 	return nil
 }
 
@@ -99,7 +102,7 @@ func TestForwardCommand_AllCommandTypes(t *testing.T) {
 		{"dvr_delete", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_DvrDelete{DvrDelete: &ipcpb.DVRDeleteRequest{}}}, "dvr_delete"},
 		{"vod_delete", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_VodDelete{VodDelete: &ipcpb.VodDeleteRequest{}}}, "vod_delete"},
 		{"dtsh_sync", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_DtshSync{DtshSync: &ipcpb.DtshSyncRequest{}}}, "dtsh_sync_request"},
-		{"stop_sessions", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_StopSessions{StopSessions: &ipcpb.StopSessionsRequest{}}}, "stop_sessions_request"},
+		{"stop_sessions", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_StopSessions{StopSessions: &ipcpb.StopSessionsRequest{TenantId: "tenant", StreamNames: []string{"stream"}}}}, "stop_sessions_request"},
 		{"invalidate_sessions", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_InvalidateSessions{InvalidateSessions: &ipcpb.InvalidateSessionsRequest{}}}, "invalidate_sessions_request"},
 		{"deactivate_push_targets", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_DeactivatePushTargets{DeactivatePushTargets: &ipcpb.DeactivatePushTargets{}}}, "deactivate_push_targets"},
 		{"processing_job", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_ProcessingJob{ProcessingJob: &ipcpb.ProcessingJobRequest{}}}, "processing_job_request"},

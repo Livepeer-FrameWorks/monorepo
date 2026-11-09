@@ -314,8 +314,12 @@ Inside Helmsman the relay (`api_sidecar/internal/relay/`) materializes those byt
 canonical local file when the artifact is warm, from S3 into disk when it is cold and the node is healthy,
 and from S3 straight to socket when the node is under pressure and must not write. Cold reads that do land
 on disk go into a per-asset `<asset>.blocks/` read-through cache of fixed 32 MiB blocks
-(`api_sidecar/internal/relay/blockcache.go`), identified by the content-addressed artifact hash in
-`meta.json` so a reprocessed asset drops the whole directory. Those cache directories are evicted like any
+(`api_sidecar/internal/relay/blockcache.go`). `meta.json` binds a generation to the artifact, upstream
+object, size and block size. Replacement detaches the old directory under the per-directory identity
+lock, then schedules bounded asynchronous deletion outside that lock. The triggering viewer does not
+wait for recursive deletion; failed or saturated cleanup leaves a retired directory for pressure GC,
+which reclaims retired generations before live caches without emitting asset lifecycle events.
+Active cache directories are evicted like any
 other warm file, ranked by heat rather than plain age: the relay touches `HeatTracker` with the `.blocks`
 dir as key on warm-block reads, and the cleanup monitor sorts on that access count and recency
 (`api_sidecar/internal/handlers/cleanup.go`), so a lease-free cache that is still being played is retained

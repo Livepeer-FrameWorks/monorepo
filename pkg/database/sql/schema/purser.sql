@@ -3903,45 +3903,6 @@ CREATE OR REPLACE TRIGGER crypto_invoices_tax_assessment_guard
     BEFORE UPDATE ON purser.crypto_invoices
     FOR EACH ROW EXECUTE FUNCTION purser.prevent_crypto_tax_assessment_change();
 
-CREATE TABLE IF NOT EXISTS purser.business_establishment_reviews (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL,
-    revision BIGINT NOT NULL CHECK (revision > 0),
-    UNIQUE (tenant_id, revision),
-    profile_sha256 VARCHAR(64),
-    is_revocation BOOLEAN NOT NULL DEFAULT FALSE,
-    country VARCHAR(2),
-    reference TEXT NOT NULL CHECK (length(btrim(reference)) BETWEEN 1 AND 1024),
-    reviewed_by UUID NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    valid_until TIMESTAMPTZ NOT NULL,
-    retention_until TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '10 years'),
-    CONSTRAINT chk_business_establishment_review_window CHECK (
-        (is_revocation AND profile_sha256 IS NULL AND country IS NULL AND valid_until = created_at)
-        OR (NOT is_revocation AND profile_sha256 IS NOT NULL AND profile_sha256 ~ '^[0-9a-f]{64}$'
-            AND country IS NOT NULL AND length(country)=2
-            AND valid_until > created_at AND valid_until <= created_at + INTERVAL '366 days')
-    )
-);
-CREATE INDEX IF NOT EXISTS idx_business_establishment_reviews_profile
-ON purser.business_establishment_reviews(tenant_id, profile_sha256, country, revision DESC);
-CREATE INDEX IF NOT EXISTS idx_business_establishment_reviews_audit
-ON purser.business_establishment_reviews(tenant_id, id);
-CREATE INDEX IF NOT EXISTS idx_business_establishment_reviews_latest
-ON purser.business_establishment_reviews(tenant_id, revision DESC);
-CREATE OR REPLACE FUNCTION purser.prevent_business_establishment_review_change()
-RETURNS TRIGGER LANGUAGE plpgsql AS $$
-BEGIN
-    RAISE EXCEPTION 'business establishment reviews are append-only; record a new review';
-END;
-$$;
-CREATE OR REPLACE TRIGGER business_establishment_reviews_update_guard
-    BEFORE UPDATE ON purser.business_establishment_reviews
-    FOR EACH ROW EXECUTE FUNCTION purser.prevent_business_establishment_review_change();
-CREATE OR REPLACE TRIGGER business_establishment_reviews_retention_guard
-    BEFORE DELETE ON purser.business_establishment_reviews
-    FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
-
 ALTER TABLE purser.billing_payments ADD COLUMN IF NOT EXISTS tenant_id UUID;
 
 CREATE OR REPLACE FUNCTION purser.set_payment_tenant()
@@ -4332,3 +4293,27 @@ ON purser.crypto_invoices(tenant_id,issued_at DESC,id DESC)
 WHERE tax_validation_status<>'location_review';
 CREATE INDEX IF NOT EXISTS idx_credit_notes_document_time
 ON purser.credit_notes(tenant_id,issued_at DESC,id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_billing_tax_reviews_tenant_id ON purser.crypto_accounting_anomalies(tenant_id,id);
+
+-- Accepted recurring terms are retained before provider synchronization. An
+-- append-only history distinguishes a return to an earlier profile from its
+-- first use and fixes which expected terms existed when a renewal was issued.
+CREATE TABLE IF NOT EXISTS purser.provider_tax_assessments (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+ tenant_id UUID NOT NULL,
+ profile_sha256 TEXT NOT NULL CHECK(length(profile_sha256)=64),
+ assessed_at TIMESTAMPTZ NOT NULL,
+ assessment JSONB NOT NULL CHECK(jsonb_typeof(assessment)='object'),
+ retention_until TIMESTAMPTZ NOT NULL DEFAULT NOW()+INTERVAL '10 years'
+);
+CREATE INDEX IF NOT EXISTS idx_provider_tax_assessments_at_point
+ ON purser.provider_tax_assessments(tenant_id,assessed_at DESC,id DESC);
+CREATE OR REPLACE TRIGGER provider_tax_assessment_guard
+ BEFORE UPDATE ON purser.provider_tax_assessments
+ FOR EACH ROW EXECUTE FUNCTION purser.retain_provider_tax_profile();
+CREATE OR REPLACE TRIGGER provider_tax_assessment_retention_guard
+ BEFORE DELETE ON purser.provider_tax_assessments
+ FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
+
+CREATE INDEX IF NOT EXISTS idx_provider_tax_assessments_audit ON purser.provider_tax_assessments(tenant_id,id);

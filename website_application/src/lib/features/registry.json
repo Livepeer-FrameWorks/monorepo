@@ -3514,6 +3514,67 @@
       },
       "subitems": [
         {
+          "slug": "vat-invoicing",
+          "name": "VAT assessment and original tax documents",
+          "area": "",
+          "kind": "product",
+          "audience": "product",
+          "description": "Shared personal/business tax assessment, exclusive VAT, frozen invoice evidence, original Stripe documents, and tax-aware Mollie and prepaid billing.",
+          "status": "shipped",
+          "horizon": "now",
+          "required_surfaces": {
+            "docs": {
+              "required": true
+            },
+            "graphql": {
+              "required": true
+            },
+            "mcp": {
+              "required": false,
+              "reason": "Tax is assessed by the existing billing flows; customers do not select exemptions through a separate tool."
+            },
+            "webapp": {
+              "required": true
+            }
+          },
+          "surfaces": {
+            "graphql": {
+              "mutations": [
+                "updateBillingDetails"
+              ],
+              "queries": [
+                "billingDetails",
+                "invoice",
+                "invoicesConnection"
+              ]
+            },
+            "mcp": {},
+            "cli": {},
+            "webapp": {
+              "routes": [
+                "/account/billing",
+                "/account/balance"
+              ]
+            },
+            "docs": {
+              "pages": [
+                "builders/billing.mdx",
+                "operators/billing-financials.mdx"
+              ]
+            }
+          },
+          "depends_on": [
+            "billing"
+          ],
+          "actual_surfaces": {
+            "cli": false,
+            "docs": true,
+            "graphql": true,
+            "mcp": false,
+            "webapp": true
+          }
+        },
+        {
           "slug": "usage-caps",
           "name": "Usage caps, alerts, retention cost preview",
           "area": "",
@@ -3698,9 +3759,11 @@
         "webapp": true
       },
       "enables": [
+        "financial-evidence-archive",
         "operator-trials",
         "plan-lifecycle",
-        "usage-caps"
+        "usage-caps",
+        "vat-invoicing"
       ],
       "family_surfaces": {
         "cli": true,

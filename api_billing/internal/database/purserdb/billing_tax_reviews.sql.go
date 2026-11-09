@@ -8,52 +8,7 @@ package purserdb
 import (
 	"context"
 	"encoding/json"
-	"time"
 )
-
-const getBusinessEstablishmentReviewAtTaxPoint = `-- name: GetBusinessEstablishmentReviewAtTaxPoint :one
-SELECT candidates.review_snapshot
-FROM (
- (SELECT to_jsonb(review)::jsonb AS review_snapshot, review.revision
-  FROM purser.business_establishment_reviews review
-  WHERE review.tenant_id=$1::text::uuid
-   AND review.created_at<=$2::timestamptz
-   AND review.profile_sha256=$3::text
-   AND review.country=$4::text
-  ORDER BY review.revision DESC
-  LIMIT 1)
- UNION ALL
- (SELECT to_jsonb(review)::jsonb AS review_snapshot, review.revision
-  FROM purser.business_establishment_reviews review
-  WHERE review.tenant_id=$1::text::uuid
-   AND review.created_at<=$2::timestamptz
-   AND review.profile_sha256 IS NULL AND review.country IS NULL
-   AND review.is_revocation=true
-  ORDER BY review.profile_sha256, review.country, review.revision DESC
-  LIMIT 1)
-) candidates
-ORDER BY candidates.revision DESC
-LIMIT 1
-`
-
-type GetBusinessEstablishmentReviewAtTaxPointParams struct {
-	TenantID      string    `db:"tenant_id" json:"tenant_id"`
-	ValidAt       time.Time `db:"valid_at" json:"valid_at"`
-	ProfileSha256 string    `db:"profile_sha256" json:"profile_sha256"`
-	Country       string    `db:"country" json:"country"`
-}
-
-func (q *Queries) GetBusinessEstablishmentReviewAtTaxPoint(ctx context.Context, arg GetBusinessEstablishmentReviewAtTaxPointParams) (json.RawMessage, error) {
-	row := q.db.QueryRowContext(ctx, getBusinessEstablishmentReviewAtTaxPoint,
-		arg.TenantID,
-		arg.ValidAt,
-		arg.ProfileSha256,
-		arg.Country,
-	)
-	var review_snapshot json.RawMessage
-	err := row.Scan(&review_snapshot)
-	return review_snapshot, err
-}
 
 const hasBillingTaxReviewReceipt = `-- name: HasBillingTaxReviewReceipt :one
 SELECT EXISTS (

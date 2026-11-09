@@ -18,8 +18,11 @@ import (
 // out input and output sessions, and stop_sessions ends every session of each
 // exactly named stream.
 type sessionMist struct {
-	mu       sync.Mutex
-	sessions map[string]string // session id -> Mist stream name
+	mu          sync.Mutex
+	sessions    map[string]string // session id -> Mist stream name
+	failStops   int
+	ignoreStops bool
+	stopCalls   int
 }
 
 func (m *sessionMist) serve(t *testing.T) string {
@@ -45,15 +48,41 @@ func (m *sessionMist) serve(t *testing.T) string {
 			_, _ = w.Write(buf)
 			return
 		case command["stop_sessions"] != nil:
+			m.stopCalls++
+			if m.failStops > 0 {
+				m.failStops--
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
 			streams, ok := command["stop_sessions"].(map[string]any)
 			if !ok {
 				t.Errorf("stop_sessions payload %#v is not stream name -> connector", command["stop_sessions"])
 			}
 			for id, stream := range m.sessions {
+				if m.ignoreStops {
+					continue
+				}
 				if _, stop := streams[stream]; stop {
 					delete(m.sessions, id)
 				}
 			}
+		case command["active_streams"] != nil:
+			streams := map[string]map[string]int{}
+			for id, name := range m.sessions {
+				if streams[name] == nil {
+					streams[name] = map[string]int{"viewers": 0, "inputs": 0, "outputs": 0}
+				}
+				field := "viewers"
+				if len(id) > 0 && id[0] == 'I' {
+					field = "inputs"
+				} else if len(id) > 0 && id[0] == 'O' {
+					field = "outputs"
+				}
+				streams[name][field]++
+			}
+			buf, _ := json.Marshal(map[string]any{"active_streams": streams})
+			_, _ = w.Write(buf)
+			return
 		}
 		_, _ = w.Write([]byte(`{}`))
 	}))

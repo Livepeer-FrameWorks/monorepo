@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -337,11 +336,12 @@ func TestStackDeployedStripePaidUpgradeOriginalTax(t *testing.T) {
 	t.Logf("deployed paid upgrade retained original zero-tax credit %d and new 21%% VAT %d", credit, positiveVAT)
 }
 
-func TestStackDeployedStripeHeldRenewalRecovery(t *testing.T) {
-	// The deployed reconciliation worker runs every five minutes. Exercise its
-	// real cadence instead of replacing it with a test-only production trigger.
-	ctx, conn, db, tenant := stackBillingConnectionTimeout(t, 15*time.Minute)
+func TestStackDeployedStripeNoHoldRenewalOutcomes(t *testing.T) {
+	// The same deployed worker reconciles the fallback fixtures. Payment
+	// outcomes remain Stripe's collection lifecycle, independent of tax sync.
+	ctx, conn, db, tenant := stackBillingConnectionTimeout(t, 16*time.Minute)
 	fallbacks := prepareStackRecurringFallbacks(t, ctx, conn, db)
+	staleRate := prepareStackStaleRate(t, ctx, conn, db)
 	var tier string
 	if err := db.QueryRowContext(ctx, `SELECT id::text FROM purser.billing_tiers WHERE tier_name='supporter'`).Scan(&tier); err != nil {
 		t.Fatal(err)
@@ -358,13 +358,9 @@ func TestStackDeployedStripeHeldRenewalRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	type subscriptionSnapshot struct {
-		Metadata map[string]string `json:"metadata"`
-		Customer string            `json:"customer"`
-		Status   string            `json:"status"`
-		Pause    *struct {
-			Behavior string `json:"behavior"`
-		} `json:"pause_collection"`
-		Latest string `json:"latest_invoice"`
+		Status   string
+		Pause    json.RawMessage `json:"pause_collection"`
+		Metadata map[string]string
 	}
 	read := func() (subscriptionSnapshot, map[string]json.RawMessage) {
 		var objects map[string]json.RawMessage
@@ -375,188 +371,76 @@ func TestStackDeployedStripeHeldRenewalRecovery(t *testing.T) {
 		}
 		return sub, objects
 	}
-	beforeHold, _ := read()
-	var configured map[string]bool
-	stackProviderControl(t, ctx, "payment_behavior", map[string]string{"customer_id": beforeHold.Customer, "outcome": "declined"}, &configured)
-	stackProviderControl(t, ctx, "renew", map[string]string{"subscription_id": subscription}, &events)
-	deliverStackProviderEvents(t, ctx, conn, db, tenant, events)
-	uncollected, _ := read()
-	pastDueID := uncollected.Latest
-	stackProviderControl(t, ctx, "collect", map[string]string{"invoice_id": pastDueID}, &events)
-	deliverStackProviderEvents(t, ctx, conn, db, tenant, events)
-	alreadyPastDue, pastDueObjects := read()
-	if alreadyPastDue.Status != "past_due" || alreadyPastDue.Pause != nil {
-		t.Fatalf("subscription was not already past_due before its tax hold: %+v", alreadyPastDue)
-	}
-	pastDueMoney, err := stackInvoiceFinancialSnapshot(pastDueObjects[pastDueID])
-	if err != nil {
-		t.Fatal(err)
-	}
-	stackProviderControl(t, ctx, "payment_behavior", map[string]string{"customer_id": beforeHold.Customer, "outcome": "succeeded"}, &configured)
-	typeName, vat := "consumer", ""
-	_, err = purserpb.NewSubscriptionServiceClient(conn).UpdateBillingDetails(ctx, &purserpb.UpdateBillingDetailsRequest{TenantId: tenant, CustomerType: &typeName, VatNumber: &vat, Address: &purserpb.BillingAddress{Street: "1 Main Street", City: "Oslo", PostalCode: "0150", Country: "NO"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wait := func(label string, condition func(subscriptionSnapshot, map[string]json.RawMessage) bool) {
-		t.Helper()
-		deadline := time.NewTimer(7 * time.Minute)
-		defer deadline.Stop()
-		ticker := time.NewTicker(3 * time.Second)
-		defer ticker.Stop()
-		for {
-			sub, objects := read()
-			if condition(sub, objects) {
-				return
-			}
-			select {
-			case <-ticker.C:
-			case <-deadline.C:
-				t.Fatalf("deployed worker did not %s", label)
-			case <-ctx.Done():
-				t.Fatal(ctx.Err())
-			}
-		}
-	}
-	wait("hold a complete profile lacking its destination policy", func(sub subscriptionSnapshot, _ map[string]json.RawMessage) bool {
-		return sub.Status == "past_due" && sub.Pause != nil && sub.Pause.Behavior == "keep_as_draft" && sub.Metadata["frameworks_tax_review"] == "true" && sub.Metadata["frameworks_tax_pause_owned"] == "true"
-	})
-	for _, fallback := range fallbacks {
-		verifyStackRecurringFallback(t, ctx, conn, db, fallback)
-	}
-	stackProviderControl(t, ctx, "renew", map[string]string{"subscription_id": subscription}, &events)
-	var draftEvent struct {
-		Data struct {
-			Object struct {
-				ID, Status string
-				AmountPaid int64 `json:"amount_paid"`
-			} `json:"object"`
-		} `json:"data"`
-	}
-	if len(events) != 1 || json.Unmarshal([]byte(events[0].Body), &draftEvent) != nil || draftEvent.Data.Object.Status != "draft" || draftEvent.Data.Object.AmountPaid != 0 {
-		t.Fatalf("held renewal unexpectedly finalized/collected: %+v", events)
-	}
-	draftID := draftEvent.Data.Object.ID
-	type paymentCase struct{ ID, Outcome string }
-	cases := []paymentCase{{ID: draftID, Outcome: "processing"}}
-	for _, outcome := range []string{"declined", "requires_action"} {
-		stackProviderControl(t, ctx, "renew", map[string]string{"subscription_id": subscription}, &events)
-		if len(events) != 1 || json.Unmarshal([]byte(events[0].Body), &draftEvent) != nil || draftEvent.Data.Object.Status != "draft" {
-			t.Fatalf("%s renewal did not remain held", outcome)
-		}
-		cases = append(cases, paymentCase{ID: draftEvent.Data.Object.ID, Outcome: outcome})
-	}
-	var manual, adjustment, operatorPaused json.RawMessage
+	noPause := func(pause json.RawMessage) bool { return len(pause) == 0 || bytes.Equal(pause, []byte("null")) }
+	var manual json.RawMessage
 	stackProviderControl(t, ctx, "unrelated_invoice", map[string]string{"subscription_id": subscription}, &manual)
-	stackProviderControl(t, ctx, "held_adjustment", map[string]string{"subscription_id": subscription}, &adjustment)
-	stackProviderControl(t, ctx, "operator_paused_invoice", map[string]string{"subscription_id": subscription}, &operatorPaused)
-	idOf := func(raw json.RawMessage) string {
-		var invoice struct{ ID string }
-		if err := json.Unmarshal(raw, &invoice); err != nil {
+	var manualInvoice struct{ ID string }
+	if err = json.Unmarshal(manual, &manualInvoice); err != nil {
+		t.Fatal(err)
+	}
+	type paymentCase struct{ ID, Outcome string }
+	cases := []paymentCase{}
+	for _, outcome := range []string{"declined", "requires_action", "processing"} {
+		stackProviderControl(t, ctx, "renew", map[string]string{"subscription_id": subscription}, &events)
+		if len(events) != 1 {
+			t.Fatalf("renewal created %d events", len(events))
+		}
+		var created struct {
+			Data struct {
+				Object struct {
+					ID          string
+					AutoAdvance bool `json:"auto_advance"`
+				}
+			}
+		}
+		if err = json.Unmarshal([]byte(events[0].Body), &created); err != nil {
 			t.Fatal(err)
 		}
-		return invoice.ID
+		if !created.Data.Object.AutoAdvance {
+			t.Fatal("renewal lost automatic collection")
+		}
+		deliverStackProviderEvents(t, ctx, conn, db, tenant, events)
+		cases = append(cases, paymentCase{ID: created.Data.Object.ID, Outcome: outcome})
+		var configured map[string]bool
+		stackProviderControl(t, ctx, "payment_behavior", map[string]string{"invoice_id": created.Data.Object.ID, "outcome": outcome}, &configured)
+		stackProviderControl(t, ctx, "collect", map[string]string{"invoice_id": created.Data.Object.ID}, &events)
+		deliverStackProviderEvents(t, ctx, conn, db, tenant, events)
 	}
-	manualID, adjustmentID, operatorID := idOf(manual), idOf(adjustment), idOf(operatorPaused)
-	financialSnapshot := func(raw json.RawMessage) []byte {
-		snapshot, err := stackInvoiceFinancialSnapshot(raw)
+	pastDue, before := read()
+	if pastDue.Status != "past_due" || !noPause(pastDue.Pause) {
+		t.Fatalf("decline did not leave ordinary past_due collection: %+v", pastDue)
+	}
+	money := map[string][]byte{}
+	for _, item := range cases {
+		money[item.ID], err = stackInvoiceFinancialSnapshot(before[item.ID])
 		if err != nil {
 			t.Fatal(err)
 		}
-		return snapshot
 	}
-	adjustmentMoney, operatorMoney := financialSnapshot(adjustment), financialSnapshot(operatorPaused)
-	heldSubscription, _ := read()
-	if heldSubscription.Customer == "" {
-		t.Fatal("held subscription lost its customer")
+	for _, fallback := range fallbacks {
+		verifyStackRecurringFallback(t, ctx, conn, db, fallback)
+	}
+	verifyStackStaleRate(t, ctx, conn, db, staleRate)
+	current, after := read()
+	if !noPause(current.Pause) || !bytes.Equal(manual, after[manualInvoice.ID]) {
+		t.Fatal("reconcile changed unrelated debt or paused collection")
 	}
 	for _, item := range cases {
-		stackProviderControl(t, ctx, "payment_behavior", map[string]string{"invoice_id": item.ID, "outcome": item.Outcome}, &configured)
-	}
-	var premature int
-	if err = db.QueryRowContext(ctx, `SELECT count(*) FROM purser.provider_billing_documents WHERE tenant_id=$1 AND provider_document_id=$2`, tenant, draftID).Scan(&premature); err != nil || premature != 0 {
-		t.Fatalf("uncollected draft became an issued tax document: %d %v", premature, err)
-	}
-	typeName, vat = "consumer", ""
-	_, err = purserpb.NewSubscriptionServiceClient(conn).UpdateBillingDetails(ctx, &purserpb.UpdateBillingDetailsRequest{TenantId: tenant, CustomerType: &typeName, VatNumber: &vat, Address: &purserpb.BillingAddress{Street: "1 Main Street", City: "Amsterdam", PostalCode: "1000AA", Country: "NL"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wait("restore future collection and finalize the original held renewal with correct VAT", func(sub subscriptionSnapshot, objects map[string]json.RawMessage) bool {
-		for _, item := range cases {
-			var invoice struct {
-				Status      string
-				Net         int64 `json:"total_excluding_tax"`
-				Total       int64
-				Paid        int64 `json:"amount_paid"`
-				AutoAdvance bool  `json:"auto_advance"`
-			}
-			if err := json.Unmarshal(objects[item.ID], &invoice); err != nil {
-				t.Fatal(err)
-			}
-			if invoice.Status != "open" || !invoice.AutoAdvance || invoice.Net <= 0 || invoice.Total != invoice.Net+(invoice.Net*2100+5000)/10000 || invoice.Paid != 0 {
-				return false
-			}
+		retained, snapshotErr := stackInvoiceFinancialSnapshot(after[item.ID])
+		if snapshotErr != nil || !bytes.Equal(money[item.ID], retained) {
+			t.Fatal("worker rewrote finalized renewal facts")
 		}
-		var reviews int
-		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM purser.crypto_accounting_anomalies WHERE tenant_id=$1 AND kind='provider_invoice_tax_review' AND network='stripe' AND reference_type='stripe_invoice' AND reference_id=$2 AND status='open' AND COALESCE(evidence_json->>'code','')<>'' AND length(COALESCE(evidence_json->>'input_fingerprint',''))=64`, tenant, adjustmentID).Scan(&reviews); err != nil {
-			t.Fatal(err)
+		var retainedDoc int
+		if err = db.QueryRowContext(ctx, `SELECT count(*) FROM purser.provider_billing_documents WHERE tenant_id=$1 AND provider_document_id=$2 AND vat_minor=(net_minor*2100+5000)/10000 AND gross_minor=net_minor+vat_minor AND original_pdf IS NOT NULL`, tenant, item.ID).Scan(&retainedDoc); err != nil || retainedDoc != 1 {
+			t.Fatalf("ordinary renewal original missing: count=%d err=%v", retainedDoc, err)
 		}
-		for key, value := range sub.Metadata {
-			if value != "" && (key == "frameworks_tax_recovery_pending" || strings.HasPrefix(key, "fwtx_")) {
-				return false
-			}
-		}
-		return sub.Pause == nil && sub.Metadata["frameworks_tax_review"] != "true" && reviews == 1
-	})
-	var requests []struct{ Method, Path string }
-	stackProviderControl(t, ctx, "requests", nil, &requests)
-	for _, request := range requests {
-		for _, item := range cases {
-			if request.Method == http.MethodPost && request.Path == "/v1/invoices/"+item.ID+"/pay" {
-				t.Fatal("tax recovery forced synchronous payment instead of restoring automatic collection")
-			}
-		}
-	}
-	_, recovered := read()
-	if !bytes.Equal(manual, recovered[manualID]) {
-		t.Fatal("worker changed the unrelated overdue manual invoice")
-	}
-	if !bytes.Equal(adjustmentMoney, financialSnapshot(recovered[adjustmentID])) || !bytes.Equal(operatorMoney, financialSnapshot(recovered[operatorID])) {
-		t.Fatal("worker changed unsupported draft money or restarted operator-paused collection")
-	}
-	if !bytes.Equal(pastDueMoney, financialSnapshot(recovered[pastDueID])) {
-		t.Fatal("tax recovery rewrote an invoice that was already finalized and past_due before the hold")
-	}
-	var retainedReview struct{ Metadata map[string]string }
-	if err = json.Unmarshal(recovered[adjustmentID], &retainedReview); err != nil {
-		t.Fatal(err)
-	}
-	var reviewCode, reviewInput string
-	if err = db.QueryRowContext(ctx, `SELECT evidence_json->>'code',evidence_json->>'input_fingerprint' FROM purser.crypto_accounting_anomalies WHERE tenant_id=$1 AND kind='provider_invoice_tax_review' AND network='stripe' AND reference_type='stripe_invoice' AND reference_id=$2`, tenant, adjustmentID).Scan(&reviewCode, &reviewInput); err != nil {
-		t.Fatal(err)
-	}
-	if retainedReview.Metadata["frameworks_tax_terminal_review"] != reviewCode || retainedReview.Metadata["frameworks_tax_terminal_input"] != reviewInput {
-		t.Fatal("provider acknowledgement does not match the durable invoice review")
-	}
-	var inventedReviews int
-	if err = db.QueryRowContext(ctx, `SELECT count(*) FROM purser.crypto_accounting_anomalies WHERE tenant_id=$1 AND kind='provider_invoice_tax_review' AND network='stripe' AND reference_type='stripe_invoice' AND reference_id IN ($2,$3,$4)`, tenant, manualID, operatorID, pastDueID).Scan(&inventedReviews); err != nil || inventedReviews != 0 {
-		t.Fatalf("manual collection choices became fabricated tax exceptions: %d %v", inventedReviews, err)
-	}
-	t.Log("deployed worker recovered a subscription already past_due before the tax hold, retained non-renewal review and preserved finalized debt and operator collection choices")
-	for _, item := range cases {
-		stackProviderControl(t, ctx, "invoice_events", map[string]string{"invoice_id": item.ID}, &events)
-		deliverStackProviderEvents(t, ctx, conn, db, tenant, events)
-		var retained int
-		if err = db.QueryRowContext(ctx, `SELECT count(*) FROM purser.provider_billing_documents WHERE tenant_id=$1 AND provider_document_id=$2 AND vat_minor=(net_minor*2100+5000)/10000 AND gross_minor=net_minor+vat_minor AND original_pdf IS NOT NULL`, tenant, item.ID).Scan(&retained); err != nil || retained != 1 {
-			t.Fatalf("recovered held renewal document: %d %v", retained, err)
-		}
+		var configured map[string]bool
 		stackProviderControl(t, ctx, "collect", map[string]string{"invoice_id": item.ID}, &events)
 		if len(events) > 0 {
 			deliverStackProviderEvents(t, ctx, conn, db, tenant, events)
 		}
 		pendingSubscription, objects := read()
-		if pendingSubscription.Pause != nil || pendingSubscription.Metadata["frameworks_tax_review"] == "true" {
+		if !noPause(pendingSubscription.Pause) || pendingSubscription.Metadata["frameworks_tax_review"] == "true" {
 			t.Fatal("payment failure or authentication paused future tax-proven collection")
 		}
 		var pending struct {
@@ -605,6 +489,6 @@ func TestStackDeployedStripeHeldRenewalRecovery(t *testing.T) {
 		if paid.Status != "paid" || paid.Paid != paid.Total || paid.Attempts != expectedAttempts {
 			t.Fatalf("later provider settlement did not retain one collection: %+v", paid)
 		}
-		t.Logf("deployed worker restored %s invoice %s with 21%% VAT, no synchronous Pay and correct eventual provider collection", item.Outcome, item.ID)
+		t.Logf("deployed ordinary %s renewal %s retained 21%% VAT and correct eventual provider collection", item.Outcome, item.ID)
 	}
 }

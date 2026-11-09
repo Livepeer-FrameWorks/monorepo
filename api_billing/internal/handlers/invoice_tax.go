@@ -27,22 +27,21 @@ func (h *X402Handler) taxDatabase() purserdb.DBTX {
 }
 
 type invoiceTaxAssessment struct {
-	ReviewRequired             bool                    `json:"review_required,omitempty"`
-	ReviewReasons              []string                `json:"review_reasons,omitempty"`
-	ConfirmationBusinessReview json.RawMessage         `json:"confirmation_business_review,omitempty"`
-	ProviderAssessment         json.RawMessage         `json:"provider_tax_assessment,omitempty"`
-	Advances                   []advanceTaxApplication `json:"advances_applied,omitempty"`
-	Advance                    *AdvanceMoney           `json:"advance_money,omitempty"`
-	DocumentKind               string                  `json:"document_kind,omitempty"`
-	Decision                   vatDecision             `json:"decision"`
-	Customer                   CryptoBillingProfile    `json:"customer"`
-	Supplier                   DocumentSupplier        `json:"supplier"`
-	Net                        int64                   `json:"net_eur_cents"`
-	VAT                        int64                   `json:"vat_eur_cents"`
-	Gross                      int64                   `json:"gross_eur_cents"`
-	TaxPoint                   time.Time               `json:"tax_point"`
-	Validation                 json.RawMessage         `json:"vat_validation,omitempty"`
-	ValidationMode             string                  `json:"vat_validation_mode,omitempty"`
+	ReviewRequired     bool                    `json:"review_required,omitempty"`
+	ReviewReasons      []string                `json:"review_reasons,omitempty"`
+	ProviderAssessment json.RawMessage         `json:"provider_tax_assessment,omitempty"`
+	Advances           []advanceTaxApplication `json:"advances_applied,omitempty"`
+	Advance            *AdvanceMoney           `json:"advance_money,omitempty"`
+	DocumentKind       string                  `json:"document_kind,omitempty"`
+	Decision           vatDecision             `json:"decision"`
+	Customer           BillingProfile          `json:"customer"`
+	Supplier           DocumentSupplier        `json:"supplier"`
+	Net                int64                   `json:"net_eur_cents"`
+	VAT                int64                   `json:"vat_eur_cents"`
+	Gross              int64                   `json:"gross_eur_cents"`
+	TaxPoint           time.Time               `json:"tax_point"`
+	Validation         json.RawMessage         `json:"vat_validation,omitempty"`
+	ValidationMode     string                  `json:"vat_validation_mode,omitempty"`
 }
 
 func exclusiveTax(net int64, rate int) (vat, gross int64) {
@@ -70,33 +69,21 @@ func assessInvoiceTaxTx(ctx context.Context, tx *sql.Tx, tenant string, net int6
 	if !a.Customer.Complete() {
 		return a, billingtax.Review("billing_profile_required", "Complete the saved billing name, email and address before invoicing")
 	}
-	if a.Customer.effectiveCustomerType() == "" {
+	if a.Customer.EffectiveCustomerType() == "" {
 		if strings.TrimSpace(a.Customer.VATNumber) != "" {
 			a.Customer.CustomerType = "business"
 		} else {
 			a.Customer.CustomerType = "consumer"
 		}
 	}
-	address, addressErr := parseBillingAddress(a.Customer.Address)
-	if addressErr != nil {
-		return a, addressErr
-	}
-	if strings.TrimSpace(a.Customer.VATNumber) != "" && billingtax.IsEU(address.Country) {
-		canonical, canonicalErr := billingtax.CanonicalVATNumber(address.Country, a.Customer.VATNumber)
-		if canonicalErr != nil {
-			return a, canonicalErr
-		}
-		a.Customer.VATNumber = canonical
-	}
 	rt := appconfig.Runtime()
-	h := &X402Handler{taxDB: tx, supplierCountry: rt.SupplierCountry}
-	a.Decision, err = h.getVATDecisionForProfile(ctx, tenant, a.Customer, "", at)
+	a.Decision, err = (&taxAssessor{db: tx, supplierCountry: rt.SupplierCountry}).assess(ctx, tenant, a.Customer, "", "", billingtax.Invoice, at)
 	if err != nil {
 		return a, err
 	}
 	a.VAT, a.Gross = exclusiveTax(a.Net, a.Decision.RateBPS)
-	a.Validation = a.Decision.verification.Snapshot
-	a.ValidationMode = a.Decision.verification.Mode
+	a.Validation = a.Decision.Verification.Snapshot
+	a.ValidationMode = a.Decision.Verification.Mode
 	a.retainOutageReview()
 	return a, nil
 }

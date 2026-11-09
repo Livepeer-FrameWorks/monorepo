@@ -129,19 +129,6 @@ func TestCryptoTaxDocuments_RealPG(t *testing.T) { //nolint:funlen // The table 
 					t.Fatal(err)
 				}
 				if test.country == "DE" && test.vatNumber == "" {
-					appconfigtest.Set(t, "EU_CONSUMER_VAT_MODE", "destination")
-					appconfigtest.Set(t, "EU_CONSUMER_DESTINATION_REGISTERED", "true")
-				}
-				if test.country == "US" {
-					fingerprint, err := CryptoBusinessProfileFingerprint(profile)
-					if err != nil {
-						t.Fatal(err)
-					}
-					appconfigtest.Set(t, "SUPPLIER_COUNTRY", "NL")
-					appconfigtest.Set(t, "CRYPTO_TAX_POLICY_JSON", fmt.Sprintf(`{"reference":"reviewed-US-policy","supplier_country":"NL","valid_from":%q,"valid_until":%q,"non_eu_businesses":{"US":{"rate_bps":0,"source":"Reviewed US business policy","tax_label":"VAT","wording":"Outside scope of Dutch VAT","evidence_reference":"US-memo"}}}`, time.Now().Add(-time.Hour).UTC().Format(time.RFC3339), time.Now().Add(time.Hour).UTC().Format(time.RFC3339)))
-					if _, err := db.ExecContext(ctx, `INSERT INTO purser.business_establishment_reviews (tenant_id,revision,profile_sha256,country,reference,reviewed_by,valid_until) VALUES ($1,1,$2,'US','KYB-proof','92000000-0000-0000-0000-000000000002',NOW()+INTERVAL '1 hour')`, tenantID, fingerprint); err != nil {
-						t.Fatal(err)
-					}
 				}
 				requirement, err := handler.GetCryptoDocumentRequirement(ctx, tenantID, test.amountCents, "203.0.113.1")
 				if err != nil {
@@ -200,12 +187,6 @@ func TestCryptoTaxDocuments_RealPG(t *testing.T) { //nolint:funlen // The table 
 			`, fmt.Sprintf("0x%x", index+1), txHash, tenantID, test.amountCents, quoteID); err != nil {
 				t.Fatal(err)
 			}
-
-			if test.revoked {
-				if _, err := db.ExecContext(ctx, `INSERT INTO purser.business_establishment_reviews(tenant_id,revision,is_revocation,reference,reviewed_by,valid_until) VALUES ($1,2,true,'withdrawn','92000000-0000-0000-0000-000000000002',NOW())`, tenantID); err != nil {
-					t.Fatal(err)
-				}
-			}
 			if test.freeze {
 				if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET billing_name='Changed after quote' WHERE tenant_id=$1`, tenantID); err != nil {
 					t.Fatal(err)
@@ -213,8 +194,6 @@ func TestCryptoTaxDocuments_RealPG(t *testing.T) { //nolint:funlen // The table 
 				if _, err := db.ExecContext(ctx, `DELETE FROM purser.vat_validation_evidence WHERE tenant_id=$1`, tenantID); err != nil {
 					t.Fatal(err)
 				}
-				appconfigtest.Set(t, "EU_CONSUMER_VAT_MODE", "")
-				appconfigtest.Set(t, "CRYPTO_TAX_POLICY_JSON", "")
 				appconfigtest.Set(t, "VIES_ENDPOINT", "http://127.0.0.1:1")
 				handler.supplierName = "Changed Seller"
 				handler.supplierRegistration = "CHANGED"
@@ -302,7 +281,7 @@ func TestCryptoTaxDocuments_RealPG(t *testing.T) { //nolint:funlen // The table 
 				if err := json.Unmarshal(retained, &assessment); err != nil {
 					t.Fatal(err)
 				}
-				if assessment.ReviewRequired != test.revoked {
+				if assessment.ReviewRequired {
 					t.Fatalf("received payment review=%v, want %v", assessment.ReviewRequired, test.revoked)
 				}
 				if customer != test.legalName {
@@ -381,7 +360,6 @@ func TestReviewedForeignQuotesKeepAcceptedIdentityAfterPolicyChanges_RealPG(t *t
 	ctx := context.Background()
 	now := time.Now().UTC()
 	storeRate(t, db, "USD", now, "1.2500")
-	policy := fmt.Sprintf(`{"reference":"fixture-country-review","supplier_country":"NL","valid_from":%q,"valid_until":%q,"non_eu_businesses":{"US":{"rate_bps":0,"source":"Reviewed fixture business treatment","evidence_reference":"fixture-business-memo","tax_label":"VAT","wording":"Reviewed fixture business wording"}},"non_eu_consumers":{"US":{"rate_bps":0,"source":"Reviewed fixture consumer treatment","evidence_reference":"fixture-consumer-memo","tax_label":"VAT","wording":"Reviewed fixture consumer wording"}}}`, now.Add(-time.Hour).Format(time.RFC3339), now.Add(time.Hour).Format(time.RFC3339))
 	for _, customer := range []struct {
 		name, kind, vat, documentKind string
 		business                      bool
@@ -391,7 +369,6 @@ func TestReviewedForeignQuotesKeepAcceptedIdentityAfterPolicyChanges_RealPG(t *t
 	} {
 		t.Run(customer.name, func(t *testing.T) {
 			appconfigtest.Set(t, "SUPPLIER_COUNTRY", "NL")
-			appconfigtest.Set(t, "CRYPTO_TAX_POLICY_JSON", policy)
 			tenant, tier := uuid.NewString(), uuid.NewString()
 			address := json.RawMessage(`{"street":"Main 1","city":"Seattle","postal_code":"98101","country":"US"}`)
 			if _, err := db.ExecContext(ctx, `INSERT INTO purser.billing_tiers(id,tier_name,display_name) VALUES($1,$2,'Foreign quote test')`, tier, "foreign-"+tier); err != nil {
@@ -399,16 +376,6 @@ func TestReviewedForeignQuotesKeepAcceptedIdentityAfterPolicyChanges_RealPG(t *t
 			}
 			if _, err := db.ExecContext(ctx, `INSERT INTO purser.tenant_subscriptions(id,tenant_id,tier_id,billing_customer_type,billing_email,billing_name,billing_address,tax_id) VALUES($1,$2,$3,$4,'buyer@example.test','Accepted Buyer',$5::jsonb,NULLIF($6,''))`, uuid.NewString(), tenant, tier, customer.kind, address, customer.vat); err != nil {
 				t.Fatal(err)
-			}
-			profile := CryptoBillingProfile{CustomerType: customer.kind, Name: "Accepted Buyer", Email: "buyer@example.test", VATNumber: customer.vat, Address: address}
-			if customer.business {
-				fingerprint, err := CryptoBusinessProfileFingerprint(profile)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, err := db.ExecContext(ctx, `INSERT INTO purser.business_establishment_reviews(tenant_id,revision,profile_sha256,country,reference,reviewed_by,valid_until) VALUES($1,1,$2,'US','retained-fixture-proof',$3,NOW()+INTERVAL '1 hour')`, tenant, fingerprint, uuid.NewString()); err != nil {
-					t.Fatal(err)
-				}
 			}
 			h := &X402Handler{db: db, logger: logging.NewLogger(), supplierCountry: "NL", supplierName: "Accepted Supplier", supplierAddress: "Amsterdam, NL", supplierVAT: "NL000000000B01", supplierRegistration: "12345678", topupUSDCents: 1000, countryFromIP: func(string) string { return "US" }}
 			quotes, requirement, err := h.CreatePaymentQuotes(ctx, tenant, "mcp://foreign-test", "0x0000000000000000000000000000000000000002", []NetworkConfig{Networks["base"], Networks["arbitrum"]}, "203.0.113.1")
@@ -424,12 +391,6 @@ func TestReviewedForeignQuotesKeepAcceptedIdentityAfterPolicyChanges_RealPG(t *t
 			if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET billing_name='Changed Buyer',billing_address='{"country":"GB"}' WHERE tenant_id=$1`, tenant); err != nil {
 				t.Fatal(err)
 			}
-			if customer.business {
-				if _, err := db.ExecContext(ctx, `INSERT INTO purser.business_establishment_reviews(tenant_id,revision,is_revocation,reference,reviewed_by,valid_until) VALUES($1,2,true,'proof withdrawn',$2,NOW())`, tenant, uuid.NewString()); err != nil {
-					t.Fatal(err)
-				}
-			}
-			appconfigtest.Set(t, "CRYPTO_TAX_POLICY_JSON", "")
 			h.supplierCountry = "BE"
 			h.supplierName = "Changed Supplier"
 			txHash := "0x" + strings.ReplaceAll(uuid.NewString(), "-", "") + strings.Repeat("0", 32)
@@ -462,18 +423,13 @@ func TestReviewedForeignQuotesKeepAcceptedIdentityAfterPolicyChanges_RealPG(t *t
 			if err := json.Unmarshal(retained, &assessment); err != nil {
 				t.Fatal(err)
 			}
-			if rate != 0 || amount != 800 || assessment.Customer.Name != "Accepted Buyer" || assessment.Supplier.Name != "Accepted Supplier" || assessment.ReviewRequired != customer.business || assessment.DocumentKind != customer.documentKind || assessment.Advance == nil || assessment.Advance.NetEUR != 800 || assessment.Advance.VATEUR != 0 || assessment.Customer.TaxAssessment == nil || assessment.Customer.TaxAssessment.PolicyVersion != CryptoTopupTaxPolicyRef {
+			if rate != 0 || amount != 800 || assessment.Customer.Name != "Accepted Buyer" || assessment.Supplier.Name != "Accepted Supplier" || assessment.ReviewRequired || assessment.DocumentKind != customer.documentKind || assessment.Advance == nil || assessment.Advance.NetEUR != 800 || assessment.Advance.VATEUR != 0 || assessment.Customer.TaxAssessment == nil || assessment.Customer.TaxAssessment.PolicyVersion != CryptoTopupTaxPolicyRef {
 				t.Fatalf("accepted quote evidence or tax treatment changed: rate=%d amount=%d assessment=%+v", rate, amount, assessment)
 			}
 
 			var reviewCount int
-			if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM purser.crypto_accounting_anomalies WHERE tenant_id=$1 AND kind='tax_assessment_review' AND reference_type='invoice' AND reference_id=$2`, tenant, invoiceID).Scan(&reviewCount); err != nil || reviewCount != map[bool]int{true: 1, false: 0}[customer.business] {
+			if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM purser.crypto_accounting_anomalies WHERE tenant_id=$1 AND kind='tax_assessment_review' AND reference_type='invoice' AND reference_id=$2`, tenant, invoiceID).Scan(&reviewCount); err != nil || reviewCount != 0 {
 				t.Fatalf("canonical review has no durable operator exception: count=%d %v", reviewCount, err)
-			}
-			if customer.business {
-				if _, err = db.ExecContext(ctx, `UPDATE purser.crypto_accounting_anomalies SET status='resolved',resolved_at=NOW(),resolution_note='reviewed original claim' WHERE tenant_id=$1 AND kind='tax_assessment_review' AND reference_id=$2`, tenant, invoiceID); err != nil {
-					t.Fatal(err)
-				}
 			}
 			replay, err := h.confirmAndCreditSettlement(ctx, tenant, quotes[0].CreditAmountCents, nonceID, txHash, 10, 21000)
 			if err != nil || replay != 800 {
@@ -483,12 +439,7 @@ func TestReviewedForeignQuotesKeepAcceptedIdentityAfterPolicyChanges_RealPG(t *t
 			if err = db.QueryRowContext(ctx, `SELECT tax_decision FROM purser.billing_invoices WHERE tenant_id=$1 AND id=$2`, tenant, invoiceID).Scan(&retainedAgain); err != nil || string(retainedAgain) != string(retained) {
 				t.Fatalf("review or replay rewrote issued facts: %v", err)
 			}
-			if customer.business {
-				var state string
-				if err = db.QueryRowContext(ctx, `SELECT status FROM purser.crypto_accounting_anomalies WHERE tenant_id=$1 AND kind='tax_assessment_review' AND reference_id=$2`, tenant, invoiceID).Scan(&state); err != nil || state != "resolved" {
-					t.Fatalf("settlement replay reopened resolved exception: %s %v", state, err)
-				}
-			}
+
 		})
 	}
 }

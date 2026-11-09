@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -551,39 +552,41 @@ func TestUseIsReportedOncePerAuthorityPerDay(t *testing.T) {
 // Compilation and WAN application may outlive one decision's useful wait. The
 // next publisher must join that fill rather than start the same work again.
 func TestSlowSharedFillSurvivesDecisionWait(t *testing.T) {
-	now := storeFixtureNow
-	store := fetchTestStore(&now)
-	release := make(chan struct{})
-	started := make(chan struct{})
-	var calls atomic.Int32
-	store.SetAuthorityFetcher(func(ctx context.Context, _ AuthorityLookup) ([][]byte, error) {
-		if calls.Add(1) == 1 {
-			close(started)
+	synctest.Test(t, func(t *testing.T) {
+		now := storeFixtureNow
+		store := fetchTestStore(&now)
+		release := make(chan struct{})
+		started := make(chan struct{})
+		var calls atomic.Int32
+		store.SetAuthorityFetcher(func(ctx context.Context, _ AuthorityLookup) ([][]byte, error) {
+			if calls.Add(1) == 1 {
+				close(started)
+			}
+			select {
+			case <-release:
+				return nil, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		})
+		lookup := AuthorityLookup{AuthorityID: "live_stream:slow-fill"}
+		firstCtx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+		defer cancel()
+		first := make(chan error, 1)
+		go func() { _, err := store.Fetch(firstCtx, lookup); first <- err }()
+		<-started
+		if err := <-first; !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("first waiter: %v", err)
 		}
-		select {
-		case <-release:
-			return nil, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		time.Sleep(authorityFetchTimeout + 30*time.Millisecond)
+		time.AfterFunc(50*time.Millisecond, func() { close(release) })
+		retryCtx, stop := context.WithTimeout(t.Context(), time.Second)
+		defer stop()
+		if _, err := store.Fetch(retryCtx, lookup); err != nil {
+			t.Fatalf("retry lost shared fill: %v", err)
+		}
+		if calls.Load() != 1 {
+			t.Fatalf("a decision timeout cancelled its shared fill: fetches=%d want=1", calls.Load())
 		}
 	})
-	lookup := AuthorityLookup{AuthorityID: "live_stream:slow-fill"}
-	firstCtx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
-	defer cancel()
-	first := make(chan error, 1)
-	go func() { _, err := store.Fetch(firstCtx, lookup); first <- err }()
-	<-started
-	if err := <-first; !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("first waiter: %v", err)
-	}
-	time.Sleep(authorityFetchTimeout + 30*time.Millisecond)
-	time.AfterFunc(50*time.Millisecond, func() { close(release) })
-	retryCtx, stop := context.WithTimeout(t.Context(), time.Second)
-	defer stop()
-	if _, err := store.Fetch(retryCtx, lookup); err != nil {
-		t.Fatalf("retry lost shared fill: %v", err)
-	}
-	if calls.Load() != 1 {
-		t.Fatalf("a decision timeout cancelled its shared fill: fetches=%d want=1", calls.Load())
-	}
 }

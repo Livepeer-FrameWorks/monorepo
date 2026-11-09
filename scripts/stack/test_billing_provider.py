@@ -2,7 +2,6 @@
 """Checks the external simulator's wire contract without starting a stack."""
 
 import hashlib
-import ast
 import hmac
 import importlib.util
 import json
@@ -142,6 +141,19 @@ class BillingProviderTest(unittest.TestCase):
         self.assertEqual(self.provider.dispatch(*conflict)[0], 409)
         self.assertEqual(self.provider.dispatch(*conflict)[0], 200)
 
+    def test_provider_outage_survives_sdk_retries_until_cleared(self):
+        fault = {"method": "POST", "path": "/v1/customers", "status": 503, "after_execution": False, "remaining": 3}
+        self.call("POST", "/__test/fault", json.dumps(fault).encode())
+        for _ in range(3):
+            status, _ = self.provider.dispatch("POST", "/v1/customers", {}, b"name=Retry", "fixture-test")
+            self.assertEqual(status, 503)
+        self.assertEqual(self.call("POST", "/v1/customers", b"name=Retry")["name"], "Retry")
+        fault["remaining"] = 100
+        self.call("POST", "/__test/fault", json.dumps(fault).encode())
+        fault["remaining"] = 0
+        self.call("POST", "/__test/fault", json.dumps(fault).encode())
+        self.assertEqual(self.call("POST", "/v1/customers", b"name=Recovered")["name"], "Recovered")
+
     def test_error_if_incomplete_does_not_apply_failed_upgrade(self):
         sub = self.subscription()
         before = json.loads(json.dumps(sub))
@@ -161,7 +173,7 @@ class BillingProviderTest(unittest.TestCase):
 
     def test_mixed_invoice_fixtures_preserve_ownership_and_payment_outcomes(self):
         sub = self.subscription()
-        self.call("POST", "/v1/subscriptions/" + sub["id"], b"metadata[frameworks_tax_profile]=paid-profile&pause_collection[behavior]=keep_as_draft&metadata[frameworks_tax_review]=true&metadata[frameworks_tax_pause_owned]=true&metadata[frameworks_tax_hold_started]=123")
+        self.call("POST", "/v1/subscriptions/" + sub["id"], b"metadata[frameworks_tax_profile]=paid-profile")
         source = self.provider.objects[sub["latest_invoice"]]
         source["metadata"]["frameworks_tax_profile"] = "paid-profile"
         manual = self.call("POST", "/__test/unrelated_invoice", json.dumps({"subscription_id": sub["id"]}).encode())
@@ -169,8 +181,8 @@ class BillingProviderTest(unittest.TestCase):
         stopped = self.call("POST", "/__test/operator_paused_invoice", json.dumps({"subscription_id": sub["id"]}).encode())
         self.assertIsNone(manual["parent"])
         self.assertEqual(adjustment["billing_reason"], "subscription_update")
-        self.assertEqual(adjustment["parent"]["subscription_details"]["metadata"]["frameworks_tax_review"], "true")
-        self.assertEqual((stopped["status"], stopped["auto_advance"], stopped["metadata"]["frameworks_tax_recovered_hold"]), ("open", False, "true"))
+        self.assertEqual(adjustment["parent"]["subscription_details"]["metadata"]["frameworks_tax_profile"], "paid-profile")
+        self.assertEqual((stopped["status"], stopped["auto_advance"]), ("open", False))
         invoices = [self.open_invoice(sub), self.open_invoice(sub)]
         for invoice, outcome in zip(invoices, ("declined", "requires_action")):
             self.call("POST", "/__test/payment_behavior", json.dumps({"invoice_id": invoice, "outcome": outcome}).encode())
@@ -315,13 +327,6 @@ class BillingProviderTest(unittest.TestCase):
         self.assertEqual((credited_inline["status"], credited_inline["total_excluding_tax"], credited_inline["total"]), ("paid", 9000, 11100))
         self.assertEqual(credited_inline["lines"]["data"][1]["taxes"][0]["amount"], 0)
         self.assertEqual(self.call("GET", "/v1/invoices/" + credited_inline["id"] + "/lines"), credited_inline["lines"])
-
-    def test_compose_installs_a_single_valid_policy_object(self):
-        compose = pathlib.Path(__file__).parents[2].joinpath("docker-compose.stack.yml").read_text()
-        value = next(line.split(": ", 1)[1] for line in compose.splitlines() if line.strip().startswith("CRYPTO_TAX_POLICY_JSON:"))
-        policy = json.loads(ast.literal_eval(value))
-        self.assertEqual(policy["supplier_country"], "NL")
-        self.assertEqual(policy["non_eu_businesses"]["US"]["rate_bps"], 0)
 
     def test_http_chunked_stripe_body_preserves_customer_and_metadata(self):
         previous = MODULE.STATE

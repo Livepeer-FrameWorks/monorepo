@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
@@ -29,6 +30,11 @@ func RecoverPublisherAdmissions(ctx context.Context, client PublisherLeaseReleas
 	if err != nil {
 		return err
 	}
+	var oldest time.Time
+	for _, candidate := range candidates {
+		oldest = earlierPublisherRecoveryItem(oldest, candidate.QueuedAt)
+	}
+	observePublisherRecoveryQueue("settlement", oldest)
 	settleErr := recoverPublisherBatch(ctx, len(candidates), func(i int) error {
 		candidate := candidates[i]
 		if candidate.Generation != "" {
@@ -56,6 +62,11 @@ func RecoverPublisherAdmissions(ctx context.Context, client PublisherLeaseReleas
 	// generation exists locally. Commodore serializes it against a late acquire.
 	markers, markerErr := q.ListPublisherAbandonmentsToForward(ctx)
 	if markerErr == nil {
+		oldest = time.Time{}
+		for _, marker := range markers {
+			oldest = earlierPublisherRecoveryItem(oldest, marker.QueuedAt)
+		}
+		observePublisherRecoveryQueue("abandonment", oldest)
 		markerErr = recoverPublisherBatch(ctx, len(markers), func(i int) error {
 			marker := markers[i]
 			// Old edges acquired leases without execution metadata. Keep the marker
@@ -91,8 +102,16 @@ func RecoverPublisherAdmissions(ctx context.Context, client PublisherLeaseReleas
 
 func releasePublisherLeases(ctx context.Context, client PublisherLeaseReleaser, q *foghorndb.Queries) error {
 	releases, err := q.ListPublisherLeaseReleases(ctx)
-	if err != nil || len(releases) == 0 {
+	if err != nil {
 		return err
+	}
+	var oldest time.Time
+	for _, release := range releases {
+		oldest = earlierPublisherRecoveryItem(oldest, release.QueuedAt)
+	}
+	observePublisherRecoveryQueue("lease_release", oldest)
+	if len(releases) == 0 {
+		return nil
 	}
 	batch := make([]*pb.ActiveIngestStream, 0, len(releases))
 	for _, release := range releases {
@@ -134,6 +153,31 @@ func releasePublisherLeases(ctx context.Context, client PublisherLeaseReleaser, 
 	}
 	_, err = q.MarkPublisherLeasesReleased(ctx, payload)
 	return errors.Join(releaseResult, err)
+}
+
+func earlierPublisherRecoveryItem(oldest, candidate time.Time) time.Time {
+	if oldest.IsZero() || candidate.Before(oldest) {
+		return candidate
+	}
+	return oldest
+}
+
+func observePublisherRecoveryQueue(queue string, oldest time.Time) {
+	if controlMetrics == nil || controlMetrics.PublisherRecoveryOldestPending == nil {
+		return
+	}
+	value := float64(0)
+	if !oldest.IsZero() {
+		value = float64(oldest.Unix())
+	}
+	controlMetrics.PublisherRecoveryOldestPending.WithLabelValues(queue).Set(value)
+}
+
+// Followers must not continue advertising a backlog they no longer own.
+func ClearPublisherRecoveryBacklog() {
+	for _, queue := range []string{"settlement", "abandonment", "lease_release"} {
+		observePublisherRecoveryQueue(queue, time.Time{})
+	}
 }
 
 // A bounded batch keeps WAN recovery from serializing a backlog behind one

@@ -23,11 +23,10 @@ import (
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/spf13/cobra"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-var localFinancialAuditSources = []string{"invoices", "payments", "simplified_invoices", "crypto_invoices", "credit_notes", "provider_settlements", "pending_topups", "balance_transactions", "business_establishment_reviews", "provider_billing_documents", "provider_tax_profiles"}
+var localFinancialAuditSources = []string{"invoices", "payments", "simplified_invoices", "crypto_invoices", "credit_notes", "provider_settlements", "pending_topups", "balance_transactions", "billing_tax_reviews", "provider_billing_documents", "provider_tax_profiles", "provider_tax_assessments"}
 var stripeFinancialAuditSources = []string{"stripe_account", "stripe_balance_snapshot", "stripe_tax_settings", "stripe_subscriptions", "stripe_customers", "stripe_invoices", "stripe_charges", "stripe_balance_transactions", "stripe_payouts"}
 
 type financialAuditClient interface {
@@ -111,35 +110,7 @@ func newAdminBillingFinanceCmd() *cobra.Command {
 		panic(flagErr)
 	}
 	cmd.AddCommand(audit)
-	cmd.AddCommand(newAdminBillingTaxProfileCmd(), newAdminRecordBusinessEvidenceCmd())
-	return cmd
-}
-
-func newAdminBillingTaxProfileCmd() *cobra.Command {
-	var tenant string
-	cmd := &cobra.Command{Use: "tax-profile", Short: "Read the billing-profile fingerprint for an operator establishment review", Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			p, cfg, cleanup, err := purserGRPCClientFromContext(cmd.Context())
-			if err != nil {
-				return err
-			}
-			defer cleanup()
-			defer p.Close()
-			ctx := context.WithValue(cmd.Context(), ctxkeys.KeyJWTToken, cfg.Auth.JWT)
-			page, err := p.AdminFinancialAuditPage(ctx, &purserpb.AdminFinancialAuditPageRequest{TenantId: tenant, Source: "tax_profile", From: timestamppb.New(time.Unix(0, 0).UTC())})
-			if err != nil {
-				return err
-			}
-			if len(page.GetRecordsJson()) != 1 {
-				return errors.New("purser returned no billing-profile fingerprint")
-			}
-			_, err = fmt.Fprintln(cmd.OutOrStdout(), string(page.GetRecordsJson()[0]))
-			return err
-		}}
-	cmd.Flags().StringVar(&tenant, "tenant-id", "", "Customer tenant UUID whose establishment evidence is being reviewed")
-	if err := cmd.MarkFlagRequired("tenant-id"); err != nil {
-		panic(err)
-	}
+	cmd.AddCommand(newAdminBillingTaxReviewsCmd())
 	return cmd
 }
 
@@ -397,6 +368,9 @@ func writeFinancialAudit(ctx context.Context, out io.Writer, client financialAud
 
 func auditTaxException(source, tenant string, data map[string]json.RawMessage) *financialAuditException {
 	id, status, kind := auditStringField(data, "id"), auditStringField(data, "status"), auditStringField(data, "document_kind")
+	if source == "billing_tax_reviews" && status == "open" {
+		return &financialAuditException{Code: "OPEN_BILLING_TAX_REVIEW", Source: source, TenantID: tenant, RecordID: id, Message: "Inspect the retained evidence with admin billing finance reviews list; acknowledge only the evidence actually reviewed."}
+	}
 	if source == "provider_billing_documents" {
 		var assessment struct {
 			Evidence struct {
@@ -501,57 +475,4 @@ func financialAuditCSVCell(value string) string {
 		return "'" + value
 	}
 	return value
-}
-
-func newAdminRecordBusinessEvidenceCmd() *cobra.Command {
-	var tenant, fingerprint, reference, until string
-	var revoke bool
-	var expectedRevision int64
-	cmd := &cobra.Command{Use: "record-business-evidence", Short: "Record a reviewed non-EU business proof against an unchanged billing profile", Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			var expiry *timestamppb.Timestamp
-			if revoke {
-				if fingerprint != "" || until != "" {
-					return errors.New("--revoke omits --profile-sha256 and --valid-until")
-				}
-			} else {
-				if fingerprint == "" || until == "" || !cmd.Flags().Changed("expected-revision") {
-					return errors.New("--profile-sha256, --expected-revision and --valid-until are required for an approval")
-				}
-				parsed, err := time.Parse(time.RFC3339, until)
-				if err != nil {
-					return fmt.Errorf("invalid --valid-until: %w", err)
-				}
-				expiry = timestamppb.New(parsed)
-			}
-			p, cfg, cleanup, err := purserGRPCClientFromContext(cmd.Context())
-			if err != nil {
-				return err
-			}
-			defer cleanup()
-			defer p.Close()
-			ctx := context.WithValue(cmd.Context(), ctxkeys.KeyJWTToken, cfg.Auth.JWT)
-			recorded, err := p.AdminRecordBusinessEvidence(ctx, &purserpb.AdminRecordBusinessEvidenceRequest{TenantId: tenant, ProfileSha256: fingerprint, Reference: reference, ValidUntil: expiry, Revoke: revoke, ExpectedRevision: expectedRevision})
-			if err != nil {
-				return err
-			}
-			raw, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(recorded)
-			if err != nil {
-				return err
-			}
-			_, err = fmt.Fprintln(cmd.OutOrStdout(), string(raw))
-			return err
-		}}
-	cmd.Flags().StringVar(&tenant, "tenant-id", "", "Customer tenant UUID")
-	cmd.Flags().StringVar(&fingerprint, "profile-sha256", "", "Fingerprint of the exact billing profile reviewed by the operator")
-	cmd.Flags().StringVar(&reference, "reference", "", "Reference to retained establishment evidence; this command does not upload documents")
-	cmd.Flags().StringVar(&until, "valid-until", "", "RFC3339 evidence expiry within the next 366 days")
-	cmd.Flags().Int64Var(&expectedRevision, "expected-revision", 0, "Evidence revision returned with the reviewed profile")
-	cmd.Flags().BoolVar(&revoke, "revoke", false, "Revoke all earlier establishment approvals for this tenant")
-	for _, flag := range []string{"tenant-id", "reference"} {
-		if err := cmd.MarkFlagRequired(flag); err != nil {
-			panic(err)
-		}
-	}
-	return cmd
 }

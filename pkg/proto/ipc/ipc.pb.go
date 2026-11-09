@@ -923,7 +923,7 @@ func (x ClipPullRequest_SourceKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ClipPullRequest_SourceKind.Descriptor instead.
 func (ClipPullRequest_SourceKind) EnumDescriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{49, 0}
+	return file_ipc_proto_rawDescGZIP(), []int{51, 0}
 }
 
 // Read-pattern hint for sidecar admission policy. Foghorn echoes this back
@@ -975,7 +975,7 @@ func (x RelayResolveRequest_RelayHint) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RelayResolveRequest_RelayHint.Descriptor instead.
 func (RelayResolveRequest_RelayHint) EnumDescriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{85, 0}
+	return file_ipc_proto_rawDescGZIP(), []int{87, 0}
 }
 
 // Foghorn's recommendation for admission policy. Sidecar honors as a hint;
@@ -1026,7 +1026,7 @@ func (x RelayResolveResponse_CacheDecisionHint) Number() protoreflect.EnumNumber
 
 // Deprecated: Use RelayResolveResponse_CacheDecisionHint.Descriptor instead.
 func (RelayResolveResponse_CacheDecisionHint) EnumDescriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{86, 0}
+	return file_ipc_proto_rawDescGZIP(), []int{88, 0}
 }
 
 type StorageLifecycleData_Action int32
@@ -1099,7 +1099,7 @@ func (x StorageLifecycleData_Action) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use StorageLifecycleData_Action.Descriptor instead.
 func (StorageLifecycleData_Action) EnumDescriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{91, 0}
+	return file_ipc_proto_rawDescGZIP(), []int{93, 0}
 }
 
 // Typed failure reason for CACHE_FAILED rows so analytics can
@@ -1156,7 +1156,7 @@ func (x StorageLifecycleData_CacheFailureReason) Number() protoreflect.EnumNumbe
 
 // Deprecated: Use StorageLifecycleData_CacheFailureReason.Descriptor instead.
 func (StorageLifecycleData_CacheFailureReason) EnumDescriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{91, 1}
+	return file_ipc_proto_rawDescGZIP(), []int{93, 1}
 }
 
 type ClipLifecycleData_Stage int32
@@ -1217,7 +1217,7 @@ func (x ClipLifecycleData_Stage) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ClipLifecycleData_Stage.Descriptor instead.
 func (ClipLifecycleData_Stage) EnumDescriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{121, 0}
+	return file_ipc_proto_rawDescGZIP(), []int{123, 0}
 }
 
 type DVRLifecycleData_Status int32
@@ -1275,7 +1275,7 @@ func (x DVRLifecycleData_Status) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use DVRLifecycleData_Status.Descriptor instead.
 func (DVRLifecycleData_Status) EnumDescriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{122, 0}
+	return file_ipc_proto_rawDescGZIP(), []int{124, 0}
 }
 
 type VodLifecycleData_Status int32
@@ -1336,7 +1336,7 @@ func (x VodLifecycleData_Status) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use VodLifecycleData_Status.Descriptor instead.
 func (VodLifecycleData_Status) EnumDescriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{123, 0}
+	return file_ipc_proto_rawDescGZIP(), []int{125, 0}
 }
 
 type MessageLifecycleData_EventType int32
@@ -1391,7 +1391,7 @@ func (x MessageLifecycleData_EventType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use MessageLifecycleData_EventType.Descriptor instead.
 func (MessageLifecycleData_EventType) EnumDescriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{124, 0}
+	return file_ipc_proto_rawDescGZIP(), []int{126, 0}
 }
 
 // Presence role for this node's local copy. ORIGIN = the full file written
@@ -1450,7 +1450,7 @@ func (x StoredArtifact_Role) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use StoredArtifact_Role.Descriptor instead.
 func (StoredArtifact_Role) EnumDescriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{135, 0}
+	return file_ipc_proto_rawDescGZIP(), []int{137, 0}
 }
 
 // Coarse geospatial bucket (H3 index + resolution)
@@ -2775,6 +2775,7 @@ type ControlMessage struct {
 	//	*ControlMessage_ControlCapabilities
 	//	*ControlMessage_DurableDeliveryAck
 	//	*ControlMessage_PublisherAdmissionSession
+	//	*ControlMessage_StopSessionsResult
 	Payload       isControlMessage_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3504,6 +3505,15 @@ func (x *ControlMessage) GetPublisherAdmissionSession() *PublisherAdmissionSessi
 	return nil
 }
 
+func (x *ControlMessage) GetStopSessionsResult() *StopSessionsResult {
+	if x != nil {
+		if x, ok := x.Payload.(*ControlMessage_StopSessionsResult); ok {
+			return x.StopSessionsResult
+		}
+	}
+	return nil
+}
+
 type isControlMessage_Payload interface {
 	isControlMessage_Payload()
 }
@@ -3892,6 +3902,10 @@ type ControlMessage_PublisherAdmissionSession struct {
 	PublisherAdmissionSession *PublisherAdmissionSession `protobuf:"bytes,178,opt,name=publisher_admission_session,json=publisherAdmissionSession,proto3,oneof"`
 }
 
+type ControlMessage_StopSessionsResult struct {
+	StopSessionsResult *StopSessionsResult `protobuf:"bytes,179,opt,name=stop_sessions_result,json=stopSessionsResult,proto3,oneof"`
+}
+
 func (*ControlMessage_Register) isControlMessage_Payload() {}
 
 func (*ControlMessage_Error) isControlMessage_Payload() {}
@@ -4039,6 +4053,8 @@ func (*ControlMessage_ControlCapabilities) isControlMessage_Payload() {}
 func (*ControlMessage_DurableDeliveryAck) isControlMessage_Payload() {}
 
 func (*ControlMessage_PublisherAdmissionSession) isControlMessage_Payload() {}
+
+func (*ControlMessage_StopSessionsResult) isControlMessage_Payload() {}
 
 // ControlCapabilities lists the control-stream behaviours this Foghorn
 // implements. Helmsman decides per connection from the stream's first
@@ -5411,6 +5427,10 @@ type StopSessionsRequest struct {
 	StreamNames   []string               `protobuf:"bytes,1,rep,name=stream_names,json=streamNames,proto3" json:"stream_names,omitempty"` // Internal stream names to stop
 	TenantId      string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`          // For logging/audit
 	Reason        string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`                              // e.g., "insufficient_balance", "suspended"
+	RequestId     string                 `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	Targets       []*StopSessionsTarget  `protobuf:"bytes,6,rep,name=targets,proto3" json:"targets,omitempty"`
+	NodeId        string                 `protobuf:"bytes,7,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5466,6 +5486,158 @@ func (x *StopSessionsRequest) GetReason() string {
 	return ""
 }
 
+func (x *StopSessionsRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *StopSessionsRequest) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *StopSessionsRequest) GetTargets() []*StopSessionsTarget {
+	if x != nil {
+		return x.Targets
+	}
+	return nil
+}
+
+func (x *StopSessionsRequest) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+// An empty generation means no publisher occupied the runtime at dispatch.
+// A later publisher must not be stopped by that command.
+type StopSessionsTarget struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	InternalName     string                 `protobuf:"bytes,1,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
+	SourceGeneration string                 `protobuf:"bytes,2,opt,name=source_generation,json=sourceGeneration,proto3" json:"source_generation,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *StopSessionsTarget) Reset() {
+	*x = StopSessionsTarget{}
+	mi := &file_ipc_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StopSessionsTarget) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StopSessionsTarget) ProtoMessage() {}
+
+func (x *StopSessionsTarget) ProtoReflect() protoreflect.Message {
+	mi := &file_ipc_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StopSessionsTarget.ProtoReflect.Descriptor instead.
+func (*StopSessionsTarget) Descriptor() ([]byte, []int) {
+	return file_ipc_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *StopSessionsTarget) GetInternalName() string {
+	if x != nil {
+		return x.InternalName
+	}
+	return ""
+}
+
+func (x *StopSessionsTarget) GetSourceGeneration() string {
+	if x != nil {
+		return x.SourceGeneration
+	}
+	return ""
+}
+
+// Success confirms Mist reports no sessions for the exact requested scope.
+// A failed, missing or retired-connection result leaves revocation pending.
+type StopSessionsResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	TenantId      string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	StreamNames   []string               `protobuf:"bytes,3,rep,name=stream_names,json=streamNames,proto3" json:"stream_names,omitempty"`
+	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StopSessionsResult) Reset() {
+	*x = StopSessionsResult{}
+	mi := &file_ipc_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StopSessionsResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StopSessionsResult) ProtoMessage() {}
+
+func (x *StopSessionsResult) ProtoReflect() protoreflect.Message {
+	mi := &file_ipc_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StopSessionsResult.ProtoReflect.Descriptor instead.
+func (*StopSessionsResult) Descriptor() ([]byte, []int) {
+	return file_ipc_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *StopSessionsResult) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *StopSessionsResult) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *StopSessionsResult) GetStreamNames() []string {
+	if x != nil {
+		return x.StreamNames
+	}
+	return nil
+}
+
+func (x *StopSessionsResult) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 // InvalidateSessionsRequest tells Helmsman to re-run USER_NEW for active
 // sessions on the given streams without disconnecting them.
 // Used after a playback-policy or signing-key change so MistServer's
@@ -5482,7 +5654,7 @@ type InvalidateSessionsRequest struct {
 
 func (x *InvalidateSessionsRequest) Reset() {
 	*x = InvalidateSessionsRequest{}
-	mi := &file_ipc_proto_msgTypes[31]
+	mi := &file_ipc_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5494,7 +5666,7 @@ func (x *InvalidateSessionsRequest) String() string {
 func (*InvalidateSessionsRequest) ProtoMessage() {}
 
 func (x *InvalidateSessionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[31]
+	mi := &file_ipc_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5507,7 +5679,7 @@ func (x *InvalidateSessionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvalidateSessionsRequest.ProtoReflect.Descriptor instead.
 func (*InvalidateSessionsRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{31}
+	return file_ipc_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *InvalidateSessionsRequest) GetStreamNames() []string {
@@ -5564,7 +5736,7 @@ type PlaybackGrant struct {
 
 func (x *PlaybackGrant) Reset() {
 	*x = PlaybackGrant{}
-	mi := &file_ipc_proto_msgTypes[32]
+	mi := &file_ipc_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5576,7 +5748,7 @@ func (x *PlaybackGrant) String() string {
 func (*PlaybackGrant) ProtoMessage() {}
 
 func (x *PlaybackGrant) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[32]
+	mi := &file_ipc_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5589,7 +5761,7 @@ func (x *PlaybackGrant) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlaybackGrant.ProtoReflect.Descriptor instead.
 func (*PlaybackGrant) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{32}
+	return file_ipc_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *PlaybackGrant) GetInternalName() string {
@@ -5679,7 +5851,7 @@ type PlaybackGrantPolicy struct {
 
 func (x *PlaybackGrantPolicy) Reset() {
 	*x = PlaybackGrantPolicy{}
-	mi := &file_ipc_proto_msgTypes[33]
+	mi := &file_ipc_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5691,7 +5863,7 @@ func (x *PlaybackGrantPolicy) String() string {
 func (*PlaybackGrantPolicy) ProtoMessage() {}
 
 func (x *PlaybackGrantPolicy) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[33]
+	mi := &file_ipc_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5704,7 +5876,7 @@ func (x *PlaybackGrantPolicy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlaybackGrantPolicy.ProtoReflect.Descriptor instead.
 func (*PlaybackGrantPolicy) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{33}
+	return file_ipc_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *PlaybackGrantPolicy) GetKind() PlaybackGrantPolicyKind {
@@ -5759,7 +5931,7 @@ type PlaybackGrantKey struct {
 
 func (x *PlaybackGrantKey) Reset() {
 	*x = PlaybackGrantKey{}
-	mi := &file_ipc_proto_msgTypes[34]
+	mi := &file_ipc_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5771,7 +5943,7 @@ func (x *PlaybackGrantKey) String() string {
 func (*PlaybackGrantKey) ProtoMessage() {}
 
 func (x *PlaybackGrantKey) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[34]
+	mi := &file_ipc_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5784,7 +5956,7 @@ func (x *PlaybackGrantKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlaybackGrantKey.ProtoReflect.Descriptor instead.
 func (*PlaybackGrantKey) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{34}
+	return file_ipc_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *PlaybackGrantKey) GetKid() string {
@@ -5812,7 +5984,7 @@ type PlaybackGrantRequest struct {
 
 func (x *PlaybackGrantRequest) Reset() {
 	*x = PlaybackGrantRequest{}
-	mi := &file_ipc_proto_msgTypes[35]
+	mi := &file_ipc_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5824,7 +5996,7 @@ func (x *PlaybackGrantRequest) String() string {
 func (*PlaybackGrantRequest) ProtoMessage() {}
 
 func (x *PlaybackGrantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[35]
+	mi := &file_ipc_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5837,7 +6009,7 @@ func (x *PlaybackGrantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlaybackGrantRequest.ProtoReflect.Descriptor instead.
 func (*PlaybackGrantRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{35}
+	return file_ipc_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *PlaybackGrantRequest) GetRequestId() string {
@@ -5867,7 +6039,7 @@ type PlaybackGrantResponse struct {
 
 func (x *PlaybackGrantResponse) Reset() {
 	*x = PlaybackGrantResponse{}
-	mi := &file_ipc_proto_msgTypes[36]
+	mi := &file_ipc_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5879,7 +6051,7 @@ func (x *PlaybackGrantResponse) String() string {
 func (*PlaybackGrantResponse) ProtoMessage() {}
 
 func (x *PlaybackGrantResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[36]
+	mi := &file_ipc_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5892,7 +6064,7 @@ func (x *PlaybackGrantResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlaybackGrantResponse.ProtoReflect.Descriptor instead.
 func (*PlaybackGrantResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{36}
+	return file_ipc_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *PlaybackGrantResponse) GetRequestId() string {
@@ -5940,7 +6112,7 @@ type ActivatePushTargets struct {
 
 func (x *ActivatePushTargets) Reset() {
 	*x = ActivatePushTargets{}
-	mi := &file_ipc_proto_msgTypes[37]
+	mi := &file_ipc_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5952,7 +6124,7 @@ func (x *ActivatePushTargets) String() string {
 func (*ActivatePushTargets) ProtoMessage() {}
 
 func (x *ActivatePushTargets) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[37]
+	mi := &file_ipc_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5965,7 +6137,7 @@ func (x *ActivatePushTargets) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActivatePushTargets.ProtoReflect.Descriptor instead.
 func (*ActivatePushTargets) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{37}
+	return file_ipc_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ActivatePushTargets) GetStreamName() string {
@@ -6038,7 +6210,7 @@ type PushTargetSpec struct {
 
 func (x *PushTargetSpec) Reset() {
 	*x = PushTargetSpec{}
-	mi := &file_ipc_proto_msgTypes[38]
+	mi := &file_ipc_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6050,7 +6222,7 @@ func (x *PushTargetSpec) String() string {
 func (*PushTargetSpec) ProtoMessage() {}
 
 func (x *PushTargetSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[38]
+	mi := &file_ipc_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6063,7 +6235,7 @@ func (x *PushTargetSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushTargetSpec.ProtoReflect.Descriptor instead.
 func (*PushTargetSpec) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{38}
+	return file_ipc_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *PushTargetSpec) GetTargetId() string {
@@ -6114,7 +6286,7 @@ type DeactivatePushTargets struct {
 
 func (x *DeactivatePushTargets) Reset() {
 	*x = DeactivatePushTargets{}
-	mi := &file_ipc_proto_msgTypes[39]
+	mi := &file_ipc_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6126,7 +6298,7 @@ func (x *DeactivatePushTargets) String() string {
 func (*DeactivatePushTargets) ProtoMessage() {}
 
 func (x *DeactivatePushTargets) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[39]
+	mi := &file_ipc_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6139,7 +6311,7 @@ func (x *DeactivatePushTargets) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeactivatePushTargets.ProtoReflect.Descriptor instead.
 func (*DeactivatePushTargets) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{39}
+	return file_ipc_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *DeactivatePushTargets) GetStreamName() string {
@@ -6177,7 +6349,7 @@ type DeactivatePushTargetsResult struct {
 
 func (x *DeactivatePushTargetsResult) Reset() {
 	*x = DeactivatePushTargetsResult{}
-	mi := &file_ipc_proto_msgTypes[40]
+	mi := &file_ipc_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6189,7 +6361,7 @@ func (x *DeactivatePushTargetsResult) String() string {
 func (*DeactivatePushTargetsResult) ProtoMessage() {}
 
 func (x *DeactivatePushTargetsResult) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[40]
+	mi := &file_ipc_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6202,7 +6374,7 @@ func (x *DeactivatePushTargetsResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeactivatePushTargetsResult.ProtoReflect.Descriptor instead.
 func (*DeactivatePushTargetsResult) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{40}
+	return file_ipc_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *DeactivatePushTargetsResult) GetStreamName() string {
@@ -6266,7 +6438,7 @@ type ActivatePushTargetsResult struct {
 
 func (x *ActivatePushTargetsResult) Reset() {
 	*x = ActivatePushTargetsResult{}
-	mi := &file_ipc_proto_msgTypes[41]
+	mi := &file_ipc_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6278,7 +6450,7 @@ func (x *ActivatePushTargetsResult) String() string {
 func (*ActivatePushTargetsResult) ProtoMessage() {}
 
 func (x *ActivatePushTargetsResult) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[41]
+	mi := &file_ipc_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6291,7 +6463,7 @@ func (x *ActivatePushTargetsResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActivatePushTargetsResult.ProtoReflect.Descriptor instead.
 func (*ActivatePushTargetsResult) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{41}
+	return file_ipc_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *ActivatePushTargetsResult) GetStreamName() string {
@@ -6356,7 +6528,7 @@ type PushTargetConvergence struct {
 
 func (x *PushTargetConvergence) Reset() {
 	*x = PushTargetConvergence{}
-	mi := &file_ipc_proto_msgTypes[42]
+	mi := &file_ipc_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6368,7 +6540,7 @@ func (x *PushTargetConvergence) String() string {
 func (*PushTargetConvergence) ProtoMessage() {}
 
 func (x *PushTargetConvergence) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[42]
+	mi := &file_ipc_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6381,7 +6553,7 @@ func (x *PushTargetConvergence) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushTargetConvergence.ProtoReflect.Descriptor instead.
 func (*PushTargetConvergence) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{42}
+	return file_ipc_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *PushTargetConvergence) GetTargetId() string {
@@ -6452,7 +6624,7 @@ type PushTargetStatusReport struct {
 
 func (x *PushTargetStatusReport) Reset() {
 	*x = PushTargetStatusReport{}
-	mi := &file_ipc_proto_msgTypes[43]
+	mi := &file_ipc_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6464,7 +6636,7 @@ func (x *PushTargetStatusReport) String() string {
 func (*PushTargetStatusReport) ProtoMessage() {}
 
 func (x *PushTargetStatusReport) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[43]
+	mi := &file_ipc_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6477,7 +6649,7 @@ func (x *PushTargetStatusReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushTargetStatusReport.ProtoReflect.Descriptor instead.
 func (*PushTargetStatusReport) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{43}
+	return file_ipc_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *PushTargetStatusReport) GetTargetId() string {
@@ -6644,7 +6816,7 @@ type ArtifactDeleted struct {
 
 func (x *ArtifactDeleted) Reset() {
 	*x = ArtifactDeleted{}
-	mi := &file_ipc_proto_msgTypes[44]
+	mi := &file_ipc_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6656,7 +6828,7 @@ func (x *ArtifactDeleted) String() string {
 func (*ArtifactDeleted) ProtoMessage() {}
 
 func (x *ArtifactDeleted) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[44]
+	mi := &file_ipc_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6669,7 +6841,7 @@ func (x *ArtifactDeleted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArtifactDeleted.ProtoReflect.Descriptor instead.
 func (*ArtifactDeleted) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{44}
+	return file_ipc_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *ArtifactDeleted) GetFilePath() string {
@@ -6804,7 +6976,7 @@ type Register struct {
 
 func (x *Register) Reset() {
 	*x = Register{}
-	mi := &file_ipc_proto_msgTypes[45]
+	mi := &file_ipc_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6816,7 +6988,7 @@ func (x *Register) String() string {
 func (*Register) ProtoMessage() {}
 
 func (x *Register) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[45]
+	mi := &file_ipc_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6829,7 +7001,7 @@ func (x *Register) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Register.ProtoReflect.Descriptor instead.
 func (*Register) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{45}
+	return file_ipc_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *Register) GetNodeId() string {
@@ -7035,7 +7207,7 @@ type LiveIngestGeneration struct {
 
 func (x *LiveIngestGeneration) Reset() {
 	*x = LiveIngestGeneration{}
-	mi := &file_ipc_proto_msgTypes[46]
+	mi := &file_ipc_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7047,7 +7219,7 @@ func (x *LiveIngestGeneration) String() string {
 func (*LiveIngestGeneration) ProtoMessage() {}
 
 func (x *LiveIngestGeneration) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[46]
+	mi := &file_ipc_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7060,7 +7232,7 @@ func (x *LiveIngestGeneration) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LiveIngestGeneration.ProtoReflect.Descriptor instead.
 func (*LiveIngestGeneration) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{46}
+	return file_ipc_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *LiveIngestGeneration) GetRuntimeName() string {
@@ -7114,7 +7286,7 @@ type AppliedManagedStream struct {
 
 func (x *AppliedManagedStream) Reset() {
 	*x = AppliedManagedStream{}
-	mi := &file_ipc_proto_msgTypes[47]
+	mi := &file_ipc_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7126,7 +7298,7 @@ func (x *AppliedManagedStream) String() string {
 func (*AppliedManagedStream) ProtoMessage() {}
 
 func (x *AppliedManagedStream) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[47]
+	mi := &file_ipc_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7139,7 +7311,7 @@ func (x *AppliedManagedStream) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppliedManagedStream.ProtoReflect.Descriptor instead.
 func (*AppliedManagedStream) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{47}
+	return file_ipc_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *AppliedManagedStream) GetName() string {
@@ -7215,7 +7387,7 @@ type NodeFingerprint struct {
 
 func (x *NodeFingerprint) Reset() {
 	*x = NodeFingerprint{}
-	mi := &file_ipc_proto_msgTypes[48]
+	mi := &file_ipc_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7227,7 +7399,7 @@ func (x *NodeFingerprint) String() string {
 func (*NodeFingerprint) ProtoMessage() {}
 
 func (x *NodeFingerprint) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[48]
+	mi := &file_ipc_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7240,7 +7412,7 @@ func (x *NodeFingerprint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeFingerprint.ProtoReflect.Descriptor instead.
 func (*NodeFingerprint) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{48}
+	return file_ipc_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *NodeFingerprint) GetLocalIpv4() []string {
@@ -7325,7 +7497,7 @@ type ClipPullRequest struct {
 
 func (x *ClipPullRequest) Reset() {
 	*x = ClipPullRequest{}
-	mi := &file_ipc_proto_msgTypes[49]
+	mi := &file_ipc_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7337,7 +7509,7 @@ func (x *ClipPullRequest) String() string {
 func (*ClipPullRequest) ProtoMessage() {}
 
 func (x *ClipPullRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[49]
+	mi := &file_ipc_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7350,7 +7522,7 @@ func (x *ClipPullRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClipPullRequest.ProtoReflect.Descriptor instead.
 func (*ClipPullRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{49}
+	return file_ipc_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *ClipPullRequest) GetClipHash() string {
@@ -7482,7 +7654,7 @@ type ControlError struct {
 
 func (x *ControlError) Reset() {
 	*x = ControlError{}
-	mi := &file_ipc_proto_msgTypes[50]
+	mi := &file_ipc_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7494,7 +7666,7 @@ func (x *ControlError) String() string {
 func (*ControlError) ProtoMessage() {}
 
 func (x *ControlError) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[50]
+	mi := &file_ipc_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7507,7 +7679,7 @@ func (x *ControlError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ControlError.ProtoReflect.Descriptor instead.
 func (*ControlError) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{50}
+	return file_ipc_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *ControlError) GetCode() string {
@@ -7540,7 +7712,7 @@ type Heartbeat struct {
 
 func (x *Heartbeat) Reset() {
 	*x = Heartbeat{}
-	mi := &file_ipc_proto_msgTypes[51]
+	mi := &file_ipc_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7552,7 +7724,7 @@ func (x *Heartbeat) String() string {
 func (*Heartbeat) ProtoMessage() {}
 
 func (x *Heartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[51]
+	mi := &file_ipc_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7565,7 +7737,7 @@ func (x *Heartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
 func (*Heartbeat) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{51}
+	return file_ipc_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *Heartbeat) GetNodeId() string {
@@ -7667,7 +7839,7 @@ type MistTrigger struct {
 
 func (x *MistTrigger) Reset() {
 	*x = MistTrigger{}
-	mi := &file_ipc_proto_msgTypes[52]
+	mi := &file_ipc_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7679,7 +7851,7 @@ func (x *MistTrigger) String() string {
 func (*MistTrigger) ProtoMessage() {}
 
 func (x *MistTrigger) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[52]
+	mi := &file_ipc_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7692,7 +7864,7 @@ func (x *MistTrigger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MistTrigger.ProtoReflect.Descriptor instead.
 func (*MistTrigger) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{52}
+	return file_ipc_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *MistTrigger) GetTriggerType() string {
@@ -8395,7 +8567,7 @@ type RawMistWebhookTrigger struct {
 
 func (x *RawMistWebhookTrigger) Reset() {
 	*x = RawMistWebhookTrigger{}
-	mi := &file_ipc_proto_msgTypes[53]
+	mi := &file_ipc_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8407,7 +8579,7 @@ func (x *RawMistWebhookTrigger) String() string {
 func (*RawMistWebhookTrigger) ProtoMessage() {}
 
 func (x *RawMistWebhookTrigger) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[53]
+	mi := &file_ipc_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8420,7 +8592,7 @@ func (x *RawMistWebhookTrigger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RawMistWebhookTrigger.ProtoReflect.Descriptor instead.
 func (*RawMistWebhookTrigger) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{53}
+	return file_ipc_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *RawMistWebhookTrigger) GetPayloadRaw() []byte {
@@ -8457,7 +8629,7 @@ type MistTriggerResponse struct {
 
 func (x *MistTriggerResponse) Reset() {
 	*x = MistTriggerResponse{}
-	mi := &file_ipc_proto_msgTypes[54]
+	mi := &file_ipc_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8469,7 +8641,7 @@ func (x *MistTriggerResponse) String() string {
 func (*MistTriggerResponse) ProtoMessage() {}
 
 func (x *MistTriggerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[54]
+	mi := &file_ipc_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8482,7 +8654,7 @@ func (x *MistTriggerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MistTriggerResponse.ProtoReflect.Descriptor instead.
 func (*MistTriggerResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{54}
+	return file_ipc_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *MistTriggerResponse) GetRequestId() string {
@@ -8570,7 +8742,7 @@ type MistTriggerAck struct {
 
 func (x *MistTriggerAck) Reset() {
 	*x = MistTriggerAck{}
-	mi := &file_ipc_proto_msgTypes[55]
+	mi := &file_ipc_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8582,7 +8754,7 @@ func (x *MistTriggerAck) String() string {
 func (*MistTriggerAck) ProtoMessage() {}
 
 func (x *MistTriggerAck) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[55]
+	mi := &file_ipc_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8595,7 +8767,7 @@ func (x *MistTriggerAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MistTriggerAck.ProtoReflect.Descriptor instead.
 func (*MistTriggerAck) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{55}
+	return file_ipc_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *MistTriggerAck) GetRequestId() string {
@@ -8662,7 +8834,7 @@ type StorageSnapshot struct {
 
 func (x *StorageSnapshot) Reset() {
 	*x = StorageSnapshot{}
-	mi := &file_ipc_proto_msgTypes[56]
+	mi := &file_ipc_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8674,7 +8846,7 @@ func (x *StorageSnapshot) String() string {
 func (*StorageSnapshot) ProtoMessage() {}
 
 func (x *StorageSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[56]
+	mi := &file_ipc_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8687,7 +8859,7 @@ func (x *StorageSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StorageSnapshot.ProtoReflect.Descriptor instead.
 func (*StorageSnapshot) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{56}
+	return file_ipc_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *StorageSnapshot) GetNodeId() string {
@@ -8778,7 +8950,7 @@ type TenantStorageUsage struct {
 
 func (x *TenantStorageUsage) Reset() {
 	*x = TenantStorageUsage{}
-	mi := &file_ipc_proto_msgTypes[57]
+	mi := &file_ipc_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8790,7 +8962,7 @@ func (x *TenantStorageUsage) String() string {
 func (*TenantStorageUsage) ProtoMessage() {}
 
 func (x *TenantStorageUsage) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[57]
+	mi := &file_ipc_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8803,7 +8975,7 @@ func (x *TenantStorageUsage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TenantStorageUsage.ProtoReflect.Descriptor instead.
 func (*TenantStorageUsage) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{57}
+	return file_ipc_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *TenantStorageUsage) GetTenantId() string {
@@ -8878,7 +9050,7 @@ type ClipHashRequest struct {
 
 func (x *ClipHashRequest) Reset() {
 	*x = ClipHashRequest{}
-	mi := &file_ipc_proto_msgTypes[58]
+	mi := &file_ipc_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8890,7 +9062,7 @@ func (x *ClipHashRequest) String() string {
 func (*ClipHashRequest) ProtoMessage() {}
 
 func (x *ClipHashRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[58]
+	mi := &file_ipc_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8903,7 +9075,7 @@ func (x *ClipHashRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClipHashRequest.ProtoReflect.Descriptor instead.
 func (*ClipHashRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{58}
+	return file_ipc_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *ClipHashRequest) GetClipHash() string {
@@ -8924,7 +9096,7 @@ type ClipHashResponse struct {
 
 func (x *ClipHashResponse) Reset() {
 	*x = ClipHashResponse{}
-	mi := &file_ipc_proto_msgTypes[59]
+	mi := &file_ipc_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8936,7 +9108,7 @@ func (x *ClipHashResponse) String() string {
 func (*ClipHashResponse) ProtoMessage() {}
 
 func (x *ClipHashResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[59]
+	mi := &file_ipc_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8949,7 +9121,7 @@ func (x *ClipHashResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClipHashResponse.ProtoReflect.Descriptor instead.
 func (*ClipHashResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{59}
+	return file_ipc_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *ClipHashResponse) GetClipHash() string {
@@ -9007,7 +9179,7 @@ type DVRStartRequest struct {
 
 func (x *DVRStartRequest) Reset() {
 	*x = DVRStartRequest{}
-	mi := &file_ipc_proto_msgTypes[60]
+	mi := &file_ipc_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9019,7 +9191,7 @@ func (x *DVRStartRequest) String() string {
 func (*DVRStartRequest) ProtoMessage() {}
 
 func (x *DVRStartRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[60]
+	mi := &file_ipc_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9032,7 +9204,7 @@ func (x *DVRStartRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DVRStartRequest.ProtoReflect.Descriptor instead.
 func (*DVRStartRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{60}
+	return file_ipc_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *DVRStartRequest) GetDvrHash() string {
@@ -9127,7 +9299,7 @@ type DVRConfig struct {
 
 func (x *DVRConfig) Reset() {
 	*x = DVRConfig{}
-	mi := &file_ipc_proto_msgTypes[61]
+	mi := &file_ipc_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9139,7 +9311,7 @@ func (x *DVRConfig) String() string {
 func (*DVRConfig) ProtoMessage() {}
 
 func (x *DVRConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[61]
+	mi := &file_ipc_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9152,7 +9324,7 @@ func (x *DVRConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DVRConfig.ProtoReflect.Descriptor instead.
 func (*DVRConfig) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{61}
+	return file_ipc_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *DVRConfig) GetEnabled() bool {
@@ -9212,7 +9384,7 @@ type DVRProgress struct {
 
 func (x *DVRProgress) Reset() {
 	*x = DVRProgress{}
-	mi := &file_ipc_proto_msgTypes[62]
+	mi := &file_ipc_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9224,7 +9396,7 @@ func (x *DVRProgress) String() string {
 func (*DVRProgress) ProtoMessage() {}
 
 func (x *DVRProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[62]
+	mi := &file_ipc_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9237,7 +9409,7 @@ func (x *DVRProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DVRProgress.ProtoReflect.Descriptor instead.
 func (*DVRProgress) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{62}
+	return file_ipc_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *DVRProgress) GetRequestId() string {
@@ -9308,7 +9480,7 @@ type DVRStopped struct {
 
 func (x *DVRStopped) Reset() {
 	*x = DVRStopped{}
-	mi := &file_ipc_proto_msgTypes[63]
+	mi := &file_ipc_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9320,7 +9492,7 @@ func (x *DVRStopped) String() string {
 func (*DVRStopped) ProtoMessage() {}
 
 func (x *DVRStopped) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[63]
+	mi := &file_ipc_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9333,7 +9505,7 @@ func (x *DVRStopped) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DVRStopped.ProtoReflect.Descriptor instead.
 func (*DVRStopped) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{63}
+	return file_ipc_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *DVRStopped) GetRequestId() string {
@@ -9418,7 +9590,7 @@ type DVRStopRequest struct {
 
 func (x *DVRStopRequest) Reset() {
 	*x = DVRStopRequest{}
-	mi := &file_ipc_proto_msgTypes[64]
+	mi := &file_ipc_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9430,7 +9602,7 @@ func (x *DVRStopRequest) String() string {
 func (*DVRStopRequest) ProtoMessage() {}
 
 func (x *DVRStopRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[64]
+	mi := &file_ipc_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9443,7 +9615,7 @@ func (x *DVRStopRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DVRStopRequest.ProtoReflect.Descriptor instead.
 func (*DVRStopRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{64}
+	return file_ipc_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *DVRStopRequest) GetDvrHash() string {
@@ -9495,7 +9667,7 @@ type RecordDVRSegmentRequest struct {
 
 func (x *RecordDVRSegmentRequest) Reset() {
 	*x = RecordDVRSegmentRequest{}
-	mi := &file_ipc_proto_msgTypes[65]
+	mi := &file_ipc_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9507,7 +9679,7 @@ func (x *RecordDVRSegmentRequest) String() string {
 func (*RecordDVRSegmentRequest) ProtoMessage() {}
 
 func (x *RecordDVRSegmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[65]
+	mi := &file_ipc_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9520,7 +9692,7 @@ func (x *RecordDVRSegmentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordDVRSegmentRequest.ProtoReflect.Descriptor instead.
 func (*RecordDVRSegmentRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{65}
+	return file_ipc_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *RecordDVRSegmentRequest) GetRequestId() string {
@@ -9604,7 +9776,7 @@ type RecordDVRSegmentResponse struct {
 
 func (x *RecordDVRSegmentResponse) Reset() {
 	*x = RecordDVRSegmentResponse{}
-	mi := &file_ipc_proto_msgTypes[66]
+	mi := &file_ipc_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9616,7 +9788,7 @@ func (x *RecordDVRSegmentResponse) String() string {
 func (*RecordDVRSegmentResponse) ProtoMessage() {}
 
 func (x *RecordDVRSegmentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[66]
+	mi := &file_ipc_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9629,7 +9801,7 @@ func (x *RecordDVRSegmentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordDVRSegmentResponse.ProtoReflect.Descriptor instead.
 func (*RecordDVRSegmentResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{66}
+	return file_ipc_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *RecordDVRSegmentResponse) GetRequestId() string {
@@ -9709,7 +9881,7 @@ type MarkDVRSegmentUploaded struct {
 
 func (x *MarkDVRSegmentUploaded) Reset() {
 	*x = MarkDVRSegmentUploaded{}
-	mi := &file_ipc_proto_msgTypes[67]
+	mi := &file_ipc_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9721,7 +9893,7 @@ func (x *MarkDVRSegmentUploaded) String() string {
 func (*MarkDVRSegmentUploaded) ProtoMessage() {}
 
 func (x *MarkDVRSegmentUploaded) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[67]
+	mi := &file_ipc_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9734,7 +9906,7 @@ func (x *MarkDVRSegmentUploaded) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarkDVRSegmentUploaded.ProtoReflect.Descriptor instead.
 func (*MarkDVRSegmentUploaded) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{67}
+	return file_ipc_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *MarkDVRSegmentUploaded) GetRequestId() string {
@@ -9789,7 +9961,7 @@ type DVRSegmentDropped struct {
 
 func (x *DVRSegmentDropped) Reset() {
 	*x = DVRSegmentDropped{}
-	mi := &file_ipc_proto_msgTypes[68]
+	mi := &file_ipc_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9801,7 +9973,7 @@ func (x *DVRSegmentDropped) String() string {
 func (*DVRSegmentDropped) ProtoMessage() {}
 
 func (x *DVRSegmentDropped) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[68]
+	mi := &file_ipc_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9814,7 +9986,7 @@ func (x *DVRSegmentDropped) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DVRSegmentDropped.ProtoReflect.Descriptor instead.
 func (*DVRSegmentDropped) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{68}
+	return file_ipc_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *DVRSegmentDropped) GetRequestId() string {
@@ -9908,7 +10080,7 @@ type EvictableSegmentsRequest struct {
 
 func (x *EvictableSegmentsRequest) Reset() {
 	*x = EvictableSegmentsRequest{}
-	mi := &file_ipc_proto_msgTypes[69]
+	mi := &file_ipc_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9920,7 +10092,7 @@ func (x *EvictableSegmentsRequest) String() string {
 func (*EvictableSegmentsRequest) ProtoMessage() {}
 
 func (x *EvictableSegmentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[69]
+	mi := &file_ipc_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9933,7 +10105,7 @@ func (x *EvictableSegmentsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvictableSegmentsRequest.ProtoReflect.Descriptor instead.
 func (*EvictableSegmentsRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{69}
+	return file_ipc_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *EvictableSegmentsRequest) GetRequestId() string {
@@ -9970,7 +10142,7 @@ type EvictableSegmentsResponse struct {
 
 func (x *EvictableSegmentsResponse) Reset() {
 	*x = EvictableSegmentsResponse{}
-	mi := &file_ipc_proto_msgTypes[70]
+	mi := &file_ipc_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9982,7 +10154,7 @@ func (x *EvictableSegmentsResponse) String() string {
 func (*EvictableSegmentsResponse) ProtoMessage() {}
 
 func (x *EvictableSegmentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[70]
+	mi := &file_ipc_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9995,7 +10167,7 @@ func (x *EvictableSegmentsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvictableSegmentsResponse.ProtoReflect.Descriptor instead.
 func (*EvictableSegmentsResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{70}
+	return file_ipc_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *EvictableSegmentsResponse) GetRequestId() string {
@@ -10036,7 +10208,7 @@ type RetryDVRSegmentUpload struct {
 
 func (x *RetryDVRSegmentUpload) Reset() {
 	*x = RetryDVRSegmentUpload{}
-	mi := &file_ipc_proto_msgTypes[71]
+	mi := &file_ipc_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10048,7 +10220,7 @@ func (x *RetryDVRSegmentUpload) String() string {
 func (*RetryDVRSegmentUpload) ProtoMessage() {}
 
 func (x *RetryDVRSegmentUpload) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[71]
+	mi := &file_ipc_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10061,7 +10233,7 @@ func (x *RetryDVRSegmentUpload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetryDVRSegmentUpload.ProtoReflect.Descriptor instead.
 func (*RetryDVRSegmentUpload) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{71}
+	return file_ipc_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *RetryDVRSegmentUpload) GetRequestId() string {
@@ -10110,7 +10282,7 @@ type ReclaimDVRSegment struct {
 
 func (x *ReclaimDVRSegment) Reset() {
 	*x = ReclaimDVRSegment{}
-	mi := &file_ipc_proto_msgTypes[72]
+	mi := &file_ipc_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10122,7 +10294,7 @@ func (x *ReclaimDVRSegment) String() string {
 func (*ReclaimDVRSegment) ProtoMessage() {}
 
 func (x *ReclaimDVRSegment) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[72]
+	mi := &file_ipc_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10135,7 +10307,7 @@ func (x *ReclaimDVRSegment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReclaimDVRSegment.ProtoReflect.Descriptor instead.
 func (*ReclaimDVRSegment) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{72}
+	return file_ipc_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *ReclaimDVRSegment) GetRequestId() string {
@@ -10178,7 +10350,7 @@ type RestoreLocalSegmentIndexRequest struct {
 
 func (x *RestoreLocalSegmentIndexRequest) Reset() {
 	*x = RestoreLocalSegmentIndexRequest{}
-	mi := &file_ipc_proto_msgTypes[73]
+	mi := &file_ipc_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10190,7 +10362,7 @@ func (x *RestoreLocalSegmentIndexRequest) String() string {
 func (*RestoreLocalSegmentIndexRequest) ProtoMessage() {}
 
 func (x *RestoreLocalSegmentIndexRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[73]
+	mi := &file_ipc_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10203,7 +10375,7 @@ func (x *RestoreLocalSegmentIndexRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreLocalSegmentIndexRequest.ProtoReflect.Descriptor instead.
 func (*RestoreLocalSegmentIndexRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{73}
+	return file_ipc_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *RestoreLocalSegmentIndexRequest) GetRequestId() string {
@@ -10245,7 +10417,7 @@ type RestoreLocalSegmentIndexResponse struct {
 
 func (x *RestoreLocalSegmentIndexResponse) Reset() {
 	*x = RestoreLocalSegmentIndexResponse{}
-	mi := &file_ipc_proto_msgTypes[74]
+	mi := &file_ipc_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10257,7 +10429,7 @@ func (x *RestoreLocalSegmentIndexResponse) String() string {
 func (*RestoreLocalSegmentIndexResponse) ProtoMessage() {}
 
 func (x *RestoreLocalSegmentIndexResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[74]
+	mi := &file_ipc_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10270,7 +10442,7 @@ func (x *RestoreLocalSegmentIndexResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreLocalSegmentIndexResponse.ProtoReflect.Descriptor instead.
 func (*RestoreLocalSegmentIndexResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{74}
+	return file_ipc_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *RestoreLocalSegmentIndexResponse) GetRequestId() string {
@@ -10305,7 +10477,7 @@ type ClipDeleteRequest struct {
 
 func (x *ClipDeleteRequest) Reset() {
 	*x = ClipDeleteRequest{}
-	mi := &file_ipc_proto_msgTypes[75]
+	mi := &file_ipc_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10317,7 +10489,7 @@ func (x *ClipDeleteRequest) String() string {
 func (*ClipDeleteRequest) ProtoMessage() {}
 
 func (x *ClipDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[75]
+	mi := &file_ipc_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10330,7 +10502,7 @@ func (x *ClipDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClipDeleteRequest.ProtoReflect.Descriptor instead.
 func (*ClipDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{75}
+	return file_ipc_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *ClipDeleteRequest) GetClipHash() string {
@@ -10358,7 +10530,7 @@ type DVRDeleteRequest struct {
 
 func (x *DVRDeleteRequest) Reset() {
 	*x = DVRDeleteRequest{}
-	mi := &file_ipc_proto_msgTypes[76]
+	mi := &file_ipc_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10370,7 +10542,7 @@ func (x *DVRDeleteRequest) String() string {
 func (*DVRDeleteRequest) ProtoMessage() {}
 
 func (x *DVRDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[76]
+	mi := &file_ipc_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10383,7 +10555,7 @@ func (x *DVRDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DVRDeleteRequest.ProtoReflect.Descriptor instead.
 func (*DVRDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{76}
+	return file_ipc_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *DVRDeleteRequest) GetDvrHash() string {
@@ -10411,7 +10583,7 @@ type VodDeleteRequest struct {
 
 func (x *VodDeleteRequest) Reset() {
 	*x = VodDeleteRequest{}
-	mi := &file_ipc_proto_msgTypes[77]
+	mi := &file_ipc_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10423,7 +10595,7 @@ func (x *VodDeleteRequest) String() string {
 func (*VodDeleteRequest) ProtoMessage() {}
 
 func (x *VodDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[77]
+	mi := &file_ipc_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10436,7 +10608,7 @@ func (x *VodDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VodDeleteRequest.ProtoReflect.Descriptor instead.
 func (*VodDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{77}
+	return file_ipc_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *VodDeleteRequest) GetVodHash() string {
@@ -10467,7 +10639,7 @@ type FreezePermissionRequest struct {
 
 func (x *FreezePermissionRequest) Reset() {
 	*x = FreezePermissionRequest{}
-	mi := &file_ipc_proto_msgTypes[78]
+	mi := &file_ipc_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10479,7 +10651,7 @@ func (x *FreezePermissionRequest) String() string {
 func (*FreezePermissionRequest) ProtoMessage() {}
 
 func (x *FreezePermissionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[78]
+	mi := &file_ipc_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10492,7 +10664,7 @@ func (x *FreezePermissionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FreezePermissionRequest.ProtoReflect.Descriptor instead.
 func (*FreezePermissionRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{78}
+	return file_ipc_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *FreezePermissionRequest) GetRequestId() string {
@@ -10546,7 +10718,7 @@ type FreezePermissionResponse struct {
 
 func (x *FreezePermissionResponse) Reset() {
 	*x = FreezePermissionResponse{}
-	mi := &file_ipc_proto_msgTypes[79]
+	mi := &file_ipc_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10558,7 +10730,7 @@ func (x *FreezePermissionResponse) String() string {
 func (*FreezePermissionResponse) ProtoMessage() {}
 
 func (x *FreezePermissionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[79]
+	mi := &file_ipc_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10571,7 +10743,7 @@ func (x *FreezePermissionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FreezePermissionResponse.ProtoReflect.Descriptor instead.
 func (*FreezePermissionResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{79}
+	return file_ipc_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *FreezePermissionResponse) GetRequestId() string {
@@ -10660,7 +10832,7 @@ type FreezeRequest struct {
 
 func (x *FreezeRequest) Reset() {
 	*x = FreezeRequest{}
-	mi := &file_ipc_proto_msgTypes[80]
+	mi := &file_ipc_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10672,7 +10844,7 @@ func (x *FreezeRequest) String() string {
 func (*FreezeRequest) ProtoMessage() {}
 
 func (x *FreezeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[80]
+	mi := &file_ipc_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10685,7 +10857,7 @@ func (x *FreezeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FreezeRequest.ProtoReflect.Descriptor instead.
 func (*FreezeRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{80}
+	return file_ipc_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *FreezeRequest) GetRequestId() string {
@@ -10779,7 +10951,7 @@ type FreezeProgress struct {
 
 func (x *FreezeProgress) Reset() {
 	*x = FreezeProgress{}
-	mi := &file_ipc_proto_msgTypes[81]
+	mi := &file_ipc_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10791,7 +10963,7 @@ func (x *FreezeProgress) String() string {
 func (*FreezeProgress) ProtoMessage() {}
 
 func (x *FreezeProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[81]
+	mi := &file_ipc_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10804,7 +10976,7 @@ func (x *FreezeProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FreezeProgress.ProtoReflect.Descriptor instead.
 func (*FreezeProgress) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{81}
+	return file_ipc_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *FreezeProgress) GetRequestId() string {
@@ -10871,7 +11043,7 @@ type DVRSegmentRef struct {
 
 func (x *DVRSegmentRef) Reset() {
 	*x = DVRSegmentRef{}
-	mi := &file_ipc_proto_msgTypes[82]
+	mi := &file_ipc_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10883,7 +11055,7 @@ func (x *DVRSegmentRef) String() string {
 func (*DVRSegmentRef) ProtoMessage() {}
 
 func (x *DVRSegmentRef) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[82]
+	mi := &file_ipc_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10896,7 +11068,7 @@ func (x *DVRSegmentRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DVRSegmentRef.ProtoReflect.Descriptor instead.
 func (*DVRSegmentRef) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{82}
+	return file_ipc_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *DVRSegmentRef) GetSegmentName() string {
@@ -10974,7 +11146,7 @@ type CanDeleteRequest struct {
 
 func (x *CanDeleteRequest) Reset() {
 	*x = CanDeleteRequest{}
-	mi := &file_ipc_proto_msgTypes[83]
+	mi := &file_ipc_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10986,7 +11158,7 @@ func (x *CanDeleteRequest) String() string {
 func (*CanDeleteRequest) ProtoMessage() {}
 
 func (x *CanDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[83]
+	mi := &file_ipc_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10999,7 +11171,7 @@ func (x *CanDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CanDeleteRequest.ProtoReflect.Descriptor instead.
 func (*CanDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{83}
+	return file_ipc_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *CanDeleteRequest) GetAssetHash() string {
@@ -11029,7 +11201,7 @@ type CanDeleteResponse struct {
 
 func (x *CanDeleteResponse) Reset() {
 	*x = CanDeleteResponse{}
-	mi := &file_ipc_proto_msgTypes[84]
+	mi := &file_ipc_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11041,7 +11213,7 @@ func (x *CanDeleteResponse) String() string {
 func (*CanDeleteResponse) ProtoMessage() {}
 
 func (x *CanDeleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[84]
+	mi := &file_ipc_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11054,7 +11226,7 @@ func (x *CanDeleteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CanDeleteResponse.ProtoReflect.Descriptor instead.
 func (*CanDeleteResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{84}
+	return file_ipc_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *CanDeleteResponse) GetAssetHash() string {
@@ -11108,7 +11280,7 @@ type RelayResolveRequest struct {
 
 func (x *RelayResolveRequest) Reset() {
 	*x = RelayResolveRequest{}
-	mi := &file_ipc_proto_msgTypes[85]
+	mi := &file_ipc_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11120,7 +11292,7 @@ func (x *RelayResolveRequest) String() string {
 func (*RelayResolveRequest) ProtoMessage() {}
 
 func (x *RelayResolveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[85]
+	mi := &file_ipc_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11133,7 +11305,7 @@ func (x *RelayResolveRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RelayResolveRequest.ProtoReflect.Descriptor instead.
 func (*RelayResolveRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{85}
+	return file_ipc_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *RelayResolveRequest) GetRequestId() string {
@@ -11225,7 +11397,7 @@ type RelayResolveResponse struct {
 
 func (x *RelayResolveResponse) Reset() {
 	*x = RelayResolveResponse{}
-	mi := &file_ipc_proto_msgTypes[86]
+	mi := &file_ipc_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11237,7 +11409,7 @@ func (x *RelayResolveResponse) String() string {
 func (*RelayResolveResponse) ProtoMessage() {}
 
 func (x *RelayResolveResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[86]
+	mi := &file_ipc_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11250,7 +11422,7 @@ func (x *RelayResolveResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RelayResolveResponse.ProtoReflect.Descriptor instead.
 func (*RelayResolveResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{86}
+	return file_ipc_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *RelayResolveResponse) GetRequestId() string {
@@ -11375,7 +11547,7 @@ type AuthorizeRelayPullRequest struct {
 
 func (x *AuthorizeRelayPullRequest) Reset() {
 	*x = AuthorizeRelayPullRequest{}
-	mi := &file_ipc_proto_msgTypes[87]
+	mi := &file_ipc_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11387,7 +11559,7 @@ func (x *AuthorizeRelayPullRequest) String() string {
 func (*AuthorizeRelayPullRequest) ProtoMessage() {}
 
 func (x *AuthorizeRelayPullRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[87]
+	mi := &file_ipc_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11400,7 +11572,7 @@ func (x *AuthorizeRelayPullRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthorizeRelayPullRequest.ProtoReflect.Descriptor instead.
 func (*AuthorizeRelayPullRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{87}
+	return file_ipc_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *AuthorizeRelayPullRequest) GetRequestId() string {
@@ -11442,7 +11614,7 @@ type AuthorizeRelayPullResponse struct {
 
 func (x *AuthorizeRelayPullResponse) Reset() {
 	*x = AuthorizeRelayPullResponse{}
-	mi := &file_ipc_proto_msgTypes[88]
+	mi := &file_ipc_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11454,7 +11626,7 @@ func (x *AuthorizeRelayPullResponse) String() string {
 func (*AuthorizeRelayPullResponse) ProtoMessage() {}
 
 func (x *AuthorizeRelayPullResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[88]
+	mi := &file_ipc_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11467,7 +11639,7 @@ func (x *AuthorizeRelayPullResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthorizeRelayPullResponse.ProtoReflect.Descriptor instead.
 func (*AuthorizeRelayPullResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{88}
+	return file_ipc_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *AuthorizeRelayPullResponse) GetRequestId() string {
@@ -11511,7 +11683,7 @@ type SyncComplete struct {
 
 func (x *SyncComplete) Reset() {
 	*x = SyncComplete{}
-	mi := &file_ipc_proto_msgTypes[89]
+	mi := &file_ipc_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11523,7 +11695,7 @@ func (x *SyncComplete) String() string {
 func (*SyncComplete) ProtoMessage() {}
 
 func (x *SyncComplete) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[89]
+	mi := &file_ipc_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11536,7 +11708,7 @@ func (x *SyncComplete) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncComplete.ProtoReflect.Descriptor instead.
 func (*SyncComplete) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{89}
+	return file_ipc_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *SyncComplete) GetRequestId() string {
@@ -11604,7 +11776,7 @@ type DtshSyncRequest struct {
 
 func (x *DtshSyncRequest) Reset() {
 	*x = DtshSyncRequest{}
-	mi := &file_ipc_proto_msgTypes[90]
+	mi := &file_ipc_proto_msgTypes[92]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11616,7 +11788,7 @@ func (x *DtshSyncRequest) String() string {
 func (*DtshSyncRequest) ProtoMessage() {}
 
 func (x *DtshSyncRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[90]
+	mi := &file_ipc_proto_msgTypes[92]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11629,7 +11801,7 @@ func (x *DtshSyncRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DtshSyncRequest.ProtoReflect.Descriptor instead.
 func (*DtshSyncRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{90}
+	return file_ipc_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *DtshSyncRequest) GetRequestId() string {
@@ -11702,7 +11874,7 @@ type StorageLifecycleData struct {
 
 func (x *StorageLifecycleData) Reset() {
 	*x = StorageLifecycleData{}
-	mi := &file_ipc_proto_msgTypes[91]
+	mi := &file_ipc_proto_msgTypes[93]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11714,7 +11886,7 @@ func (x *StorageLifecycleData) String() string {
 func (*StorageLifecycleData) ProtoMessage() {}
 
 func (x *StorageLifecycleData) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[91]
+	mi := &file_ipc_proto_msgTypes[93]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11727,7 +11899,7 @@ func (x *StorageLifecycleData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StorageLifecycleData.ProtoReflect.Descriptor instead.
 func (*StorageLifecycleData) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{91}
+	return file_ipc_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *StorageLifecycleData) GetAction() StorageLifecycleData_Action {
@@ -11898,7 +12070,7 @@ type PushRewriteTrigger struct {
 
 func (x *PushRewriteTrigger) Reset() {
 	*x = PushRewriteTrigger{}
-	mi := &file_ipc_proto_msgTypes[92]
+	mi := &file_ipc_proto_msgTypes[94]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11910,7 +12082,7 @@ func (x *PushRewriteTrigger) String() string {
 func (*PushRewriteTrigger) ProtoMessage() {}
 
 func (x *PushRewriteTrigger) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[92]
+	mi := &file_ipc_proto_msgTypes[94]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11923,7 +12095,7 @@ func (x *PushRewriteTrigger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushRewriteTrigger.ProtoReflect.Descriptor instead.
 func (*PushRewriteTrigger) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{92}
+	return file_ipc_proto_rawDescGZIP(), []int{94}
 }
 
 func (x *PushRewriteTrigger) GetPushUrl() string {
@@ -12087,7 +12259,7 @@ type ConnectionPlayTrigger struct {
 
 func (x *ConnectionPlayTrigger) Reset() {
 	*x = ConnectionPlayTrigger{}
-	mi := &file_ipc_proto_msgTypes[93]
+	mi := &file_ipc_proto_msgTypes[95]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12099,7 +12271,7 @@ func (x *ConnectionPlayTrigger) String() string {
 func (*ConnectionPlayTrigger) ProtoMessage() {}
 
 func (x *ConnectionPlayTrigger) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[93]
+	mi := &file_ipc_proto_msgTypes[95]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12112,7 +12284,7 @@ func (x *ConnectionPlayTrigger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConnectionPlayTrigger.ProtoReflect.Descriptor instead.
 func (*ConnectionPlayTrigger) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{93}
+	return file_ipc_proto_rawDescGZIP(), []int{95}
 }
 
 func (x *ConnectionPlayTrigger) GetStreamName() string {
@@ -12173,7 +12345,7 @@ type ViewerResolveTrigger struct {
 
 func (x *ViewerResolveTrigger) Reset() {
 	*x = ViewerResolveTrigger{}
-	mi := &file_ipc_proto_msgTypes[94]
+	mi := &file_ipc_proto_msgTypes[96]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12185,7 +12357,7 @@ func (x *ViewerResolveTrigger) String() string {
 func (*ViewerResolveTrigger) ProtoMessage() {}
 
 func (x *ViewerResolveTrigger) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[94]
+	mi := &file_ipc_proto_msgTypes[96]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12198,7 +12370,7 @@ func (x *ViewerResolveTrigger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ViewerResolveTrigger.ProtoReflect.Descriptor instead.
 func (*ViewerResolveTrigger) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{94}
+	return file_ipc_proto_rawDescGZIP(), []int{96}
 }
 
 func (x *ViewerResolveTrigger) GetRequestedStream() string {
@@ -12309,7 +12481,7 @@ type StreamSourceTrigger struct {
 
 func (x *StreamSourceTrigger) Reset() {
 	*x = StreamSourceTrigger{}
-	mi := &file_ipc_proto_msgTypes[95]
+	mi := &file_ipc_proto_msgTypes[97]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12321,7 +12493,7 @@ func (x *StreamSourceTrigger) String() string {
 func (*StreamSourceTrigger) ProtoMessage() {}
 
 func (x *StreamSourceTrigger) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[95]
+	mi := &file_ipc_proto_msgTypes[97]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12334,7 +12506,7 @@ func (x *StreamSourceTrigger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamSourceTrigger.ProtoReflect.Descriptor instead.
 func (*StreamSourceTrigger) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{95}
+	return file_ipc_proto_rawDescGZIP(), []int{97}
 }
 
 func (x *StreamSourceTrigger) GetStreamName() string {
@@ -12360,7 +12532,7 @@ type StreamProcessTrigger struct {
 
 func (x *StreamProcessTrigger) Reset() {
 	*x = StreamProcessTrigger{}
-	mi := &file_ipc_proto_msgTypes[96]
+	mi := &file_ipc_proto_msgTypes[98]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12372,7 +12544,7 @@ func (x *StreamProcessTrigger) String() string {
 func (*StreamProcessTrigger) ProtoMessage() {}
 
 func (x *StreamProcessTrigger) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[96]
+	mi := &file_ipc_proto_msgTypes[98]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12385,7 +12557,7 @@ func (x *StreamProcessTrigger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamProcessTrigger.ProtoReflect.Descriptor instead.
 func (*StreamProcessTrigger) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{96}
+	return file_ipc_proto_rawDescGZIP(), []int{98}
 }
 
 func (x *StreamProcessTrigger) GetStreamName() string {
@@ -12407,7 +12579,7 @@ type PushOutStartTrigger struct {
 
 func (x *PushOutStartTrigger) Reset() {
 	*x = PushOutStartTrigger{}
-	mi := &file_ipc_proto_msgTypes[97]
+	mi := &file_ipc_proto_msgTypes[99]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12419,7 +12591,7 @@ func (x *PushOutStartTrigger) String() string {
 func (*PushOutStartTrigger) ProtoMessage() {}
 
 func (x *PushOutStartTrigger) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[97]
+	mi := &file_ipc_proto_msgTypes[99]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12432,7 +12604,7 @@ func (x *PushOutStartTrigger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushOutStartTrigger.ProtoReflect.Descriptor instead.
 func (*PushOutStartTrigger) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{97}
+	return file_ipc_proto_rawDescGZIP(), []int{99}
 }
 
 func (x *PushOutStartTrigger) GetStreamName() string {
@@ -12479,7 +12651,7 @@ type PushEndTrigger struct {
 
 func (x *PushEndTrigger) Reset() {
 	*x = PushEndTrigger{}
-	mi := &file_ipc_proto_msgTypes[98]
+	mi := &file_ipc_proto_msgTypes[100]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12491,7 +12663,7 @@ func (x *PushEndTrigger) String() string {
 func (*PushEndTrigger) ProtoMessage() {}
 
 func (x *PushEndTrigger) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[98]
+	mi := &file_ipc_proto_msgTypes[100]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12504,7 +12676,7 @@ func (x *PushEndTrigger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushEndTrigger.ProtoReflect.Descriptor instead.
 func (*PushEndTrigger) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{98}
+	return file_ipc_proto_rawDescGZIP(), []int{100}
 }
 
 func (x *PushEndTrigger) GetPushId() int64 {
@@ -12605,7 +12777,7 @@ type PushInputCloseTrigger struct {
 
 func (x *PushInputCloseTrigger) Reset() {
 	*x = PushInputCloseTrigger{}
-	mi := &file_ipc_proto_msgTypes[99]
+	mi := &file_ipc_proto_msgTypes[101]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12617,7 +12789,7 @@ func (x *PushInputCloseTrigger) String() string {
 func (*PushInputCloseTrigger) ProtoMessage() {}
 
 func (x *PushInputCloseTrigger) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[99]
+	mi := &file_ipc_proto_msgTypes[101]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12630,7 +12802,7 @@ func (x *PushInputCloseTrigger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushInputCloseTrigger.ProtoReflect.Descriptor instead.
 func (*PushInputCloseTrigger) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{99}
+	return file_ipc_proto_rawDescGZIP(), []int{101}
 }
 
 func (x *PushInputCloseTrigger) GetStreamName() string {
@@ -12751,7 +12923,7 @@ type ViewerConnectTrigger struct {
 
 func (x *ViewerConnectTrigger) Reset() {
 	*x = ViewerConnectTrigger{}
-	mi := &file_ipc_proto_msgTypes[100]
+	mi := &file_ipc_proto_msgTypes[102]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12763,7 +12935,7 @@ func (x *ViewerConnectTrigger) String() string {
 func (*ViewerConnectTrigger) ProtoMessage() {}
 
 func (x *ViewerConnectTrigger) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[100]
+	mi := &file_ipc_proto_msgTypes[102]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12776,7 +12948,7 @@ func (x *ViewerConnectTrigger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ViewerConnectTrigger.ProtoReflect.Descriptor instead.
 func (*ViewerConnectTrigger) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{100}
+	return file_ipc_proto_rawDescGZIP(), []int{102}
 }
 
 func (x *ViewerConnectTrigger) GetStreamName() string {
@@ -12962,7 +13134,7 @@ type ViewerDisconnectTrigger struct {
 
 func (x *ViewerDisconnectTrigger) Reset() {
 	*x = ViewerDisconnectTrigger{}
-	mi := &file_ipc_proto_msgTypes[101]
+	mi := &file_ipc_proto_msgTypes[103]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12974,7 +13146,7 @@ func (x *ViewerDisconnectTrigger) String() string {
 func (*ViewerDisconnectTrigger) ProtoMessage() {}
 
 func (x *ViewerDisconnectTrigger) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[101]
+	mi := &file_ipc_proto_msgTypes[103]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12987,7 +13159,7 @@ func (x *ViewerDisconnectTrigger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ViewerDisconnectTrigger.ProtoReflect.Descriptor instead.
 func (*ViewerDisconnectTrigger) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{101}
+	return file_ipc_proto_rawDescGZIP(), []int{103}
 }
 
 func (x *ViewerDisconnectTrigger) GetSessionId() string {
@@ -13178,7 +13350,7 @@ type SessionTimeShare struct {
 
 func (x *SessionTimeShare) Reset() {
 	*x = SessionTimeShare{}
-	mi := &file_ipc_proto_msgTypes[102]
+	mi := &file_ipc_proto_msgTypes[104]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13190,7 +13362,7 @@ func (x *SessionTimeShare) String() string {
 func (*SessionTimeShare) ProtoMessage() {}
 
 func (x *SessionTimeShare) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[102]
+	mi := &file_ipc_proto_msgTypes[104]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13203,7 +13375,7 @@ func (x *SessionTimeShare) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionTimeShare.ProtoReflect.Descriptor instead.
 func (*SessionTimeShare) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{102}
+	return file_ipc_proto_rawDescGZIP(), []int{104}
 }
 
 func (x *SessionTimeShare) GetName() string {
@@ -13245,7 +13417,7 @@ type StreamBufferTrigger struct {
 
 func (x *StreamBufferTrigger) Reset() {
 	*x = StreamBufferTrigger{}
-	mi := &file_ipc_proto_msgTypes[103]
+	mi := &file_ipc_proto_msgTypes[105]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13257,7 +13429,7 @@ func (x *StreamBufferTrigger) String() string {
 func (*StreamBufferTrigger) ProtoMessage() {}
 
 func (x *StreamBufferTrigger) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[103]
+	mi := &file_ipc_proto_msgTypes[105]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13270,7 +13442,7 @@ func (x *StreamBufferTrigger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamBufferTrigger.ProtoReflect.Descriptor instead.
 func (*StreamBufferTrigger) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{103}
+	return file_ipc_proto_rawDescGZIP(), []int{105}
 }
 
 func (x *StreamBufferTrigger) GetStreamName() string {
@@ -13397,7 +13569,7 @@ type StreamEndTrigger struct {
 
 func (x *StreamEndTrigger) Reset() {
 	*x = StreamEndTrigger{}
-	mi := &file_ipc_proto_msgTypes[104]
+	mi := &file_ipc_proto_msgTypes[106]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13409,7 +13581,7 @@ func (x *StreamEndTrigger) String() string {
 func (*StreamEndTrigger) ProtoMessage() {}
 
 func (x *StreamEndTrigger) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[104]
+	mi := &file_ipc_proto_msgTypes[106]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13422,7 +13594,7 @@ func (x *StreamEndTrigger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamEndTrigger.ProtoReflect.Descriptor instead.
 func (*StreamEndTrigger) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{104}
+	return file_ipc_proto_rawDescGZIP(), []int{106}
 }
 
 func (x *StreamEndTrigger) GetStreamName() string {
@@ -13537,7 +13709,7 @@ type StreamTrackListTrigger struct {
 
 func (x *StreamTrackListTrigger) Reset() {
 	*x = StreamTrackListTrigger{}
-	mi := &file_ipc_proto_msgTypes[105]
+	mi := &file_ipc_proto_msgTypes[107]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13549,7 +13721,7 @@ func (x *StreamTrackListTrigger) String() string {
 func (*StreamTrackListTrigger) ProtoMessage() {}
 
 func (x *StreamTrackListTrigger) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[105]
+	mi := &file_ipc_proto_msgTypes[107]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13562,7 +13734,7 @@ func (x *StreamTrackListTrigger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamTrackListTrigger.ProtoReflect.Descriptor instead.
 func (*StreamTrackListTrigger) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{105}
+	return file_ipc_proto_rawDescGZIP(), []int{107}
 }
 
 func (x *StreamTrackListTrigger) GetStreamName() string {
@@ -13700,7 +13872,7 @@ type ProcessingSpeedStats struct {
 
 func (x *ProcessingSpeedStats) Reset() {
 	*x = ProcessingSpeedStats{}
-	mi := &file_ipc_proto_msgTypes[106]
+	mi := &file_ipc_proto_msgTypes[108]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13712,7 +13884,7 @@ func (x *ProcessingSpeedStats) String() string {
 func (*ProcessingSpeedStats) ProtoMessage() {}
 
 func (x *ProcessingSpeedStats) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[106]
+	mi := &file_ipc_proto_msgTypes[108]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13725,7 +13897,7 @@ func (x *ProcessingSpeedStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessingSpeedStats.ProtoReflect.Descriptor instead.
 func (*ProcessingSpeedStats) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{106}
+	return file_ipc_proto_rawDescGZIP(), []int{108}
 }
 
 func (x *ProcessingSpeedStats) GetTicks() uint32 {
@@ -13824,7 +13996,7 @@ type RecordingCompleteTrigger struct {
 
 func (x *RecordingCompleteTrigger) Reset() {
 	*x = RecordingCompleteTrigger{}
-	mi := &file_ipc_proto_msgTypes[107]
+	mi := &file_ipc_proto_msgTypes[109]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13836,7 +14008,7 @@ func (x *RecordingCompleteTrigger) String() string {
 func (*RecordingCompleteTrigger) ProtoMessage() {}
 
 func (x *RecordingCompleteTrigger) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[107]
+	mi := &file_ipc_proto_msgTypes[109]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13849,7 +14021,7 @@ func (x *RecordingCompleteTrigger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordingCompleteTrigger.ProtoReflect.Descriptor instead.
 func (*RecordingCompleteTrigger) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{107}
+	return file_ipc_proto_rawDescGZIP(), []int{109}
 }
 
 func (x *RecordingCompleteTrigger) GetStreamName() string {
@@ -13965,7 +14137,7 @@ type RecordingSegmentTrigger struct {
 
 func (x *RecordingSegmentTrigger) Reset() {
 	*x = RecordingSegmentTrigger{}
-	mi := &file_ipc_proto_msgTypes[108]
+	mi := &file_ipc_proto_msgTypes[110]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13977,7 +14149,7 @@ func (x *RecordingSegmentTrigger) String() string {
 func (*RecordingSegmentTrigger) ProtoMessage() {}
 
 func (x *RecordingSegmentTrigger) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[108]
+	mi := &file_ipc_proto_msgTypes[110]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13990,7 +14162,7 @@ func (x *RecordingSegmentTrigger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordingSegmentTrigger.ProtoReflect.Descriptor instead.
 func (*RecordingSegmentTrigger) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{108}
+	return file_ipc_proto_rawDescGZIP(), []int{110}
 }
 
 func (x *RecordingSegmentTrigger) GetStreamName() string {
@@ -14107,7 +14279,7 @@ type StreamLifecycleUpdate struct {
 
 func (x *StreamLifecycleUpdate) Reset() {
 	*x = StreamLifecycleUpdate{}
-	mi := &file_ipc_proto_msgTypes[109]
+	mi := &file_ipc_proto_msgTypes[111]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14119,7 +14291,7 @@ func (x *StreamLifecycleUpdate) String() string {
 func (*StreamLifecycleUpdate) ProtoMessage() {}
 
 func (x *StreamLifecycleUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[109]
+	mi := &file_ipc_proto_msgTypes[111]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14132,7 +14304,7 @@ func (x *StreamLifecycleUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamLifecycleUpdate.ProtoReflect.Descriptor instead.
 func (*StreamLifecycleUpdate) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{109}
+	return file_ipc_proto_rawDescGZIP(), []int{111}
 }
 
 func (x *StreamLifecycleUpdate) GetNodeId() string {
@@ -14443,7 +14615,7 @@ type IngestRuntimeAbsent struct {
 
 func (x *IngestRuntimeAbsent) Reset() {
 	*x = IngestRuntimeAbsent{}
-	mi := &file_ipc_proto_msgTypes[110]
+	mi := &file_ipc_proto_msgTypes[112]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14455,7 +14627,7 @@ func (x *IngestRuntimeAbsent) String() string {
 func (*IngestRuntimeAbsent) ProtoMessage() {}
 
 func (x *IngestRuntimeAbsent) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[110]
+	mi := &file_ipc_proto_msgTypes[112]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14468,7 +14640,7 @@ func (x *IngestRuntimeAbsent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestRuntimeAbsent.ProtoReflect.Descriptor instead.
 func (*IngestRuntimeAbsent) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{110}
+	return file_ipc_proto_rawDescGZIP(), []int{112}
 }
 
 func (x *IngestRuntimeAbsent) GetLifecycle() *StreamLifecycleUpdate {
@@ -14510,7 +14682,7 @@ type IngestAdmissionAbandoned struct {
 
 func (x *IngestAdmissionAbandoned) Reset() {
 	*x = IngestAdmissionAbandoned{}
-	mi := &file_ipc_proto_msgTypes[111]
+	mi := &file_ipc_proto_msgTypes[113]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14522,7 +14694,7 @@ func (x *IngestAdmissionAbandoned) String() string {
 func (*IngestAdmissionAbandoned) ProtoMessage() {}
 
 func (x *IngestAdmissionAbandoned) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[111]
+	mi := &file_ipc_proto_msgTypes[113]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14535,7 +14707,7 @@ func (x *IngestAdmissionAbandoned) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestAdmissionAbandoned.ProtoReflect.Descriptor instead.
 func (*IngestAdmissionAbandoned) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{111}
+	return file_ipc_proto_rawDescGZIP(), []int{113}
 }
 
 func (x *IngestAdmissionAbandoned) GetTriggerUuid() string {
@@ -14573,7 +14745,7 @@ type MistStreamProcessObservation struct {
 
 func (x *MistStreamProcessObservation) Reset() {
 	*x = MistStreamProcessObservation{}
-	mi := &file_ipc_proto_msgTypes[112]
+	mi := &file_ipc_proto_msgTypes[114]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14585,7 +14757,7 @@ func (x *MistStreamProcessObservation) String() string {
 func (*MistStreamProcessObservation) ProtoMessage() {}
 
 func (x *MistStreamProcessObservation) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[112]
+	mi := &file_ipc_proto_msgTypes[114]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14598,7 +14770,7 @@ func (x *MistStreamProcessObservation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MistStreamProcessObservation.ProtoReflect.Descriptor instead.
 func (*MistStreamProcessObservation) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{112}
+	return file_ipc_proto_rawDescGZIP(), []int{114}
 }
 
 func (x *MistStreamProcessObservation) GetRuntimeName() string {
@@ -14691,7 +14863,7 @@ type ClientLifecycleUpdate struct {
 
 func (x *ClientLifecycleUpdate) Reset() {
 	*x = ClientLifecycleUpdate{}
-	mi := &file_ipc_proto_msgTypes[113]
+	mi := &file_ipc_proto_msgTypes[115]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14703,7 +14875,7 @@ func (x *ClientLifecycleUpdate) String() string {
 func (*ClientLifecycleUpdate) ProtoMessage() {}
 
 func (x *ClientLifecycleUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[113]
+	mi := &file_ipc_proto_msgTypes[115]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14716,7 +14888,7 @@ func (x *ClientLifecycleUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientLifecycleUpdate.ProtoReflect.Descriptor instead.
 func (*ClientLifecycleUpdate) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{113}
+	return file_ipc_proto_rawDescGZIP(), []int{115}
 }
 
 func (x *ClientLifecycleUpdate) GetNodeId() string {
@@ -14907,7 +15079,7 @@ type ClientLifecycleBatch struct {
 
 func (x *ClientLifecycleBatch) Reset() {
 	*x = ClientLifecycleBatch{}
-	mi := &file_ipc_proto_msgTypes[114]
+	mi := &file_ipc_proto_msgTypes[116]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14919,7 +15091,7 @@ func (x *ClientLifecycleBatch) String() string {
 func (*ClientLifecycleBatch) ProtoMessage() {}
 
 func (x *ClientLifecycleBatch) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[114]
+	mi := &file_ipc_proto_msgTypes[116]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14932,7 +15104,7 @@ func (x *ClientLifecycleBatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientLifecycleBatch.ProtoReflect.Descriptor instead.
 func (*ClientLifecycleBatch) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{114}
+	return file_ipc_proto_rawDescGZIP(), []int{116}
 }
 
 func (x *ClientLifecycleBatch) GetTenantId() string {
@@ -15012,7 +15184,7 @@ type PlaybackBootResource struct {
 
 func (x *PlaybackBootResource) Reset() {
 	*x = PlaybackBootResource{}
-	mi := &file_ipc_proto_msgTypes[115]
+	mi := &file_ipc_proto_msgTypes[117]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -15024,7 +15196,7 @@ func (x *PlaybackBootResource) String() string {
 func (*PlaybackBootResource) ProtoMessage() {}
 
 func (x *PlaybackBootResource) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[115]
+	mi := &file_ipc_proto_msgTypes[117]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15037,7 +15209,7 @@ func (x *PlaybackBootResource) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlaybackBootResource.ProtoReflect.Descriptor instead.
 func (*PlaybackBootResource) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{115}
+	return file_ipc_proto_rawDescGZIP(), []int{117}
 }
 
 func (x *PlaybackBootResource) GetKind() string {
@@ -15151,7 +15323,7 @@ type PlaybackBootTrace struct {
 
 func (x *PlaybackBootTrace) Reset() {
 	*x = PlaybackBootTrace{}
-	mi := &file_ipc_proto_msgTypes[116]
+	mi := &file_ipc_proto_msgTypes[118]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -15163,7 +15335,7 @@ func (x *PlaybackBootTrace) String() string {
 func (*PlaybackBootTrace) ProtoMessage() {}
 
 func (x *PlaybackBootTrace) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[116]
+	mi := &file_ipc_proto_msgTypes[118]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15176,7 +15348,7 @@ func (x *PlaybackBootTrace) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlaybackBootTrace.ProtoReflect.Descriptor instead.
 func (*PlaybackBootTrace) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{116}
+	return file_ipc_proto_rawDescGZIP(), []int{118}
 }
 
 func (x *PlaybackBootTrace) GetTenantId() string {
@@ -15462,7 +15634,7 @@ type PlaybackSessionQoe struct {
 
 func (x *PlaybackSessionQoe) Reset() {
 	*x = PlaybackSessionQoe{}
-	mi := &file_ipc_proto_msgTypes[117]
+	mi := &file_ipc_proto_msgTypes[119]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -15474,7 +15646,7 @@ func (x *PlaybackSessionQoe) String() string {
 func (*PlaybackSessionQoe) ProtoMessage() {}
 
 func (x *PlaybackSessionQoe) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[117]
+	mi := &file_ipc_proto_msgTypes[119]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15487,7 +15659,7 @@ func (x *PlaybackSessionQoe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlaybackSessionQoe.ProtoReflect.Descriptor instead.
 func (*PlaybackSessionQoe) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{117}
+	return file_ipc_proto_rawDescGZIP(), []int{119}
 }
 
 func (x *PlaybackSessionQoe) GetTenantId() string {
@@ -15879,7 +16051,7 @@ type NodeLifecycleUpdate struct {
 
 func (x *NodeLifecycleUpdate) Reset() {
 	*x = NodeLifecycleUpdate{}
-	mi := &file_ipc_proto_msgTypes[118]
+	mi := &file_ipc_proto_msgTypes[120]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -15891,7 +16063,7 @@ func (x *NodeLifecycleUpdate) String() string {
 func (*NodeLifecycleUpdate) ProtoMessage() {}
 
 func (x *NodeLifecycleUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[118]
+	mi := &file_ipc_proto_msgTypes[120]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15904,7 +16076,7 @@ func (x *NodeLifecycleUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeLifecycleUpdate.ProtoReflect.Descriptor instead.
 func (*NodeLifecycleUpdate) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{118}
+	return file_ipc_proto_rawDescGZIP(), []int{120}
 }
 
 func (x *NodeLifecycleUpdate) GetNodeId() string {
@@ -16246,7 +16418,7 @@ type EdgeProvisionedConfig struct {
 
 func (x *EdgeProvisionedConfig) Reset() {
 	*x = EdgeProvisionedConfig{}
-	mi := &file_ipc_proto_msgTypes[119]
+	mi := &file_ipc_proto_msgTypes[121]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16258,7 +16430,7 @@ func (x *EdgeProvisionedConfig) String() string {
 func (*EdgeProvisionedConfig) ProtoMessage() {}
 
 func (x *EdgeProvisionedConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[119]
+	mi := &file_ipc_proto_msgTypes[121]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16271,7 +16443,7 @@ func (x *EdgeProvisionedConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EdgeProvisionedConfig.ProtoReflect.Descriptor instead.
 func (*EdgeProvisionedConfig) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{119}
+	return file_ipc_proto_rawDescGZIP(), []int{121}
 }
 
 func (x *EdgeProvisionedConfig) GetCliVersion() string {
@@ -16335,7 +16507,7 @@ type LoadBalancingData struct {
 
 func (x *LoadBalancingData) Reset() {
 	*x = LoadBalancingData{}
-	mi := &file_ipc_proto_msgTypes[120]
+	mi := &file_ipc_proto_msgTypes[122]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16347,7 +16519,7 @@ func (x *LoadBalancingData) String() string {
 func (*LoadBalancingData) ProtoMessage() {}
 
 func (x *LoadBalancingData) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[120]
+	mi := &file_ipc_proto_msgTypes[122]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16360,7 +16532,7 @@ func (x *LoadBalancingData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LoadBalancingData.ProtoReflect.Descriptor instead.
 func (*LoadBalancingData) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{120}
+	return file_ipc_proto_rawDescGZIP(), []int{122}
 }
 
 func (x *LoadBalancingData) GetSelectedNode() string {
@@ -16624,7 +16796,7 @@ type ClipLifecycleData struct {
 
 func (x *ClipLifecycleData) Reset() {
 	*x = ClipLifecycleData{}
-	mi := &file_ipc_proto_msgTypes[121]
+	mi := &file_ipc_proto_msgTypes[123]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16636,7 +16808,7 @@ func (x *ClipLifecycleData) String() string {
 func (*ClipLifecycleData) ProtoMessage() {}
 
 func (x *ClipLifecycleData) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[121]
+	mi := &file_ipc_proto_msgTypes[123]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16649,7 +16821,7 @@ func (x *ClipLifecycleData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClipLifecycleData.ProtoReflect.Descriptor instead.
 func (*ClipLifecycleData) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{121}
+	return file_ipc_proto_rawDescGZIP(), []int{123}
 }
 
 func (x *ClipLifecycleData) GetStage() ClipLifecycleData_Stage {
@@ -16917,7 +17089,7 @@ type DVRLifecycleData struct {
 
 func (x *DVRLifecycleData) Reset() {
 	*x = DVRLifecycleData{}
-	mi := &file_ipc_proto_msgTypes[122]
+	mi := &file_ipc_proto_msgTypes[124]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16929,7 +17101,7 @@ func (x *DVRLifecycleData) String() string {
 func (*DVRLifecycleData) ProtoMessage() {}
 
 func (x *DVRLifecycleData) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[122]
+	mi := &file_ipc_proto_msgTypes[124]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16942,7 +17114,7 @@ func (x *DVRLifecycleData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DVRLifecycleData.ProtoReflect.Descriptor instead.
 func (*DVRLifecycleData) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{122}
+	return file_ipc_proto_rawDescGZIP(), []int{124}
 }
 
 func (x *DVRLifecycleData) GetStatus() DVRLifecycleData_Status {
@@ -17150,7 +17322,7 @@ type VodLifecycleData struct {
 
 func (x *VodLifecycleData) Reset() {
 	*x = VodLifecycleData{}
-	mi := &file_ipc_proto_msgTypes[123]
+	mi := &file_ipc_proto_msgTypes[125]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17162,7 +17334,7 @@ func (x *VodLifecycleData) String() string {
 func (*VodLifecycleData) ProtoMessage() {}
 
 func (x *VodLifecycleData) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[123]
+	mi := &file_ipc_proto_msgTypes[125]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17175,7 +17347,7 @@ func (x *VodLifecycleData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VodLifecycleData.ProtoReflect.Descriptor instead.
 func (*VodLifecycleData) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{123}
+	return file_ipc_proto_rawDescGZIP(), []int{125}
 }
 
 func (x *VodLifecycleData) GetStatus() VodLifecycleData_Status {
@@ -17415,7 +17587,7 @@ type MessageLifecycleData struct {
 
 func (x *MessageLifecycleData) Reset() {
 	*x = MessageLifecycleData{}
-	mi := &file_ipc_proto_msgTypes[124]
+	mi := &file_ipc_proto_msgTypes[126]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17427,7 +17599,7 @@ func (x *MessageLifecycleData) String() string {
 func (*MessageLifecycleData) ProtoMessage() {}
 
 func (x *MessageLifecycleData) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[124]
+	mi := &file_ipc_proto_msgTypes[126]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17440,7 +17612,7 @@ func (x *MessageLifecycleData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MessageLifecycleData.ProtoReflect.Descriptor instead.
 func (*MessageLifecycleData) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{124}
+	return file_ipc_proto_rawDescGZIP(), []int{126}
 }
 
 func (x *MessageLifecycleData) GetEventType() MessageLifecycleData_EventType {
@@ -17554,7 +17726,7 @@ type FederationEventData struct {
 
 func (x *FederationEventData) Reset() {
 	*x = FederationEventData{}
-	mi := &file_ipc_proto_msgTypes[125]
+	mi := &file_ipc_proto_msgTypes[127]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17566,7 +17738,7 @@ func (x *FederationEventData) String() string {
 func (*FederationEventData) ProtoMessage() {}
 
 func (x *FederationEventData) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[125]
+	mi := &file_ipc_proto_msgTypes[127]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17579,7 +17751,7 @@ func (x *FederationEventData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FederationEventData.ProtoReflect.Descriptor instead.
 func (*FederationEventData) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{125}
+	return file_ipc_proto_rawDescGZIP(), []int{127}
 }
 
 func (x *FederationEventData) GetEventType() FederationEventType {
@@ -17791,7 +17963,7 @@ type NodeCapabilities struct {
 
 func (x *NodeCapabilities) Reset() {
 	*x = NodeCapabilities{}
-	mi := &file_ipc_proto_msgTypes[126]
+	mi := &file_ipc_proto_msgTypes[128]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17803,7 +17975,7 @@ func (x *NodeCapabilities) String() string {
 func (*NodeCapabilities) ProtoMessage() {}
 
 func (x *NodeCapabilities) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[126]
+	mi := &file_ipc_proto_msgTypes[128]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17816,7 +17988,7 @@ func (x *NodeCapabilities) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeCapabilities.ProtoReflect.Descriptor instead.
 func (*NodeCapabilities) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{126}
+	return file_ipc_proto_rawDescGZIP(), []int{128}
 }
 
 func (x *NodeCapabilities) GetIngest() bool {
@@ -17868,7 +18040,7 @@ type ProcessingConfig struct {
 
 func (x *ProcessingConfig) Reset() {
 	*x = ProcessingConfig{}
-	mi := &file_ipc_proto_msgTypes[127]
+	mi := &file_ipc_proto_msgTypes[129]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17880,7 +18052,7 @@ func (x *ProcessingConfig) String() string {
 func (*ProcessingConfig) ProtoMessage() {}
 
 func (x *ProcessingConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[127]
+	mi := &file_ipc_proto_msgTypes[129]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17893,7 +18065,7 @@ func (x *ProcessingConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessingConfig.ProtoReflect.Descriptor instead.
 func (*ProcessingConfig) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{127}
+	return file_ipc_proto_rawDescGZIP(), []int{129}
 }
 
 func (x *ProcessingConfig) GetLivepeerGatewayAvailable() bool {
@@ -17936,7 +18108,7 @@ type ProcessMeterQuantity struct {
 
 func (x *ProcessMeterQuantity) Reset() {
 	*x = ProcessMeterQuantity{}
-	mi := &file_ipc_proto_msgTypes[128]
+	mi := &file_ipc_proto_msgTypes[130]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17948,7 +18120,7 @@ func (x *ProcessMeterQuantity) String() string {
 func (*ProcessMeterQuantity) ProtoMessage() {}
 
 func (x *ProcessMeterQuantity) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[128]
+	mi := &file_ipc_proto_msgTypes[130]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17961,7 +18133,7 @@ func (x *ProcessMeterQuantity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessMeterQuantity.ProtoReflect.Descriptor instead.
 func (*ProcessMeterQuantity) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{128}
+	return file_ipc_proto_rawDescGZIP(), []int{130}
 }
 
 func (x *ProcessMeterQuantity) GetMeter() string {
@@ -18073,7 +18245,7 @@ type ProcessBillingEvent struct {
 
 func (x *ProcessBillingEvent) Reset() {
 	*x = ProcessBillingEvent{}
-	mi := &file_ipc_proto_msgTypes[129]
+	mi := &file_ipc_proto_msgTypes[131]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18085,7 +18257,7 @@ func (x *ProcessBillingEvent) String() string {
 func (*ProcessBillingEvent) ProtoMessage() {}
 
 func (x *ProcessBillingEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[129]
+	mi := &file_ipc_proto_msgTypes[131]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18098,7 +18270,7 @@ func (x *ProcessBillingEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessBillingEvent.ProtoReflect.Descriptor instead.
 func (*ProcessBillingEvent) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{129}
+	return file_ipc_proto_rawDescGZIP(), []int{131}
 }
 
 func (x *ProcessBillingEvent) GetNodeId() string {
@@ -18539,7 +18711,7 @@ type StorageInfo struct {
 
 func (x *StorageInfo) Reset() {
 	*x = StorageInfo{}
-	mi := &file_ipc_proto_msgTypes[130]
+	mi := &file_ipc_proto_msgTypes[132]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18551,7 +18723,7 @@ func (x *StorageInfo) String() string {
 func (*StorageInfo) ProtoMessage() {}
 
 func (x *StorageInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[130]
+	mi := &file_ipc_proto_msgTypes[132]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18564,7 +18736,7 @@ func (x *StorageInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StorageInfo.ProtoReflect.Descriptor instead.
 func (*StorageInfo) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{130}
+	return file_ipc_proto_rawDescGZIP(), []int{132}
 }
 
 func (x *StorageInfo) GetLocalPath() string {
@@ -18607,7 +18779,7 @@ type ProcessingClassCapacity struct {
 
 func (x *ProcessingClassCapacity) Reset() {
 	*x = ProcessingClassCapacity{}
-	mi := &file_ipc_proto_msgTypes[131]
+	mi := &file_ipc_proto_msgTypes[133]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18619,7 +18791,7 @@ func (x *ProcessingClassCapacity) String() string {
 func (*ProcessingClassCapacity) ProtoMessage() {}
 
 func (x *ProcessingClassCapacity) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[131]
+	mi := &file_ipc_proto_msgTypes[133]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18632,7 +18804,7 @@ func (x *ProcessingClassCapacity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessingClassCapacity.ProtoReflect.Descriptor instead.
 func (*ProcessingClassCapacity) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{131}
+	return file_ipc_proto_rawDescGZIP(), []int{133}
 }
 
 func (x *ProcessingClassCapacity) GetClass() string {
@@ -18677,7 +18849,7 @@ type NodeLimits struct {
 
 func (x *NodeLimits) Reset() {
 	*x = NodeLimits{}
-	mi := &file_ipc_proto_msgTypes[132]
+	mi := &file_ipc_proto_msgTypes[134]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18689,7 +18861,7 @@ func (x *NodeLimits) String() string {
 func (*NodeLimits) ProtoMessage() {}
 
 func (x *NodeLimits) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[132]
+	mi := &file_ipc_proto_msgTypes[134]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18702,7 +18874,7 @@ func (x *NodeLimits) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeLimits.ProtoReflect.Descriptor instead.
 func (*NodeLimits) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{132}
+	return file_ipc_proto_rawDescGZIP(), []int{134}
 }
 
 func (x *NodeLimits) GetStorageCapacityBytes() uint64 {
@@ -18744,7 +18916,7 @@ type StreamData struct {
 
 func (x *StreamData) Reset() {
 	*x = StreamData{}
-	mi := &file_ipc_proto_msgTypes[133]
+	mi := &file_ipc_proto_msgTypes[135]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18756,7 +18928,7 @@ func (x *StreamData) String() string {
 func (*StreamData) ProtoMessage() {}
 
 func (x *StreamData) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[133]
+	mi := &file_ipc_proto_msgTypes[135]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18769,7 +18941,7 @@ func (x *StreamData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamData.ProtoReflect.Descriptor instead.
 func (*StreamData) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{133}
+	return file_ipc_proto_rawDescGZIP(), []int{135}
 }
 
 func (x *StreamData) GetTotal() uint64 {
@@ -18870,7 +19042,7 @@ type StreamTrack struct {
 
 func (x *StreamTrack) Reset() {
 	*x = StreamTrack{}
-	mi := &file_ipc_proto_msgTypes[134]
+	mi := &file_ipc_proto_msgTypes[136]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18882,7 +19054,7 @@ func (x *StreamTrack) String() string {
 func (*StreamTrack) ProtoMessage() {}
 
 func (x *StreamTrack) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[134]
+	mi := &file_ipc_proto_msgTypes[136]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18895,7 +19067,7 @@ func (x *StreamTrack) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamTrack.ProtoReflect.Descriptor instead.
 func (*StreamTrack) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{134}
+	return file_ipc_proto_rawDescGZIP(), []int{136}
 }
 
 func (x *StreamTrack) GetTrackName() string {
@@ -19119,7 +19291,7 @@ type StoredArtifact struct {
 
 func (x *StoredArtifact) Reset() {
 	*x = StoredArtifact{}
-	mi := &file_ipc_proto_msgTypes[135]
+	mi := &file_ipc_proto_msgTypes[137]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19131,7 +19303,7 @@ func (x *StoredArtifact) String() string {
 func (*StoredArtifact) ProtoMessage() {}
 
 func (x *StoredArtifact) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[135]
+	mi := &file_ipc_proto_msgTypes[137]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19144,7 +19316,7 @@ func (x *StoredArtifact) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StoredArtifact.ProtoReflect.Descriptor instead.
 func (*StoredArtifact) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{135}
+	return file_ipc_proto_rawDescGZIP(), []int{137}
 }
 
 func (x *StoredArtifact) GetClipHash() string {
@@ -19255,7 +19427,7 @@ type StreamProcess struct {
 
 func (x *StreamProcess) Reset() {
 	*x = StreamProcess{}
-	mi := &file_ipc_proto_msgTypes[136]
+	mi := &file_ipc_proto_msgTypes[138]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19267,7 +19439,7 @@ func (x *StreamProcess) String() string {
 func (*StreamProcess) ProtoMessage() {}
 
 func (x *StreamProcess) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[136]
+	mi := &file_ipc_proto_msgTypes[138]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19280,7 +19452,7 @@ func (x *StreamProcess) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamProcess.ProtoReflect.Descriptor instead.
 func (*StreamProcess) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{136}
+	return file_ipc_proto_rawDescGZIP(), []int{138}
 }
 
 func (x *StreamProcess) GetProcess() string {
@@ -19360,7 +19532,7 @@ type StreamDef struct {
 
 func (x *StreamDef) Reset() {
 	*x = StreamDef{}
-	mi := &file_ipc_proto_msgTypes[137]
+	mi := &file_ipc_proto_msgTypes[139]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19372,7 +19544,7 @@ func (x *StreamDef) String() string {
 func (*StreamDef) ProtoMessage() {}
 
 func (x *StreamDef) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[137]
+	mi := &file_ipc_proto_msgTypes[139]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19385,7 +19557,7 @@ func (x *StreamDef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamDef.ProtoReflect.Descriptor instead.
 func (*StreamDef) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{137}
+	return file_ipc_proto_rawDescGZIP(), []int{139}
 }
 
 func (x *StreamDef) GetName() string {
@@ -19442,7 +19614,7 @@ type StreamTemplate struct {
 
 func (x *StreamTemplate) Reset() {
 	*x = StreamTemplate{}
-	mi := &file_ipc_proto_msgTypes[138]
+	mi := &file_ipc_proto_msgTypes[140]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19454,7 +19626,7 @@ func (x *StreamTemplate) String() string {
 func (*StreamTemplate) ProtoMessage() {}
 
 func (x *StreamTemplate) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[138]
+	mi := &file_ipc_proto_msgTypes[140]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19467,7 +19639,7 @@ func (x *StreamTemplate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamTemplate.ProtoReflect.Descriptor instead.
 func (*StreamTemplate) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{138}
+	return file_ipc_proto_rawDescGZIP(), []int{140}
 }
 
 func (x *StreamTemplate) GetId() string {
@@ -19527,7 +19699,7 @@ type TLSCertBundle struct {
 
 func (x *TLSCertBundle) Reset() {
 	*x = TLSCertBundle{}
-	mi := &file_ipc_proto_msgTypes[139]
+	mi := &file_ipc_proto_msgTypes[141]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19539,7 +19711,7 @@ func (x *TLSCertBundle) String() string {
 func (*TLSCertBundle) ProtoMessage() {}
 
 func (x *TLSCertBundle) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[139]
+	mi := &file_ipc_proto_msgTypes[141]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19552,7 +19724,7 @@ func (x *TLSCertBundle) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TLSCertBundle.ProtoReflect.Descriptor instead.
 func (*TLSCertBundle) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{139}
+	return file_ipc_proto_rawDescGZIP(), []int{141}
 }
 
 func (x *TLSCertBundle) GetCertPem() string {
@@ -19646,7 +19818,7 @@ type ConfigSeed struct {
 
 func (x *ConfigSeed) Reset() {
 	*x = ConfigSeed{}
-	mi := &file_ipc_proto_msgTypes[140]
+	mi := &file_ipc_proto_msgTypes[142]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19658,7 +19830,7 @@ func (x *ConfigSeed) String() string {
 func (*ConfigSeed) ProtoMessage() {}
 
 func (x *ConfigSeed) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[140]
+	mi := &file_ipc_proto_msgTypes[142]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19671,7 +19843,7 @@ func (x *ConfigSeed) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigSeed.ProtoReflect.Descriptor instead.
 func (*ConfigSeed) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{140}
+	return file_ipc_proto_rawDescGZIP(), []int{142}
 }
 
 func (x *ConfigSeed) GetNodeId() string {
@@ -19793,7 +19965,7 @@ type BalancerCapabilityUpdate struct {
 
 func (x *BalancerCapabilityUpdate) Reset() {
 	*x = BalancerCapabilityUpdate{}
-	mi := &file_ipc_proto_msgTypes[141]
+	mi := &file_ipc_proto_msgTypes[143]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19805,7 +19977,7 @@ func (x *BalancerCapabilityUpdate) String() string {
 func (*BalancerCapabilityUpdate) ProtoMessage() {}
 
 func (x *BalancerCapabilityUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[141]
+	mi := &file_ipc_proto_msgTypes[143]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19818,7 +19990,7 @@ func (x *BalancerCapabilityUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BalancerCapabilityUpdate.ProtoReflect.Descriptor instead.
 func (*BalancerCapabilityUpdate) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{141}
+	return file_ipc_proto_rawDescGZIP(), []int{143}
 }
 
 func (x *BalancerCapabilityUpdate) GetNodeId() string {
@@ -19868,7 +20040,7 @@ type ConfigSeedApplyResult struct {
 
 func (x *ConfigSeedApplyResult) Reset() {
 	*x = ConfigSeedApplyResult{}
-	mi := &file_ipc_proto_msgTypes[142]
+	mi := &file_ipc_proto_msgTypes[144]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19880,7 +20052,7 @@ func (x *ConfigSeedApplyResult) String() string {
 func (*ConfigSeedApplyResult) ProtoMessage() {}
 
 func (x *ConfigSeedApplyResult) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[142]
+	mi := &file_ipc_proto_msgTypes[144]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19893,7 +20065,7 @@ func (x *ConfigSeedApplyResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigSeedApplyResult.ProtoReflect.Descriptor instead.
 func (*ConfigSeedApplyResult) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{142}
+	return file_ipc_proto_rawDescGZIP(), []int{144}
 }
 
 func (x *ConfigSeedApplyResult) GetNodeId() string {
@@ -19966,7 +20138,7 @@ type SiteConfig struct {
 
 func (x *SiteConfig) Reset() {
 	*x = SiteConfig{}
-	mi := &file_ipc_proto_msgTypes[143]
+	mi := &file_ipc_proto_msgTypes[145]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -19978,7 +20150,7 @@ func (x *SiteConfig) String() string {
 func (*SiteConfig) ProtoMessage() {}
 
 func (x *SiteConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[143]
+	mi := &file_ipc_proto_msgTypes[145]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19991,7 +20163,7 @@ func (x *SiteConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SiteConfig.ProtoReflect.Descriptor instead.
 func (*SiteConfig) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{143}
+	return file_ipc_proto_rawDescGZIP(), []int{145}
 }
 
 func (x *SiteConfig) GetSiteAddress() string {
@@ -20037,7 +20209,7 @@ type TranscodeProfile struct {
 
 func (x *TranscodeProfile) Reset() {
 	*x = TranscodeProfile{}
-	mi := &file_ipc_proto_msgTypes[144]
+	mi := &file_ipc_proto_msgTypes[146]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20049,7 +20221,7 @@ func (x *TranscodeProfile) String() string {
 func (*TranscodeProfile) ProtoMessage() {}
 
 func (x *TranscodeProfile) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[144]
+	mi := &file_ipc_proto_msgTypes[146]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20062,7 +20234,7 @@ func (x *TranscodeProfile) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TranscodeProfile.ProtoReflect.Descriptor instead.
 func (*TranscodeProfile) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{144}
+	return file_ipc_proto_rawDescGZIP(), []int{146}
 }
 
 func (x *TranscodeProfile) GetName() string {
@@ -20123,7 +20295,7 @@ type TranscodeJobRequest struct {
 
 func (x *TranscodeJobRequest) Reset() {
 	*x = TranscodeJobRequest{}
-	mi := &file_ipc_proto_msgTypes[145]
+	mi := &file_ipc_proto_msgTypes[147]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20135,7 +20307,7 @@ func (x *TranscodeJobRequest) String() string {
 func (*TranscodeJobRequest) ProtoMessage() {}
 
 func (x *TranscodeJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[145]
+	mi := &file_ipc_proto_msgTypes[147]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20148,7 +20320,7 @@ func (x *TranscodeJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TranscodeJobRequest.ProtoReflect.Descriptor instead.
 func (*TranscodeJobRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{145}
+	return file_ipc_proto_rawDescGZIP(), []int{147}
 }
 
 func (x *TranscodeJobRequest) GetJobId() string {
@@ -20213,7 +20385,7 @@ type TranscodeJobProgress struct {
 
 func (x *TranscodeJobProgress) Reset() {
 	*x = TranscodeJobProgress{}
-	mi := &file_ipc_proto_msgTypes[146]
+	mi := &file_ipc_proto_msgTypes[148]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20225,7 +20397,7 @@ func (x *TranscodeJobProgress) String() string {
 func (*TranscodeJobProgress) ProtoMessage() {}
 
 func (x *TranscodeJobProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[146]
+	mi := &file_ipc_proto_msgTypes[148]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20238,7 +20410,7 @@ func (x *TranscodeJobProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TranscodeJobProgress.ProtoReflect.Descriptor instead.
 func (*TranscodeJobProgress) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{146}
+	return file_ipc_proto_rawDescGZIP(), []int{148}
 }
 
 func (x *TranscodeJobProgress) GetJobId() string {
@@ -20283,7 +20455,7 @@ type TranscodeJobComplete struct {
 
 func (x *TranscodeJobComplete) Reset() {
 	*x = TranscodeJobComplete{}
-	mi := &file_ipc_proto_msgTypes[147]
+	mi := &file_ipc_proto_msgTypes[149]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20295,7 +20467,7 @@ func (x *TranscodeJobComplete) String() string {
 func (*TranscodeJobComplete) ProtoMessage() {}
 
 func (x *TranscodeJobComplete) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[147]
+	mi := &file_ipc_proto_msgTypes[149]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20308,7 +20480,7 @@ func (x *TranscodeJobComplete) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TranscodeJobComplete.ProtoReflect.Descriptor instead.
 func (*TranscodeJobComplete) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{147}
+	return file_ipc_proto_rawDescGZIP(), []int{149}
 }
 
 func (x *TranscodeJobComplete) GetJobId() string {
@@ -20388,7 +20560,7 @@ type ProcessingJobRequest struct {
 
 func (x *ProcessingJobRequest) Reset() {
 	*x = ProcessingJobRequest{}
-	mi := &file_ipc_proto_msgTypes[148]
+	mi := &file_ipc_proto_msgTypes[150]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20400,7 +20572,7 @@ func (x *ProcessingJobRequest) String() string {
 func (*ProcessingJobRequest) ProtoMessage() {}
 
 func (x *ProcessingJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[148]
+	mi := &file_ipc_proto_msgTypes[150]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20413,7 +20585,7 @@ func (x *ProcessingJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessingJobRequest.ProtoReflect.Descriptor instead.
 func (*ProcessingJobRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{148}
+	return file_ipc_proto_rawDescGZIP(), []int{150}
 }
 
 func (x *ProcessingJobRequest) GetJobId() string {
@@ -20563,7 +20735,7 @@ type DVRChapterSegmentRef struct {
 
 func (x *DVRChapterSegmentRef) Reset() {
 	*x = DVRChapterSegmentRef{}
-	mi := &file_ipc_proto_msgTypes[149]
+	mi := &file_ipc_proto_msgTypes[151]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20575,7 +20747,7 @@ func (x *DVRChapterSegmentRef) String() string {
 func (*DVRChapterSegmentRef) ProtoMessage() {}
 
 func (x *DVRChapterSegmentRef) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[149]
+	mi := &file_ipc_proto_msgTypes[151]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20588,7 +20760,7 @@ func (x *DVRChapterSegmentRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DVRChapterSegmentRef.ProtoReflect.Descriptor instead.
 func (*DVRChapterSegmentRef) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{149}
+	return file_ipc_proto_rawDescGZIP(), []int{151}
 }
 
 func (x *DVRChapterSegmentRef) GetSegmentName() string {
@@ -20673,7 +20845,7 @@ type ProcessingJobResult struct {
 
 func (x *ProcessingJobResult) Reset() {
 	*x = ProcessingJobResult{}
-	mi := &file_ipc_proto_msgTypes[150]
+	mi := &file_ipc_proto_msgTypes[152]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20685,7 +20857,7 @@ func (x *ProcessingJobResult) String() string {
 func (*ProcessingJobResult) ProtoMessage() {}
 
 func (x *ProcessingJobResult) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[150]
+	mi := &file_ipc_proto_msgTypes[152]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20698,7 +20870,7 @@ func (x *ProcessingJobResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessingJobResult.ProtoReflect.Descriptor instead.
 func (*ProcessingJobResult) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{150}
+	return file_ipc_proto_rawDescGZIP(), []int{152}
 }
 
 func (x *ProcessingJobResult) GetJobId() string {
@@ -20780,7 +20952,7 @@ type ProcessingJobProgress struct {
 
 func (x *ProcessingJobProgress) Reset() {
 	*x = ProcessingJobProgress{}
-	mi := &file_ipc_proto_msgTypes[151]
+	mi := &file_ipc_proto_msgTypes[153]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20792,7 +20964,7 @@ func (x *ProcessingJobProgress) String() string {
 func (*ProcessingJobProgress) ProtoMessage() {}
 
 func (x *ProcessingJobProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[151]
+	mi := &file_ipc_proto_msgTypes[153]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20805,7 +20977,7 @@ func (x *ProcessingJobProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessingJobProgress.ProtoReflect.Descriptor instead.
 func (*ProcessingJobProgress) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{151}
+	return file_ipc_proto_rawDescGZIP(), []int{153}
 }
 
 func (x *ProcessingJobProgress) GetJobId() string {
@@ -20854,7 +21026,7 @@ type APIRequestBatch struct {
 
 func (x *APIRequestBatch) Reset() {
 	*x = APIRequestBatch{}
-	mi := &file_ipc_proto_msgTypes[152]
+	mi := &file_ipc_proto_msgTypes[154]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20866,7 +21038,7 @@ func (x *APIRequestBatch) String() string {
 func (*APIRequestBatch) ProtoMessage() {}
 
 func (x *APIRequestBatch) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[152]
+	mi := &file_ipc_proto_msgTypes[154]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20879,7 +21051,7 @@ func (x *APIRequestBatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use APIRequestBatch.ProtoReflect.Descriptor instead.
 func (*APIRequestBatch) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{152}
+	return file_ipc_proto_rawDescGZIP(), []int{154}
 }
 
 func (x *APIRequestBatch) GetTimestamp() int64 {
@@ -20936,7 +21108,7 @@ type APIRequestAggregate struct {
 
 func (x *APIRequestAggregate) Reset() {
 	*x = APIRequestAggregate{}
-	mi := &file_ipc_proto_msgTypes[153]
+	mi := &file_ipc_proto_msgTypes[155]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -20948,7 +21120,7 @@ func (x *APIRequestAggregate) String() string {
 func (*APIRequestAggregate) ProtoMessage() {}
 
 func (x *APIRequestAggregate) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[153]
+	mi := &file_ipc_proto_msgTypes[155]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20961,7 +21133,7 @@ func (x *APIRequestAggregate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use APIRequestAggregate.ProtoReflect.Descriptor instead.
 func (*APIRequestAggregate) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{153}
+	return file_ipc_proto_rawDescGZIP(), []int{155}
 }
 
 func (x *APIRequestAggregate) GetTenantId() string {
@@ -21093,7 +21265,7 @@ type ValidateEdgeTokenRequest struct {
 
 func (x *ValidateEdgeTokenRequest) Reset() {
 	*x = ValidateEdgeTokenRequest{}
-	mi := &file_ipc_proto_msgTypes[154]
+	mi := &file_ipc_proto_msgTypes[156]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21105,7 +21277,7 @@ func (x *ValidateEdgeTokenRequest) String() string {
 func (*ValidateEdgeTokenRequest) ProtoMessage() {}
 
 func (x *ValidateEdgeTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[154]
+	mi := &file_ipc_proto_msgTypes[156]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21118,7 +21290,7 @@ func (x *ValidateEdgeTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateEdgeTokenRequest.ProtoReflect.Descriptor instead.
 func (*ValidateEdgeTokenRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{154}
+	return file_ipc_proto_rawDescGZIP(), []int{156}
 }
 
 func (x *ValidateEdgeTokenRequest) GetToken() string {
@@ -21141,7 +21313,7 @@ type ValidateEdgeTokenResponse struct {
 
 func (x *ValidateEdgeTokenResponse) Reset() {
 	*x = ValidateEdgeTokenResponse{}
-	mi := &file_ipc_proto_msgTypes[155]
+	mi := &file_ipc_proto_msgTypes[157]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21153,7 +21325,7 @@ func (x *ValidateEdgeTokenResponse) String() string {
 func (*ValidateEdgeTokenResponse) ProtoMessage() {}
 
 func (x *ValidateEdgeTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[155]
+	mi := &file_ipc_proto_msgTypes[157]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21166,7 +21338,7 @@ func (x *ValidateEdgeTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateEdgeTokenResponse.ProtoReflect.Descriptor instead.
 func (*ValidateEdgeTokenResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{155}
+	return file_ipc_proto_rawDescGZIP(), []int{157}
 }
 
 func (x *ValidateEdgeTokenResponse) GetValid() bool {
@@ -21217,7 +21389,7 @@ type EdgeMistAdminSessionRequest struct {
 
 func (x *EdgeMistAdminSessionRequest) Reset() {
 	*x = EdgeMistAdminSessionRequest{}
-	mi := &file_ipc_proto_msgTypes[156]
+	mi := &file_ipc_proto_msgTypes[158]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21229,7 +21401,7 @@ func (x *EdgeMistAdminSessionRequest) String() string {
 func (*EdgeMistAdminSessionRequest) ProtoMessage() {}
 
 func (x *EdgeMistAdminSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[156]
+	mi := &file_ipc_proto_msgTypes[158]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21242,7 +21414,7 @@ func (x *EdgeMistAdminSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EdgeMistAdminSessionRequest.ProtoReflect.Descriptor instead.
 func (*EdgeMistAdminSessionRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{156}
+	return file_ipc_proto_rawDescGZIP(), []int{158}
 }
 
 func (x *EdgeMistAdminSessionRequest) GetToken() string {
@@ -21267,7 +21439,7 @@ type EdgeMistAdminSessionResponse struct {
 
 func (x *EdgeMistAdminSessionResponse) Reset() {
 	*x = EdgeMistAdminSessionResponse{}
-	mi := &file_ipc_proto_msgTypes[157]
+	mi := &file_ipc_proto_msgTypes[159]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21279,7 +21451,7 @@ func (x *EdgeMistAdminSessionResponse) String() string {
 func (*EdgeMistAdminSessionResponse) ProtoMessage() {}
 
 func (x *EdgeMistAdminSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[157]
+	mi := &file_ipc_proto_msgTypes[159]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21292,7 +21464,7 @@ func (x *EdgeMistAdminSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EdgeMistAdminSessionResponse.ProtoReflect.Descriptor instead.
 func (*EdgeMistAdminSessionResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{157}
+	return file_ipc_proto_rawDescGZIP(), []int{159}
 }
 
 func (x *EdgeMistAdminSessionResponse) GetValid() bool {
@@ -21355,7 +21527,7 @@ type ThumbnailUploadRequest struct {
 
 func (x *ThumbnailUploadRequest) Reset() {
 	*x = ThumbnailUploadRequest{}
-	mi := &file_ipc_proto_msgTypes[158]
+	mi := &file_ipc_proto_msgTypes[160]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21367,7 +21539,7 @@ func (x *ThumbnailUploadRequest) String() string {
 func (*ThumbnailUploadRequest) ProtoMessage() {}
 
 func (x *ThumbnailUploadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[158]
+	mi := &file_ipc_proto_msgTypes[160]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21380,7 +21552,7 @@ func (x *ThumbnailUploadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThumbnailUploadRequest.ProtoReflect.Descriptor instead.
 func (*ThumbnailUploadRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{158}
+	return file_ipc_proto_rawDescGZIP(), []int{160}
 }
 
 func (x *ThumbnailUploadRequest) GetInternalName() string {
@@ -21411,7 +21583,7 @@ type ThumbnailUploadResponse struct {
 
 func (x *ThumbnailUploadResponse) Reset() {
 	*x = ThumbnailUploadResponse{}
-	mi := &file_ipc_proto_msgTypes[159]
+	mi := &file_ipc_proto_msgTypes[161]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21423,7 +21595,7 @@ func (x *ThumbnailUploadResponse) String() string {
 func (*ThumbnailUploadResponse) ProtoMessage() {}
 
 func (x *ThumbnailUploadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[159]
+	mi := &file_ipc_proto_msgTypes[161]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21436,7 +21608,7 @@ func (x *ThumbnailUploadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThumbnailUploadResponse.ProtoReflect.Descriptor instead.
 func (*ThumbnailUploadResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{159}
+	return file_ipc_proto_rawDescGZIP(), []int{161}
 }
 
 func (x *ThumbnailUploadResponse) GetThumbnailKey() string {
@@ -21472,7 +21644,7 @@ type ThumbnailUploaded struct {
 
 func (x *ThumbnailUploaded) Reset() {
 	*x = ThumbnailUploaded{}
-	mi := &file_ipc_proto_msgTypes[160]
+	mi := &file_ipc_proto_msgTypes[162]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21484,7 +21656,7 @@ func (x *ThumbnailUploaded) String() string {
 func (*ThumbnailUploaded) ProtoMessage() {}
 
 func (x *ThumbnailUploaded) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[160]
+	mi := &file_ipc_proto_msgTypes[162]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21497,7 +21669,7 @@ func (x *ThumbnailUploaded) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThumbnailUploaded.ProtoReflect.Descriptor instead.
 func (*ThumbnailUploaded) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{160}
+	return file_ipc_proto_rawDescGZIP(), []int{162}
 }
 
 func (x *ThumbnailUploaded) GetThumbnailKey() string {
@@ -21560,7 +21732,7 @@ type GatewayTelemetryEvent struct {
 
 func (x *GatewayTelemetryEvent) Reset() {
 	*x = GatewayTelemetryEvent{}
-	mi := &file_ipc_proto_msgTypes[161]
+	mi := &file_ipc_proto_msgTypes[163]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21572,7 +21744,7 @@ func (x *GatewayTelemetryEvent) String() string {
 func (*GatewayTelemetryEvent) ProtoMessage() {}
 
 func (x *GatewayTelemetryEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[161]
+	mi := &file_ipc_proto_msgTypes[163]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21585,7 +21757,7 @@ func (x *GatewayTelemetryEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GatewayTelemetryEvent.ProtoReflect.Descriptor instead.
 func (*GatewayTelemetryEvent) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{161}
+	return file_ipc_proto_rawDescGZIP(), []int{163}
 }
 
 func (x *GatewayTelemetryEvent) GetGatewayId() string {
@@ -21828,7 +22000,7 @@ type OrchestratorVantageGeo struct {
 
 func (x *OrchestratorVantageGeo) Reset() {
 	*x = OrchestratorVantageGeo{}
-	mi := &file_ipc_proto_msgTypes[162]
+	mi := &file_ipc_proto_msgTypes[164]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21840,7 +22012,7 @@ func (x *OrchestratorVantageGeo) String() string {
 func (*OrchestratorVantageGeo) ProtoMessage() {}
 
 func (x *OrchestratorVantageGeo) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[162]
+	mi := &file_ipc_proto_msgTypes[164]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21853,7 +22025,7 @@ func (x *OrchestratorVantageGeo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestratorVantageGeo.ProtoReflect.Descriptor instead.
 func (*OrchestratorVantageGeo) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{162}
+	return file_ipc_proto_rawDescGZIP(), []int{164}
 }
 
 func (x *OrchestratorVantageGeo) GetResolvedIp() string {
@@ -21940,7 +22112,7 @@ type OrchestratorDiscoveryObserved struct {
 
 func (x *OrchestratorDiscoveryObserved) Reset() {
 	*x = OrchestratorDiscoveryObserved{}
-	mi := &file_ipc_proto_msgTypes[163]
+	mi := &file_ipc_proto_msgTypes[165]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -21952,7 +22124,7 @@ func (x *OrchestratorDiscoveryObserved) String() string {
 func (*OrchestratorDiscoveryObserved) ProtoMessage() {}
 
 func (x *OrchestratorDiscoveryObserved) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[163]
+	mi := &file_ipc_proto_msgTypes[165]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21965,7 +22137,7 @@ func (x *OrchestratorDiscoveryObserved) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestratorDiscoveryObserved.ProtoReflect.Descriptor instead.
 func (*OrchestratorDiscoveryObserved) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{163}
+	return file_ipc_proto_rawDescGZIP(), []int{165}
 }
 
 func (x *OrchestratorDiscoveryObserved) GetOrchAddr() string {
@@ -22109,7 +22281,7 @@ type OrchestratorStateUpdate struct {
 
 func (x *OrchestratorStateUpdate) Reset() {
 	*x = OrchestratorStateUpdate{}
-	mi := &file_ipc_proto_msgTypes[164]
+	mi := &file_ipc_proto_msgTypes[166]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22121,7 +22293,7 @@ func (x *OrchestratorStateUpdate) String() string {
 func (*OrchestratorStateUpdate) ProtoMessage() {}
 
 func (x *OrchestratorStateUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[164]
+	mi := &file_ipc_proto_msgTypes[166]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22134,7 +22306,7 @@ func (x *OrchestratorStateUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestratorStateUpdate.ProtoReflect.Descriptor instead.
 func (*OrchestratorStateUpdate) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{164}
+	return file_ipc_proto_rawDescGZIP(), []int{166}
 }
 
 func (x *OrchestratorStateUpdate) GetOrchAddr() string {
@@ -22242,7 +22414,7 @@ type OrchestratorCapabilityPriceEntry struct {
 
 func (x *OrchestratorCapabilityPriceEntry) Reset() {
 	*x = OrchestratorCapabilityPriceEntry{}
-	mi := &file_ipc_proto_msgTypes[165]
+	mi := &file_ipc_proto_msgTypes[167]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22254,7 +22426,7 @@ func (x *OrchestratorCapabilityPriceEntry) String() string {
 func (*OrchestratorCapabilityPriceEntry) ProtoMessage() {}
 
 func (x *OrchestratorCapabilityPriceEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[165]
+	mi := &file_ipc_proto_msgTypes[167]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22267,7 +22439,7 @@ func (x *OrchestratorCapabilityPriceEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestratorCapabilityPriceEntry.ProtoReflect.Descriptor instead.
 func (*OrchestratorCapabilityPriceEntry) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{165}
+	return file_ipc_proto_rawDescGZIP(), []int{167}
 }
 
 func (x *OrchestratorCapabilityPriceEntry) GetCapability() string {
@@ -22330,7 +22502,7 @@ type OrchestratorTranscodeOutcome struct {
 
 func (x *OrchestratorTranscodeOutcome) Reset() {
 	*x = OrchestratorTranscodeOutcome{}
-	mi := &file_ipc_proto_msgTypes[166]
+	mi := &file_ipc_proto_msgTypes[168]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22342,7 +22514,7 @@ func (x *OrchestratorTranscodeOutcome) String() string {
 func (*OrchestratorTranscodeOutcome) ProtoMessage() {}
 
 func (x *OrchestratorTranscodeOutcome) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[166]
+	mi := &file_ipc_proto_msgTypes[168]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22355,7 +22527,7 @@ func (x *OrchestratorTranscodeOutcome) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestratorTranscodeOutcome.ProtoReflect.Descriptor instead.
 func (*OrchestratorTranscodeOutcome) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{166}
+	return file_ipc_proto_rawDescGZIP(), []int{168}
 }
 
 func (x *OrchestratorTranscodeOutcome) GetOrchAddr() string {
@@ -22525,7 +22697,7 @@ type NetworkAmount struct {
 
 func (x *NetworkAmount) Reset() {
 	*x = NetworkAmount{}
-	mi := &file_ipc_proto_msgTypes[167]
+	mi := &file_ipc_proto_msgTypes[169]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22537,7 +22709,7 @@ func (x *NetworkAmount) String() string {
 func (*NetworkAmount) ProtoMessage() {}
 
 func (x *NetworkAmount) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[167]
+	mi := &file_ipc_proto_msgTypes[169]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22550,7 +22722,7 @@ func (x *NetworkAmount) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkAmount.ProtoReflect.Descriptor instead.
 func (*NetworkAmount) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{167}
+	return file_ipc_proto_rawDescGZIP(), []int{169}
 }
 
 func (x *NetworkAmount) GetNumerator() string {
@@ -22595,7 +22767,7 @@ type OrchestratorAttemptAccounting struct {
 
 func (x *OrchestratorAttemptAccounting) Reset() {
 	*x = OrchestratorAttemptAccounting{}
-	mi := &file_ipc_proto_msgTypes[168]
+	mi := &file_ipc_proto_msgTypes[170]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22607,7 +22779,7 @@ func (x *OrchestratorAttemptAccounting) String() string {
 func (*OrchestratorAttemptAccounting) ProtoMessage() {}
 
 func (x *OrchestratorAttemptAccounting) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[168]
+	mi := &file_ipc_proto_msgTypes[170]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22620,7 +22792,7 @@ func (x *OrchestratorAttemptAccounting) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestratorAttemptAccounting.ProtoReflect.Descriptor instead.
 func (*OrchestratorAttemptAccounting) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{168}
+	return file_ipc_proto_rawDescGZIP(), []int{170}
 }
 
 func (x *OrchestratorAttemptAccounting) GetVersion() uint32 {
@@ -22688,7 +22860,7 @@ type OrchestratorAIOutcome struct {
 
 func (x *OrchestratorAIOutcome) Reset() {
 	*x = OrchestratorAIOutcome{}
-	mi := &file_ipc_proto_msgTypes[169]
+	mi := &file_ipc_proto_msgTypes[171]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22700,7 +22872,7 @@ func (x *OrchestratorAIOutcome) String() string {
 func (*OrchestratorAIOutcome) ProtoMessage() {}
 
 func (x *OrchestratorAIOutcome) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[169]
+	mi := &file_ipc_proto_msgTypes[171]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22713,7 +22885,7 @@ func (x *OrchestratorAIOutcome) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestratorAIOutcome.ProtoReflect.Descriptor instead.
 func (*OrchestratorAIOutcome) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{169}
+	return file_ipc_proto_rawDescGZIP(), []int{171}
 }
 
 func (x *OrchestratorAIOutcome) GetOrchAddr() string {
@@ -22820,7 +22992,7 @@ type OrchestratorCandidateDecision struct {
 
 func (x *OrchestratorCandidateDecision) Reset() {
 	*x = OrchestratorCandidateDecision{}
-	mi := &file_ipc_proto_msgTypes[170]
+	mi := &file_ipc_proto_msgTypes[172]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22832,7 +23004,7 @@ func (x *OrchestratorCandidateDecision) String() string {
 func (*OrchestratorCandidateDecision) ProtoMessage() {}
 
 func (x *OrchestratorCandidateDecision) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[170]
+	mi := &file_ipc_proto_msgTypes[172]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22845,7 +23017,7 @@ func (x *OrchestratorCandidateDecision) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestratorCandidateDecision.ProtoReflect.Descriptor instead.
 func (*OrchestratorCandidateDecision) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{170}
+	return file_ipc_proto_rawDescGZIP(), []int{172}
 }
 
 func (x *OrchestratorCandidateDecision) GetOrchAddr() string {
@@ -22954,7 +23126,7 @@ type OrchestratorSegmentResult struct {
 
 func (x *OrchestratorSegmentResult) Reset() {
 	*x = OrchestratorSegmentResult{}
-	mi := &file_ipc_proto_msgTypes[171]
+	mi := &file_ipc_proto_msgTypes[173]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22966,7 +23138,7 @@ func (x *OrchestratorSegmentResult) String() string {
 func (*OrchestratorSegmentResult) ProtoMessage() {}
 
 func (x *OrchestratorSegmentResult) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[171]
+	mi := &file_ipc_proto_msgTypes[173]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22979,7 +23151,7 @@ func (x *OrchestratorSegmentResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestratorSegmentResult.ProtoReflect.Descriptor instead.
 func (*OrchestratorSegmentResult) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{171}
+	return file_ipc_proto_rawDescGZIP(), []int{173}
 }
 
 func (x *OrchestratorSegmentResult) GetOrchAddr() string {
@@ -23138,7 +23310,7 @@ type OrchestratorObserverReport struct {
 
 func (x *OrchestratorObserverReport) Reset() {
 	*x = OrchestratorObserverReport{}
-	mi := &file_ipc_proto_msgTypes[172]
+	mi := &file_ipc_proto_msgTypes[174]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -23150,7 +23322,7 @@ func (x *OrchestratorObserverReport) String() string {
 func (*OrchestratorObserverReport) ProtoMessage() {}
 
 func (x *OrchestratorObserverReport) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[172]
+	mi := &file_ipc_proto_msgTypes[174]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -23163,7 +23335,7 @@ func (x *OrchestratorObserverReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestratorObserverReport.ProtoReflect.Descriptor instead.
 func (*OrchestratorObserverReport) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{172}
+	return file_ipc_proto_rawDescGZIP(), []int{174}
 }
 
 func (x *OrchestratorObserverReport) GetReportKind() string {
@@ -23234,7 +23406,7 @@ type ThumbnailUploadResponse_PresignedUpload struct {
 
 func (x *ThumbnailUploadResponse_PresignedUpload) Reset() {
 	*x = ThumbnailUploadResponse_PresignedUpload{}
-	mi := &file_ipc_proto_msgTypes[181]
+	mi := &file_ipc_proto_msgTypes[183]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -23246,7 +23418,7 @@ func (x *ThumbnailUploadResponse_PresignedUpload) String() string {
 func (*ThumbnailUploadResponse_PresignedUpload) ProtoMessage() {}
 
 func (x *ThumbnailUploadResponse_PresignedUpload) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[181]
+	mi := &file_ipc_proto_msgTypes[183]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -23259,7 +23431,7 @@ func (x *ThumbnailUploadResponse_PresignedUpload) ProtoReflect() protoreflect.Me
 
 // Deprecated: Use ThumbnailUploadResponse_PresignedUpload.ProtoReflect.Descriptor instead.
 func (*ThumbnailUploadResponse_PresignedUpload) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{159, 0}
+	return file_ipc_proto_rawDescGZIP(), []int{161, 0}
 }
 
 func (x *ThumbnailUploadResponse_PresignedUpload) GetFileName() string {
@@ -23428,7 +23600,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\bseverity\x18\x05 \x01(\tR\bseverity\x12\x14\n" +
 	"\x05title\x18\x06 \x01(\tR\x05title\x12\x16\n" +
 	"\x06change\x18\a \x01(\tR\x06change\x12\"\n" +
-	"\rupdated_at_ms\x18\b \x01(\x03R\vupdatedAtMs\"\xca8\n" +
+	"\rupdated_at_ms\x18\b \x01(\x03R\vupdatedAtMs\"\xa49\n" +
 	"\x0eControlMessage\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x123\n" +
@@ -23514,7 +23686,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\x17playback_grant_response\x18\xaf\x01 \x01(\v2&.helmsmancontrol.PlaybackGrantResponseH\x00R\x15playbackGrantResponse\x12Z\n" +
 	"\x14control_capabilities\x18\xb0\x01 \x01(\v2$.helmsmancontrol.ControlCapabilitiesH\x00R\x13controlCapabilities\x12X\n" +
 	"\x14durable_delivery_ack\x18\xb1\x01 \x01(\v2#.helmsmancontrol.DurableDeliveryAckH\x00R\x12durableDeliveryAck\x12m\n" +
-	"\x1bpublisher_admission_session\x18\xb2\x01 \x01(\v2*.helmsmancontrol.PublisherAdmissionSessionH\x00R\x19publisherAdmissionSessionB\t\n" +
+	"\x1bpublisher_admission_session\x18\xb2\x01 \x01(\v2*.helmsmancontrol.PublisherAdmissionSessionH\x00R\x19publisherAdmissionSession\x12X\n" +
+	"\x14stop_sessions_result\x18\xb3\x01 \x01(\v2#.helmsmancontrol.StopSessionsResultH\x00R\x12stopSessionsResultB\t\n" +
 	"\apayloadJ\x04\b\x16\x10\x17J\x04\b\x17\x10\x18J\x04\b+\x10,J\x04\b,\x10-J\x04\b-\x10.J\x04\b.\x10/J\x04\b\f\x10\rJ\x04\b\r\x10\x0eJ\x04\b\x0e\x10\x0fJ\x06\b\xa4\x01\x10\xa5\x01J\x06\b\xa5\x01\x10\xa6\x01R\x11dvr_ready_requestR\x12dvr_ready_responseR\x0ffreeze_completeR\x0fdefrost_requestR\x10defrost_progressR\x10defrost_completeR\x11clip_pull_requestR\rclip_progressR\tclip_doneR\x19dvr_update_source_requestR\x1advr_update_source_response\"I\n" +
 	"\x13ControlCapabilities\x122\n" +
 	"\x15durable_delivery_acks\x18\x01 \x01(\bR\x13durableDeliveryAcks\"J\n" +
@@ -23627,11 +23800,26 @@ const file_ipc_proto_rawDesc = "" +
 	"\x0etarget_release\x18\x02 \x01(\tR\rtargetRelease\x12E\n" +
 	"\n" +
 	"components\x18\x03 \x03(\v2%.helmsmancontrol.ComponentApplyResultR\n" +
-	"components\"m\n" +
+	"components\"\x9f\x02\n" +
 	"\x13StopSessionsRequest\x12!\n" +
 	"\fstream_names\x18\x01 \x03(\tR\vstreamNames\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason\"s\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x04 \x01(\tR\trequestId\x129\n" +
+	"\n" +
+	"expires_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12=\n" +
+	"\atargets\x18\x06 \x03(\v2#.helmsmancontrol.StopSessionsTargetR\atargets\x12\x17\n" +
+	"\anode_id\x18\a \x01(\tR\x06nodeId\"f\n" +
+	"\x12StopSessionsTarget\x12#\n" +
+	"\rinternal_name\x18\x01 \x01(\tR\finternalName\x12+\n" +
+	"\x11source_generation\x18\x02 \x01(\tR\x10sourceGeneration\"\x89\x01\n" +
+	"\x12StopSessionsResult\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1b\n" +
+	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12!\n" +
+	"\fstream_names\x18\x03 \x03(\tR\vstreamNames\x12\x14\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"s\n" +
 	"\x19InvalidateSessionsRequest\x12!\n" +
 	"\fstream_names\x18\x01 \x03(\tR\vstreamNames\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x16\n" +
@@ -26319,7 +26507,7 @@ func file_ipc_proto_rawDescGZIP() []byte {
 }
 
 var file_ipc_proto_enumTypes = make([]protoimpl.EnumInfo, 24)
-var file_ipc_proto_msgTypes = make([]protoimpl.MessageInfo, 182)
+var file_ipc_proto_msgTypes = make([]protoimpl.MessageInfo, 184)
 var file_ipc_proto_goTypes = []any{
 	(ClusterRejectReason)(0),                        // 0: helmsmancontrol.ClusterRejectReason
 	(PlaybackGrantPolicyKind)(0),                    // 1: helmsmancontrol.PlaybackGrantPolicyKind
@@ -26376,436 +26564,441 @@ var file_ipc_proto_goTypes = []any{
 	(*ComponentApplyResult)(nil),                    // 52: helmsmancontrol.ComponentApplyResult
 	(*UpdateApplyResult)(nil),                       // 53: helmsmancontrol.UpdateApplyResult
 	(*StopSessionsRequest)(nil),                     // 54: helmsmancontrol.StopSessionsRequest
-	(*InvalidateSessionsRequest)(nil),               // 55: helmsmancontrol.InvalidateSessionsRequest
-	(*PlaybackGrant)(nil),                           // 56: helmsmancontrol.PlaybackGrant
-	(*PlaybackGrantPolicy)(nil),                     // 57: helmsmancontrol.PlaybackGrantPolicy
-	(*PlaybackGrantKey)(nil),                        // 58: helmsmancontrol.PlaybackGrantKey
-	(*PlaybackGrantRequest)(nil),                    // 59: helmsmancontrol.PlaybackGrantRequest
-	(*PlaybackGrantResponse)(nil),                   // 60: helmsmancontrol.PlaybackGrantResponse
-	(*ActivatePushTargets)(nil),                     // 61: helmsmancontrol.ActivatePushTargets
-	(*PushTargetSpec)(nil),                          // 62: helmsmancontrol.PushTargetSpec
-	(*DeactivatePushTargets)(nil),                   // 63: helmsmancontrol.DeactivatePushTargets
-	(*DeactivatePushTargetsResult)(nil),             // 64: helmsmancontrol.DeactivatePushTargetsResult
-	(*ActivatePushTargetsResult)(nil),               // 65: helmsmancontrol.ActivatePushTargetsResult
-	(*PushTargetConvergence)(nil),                   // 66: helmsmancontrol.PushTargetConvergence
-	(*PushTargetStatusReport)(nil),                  // 67: helmsmancontrol.PushTargetStatusReport
-	(*ArtifactDeleted)(nil),                         // 68: helmsmancontrol.ArtifactDeleted
-	(*Register)(nil),                                // 69: helmsmancontrol.Register
-	(*LiveIngestGeneration)(nil),                    // 70: helmsmancontrol.LiveIngestGeneration
-	(*AppliedManagedStream)(nil),                    // 71: helmsmancontrol.AppliedManagedStream
-	(*NodeFingerprint)(nil),                         // 72: helmsmancontrol.NodeFingerprint
-	(*ClipPullRequest)(nil),                         // 73: helmsmancontrol.ClipPullRequest
-	(*ControlError)(nil),                            // 74: helmsmancontrol.ControlError
-	(*Heartbeat)(nil),                               // 75: helmsmancontrol.Heartbeat
-	(*MistTrigger)(nil),                             // 76: helmsmancontrol.MistTrigger
-	(*RawMistWebhookTrigger)(nil),                   // 77: helmsmancontrol.RawMistWebhookTrigger
-	(*MistTriggerResponse)(nil),                     // 78: helmsmancontrol.MistTriggerResponse
-	(*MistTriggerAck)(nil),                          // 79: helmsmancontrol.MistTriggerAck
-	(*StorageSnapshot)(nil),                         // 80: helmsmancontrol.StorageSnapshot
-	(*TenantStorageUsage)(nil),                      // 81: helmsmancontrol.TenantStorageUsage
-	(*ClipHashRequest)(nil),                         // 82: helmsmancontrol.ClipHashRequest
-	(*ClipHashResponse)(nil),                        // 83: helmsmancontrol.ClipHashResponse
-	(*DVRStartRequest)(nil),                         // 84: helmsmancontrol.DVRStartRequest
-	(*DVRConfig)(nil),                               // 85: helmsmancontrol.DVRConfig
-	(*DVRProgress)(nil),                             // 86: helmsmancontrol.DVRProgress
-	(*DVRStopped)(nil),                              // 87: helmsmancontrol.DVRStopped
-	(*DVRStopRequest)(nil),                          // 88: helmsmancontrol.DVRStopRequest
-	(*RecordDVRSegmentRequest)(nil),                 // 89: helmsmancontrol.RecordDVRSegmentRequest
-	(*RecordDVRSegmentResponse)(nil),                // 90: helmsmancontrol.RecordDVRSegmentResponse
-	(*MarkDVRSegmentUploaded)(nil),                  // 91: helmsmancontrol.MarkDVRSegmentUploaded
-	(*DVRSegmentDropped)(nil),                       // 92: helmsmancontrol.DVRSegmentDropped
-	(*EvictableSegmentsRequest)(nil),                // 93: helmsmancontrol.EvictableSegmentsRequest
-	(*EvictableSegmentsResponse)(nil),               // 94: helmsmancontrol.EvictableSegmentsResponse
-	(*RetryDVRSegmentUpload)(nil),                   // 95: helmsmancontrol.RetryDVRSegmentUpload
-	(*ReclaimDVRSegment)(nil),                       // 96: helmsmancontrol.ReclaimDVRSegment
-	(*RestoreLocalSegmentIndexRequest)(nil),         // 97: helmsmancontrol.RestoreLocalSegmentIndexRequest
-	(*RestoreLocalSegmentIndexResponse)(nil),        // 98: helmsmancontrol.RestoreLocalSegmentIndexResponse
-	(*ClipDeleteRequest)(nil),                       // 99: helmsmancontrol.ClipDeleteRequest
-	(*DVRDeleteRequest)(nil),                        // 100: helmsmancontrol.DVRDeleteRequest
-	(*VodDeleteRequest)(nil),                        // 101: helmsmancontrol.VodDeleteRequest
-	(*FreezePermissionRequest)(nil),                 // 102: helmsmancontrol.FreezePermissionRequest
-	(*FreezePermissionResponse)(nil),                // 103: helmsmancontrol.FreezePermissionResponse
-	(*FreezeRequest)(nil),                           // 104: helmsmancontrol.FreezeRequest
-	(*FreezeProgress)(nil),                          // 105: helmsmancontrol.FreezeProgress
-	(*DVRSegmentRef)(nil),                           // 106: helmsmancontrol.DVRSegmentRef
-	(*CanDeleteRequest)(nil),                        // 107: helmsmancontrol.CanDeleteRequest
-	(*CanDeleteResponse)(nil),                       // 108: helmsmancontrol.CanDeleteResponse
-	(*RelayResolveRequest)(nil),                     // 109: helmsmancontrol.RelayResolveRequest
-	(*RelayResolveResponse)(nil),                    // 110: helmsmancontrol.RelayResolveResponse
-	(*AuthorizeRelayPullRequest)(nil),               // 111: helmsmancontrol.AuthorizeRelayPullRequest
-	(*AuthorizeRelayPullResponse)(nil),              // 112: helmsmancontrol.AuthorizeRelayPullResponse
-	(*SyncComplete)(nil),                            // 113: helmsmancontrol.SyncComplete
-	(*DtshSyncRequest)(nil),                         // 114: helmsmancontrol.DtshSyncRequest
-	(*StorageLifecycleData)(nil),                    // 115: helmsmancontrol.StorageLifecycleData
-	(*PushRewriteTrigger)(nil),                      // 116: helmsmancontrol.PushRewriteTrigger
-	(*ConnectionPlayTrigger)(nil),                   // 117: helmsmancontrol.ConnectionPlayTrigger
-	(*ViewerResolveTrigger)(nil),                    // 118: helmsmancontrol.ViewerResolveTrigger
-	(*StreamSourceTrigger)(nil),                     // 119: helmsmancontrol.StreamSourceTrigger
-	(*StreamProcessTrigger)(nil),                    // 120: helmsmancontrol.StreamProcessTrigger
-	(*PushOutStartTrigger)(nil),                     // 121: helmsmancontrol.PushOutStartTrigger
-	(*PushEndTrigger)(nil),                          // 122: helmsmancontrol.PushEndTrigger
-	(*PushInputCloseTrigger)(nil),                   // 123: helmsmancontrol.PushInputCloseTrigger
-	(*ViewerConnectTrigger)(nil),                    // 124: helmsmancontrol.ViewerConnectTrigger
-	(*ViewerDisconnectTrigger)(nil),                 // 125: helmsmancontrol.ViewerDisconnectTrigger
-	(*SessionTimeShare)(nil),                        // 126: helmsmancontrol.SessionTimeShare
-	(*StreamBufferTrigger)(nil),                     // 127: helmsmancontrol.StreamBufferTrigger
-	(*StreamEndTrigger)(nil),                        // 128: helmsmancontrol.StreamEndTrigger
-	(*StreamTrackListTrigger)(nil),                  // 129: helmsmancontrol.StreamTrackListTrigger
-	(*ProcessingSpeedStats)(nil),                    // 130: helmsmancontrol.ProcessingSpeedStats
-	(*RecordingCompleteTrigger)(nil),                // 131: helmsmancontrol.RecordingCompleteTrigger
-	(*RecordingSegmentTrigger)(nil),                 // 132: helmsmancontrol.RecordingSegmentTrigger
-	(*StreamLifecycleUpdate)(nil),                   // 133: helmsmancontrol.StreamLifecycleUpdate
-	(*IngestRuntimeAbsent)(nil),                     // 134: helmsmancontrol.IngestRuntimeAbsent
-	(*IngestAdmissionAbandoned)(nil),                // 135: helmsmancontrol.IngestAdmissionAbandoned
-	(*MistStreamProcessObservation)(nil),            // 136: helmsmancontrol.MistStreamProcessObservation
-	(*ClientLifecycleUpdate)(nil),                   // 137: helmsmancontrol.ClientLifecycleUpdate
-	(*ClientLifecycleBatch)(nil),                    // 138: helmsmancontrol.ClientLifecycleBatch
-	(*PlaybackBootResource)(nil),                    // 139: helmsmancontrol.PlaybackBootResource
-	(*PlaybackBootTrace)(nil),                       // 140: helmsmancontrol.PlaybackBootTrace
-	(*PlaybackSessionQoe)(nil),                      // 141: helmsmancontrol.PlaybackSessionQoe
-	(*NodeLifecycleUpdate)(nil),                     // 142: helmsmancontrol.NodeLifecycleUpdate
-	(*EdgeProvisionedConfig)(nil),                   // 143: helmsmancontrol.EdgeProvisionedConfig
-	(*LoadBalancingData)(nil),                       // 144: helmsmancontrol.LoadBalancingData
-	(*ClipLifecycleData)(nil),                       // 145: helmsmancontrol.ClipLifecycleData
-	(*DVRLifecycleData)(nil),                        // 146: helmsmancontrol.DVRLifecycleData
-	(*VodLifecycleData)(nil),                        // 147: helmsmancontrol.VodLifecycleData
-	(*MessageLifecycleData)(nil),                    // 148: helmsmancontrol.MessageLifecycleData
-	(*FederationEventData)(nil),                     // 149: helmsmancontrol.FederationEventData
-	(*NodeCapabilities)(nil),                        // 150: helmsmancontrol.NodeCapabilities
-	(*ProcessingConfig)(nil),                        // 151: helmsmancontrol.ProcessingConfig
-	(*ProcessMeterQuantity)(nil),                    // 152: helmsmancontrol.ProcessMeterQuantity
-	(*ProcessBillingEvent)(nil),                     // 153: helmsmancontrol.ProcessBillingEvent
-	(*StorageInfo)(nil),                             // 154: helmsmancontrol.StorageInfo
-	(*ProcessingClassCapacity)(nil),                 // 155: helmsmancontrol.ProcessingClassCapacity
-	(*NodeLimits)(nil),                              // 156: helmsmancontrol.NodeLimits
-	(*StreamData)(nil),                              // 157: helmsmancontrol.StreamData
-	(*StreamTrack)(nil),                             // 158: helmsmancontrol.StreamTrack
-	(*StoredArtifact)(nil),                          // 159: helmsmancontrol.StoredArtifact
-	(*StreamProcess)(nil),                           // 160: helmsmancontrol.StreamProcess
-	(*StreamDef)(nil),                               // 161: helmsmancontrol.StreamDef
-	(*StreamTemplate)(nil),                          // 162: helmsmancontrol.StreamTemplate
-	(*TLSCertBundle)(nil),                           // 163: helmsmancontrol.TLSCertBundle
-	(*ConfigSeed)(nil),                              // 164: helmsmancontrol.ConfigSeed
-	(*BalancerCapabilityUpdate)(nil),                // 165: helmsmancontrol.BalancerCapabilityUpdate
-	(*ConfigSeedApplyResult)(nil),                   // 166: helmsmancontrol.ConfigSeedApplyResult
-	(*SiteConfig)(nil),                              // 167: helmsmancontrol.SiteConfig
-	(*TranscodeProfile)(nil),                        // 168: helmsmancontrol.TranscodeProfile
-	(*TranscodeJobRequest)(nil),                     // 169: helmsmancontrol.TranscodeJobRequest
-	(*TranscodeJobProgress)(nil),                    // 170: helmsmancontrol.TranscodeJobProgress
-	(*TranscodeJobComplete)(nil),                    // 171: helmsmancontrol.TranscodeJobComplete
-	(*ProcessingJobRequest)(nil),                    // 172: helmsmancontrol.ProcessingJobRequest
-	(*DVRChapterSegmentRef)(nil),                    // 173: helmsmancontrol.DVRChapterSegmentRef
-	(*ProcessingJobResult)(nil),                     // 174: helmsmancontrol.ProcessingJobResult
-	(*ProcessingJobProgress)(nil),                   // 175: helmsmancontrol.ProcessingJobProgress
-	(*APIRequestBatch)(nil),                         // 176: helmsmancontrol.APIRequestBatch
-	(*APIRequestAggregate)(nil),                     // 177: helmsmancontrol.APIRequestAggregate
-	(*ValidateEdgeTokenRequest)(nil),                // 178: helmsmancontrol.ValidateEdgeTokenRequest
-	(*ValidateEdgeTokenResponse)(nil),               // 179: helmsmancontrol.ValidateEdgeTokenResponse
-	(*EdgeMistAdminSessionRequest)(nil),             // 180: helmsmancontrol.EdgeMistAdminSessionRequest
-	(*EdgeMistAdminSessionResponse)(nil),            // 181: helmsmancontrol.EdgeMistAdminSessionResponse
-	(*ThumbnailUploadRequest)(nil),                  // 182: helmsmancontrol.ThumbnailUploadRequest
-	(*ThumbnailUploadResponse)(nil),                 // 183: helmsmancontrol.ThumbnailUploadResponse
-	(*ThumbnailUploaded)(nil),                       // 184: helmsmancontrol.ThumbnailUploaded
-	(*GatewayTelemetryEvent)(nil),                   // 185: helmsmancontrol.GatewayTelemetryEvent
-	(*OrchestratorVantageGeo)(nil),                  // 186: helmsmancontrol.OrchestratorVantageGeo
-	(*OrchestratorDiscoveryObserved)(nil),           // 187: helmsmancontrol.OrchestratorDiscoveryObserved
-	(*OrchestratorStateUpdate)(nil),                 // 188: helmsmancontrol.OrchestratorStateUpdate
-	(*OrchestratorCapabilityPriceEntry)(nil),        // 189: helmsmancontrol.OrchestratorCapabilityPriceEntry
-	(*OrchestratorTranscodeOutcome)(nil),            // 190: helmsmancontrol.OrchestratorTranscodeOutcome
-	(*NetworkAmount)(nil),                           // 191: helmsmancontrol.NetworkAmount
-	(*OrchestratorAttemptAccounting)(nil),           // 192: helmsmancontrol.OrchestratorAttemptAccounting
-	(*OrchestratorAIOutcome)(nil),                   // 193: helmsmancontrol.OrchestratorAIOutcome
-	(*OrchestratorCandidateDecision)(nil),           // 194: helmsmancontrol.OrchestratorCandidateDecision
-	(*OrchestratorSegmentResult)(nil),               // 195: helmsmancontrol.OrchestratorSegmentResult
-	(*OrchestratorObserverReport)(nil),              // 196: helmsmancontrol.OrchestratorObserverReport
-	nil,                                             // 197: helmsmancontrol.PlaybackGrantPolicy.RequiredClaimsJsonEntry
-	nil,                                             // 198: helmsmancontrol.FreezeRequest.SegmentUrlsEntry
-	nil,                                             // 199: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
-	nil,                                             // 200: helmsmancontrol.ProcessMeterQuantity.DimensionsEntry
-	nil,                                             // 201: helmsmancontrol.StreamProcess.ExtraEntry
-	nil,                                             // 202: helmsmancontrol.ConfigSeedApplyResult.BundleVersionsEntry
-	nil,                                             // 203: helmsmancontrol.ProcessingJobRequest.ParamsEntry
-	nil,                                             // 204: helmsmancontrol.ProcessingJobResult.OutputsEntry
-	(*ThumbnailUploadResponse_PresignedUpload)(nil), // 205: helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
-	(*timestamppb.Timestamp)(nil),                   // 206: google.protobuf.Timestamp
-	(*common.SignupAttribution)(nil),                // 207: common.SignupAttribution
-	(*structpb.Struct)(nil),                         // 208: google.protobuf.Struct
-	(*common.EdgeTelemetryConfig)(nil),              // 209: common.EdgeTelemetryConfig
-	(*events.DomainEventBatch)(nil),                 // 210: frameworks.events.DomainEventBatch
-	(*emptypb.Empty)(nil),                           // 211: google.protobuf.Empty
-	(*events.PublishDomainEventsResponse)(nil),      // 212: frameworks.events.PublishDomainEventsResponse
+	(*StopSessionsTarget)(nil),                      // 55: helmsmancontrol.StopSessionsTarget
+	(*StopSessionsResult)(nil),                      // 56: helmsmancontrol.StopSessionsResult
+	(*InvalidateSessionsRequest)(nil),               // 57: helmsmancontrol.InvalidateSessionsRequest
+	(*PlaybackGrant)(nil),                           // 58: helmsmancontrol.PlaybackGrant
+	(*PlaybackGrantPolicy)(nil),                     // 59: helmsmancontrol.PlaybackGrantPolicy
+	(*PlaybackGrantKey)(nil),                        // 60: helmsmancontrol.PlaybackGrantKey
+	(*PlaybackGrantRequest)(nil),                    // 61: helmsmancontrol.PlaybackGrantRequest
+	(*PlaybackGrantResponse)(nil),                   // 62: helmsmancontrol.PlaybackGrantResponse
+	(*ActivatePushTargets)(nil),                     // 63: helmsmancontrol.ActivatePushTargets
+	(*PushTargetSpec)(nil),                          // 64: helmsmancontrol.PushTargetSpec
+	(*DeactivatePushTargets)(nil),                   // 65: helmsmancontrol.DeactivatePushTargets
+	(*DeactivatePushTargetsResult)(nil),             // 66: helmsmancontrol.DeactivatePushTargetsResult
+	(*ActivatePushTargetsResult)(nil),               // 67: helmsmancontrol.ActivatePushTargetsResult
+	(*PushTargetConvergence)(nil),                   // 68: helmsmancontrol.PushTargetConvergence
+	(*PushTargetStatusReport)(nil),                  // 69: helmsmancontrol.PushTargetStatusReport
+	(*ArtifactDeleted)(nil),                         // 70: helmsmancontrol.ArtifactDeleted
+	(*Register)(nil),                                // 71: helmsmancontrol.Register
+	(*LiveIngestGeneration)(nil),                    // 72: helmsmancontrol.LiveIngestGeneration
+	(*AppliedManagedStream)(nil),                    // 73: helmsmancontrol.AppliedManagedStream
+	(*NodeFingerprint)(nil),                         // 74: helmsmancontrol.NodeFingerprint
+	(*ClipPullRequest)(nil),                         // 75: helmsmancontrol.ClipPullRequest
+	(*ControlError)(nil),                            // 76: helmsmancontrol.ControlError
+	(*Heartbeat)(nil),                               // 77: helmsmancontrol.Heartbeat
+	(*MistTrigger)(nil),                             // 78: helmsmancontrol.MistTrigger
+	(*RawMistWebhookTrigger)(nil),                   // 79: helmsmancontrol.RawMistWebhookTrigger
+	(*MistTriggerResponse)(nil),                     // 80: helmsmancontrol.MistTriggerResponse
+	(*MistTriggerAck)(nil),                          // 81: helmsmancontrol.MistTriggerAck
+	(*StorageSnapshot)(nil),                         // 82: helmsmancontrol.StorageSnapshot
+	(*TenantStorageUsage)(nil),                      // 83: helmsmancontrol.TenantStorageUsage
+	(*ClipHashRequest)(nil),                         // 84: helmsmancontrol.ClipHashRequest
+	(*ClipHashResponse)(nil),                        // 85: helmsmancontrol.ClipHashResponse
+	(*DVRStartRequest)(nil),                         // 86: helmsmancontrol.DVRStartRequest
+	(*DVRConfig)(nil),                               // 87: helmsmancontrol.DVRConfig
+	(*DVRProgress)(nil),                             // 88: helmsmancontrol.DVRProgress
+	(*DVRStopped)(nil),                              // 89: helmsmancontrol.DVRStopped
+	(*DVRStopRequest)(nil),                          // 90: helmsmancontrol.DVRStopRequest
+	(*RecordDVRSegmentRequest)(nil),                 // 91: helmsmancontrol.RecordDVRSegmentRequest
+	(*RecordDVRSegmentResponse)(nil),                // 92: helmsmancontrol.RecordDVRSegmentResponse
+	(*MarkDVRSegmentUploaded)(nil),                  // 93: helmsmancontrol.MarkDVRSegmentUploaded
+	(*DVRSegmentDropped)(nil),                       // 94: helmsmancontrol.DVRSegmentDropped
+	(*EvictableSegmentsRequest)(nil),                // 95: helmsmancontrol.EvictableSegmentsRequest
+	(*EvictableSegmentsResponse)(nil),               // 96: helmsmancontrol.EvictableSegmentsResponse
+	(*RetryDVRSegmentUpload)(nil),                   // 97: helmsmancontrol.RetryDVRSegmentUpload
+	(*ReclaimDVRSegment)(nil),                       // 98: helmsmancontrol.ReclaimDVRSegment
+	(*RestoreLocalSegmentIndexRequest)(nil),         // 99: helmsmancontrol.RestoreLocalSegmentIndexRequest
+	(*RestoreLocalSegmentIndexResponse)(nil),        // 100: helmsmancontrol.RestoreLocalSegmentIndexResponse
+	(*ClipDeleteRequest)(nil),                       // 101: helmsmancontrol.ClipDeleteRequest
+	(*DVRDeleteRequest)(nil),                        // 102: helmsmancontrol.DVRDeleteRequest
+	(*VodDeleteRequest)(nil),                        // 103: helmsmancontrol.VodDeleteRequest
+	(*FreezePermissionRequest)(nil),                 // 104: helmsmancontrol.FreezePermissionRequest
+	(*FreezePermissionResponse)(nil),                // 105: helmsmancontrol.FreezePermissionResponse
+	(*FreezeRequest)(nil),                           // 106: helmsmancontrol.FreezeRequest
+	(*FreezeProgress)(nil),                          // 107: helmsmancontrol.FreezeProgress
+	(*DVRSegmentRef)(nil),                           // 108: helmsmancontrol.DVRSegmentRef
+	(*CanDeleteRequest)(nil),                        // 109: helmsmancontrol.CanDeleteRequest
+	(*CanDeleteResponse)(nil),                       // 110: helmsmancontrol.CanDeleteResponse
+	(*RelayResolveRequest)(nil),                     // 111: helmsmancontrol.RelayResolveRequest
+	(*RelayResolveResponse)(nil),                    // 112: helmsmancontrol.RelayResolveResponse
+	(*AuthorizeRelayPullRequest)(nil),               // 113: helmsmancontrol.AuthorizeRelayPullRequest
+	(*AuthorizeRelayPullResponse)(nil),              // 114: helmsmancontrol.AuthorizeRelayPullResponse
+	(*SyncComplete)(nil),                            // 115: helmsmancontrol.SyncComplete
+	(*DtshSyncRequest)(nil),                         // 116: helmsmancontrol.DtshSyncRequest
+	(*StorageLifecycleData)(nil),                    // 117: helmsmancontrol.StorageLifecycleData
+	(*PushRewriteTrigger)(nil),                      // 118: helmsmancontrol.PushRewriteTrigger
+	(*ConnectionPlayTrigger)(nil),                   // 119: helmsmancontrol.ConnectionPlayTrigger
+	(*ViewerResolveTrigger)(nil),                    // 120: helmsmancontrol.ViewerResolveTrigger
+	(*StreamSourceTrigger)(nil),                     // 121: helmsmancontrol.StreamSourceTrigger
+	(*StreamProcessTrigger)(nil),                    // 122: helmsmancontrol.StreamProcessTrigger
+	(*PushOutStartTrigger)(nil),                     // 123: helmsmancontrol.PushOutStartTrigger
+	(*PushEndTrigger)(nil),                          // 124: helmsmancontrol.PushEndTrigger
+	(*PushInputCloseTrigger)(nil),                   // 125: helmsmancontrol.PushInputCloseTrigger
+	(*ViewerConnectTrigger)(nil),                    // 126: helmsmancontrol.ViewerConnectTrigger
+	(*ViewerDisconnectTrigger)(nil),                 // 127: helmsmancontrol.ViewerDisconnectTrigger
+	(*SessionTimeShare)(nil),                        // 128: helmsmancontrol.SessionTimeShare
+	(*StreamBufferTrigger)(nil),                     // 129: helmsmancontrol.StreamBufferTrigger
+	(*StreamEndTrigger)(nil),                        // 130: helmsmancontrol.StreamEndTrigger
+	(*StreamTrackListTrigger)(nil),                  // 131: helmsmancontrol.StreamTrackListTrigger
+	(*ProcessingSpeedStats)(nil),                    // 132: helmsmancontrol.ProcessingSpeedStats
+	(*RecordingCompleteTrigger)(nil),                // 133: helmsmancontrol.RecordingCompleteTrigger
+	(*RecordingSegmentTrigger)(nil),                 // 134: helmsmancontrol.RecordingSegmentTrigger
+	(*StreamLifecycleUpdate)(nil),                   // 135: helmsmancontrol.StreamLifecycleUpdate
+	(*IngestRuntimeAbsent)(nil),                     // 136: helmsmancontrol.IngestRuntimeAbsent
+	(*IngestAdmissionAbandoned)(nil),                // 137: helmsmancontrol.IngestAdmissionAbandoned
+	(*MistStreamProcessObservation)(nil),            // 138: helmsmancontrol.MistStreamProcessObservation
+	(*ClientLifecycleUpdate)(nil),                   // 139: helmsmancontrol.ClientLifecycleUpdate
+	(*ClientLifecycleBatch)(nil),                    // 140: helmsmancontrol.ClientLifecycleBatch
+	(*PlaybackBootResource)(nil),                    // 141: helmsmancontrol.PlaybackBootResource
+	(*PlaybackBootTrace)(nil),                       // 142: helmsmancontrol.PlaybackBootTrace
+	(*PlaybackSessionQoe)(nil),                      // 143: helmsmancontrol.PlaybackSessionQoe
+	(*NodeLifecycleUpdate)(nil),                     // 144: helmsmancontrol.NodeLifecycleUpdate
+	(*EdgeProvisionedConfig)(nil),                   // 145: helmsmancontrol.EdgeProvisionedConfig
+	(*LoadBalancingData)(nil),                       // 146: helmsmancontrol.LoadBalancingData
+	(*ClipLifecycleData)(nil),                       // 147: helmsmancontrol.ClipLifecycleData
+	(*DVRLifecycleData)(nil),                        // 148: helmsmancontrol.DVRLifecycleData
+	(*VodLifecycleData)(nil),                        // 149: helmsmancontrol.VodLifecycleData
+	(*MessageLifecycleData)(nil),                    // 150: helmsmancontrol.MessageLifecycleData
+	(*FederationEventData)(nil),                     // 151: helmsmancontrol.FederationEventData
+	(*NodeCapabilities)(nil),                        // 152: helmsmancontrol.NodeCapabilities
+	(*ProcessingConfig)(nil),                        // 153: helmsmancontrol.ProcessingConfig
+	(*ProcessMeterQuantity)(nil),                    // 154: helmsmancontrol.ProcessMeterQuantity
+	(*ProcessBillingEvent)(nil),                     // 155: helmsmancontrol.ProcessBillingEvent
+	(*StorageInfo)(nil),                             // 156: helmsmancontrol.StorageInfo
+	(*ProcessingClassCapacity)(nil),                 // 157: helmsmancontrol.ProcessingClassCapacity
+	(*NodeLimits)(nil),                              // 158: helmsmancontrol.NodeLimits
+	(*StreamData)(nil),                              // 159: helmsmancontrol.StreamData
+	(*StreamTrack)(nil),                             // 160: helmsmancontrol.StreamTrack
+	(*StoredArtifact)(nil),                          // 161: helmsmancontrol.StoredArtifact
+	(*StreamProcess)(nil),                           // 162: helmsmancontrol.StreamProcess
+	(*StreamDef)(nil),                               // 163: helmsmancontrol.StreamDef
+	(*StreamTemplate)(nil),                          // 164: helmsmancontrol.StreamTemplate
+	(*TLSCertBundle)(nil),                           // 165: helmsmancontrol.TLSCertBundle
+	(*ConfigSeed)(nil),                              // 166: helmsmancontrol.ConfigSeed
+	(*BalancerCapabilityUpdate)(nil),                // 167: helmsmancontrol.BalancerCapabilityUpdate
+	(*ConfigSeedApplyResult)(nil),                   // 168: helmsmancontrol.ConfigSeedApplyResult
+	(*SiteConfig)(nil),                              // 169: helmsmancontrol.SiteConfig
+	(*TranscodeProfile)(nil),                        // 170: helmsmancontrol.TranscodeProfile
+	(*TranscodeJobRequest)(nil),                     // 171: helmsmancontrol.TranscodeJobRequest
+	(*TranscodeJobProgress)(nil),                    // 172: helmsmancontrol.TranscodeJobProgress
+	(*TranscodeJobComplete)(nil),                    // 173: helmsmancontrol.TranscodeJobComplete
+	(*ProcessingJobRequest)(nil),                    // 174: helmsmancontrol.ProcessingJobRequest
+	(*DVRChapterSegmentRef)(nil),                    // 175: helmsmancontrol.DVRChapterSegmentRef
+	(*ProcessingJobResult)(nil),                     // 176: helmsmancontrol.ProcessingJobResult
+	(*ProcessingJobProgress)(nil),                   // 177: helmsmancontrol.ProcessingJobProgress
+	(*APIRequestBatch)(nil),                         // 178: helmsmancontrol.APIRequestBatch
+	(*APIRequestAggregate)(nil),                     // 179: helmsmancontrol.APIRequestAggregate
+	(*ValidateEdgeTokenRequest)(nil),                // 180: helmsmancontrol.ValidateEdgeTokenRequest
+	(*ValidateEdgeTokenResponse)(nil),               // 181: helmsmancontrol.ValidateEdgeTokenResponse
+	(*EdgeMistAdminSessionRequest)(nil),             // 182: helmsmancontrol.EdgeMistAdminSessionRequest
+	(*EdgeMistAdminSessionResponse)(nil),            // 183: helmsmancontrol.EdgeMistAdminSessionResponse
+	(*ThumbnailUploadRequest)(nil),                  // 184: helmsmancontrol.ThumbnailUploadRequest
+	(*ThumbnailUploadResponse)(nil),                 // 185: helmsmancontrol.ThumbnailUploadResponse
+	(*ThumbnailUploaded)(nil),                       // 186: helmsmancontrol.ThumbnailUploaded
+	(*GatewayTelemetryEvent)(nil),                   // 187: helmsmancontrol.GatewayTelemetryEvent
+	(*OrchestratorVantageGeo)(nil),                  // 188: helmsmancontrol.OrchestratorVantageGeo
+	(*OrchestratorDiscoveryObserved)(nil),           // 189: helmsmancontrol.OrchestratorDiscoveryObserved
+	(*OrchestratorStateUpdate)(nil),                 // 190: helmsmancontrol.OrchestratorStateUpdate
+	(*OrchestratorCapabilityPriceEntry)(nil),        // 191: helmsmancontrol.OrchestratorCapabilityPriceEntry
+	(*OrchestratorTranscodeOutcome)(nil),            // 192: helmsmancontrol.OrchestratorTranscodeOutcome
+	(*NetworkAmount)(nil),                           // 193: helmsmancontrol.NetworkAmount
+	(*OrchestratorAttemptAccounting)(nil),           // 194: helmsmancontrol.OrchestratorAttemptAccounting
+	(*OrchestratorAIOutcome)(nil),                   // 195: helmsmancontrol.OrchestratorAIOutcome
+	(*OrchestratorCandidateDecision)(nil),           // 196: helmsmancontrol.OrchestratorCandidateDecision
+	(*OrchestratorSegmentResult)(nil),               // 197: helmsmancontrol.OrchestratorSegmentResult
+	(*OrchestratorObserverReport)(nil),              // 198: helmsmancontrol.OrchestratorObserverReport
+	nil,                                             // 199: helmsmancontrol.PlaybackGrantPolicy.RequiredClaimsJsonEntry
+	nil,                                             // 200: helmsmancontrol.FreezeRequest.SegmentUrlsEntry
+	nil,                                             // 201: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
+	nil,                                             // 202: helmsmancontrol.ProcessMeterQuantity.DimensionsEntry
+	nil,                                             // 203: helmsmancontrol.StreamProcess.ExtraEntry
+	nil,                                             // 204: helmsmancontrol.ConfigSeedApplyResult.BundleVersionsEntry
+	nil,                                             // 205: helmsmancontrol.ProcessingJobRequest.ParamsEntry
+	nil,                                             // 206: helmsmancontrol.ProcessingJobResult.OutputsEntry
+	(*ThumbnailUploadResponse_PresignedUpload)(nil), // 207: helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
+	(*timestamppb.Timestamp)(nil),                   // 208: google.protobuf.Timestamp
+	(*common.SignupAttribution)(nil),                // 209: common.SignupAttribution
+	(*structpb.Struct)(nil),                         // 210: google.protobuf.Struct
+	(*common.EdgeTelemetryConfig)(nil),              // 211: common.EdgeTelemetryConfig
+	(*events.DomainEventBatch)(nil),                 // 212: frameworks.events.DomainEventBatch
+	(*emptypb.Empty)(nil),                           // 213: google.protobuf.Empty
+	(*events.PublishDomainEventsResponse)(nil),      // 214: frameworks.events.PublishDomainEventsResponse
 }
 var file_ipc_proto_depIdxs = []int32{
-	206, // 0: helmsmancontrol.ServiceEvent.timestamp:type_name -> google.protobuf.Timestamp
-	176, // 1: helmsmancontrol.ServiceEvent.api_request_batch:type_name -> helmsmancontrol.APIRequestBatch
+	208, // 0: helmsmancontrol.ServiceEvent.timestamp:type_name -> google.protobuf.Timestamp
+	178, // 1: helmsmancontrol.ServiceEvent.api_request_batch:type_name -> helmsmancontrol.APIRequestBatch
 	26,  // 2: helmsmancontrol.ServiceEvent.auth_event:type_name -> helmsmancontrol.AuthEvent
 	27,  // 3: helmsmancontrol.ServiceEvent.tenant_event:type_name -> helmsmancontrol.TenantEvent
 	28,  // 4: helmsmancontrol.ServiceEvent.cluster_event:type_name -> helmsmancontrol.ClusterEvent
 	29,  // 5: helmsmancontrol.ServiceEvent.stream_change_event:type_name -> helmsmancontrol.StreamChangeEvent
 	30,  // 6: helmsmancontrol.ServiceEvent.stream_key_event:type_name -> helmsmancontrol.StreamKeyEvent
 	31,  // 7: helmsmancontrol.ServiceEvent.billing_event:type_name -> helmsmancontrol.BillingEvent
-	148, // 8: helmsmancontrol.ServiceEvent.support_event:type_name -> helmsmancontrol.MessageLifecycleData
+	150, // 8: helmsmancontrol.ServiceEvent.support_event:type_name -> helmsmancontrol.MessageLifecycleData
 	32,  // 9: helmsmancontrol.ServiceEvent.artifact_event:type_name -> helmsmancontrol.ArtifactEvent
 	33,  // 10: helmsmancontrol.ServiceEvent.artifact_node_copy_event:type_name -> helmsmancontrol.ArtifactNodeCopyEvent
 	34,  // 11: helmsmancontrol.ServiceEvent.incident_event:type_name -> helmsmancontrol.IncidentEvent
-	207, // 12: helmsmancontrol.TenantEvent.attribution:type_name -> common.SignupAttribution
+	209, // 12: helmsmancontrol.TenantEvent.attribution:type_name -> common.SignupAttribution
 	0,   // 13: helmsmancontrol.ClusterEvent.reject_reason_code:type_name -> helmsmancontrol.ClusterRejectReason
-	208, // 14: helmsmancontrol.ClusterEvent.before_state:type_name -> google.protobuf.Struct
-	208, // 15: helmsmancontrol.ClusterEvent.after_state:type_name -> google.protobuf.Struct
+	210, // 14: helmsmancontrol.ClusterEvent.before_state:type_name -> google.protobuf.Struct
+	210, // 15: helmsmancontrol.ClusterEvent.after_state:type_name -> google.protobuf.Struct
 	12,  // 16: helmsmancontrol.ArtifactEvent.artifact_type:type_name -> helmsmancontrol.ArtifactEvent.ArtifactType
 	13,  // 17: helmsmancontrol.ArtifactNodeCopyEvent.transition:type_name -> helmsmancontrol.ArtifactNodeCopyEvent.Transition
-	206, // 18: helmsmancontrol.ControlMessage.sent_at:type_name -> google.protobuf.Timestamp
-	69,  // 19: helmsmancontrol.ControlMessage.register:type_name -> helmsmancontrol.Register
-	74,  // 20: helmsmancontrol.ControlMessage.error:type_name -> helmsmancontrol.ControlError
-	75,  // 21: helmsmancontrol.ControlMessage.heartbeat:type_name -> helmsmancontrol.Heartbeat
-	84,  // 22: helmsmancontrol.ControlMessage.dvr_start_request:type_name -> helmsmancontrol.DVRStartRequest
-	86,  // 23: helmsmancontrol.ControlMessage.dvr_progress:type_name -> helmsmancontrol.DVRProgress
-	87,  // 24: helmsmancontrol.ControlMessage.dvr_stopped:type_name -> helmsmancontrol.DVRStopped
-	88,  // 25: helmsmancontrol.ControlMessage.dvr_stop_request:type_name -> helmsmancontrol.DVRStopRequest
-	76,  // 26: helmsmancontrol.ControlMessage.mist_trigger:type_name -> helmsmancontrol.MistTrigger
-	78,  // 27: helmsmancontrol.ControlMessage.mist_trigger_response:type_name -> helmsmancontrol.MistTriggerResponse
-	79,  // 28: helmsmancontrol.ControlMessage.mist_trigger_ack:type_name -> helmsmancontrol.MistTriggerAck
-	164, // 29: helmsmancontrol.ControlMessage.config_seed:type_name -> helmsmancontrol.ConfigSeed
-	165, // 30: helmsmancontrol.ControlMessage.balancer_capability_update:type_name -> helmsmancontrol.BalancerCapabilityUpdate
-	166, // 31: helmsmancontrol.ControlMessage.config_seed_apply_result:type_name -> helmsmancontrol.ConfigSeedApplyResult
-	68,  // 32: helmsmancontrol.ControlMessage.artifact_deleted:type_name -> helmsmancontrol.ArtifactDeleted
-	99,  // 33: helmsmancontrol.ControlMessage.clip_delete:type_name -> helmsmancontrol.ClipDeleteRequest
-	100, // 34: helmsmancontrol.ControlMessage.dvr_delete:type_name -> helmsmancontrol.DVRDeleteRequest
-	101, // 35: helmsmancontrol.ControlMessage.vod_delete:type_name -> helmsmancontrol.VodDeleteRequest
-	102, // 36: helmsmancontrol.ControlMessage.freeze_permission_request:type_name -> helmsmancontrol.FreezePermissionRequest
-	103, // 37: helmsmancontrol.ControlMessage.freeze_permission_response:type_name -> helmsmancontrol.FreezePermissionResponse
-	105, // 38: helmsmancontrol.ControlMessage.freeze_progress:type_name -> helmsmancontrol.FreezeProgress
-	107, // 39: helmsmancontrol.ControlMessage.can_delete_request:type_name -> helmsmancontrol.CanDeleteRequest
-	108, // 40: helmsmancontrol.ControlMessage.can_delete_response:type_name -> helmsmancontrol.CanDeleteResponse
-	113, // 41: helmsmancontrol.ControlMessage.sync_complete:type_name -> helmsmancontrol.SyncComplete
-	114, // 42: helmsmancontrol.ControlMessage.dtsh_sync_request:type_name -> helmsmancontrol.DtshSyncRequest
-	104, // 43: helmsmancontrol.ControlMessage.freeze_request:type_name -> helmsmancontrol.FreezeRequest
-	169, // 44: helmsmancontrol.ControlMessage.transcode_job_request:type_name -> helmsmancontrol.TranscodeJobRequest
-	170, // 45: helmsmancontrol.ControlMessage.transcode_job_progress:type_name -> helmsmancontrol.TranscodeJobProgress
-	171, // 46: helmsmancontrol.ControlMessage.transcode_job_complete:type_name -> helmsmancontrol.TranscodeJobComplete
-	172, // 47: helmsmancontrol.ControlMessage.processing_job_request:type_name -> helmsmancontrol.ProcessingJobRequest
-	174, // 48: helmsmancontrol.ControlMessage.processing_job_result:type_name -> helmsmancontrol.ProcessingJobResult
-	175, // 49: helmsmancontrol.ControlMessage.processing_job_progress:type_name -> helmsmancontrol.ProcessingJobProgress
+	208, // 18: helmsmancontrol.ControlMessage.sent_at:type_name -> google.protobuf.Timestamp
+	71,  // 19: helmsmancontrol.ControlMessage.register:type_name -> helmsmancontrol.Register
+	76,  // 20: helmsmancontrol.ControlMessage.error:type_name -> helmsmancontrol.ControlError
+	77,  // 21: helmsmancontrol.ControlMessage.heartbeat:type_name -> helmsmancontrol.Heartbeat
+	86,  // 22: helmsmancontrol.ControlMessage.dvr_start_request:type_name -> helmsmancontrol.DVRStartRequest
+	88,  // 23: helmsmancontrol.ControlMessage.dvr_progress:type_name -> helmsmancontrol.DVRProgress
+	89,  // 24: helmsmancontrol.ControlMessage.dvr_stopped:type_name -> helmsmancontrol.DVRStopped
+	90,  // 25: helmsmancontrol.ControlMessage.dvr_stop_request:type_name -> helmsmancontrol.DVRStopRequest
+	78,  // 26: helmsmancontrol.ControlMessage.mist_trigger:type_name -> helmsmancontrol.MistTrigger
+	80,  // 27: helmsmancontrol.ControlMessage.mist_trigger_response:type_name -> helmsmancontrol.MistTriggerResponse
+	81,  // 28: helmsmancontrol.ControlMessage.mist_trigger_ack:type_name -> helmsmancontrol.MistTriggerAck
+	166, // 29: helmsmancontrol.ControlMessage.config_seed:type_name -> helmsmancontrol.ConfigSeed
+	167, // 30: helmsmancontrol.ControlMessage.balancer_capability_update:type_name -> helmsmancontrol.BalancerCapabilityUpdate
+	168, // 31: helmsmancontrol.ControlMessage.config_seed_apply_result:type_name -> helmsmancontrol.ConfigSeedApplyResult
+	70,  // 32: helmsmancontrol.ControlMessage.artifact_deleted:type_name -> helmsmancontrol.ArtifactDeleted
+	101, // 33: helmsmancontrol.ControlMessage.clip_delete:type_name -> helmsmancontrol.ClipDeleteRequest
+	102, // 34: helmsmancontrol.ControlMessage.dvr_delete:type_name -> helmsmancontrol.DVRDeleteRequest
+	103, // 35: helmsmancontrol.ControlMessage.vod_delete:type_name -> helmsmancontrol.VodDeleteRequest
+	104, // 36: helmsmancontrol.ControlMessage.freeze_permission_request:type_name -> helmsmancontrol.FreezePermissionRequest
+	105, // 37: helmsmancontrol.ControlMessage.freeze_permission_response:type_name -> helmsmancontrol.FreezePermissionResponse
+	107, // 38: helmsmancontrol.ControlMessage.freeze_progress:type_name -> helmsmancontrol.FreezeProgress
+	109, // 39: helmsmancontrol.ControlMessage.can_delete_request:type_name -> helmsmancontrol.CanDeleteRequest
+	110, // 40: helmsmancontrol.ControlMessage.can_delete_response:type_name -> helmsmancontrol.CanDeleteResponse
+	115, // 41: helmsmancontrol.ControlMessage.sync_complete:type_name -> helmsmancontrol.SyncComplete
+	116, // 42: helmsmancontrol.ControlMessage.dtsh_sync_request:type_name -> helmsmancontrol.DtshSyncRequest
+	106, // 43: helmsmancontrol.ControlMessage.freeze_request:type_name -> helmsmancontrol.FreezeRequest
+	171, // 44: helmsmancontrol.ControlMessage.transcode_job_request:type_name -> helmsmancontrol.TranscodeJobRequest
+	172, // 45: helmsmancontrol.ControlMessage.transcode_job_progress:type_name -> helmsmancontrol.TranscodeJobProgress
+	173, // 46: helmsmancontrol.ControlMessage.transcode_job_complete:type_name -> helmsmancontrol.TranscodeJobComplete
+	174, // 47: helmsmancontrol.ControlMessage.processing_job_request:type_name -> helmsmancontrol.ProcessingJobRequest
+	176, // 48: helmsmancontrol.ControlMessage.processing_job_result:type_name -> helmsmancontrol.ProcessingJobResult
+	177, // 49: helmsmancontrol.ControlMessage.processing_job_progress:type_name -> helmsmancontrol.ProcessingJobProgress
 	54,  // 50: helmsmancontrol.ControlMessage.stop_sessions_request:type_name -> helmsmancontrol.StopSessionsRequest
-	55,  // 51: helmsmancontrol.ControlMessage.invalidate_sessions_request:type_name -> helmsmancontrol.InvalidateSessionsRequest
+	57,  // 51: helmsmancontrol.ControlMessage.invalidate_sessions_request:type_name -> helmsmancontrol.InvalidateSessionsRequest
 	48,  // 52: helmsmancontrol.ControlMessage.mode_change_request:type_name -> helmsmancontrol.ModeChangeRequest
-	61,  // 53: helmsmancontrol.ControlMessage.activate_push_targets:type_name -> helmsmancontrol.ActivatePushTargets
-	63,  // 54: helmsmancontrol.ControlMessage.deactivate_push_targets:type_name -> helmsmancontrol.DeactivatePushTargets
-	67,  // 55: helmsmancontrol.ControlMessage.push_target_status:type_name -> helmsmancontrol.PushTargetStatusReport
-	178, // 56: helmsmancontrol.ControlMessage.validate_edge_token_request:type_name -> helmsmancontrol.ValidateEdgeTokenRequest
-	179, // 57: helmsmancontrol.ControlMessage.validate_edge_token_response:type_name -> helmsmancontrol.ValidateEdgeTokenResponse
-	180, // 58: helmsmancontrol.ControlMessage.edge_mist_admin_session_request:type_name -> helmsmancontrol.EdgeMistAdminSessionRequest
-	181, // 59: helmsmancontrol.ControlMessage.edge_mist_admin_session_response:type_name -> helmsmancontrol.EdgeMistAdminSessionResponse
-	182, // 60: helmsmancontrol.ControlMessage.thumbnail_upload_request:type_name -> helmsmancontrol.ThumbnailUploadRequest
-	183, // 61: helmsmancontrol.ControlMessage.thumbnail_upload_response:type_name -> helmsmancontrol.ThumbnailUploadResponse
-	184, // 62: helmsmancontrol.ControlMessage.thumbnail_uploaded:type_name -> helmsmancontrol.ThumbnailUploaded
+	63,  // 53: helmsmancontrol.ControlMessage.activate_push_targets:type_name -> helmsmancontrol.ActivatePushTargets
+	65,  // 54: helmsmancontrol.ControlMessage.deactivate_push_targets:type_name -> helmsmancontrol.DeactivatePushTargets
+	69,  // 55: helmsmancontrol.ControlMessage.push_target_status:type_name -> helmsmancontrol.PushTargetStatusReport
+	180, // 56: helmsmancontrol.ControlMessage.validate_edge_token_request:type_name -> helmsmancontrol.ValidateEdgeTokenRequest
+	181, // 57: helmsmancontrol.ControlMessage.validate_edge_token_response:type_name -> helmsmancontrol.ValidateEdgeTokenResponse
+	182, // 58: helmsmancontrol.ControlMessage.edge_mist_admin_session_request:type_name -> helmsmancontrol.EdgeMistAdminSessionRequest
+	183, // 59: helmsmancontrol.ControlMessage.edge_mist_admin_session_response:type_name -> helmsmancontrol.EdgeMistAdminSessionResponse
+	184, // 60: helmsmancontrol.ControlMessage.thumbnail_upload_request:type_name -> helmsmancontrol.ThumbnailUploadRequest
+	185, // 61: helmsmancontrol.ControlMessage.thumbnail_upload_response:type_name -> helmsmancontrol.ThumbnailUploadResponse
+	186, // 62: helmsmancontrol.ControlMessage.thumbnail_uploaded:type_name -> helmsmancontrol.ThumbnailUploaded
 	51,  // 63: helmsmancontrol.ControlMessage.desired_state_update:type_name -> helmsmancontrol.DesiredStateUpdate
 	53,  // 64: helmsmancontrol.ControlMessage.update_apply_result:type_name -> helmsmancontrol.UpdateApplyResult
-	89,  // 65: helmsmancontrol.ControlMessage.record_dvr_segment_request:type_name -> helmsmancontrol.RecordDVRSegmentRequest
-	90,  // 66: helmsmancontrol.ControlMessage.record_dvr_segment_response:type_name -> helmsmancontrol.RecordDVRSegmentResponse
-	91,  // 67: helmsmancontrol.ControlMessage.mark_dvr_segment_uploaded:type_name -> helmsmancontrol.MarkDVRSegmentUploaded
-	92,  // 68: helmsmancontrol.ControlMessage.dvr_segment_dropped:type_name -> helmsmancontrol.DVRSegmentDropped
-	93,  // 69: helmsmancontrol.ControlMessage.evictable_segments_request:type_name -> helmsmancontrol.EvictableSegmentsRequest
-	94,  // 70: helmsmancontrol.ControlMessage.evictable_segments_response:type_name -> helmsmancontrol.EvictableSegmentsResponse
-	95,  // 71: helmsmancontrol.ControlMessage.retry_dvr_segment_upload:type_name -> helmsmancontrol.RetryDVRSegmentUpload
-	96,  // 72: helmsmancontrol.ControlMessage.reclaim_dvr_segment:type_name -> helmsmancontrol.ReclaimDVRSegment
-	97,  // 73: helmsmancontrol.ControlMessage.restore_local_segment_index_request:type_name -> helmsmancontrol.RestoreLocalSegmentIndexRequest
-	98,  // 74: helmsmancontrol.ControlMessage.restore_local_segment_index_response:type_name -> helmsmancontrol.RestoreLocalSegmentIndexResponse
-	109, // 75: helmsmancontrol.ControlMessage.relay_resolve_request:type_name -> helmsmancontrol.RelayResolveRequest
-	110, // 76: helmsmancontrol.ControlMessage.relay_resolve_response:type_name -> helmsmancontrol.RelayResolveResponse
+	91,  // 65: helmsmancontrol.ControlMessage.record_dvr_segment_request:type_name -> helmsmancontrol.RecordDVRSegmentRequest
+	92,  // 66: helmsmancontrol.ControlMessage.record_dvr_segment_response:type_name -> helmsmancontrol.RecordDVRSegmentResponse
+	93,  // 67: helmsmancontrol.ControlMessage.mark_dvr_segment_uploaded:type_name -> helmsmancontrol.MarkDVRSegmentUploaded
+	94,  // 68: helmsmancontrol.ControlMessage.dvr_segment_dropped:type_name -> helmsmancontrol.DVRSegmentDropped
+	95,  // 69: helmsmancontrol.ControlMessage.evictable_segments_request:type_name -> helmsmancontrol.EvictableSegmentsRequest
+	96,  // 70: helmsmancontrol.ControlMessage.evictable_segments_response:type_name -> helmsmancontrol.EvictableSegmentsResponse
+	97,  // 71: helmsmancontrol.ControlMessage.retry_dvr_segment_upload:type_name -> helmsmancontrol.RetryDVRSegmentUpload
+	98,  // 72: helmsmancontrol.ControlMessage.reclaim_dvr_segment:type_name -> helmsmancontrol.ReclaimDVRSegment
+	99,  // 73: helmsmancontrol.ControlMessage.restore_local_segment_index_request:type_name -> helmsmancontrol.RestoreLocalSegmentIndexRequest
+	100, // 74: helmsmancontrol.ControlMessage.restore_local_segment_index_response:type_name -> helmsmancontrol.RestoreLocalSegmentIndexResponse
+	111, // 75: helmsmancontrol.ControlMessage.relay_resolve_request:type_name -> helmsmancontrol.RelayResolveRequest
+	112, // 76: helmsmancontrol.ControlMessage.relay_resolve_response:type_name -> helmsmancontrol.RelayResolveResponse
 	42,  // 77: helmsmancontrol.ControlMessage.apply_managed_stream:type_name -> helmsmancontrol.ApplyManagedStream
 	44,  // 78: helmsmancontrol.ControlMessage.retract_managed_stream:type_name -> helmsmancontrol.RetractManagedStream
 	46,  // 79: helmsmancontrol.ControlMessage.drain_stream_request:type_name -> helmsmancontrol.DrainStreamRequest
 	47,  // 80: helmsmancontrol.ControlMessage.drain_stream_response:type_name -> helmsmancontrol.DrainStreamResponse
-	111, // 81: helmsmancontrol.ControlMessage.authorize_relay_pull_request:type_name -> helmsmancontrol.AuthorizeRelayPullRequest
-	112, // 82: helmsmancontrol.ControlMessage.authorize_relay_pull_response:type_name -> helmsmancontrol.AuthorizeRelayPullResponse
-	65,  // 83: helmsmancontrol.ControlMessage.activate_push_targets_result:type_name -> helmsmancontrol.ActivatePushTargetsResult
-	64,  // 84: helmsmancontrol.ControlMessage.deactivate_push_targets_result:type_name -> helmsmancontrol.DeactivatePushTargetsResult
+	113, // 81: helmsmancontrol.ControlMessage.authorize_relay_pull_request:type_name -> helmsmancontrol.AuthorizeRelayPullRequest
+	114, // 82: helmsmancontrol.ControlMessage.authorize_relay_pull_response:type_name -> helmsmancontrol.AuthorizeRelayPullResponse
+	67,  // 83: helmsmancontrol.ControlMessage.activate_push_targets_result:type_name -> helmsmancontrol.ActivatePushTargetsResult
+	66,  // 84: helmsmancontrol.ControlMessage.deactivate_push_targets_result:type_name -> helmsmancontrol.DeactivatePushTargetsResult
 	40,  // 85: helmsmancontrol.ControlMessage.going_away:type_name -> helmsmancontrol.GoingAway
 	41,  // 86: helmsmancontrol.ControlMessage.stream_transcode_degraded:type_name -> helmsmancontrol.StreamTranscodeDegraded
-	56,  // 87: helmsmancontrol.ControlMessage.playback_grant:type_name -> helmsmancontrol.PlaybackGrant
-	59,  // 88: helmsmancontrol.ControlMessage.playback_grant_request:type_name -> helmsmancontrol.PlaybackGrantRequest
-	60,  // 89: helmsmancontrol.ControlMessage.playback_grant_response:type_name -> helmsmancontrol.PlaybackGrantResponse
+	58,  // 87: helmsmancontrol.ControlMessage.playback_grant:type_name -> helmsmancontrol.PlaybackGrant
+	61,  // 88: helmsmancontrol.ControlMessage.playback_grant_request:type_name -> helmsmancontrol.PlaybackGrantRequest
+	62,  // 89: helmsmancontrol.ControlMessage.playback_grant_response:type_name -> helmsmancontrol.PlaybackGrantResponse
 	36,  // 90: helmsmancontrol.ControlMessage.control_capabilities:type_name -> helmsmancontrol.ControlCapabilities
 	39,  // 91: helmsmancontrol.ControlMessage.durable_delivery_ack:type_name -> helmsmancontrol.DurableDeliveryAck
 	37,  // 92: helmsmancontrol.ControlMessage.publisher_admission_session:type_name -> helmsmancontrol.PublisherAdmissionSession
-	76,  // 93: helmsmancontrol.AdmitPublisherRequest.trigger:type_name -> helmsmancontrol.MistTrigger
-	43,  // 94: helmsmancontrol.ApplyManagedStream.placement_admission:type_name -> helmsmancontrol.ManagedStreamAdmission
-	206, // 95: helmsmancontrol.ManagedStreamAdmission.issued_at:type_name -> google.protobuf.Timestamp
-	206, // 96: helmsmancontrol.ManagedStreamAdmission.expires_at:type_name -> google.protobuf.Timestamp
-	45,  // 97: helmsmancontrol.RetractManagedStream.placement_retraction:type_name -> helmsmancontrol.ManagedStreamRetraction
-	206, // 98: helmsmancontrol.ManagedStreamRetraction.issued_at:type_name -> google.protobuf.Timestamp
-	206, // 99: helmsmancontrol.ManagedStreamRetraction.expires_at:type_name -> google.protobuf.Timestamp
-	10,  // 100: helmsmancontrol.ModeChangeRequest.requested_mode:type_name -> helmsmancontrol.NodeOperationalMode
-	50,  // 101: helmsmancontrol.DesiredStateUpdate.components:type_name -> helmsmancontrol.DesiredComponent
-	206, // 102: helmsmancontrol.DesiredStateUpdate.cordon_token_expires_at:type_name -> google.protobuf.Timestamp
-	52,  // 103: helmsmancontrol.UpdateApplyResult.components:type_name -> helmsmancontrol.ComponentApplyResult
-	57,  // 104: helmsmancontrol.PlaybackGrant.policy:type_name -> helmsmancontrol.PlaybackGrantPolicy
-	206, // 105: helmsmancontrol.PlaybackGrant.valid_until:type_name -> google.protobuf.Timestamp
-	1,   // 106: helmsmancontrol.PlaybackGrantPolicy.kind:type_name -> helmsmancontrol.PlaybackGrantPolicyKind
-	58,  // 107: helmsmancontrol.PlaybackGrantPolicy.active_keys:type_name -> helmsmancontrol.PlaybackGrantKey
-	197, // 108: helmsmancontrol.PlaybackGrantPolicy.required_claims_json:type_name -> helmsmancontrol.PlaybackGrantPolicy.RequiredClaimsJsonEntry
-	56,  // 109: helmsmancontrol.PlaybackGrantResponse.grant:type_name -> helmsmancontrol.PlaybackGrant
-	62,  // 110: helmsmancontrol.ActivatePushTargets.targets:type_name -> helmsmancontrol.PushTargetSpec
-	66,  // 111: helmsmancontrol.DeactivatePushTargetsResult.targets:type_name -> helmsmancontrol.PushTargetConvergence
-	66,  // 112: helmsmancontrol.ActivatePushTargetsResult.targets:type_name -> helmsmancontrol.PushTargetConvergence
-	3,   // 113: helmsmancontrol.PushTargetConvergence.reason:type_name -> helmsmancontrol.RestreamReason
-	2,   // 114: helmsmancontrol.PushTargetStatusReport.state:type_name -> helmsmancontrol.RestreamState
-	3,   // 115: helmsmancontrol.PushTargetStatusReport.reason:type_name -> helmsmancontrol.RestreamReason
-	72,  // 116: helmsmancontrol.Register.fingerprint:type_name -> helmsmancontrol.NodeFingerprint
-	10,  // 117: helmsmancontrol.Register.requested_mode:type_name -> helmsmancontrol.NodeOperationalMode
-	71,  // 118: helmsmancontrol.Register.applied_managed_streams:type_name -> helmsmancontrol.AppliedManagedStream
-	206, // 119: helmsmancontrol.Register.node_identity_proof_issued_at:type_name -> google.protobuf.Timestamp
-	70,  // 120: helmsmancontrol.Register.live_ingest_generations:type_name -> helmsmancontrol.LiveIngestGeneration
-	43,  // 121: helmsmancontrol.AppliedManagedStream.placement_admission:type_name -> helmsmancontrol.ManagedStreamAdmission
-	14,  // 122: helmsmancontrol.ClipPullRequest.source_kind:type_name -> helmsmancontrol.ClipPullRequest.SourceKind
-	71,  // 123: helmsmancontrol.Heartbeat.applied_managed_streams:type_name -> helmsmancontrol.AppliedManagedStream
-	116, // 124: helmsmancontrol.MistTrigger.push_rewrite:type_name -> helmsmancontrol.PushRewriteTrigger
-	118, // 125: helmsmancontrol.MistTrigger.play_rewrite:type_name -> helmsmancontrol.ViewerResolveTrigger
-	119, // 126: helmsmancontrol.MistTrigger.stream_source:type_name -> helmsmancontrol.StreamSourceTrigger
-	121, // 127: helmsmancontrol.MistTrigger.push_out_start:type_name -> helmsmancontrol.PushOutStartTrigger
-	122, // 128: helmsmancontrol.MistTrigger.push_end:type_name -> helmsmancontrol.PushEndTrigger
-	124, // 129: helmsmancontrol.MistTrigger.viewer_connect:type_name -> helmsmancontrol.ViewerConnectTrigger
-	125, // 130: helmsmancontrol.MistTrigger.viewer_disconnect:type_name -> helmsmancontrol.ViewerDisconnectTrigger
-	127, // 131: helmsmancontrol.MistTrigger.stream_buffer:type_name -> helmsmancontrol.StreamBufferTrigger
-	128, // 132: helmsmancontrol.MistTrigger.stream_end:type_name -> helmsmancontrol.StreamEndTrigger
-	129, // 133: helmsmancontrol.MistTrigger.track_list:type_name -> helmsmancontrol.StreamTrackListTrigger
-	131, // 134: helmsmancontrol.MistTrigger.recording_complete:type_name -> helmsmancontrol.RecordingCompleteTrigger
-	133, // 135: helmsmancontrol.MistTrigger.stream_lifecycle_update:type_name -> helmsmancontrol.StreamLifecycleUpdate
-	137, // 136: helmsmancontrol.MistTrigger.client_lifecycle_update:type_name -> helmsmancontrol.ClientLifecycleUpdate
-	142, // 137: helmsmancontrol.MistTrigger.node_lifecycle_update:type_name -> helmsmancontrol.NodeLifecycleUpdate
-	144, // 138: helmsmancontrol.MistTrigger.load_balancing_data:type_name -> helmsmancontrol.LoadBalancingData
-	145, // 139: helmsmancontrol.MistTrigger.clip_lifecycle_data:type_name -> helmsmancontrol.ClipLifecycleData
-	146, // 140: helmsmancontrol.MistTrigger.dvr_lifecycle_data:type_name -> helmsmancontrol.DVRLifecycleData
-	80,  // 141: helmsmancontrol.MistTrigger.storage_snapshot:type_name -> helmsmancontrol.StorageSnapshot
-	115, // 142: helmsmancontrol.MistTrigger.storage_lifecycle_data:type_name -> helmsmancontrol.StorageLifecycleData
-	132, // 143: helmsmancontrol.MistTrigger.recording_segment:type_name -> helmsmancontrol.RecordingSegmentTrigger
-	153, // 144: helmsmancontrol.MistTrigger.process_billing:type_name -> helmsmancontrol.ProcessBillingEvent
-	147, // 145: helmsmancontrol.MistTrigger.vod_lifecycle_data:type_name -> helmsmancontrol.VodLifecycleData
-	176, // 146: helmsmancontrol.MistTrigger.api_request_batch:type_name -> helmsmancontrol.APIRequestBatch
-	148, // 147: helmsmancontrol.MistTrigger.message_lifecycle_data:type_name -> helmsmancontrol.MessageLifecycleData
-	149, // 148: helmsmancontrol.MistTrigger.federation_event_data:type_name -> helmsmancontrol.FederationEventData
-	120, // 149: helmsmancontrol.MistTrigger.stream_process:type_name -> helmsmancontrol.StreamProcessTrigger
-	138, // 150: helmsmancontrol.MistTrigger.client_lifecycle_batch:type_name -> helmsmancontrol.ClientLifecycleBatch
-	77,  // 151: helmsmancontrol.MistTrigger.raw_mist_webhook:type_name -> helmsmancontrol.RawMistWebhookTrigger
-	123, // 152: helmsmancontrol.MistTrigger.push_input_close:type_name -> helmsmancontrol.PushInputCloseTrigger
-	140, // 153: helmsmancontrol.MistTrigger.playback_boot_trace:type_name -> helmsmancontrol.PlaybackBootTrace
-	141, // 154: helmsmancontrol.MistTrigger.playback_session_qoe:type_name -> helmsmancontrol.PlaybackSessionQoe
-	134, // 155: helmsmancontrol.MistTrigger.ingest_runtime_absent:type_name -> helmsmancontrol.IngestRuntimeAbsent
-	67,  // 156: helmsmancontrol.MistTrigger.restream_status:type_name -> helmsmancontrol.PushTargetStatusReport
-	117, // 157: helmsmancontrol.MistTrigger.connection_play:type_name -> helmsmancontrol.ConnectionPlayTrigger
-	135, // 158: helmsmancontrol.MistTrigger.ingest_admission_abandoned:type_name -> helmsmancontrol.IngestAdmissionAbandoned
-	206, // 159: helmsmancontrol.MistTrigger.publisher_deadline:type_name -> google.protobuf.Timestamp
-	6,   // 160: helmsmancontrol.MistTriggerResponse.error_code:type_name -> helmsmancontrol.IngestErrorCode
-	4,   // 161: helmsmancontrol.MistTriggerResponse.action:type_name -> helmsmancontrol.MistTriggerAction
-	5,   // 162: helmsmancontrol.MistTriggerAck.error_code:type_name -> helmsmancontrol.TriggerAckErrorCode
-	150, // 163: helmsmancontrol.StorageSnapshot.capabilities:type_name -> helmsmancontrol.NodeCapabilities
-	81,  // 164: helmsmancontrol.StorageSnapshot.usage:type_name -> helmsmancontrol.TenantStorageUsage
-	85,  // 165: helmsmancontrol.DVRStartRequest.config:type_name -> helmsmancontrol.DVRConfig
-	7,   // 166: helmsmancontrol.DVRStopped.source_state:type_name -> helmsmancontrol.DVRSourceState
-	106, // 167: helmsmancontrol.RetryDVRSegmentUpload.segments:type_name -> helmsmancontrol.DVRSegmentRef
-	106, // 168: helmsmancontrol.RestoreLocalSegmentIndexResponse.segments:type_name -> helmsmancontrol.DVRSegmentRef
-	198, // 169: helmsmancontrol.FreezeRequest.segment_urls:type_name -> helmsmancontrol.FreezeRequest.SegmentUrlsEntry
-	15,  // 170: helmsmancontrol.RelayResolveRequest.hint:type_name -> helmsmancontrol.RelayResolveRequest.RelayHint
-	9,   // 171: helmsmancontrol.RelayResolveResponse.state:type_name -> helmsmancontrol.AssetState
-	16,  // 172: helmsmancontrol.RelayResolveResponse.policy_hint:type_name -> helmsmancontrol.RelayResolveResponse.CacheDecisionHint
-	17,  // 173: helmsmancontrol.StorageLifecycleData.action:type_name -> helmsmancontrol.StorageLifecycleData.Action
-	18,  // 174: helmsmancontrol.StorageLifecycleData.reason:type_name -> helmsmancontrol.StorageLifecycleData.CacheFailureReason
-	24,  // 175: helmsmancontrol.PushRewriteTrigger.publisher_bucket:type_name -> helmsmancontrol.GeoBucket
-	24,  // 176: helmsmancontrol.PushRewriteTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
-	24,  // 177: helmsmancontrol.ViewerResolveTrigger.client_bucket:type_name -> helmsmancontrol.GeoBucket
-	24,  // 178: helmsmancontrol.ViewerResolveTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
-	24,  // 179: helmsmancontrol.ViewerConnectTrigger.client_bucket:type_name -> helmsmancontrol.GeoBucket
-	24,  // 180: helmsmancontrol.ViewerConnectTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
-	24,  // 181: helmsmancontrol.ViewerDisconnectTrigger.client_bucket:type_name -> helmsmancontrol.GeoBucket
-	24,  // 182: helmsmancontrol.ViewerDisconnectTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
-	126, // 183: helmsmancontrol.ViewerDisconnectTrigger.stream_times:type_name -> helmsmancontrol.SessionTimeShare
-	126, // 184: helmsmancontrol.ViewerDisconnectTrigger.connector_times:type_name -> helmsmancontrol.SessionTimeShare
-	126, // 185: helmsmancontrol.ViewerDisconnectTrigger.host_times:type_name -> helmsmancontrol.SessionTimeShare
-	158, // 186: helmsmancontrol.StreamBufferTrigger.tracks:type_name -> helmsmancontrol.StreamTrack
-	158, // 187: helmsmancontrol.StreamTrackListTrigger.tracks:type_name -> helmsmancontrol.StreamTrack
-	158, // 188: helmsmancontrol.RecordingCompleteTrigger.tracks:type_name -> helmsmancontrol.StreamTrack
-	130, // 189: helmsmancontrol.RecordingCompleteTrigger.processing_speed:type_name -> helmsmancontrol.ProcessingSpeedStats
-	136, // 190: helmsmancontrol.StreamLifecycleUpdate.process_observation:type_name -> helmsmancontrol.MistStreamProcessObservation
-	133, // 191: helmsmancontrol.IngestRuntimeAbsent.lifecycle:type_name -> helmsmancontrol.StreamLifecycleUpdate
-	137, // 192: helmsmancontrol.ClientLifecycleBatch.samples:type_name -> helmsmancontrol.ClientLifecycleUpdate
-	139, // 193: helmsmancontrol.PlaybackBootTrace.resources:type_name -> helmsmancontrol.PlaybackBootResource
-	150, // 194: helmsmancontrol.NodeLifecycleUpdate.capabilities:type_name -> helmsmancontrol.NodeCapabilities
-	154, // 195: helmsmancontrol.NodeLifecycleUpdate.storage:type_name -> helmsmancontrol.StorageInfo
-	156, // 196: helmsmancontrol.NodeLifecycleUpdate.limits:type_name -> helmsmancontrol.NodeLimits
-	199, // 197: helmsmancontrol.NodeLifecycleUpdate.streams:type_name -> helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
-	159, // 198: helmsmancontrol.NodeLifecycleUpdate.artifacts:type_name -> helmsmancontrol.StoredArtifact
-	49,  // 199: helmsmancontrol.NodeLifecycleUpdate.component_versions:type_name -> helmsmancontrol.EdgeComponentVersion
-	10,  // 200: helmsmancontrol.NodeLifecycleUpdate.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
-	143, // 201: helmsmancontrol.NodeLifecycleUpdate.provisioned_config:type_name -> helmsmancontrol.EdgeProvisionedConfig
-	24,  // 202: helmsmancontrol.LoadBalancingData.client_bucket:type_name -> helmsmancontrol.GeoBucket
-	24,  // 203: helmsmancontrol.LoadBalancingData.node_bucket:type_name -> helmsmancontrol.GeoBucket
-	19,  // 204: helmsmancontrol.ClipLifecycleData.stage:type_name -> helmsmancontrol.ClipLifecycleData.Stage
-	130, // 205: helmsmancontrol.ClipLifecycleData.processing_speed:type_name -> helmsmancontrol.ProcessingSpeedStats
-	20,  // 206: helmsmancontrol.DVRLifecycleData.status:type_name -> helmsmancontrol.DVRLifecycleData.Status
-	21,  // 207: helmsmancontrol.VodLifecycleData.status:type_name -> helmsmancontrol.VodLifecycleData.Status
-	130, // 208: helmsmancontrol.VodLifecycleData.processing_speed:type_name -> helmsmancontrol.ProcessingSpeedStats
-	22,  // 209: helmsmancontrol.MessageLifecycleData.event_type:type_name -> helmsmancontrol.MessageLifecycleData.EventType
-	11,  // 210: helmsmancontrol.FederationEventData.event_type:type_name -> helmsmancontrol.FederationEventType
-	200, // 211: helmsmancontrol.ProcessMeterQuantity.dimensions:type_name -> helmsmancontrol.ProcessMeterQuantity.DimensionsEntry
-	152, // 212: helmsmancontrol.ProcessBillingEvent.meter_quantities:type_name -> helmsmancontrol.ProcessMeterQuantity
-	155, // 213: helmsmancontrol.NodeLimits.processing_classes:type_name -> helmsmancontrol.ProcessingClassCapacity
-	12,  // 214: helmsmancontrol.StoredArtifact.artifact_type:type_name -> helmsmancontrol.ArtifactEvent.ArtifactType
-	23,  // 215: helmsmancontrol.StoredArtifact.role:type_name -> helmsmancontrol.StoredArtifact.Role
-	201, // 216: helmsmancontrol.StreamProcess.extra:type_name -> helmsmancontrol.StreamProcess.ExtraEntry
-	160, // 217: helmsmancontrol.StreamDef.processes:type_name -> helmsmancontrol.StreamProcess
-	161, // 218: helmsmancontrol.StreamTemplate.def:type_name -> helmsmancontrol.StreamDef
-	162, // 219: helmsmancontrol.ConfigSeed.templates:type_name -> helmsmancontrol.StreamTemplate
-	151, // 220: helmsmancontrol.ConfigSeed.processing:type_name -> helmsmancontrol.ProcessingConfig
-	10,  // 221: helmsmancontrol.ConfigSeed.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
-	163, // 222: helmsmancontrol.ConfigSeed.tls:type_name -> helmsmancontrol.TLSCertBundle
-	167, // 223: helmsmancontrol.ConfigSeed.site:type_name -> helmsmancontrol.SiteConfig
-	209, // 224: helmsmancontrol.ConfigSeed.telemetry:type_name -> common.EdgeTelemetryConfig
-	163, // 225: helmsmancontrol.ConfigSeed.tls_bundles:type_name -> helmsmancontrol.TLSCertBundle
-	206, // 226: helmsmancontrol.ConfigSeedApplyResult.applied_at:type_name -> google.protobuf.Timestamp
-	202, // 227: helmsmancontrol.ConfigSeedApplyResult.bundle_versions:type_name -> helmsmancontrol.ConfigSeedApplyResult.BundleVersionsEntry
-	168, // 228: helmsmancontrol.TranscodeJobRequest.profiles:type_name -> helmsmancontrol.TranscodeProfile
-	203, // 229: helmsmancontrol.ProcessingJobRequest.params:type_name -> helmsmancontrol.ProcessingJobRequest.ParamsEntry
-	173, // 230: helmsmancontrol.ProcessingJobRequest.source_segments:type_name -> helmsmancontrol.DVRChapterSegmentRef
-	204, // 231: helmsmancontrol.ProcessingJobResult.outputs:type_name -> helmsmancontrol.ProcessingJobResult.OutputsEntry
-	158, // 232: helmsmancontrol.ProcessingJobResult.tracks:type_name -> helmsmancontrol.StreamTrack
-	177, // 233: helmsmancontrol.APIRequestBatch.aggregates:type_name -> helmsmancontrol.APIRequestAggregate
-	205, // 234: helmsmancontrol.ThumbnailUploadResponse.uploads:type_name -> helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
-	206, // 235: helmsmancontrol.GatewayTelemetryEvent.timestamp:type_name -> google.protobuf.Timestamp
-	187, // 236: helmsmancontrol.GatewayTelemetryEvent.discovery:type_name -> helmsmancontrol.OrchestratorDiscoveryObserved
-	188, // 237: helmsmancontrol.GatewayTelemetryEvent.state:type_name -> helmsmancontrol.OrchestratorStateUpdate
-	190, // 238: helmsmancontrol.GatewayTelemetryEvent.transcode:type_name -> helmsmancontrol.OrchestratorTranscodeOutcome
-	193, // 239: helmsmancontrol.GatewayTelemetryEvent.ai:type_name -> helmsmancontrol.OrchestratorAIOutcome
-	194, // 240: helmsmancontrol.GatewayTelemetryEvent.decision:type_name -> helmsmancontrol.OrchestratorCandidateDecision
-	195, // 241: helmsmancontrol.GatewayTelemetryEvent.segment_result:type_name -> helmsmancontrol.OrchestratorSegmentResult
-	196, // 242: helmsmancontrol.GatewayTelemetryEvent.observer_report:type_name -> helmsmancontrol.OrchestratorObserverReport
-	206, // 243: helmsmancontrol.OrchestratorVantageGeo.geo_resolved_at:type_name -> google.protobuf.Timestamp
-	186, // 244: helmsmancontrol.OrchestratorDiscoveryObserved.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
-	186, // 245: helmsmancontrol.OrchestratorStateUpdate.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
-	189, // 246: helmsmancontrol.OrchestratorStateUpdate.capability_price_entries:type_name -> helmsmancontrol.OrchestratorCapabilityPriceEntry
-	192, // 247: helmsmancontrol.OrchestratorTranscodeOutcome.accounting:type_name -> helmsmancontrol.OrchestratorAttemptAccounting
-	191, // 248: helmsmancontrol.OrchestratorAttemptAccounting.service_charge:type_name -> helmsmancontrol.NetworkAmount
-	191, // 249: helmsmancontrol.OrchestratorAttemptAccounting.ticket_credit_sent:type_name -> helmsmancontrol.NetworkAmount
-	157, // 250: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry.value:type_name -> helmsmancontrol.StreamData
-	35,  // 251: helmsmancontrol.HelmsmanControl.Connect:input_type -> helmsmancontrol.ControlMessage
-	82,  // 252: helmsmancontrol.HelmsmanControl.ResolveClipHash:input_type -> helmsmancontrol.ClipHashRequest
-	38,  // 253: helmsmancontrol.HelmsmanControl.AdmitPublisher:input_type -> helmsmancontrol.AdmitPublisherRequest
-	76,  // 254: helmsmancontrol.DecklogService.SendEvent:input_type -> helmsmancontrol.MistTrigger
-	25,  // 255: helmsmancontrol.DecklogService.SendServiceEvent:input_type -> helmsmancontrol.ServiceEvent
-	185, // 256: helmsmancontrol.DecklogService.SendGatewayTelemetry:input_type -> helmsmancontrol.GatewayTelemetryEvent
-	210, // 257: helmsmancontrol.DecklogService.PublishDomainEvents:input_type -> frameworks.events.DomainEventBatch
-	35,  // 258: helmsmancontrol.HelmsmanControl.Connect:output_type -> helmsmancontrol.ControlMessage
-	83,  // 259: helmsmancontrol.HelmsmanControl.ResolveClipHash:output_type -> helmsmancontrol.ClipHashResponse
-	78,  // 260: helmsmancontrol.HelmsmanControl.AdmitPublisher:output_type -> helmsmancontrol.MistTriggerResponse
-	211, // 261: helmsmancontrol.DecklogService.SendEvent:output_type -> google.protobuf.Empty
-	211, // 262: helmsmancontrol.DecklogService.SendServiceEvent:output_type -> google.protobuf.Empty
-	211, // 263: helmsmancontrol.DecklogService.SendGatewayTelemetry:output_type -> google.protobuf.Empty
-	212, // 264: helmsmancontrol.DecklogService.PublishDomainEvents:output_type -> frameworks.events.PublishDomainEventsResponse
-	258, // [258:265] is the sub-list for method output_type
-	251, // [251:258] is the sub-list for method input_type
-	251, // [251:251] is the sub-list for extension type_name
-	251, // [251:251] is the sub-list for extension extendee
-	0,   // [0:251] is the sub-list for field type_name
+	56,  // 93: helmsmancontrol.ControlMessage.stop_sessions_result:type_name -> helmsmancontrol.StopSessionsResult
+	78,  // 94: helmsmancontrol.AdmitPublisherRequest.trigger:type_name -> helmsmancontrol.MistTrigger
+	43,  // 95: helmsmancontrol.ApplyManagedStream.placement_admission:type_name -> helmsmancontrol.ManagedStreamAdmission
+	208, // 96: helmsmancontrol.ManagedStreamAdmission.issued_at:type_name -> google.protobuf.Timestamp
+	208, // 97: helmsmancontrol.ManagedStreamAdmission.expires_at:type_name -> google.protobuf.Timestamp
+	45,  // 98: helmsmancontrol.RetractManagedStream.placement_retraction:type_name -> helmsmancontrol.ManagedStreamRetraction
+	208, // 99: helmsmancontrol.ManagedStreamRetraction.issued_at:type_name -> google.protobuf.Timestamp
+	208, // 100: helmsmancontrol.ManagedStreamRetraction.expires_at:type_name -> google.protobuf.Timestamp
+	10,  // 101: helmsmancontrol.ModeChangeRequest.requested_mode:type_name -> helmsmancontrol.NodeOperationalMode
+	50,  // 102: helmsmancontrol.DesiredStateUpdate.components:type_name -> helmsmancontrol.DesiredComponent
+	208, // 103: helmsmancontrol.DesiredStateUpdate.cordon_token_expires_at:type_name -> google.protobuf.Timestamp
+	52,  // 104: helmsmancontrol.UpdateApplyResult.components:type_name -> helmsmancontrol.ComponentApplyResult
+	208, // 105: helmsmancontrol.StopSessionsRequest.expires_at:type_name -> google.protobuf.Timestamp
+	55,  // 106: helmsmancontrol.StopSessionsRequest.targets:type_name -> helmsmancontrol.StopSessionsTarget
+	59,  // 107: helmsmancontrol.PlaybackGrant.policy:type_name -> helmsmancontrol.PlaybackGrantPolicy
+	208, // 108: helmsmancontrol.PlaybackGrant.valid_until:type_name -> google.protobuf.Timestamp
+	1,   // 109: helmsmancontrol.PlaybackGrantPolicy.kind:type_name -> helmsmancontrol.PlaybackGrantPolicyKind
+	60,  // 110: helmsmancontrol.PlaybackGrantPolicy.active_keys:type_name -> helmsmancontrol.PlaybackGrantKey
+	199, // 111: helmsmancontrol.PlaybackGrantPolicy.required_claims_json:type_name -> helmsmancontrol.PlaybackGrantPolicy.RequiredClaimsJsonEntry
+	58,  // 112: helmsmancontrol.PlaybackGrantResponse.grant:type_name -> helmsmancontrol.PlaybackGrant
+	64,  // 113: helmsmancontrol.ActivatePushTargets.targets:type_name -> helmsmancontrol.PushTargetSpec
+	68,  // 114: helmsmancontrol.DeactivatePushTargetsResult.targets:type_name -> helmsmancontrol.PushTargetConvergence
+	68,  // 115: helmsmancontrol.ActivatePushTargetsResult.targets:type_name -> helmsmancontrol.PushTargetConvergence
+	3,   // 116: helmsmancontrol.PushTargetConvergence.reason:type_name -> helmsmancontrol.RestreamReason
+	2,   // 117: helmsmancontrol.PushTargetStatusReport.state:type_name -> helmsmancontrol.RestreamState
+	3,   // 118: helmsmancontrol.PushTargetStatusReport.reason:type_name -> helmsmancontrol.RestreamReason
+	74,  // 119: helmsmancontrol.Register.fingerprint:type_name -> helmsmancontrol.NodeFingerprint
+	10,  // 120: helmsmancontrol.Register.requested_mode:type_name -> helmsmancontrol.NodeOperationalMode
+	73,  // 121: helmsmancontrol.Register.applied_managed_streams:type_name -> helmsmancontrol.AppliedManagedStream
+	208, // 122: helmsmancontrol.Register.node_identity_proof_issued_at:type_name -> google.protobuf.Timestamp
+	72,  // 123: helmsmancontrol.Register.live_ingest_generations:type_name -> helmsmancontrol.LiveIngestGeneration
+	43,  // 124: helmsmancontrol.AppliedManagedStream.placement_admission:type_name -> helmsmancontrol.ManagedStreamAdmission
+	14,  // 125: helmsmancontrol.ClipPullRequest.source_kind:type_name -> helmsmancontrol.ClipPullRequest.SourceKind
+	73,  // 126: helmsmancontrol.Heartbeat.applied_managed_streams:type_name -> helmsmancontrol.AppliedManagedStream
+	118, // 127: helmsmancontrol.MistTrigger.push_rewrite:type_name -> helmsmancontrol.PushRewriteTrigger
+	120, // 128: helmsmancontrol.MistTrigger.play_rewrite:type_name -> helmsmancontrol.ViewerResolveTrigger
+	121, // 129: helmsmancontrol.MistTrigger.stream_source:type_name -> helmsmancontrol.StreamSourceTrigger
+	123, // 130: helmsmancontrol.MistTrigger.push_out_start:type_name -> helmsmancontrol.PushOutStartTrigger
+	124, // 131: helmsmancontrol.MistTrigger.push_end:type_name -> helmsmancontrol.PushEndTrigger
+	126, // 132: helmsmancontrol.MistTrigger.viewer_connect:type_name -> helmsmancontrol.ViewerConnectTrigger
+	127, // 133: helmsmancontrol.MistTrigger.viewer_disconnect:type_name -> helmsmancontrol.ViewerDisconnectTrigger
+	129, // 134: helmsmancontrol.MistTrigger.stream_buffer:type_name -> helmsmancontrol.StreamBufferTrigger
+	130, // 135: helmsmancontrol.MistTrigger.stream_end:type_name -> helmsmancontrol.StreamEndTrigger
+	131, // 136: helmsmancontrol.MistTrigger.track_list:type_name -> helmsmancontrol.StreamTrackListTrigger
+	133, // 137: helmsmancontrol.MistTrigger.recording_complete:type_name -> helmsmancontrol.RecordingCompleteTrigger
+	135, // 138: helmsmancontrol.MistTrigger.stream_lifecycle_update:type_name -> helmsmancontrol.StreamLifecycleUpdate
+	139, // 139: helmsmancontrol.MistTrigger.client_lifecycle_update:type_name -> helmsmancontrol.ClientLifecycleUpdate
+	144, // 140: helmsmancontrol.MistTrigger.node_lifecycle_update:type_name -> helmsmancontrol.NodeLifecycleUpdate
+	146, // 141: helmsmancontrol.MistTrigger.load_balancing_data:type_name -> helmsmancontrol.LoadBalancingData
+	147, // 142: helmsmancontrol.MistTrigger.clip_lifecycle_data:type_name -> helmsmancontrol.ClipLifecycleData
+	148, // 143: helmsmancontrol.MistTrigger.dvr_lifecycle_data:type_name -> helmsmancontrol.DVRLifecycleData
+	82,  // 144: helmsmancontrol.MistTrigger.storage_snapshot:type_name -> helmsmancontrol.StorageSnapshot
+	117, // 145: helmsmancontrol.MistTrigger.storage_lifecycle_data:type_name -> helmsmancontrol.StorageLifecycleData
+	134, // 146: helmsmancontrol.MistTrigger.recording_segment:type_name -> helmsmancontrol.RecordingSegmentTrigger
+	155, // 147: helmsmancontrol.MistTrigger.process_billing:type_name -> helmsmancontrol.ProcessBillingEvent
+	149, // 148: helmsmancontrol.MistTrigger.vod_lifecycle_data:type_name -> helmsmancontrol.VodLifecycleData
+	178, // 149: helmsmancontrol.MistTrigger.api_request_batch:type_name -> helmsmancontrol.APIRequestBatch
+	150, // 150: helmsmancontrol.MistTrigger.message_lifecycle_data:type_name -> helmsmancontrol.MessageLifecycleData
+	151, // 151: helmsmancontrol.MistTrigger.federation_event_data:type_name -> helmsmancontrol.FederationEventData
+	122, // 152: helmsmancontrol.MistTrigger.stream_process:type_name -> helmsmancontrol.StreamProcessTrigger
+	140, // 153: helmsmancontrol.MistTrigger.client_lifecycle_batch:type_name -> helmsmancontrol.ClientLifecycleBatch
+	79,  // 154: helmsmancontrol.MistTrigger.raw_mist_webhook:type_name -> helmsmancontrol.RawMistWebhookTrigger
+	125, // 155: helmsmancontrol.MistTrigger.push_input_close:type_name -> helmsmancontrol.PushInputCloseTrigger
+	142, // 156: helmsmancontrol.MistTrigger.playback_boot_trace:type_name -> helmsmancontrol.PlaybackBootTrace
+	143, // 157: helmsmancontrol.MistTrigger.playback_session_qoe:type_name -> helmsmancontrol.PlaybackSessionQoe
+	136, // 158: helmsmancontrol.MistTrigger.ingest_runtime_absent:type_name -> helmsmancontrol.IngestRuntimeAbsent
+	69,  // 159: helmsmancontrol.MistTrigger.restream_status:type_name -> helmsmancontrol.PushTargetStatusReport
+	119, // 160: helmsmancontrol.MistTrigger.connection_play:type_name -> helmsmancontrol.ConnectionPlayTrigger
+	137, // 161: helmsmancontrol.MistTrigger.ingest_admission_abandoned:type_name -> helmsmancontrol.IngestAdmissionAbandoned
+	208, // 162: helmsmancontrol.MistTrigger.publisher_deadline:type_name -> google.protobuf.Timestamp
+	6,   // 163: helmsmancontrol.MistTriggerResponse.error_code:type_name -> helmsmancontrol.IngestErrorCode
+	4,   // 164: helmsmancontrol.MistTriggerResponse.action:type_name -> helmsmancontrol.MistTriggerAction
+	5,   // 165: helmsmancontrol.MistTriggerAck.error_code:type_name -> helmsmancontrol.TriggerAckErrorCode
+	152, // 166: helmsmancontrol.StorageSnapshot.capabilities:type_name -> helmsmancontrol.NodeCapabilities
+	83,  // 167: helmsmancontrol.StorageSnapshot.usage:type_name -> helmsmancontrol.TenantStorageUsage
+	87,  // 168: helmsmancontrol.DVRStartRequest.config:type_name -> helmsmancontrol.DVRConfig
+	7,   // 169: helmsmancontrol.DVRStopped.source_state:type_name -> helmsmancontrol.DVRSourceState
+	108, // 170: helmsmancontrol.RetryDVRSegmentUpload.segments:type_name -> helmsmancontrol.DVRSegmentRef
+	108, // 171: helmsmancontrol.RestoreLocalSegmentIndexResponse.segments:type_name -> helmsmancontrol.DVRSegmentRef
+	200, // 172: helmsmancontrol.FreezeRequest.segment_urls:type_name -> helmsmancontrol.FreezeRequest.SegmentUrlsEntry
+	15,  // 173: helmsmancontrol.RelayResolveRequest.hint:type_name -> helmsmancontrol.RelayResolveRequest.RelayHint
+	9,   // 174: helmsmancontrol.RelayResolveResponse.state:type_name -> helmsmancontrol.AssetState
+	16,  // 175: helmsmancontrol.RelayResolveResponse.policy_hint:type_name -> helmsmancontrol.RelayResolveResponse.CacheDecisionHint
+	17,  // 176: helmsmancontrol.StorageLifecycleData.action:type_name -> helmsmancontrol.StorageLifecycleData.Action
+	18,  // 177: helmsmancontrol.StorageLifecycleData.reason:type_name -> helmsmancontrol.StorageLifecycleData.CacheFailureReason
+	24,  // 178: helmsmancontrol.PushRewriteTrigger.publisher_bucket:type_name -> helmsmancontrol.GeoBucket
+	24,  // 179: helmsmancontrol.PushRewriteTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
+	24,  // 180: helmsmancontrol.ViewerResolveTrigger.client_bucket:type_name -> helmsmancontrol.GeoBucket
+	24,  // 181: helmsmancontrol.ViewerResolveTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
+	24,  // 182: helmsmancontrol.ViewerConnectTrigger.client_bucket:type_name -> helmsmancontrol.GeoBucket
+	24,  // 183: helmsmancontrol.ViewerConnectTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
+	24,  // 184: helmsmancontrol.ViewerDisconnectTrigger.client_bucket:type_name -> helmsmancontrol.GeoBucket
+	24,  // 185: helmsmancontrol.ViewerDisconnectTrigger.node_bucket:type_name -> helmsmancontrol.GeoBucket
+	128, // 186: helmsmancontrol.ViewerDisconnectTrigger.stream_times:type_name -> helmsmancontrol.SessionTimeShare
+	128, // 187: helmsmancontrol.ViewerDisconnectTrigger.connector_times:type_name -> helmsmancontrol.SessionTimeShare
+	128, // 188: helmsmancontrol.ViewerDisconnectTrigger.host_times:type_name -> helmsmancontrol.SessionTimeShare
+	160, // 189: helmsmancontrol.StreamBufferTrigger.tracks:type_name -> helmsmancontrol.StreamTrack
+	160, // 190: helmsmancontrol.StreamTrackListTrigger.tracks:type_name -> helmsmancontrol.StreamTrack
+	160, // 191: helmsmancontrol.RecordingCompleteTrigger.tracks:type_name -> helmsmancontrol.StreamTrack
+	132, // 192: helmsmancontrol.RecordingCompleteTrigger.processing_speed:type_name -> helmsmancontrol.ProcessingSpeedStats
+	138, // 193: helmsmancontrol.StreamLifecycleUpdate.process_observation:type_name -> helmsmancontrol.MistStreamProcessObservation
+	135, // 194: helmsmancontrol.IngestRuntimeAbsent.lifecycle:type_name -> helmsmancontrol.StreamLifecycleUpdate
+	139, // 195: helmsmancontrol.ClientLifecycleBatch.samples:type_name -> helmsmancontrol.ClientLifecycleUpdate
+	141, // 196: helmsmancontrol.PlaybackBootTrace.resources:type_name -> helmsmancontrol.PlaybackBootResource
+	152, // 197: helmsmancontrol.NodeLifecycleUpdate.capabilities:type_name -> helmsmancontrol.NodeCapabilities
+	156, // 198: helmsmancontrol.NodeLifecycleUpdate.storage:type_name -> helmsmancontrol.StorageInfo
+	158, // 199: helmsmancontrol.NodeLifecycleUpdate.limits:type_name -> helmsmancontrol.NodeLimits
+	201, // 200: helmsmancontrol.NodeLifecycleUpdate.streams:type_name -> helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
+	161, // 201: helmsmancontrol.NodeLifecycleUpdate.artifacts:type_name -> helmsmancontrol.StoredArtifact
+	49,  // 202: helmsmancontrol.NodeLifecycleUpdate.component_versions:type_name -> helmsmancontrol.EdgeComponentVersion
+	10,  // 203: helmsmancontrol.NodeLifecycleUpdate.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
+	145, // 204: helmsmancontrol.NodeLifecycleUpdate.provisioned_config:type_name -> helmsmancontrol.EdgeProvisionedConfig
+	24,  // 205: helmsmancontrol.LoadBalancingData.client_bucket:type_name -> helmsmancontrol.GeoBucket
+	24,  // 206: helmsmancontrol.LoadBalancingData.node_bucket:type_name -> helmsmancontrol.GeoBucket
+	19,  // 207: helmsmancontrol.ClipLifecycleData.stage:type_name -> helmsmancontrol.ClipLifecycleData.Stage
+	132, // 208: helmsmancontrol.ClipLifecycleData.processing_speed:type_name -> helmsmancontrol.ProcessingSpeedStats
+	20,  // 209: helmsmancontrol.DVRLifecycleData.status:type_name -> helmsmancontrol.DVRLifecycleData.Status
+	21,  // 210: helmsmancontrol.VodLifecycleData.status:type_name -> helmsmancontrol.VodLifecycleData.Status
+	132, // 211: helmsmancontrol.VodLifecycleData.processing_speed:type_name -> helmsmancontrol.ProcessingSpeedStats
+	22,  // 212: helmsmancontrol.MessageLifecycleData.event_type:type_name -> helmsmancontrol.MessageLifecycleData.EventType
+	11,  // 213: helmsmancontrol.FederationEventData.event_type:type_name -> helmsmancontrol.FederationEventType
+	202, // 214: helmsmancontrol.ProcessMeterQuantity.dimensions:type_name -> helmsmancontrol.ProcessMeterQuantity.DimensionsEntry
+	154, // 215: helmsmancontrol.ProcessBillingEvent.meter_quantities:type_name -> helmsmancontrol.ProcessMeterQuantity
+	157, // 216: helmsmancontrol.NodeLimits.processing_classes:type_name -> helmsmancontrol.ProcessingClassCapacity
+	12,  // 217: helmsmancontrol.StoredArtifact.artifact_type:type_name -> helmsmancontrol.ArtifactEvent.ArtifactType
+	23,  // 218: helmsmancontrol.StoredArtifact.role:type_name -> helmsmancontrol.StoredArtifact.Role
+	203, // 219: helmsmancontrol.StreamProcess.extra:type_name -> helmsmancontrol.StreamProcess.ExtraEntry
+	162, // 220: helmsmancontrol.StreamDef.processes:type_name -> helmsmancontrol.StreamProcess
+	163, // 221: helmsmancontrol.StreamTemplate.def:type_name -> helmsmancontrol.StreamDef
+	164, // 222: helmsmancontrol.ConfigSeed.templates:type_name -> helmsmancontrol.StreamTemplate
+	153, // 223: helmsmancontrol.ConfigSeed.processing:type_name -> helmsmancontrol.ProcessingConfig
+	10,  // 224: helmsmancontrol.ConfigSeed.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
+	165, // 225: helmsmancontrol.ConfigSeed.tls:type_name -> helmsmancontrol.TLSCertBundle
+	169, // 226: helmsmancontrol.ConfigSeed.site:type_name -> helmsmancontrol.SiteConfig
+	211, // 227: helmsmancontrol.ConfigSeed.telemetry:type_name -> common.EdgeTelemetryConfig
+	165, // 228: helmsmancontrol.ConfigSeed.tls_bundles:type_name -> helmsmancontrol.TLSCertBundle
+	208, // 229: helmsmancontrol.ConfigSeedApplyResult.applied_at:type_name -> google.protobuf.Timestamp
+	204, // 230: helmsmancontrol.ConfigSeedApplyResult.bundle_versions:type_name -> helmsmancontrol.ConfigSeedApplyResult.BundleVersionsEntry
+	170, // 231: helmsmancontrol.TranscodeJobRequest.profiles:type_name -> helmsmancontrol.TranscodeProfile
+	205, // 232: helmsmancontrol.ProcessingJobRequest.params:type_name -> helmsmancontrol.ProcessingJobRequest.ParamsEntry
+	175, // 233: helmsmancontrol.ProcessingJobRequest.source_segments:type_name -> helmsmancontrol.DVRChapterSegmentRef
+	206, // 234: helmsmancontrol.ProcessingJobResult.outputs:type_name -> helmsmancontrol.ProcessingJobResult.OutputsEntry
+	160, // 235: helmsmancontrol.ProcessingJobResult.tracks:type_name -> helmsmancontrol.StreamTrack
+	179, // 236: helmsmancontrol.APIRequestBatch.aggregates:type_name -> helmsmancontrol.APIRequestAggregate
+	207, // 237: helmsmancontrol.ThumbnailUploadResponse.uploads:type_name -> helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
+	208, // 238: helmsmancontrol.GatewayTelemetryEvent.timestamp:type_name -> google.protobuf.Timestamp
+	189, // 239: helmsmancontrol.GatewayTelemetryEvent.discovery:type_name -> helmsmancontrol.OrchestratorDiscoveryObserved
+	190, // 240: helmsmancontrol.GatewayTelemetryEvent.state:type_name -> helmsmancontrol.OrchestratorStateUpdate
+	192, // 241: helmsmancontrol.GatewayTelemetryEvent.transcode:type_name -> helmsmancontrol.OrchestratorTranscodeOutcome
+	195, // 242: helmsmancontrol.GatewayTelemetryEvent.ai:type_name -> helmsmancontrol.OrchestratorAIOutcome
+	196, // 243: helmsmancontrol.GatewayTelemetryEvent.decision:type_name -> helmsmancontrol.OrchestratorCandidateDecision
+	197, // 244: helmsmancontrol.GatewayTelemetryEvent.segment_result:type_name -> helmsmancontrol.OrchestratorSegmentResult
+	198, // 245: helmsmancontrol.GatewayTelemetryEvent.observer_report:type_name -> helmsmancontrol.OrchestratorObserverReport
+	208, // 246: helmsmancontrol.OrchestratorVantageGeo.geo_resolved_at:type_name -> google.protobuf.Timestamp
+	188, // 247: helmsmancontrol.OrchestratorDiscoveryObserved.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
+	188, // 248: helmsmancontrol.OrchestratorStateUpdate.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
+	191, // 249: helmsmancontrol.OrchestratorStateUpdate.capability_price_entries:type_name -> helmsmancontrol.OrchestratorCapabilityPriceEntry
+	194, // 250: helmsmancontrol.OrchestratorTranscodeOutcome.accounting:type_name -> helmsmancontrol.OrchestratorAttemptAccounting
+	193, // 251: helmsmancontrol.OrchestratorAttemptAccounting.service_charge:type_name -> helmsmancontrol.NetworkAmount
+	193, // 252: helmsmancontrol.OrchestratorAttemptAccounting.ticket_credit_sent:type_name -> helmsmancontrol.NetworkAmount
+	159, // 253: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry.value:type_name -> helmsmancontrol.StreamData
+	35,  // 254: helmsmancontrol.HelmsmanControl.Connect:input_type -> helmsmancontrol.ControlMessage
+	84,  // 255: helmsmancontrol.HelmsmanControl.ResolveClipHash:input_type -> helmsmancontrol.ClipHashRequest
+	38,  // 256: helmsmancontrol.HelmsmanControl.AdmitPublisher:input_type -> helmsmancontrol.AdmitPublisherRequest
+	78,  // 257: helmsmancontrol.DecklogService.SendEvent:input_type -> helmsmancontrol.MistTrigger
+	25,  // 258: helmsmancontrol.DecklogService.SendServiceEvent:input_type -> helmsmancontrol.ServiceEvent
+	187, // 259: helmsmancontrol.DecklogService.SendGatewayTelemetry:input_type -> helmsmancontrol.GatewayTelemetryEvent
+	212, // 260: helmsmancontrol.DecklogService.PublishDomainEvents:input_type -> frameworks.events.DomainEventBatch
+	35,  // 261: helmsmancontrol.HelmsmanControl.Connect:output_type -> helmsmancontrol.ControlMessage
+	85,  // 262: helmsmancontrol.HelmsmanControl.ResolveClipHash:output_type -> helmsmancontrol.ClipHashResponse
+	80,  // 263: helmsmancontrol.HelmsmanControl.AdmitPublisher:output_type -> helmsmancontrol.MistTriggerResponse
+	213, // 264: helmsmancontrol.DecklogService.SendEvent:output_type -> google.protobuf.Empty
+	213, // 265: helmsmancontrol.DecklogService.SendServiceEvent:output_type -> google.protobuf.Empty
+	213, // 266: helmsmancontrol.DecklogService.SendGatewayTelemetry:output_type -> google.protobuf.Empty
+	214, // 267: helmsmancontrol.DecklogService.PublishDomainEvents:output_type -> frameworks.events.PublishDomainEventsResponse
+	261, // [261:268] is the sub-list for method output_type
+	254, // [254:261] is the sub-list for method input_type
+	254, // [254:254] is the sub-list for extension type_name
+	254, // [254:254] is the sub-list for extension extendee
+	0,   // [0:254] is the sub-list for field type_name
 }
 
 func init() { file_ipc_proto_init() }
@@ -26902,11 +27095,12 @@ func file_ipc_proto_init() {
 		(*ControlMessage_ControlCapabilities)(nil),
 		(*ControlMessage_DurableDeliveryAck)(nil),
 		(*ControlMessage_PublisherAdmissionSession)(nil),
+		(*ControlMessage_StopSessionsResult)(nil),
 	}
-	file_ipc_proto_msgTypes[45].OneofWrappers = []any{}
-	file_ipc_proto_msgTypes[48].OneofWrappers = []any{}
-	file_ipc_proto_msgTypes[49].OneofWrappers = []any{}
-	file_ipc_proto_msgTypes[52].OneofWrappers = []any{
+	file_ipc_proto_msgTypes[47].OneofWrappers = []any{}
+	file_ipc_proto_msgTypes[50].OneofWrappers = []any{}
+	file_ipc_proto_msgTypes[51].OneofWrappers = []any{}
+	file_ipc_proto_msgTypes[54].OneofWrappers = []any{
 		(*MistTrigger_PushRewrite)(nil),
 		(*MistTrigger_PlayRewrite)(nil),
 		(*MistTrigger_StreamSource)(nil),
@@ -26943,41 +27137,41 @@ func file_ipc_proto_init() {
 		(*MistTrigger_ConnectionPlay)(nil),
 		(*MistTrigger_IngestAdmissionAbandoned)(nil),
 	}
-	file_ipc_proto_msgTypes[56].OneofWrappers = []any{}
-	file_ipc_proto_msgTypes[64].OneofWrappers = []any{}
-	file_ipc_proto_msgTypes[91].OneofWrappers = []any{}
-	file_ipc_proto_msgTypes[92].OneofWrappers = []any{}
+	file_ipc_proto_msgTypes[58].OneofWrappers = []any{}
+	file_ipc_proto_msgTypes[66].OneofWrappers = []any{}
+	file_ipc_proto_msgTypes[93].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[94].OneofWrappers = []any{}
-	file_ipc_proto_msgTypes[95].OneofWrappers = []any{}
+	file_ipc_proto_msgTypes[96].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[97].OneofWrappers = []any{}
-	file_ipc_proto_msgTypes[98].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[99].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[100].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[101].OneofWrappers = []any{}
+	file_ipc_proto_msgTypes[102].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[103].OneofWrappers = []any{}
-	file_ipc_proto_msgTypes[104].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[105].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[106].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[107].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[108].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[109].OneofWrappers = []any{}
-	file_ipc_proto_msgTypes[112].OneofWrappers = []any{}
-	file_ipc_proto_msgTypes[113].OneofWrappers = []any{}
+	file_ipc_proto_msgTypes[110].OneofWrappers = []any{}
+	file_ipc_proto_msgTypes[111].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[114].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[115].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[116].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[117].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[118].OneofWrappers = []any{}
+	file_ipc_proto_msgTypes[119].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[120].OneofWrappers = []any{}
-	file_ipc_proto_msgTypes[121].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[122].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[123].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[124].OneofWrappers = []any{}
 	file_ipc_proto_msgTypes[125].OneofWrappers = []any{}
-	file_ipc_proto_msgTypes[129].OneofWrappers = []any{}
-	file_ipc_proto_msgTypes[134].OneofWrappers = []any{}
-	file_ipc_proto_msgTypes[150].OneofWrappers = []any{}
-	file_ipc_proto_msgTypes[161].OneofWrappers = []any{
+	file_ipc_proto_msgTypes[126].OneofWrappers = []any{}
+	file_ipc_proto_msgTypes[127].OneofWrappers = []any{}
+	file_ipc_proto_msgTypes[131].OneofWrappers = []any{}
+	file_ipc_proto_msgTypes[136].OneofWrappers = []any{}
+	file_ipc_proto_msgTypes[152].OneofWrappers = []any{}
+	file_ipc_proto_msgTypes[163].OneofWrappers = []any{
 		(*GatewayTelemetryEvent_Discovery)(nil),
 		(*GatewayTelemetryEvent_State)(nil),
 		(*GatewayTelemetryEvent_Transcode)(nil),
@@ -26992,7 +27186,7 @@ func file_ipc_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ipc_proto_rawDesc), len(file_ipc_proto_rawDesc)),
 			NumEnums:      24,
-			NumMessages:   182,
+			NumMessages:   184,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

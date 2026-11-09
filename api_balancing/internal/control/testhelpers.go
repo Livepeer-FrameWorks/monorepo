@@ -14,7 +14,17 @@ func SetupTestRegistry(nodeID string, stream ipcpb.HelmsmanControl_ConnectServer
 	if nodeID != "" && stream != nil {
 		// Register the fake connection as a CURRENT-protocol sidecar so staged-freeze dispatch (gated at the
 		// final owning send) is delivered; tests exercising an old sidecar set protocolVersion explicitly.
-		registry.conns[nodeID] = &conn{stream: stream, protocolVersion: RestreamAttemptFenceProtocolMin}
+		registry.conns[nodeID] = &conn{stream: stream, rawNodeID: nodeID, protocolVersion: StopSessionsAckProtocolMin}
 	}
 	return func() { registry = prev }
+}
+
+// CompleteTestStopSessions delivers the edge result through the same correlation
+// and connection fences as a registered control stream, for cross-package tests.
+func CompleteTestStopSessions(nodeID string, req *ipcpb.StopSessionsRequest, resultError string) bool {
+	session, ok := currentNodeSession(nodeID)
+	if !ok {
+		return false
+	}
+	return acceptStopSessionsResult(&ipcpb.StopSessionsResult{RequestId: req.GetRequestId(), TenantId: req.GetTenantId(), StreamNames: req.GetStreamNames(), Error: resultError}, session)
 }

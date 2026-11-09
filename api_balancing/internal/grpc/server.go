@@ -4996,7 +4996,7 @@ func (s *FoghornGRPCServer) terminateStreamSessions(ctx context.Context, tenantI
 			TenantId:    tenantID,
 			Reason:      reason,
 		}
-		if err := control.SendStopSessions(nodeID, stopReq); err != nil {
+		if err := control.SendStopSessionsContext(ctx, nodeID, stopReq); err != nil {
 			s.logger.WithFields(logging.Fields{
 				"node_id":   nodeID,
 				"tenant_id": tenantID,

@@ -3,7 +3,6 @@ package handlers
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
@@ -109,7 +108,7 @@ func TestPaidStripeUpgradeRetainsAndSyncsCurrentTaxBeforeProviderPurchase(t *tes
 		{"failed tax sync forbids upgrade", nil, errors.New("subscription tax unavailable"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for key, value := range map[string]string{"SUPPLIER_NAME": "DDVTech B.V.", "SUPPLIER_ADDRESS": "Leiden NL", "SUPPLIER_VAT_NUMBER": "NL853319145B01", "SUPPLIER_REGISTRATION_NUMBER": "59104694", "SUPPLIER_COUNTRY": "NL", "CRYPTO_TAX_POLICY_JSON": ""} {
+			for key, value := range map[string]string{"SUPPLIER_NAME": "DDVTech B.V.", "SUPPLIER_ADDRESS": "Leiden NL", "SUPPLIER_VAT_NUMBER": "NL853319145B01", "SUPPLIER_REGISTRATION_NUMBER": "59104694", "SUPPLIER_COUNTRY": "NL"} {
 				appconfigtest.Set(t, key, value)
 			}
 			db, mock, err := sqlmock.New()
@@ -119,7 +118,6 @@ func TestPaidStripeUpgradeRetainsAndSyncsCurrentTaxBeforeProviderPurchase(t *tes
 			defer db.Close()
 			retained := &billingstripe.TaxProfile{}
 			mock.ExpectQuery("-- name: GetCryptoDocumentBillingProfile").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow("buyer@example.test", "Buyer", "Buyer Ltd", []byte(`{"street":"Main1","city":"Toronto","postal_code":"M5V1A1","country":"CA"}`), nil, "business"))
-			mock.ExpectQuery("-- name: GetProviderTaxProfile").WithArgs("tenant", sqlmock.AnyArg()).WillReturnError(sql.ErrNoRows)
 			store := mock.ExpectExec("-- name: StoreProviderTaxProfile").WithArgs("tenant", sqlmock.AnyArg(), retainedUpgradeTaxArg{profile: retained})
 			if tc.retainError != nil {
 				store.WillReturnError(tc.retainError)

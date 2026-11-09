@@ -2,7 +2,6 @@ package grpc
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -14,45 +13,6 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-func TestOperatorTaxProfileFingerprintTracksSavedLegalIdentity(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	tenant := "92000000-0000-0000-0000-000000000001"
-	var previous string
-	for _, company := range []string{"Original Inc", "Changed Inc"} {
-		mock.ExpectQuery("SELECT billing_email, billing_name, billing_company").WithArgs(tenant).WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow("buyer@example.test", "Legal Name", company, []byte(`{"country":"US","postal_code":"98101","city":"Seattle","street":"Main 1"}`), nil, "business"))
-		mock.ExpectQuery("-- name: GetBusinessEvidenceRevision").WithArgs(tenant).WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(3))
-		page, err := (&PurserServer{db: db}).AdminFinancialAuditPage(grantNoticeOperatorCtx(), &purserpb.AdminFinancialAuditPageRequest{TenantId: tenant, Source: "tax_profile", From: timestamppb.New(time.Unix(0, 0).UTC())})
-		if err != nil || len(page.GetRecordsJson()) != 1 {
-			t.Fatalf("profile fingerprint: %+v %v", page, err)
-		}
-		var body map[string]json.RawMessage
-		if err := json.Unmarshal(page.GetRecordsJson()[0], &body); err != nil {
-			t.Fatal(err)
-		}
-		var fingerprint, bodyID string
-		if err := json.Unmarshal(body["profile_sha256"], &fingerprint); err != nil {
-			t.Fatal(err)
-		}
-		if err := json.Unmarshal(body["id"], &bodyID); err != nil {
-			t.Fatal(err)
-		}
-		if string(body["evidence_revision"]) != "3" {
-			t.Fatalf("missing current evidence revision: %s", body["evidence_revision"])
-		}
-		if bodyID != tenant || len(fingerprint) != 64 || fingerprint == previous {
-			t.Fatalf("fingerprint is missing, unscoped or survived a legal identity change: %v", body)
-		}
-		previous = fingerprint
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
 
 func TestFinancialAuditUsesServerNowWhenCutoffIsOmitted(t *testing.T) {
 	db, mock, err := sqlmock.New()

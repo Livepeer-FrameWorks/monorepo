@@ -1,11 +1,15 @@
 ---
 title: Billing financial evidence
-description: Download operator financial evidence and understand customer tax classification.
+description: Export sales and payment evidence, inspect tax reviews, and prepare the bookkeeping handoff.
 sidebar:
   order: 19
 ---
 
-## Download an audit archive
+Purser issues documents for the configured seller. DDVTech B.V.'s hosted-service
+documents are DDVTech's sales records. Stripe and Mollie collect payments; their
+payouts transfer money from provider balances to the bank.
+
+## Download the evidence
 
 Use a platform-operator login and matching CLI/Purser versions:
 
@@ -14,266 +18,110 @@ frameworks admin billing finance audit --from inception --through now \
   --provider stripe --output ./ddvtech-financial-audit.zip
 ```
 
-The command reads Purser records for tenants enumerated through Quartermaster
-and the configured Stripe account. It performs no collections, refunds, payouts,
-invoice corrections, or database writes. Both service calls and provider calls
-are paginated. A failed page or a non-advancing cursor prevents publication of
-the archive. An existing output file is never overwritten; the completed ZIP
-has private filesystem permissions.
+This reads Purser records for tenants enumerated through Quartermaster and the
+configured Stripe account. It performs no collections, refunds, payouts, invoice
+corrections or database writes. Service and provider reads are paginated. A failed
+page or non-advancing cursor prevents publication; existing output files are not
+overwritten. The completed ZIP has private filesystem permissions.
 
-The ZIP includes:
+The archive contains:
 
-- `manifest.json`: occurrence interval, tenant scope, source counts, page capture
-  timestamps, file hashes and `posting_ready: false`.
-- `evidence/*.jsonl`: retained invoice/payment/top-up/balance-movement records
-  from Purser, plus Stripe account, current balance, invoices, charges, balance
-  transactions and payouts. Imported provider documents include original document
-  numbers, tax facts and PDF hashes; retained provider tax profiles include the
-  customer identity and evidence used before collection.
-- `exceptions.csv`: warnings grouped by tenant, source and action, with record counts.
-- `exception_records.csv`: individual record IDs behind those warnings. Missing
-  regular-invoice tax breakdowns remain visible; grouping does not waive them.
+- `manifest.json`: interval, tenant scope, source counts, capture timestamps,
+  hashes and `posting_ready: false`.
+- `evidence/*.jsonl`: Purser documents, payments, balances, reviews and accepted
+  provider tax profiles; optional Stripe account, balance, invoice, charge,
+  balance-transaction and payout evidence.
+- `exceptions.csv`: grouped warnings and required actions.
+- `exception_records.csv`: individual source identities behind those warnings.
 
-The manifest uses archive schema version 2. `--through now` is resolved by Purser
-once and reused for every page; the laptop clock does not choose the cutoff.
-Use matching CLI/Purser versions so both understand `effective_through`. Explicit
-future cutoffs are rejected. This remains an observed evidence export: backdated
-records and mutable statuses prevent treating it as a frozen accounting close.
+`--from` accepts `inception`, a UTC date or RFC3339 timestamp. `--through` accepts
+`now` or RFC3339 and is exclusive. Purser resolves `now` once for every page;
+future cutoffs are rejected. Undated rows remain included and flagged for period
+review. Use `--provider none` to omit provider evidence explicitly.
 
-`--from` accepts `inception`, a UTC date, or an RFC3339 timestamp; `--through`
-accepts `now` or RFC3339 and is exclusive. Purser source rows contain their status
-at capture time. Stripe account and balance snapshots are current at retrieval,
-even when the list-activity interval is historical. This is not an accounting
-snapshot reconstructed as of a past date.
+Archive schema version is 2. Statuses are observed at capture; backdated records
+and later changes prevent it being a frozen close. Stripe account/balance
+snapshots are current at retrieval, including for historical intervals. Tenants
+absent from Quartermaster enumeration remain a coverage exception. Original PDF
+references/hashes are included, but this command does not download PDF files.
+Customers download retained originals through their billing-document list.
 
-Purser rows with no occurrence date are retained regardless of the requested
-interval and flagged `OCCURRENCE_DATE_UNKNOWN`. Establish their accounting period
-before using the archive for interval control totals.
+## Inspect and acknowledge tax reviews
 
-`--provider none` omits provider evidence and records that omission explicitly.
-Historical tenants absent from Quartermaster enumeration remain a coverage
-exception; the archive does not certify that every retained tenant was included.
-Stripe invoice records retain provider document references, but original PDF
-files are not downloaded by this command.
-
-Imported Stripe invoices and credit notes are available in the customer's
-billing-document list. Downloads return the retained original PDF. Purser keeps
-the provider's document number and does not issue another invoice for the same
-Stripe subscription supply.
-
-Stripe imports use the accepted supplier and customer snapshot and tax evidence
-valid at the document's tax point. They do not depend on today's billing profile,
-supplier configuration or a new VIES request. Original amounts, parties, document
-numbers, PDF bytes and issued facts remain unchanged. Missing original tax
-amounts are never invented to clear an exception.
-
-An already-retained unverified document keeps that classification. Webhook
-redelivery and the recurring tax worker do not reassess it. An operator can
-resolve its review without the same facts reopening it or increasing its count.
-Documents issued using provisional VAT evidence have their own retained review,
-separate from the tenant's later VIES revalidation notice.
-A postdeploy reconciliation inserts missing document reviews without requiring
-webhook redelivery and preserves existing operator resolutions.
-
-Jurisdiction policy references and validity windows form part of the accepted
-provider assessment identity. Renewing that policy retains a new assessment for
-future collections; older documents keep the proof valid at their own tax point.
-
-Use this archive to investigate the opening records and prepare corrections with
-the bookkeeper. It is not a journal import, reconciled close or payout approval.
-The export intentionally supplies no `journal.csv` and never marks itself
-posting-ready.
-
-## Personal and business billing
-
-Customers select **Personal** or **Business** in their saved billing details.
-Personal profiles need no company name or VAT number. Choosing personal billing
-clears those business fields; the backend rejects a consumer profile that still
-claims a business VAT number. Existing profiles remain `unspecified` until
-classified, rather than deriving tax status from their company name. A retained VAT claim
-identifies a legacy business for assessment and establishment reviews; confirming
-Business later preserves the same evidence identity. No saved selection is
-changed by an operator evidence read.
-
-For new crypto payment instructions, unclassified profiles without a VAT claim
-must choose a customer type, and all profiles must confirm their billing country.
-Cross-border tax decisions use a shared consumer/business rule engine. Consumer
-location evidence does not establish business status or reverse charge.
-
-The Dutch supplier policy adds 21% VAT to domestic prices and to EU consumer
-prices. A qualifying EU business outside the Netherlands receives reverse
-charge. Non-EU service documents state that Dutch VAT is outside scope. Prices
-are exclusive of VAT. Customers do not choose a rate or exemption.
-
-Purser freezes the net amount, VAT, gross amount, tax point, billing parties and
-tax evidence when it issues an invoice. Invoice PDFs and emails show those
-totals. Stripe subscriptions use exclusive tax rates selected from the same
-assessment; Mollie subscription payments produce a Purser invoice from their
-retained collection terms. Changes to a saved profile affect future collections,
-not documents already issued.
-
-New prepaid purchases collect the gross amount and add the net amount as
-spendable service credit. A EUR 100 purchase with 21% VAT collects EUR 121 and
-adds EUR 100 credit. The payment and its tax document commit together. Applying
-that advance to a later invoice deducts its original net and VAT, so VAT is not
-charged again. Refunds credit the original tax and remove only the refunded net
-credit from the wallet.
-
-Existing paid purchases and balances retain their accepted amounts. Where an
-old balance has no retained tax breakdown, it remains unclassified; any VAT
-covered by the supplier is stated separately when that credit is applied. The
-upgrade does not initiate a second charge to recover historical VAT.
-
-An explicitly configured destination policy supplies any additional destination
-treatment. Business evidence retained for a configured reviewed jurisdiction is
-bound to the saved identity. Profile changes invalidate that evidence.
-
-## VIES availability and retained evidence
-
-A quote retains the exact VIES response used for its decision. Confirmation
-uses that accepted assessment without another VIES call. Legacy quotes use a
-positive response that was valid when the quote was issued, when retained;
-a verification outage must not silently replace reverse charge with VAT.
-Without sufficient evidence, the received payment stays recorded and its
-missing tax document remains in reconciliation review.
-
-The latest positive VIES response remains usable for seven days after its
-24-hour cache expires, only during a transient outage. A newer negative result
-prevents fallback. Permanent SOAP faults are classified before the HTTP status,
-so an HTTP 500 carrying a rejected VAT request does not authorize reverse charge.
-
-Each use of dated evidence records durable, tenant-scoped revalidation work.
-The billing worker rechecks it when VIES is available. A successful check retains
-the later response beside the accepted claim; an invalid result remains an
-operator exception. Issued facts and already-paid amounts remain unchanged.
-
-## Tax holds and payment retries
-
-Stripe collection holds require a definite tax-review condition. Temporary
-database, configuration or VIES failures are retried without creating a new
-collection hold. After billing details are corrected, Purser synchronizes future
-tax rates and releases its own pause. Older invoices that still need review do
-not prevent correctly taxed future renewals or other subscriptions from running.
-Checkout and tier-upgrade preflights synchronize future tax settings; background
-workers handle older held invoices. Completed recovery acknowledges only its own
-pending work, so a concurrent hold cannot lose its recovery and ordinary
-reconciliations do not keep listing historical invoices.
-For a Dutch supplier, existing recurring subscriptions with incomplete billing
-profiles, an invalid VAT claim, or missing business-establishment proof required by
-a configured country policy collect Dutch VAT on top of the net price through
-Stripe and Mollie, without a collection hold. Purser selects this treatment before
-location-policy checks for an incomplete profile. It loads the effective Dutch
-rate, currently 21%, and freezes the rate's source and effective date. Temporary
-database or VIES failures remain retryable.
-Reverse charge and non-EU zero VAT require a complete, validated profile. Stripe
-removes retained EU VAT IDs during this fallback and synchronizes the customer
-details that are present. A completion or VAT-review prompt remains on the
-customer's Billing page, and every newly issued fallback renewal has its own
-operator review. Mollie records the subscription review before updating collection
-terms and sends the issued invoice email. Resolving an older document's review
-does not hide the next fallback renewal. Correcting the saved details lets the
-worker use the validated treatment and clear the subscription notice.
-New Stripe/Mollie checkout and card top-up flows retain their existing
-billing-detail requirements.
-
-Draft renewals created during the tax hold receive the verified tax treatment
-and return to Stripe's automatic collection. Stripe handles declined payments,
-authentication requests and payments still processing through its normal
-collection flow. Restoring tax settings does not require immediate payment
-success. Unrelated invoices and operator-created pauses remain untouched;
-finalized invoices retain their original tax facts.
-
-Owned held drafts with prorations, discounts or a supply other than a regular
-renewal receive a durable review for that invoice. Purser records the review
-before acknowledging it to Stripe and completing the recovery scan. They are
-not silently abandoned or retried by every tax sweep. Operators can correct the
-invoice through Stripe and resolve its review. A deliberate `auto_advance=false`
-on a finalized invoice is preserved.
-Changing an operator pause or the subscription's customer rechecks outstanding
-drafts against that new context. Finalized invoices stay outside draft repair.
-An owned held invoice finalized outside the worker is checked for its frozen
-tax proof and receives an invoice review if that proof is missing. Its issued
-amounts and collection settings remain unchanged.
-
-For native Mollie payments, temporary assessment failures leave the webhook
-available for retry before an invoice is issued. Definitive mismatches retain
-the accepted payment terms and an operator review. Issuance checks the billing
-identity and personal/business classification used by the assessment against
-the saved profile before freezing the document.
-Missing current supplier configuration uses the complete supplier evidence
-already accepted with a confirmed payment, records a document review, and lets
-the payment lifecycle proceed. Incomplete accepted evidence cannot be used to
-invent an invoice supplier. Confirmed payments with unusable accepted tax proof
-retain their actual received amount in a paid record requiring tax review,
-without an assessed net/VAT split or an emailed tax invoice. This also applies
-when the accepted profile or net metadata is missing. A received amount below
-the accepted gross fee does not reset existing dunning attempts; a full payment
-or overpayment does. Grace-based VAT evidence has a document-specific
-review that remains independent of the tenant's later revalidation notice.
-
-Temporary VIES failures during postpaid issuance roll back that attempt and use
-the normal job retry schedule, without a permanent manual-review invoice.
-
-A tax refusal during a billing-phase change leaves the arrangement unchanged
-and records an operator exception after rollback. Bootstrap dry runs do not
-persist these exceptions.
-
-## Reviewed non-EU tax policy
-
-`CRYPTO_TAX_POLICY_JSON` accepts an explicit supplier country, review reference,
-UTC validity window, and country-specific `non_eu_businesses` and/or
-`non_eu_consumers` rules. Each rule requires `rate_bps` (including an explicit
-zero), `source`, `evidence_reference`, `tax_label` and invoice `wording`. The
-operator must obtain the actual jurisdiction treatment before configuring it.
-For example, the following illustrates the format, not a tax determination:
-
-```json
-{
-  "reference": "retained-tax-review",
-  "supplier_country": "NL",
-  "valid_from": "2026-11-01T00:00:00Z",
-  "valid_until": "2027-01-01T00:00:00Z",
-  "non_eu_businesses": {
-    "US": {
-      "rate_bps": 0,
-      "source": "Reviewed treatment for this supply",
-      "evidence_reference": "retained-country-memo",
-      "tax_label": "VAT",
-      "wording": "Outside scope of Dutch VAT"
-    }
-  }
-}
-```
-
-A non-EU business also needs establishment evidence recorded by a platform
-operator, bound to its complete saved business profile:
+List a tenant's open reviews:
 
 ```bash
-frameworks admin billing finance tax-profile --tenant-id <customer-uuid>
-frameworks admin billing finance record-business-evidence \
-  --tenant-id <customer-uuid> --profile-sha256 <returned-profile-sha256> \
-  --expected-revision <returned-evidence-revision> \
-  --reference <retained-establishment-proof> --valid-until <RFC3339-expiry>
+frameworks admin billing finance reviews list --tenant-id <customer-uuid>
 ```
 
-Inspect the returned profile before approving it. An approval requires the exact
-fingerprint and evidence revision inspected, expires within 366 days, and
-retains the operator identity and reference for ten years. The command records
-a reference; retain the underlying proof separately. Changing billing identity
-invalidates the matching proof. Revoke all earlier approvals with:
+The list includes retained evidence and its hash. Optional `--provider`,
+`--category` and `--status open|resolved|all` filters narrow it. After inspecting
+the actual evidence, record a decision:
 
 ```bash
-frameworks admin billing finance record-business-evidence \
-  --tenant-id <customer-uuid> --revoke --reference <revocation-reason>
+frameworks admin billing finance reviews acknowledge \
+  --tenant-id <customer-uuid> --review-id <review-uuid> \
+  --evidence-sha256 <inspected-hash> --reason "<review decision>"
 ```
 
-Both inspection and recording require a platform-operator JWT; service tokens
-and customer sessions cannot approve evidence. The audit archive includes the
-append-only approval and revocation records. Neither a business review nor a
-country policy enrolls the supplier in a foreign tax scheme.
+Acknowledgment retains the operator identity and reason. It does not change an
+invoice, validate a VAT number, move money or dismiss funds/scanner failures.
+The same evidence does not reopen a resolved review; new facts can. An older
+review's acknowledgment does not resolve a later invoice's separate review.
 
-Historical invoices without retained tax facts remain missing-tax exceptions.
-New invoices with complete frozen totals and a supported policy do not receive
-that warning. This archive remains evidence for bookkeeping: it does not produce
-balanced journal entries, reconcile provider payouts to the bank, or certify an
-accounting close.
+## Customer tax and invoices
+
+Prices exclude VAT. With the Dutch supplier service policy, Dutch customers and
+EU consumers pay Dutch VAT, currently 21%. A qualifying business elsewhere in
+the EU receives reverse charge after validation. Non-EU services state that
+Dutch VAT is outside scope. Customers save their location and choose Personal
+or Business; they do not select a rate or exemption.
+
+New purchases require relevant billing details and claim validation. Existing
+recurring Stripe/Mollie subscriptions use Dutch VAT while details are incomplete
+or a new/changed EU VAT claim cannot be established. The Billing page shows a notice, and
+each affected invoice gets its own operator review. Temporary database failures
+leave provider settings unchanged for retry. Corrected details affect future
+collections.
+
+Purser invoices freeze parties, tax point, net/VAT/gross and accepted evidence.
+Stripe subscription supplies retain Stripe's original number and PDF without a
+duplicate Purser supply. Mollie payments use accepted collection terms for a
+Purser invoice. Confirmed payments with insufficient legal evidence remain
+recorded for review without an invented tax invoice.
+
+Prepaid purchases collect gross cash and grant net service credit. EUR 121 at
+21% VAT grants EUR 100 credit. Consuming it carries its original tax and does not
+charge VAT again. Refunds retain original tax treatment. Previously paid
+customers are not charged again to recover historical VAT.
+
+## VIES and original evidence
+
+VIES proof is retained with accepted assessments. During a transient outage, a
+positive result can remain usable for seven days after its 24-hour cache expires.
+A newer negative response or permanent fault prevents this. Provisional proof
+creates revalidation work and a separate document review. An unchanged,
+previously established reverse-charge setup keeps its actual provider terms
+during a transient outage and retries verification. New or changed unproven
+claims use Dutch VAT and review. Reconciliation compares the complete legal
+profile and retained setup, rather than assuming that any old VAT number proves
+an unchanged claim.
+
+Issued documents are checked against evidence valid at their tax point. Today's
+profile, supplier configuration and VIES response do not rewrite their money,
+parties, number or PDF. Redelivery does not automatically promote an already
+retained unknown document to verified. Keep corrections linked to their original
+issuer and supporting evidence.
+
+## Hand off to bookkeeping
+
+Give the archive and original invoices/credit notes to the person preparing the
+accounts. Match payments against provider activity, then reconcile fees, refunds,
+disputes, reserves, currency conversion and payouts to bank receipts. Provider
+fee invoices are separate purchase evidence. A payout is not another sale;
+receipts and prepaid statements must not duplicate invoice revenue.
+
+Resolve missing-tax, missing-document and coverage exceptions explicitly. The
+archive supplies no `journal.csv`, balanced journal, reconciled prepaid schedule,
+bank match or close approval. Moving money from Stripe does not remove the need
+to account for the associated sales, tax and fees.

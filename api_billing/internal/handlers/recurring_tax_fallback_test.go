@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -86,7 +85,7 @@ func TestIncompleteRecurringProfileUsesDutchVATWithoutZeroTaxClaim(t *testing.T)
 	defer db.Close()
 	mock.ExpectQuery("-- name: GetCryptoDocumentBillingProfile").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow("buyer@example.test", "Buyer", "Buyer B.V.", []byte(`{"street":" ","city":"Leiden","postal_code":"2332ED","country":"NL"}`), "unverified VAT claim", "business"))
 	stored := &billingstripe.TaxProfile{}
-	mock.ExpectQuery("-- name: GetEffectiveVATRate").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("-- name: GetEffectiveVATRate").WillReturnRows(sqlmock.NewRows([]string{"rate_bps", "source", "source_checked_on", "effective_from"}).AddRow(2100, "Dutch effective rate", "2026-11-01", "2026-01-01"))
 	mock.ExpectExec("-- name: StoreProviderTaxProfile").WithArgs("tenant", sqlmock.AnyArg(), retainedUpgradeTaxArg{profile: stored}).WillReturnResult(sqlmock.NewResult(0, 1))
 	profile, err := AssessRecurringProviderTaxProfile(t.Context(), db, "tenant", "")
 	if err != nil {
@@ -117,7 +116,7 @@ func TestMalformedStructuredRecurringAddressRetainsClaimWithoutInventingFields(t
 	}
 	defer db.Close()
 	mock.ExpectQuery("-- name: GetCryptoDocumentBillingProfile").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow("buyer@example.test", "Buyer", "", []byte(`["not","a billing object"]`), "unverified", "business"))
-	mock.ExpectQuery("-- name: GetEffectiveVATRate").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("-- name: GetEffectiveVATRate").WillReturnRows(sqlmock.NewRows([]string{"rate_bps", "source", "source_checked_on", "effective_from"}).AddRow(2100, "Dutch effective rate", "2026-11-01", "2026-01-01"))
 	mock.ExpectExec("-- name: StoreProviderTaxProfile").WillReturnResult(sqlmock.NewResult(0, 1))
 	profile, err := AssessRecurringProviderTaxProfile(t.Context(), db, "tenant", "")
 	if err != nil || !profile.IncompleteProfile || profile.RateBPS != 2100 || profile.Country != "" || profile.Street != "" || profile.City != "" || profile.PostalCode != "" {

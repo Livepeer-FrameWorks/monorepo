@@ -85,11 +85,11 @@ WITH records AS (
        AND p.id IS DISTINCT FROM NULLIF($5::text,'')::uuid
      ORDER BY p.id LIMIT 101)
     UNION ALL
-    (SELECT 'business_establishment_reviews'::text AS source,r.id
-     FROM purser.business_establishment_reviews r
-     WHERE r.tenant_id=$1::text::uuid
-       AND $2::text='business_establishment_reviews'
-       AND r.created_at>=$3::timestamptz AND r.created_at<$4::timestamptz
+    (SELECT 'billing_tax_reviews'::text AS source,r.id
+     FROM purser.crypto_accounting_anomalies r
+     WHERE r.tenant_id=$1::text::uuid AND $2::text='billing_tax_reviews'
+       AND r.kind IN ('provider_tax_review','provider_invoice_tax_review','provider_tax_document_review','provider_tax_evidence_review','invoice_tax_review','invoice_tax_evidence_review','tax_assessment_review','operator_tax_review_acknowledgement')
+       AND r.first_seen_at>=$3::timestamptz AND r.first_seen_at<$4::timestamptz
        AND r.id>=COALESCE(NULLIF($5::text,''),'00000000-0000-0000-0000-000000000000')::uuid
        AND r.id IS DISTINCT FROM NULLIF($5::text,'')::uuid
      ORDER BY r.id LIMIT 101)
@@ -104,6 +104,13 @@ WITH records AS (
     (SELECT 'provider_tax_profiles'::text AS source,p.id FROM purser.provider_tax_profiles p
      WHERE p.tenant_id=$1::text::uuid AND $2::text='provider_tax_profiles'
        AND p.created_at>=$3::timestamptz AND p.created_at<$4::timestamptz
+       AND p.id>=COALESCE(NULLIF($5::text,''),'00000000-0000-0000-0000-000000000000')::uuid
+       AND p.id IS DISTINCT FROM NULLIF($5::text,'')::uuid
+     ORDER BY p.id LIMIT 101)
+    UNION ALL
+    (SELECT 'provider_tax_assessments'::text AS source,p.id FROM purser.provider_tax_assessments p
+     WHERE p.tenant_id=$1::text::uuid AND $2::text='provider_tax_assessments'
+       AND p.assessed_at>=$3::timestamptz AND p.assessed_at<$4::timestamptz
        AND p.id>=COALESCE(NULLIF($5::text,''),'00000000-0000-0000-0000-000000000000')::uuid
        AND p.id IS DISTINCT FROM NULLIF($5::text,'')::uuid
      ORDER BY p.id LIMIT 101)
@@ -150,8 +157,8 @@ SELECT page.id::text AS id,
                SELECT to_jsonb(p)::text FROM purser.balance_transactions p
                WHERE p.tenant_id = $1::text::uuid AND p.id = page.id
            )
-           WHEN 'business_establishment_reviews' THEN (
-               SELECT to_jsonb(r)::text FROM purser.business_establishment_reviews r
+           WHEN 'billing_tax_reviews' THEN (
+               SELECT to_jsonb(r)::text FROM purser.crypto_accounting_anomalies r
                WHERE r.tenant_id=$1::text::uuid AND r.id=page.id
            )
            WHEN 'provider_billing_documents' THEN (
@@ -164,6 +171,7 @@ SELECT page.id::text AS id,
                   AND a.reference_id=$1::text || ':' || (p.tax_assessment->'evidence'->'vat_validation'->>'vat_number_hash')
                 ORDER BY a.last_seen_at DESC,a.id DESC LIMIT 1)))::text
              FROM purser.provider_billing_documents p WHERE p.tenant_id=$1::text::uuid AND p.id=page.id)
+           WHEN 'provider_tax_assessments' THEN (SELECT to_jsonb(p)::text FROM purser.provider_tax_assessments p WHERE p.tenant_id=$1::text::uuid AND p.id=page.id)
            WHEN 'provider_tax_profiles' THEN (SELECT (to_jsonb(p))::text FROM purser.provider_tax_profiles p WHERE p.tenant_id=$1::text::uuid AND p.id=page.id)
        END, '{}')::text AS payload
 FROM page

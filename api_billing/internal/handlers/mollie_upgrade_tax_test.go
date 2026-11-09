@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -37,7 +36,7 @@ func TestPaidMollieUpgradeRetainsCurrentTaxOnExistingNetBeforePurchase(t *testin
 		{name: "failed tax sync forbids purchase", country: "CA", oldRate: "2100", oldGross: "24.20", syncFail: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for key, value := range map[string]string{"SUPPLIER_NAME": "DDVTech B.V.", "SUPPLIER_ADDRESS": "Leiden NL", "SUPPLIER_VAT_NUMBER": "NL853319145B01", "SUPPLIER_REGISTRATION_NUMBER": "59104694", "SUPPLIER_COUNTRY": "NL", "CRYPTO_TAX_POLICY_JSON": ""} {
+			for key, value := range map[string]string{"SUPPLIER_NAME": "DDVTech B.V.", "SUPPLIER_ADDRESS": "Leiden NL", "SUPPLIER_VAT_NUMBER": "NL853319145B01", "SUPPLIER_REGISTRATION_NUMBER": "59104694", "SUPPLIER_COUNTRY": "NL"} {
 				appconfigtest.Set(t, key, value)
 			}
 			db, mock, err := sqlmock.New()
@@ -51,9 +50,6 @@ func TestPaidMollieUpgradeRetainsCurrentTaxOnExistingNetBeforePurchase(t *testin
 				mock.ExpectQuery("-- name: GetEffectiveVATRate").WillReturnRows(sqlmock.NewRows([]string{"rate_bps", "source", "source_checked_on", "effective_from"}).AddRow(2100, "Dutch VAT", "2026-01-01", "2026-01-01"))
 			}
 			failure := errors.New("tax preflight unavailable")
-			if tc.country == "CA" {
-				mock.ExpectQuery("-- name: GetProviderTaxProfile").WithArgs("tenant", sqlmock.AnyArg()).WillReturnError(sql.ErrNoRows)
-			}
 			store := mock.ExpectExec("-- name: StoreProviderTaxProfile").WithArgs("tenant", sqlmock.AnyArg(), retainedUpgradeTaxArg{profile: retained})
 			if tc.retainFail {
 				store.WillReturnError(failure)

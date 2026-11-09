@@ -7,57 +7,9 @@ package purserdb
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"time"
 )
-
-const getBusinessEstablishmentReviewSnapshot = `-- name: GetBusinessEstablishmentReviewSnapshot :one
-WITH latest AS (
-    SELECT review.id, review.tenant_id, review.revision, review.profile_sha256, review.is_revocation, review.country, review.reference, review.reviewed_by, review.created_at, review.valid_until, review.retention_until
-    FROM purser.business_establishment_reviews review
-    WHERE review.tenant_id = $2::text::uuid
-      AND ((review.profile_sha256 = $3 AND review.country = $4)
-           OR review.is_revocation = true)
-    ORDER BY review.revision DESC LIMIT 1
-)
-SELECT to_jsonb(latest)::jsonb AS review_snapshot
-FROM latest
-WHERE latest.is_revocation = false
-  AND latest.valid_until > $1::timestamptz
-`
-
-type GetBusinessEstablishmentReviewSnapshotParams struct {
-	ValidAt       time.Time      `db:"valid_at" json:"valid_at"`
-	TenantID      string         `db:"tenant_id" json:"tenant_id"`
-	ProfileSha256 sql.NullString `db:"profile_sha256" json:"profile_sha256"`
-	Country       sql.NullString `db:"country" json:"country"`
-}
-
-func (q *Queries) GetBusinessEstablishmentReviewSnapshot(ctx context.Context, arg GetBusinessEstablishmentReviewSnapshotParams) (json.RawMessage, error) {
-	row := q.db.QueryRowContext(ctx, getBusinessEstablishmentReviewSnapshot,
-		arg.ValidAt,
-		arg.TenantID,
-		arg.ProfileSha256,
-		arg.Country,
-	)
-	var review_snapshot json.RawMessage
-	err := row.Scan(&review_snapshot)
-	return review_snapshot, err
-}
-
-const getBusinessEvidenceRevision = `-- name: GetBusinessEvidenceRevision :one
-SELECT COALESCE(MAX(review.revision),0)::bigint AS revision
-FROM purser.business_establishment_reviews review
-WHERE review.tenant_id=$1::text::uuid
-`
-
-func (q *Queries) GetBusinessEvidenceRevision(ctx context.Context, tenantID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, getBusinessEvidenceRevision, tenantID)
-	var revision int64
-	err := row.Scan(&revision)
-	return revision, err
-}
 
 const getVATValidationAtQuote = `-- name: GetVATValidationAtQuote :one
 SELECT evidence.valid, to_jsonb(evidence)::jsonb AS validation_snapshot,
@@ -86,94 +38,5 @@ func (q *Queries) GetVATValidationAtQuote(ctx context.Context, arg GetVATValidat
 	row := q.db.QueryRowContext(ctx, getVATValidationAtQuote, arg.QuotedAt, arg.TenantID, arg.VatNumberHash)
 	var i GetVATValidationAtQuoteRow
 	err := row.Scan(&i.Valid, &i.ValidationSnapshot, &i.FreshAtQuote)
-	return i, err
-}
-
-const lockBusinessEvidenceProfile = `-- name: LockBusinessEvidenceProfile :one
-SELECT COALESCE(billing_email, '')::text AS billing_email,
-       COALESCE(billing_name, '')::text AS billing_name,
-       COALESCE(billing_company, '')::text AS billing_company,
-       COALESCE(tax_id, '')::text AS tax_id,
-       COALESCE(billing_address, '{}'::jsonb) AS billing_address,
-       billing_customer_type::text AS customer_type, COALESCE(status,'')::text AS status
-FROM purser.tenant_subscriptions
-WHERE tenant_id = $1::text::uuid
-ORDER BY created_at DESC LIMIT 1 FOR UPDATE
-`
-
-type LockBusinessEvidenceProfileRow struct {
-	BillingEmail   string          `db:"billing_email" json:"billing_email"`
-	BillingName    string          `db:"billing_name" json:"billing_name"`
-	BillingCompany string          `db:"billing_company" json:"billing_company"`
-	TaxID          string          `db:"tax_id" json:"tax_id"`
-	BillingAddress json.RawMessage `db:"billing_address" json:"billing_address"`
-	CustomerType   string          `db:"customer_type" json:"customer_type"`
-	Status         string          `db:"status" json:"status"`
-}
-
-func (q *Queries) LockBusinessEvidenceProfile(ctx context.Context, tenantID string) (LockBusinessEvidenceProfileRow, error) {
-	row := q.db.QueryRowContext(ctx, lockBusinessEvidenceProfile, tenantID)
-	var i LockBusinessEvidenceProfileRow
-	err := row.Scan(
-		&i.BillingEmail,
-		&i.BillingName,
-		&i.BillingCompany,
-		&i.TaxID,
-		&i.BillingAddress,
-		&i.CustomerType,
-		&i.Status,
-	)
-	return i, err
-}
-
-const recordBusinessEstablishmentReview = `-- name: RecordBusinessEstablishmentReview :one
-INSERT INTO purser.business_establishment_reviews (
-    tenant_id, revision, profile_sha256, country, reference, reviewed_by, valid_until, is_revocation
-) VALUES (
-    $1::text::uuid,
-    (SELECT COALESCE(MAX(previous.revision),0)+1 FROM purser.business_establishment_reviews previous WHERE previous.tenant_id=$1::text::uuid),
-    CASE WHEN $2::boolean THEN NULL ELSE $3::text END,
-    CASE WHEN $2::boolean THEN NULL ELSE $4::text END,
-    $5, $6::text::uuid,
-    CASE WHEN $2::boolean THEN NOW() ELSE $7::timestamptz END,
-    $2::boolean
-)
-RETURNING id::text AS id, created_at, valid_until, revision
-`
-
-type RecordBusinessEstablishmentReviewParams struct {
-	TenantID      string    `db:"tenant_id" json:"tenant_id"`
-	IsRevocation  bool      `db:"is_revocation" json:"is_revocation"`
-	ProfileSha256 string    `db:"profile_sha256" json:"profile_sha256"`
-	Country       string    `db:"country" json:"country"`
-	Reference     string    `db:"reference" json:"reference"`
-	ReviewedBy    string    `db:"reviewed_by" json:"reviewed_by"`
-	ValidUntil    time.Time `db:"valid_until" json:"valid_until"`
-}
-
-type RecordBusinessEstablishmentReviewRow struct {
-	ID         string    `db:"id" json:"id"`
-	CreatedAt  time.Time `db:"created_at" json:"created_at"`
-	ValidUntil time.Time `db:"valid_until" json:"valid_until"`
-	Revision   int64     `db:"revision" json:"revision"`
-}
-
-func (q *Queries) RecordBusinessEstablishmentReview(ctx context.Context, arg RecordBusinessEstablishmentReviewParams) (RecordBusinessEstablishmentReviewRow, error) {
-	row := q.db.QueryRowContext(ctx, recordBusinessEstablishmentReview,
-		arg.TenantID,
-		arg.IsRevocation,
-		arg.ProfileSha256,
-		arg.Country,
-		arg.Reference,
-		arg.ReviewedBy,
-		arg.ValidUntil,
-	)
-	var i RecordBusinessEstablishmentReviewRow
-	err := row.Scan(
-		&i.ID,
-		&i.CreatedAt,
-		&i.ValidUntil,
-		&i.Revision,
-	)
 	return i, err
 }

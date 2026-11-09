@@ -57,9 +57,10 @@ const foghornInternalServerName = "foghorn.internal"
 //     and deactivation results.
 //   - Version 7 = reports the processing jobs it is running in Register, so Foghorn can re-dispatch the
 //     jobs a restarted sidecar lost (ProcessingJobInventoryProtocolMin on Foghorn).
+//   - Version 9 = acknowledges session termination only after verifying Mist session counts.
 //   - Version 8 = honors the video choice carried by restream activation and passes the
 //     corresponding media policy to a capable Mist controller.
-const controlProtocolVersion int32 = 8
+const controlProtocolVersion int32 = 9
 
 // DeleteClipFunc is the function type for clip deletion
 type DeleteClipFunc func(clipHash string) (uint64, error)
@@ -2204,7 +2205,11 @@ func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 				}
 			case *ipcpb.ControlMessage_StopSessionsRequest:
 				// Handle stop sessions request from Foghorn (billing suspension)
-				go handleStopSessions(logger, x.StopSessionsRequest)
+				if x.StopSessionsRequest.GetRequestId() == "" {
+					go handleStopSessions(logger, x.StopSessionsRequest)
+				} else if stopSessionsNodeMatches(x.StopSessionsRequest, connection) {
+					go handleConfirmedStopSessions(logger, x.StopSessionsRequest, connection)
+				}
 			case *ipcpb.ControlMessage_InvalidateSessionsRequest:
 				// Re-run USER_NEW for active sessions after a playback policy
 				// or signing-key change. Does NOT disconnect viewers.
@@ -3554,58 +3559,11 @@ func SendSyncComplete(requestID, assetHash, status string, sizeBytes uint64, err
 // handleStopSessions terminates all sessions, viewers and publisher input, of
 // the given streams on this node. Foghorn sends it when a tenant is suspended.
 func handleStopSessions(logger logging.Logger, req *ipcpb.StopSessionsRequest) {
-	if len(req.StreamNames) == 0 {
-		return
-	}
-	if sessions := currentPlaybackGrantSessions(); sessions != nil {
-		sessions.StopStreams(req.StreamNames, req.GetReason())
-	}
-
-	cfg := currentConfig
-	if cfg == nil {
-		logger.Warn("config not initialized; cannot stop sessions")
-		return
-	}
-
-	mistClient := mist.NewClient(logger, appconfig.MistClient())
-	if cfg.MistServerURL != "" {
-		mistClient.BaseURL = cfg.MistServerURL
-	}
-
-	// Foghorn names streams by internal name; Mist stops sessions by exact
-	// runtime name. Stopping a runtime name ends its viewers and its input
-	// session, so the publisher is disconnected too; its reconnect is refused
-	// at PUSH_REWRITE while the tenant is suspended.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	live, listErr := mistClient.ViewerSessions(ctx)
-	if listErr != nil {
-		logger.WithError(listErr).WithField("tenant_id", req.TenantId).
-			Warn("Cannot list Mist viewer sessions; stopping the streams under their standard runtime names only")
+	if err := stopSessionsEffect(ctx, logger, req, nil); err != nil {
+		logger.WithError(err).WithField("tenant_id", req.GetTenantId()).Warn("Failed to stop sessions via MistServer API")
 	}
-	runtimeNames := mist.SessionStreamNames(req.StreamNames, live)
-
-	logger.WithFields(logging.Fields{
-		"tenant_id":     req.TenantId,
-		"reason":        req.Reason,
-		"stream_count":  len(req.StreamNames),
-		"stream_names":  req.StreamNames,
-		"runtime_names": runtimeNames,
-	}).Info("Stopping sessions for suspended tenant")
-
-	if err := mistClient.StopSessionsMultipleContext(ctx, runtimeNames); err != nil {
-		logger.WithFields(logging.Fields{
-			"tenant_id":     req.TenantId,
-			"runtime_names": runtimeNames,
-			"error":         err,
-		}).Error("Failed to stop sessions via MistServer API")
-		return
-	}
-
-	logger.WithFields(logging.Fields{
-		"tenant_id":     req.TenantId,
-		"runtime_names": runtimeNames,
-	}).Info("Successfully stopped sessions for suspended tenant")
 }
 
 // handleInvalidateSessions re-runs USER_NEW for active sessions on the listed

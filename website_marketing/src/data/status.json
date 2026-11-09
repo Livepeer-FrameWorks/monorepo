@@ -1387,6 +1387,19 @@
       "roadmap": null,
       "showcase": null
     },
+    "vat-invoicing": {
+      "id": "vat-invoicing",
+      "title": "VAT assessment and original tax documents",
+      "status": "shipped",
+      "availability": "Available",
+      "maturity": null,
+      "horizon": "now",
+      "tier": "Shipping today",
+      "tag": "Shipping",
+      "note": null,
+      "roadmap": null,
+      "showcase": null
+    },
     "viewer-protocol-selection": {
       "id": "viewer-protocol-selection",
       "title": "Viewer protocol selection",

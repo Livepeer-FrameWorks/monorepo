@@ -381,6 +381,7 @@ type Querier interface {
 	GetRegistryProcessingJob(ctx context.Context, artifactHash sql.NullString) (GetRegistryProcessingJobRow, error)
 	GetRelayArtifact(ctx context.Context, artifactHash string) (GetRelayArtifactRow, error)
 	GetRelayVodMetadata(ctx context.Context, artifactHash string) (GetRelayVodMetadataRow, error)
+	GetStopSessionsGeneration(ctx context.Context, arg GetStopSessionsGenerationParams) (string, error)
 	GetStreamRuntimeDiagnosis(ctx context.Context, arg GetStreamRuntimeDiagnosisParams) (json.RawMessage, error)
 	GetSyncCompletionAttempt(ctx context.Context, arg GetSyncCompletionAttemptParams) (GetSyncCompletionAttemptRow, error)
 	GetTenantAuthorityProjection(ctx context.Context, tenantID string) (GetTenantAuthorityProjectionRow, error)

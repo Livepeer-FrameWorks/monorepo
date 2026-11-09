@@ -72,10 +72,11 @@ confirmed-payment receipt, and credit note, renders only persisted evidence, and
 returns an integrity hash. Database deletion guards retain these source records
 for at least ten years. Confirmed top-up is the VAT tax point; each document
 records the effective rate source and customer location. New instructions retain
-an immutable `vat-at-confirmed-topup-v2` assessment with the supplier/customer
-identity, accepted treatment, location evidence, and the VIES or establishment
-review actually used. Domestic/destination statutory rates still follow the
-confirmation tax point. Changing a billing profile, supplier configuration or
+an immutable `exclusive-crypto-advance-v3` assessment with the supplier/customer
+identity, accepted treatment, location evidence, and the VIES proof actually
+used. Gross payment and net service credit are distinct; a EUR 100 net advance
+with 21% VAT collects EUR 121. Effective rates are retained at the tax point.
+Changing a billing profile, supplier configuration or
 VIES availability cannot erase an already-received payment's document.
 
 New instructions require a billing country and a personal/business
@@ -85,22 +86,20 @@ EUR 100 require a full invoice identity. Older quotes settle under their
 versioned legacy rules; non-EU legacy treatment is explicitly marked for review,
 not reused to authorize new quotes.
 
-Payment instructions cannot outlive the reviewed country policy. Late receipts
-still produce their document; expired or revoked evidence is retained and marked
+Late receipts retain their accepted payment and tax evidence; missing or
+unusable proof is retained for review rather than silently changing the claim.
+Expired or revoked evidence is marked
 `CRYPTO_TAX_REVIEW_REQUIRED` in the financial audit. The original quote assessment
 and confirmation evidence remain available for correction review.
 
-Cross-border consumer payments are checked before payment instructions are
-returned. A foreign country alone cannot establish tax exemption. EU consumer
-destination VAT requires an explicitly configured regime and confirmed OSS or
-destination registration; unconfigured destinations and insufficient or
-conflicting location evidence are held for review. EU business reverse charge
-requires validated VAT evidence. National numbers and Greek GR/EL prefixes are
-normalized before VIES validation. Invalid claims or an outage without a valid
-cached result are held before payment; they are not silently recast as consumer
-sales. Reviewed non-EU policies and operator establishment evidence are described
-in [Billing financial evidence](/operators/billing-financials/). These checks supplement the global
-crypto readiness report.
+The Dutch supplier service policy charges Dutch VAT to Dutch customers and EU
+consumers. EU business reverse charge requires validated VAT evidence. Non-EU
+services state that Dutch VAT is outside scope. National numbers and Greek
+GR/EL prefixes are normalized before validation. Invalid claims or unavailable
+verification are returned before a new purchase is accepted. The recurring
+collection fallback and operator review workflow are described in
+[Billing financial evidence](/operators/billing-financials/). These checks
+supplement the global crypto readiness report.
 
 ## Custody and sweeping
 

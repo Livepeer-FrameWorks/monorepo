@@ -106,21 +106,19 @@ func TestNativeMollieIssuanceDoesNotAssessInsideLockedTransaction_RealPG(t *test
 			}
 			if changed {
 				select {
-				case err := <-updated:
-					if err != nil {
-						t.Fatalf("VIES assessment held tenant lock: %v", err)
-					}
+				case <-updated:
+					t.Fatal("paid issuance called current VIES instead of retained proof")
 				default:
-					t.Fatal("fresh assessment never reached VIES")
 				}
 			}
+
 			var reviewed bool
 			var buyer string
 			var gross int64
 			if err = db.QueryRow(`SELECT COALESCE((tax_decision->>'review_required')::boolean,false),customer_snapshot->>'name',gross_eur_cents FROM purser.billing_invoices WHERE tenant_id=$1::uuid`, tenant).Scan(&reviewed, &buyer, &gross); err != nil {
 				t.Fatal(err)
 			}
-			if reviewed != changed || gross != terms.GrossMinor || buyer != "Original Buyer" {
+			if reviewed || gross != terms.GrossMinor || buyer != "Original Buyer" {
 				t.Fatalf("locked binding lost paid terms or changed-profile review: review%v gross%d buyer%s", reviewed, gross, buyer)
 			}
 		})

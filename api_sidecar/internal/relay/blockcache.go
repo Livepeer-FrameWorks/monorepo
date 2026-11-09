@@ -27,7 +27,6 @@ package relay
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -147,17 +146,6 @@ func (s *BlockStore) SaveMeta(m *BlockMeta) error {
 		return err
 	}
 	return os.Rename(tmp, s.MetaPath())
-}
-
-// EnsureMeta validates an existing meta against the given asset hash, total
-// size and upstream object, and rebuilds the dir from scratch when they
-// don't match (the blocks are another object's bytes). An unknown object on
-// either side matches; the first known one is recorded. Creates a fresh meta
-// when the dir is empty or unreadable. Cleanup errors leave the new identity
-// in place and the detached bytes eligible for ordinary cache eviction.
-func (s *BlockStore) EnsureMeta(assetHash, ext, object string, totalSize int64) (*BlockMeta, error) {
-	meta, retired, err := s.prepareMeta(assetHash, ext, object, totalSize)
-	return meta, errors.Join(err, s.removeRetired(retired))
 }
 
 // prepareMeta atomically detaches an untrusted generation before replacing its

@@ -49,7 +49,7 @@ func stackFallbackObjects(t *testing.T, ctx context.Context, fixture stackRecurr
 func prepareStackRecurringFallbacks(t *testing.T, ctx context.Context, conn *grpc.ClientConn, db *sql.DB) []stackRecurringFallback {
 	t.Helper()
 	tenants := strings.Split(os.Getenv("STACK_BILLING_FALLBACK_TENANT_IDS"), ",")
-	scenarios := []string{"incomplete business", "incomplete EU consumer", "incomplete foreign consumer", "invalid complete VAT claim", "unproven foreign business"}
+	scenarios := []string{"incomplete business", "incomplete EU consumer", "incomplete foreign consumer", "invalid complete VAT claim"}
 	if len(tenants) != len(scenarios) {
 		t.Fatal("scenario54 must supply a separate tenant for every recurring fallback case")
 	}
@@ -105,9 +105,7 @@ func prepareStackRecurringFallback(t *testing.T, ctx context.Context, conn *grpc
 		// The deployed worker can assess the row as soon as it is saved.
 		var configured map[string]bool
 		stackProviderControl(t, ctx, "vies", map[string]any{"vat_number": "U99999999", "valid": false}, &configured)
-	case "unproven foreign business":
-		name = fixture.knownName
-		fixture.country, fixture.claimedVAT, fixture.reason = "US", "", "business_evidence_required"
+
 	}
 	// Each disposable customer starts with a valid reverse-charge checkout.
 	// Mutating only its fixture row exercises historical saved claims as well
@@ -124,9 +122,8 @@ func prepareStackRecurringFallback(t *testing.T, ctx context.Context, conn *grpc
 
 func verifyStackRecurringFallback(t *testing.T, ctx context.Context, conn *grpc.ClientConn, db *sql.DB, fixture stackRecurringFallback) {
 	t.Helper()
-	// The main held-renewal fixture has just observed the first real worker
-	// cycle. This tenant shares that cycle, allowing only its remaining scan time.
-	deadline := time.NewTimer(time.Minute)
+	// The worker runs on its ordinary five-minute cadence for these fixtures.
+	deadline := time.NewTimer(7 * time.Minute)
 	defer deadline.Stop()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -189,7 +186,7 @@ func verifyStackRecurringFallback(t *testing.T, ctx context.Context, conn *grpc.
 		}
 	}
 	details, err := purserpb.NewSubscriptionServiceClient(conn).GetBillingDetails(ctx, &purserpb.GetBillingDetailsRequest{TenantId: fixture.tenant})
-	if err != nil || !details.GetTaxReviewRequired() || details.GetIsComplete() != (fixture.scenario == "invalid complete VAT claim" || fixture.scenario == "unproven foreign business") {
+	if err != nil || !details.GetTaxReviewRequired() || details.GetIsComplete() != (fixture.scenario == "invalid complete VAT claim") {
 		t.Fatalf("%s lost customer-visible profile/VAT review: details=%+v err=%v", fixture.scenario, details, err)
 	}
 	var firstInvoice, firstDocument, firstReview, firstSnapshot, firstEvidence, secondDocument string

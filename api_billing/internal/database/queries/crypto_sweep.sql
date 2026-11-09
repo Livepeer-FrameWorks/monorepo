@@ -1,11 +1,14 @@
--- name: CountCurrentEUVATRates :one
+-- name: CountCurrentDutchVATRates :one
 SELECT COUNT(*)
 FROM purser.vat_rate_periods
-WHERE effective_from <= CURRENT_DATE
+WHERE country_code='NL' AND rate_bps>0 AND effective_from <= CURRENT_DATE
   AND (effective_until IS NULL OR effective_until > CURRENT_DATE);
 
 -- name: CountOpenCryptoAccountingAnomalies :one
-SELECT COUNT(*) FROM purser.crypto_accounting_anomalies WHERE status = 'open';
+SELECT COUNT(*) FROM purser.crypto_accounting_anomalies
+WHERE status='open' AND kind IN ('tax_document_missing','tax_assessment_review',
+ 'x402_consumed_authorization_missing_transaction','x402_late_settlement_missing_reversal',
+ 'x402_settlement_confirmed_after_quote_expiry');
 
 -- name: GetCryptoScannerHealth :one
 SELECT scanned_at, last_error, lag_blocks

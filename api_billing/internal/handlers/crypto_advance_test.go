@@ -108,16 +108,15 @@ func TestCryptoAdvanceRefusesUnconfiguredSupplierBeforePaymentInstructions(t *te
 	}
 }
 
-func TestCryptoAdvanceRetainsReviewForGraceAndExpiredPolicy(t *testing.T) {
+func TestCryptoAdvanceRetainsReviewForGrace(t *testing.T) {
 	now := time.Now().UTC()
-	expired := now.Add(-time.Minute)
 	money, cash, err := quoteAdvanceMoney(800, 0, fx.Identity(now))
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile := CryptoBillingProfile{CustomerType: "business", Name: "Accepted Buyer", Email: "buyer@example.test", Address: json.RawMessage(`{"street":"Main1","city":"Berlin","postal_code":"10115","country":"DE"}`), TaxAssessment: &CryptoTaxAssessment{Advance: &money, PolicyVersion: billing.CurrentCryptoTopupTaxPolicy, AssessedAt: now.Add(-2 * time.Minute), SupplierCountry: "NL", Supplier: DocumentSupplier{Name: "Accepted Supplier", Address: "Leiden, NL", VATNumber: "NL123456789B01", RegistrationNumber: "12345678"}, VATValidationMode: "outage_grace", Decision: vatDecision{Country: "DE", RateBPS: 0, VIESValidated: true, ReverseCharge: true, Source: "Retained VIES", PolicyValidUntil: &expired}}}
+	profile := CryptoBillingProfile{CustomerType: "business", Name: "Accepted Buyer", Email: "buyer@example.test", Address: json.RawMessage(`{"street":"Main1","city":"Berlin","postal_code":"10115","country":"DE"}`), TaxAssessment: &CryptoTaxAssessment{Advance: &money, PolicyVersion: billing.CurrentCryptoTopupTaxPolicy, AssessedAt: now.Add(-2 * time.Minute), SupplierCountry: "NL", Supplier: DocumentSupplier{Name: "Accepted Supplier", Address: "Leiden, NL", VATNumber: "NL123456789B01", RegistrationNumber: "12345678"}, VATValidationMode: "outage_grace", Decision: vatDecision{Country: "DE", RateBPS: 0, VIESValidated: true, ReverseCharge: true, Source: "Retained VIES"}}}
 	a, err := cryptoAdvanceAssessment(profile, "full", cash, now)
-	if err != nil || !a.ReviewRequired || len(a.ReviewReasons) != 2 || a.Net != 800 || a.VAT != 0 || a.Gross != 800 || a.Customer.Name != "Accepted Buyer" || a.Supplier.Name != "Accepted Supplier" {
+	if err != nil || !a.ReviewRequired || len(a.ReviewReasons) != 1 || a.Net != 800 || a.VAT != 0 || a.Gross != 800 || a.Customer.Name != "Accepted Buyer" || a.Supplier.Name != "Accepted Supplier" {
 		t.Fatalf("review changed or lost accepted advance facts: %+v %v", a, err)
 	}
 }

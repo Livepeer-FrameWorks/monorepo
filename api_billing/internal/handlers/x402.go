@@ -1600,28 +1600,14 @@ func (h *X402Handler) generateCryptoTopupInvoice(ctx context.Context, tenantID s
 		taxValidationStatus = "vies_valid_domestic"
 	}
 
-	reviewRequired := vatDecision.verification.Mode == "outage_grace" || (vatDecision.PolicyValidUntil != nil && !confirmedAt.Before(*vatDecision.PolicyValidUntil)) || (profile.TaxAssessment != nil && profile.TaxAssessment.VATValidationMode == "outage_grace")
-	var confirmationBusinessReview json.RawMessage
-	if profile.TaxAssessment != nil && len(vatDecision.BusinessEstablishment) > 0 {
-		fingerprint, hashErr := CryptoBusinessProfileFingerprint(profile)
-		if hashErr != nil {
-			reviewRequired = true
-		} else {
-			current, _, reviewErr := h.loadBusinessReview(ctx, tenantID, fingerprint, billingCountry, confirmedAt)
-			if reviewErr != nil {
-				reviewRequired = true
-			} else {
-				confirmationBusinessReview = current
-			}
-		}
-	}
+	reviewRequired := vatDecision.Verification.Mode == "outage_grace" || (profile.TaxAssessment != nil && profile.TaxAssessment.VATValidationMode == "outage_grace")
 	customerProfile := profile
 	customerProfile.TaxAssessment = nil
 	assessmentJSON, encodeErr := json.Marshal(map[string]any{
 		"policy_version": policyRef, "quoted_assessment": profile.TaxAssessment,
 		"customer_profile": customerProfile, "confirmed_decision": vatDecision,
 		"supplier": supplier, "tax_point": confirmedAt, "legacy": profile.TaxAssessment == nil,
-		"legacy_vat_validation": vatDecision.verification.Snapshot, "review_required": reviewRequired, "confirmation_business_review": confirmationBusinessReview,
+		"legacy_vat_validation": vatDecision.Verification.Snapshot, "review_required": reviewRequired,
 	})
 	if encodeErr != nil {
 		return "", fmt.Errorf("encode crypto document assessment: %w", encodeErr)
@@ -2001,85 +1987,7 @@ func (h *X402Handler) simulateTransfer(ctx context.Context, network NetworkConfi
 	return nil
 }
 
-const developmentVATRateSource = "bundled development fallback; not allowed in production"
-
-// This fallback keeps isolated unit/dev stacks useful before migrations are
-// applied. Production always requires the effective-dated database catalog.
-var developmentVATRates = map[string]int{
-	"AT": 2000, // Austria
-	"BE": 2100, // Belgium
-	"BG": 2000, // Bulgaria
-	"HR": 2500, // Croatia
-	"CY": 1900, // Cyprus
-	"CZ": 2100, // Czech Republic
-	"DK": 2500, // Denmark
-	"EE": 2400, // Estonia
-	"FI": 2550, // Finland
-	"FR": 2000, // France
-	"DE": 1900, // Germany
-	"GR": 2400, // Greece
-	"HU": 2700, // Hungary
-	"IE": 2300, // Ireland
-	"IT": 2200, // Italy
-	"LV": 2100, // Latvia
-	"LT": 2100, // Lithuania
-	"LU": 1700, // Luxembourg
-	"MT": 1800, // Malta
-	"NL": 2100, // Netherlands
-	"PL": 2300, // Poland
-	"PT": 2300, // Portugal
-	"RO": 2100, // Romania
-	"SK": 2300, // Slovakia
-	"SI": 2200, // Slovenia
-	"ES": 2100, // Spain
-	"SE": 2500, // Sweden
-}
-
-type vatDecision struct {
-	verification          vatVerification
-	BusinessEstablishment json.RawMessage       `json:"business_establishment,omitempty"`
-	PolicyValidFrom       *time.Time            `json:"policy_valid_from,omitempty"`
-	PolicyValidUntil      *time.Time            `json:"policy_valid_until,omitempty"`
-	TaxLabel              string                `json:"tax_label,omitempty"`
-	Wording               string                `json:"wording,omitempty"`
-	Treatment             string                `json:"treatment,omitempty"`
-	PolicyEvidence        []billingtax.Evidence `json:"policy_evidence,omitempty"`
-	PolicyReference       string                `json:"policy_reference,omitempty"`
-	Evidence              []billingtax.Evidence `json:"evidence,omitempty"`
-	RateBPS               int
-	Country               string
-	VIESValidated         bool
-	ReverseCharge         bool
-	Source                string
-	CheckedOn             string
-	EffectiveFrom         string
-}
-
-func (h *X402Handler) loadEffectiveVATRate(ctx context.Context, country string, at time.Time) (vatDecision, error) {
-	row, err := purserdb.New(h.taxDatabase()).GetEffectiveVATRate(ctx, purserdb.GetEffectiveVATRateParams{
-		CountryCode: country, EffectiveAt: at,
-	})
-	if err == nil {
-		return vatDecision{
-			RateBPS: int(row.RateBps), Country: country, Source: row.Source,
-			CheckedOn: row.SourceCheckedOn, EffectiveFrom: row.EffectiveFrom,
-		}, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return vatDecision{}, fmt.Errorf("load effective VAT rate for %s: %w", country, err)
-	}
-	decision := vatDecision{Country: country}
-	if !appconfig.Runtime().IsProduction() {
-		if rate, ok := developmentVATRates[country]; ok {
-			decision.RateBPS = rate
-			decision.Source = developmentVATRateSource
-			decision.CheckedOn = "2026-07-13"
-			decision.EffectiveFrom = "2026-01-01"
-			return decision, nil
-		}
-	}
-	return vatDecision{}, fmt.Errorf("no effective VAT rate for %s at %s", country, at.Format("2006-01-02"))
-}
+type vatDecision = billingtax.RetainedDecision
 
 type billingAddress struct {
 	Street     string `json:"street"`
@@ -2096,101 +2004,8 @@ func parseBillingAddress(raw []byte) (billingAddress, error) {
 	return addr, nil
 }
 
-func (h *X402Handler) getVATDecisionForProfile(ctx context.Context, tenantID string, profile CryptoBillingProfile, clientIP string, at time.Time) (vatDecision, error) {
-	addr, err := parseBillingAddress(profile.Address)
-	if err != nil || !countries.IsValid(addr.Country) {
-		return vatDecision{}, billingtax.Review("billing_country_required", "confirm a valid billing country")
-	}
-	country := countries.Normalize(addr.Country)
-	customerType := billingtax.CustomerType(profile.effectiveCustomerType())
-	evidence := []billingtax.Evidence{{Source: "billing_address", Country: country, Reference: "immutable-billing-profile"}}
-	if ipCountry := h.getCountryFromIP(clientIP); ipCountry != "" {
-		evidence = append(evidence, billingtax.Evidence{Source: "ip_country", Country: ipCountry, Reference: clientIP})
-	}
-	rt := appconfig.Runtime()
-	// The Dutch supplier's selected service policy charges home VAT to EU
-	// consumers and no Dutch VAT outside the EU. A configured jurisdiction
-	// policy supplies any additional destination treatment.
-	if countries.Normalize(h.supplierCountry) == "NL" && (customerType == billingtax.Consumer || customerType == billingtax.Business) {
-		if !billingtax.IsEU(country) && strings.TrimSpace(rt.CryptoTaxPolicyJSON) == "" {
-			return vatDecision{Country: country, TaxLabel: "VAT", Treatment: "non_eu_service", Wording: "Outside scope of Dutch VAT", Source: "Dutch service place-of-supply policy", PolicyReference: "nl-service-policy-v1", CheckedOn: at.Format(time.DateOnly), EffectiveFrom: at.Format(time.DateOnly), Evidence: evidence}, nil
-		}
-		if customerType == billingtax.Consumer && country != "NL" && billingtax.IsEU(country) && rt.EUConsumerVATMode != "destination" {
-			d, rateErr := h.loadEffectiveVATRate(ctx, "NL", at)
-			d.Country = country
-			d.Treatment = "eu_b2c_home"
-			d.TaxLabel = "VAT"
-			d.PolicyReference = "nl-service-policy-v1"
-			d.Evidence = evidence
-			return d, rateErr
-		}
-	}
-	policy := billingtax.Policy{SupplierCountry: h.supplierCountry, EUConsumerMode: billingtax.ConsumerMode(rt.EUConsumerVATMode), DestinationRegistrationConfirmed: rt.EUConsumerDestinationRegistered}
-	profileInput := billingtax.Profile{Type: customerType, Country: country, VATNumber: profile.VATNumber, Evidence: evidence}
-	policyReference := ""
-	var policyFrom, policyUntil *time.Time
-	var businessReview json.RawMessage
-	var policyEvidence []billingtax.Evidence
-	if country != countries.Normalize(h.supplierCountry) && !billingtax.IsEU(country) && strings.TrimSpace(rt.CryptoTaxPolicyJSON) != "" {
-		operatorPolicy, policyErr := billingtax.DecodeOperatorPolicy(rt.CryptoTaxPolicyJSON, h.supplierCountry)
-		if policyErr != nil || !operatorPolicy.Active(at) {
-			return vatDecision{}, billingtax.Review("foreign_tax_policy_required", "the destination's reviewed policy is unavailable or expired")
-		}
-		operatorPolicy.Apply(&policy)
-		policyReference = operatorPolicy.Reference
-		policyFrom = &operatorPolicy.ValidFrom
-		policyUntil = &operatorPolicy.ValidUntil
-		if rule, ok := operatorPolicy.NonEUConsumers[country]; ok && customerType == billingtax.Consumer {
-			policyEvidence = append(policyEvidence, billingtax.Evidence{Source: "jurisdiction_review", Country: country, Reference: rule.EvidenceReference})
-		}
-		if rule, ok := operatorPolicy.NonEUBusinesses[country]; ok && customerType == billingtax.Business {
-			policyEvidence = append(policyEvidence, billingtax.Evidence{Source: "jurisdiction_review", Country: country, Reference: rule.EvidenceReference})
-		}
-		if customerType == billingtax.Business {
-			fingerprint, fingerprintErr := CryptoBusinessProfileFingerprint(profile)
-			if fingerprintErr == nil {
-				record, proof, reviewErr := h.loadBusinessReview(ctx, tenantID, fingerprint, country, at)
-				if reviewErr != nil && !errors.Is(reviewErr, sql.ErrNoRows) {
-					return vatDecision{}, billingtax.Review("business_evidence_unavailable", "Business verification is temporarily unavailable; retry before paying")
-				}
-				if reviewErr == nil {
-					businessReview = record
-					profileInput.BusinessEvidenceReference = proof.Reference
-					policyEvidence = append(policyEvidence, billingtax.Evidence{Source: "business_establishment", Country: country, Reference: proof.Reference})
-				}
-			}
-		}
-
-	}
-	lookup := func(ctx context.Context, country string, at time.Time) (billingtax.Rate, error) {
-		decision, err := h.loadEffectiveVATRate(ctx, country, at)
-		return billingtax.Rate{BPS: decision.RateBPS, Source: decision.Source, CheckedOn: decision.CheckedOn, EffectiveFrom: decision.EffectiveFrom}, err
-	}
-	var verification vatVerification
-	validate := func(ctx context.Context, country, vatNumber string) (bool, error) {
-		observed, err := h.validateVIESVATEvidence(ctx, tenantID, country, vatNumber)
-		if err == nil && observed.Valid {
-			verification = observed
-		}
-		return observed.Valid, err
-	}
-
-	decision, err := billingtax.Evaluate(ctx, policy, profileInput, 0, at, lookup, validate)
-	if err != nil {
-		return vatDecision{}, err
-	}
-	result := vatDecision{PolicyEvidence: policyEvidence, BusinessEstablishment: businessReview, PolicyValidFrom: policyFrom, PolicyValidUntil: policyUntil, TaxLabel: decision.TaxLabel, Wording: decision.Wording, Treatment: decision.Treatment, PolicyReference: policyReference, Evidence: decision.Evidence, RateBPS: decision.Rate.BPS, Country: decision.Country, VIESValidated: decision.VATValidated, ReverseCharge: decision.ReverseCharge, Source: decision.Rate.Source, CheckedOn: decision.Rate.CheckedOn, EffectiveFrom: decision.Rate.EffectiveFrom}
-	if result.ReverseCharge {
-		result.CheckedOn, result.EffectiveFrom = at.Format("2006-01-02"), at.Format("2006-01-02")
-	} else if customerType == billingtax.Business && country == countries.Normalize(h.supplierCountry) && strings.TrimSpace(profile.VATNumber) != "" {
-		validated, validationErr := validate(ctx, country, profile.VATNumber)
-		if validationErr == nil && validated {
-			result.VIESValidated = true
-			result.Source += "; VIES validated domestic customer"
-		}
-	}
-	result.verification = verification
-	return result, nil
+func (h *X402Handler) getVATDecisionForProfile(ctx context.Context, tenant string, profile BillingProfile, clientIP string, at time.Time) (vatDecision, error) {
+	return (&taxAssessor{db: h.taxDatabase(), supplierCountry: h.supplierCountry}).assess(ctx, tenant, profile, clientIP, h.getCountryFromIP(clientIP), billingtax.Checkout, at)
 }
 
 type cryptoTaxSnapshot struct {
@@ -2268,33 +2083,10 @@ type CryptoDocumentRequirement struct {
 	RequiresBillingCountry  bool
 }
 
-// CryptoBillingProfile is the immutable customer snapshot bound to a payment
-// quote or deposit address. The raw structured address is retained verbatim.
-type CryptoBillingProfile struct {
-	TaxAssessment *CryptoTaxAssessment `json:"tax_assessment,omitempty"`
-	CustomerType  string               `json:"customer_type,omitempty"`
-	Email         string               `json:"email,omitempty"`
-	Name          string               `json:"name,omitempty"`
-	Company       string               `json:"company,omitempty"`
-	VATNumber     string               `json:"vat_number,omitempty"`
-	Address       json.RawMessage      `json:"address,omitempty"`
-}
+type BillingProfile = billingtax.BillingProfile
 
-func (p CryptoBillingProfile) effectiveCustomerType() string {
-	switch p.CustomerType {
-	case "consumer", "business":
-		return p.CustomerType
-	case "", "unspecified":
-		if strings.TrimSpace(p.VATNumber) != "" {
-			return "business"
-		}
-	}
-	return ""
-}
-
-func (p CryptoBillingProfile) Complete() bool {
-	return strings.TrimSpace(p.Name) != "" && isBillingDetailsComplete(sql.NullString{String: p.Email, Valid: strings.TrimSpace(p.Email) != ""}, p.Address)
-}
+// CryptoBillingProfile names the customer snapshot carried by legacy crypto APIs.
+type CryptoBillingProfile = billingtax.BillingProfile
 
 // GetCryptoDocumentRequirement applies the EUR 100 simplified-invoice ceiling
 // and treats a submitted VAT number as an explicit B2B/full-invoice claim.
@@ -2320,7 +2112,7 @@ func (h *X402Handler) GetCryptoDocumentRequirement(ctx context.Context, tenantID
 		VATNumber:    strings.TrimSpace(row.TaxID.String),
 		Address:      append(json.RawMessage(nil), row.BillingAddress...),
 	}
-	if effective := profile.effectiveCustomerType(); effective != "" {
+	if effective := profile.EffectiveCustomerType(); effective != "" {
 		profile.CustomerType = effective
 	}
 	address, addressErr := parseBillingAddress(profile.Address)
@@ -2341,11 +2133,11 @@ func (h *X402Handler) GetCryptoDocumentRequirement(ctx context.Context, tenantID
 			Supplier: DocumentSupplier{Name: h.supplierName, Address: h.supplierAddress, VATNumber: h.supplierVAT, RegistrationNumber: h.supplierRegistration},
 			Decision: decision, IPCountry: h.getCountryFromIP(clientIP)}
 		if decision.VIESValidated {
-			if len(decision.verification.Snapshot) == 0 {
+			if len(decision.Verification.Snapshot) == 0 {
 				return CryptoDocumentRequirement{}, billingtax.Review("vat_validation_unavailable", "VAT evidence could not be retained; retry before paying")
 			}
-			profile.TaxAssessment.VATValidation = append(json.RawMessage(nil), decision.verification.Snapshot...)
-			profile.TaxAssessment.VATValidationMode = decision.verification.Mode
+			profile.TaxAssessment.VATValidation = append(json.RawMessage(nil), decision.Verification.Snapshot...)
+			profile.TaxAssessment.VATValidationMode = decision.Verification.Mode
 		}
 
 	}

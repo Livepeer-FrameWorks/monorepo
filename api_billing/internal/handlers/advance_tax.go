@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"frameworks/api_billing/internal/fx"
+	billingtax "frameworks/api_billing/internal/tax"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
@@ -34,16 +35,7 @@ func QuoteFiatPrepaidAdvance(ctx context.Context, db *sql.DB, tenant string, net
 
 // AdvanceMoney separates the gross cash receipt from the net service credit.
 // VAT is rounded in the payment currency and valued at the locked FX rate.
-type AdvanceMoney struct {
-	NetOriginal   int64  `json:"net_original_minor"`
-	VATOriginal   int64  `json:"vat_original_minor"`
-	GrossOriginal int64  `json:"gross_original_minor"`
-	NetEUR        int64  `json:"net_eur_cents"`
-	VATEUR        int64  `json:"vat_eur_cents"`
-	GrossEUR      int64  `json:"gross_eur_cents"`
-	Currency      string `json:"currency"`
-	RateBPS       int    `json:"rate_bps"`
-}
+type AdvanceMoney = billingtax.AdvanceMoney
 
 func quoteAdvanceMoney(netOriginal int64, rateBPS int, rate fx.Rate) (AdvanceMoney, fx.Record, error) {
 	a := AdvanceMoney{NetOriginal: netOriginal, Currency: rate.Currency, RateBPS: rateBPS}

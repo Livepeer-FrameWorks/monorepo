@@ -167,33 +167,6 @@ WHERE id = sqlc.arg(invoice_id)::text::uuid
   AND tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND status IN ('pending', 'overdue');
 
--- name: GetSubscriptionForInvoice :one
--- The columns ListSubscriptionsDueForInvoice returns, for one tenant whose
--- period is closed early.
-SELECT ts.tenant_id::text AS tenant_id,
-       ts.billing_email,
-       ts.tier_id,
-       ts.status,
-       ts.billing_period_start,
-       ts.billing_period_end,
-       ts.mollie_next_payment_date,
-       ts.stripe_subscription_id,
-       ts.mollie_subscription_id,
-       ts.payment_method,
-       ts.stripe_customer_id,
-       ts.presentment_currency::text AS presentment_currency,
-       EXISTS (
-           SELECT 1 FROM purser.mollie_customers mc WHERE mc.tenant_id = ts.tenant_id
-       )::boolean AS has_mollie_customer,
-       bt.tier_name,
-       bt.display_name,
-       bt.billing_period,
-       ts.billing_model
-FROM purser.tenant_subscriptions ts
-JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
-WHERE ts.tenant_id = sqlc.arg(tenant_id)::text::uuid
-  AND ts.status = 'active';
-
 -- name: ActivateAdvanceBilledSubscription :execrows
 -- Applies the tier a payment-method setup was started for and starts the first
 -- period at activation. The base fee for that period is then charged in

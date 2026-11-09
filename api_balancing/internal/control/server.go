@@ -2403,6 +2403,8 @@ receiveLoop:
 			go processAuthorizeRelayPullRequest(x.AuthorizeRelayPullRequest, connSession.NodeID(), stream, registry.log)
 		case *ipcpb.ControlMessage_PlaybackGrantRequest:
 			go processPlaybackGrantRequest(x.PlaybackGrantRequest, connSession.NodeID(), stream, registry.log)
+		case *ipcpb.ControlMessage_StopSessionsResult:
+			acceptStopSessionsResult(x.StopSessionsResult, connSession)
 		case *ipcpb.ControlMessage_DrainStreamResponse:
 			// Correlated completion of a prior-owner drain dispatched by the admission-effects
 			// worker. unloaded=false with an empty error means the stream was already absent — an
@@ -4965,6 +4967,7 @@ const MinControlProtocolVersion int32 = NodeIdentityProofProtocolMin
 // A false capability never means "drop the node": a dispatched operation the session cannot do FAILS CLOSED and the
 // work stays local/retryable until the sidecar is upgraded.
 type ControlFeatures struct {
+	ConfirmedSessionStop   bool // effect acknowledgement scoped to an exact node connection
 	StagedFreeze           bool // server-minted staged freeze (>= FreezeStagedProtocolMin)
 	StagedThumbnail        bool // server-minted staged thumbnail publication (>= ThumbnailStagedProtocolMin)
 	AuthoritativeInventory bool // versioned whole-node artifact inventory (>= AuthoritativeInventoryProtocolMin)
@@ -4976,6 +4979,7 @@ type ControlFeatures struct {
 // ControlFeaturesForProtocol derives the capability set a declared control-protocol version supports.
 func ControlFeaturesForProtocol(v int32) ControlFeatures {
 	return ControlFeatures{
+		ConfirmedSessionStop:   v >= StopSessionsAckProtocolMin,
 		StagedFreeze:           v >= FreezeStagedProtocolMin,
 		StagedThumbnail:        v >= ThumbnailStagedProtocolMin,
 		AuthoritativeInventory: v >= AuthoritativeInventoryProtocolMin,
@@ -8122,29 +8126,23 @@ func SendDtshSyncRequest(nodeID string, req *ipcpb.DtshSyncRequest) error {
 }
 
 func SendLocalStopSessions(nodeID string, req *ipcpb.StopSessionsRequest) error {
-	registry.mu.RLock()
-	c := registry.conns[nodeID]
-	registry.mu.RUnlock()
-	if c == nil {
-		return ErrNotConnected
-	}
-	msg := &ipcpb.ControlMessage{
-		Payload: &ipcpb.ControlMessage_StopSessionsRequest{StopSessionsRequest: req},
-		SentAt:  timestamppb.Now(),
-	}
-	return c.stream.Send(msg)
+	return SendLocalStopSessionsContext(context.Background(), nodeID, req)
 }
 
 // SendStopSessions sends a StopSessionsRequest to the given node, relaying via HA if needed.
 func SendStopSessions(nodeID string, req *ipcpb.StopSessionsRequest) error {
-	err := SendLocalStopSessions(nodeID, req)
+	return SendStopSessionsContext(context.Background(), nodeID, req)
+}
+
+func SendStopSessionsContext(ctx context.Context, nodeID string, req *ipcpb.StopSessionsRequest) error {
+	err := SendLocalStopSessionsContext(ctx, nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil {
 		return ErrNotConnected
 	}
-	return relayFailure(err, commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
+	return relayFailure(err, commandRelay.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
 		Command:      &foghornrelaypb.ForwardCommandRequest_StopSessions{StopSessions: req},
 	}))

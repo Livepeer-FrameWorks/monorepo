@@ -55,18 +55,14 @@ type viesFault struct {
 	String string `xml:"faultstring"`
 }
 
-type vatVerification struct {
-	Valid    bool
-	Snapshot json.RawMessage
-	Mode     string
-}
+type vatVerification = billingtax.VATVerification
 
 type viesUnavailableError struct{ cause error }
 
 func (e *viesUnavailableError) Error() string { return "VIES verification is temporarily unavailable" }
 func (e *viesUnavailableError) Unwrap() error { return e.cause }
 
-func (h *X402Handler) validateVIESVATEvidence(ctx context.Context, tenantID, countryCode, vatNumber string) (vatVerification, error) {
+func (h *taxAssessor) validateVIESVATEvidence(ctx context.Context, tenantID, countryCode, vatNumber string) (vatVerification, error) {
 	canonical, err := billingtax.CanonicalVATNumber(countryCode, vatNumber)
 	if err != nil {
 		return vatVerification{}, err
@@ -76,7 +72,7 @@ func (h *X402Handler) validateVIESVATEvidence(ctx context.Context, tenantID, cou
 	digest := sha256.Sum256([]byte(canonical))
 	vatHash := hex.EncodeToString(digest[:])
 	grace := viesOutageGraceHours
-	cached, cacheErr := purserdb.New(h.taxDatabase()).GetCachedVATValidation(ctx, purserdb.GetCachedVATValidationParams{TenantID: tenantID, VatNumberHash: vatHash, OutageGraceHours: int32(grace)})
+	cached, cacheErr := purserdb.New(h.db).GetCachedVATValidation(ctx, purserdb.GetCachedVATValidationParams{TenantID: tenantID, VatNumberHash: vatHash, OutageGraceHours: int32(grace)})
 	if cacheErr == nil && cached.Fresh {
 		return vatVerification{Valid: cached.Valid, Snapshot: cached.ValidationSnapshot, Mode: "fresh_cache"}, nil
 	}
@@ -90,7 +86,7 @@ func (h *X402Handler) validateVIESVATEvidence(ctx context.Context, tenantID, cou
 	var unavailable *viesUnavailableError
 	if ctx.Err() == nil && errors.As(refreshErr, &unavailable) && grace > 0 && cacheErr == nil && cached.Valid && cached.WithinOutageGrace {
 		proof, _ := json.Marshal(map[string]any{"country": countryCode, "vat_number": canonical, "retained_validation": cached.ValidationSnapshot})
-		if err := purserdb.New(h.taxDatabase()).RecordCryptoAccountingAnomaly(ctx, purserdb.RecordCryptoAccountingAnomalyParams{TenantID: tenantID, Kind: "vies_revalidation", Network: "vies", ReferenceType: "vat_validation", ReferenceID: tenantID + ":" + vatHash, Detail: "Retained positive VIES evidence used during outage; automatic revalidation pending", EvidenceJson: proof}); err != nil {
+		if err := purserdb.New(h.db).RecordCryptoAccountingAnomaly(ctx, purserdb.RecordCryptoAccountingAnomalyParams{TenantID: tenantID, Kind: "vies_revalidation", Network: "vies", ReferenceType: "vat_validation", ReferenceID: tenantID + ":" + vatHash, Detail: "Retained positive VIES evidence used during outage; automatic revalidation pending", EvidenceJson: proof}); err != nil {
 			return vatVerification{}, err
 		}
 		return vatVerification{Valid: true, Snapshot: cached.ValidationSnapshot, Mode: "outage_grace"}, nil
@@ -98,7 +94,7 @@ func (h *X402Handler) validateVIESVATEvidence(ctx context.Context, tenantID, cou
 	return vatVerification{}, refreshErr
 }
 
-func (h *X402Handler) refreshVIESVAT(ctx context.Context, tenantID, countryCode, vatNumber, vatHash string) (vatVerification, error) {
+func (h *taxAssessor) refreshVIESVAT(ctx context.Context, tenantID, countryCode, vatNumber, vatHash string) (vatVerification, error) {
 	requestEnvelope := viesEnvelope{Body: viesBody{CheckVAT: &viesCheckVAT{CountryCode: countryCode, VATNumber: vatNumber}}}
 	payload, err := xml.Marshal(requestEnvelope)
 	if err != nil {
@@ -135,10 +131,10 @@ func (h *X402Handler) refreshVIESVAT(ctx context.Context, tenantID, countryCode,
 			}
 		}
 		raw, _ := json.Marshal(map[string]string{"verification_fault": fault})
-		if err := purserdb.New(h.taxDatabase()).RecordPermanentVIESFault(ctx, purserdb.RecordPermanentVIESFaultParams{TenantID: tenantID, CountryCode: countryCode, VatNumberHash: vatHash, VatNumberMasked: maskVATNumber(countryCode, vatNumber), RawResponse: raw}); err != nil {
+		if err := purserdb.New(h.db).RecordPermanentVIESFault(ctx, purserdb.RecordPermanentVIESFaultParams{TenantID: tenantID, CountryCode: countryCode, VatNumberHash: vatHash, VatNumberMasked: maskVATNumber(countryCode, vatNumber), RawResponse: raw}); err != nil {
 			return vatVerification{}, err
 		}
-		return vatVerification{}, fmt.Errorf("VIES rejected VAT verification")
+		return vatVerification{}, billingtax.Review("vat_number_invalid", "The VAT verification service rejected the submitted VAT claim")
 	}
 	if response.StatusCode >= 500 || response.StatusCode == http.StatusTooManyRequests {
 		return vatVerification{}, &viesUnavailableError{cause: fmt.Errorf("VIES returned HTTP %d", response.StatusCode)}
@@ -162,7 +158,7 @@ func (h *X402Handler) refreshVIESVAT(ctx context.Context, tenantID, countryCode,
 	}
 	raw, _ := json.Marshal(result)
 	masked := maskVATNumber(countryCode, vatNumber)
-	snapshot, err := purserdb.New(h.taxDatabase()).UpsertVATValidationEvidence(ctx, purserdb.UpsertVATValidationEvidenceParams{
+	snapshot, err := purserdb.New(h.db).UpsertVATValidationEvidence(ctx, purserdb.UpsertVATValidationEvidenceParams{
 		TenantID: tenantID, CountryCode: countryCode, VatNumberHash: vatHash,
 		VatNumberMasked: masked, Valid: result.Valid, RequestDate: requestDate,
 		TraderName:    sql.NullString{String: result.Name, Valid: true},
@@ -199,4 +195,11 @@ func parseVIESRequestDate(value string) (time.Time, error) {
 
 func maskVATNumber(country, number string) string {
 	return country + strings.Repeat("*", max(0, len(number)-4)) + number[max(0, len(number)-4):]
+}
+
+func (h *X402Handler) validateVIESVATEvidence(ctx context.Context, tenant, country, vat string) (vatVerification, error) {
+	return (&taxAssessor{db: h.taxDatabase(), supplierCountry: h.supplierCountry}).validateVIESVATEvidence(ctx, tenant, country, vat)
+}
+func (h *X402Handler) refreshVIESVAT(ctx context.Context, tenant, country, vat, hash string) (vatVerification, error) {
+	return (&taxAssessor{db: h.taxDatabase(), supplierCountry: h.supplierCountry}).refreshVIESVAT(ctx, tenant, country, vat, hash)
 }
