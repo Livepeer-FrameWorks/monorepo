@@ -110,7 +110,7 @@ func verifyStackStaleRate(t *testing.T, ctx context.Context, conn *grpc.ClientCo
 	stackProviderControl(t, ctx, "collect", map[string]string{"invoice_id": event.Data.Object.ID}, &events)
 	deliverStackProviderEvents(t, ctx, conn, db, fixture.tenant, events)
 	var count int
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM purser.provider_billing_documents WHERE tenant_id=$1 AND provider_document_id=$2 AND gross_minor=$3 AND tax_status='legacy_unknown' AND net_minor IS NULL AND vat_minor IS NULL AND tax_assessment#>'{evidence,expected_tax_assessment}' IS NOT NULL`, fixture.tenant, event.Data.Object.ID, event.Data.Object.Total).Scan(&count); err != nil || count != 1 {
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM purser.provider_billing_documents WHERE tenant_id=$1 AND provider_document_id=$2 AND gross_minor=$3 AND tax_status='legacy_unknown' AND net_minor=$3 AND vat_minor=0 AND tax_assessment#>'{evidence,expected_tax_assessment}' IS NOT NULL`, fixture.tenant, event.Data.Object.ID, event.Data.Object.Total).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("stale0 renewal became verified or lost accepted21 proof/actualcash: count=%d %v", count, err)
 	}
 	var requests []struct {
@@ -142,7 +142,7 @@ func verifyStackStaleRate(t *testing.T, ctx context.Context, conn *grpc.ClientCo
 			t.Fatal(ctx.Err())
 		}
 	}
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM purser.provider_billing_documents WHERE tenant_id=$1 AND provider_document_id=$2 AND gross_minor=$3 AND tax_status='legacy_unknown' AND net_minor IS NULL AND vat_minor IS NULL AND tax_assessment#>'{evidence,expected_tax_assessment}' IS NOT NULL`, fixture.tenant, event.Data.Object.ID, event.Data.Object.Total).Scan(&count); err != nil || count != 1 {
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM purser.provider_billing_documents WHERE tenant_id=$1 AND provider_document_id=$2 AND gross_minor=$3 AND tax_status='legacy_unknown' AND net_minor=$3 AND vat_minor=0 AND tax_assessment#>'{evidence,expected_tax_assessment}' IS NOT NULL`, fixture.tenant, event.Data.Object.ID, event.Data.Object.Total).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("successful future sync rewrote the historical review: count=%d %v", count, err)
 	}
 	payments := 0

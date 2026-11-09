@@ -55,11 +55,12 @@ func providerRenewalStaleSyncFailure(t *testing.T, customerUpdated bool) {
 	}
 	var status string
 	var proof []byte
-	if err := db.QueryRow(`SELECT tax_status,tax_assessment FROM purser.provider_billing_documents WHERE tenant_id=$1::uuid`, tenant).Scan(&status, &proof); err != nil {
+	var net, vat, gross int64
+	if err := db.QueryRow(`SELECT tax_status,tax_assessment,net_minor,vat_minor,gross_minor FROM purser.provider_billing_documents WHERE tenant_id=$1::uuid`, tenant).Scan(&status, &proof, &net, &vat, &gross); err != nil {
 		t.Fatal(err)
 	}
-	if status == "ready" {
-		t.Fatalf("renewal verified stale zero VAT after accepted Dutch terms failed to reach provider: %s", proof)
+	if status != "legacy_unknown" || net != 10000 || vat != 0 || gross != 10000 {
+		t.Fatalf("stale renewal changed reported money or verified tax: status=%s net=%d vat=%d gross=%d proof=%s", status, net, vat, gross, proof)
 	}
 	var review map[string]json.RawMessage
 	if err := json.Unmarshal(proof, &review); err != nil {
