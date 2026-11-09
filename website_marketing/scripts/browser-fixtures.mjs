@@ -10,6 +10,7 @@ import { once } from "node:events";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { chromium } from "playwright";
+import { runBrowserFixture } from "./browser-fixture.mjs";
 
 const siteDir = join(import.meta.dirname, "..");
 const fixtureDir = join(siteDir, "test", "browser");
@@ -56,8 +57,7 @@ async function waitForServer(url, child, timeoutMs) {
 
 const port = await freePort();
 const origin = `http://127.0.0.1:${port}`;
-// Rebuild optimized dependencies so fixture startup does not inherit another run's Vite cache.
-const devServer = spawn("pnpm", ["exec", "react-router", "dev", "--force"], {
+const devServer = spawn("pnpm", ["exec", "react-router", "dev"], {
   cwd: siteDir,
   env: {
     ...process.env,
@@ -92,37 +92,21 @@ try {
   const browser = await chromium.launch();
   try {
     for (const [fixture, query] of cases) {
-      const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
-      const diagnostics = [];
-      const recordDiagnostic = (message) => {
-        if (diagnostics.length < 20) diagnostics.push(message.slice(0, 500));
-      };
-      page.on("pageerror", (error) => recordDiagnostic(`pageerror: ${error.message}`));
-      page.on("requestfailed", (request) =>
-        recordDiagnostic(`requestfailed: ${request.failure()?.errorText} ${request.url()}`)
-      );
       const url = `${origin}/@fs${join(fixtureDir, fixture)}?${query}`;
-      let status = "timeout";
-      let report = "";
-      try {
-        await page.goto(url);
-        const output = page.locator('output[data-status="pass"], output[data-status="fail"]');
-        await output.waitFor({ timeout: 60_000 });
-        status = await output.getAttribute("data-status");
-        report = await output.textContent();
-      } catch (error) {
-        report =
-          (await page
-            .locator("output")
-            .textContent()
-            .catch(() => "")) || error.message;
-      } finally {
-        await page.close();
-      }
+      const printDiagnostics = (result) => {
+        console.error(`Browser diagnostics: ${result.diagnostics.join("\n") || "none captured"}`);
+        console.error(serverLog.slice(-4000));
+      };
+      const { status, report, diagnostics } = await runBrowserFixture(browser, url, (result) => {
+        console.error(
+          `RETRY ${fixture}?${query}: local bootstrap request aborted by network change`
+        );
+        console.error(result.report);
+        printDiagnostics(result);
+      });
       if (status !== "pass") {
         failed += 1;
-        console.error(`Browser diagnostics: ${diagnostics.join("\n") || "none captured"}`);
-        console.error(serverLog.slice(-4000));
+        printDiagnostics({ diagnostics });
       }
       console.log(`${status === "pass" ? "PASS" : "FAIL"} ${fixture}?${query} (${status})`);
       for (const line of String(report).trim().split("\n")) console.log(`    ${line}`);
