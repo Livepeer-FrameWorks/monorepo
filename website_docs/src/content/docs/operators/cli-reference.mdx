@@ -2372,7 +2372,7 @@ frameworks admin billing set-cluster-pricing \
 
 ### frameworks admin billing finance
 
-Operator financial evidence collection and establishment reviews. Requires a platform-operator
+Operator financial evidence collection and retained tax reviews. Requires a platform-operator
 login. See [Billing financial evidence](/operators/billing-financials/) for the
 archive contents and accounting limitations.
 
@@ -2395,22 +2395,48 @@ payouts or corrections, supplies no journal import and remains
 `posting_ready: false`. Current status/balance observations are not reconstructed
 historical accounting snapshots.
 
-#### frameworks admin billing finance tax-profile
+#### frameworks admin billing finance reviews
 
-`--tenant-id <uuid>` reads the complete saved business profile, its canonical
-SHA256 and the current `evidence_revision`. Inspect that identity before recording
-establishment evidence. This operation is read-only.
+Inspect retained tax reviews and acknowledge exactly the evidence reviewed.
+Acknowledgment records an operator decision; it does not verify a payment,
+change an issued document, collect money or dismiss funds/scanner failures.
 
-#### frameworks admin billing finance record-business-evidence
+##### frameworks admin billing finance reviews list
 
-Record a retained non-EU business establishment review with `--tenant-id`,
-`--profile-sha256`, `--expected-revision`, `--reference` and `--valid-until` (RFC3339,
-within 366 days). The server refuses changed profiles and stale evidence
-revisions. `--revoke --tenant-id <uuid> --reference <reason>` instead appends a
-tenant-wide revocation, omitting fingerprint and expiry. Both require a
-platform-operator JWT. References do not upload the underlying evidence or set a
-tax rate; retain proof separately and configure the reviewed country policy.
-See [Billing financial evidence](/operators/billing-financials/).
+```bash
+frameworks admin billing finance reviews list --tenant-id <customer-uuid>
+```
+
+**Flags:**
+
+- `--tenant-id` (required) - Customer tenant UUID.
+- `--provider` - Exact retained provider or network; omit to include all providers.
+- `--category` - Exact retained tax-review kind; omit to include every tax category.
+- `--status` - `open` (default), `resolved` or `all`.
+
+The paginated listing includes original evidence, its `evidence_sha256`, and
+retained acknowledgments. Inspect those facts before recording a decision.
+
+##### frameworks admin billing finance reviews acknowledge
+
+```bash
+frameworks admin billing finance reviews acknowledge \
+  --tenant-id <customer-uuid> --review-id <review-uuid> \
+  --evidence-sha256 <inspected-hash> --reason "Reviewed the retained invoice evidence"
+```
+
+**Flags:**
+
+- `--tenant-id` (required) - Customer tenant UUID.
+- `--review-id` (required) - Retained review UUID.
+- `--evidence-sha256` (required) - Hash from the inspected review record.
+- `--reason` (required) - Operator decision retained with the actor identity.
+
+The server refuses stale evidence hashes. Repeating acknowledgment of the same
+facts does not reopen the review; changed facts can reopen it. Acknowledging one
+document does not resolve a later invoice's separate review. See
+[Billing financial evidence](/operators/billing-financials/) for the workflow and
+accounting limitations.
 
 ### frameworks admin billing credit
 
