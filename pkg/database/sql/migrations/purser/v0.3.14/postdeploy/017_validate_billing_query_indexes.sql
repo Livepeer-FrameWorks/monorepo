@@ -3,6 +3,8 @@ BEGIN
     IF EXISTS (
         SELECT 1
         FROM (VALUES
+            (to_regclass('purser.idx_billing_invoices_tenant_created'), 'purser.billing_invoices'::regclass),
+            (to_regclass('purser.idx_payment_provider_intents_tenant_created'), 'purser.payment_provider_intents'::regclass),
             (to_regclass('purser.idx_provider_tax_assessments_audit'), 'purser.provider_tax_assessments'::regclass),
             (to_regclass('purser.idx_billing_tax_reviews_tenant_id'), 'purser.crypto_accounting_anomalies'::regclass),
             (to_regclass('purser.idx_prepaid_funding_lots_tenant_source_document'), 'purser.prepaid_funding_lots'::regclass),
