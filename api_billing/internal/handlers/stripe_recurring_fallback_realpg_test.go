@@ -60,9 +60,9 @@ func TestStripeIncompleteRecurringRenewalsRetainVATAndSeparateReviews_RealPG(t *
 		t.Fatalf("renewal review reused a closed issue or churned on replay: resolved=%d open=%d occurrences=%d", resolved, open, occurrences)
 	}
 	appconfigtest.Set(t, "SUPPLIER_COUNTRY", "FR")
-	_, err = AssessRecurringProviderTaxProfile(t.Context(), db, tenant, "")
+	profile, err = AssessRecurringProviderTaxProfile(t.Context(), db, tenant, "")
 	var review *billingtax.ReviewError
-	if !errors.As(err, &review) || review.Code != "billing_profile_required" {
-		t.Fatalf("non-Dutch operator inherited an unapproved Dutch VAT fallback: %v", err)
+	if profile != nil || err == nil || errors.As(err, &review) {
+		t.Fatalf("unsupported supplier must return an operational configuration error without a tax profile or customer review: profile=%+v err=%v", profile, err)
 	}
 }
