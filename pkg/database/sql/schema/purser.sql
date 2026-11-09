@@ -4296,6 +4296,11 @@ ON purser.credit_notes(tenant_id,issued_at DESC,id DESC);
 
 CREATE INDEX IF NOT EXISTS idx_billing_tax_reviews_tenant_id ON purser.crypto_accounting_anomalies(tenant_id,id);
 
+CREATE INDEX IF NOT EXISTS idx_billing_invoices_tenant_created
+ON purser.billing_invoices(tenant_id,created_at DESC,id DESC);
+CREATE INDEX IF NOT EXISTS idx_payment_provider_intents_tenant_created
+ON purser.payment_provider_intents(tenant_id,created_at DESC,id DESC);
+
 -- Accepted recurring terms are retained before provider synchronization. An
 -- append-only history distinguishes a return to an earlier profile from its
 -- first use and fixes which expected terms existed when a renewal was issued.

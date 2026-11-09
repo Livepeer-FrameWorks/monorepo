@@ -1,5 +1,9 @@
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_prepaid_funding_lots_tenant_source_document
 ON purser.prepaid_funding_lots(tenant_id,source_document_id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_billing_invoices_tenant_created
+ON purser.billing_invoices(tenant_id,created_at DESC,id DESC);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_payment_provider_intents_tenant_created
+ON purser.payment_provider_intents(tenant_id,created_at DESC,id DESC);
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_prepaid_funding_lots_active_remaining
 ON purser.prepaid_funding_lots(tenant_id) INCLUDE(remaining_net_eur_cents)
 WHERE remaining_net_eur_cents>0;
