@@ -5,6 +5,7 @@ import (
 	"context"
 	"net"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -89,16 +90,18 @@ func TestPublisherRPCQueueCancellationAndReplacement(t *testing.T) {
 	c.canonicalID, c.clusterID, c.fence = "node", "cluster", 1
 	c.admissionToken = bytes.Repeat([]byte{2}, 32)
 	req := &ipcpb.AdmitPublisherRequest{NodeId: "node", SessionToken: c.admissionToken, Trigger: &ipcpb.MistTrigger{TriggerType: "PUSH_REWRITE", TriggerPayload: &ipcpb.MistTrigger_PushRewrite{PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 1, TriggerUuid: "exec"}}}}
-	publisherAdmissionSlots = make(chan struct{})
 	mistTriggerProcessor = publisherProcessorFunc(func(context.Context, *ipcpb.MistTrigger) (string, bool, error) {
 		t.Fatal("cancelled queue entered coordinator")
 		return "", true, nil
 	})
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
-	defer cancel()
-	if _, err := (&Server{}).AdmitPublisher(ctx, req); status.Code(err) != codes.DeadlineExceeded {
-		t.Fatalf("queue ignored cancellation: %v", err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		publisherAdmissionSlots = make(chan struct{})
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+		defer cancel()
+		if _, err := (&Server{}).AdmitPublisher(ctx, req); status.Code(err) != codes.DeadlineExceeded {
+			t.Fatalf("queue ignored cancellation: %v", err)
+		}
+	})
 	publisherAdmissionSlots = make(chan struct{}, 1)
 	mistTriggerProcessor = publisherProcessorFunc(func(context.Context, *ipcpb.MistTrigger) (string, bool, error) {
 		registry.mu.Lock()

@@ -2,14 +2,10 @@ package grpc
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
-	"errors"
 	"strings"
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
-	"frameworks/api_billing/internal/handlers"
 	billingstripe "frameworks/api_billing/internal/stripe"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -55,35 +51,8 @@ func (s *PurserServer) AdminFinancialAuditPage(ctx context.Context, req *purserp
 	if _, err := uuid.Parse(req.GetTenantId()); err != nil {
 		return nil, status.Error(codes.InvalidArgument, "valid tenant_id required")
 	}
-	if req.GetSource() == "tax_profile" {
-		if req.GetAfterId() != "" {
-			return nil, status.Error(codes.InvalidArgument, "tax profile is not paginated")
-		}
-		row, err := purserdb.New(s.db).GetCryptoDocumentBillingProfile(ctx, req.GetTenantId())
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, status.Error(codes.NotFound, "tenant has no billing profile")
-		}
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "read billing profile: %v", err)
-		}
-		profile := handlers.CryptoBillingProfile{CustomerType: row.CustomerType, Email: row.BillingEmail.String, Name: row.BillingName.String, Company: row.BillingCompany.String, VATNumber: row.TaxID.String, Address: row.BillingAddress}
-		fingerprint, err := handlers.CryptoBusinessProfileFingerprint(profile)
-		if err != nil {
-			return nil, status.Error(codes.FailedPrecondition, "save a complete business billing profile before reviewing establishment evidence")
-		}
-		revision, revisionErr := purserdb.New(s.db).GetBusinessEvidenceRevision(ctx, req.GetTenantId())
-		if revisionErr != nil {
-			return nil, status.Errorf(codes.Internal, "read evidence revision: %v", revisionErr)
-		}
-		payload, err := json.Marshal(map[string]any{"id": req.GetTenantId(), "customer_type": "business", "saved_customer_type": profile.CustomerType, "profile_sha256": fingerprint, "profile": profile, "evidence_revision": revision})
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "encode tax profile: %v", err)
-		}
-		s.logFinancialEvidenceRead(ctx, req, 1)
-		return &purserpb.AdminFinancialAuditPageResponse{RecordsJson: [][]byte{payload}, CapturedAt: timestamppb.Now(), EffectiveThrough: req.GetThrough()}, nil
-	}
 	switch req.GetSource() {
-	case "invoices", "payments", "simplified_invoices", "crypto_invoices", "credit_notes", "provider_settlements", "pending_topups", "balance_transactions", "business_establishment_reviews", "provider_billing_documents", "provider_tax_profiles":
+	case "invoices", "payments", "simplified_invoices", "crypto_invoices", "credit_notes", "provider_settlements", "pending_topups", "balance_transactions", "billing_tax_reviews", "provider_billing_documents", "provider_tax_profiles", "provider_tax_assessments":
 	default:
 		return nil, status.Error(codes.InvalidArgument, "unsupported financial source")
 	}

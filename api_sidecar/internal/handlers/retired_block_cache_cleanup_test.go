@@ -13,7 +13,7 @@ func TestOrdinaryCleanupReclaimsRetiredBlockGeneration(t *testing.T) {
 	sm := newCapacityStorageManager(t, "vod")
 	asset := filepath.Join(sm.basePath, "vod", "202401011200abcdef1234.mkv")
 	store := relay.NewBlockStore(asset, 8)
-	if _, err := store.EnsureMeta("202401011200abcdef1234", ".mkv", "old", 8); err != nil {
+	if err := store.SaveMeta(&relay.BlockMeta{AssetHash: "202401011200abcdef1234", Ext: ".mkv", Object: "old", TotalSize: 8, BlockSize: 8}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.WriteBlock(0, []byte("OLD-BODY")); err != nil {
@@ -29,7 +29,7 @@ func TestOrdinaryCleanupReclaimsRetiredBlockGeneration(t *testing.T) {
 	if err := os.Rename(store.Dir(), retired); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.EnsureMeta("202401011200abcdef1234", ".mkv", "new", 8); err != nil {
+	if err := store.SaveMeta(&relay.BlockMeta{AssetHash: "202401011200abcdef1234", Ext: ".mkv", Object: "new", TotalSize: 8, BlockSize: 8}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.WriteBlock(0, []byte("NEW-BODY")); err != nil {

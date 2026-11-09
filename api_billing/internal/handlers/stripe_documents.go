@@ -177,9 +177,7 @@ func (s *Service) assessImportedStripeInvoice(ctx context.Context, tenant string
 	if profile.IncompleteProfile {
 		reasons = append(reasons, "incomplete_recurring_billing_profile")
 	}
-	if len(reasons) == 0 {
-		reasons = append(reasons, stripeIssuedPartiesReview(doc, profile)...)
-	}
+	assessedProfile := len(reasons) == 0
 	if len(reasons) == 0 {
 		verified, historicalReasons, err := s.stripeTaxEvidenceAtIssue(ctx, tenant, doc, profile)
 		if err != nil {
@@ -190,6 +188,9 @@ func (s *Service) assessImportedStripeInvoice(ctx context.Context, tenant string
 		if err != nil {
 			return nil, nil, err
 		}
+	}
+	if assessedProfile {
+		reasons = append(reasons, stripeIssuedPartiesReview(doc, profile)...)
 	}
 	if len(reasons) != 0 {
 		var err error

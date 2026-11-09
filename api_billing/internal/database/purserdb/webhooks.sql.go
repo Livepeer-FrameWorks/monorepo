@@ -221,19 +221,6 @@ func (q *Queries) GetBillingInvoiceAmountCents(ctx context.Context, invoiceID st
 	return amount_cents, err
 }
 
-const getBillingInvoiceTenant = `-- name: GetBillingInvoiceTenant :one
-SELECT tenant_id::text AS tenant_id
-FROM purser.billing_invoices
-WHERE id = $1::text::uuid
-`
-
-func (q *Queries) GetBillingInvoiceTenant(ctx context.Context, invoiceID string) (string, error) {
-	row := q.db.QueryRowContext(ctx, getBillingInvoiceTenant, invoiceID)
-	var tenant_id string
-	err := row.Scan(&tenant_id)
-	return tenant_id, err
-}
-
 const getBillingPaymentByProviderTransaction = `-- name: GetBillingPaymentByProviderTransaction :one
 SELECT payment.id::text AS payment_id, payment.invoice_id::text AS invoice_id,
        invoice.tenant_id::text AS tenant_id, payment.amount::text AS amount,

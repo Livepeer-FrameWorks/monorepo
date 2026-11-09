@@ -17,59 +17,63 @@ import (
 // Issued provider documents are verified against retained acceptance and facts
 // that existed at their tax point. Today's customer profile is irrelevant.
 func (s *Service) stripeTaxEvidenceAtIssue(ctx context.Context, tenant string, doc billingstripe.ProviderTaxDocument, profile billingstripe.TaxProfile) (billingstripe.TaxProfile, []string, error) {
-	var proof CryptoTaxAssessment
-	if err := json.Unmarshal(profile.Evidence, &proof); err != nil {
-		return profile, []string{"retained_tax_evidence_invalid"}, nil //nolint:nilerr // Malformed immutable evidence needs review; retries cannot repair it.
-	}
-	if _, err := proof.validatedDecision(); err != nil {
-		return profile, []string{"retained_tax_evidence_invalid"}, nil //nolint:nilerr // An invalid retained claim is a review outcome, not an operational failure.
-	}
 	// Stripe timestamps have whole-second precision.
-	point := doc.IssuedAt.Add(time.Second - time.Nanosecond)
-	if proof.AssessedAt.After(point) {
-		return profile, []string{"tax_evidence_after_tax_point"}, nil
+	return historicalProviderTaxEvidence(ctx, s.db, tenant, profile, doc.IssuedAt.Add(time.Second-time.Nanosecond))
+}
+
+func historicalProviderTaxEvidence(ctx context.Context, db purserdb.DBTX, tenant string, profile billingstripe.TaxProfile, point time.Time) (billingstripe.TaxProfile, []string, error) {
+	var proof TaxAssessment
+	if json.Unmarshal(profile.Evidence, &proof) != nil {
+		return profile, []string{"retained_tax_evidence_invalid"}, nil //nolint:nilerr // Malformed retained proof is a permanent review outcome.
 	}
 	supplier := proof.Supplier
-	if !supplier.Complete() ||
-		billingstripe.SupplierTaxIdentity(supplier.Name, supplier.Address, supplier.VATNumber, supplier.RegistrationNumber) != profile.SupplierIdentity || proof.SupplierCountry != profile.SupplierCountry {
+	if !supplier.Complete() || billingstripe.SupplierTaxIdentity(supplier.Name, supplier.Address, supplier.VATNumber, supplier.RegistrationNumber) != profile.SupplierIdentity || proof.SupplierCountry != profile.SupplierCountry {
 		return profile, []string{"retained_supplier_evidence_invalid"}, nil
-	}
-	if proof.Decision.PolicyValidFrom != nil && doc.IssuedAt.Before(*proof.Decision.PolicyValidFrom) || proof.Decision.PolicyValidUntil != nil && !doc.IssuedAt.Before(*proof.Decision.PolicyValidUntil) {
-		return profile, []string{"policy_evidence_not_valid_at_tax_point"}, nil
 	}
 	if proof.Decision.RateBPS != profile.RateBPS || proof.Decision.ReverseCharge != profile.ReverseCharge {
 		return profile, []string{"retained_tax_terms_mismatch"}, nil
 	}
-	if reasons, err := s.stripeBusinessEvidenceAtIssue(ctx, tenant, doc, profile, proof); err != nil || len(reasons) > 0 {
-		return profile, reasons, err
-	}
-	if profile.ReverseCharge {
-		hash := sha256.Sum256([]byte(profile.VATNumber))
-		if retainedVATCoversStripeTaxPoint(proof.VATValidation, tenant, profile.Country, hex.EncodeToString(hash[:]), point) {
+	request := billingtax.AssessmentRequest{Purpose: billingtax.Historical, At: point, TenantID: tenant, Retained: &proof, Profile: billingtax.Profile{Country: profile.Country, VATNumber: profile.VATNumber}}
+	_, err := billingtax.Assess(ctx, request, nil, nil)
+	var review *billingtax.ReviewError
+	if errors.As(err, &review) && review.Code == "vat_evidence_missing_at_tax_point" {
+		canonical, canonicalErr := billingtax.CanonicalVATNumber(profile.Country, profile.VATNumber)
+		if canonicalErr != nil {
+			return profile, []string{"retained_tax_terms_invalid"}, nil //nolint:nilerr // An invalid retained claim requires review rather than an operational retry.
+		}
+		hash := sha256.Sum256([]byte(canonical))
+		prior, readErr := purserdb.New(db).GetVATValidationAtQuote(ctx, purserdb.GetVATValidationAtQuoteParams{TenantID: tenant, VatNumberHash: hex.EncodeToString(hash[:]), QuotedAt: point})
+		if readErr != nil && !errors.Is(readErr, sql.ErrNoRows) {
+			return profile, nil, readErr
+		}
+		if readErr == nil && prior.Valid && !prior.FreshAtQuote {
+			return profile, []string{"vat_evidence_requires_document_review"}, nil
+		}
+		if readErr == nil && prior.Valid && prior.FreshAtQuote {
+			proof.VATValidation = prior.ValidationSnapshot
 			proof.VATValidationMode = "tax_point"
-			encoded, err := json.Marshal(proof)
-			profile.Evidence = encoded
-			return profile, nil, err
+			request.Retained = &proof
+			_, err = billingtax.Assess(ctx, request, nil, nil)
 		}
-		validation, err := purserdb.New(s.db).GetVATValidationAtQuote(ctx, purserdb.GetVATValidationAtQuoteParams{TenantID: tenant, VatNumberHash: hex.EncodeToString(hash[:]), QuotedAt: point})
-		if errors.Is(err, sql.ErrNoRows) {
-			return profile, []string{"vat_evidence_missing_at_tax_point"}, nil
-		}
-		if err != nil {
-			return profile, nil, err
-		}
-		if !validation.Valid {
-			return profile, []string{"vat_evidence_invalid_at_tax_point"}, nil
-		}
-		proof.VATValidation = validation.ValidationSnapshot
-		if !validation.FreshAtQuote {
-			proof.VATValidationMode = "outage_grace"
-			profile.Evidence, err = json.Marshal(proof)
-			return profile, []string{"vat_evidence_requires_document_review"}, err
-		}
-		proof.VATValidationMode = "tax_point"
 	}
-	var err error
+	if err != nil {
+		if errors.As(err, &review) {
+			return profile, []string{review.Code}, nil
+		}
+		return profile, nil, err
+	}
+	expected, matching, expectedErr := providerTaxExpectationAtPoint(ctx, db, tenant, profile, point)
+	if expectedErr != nil {
+		return profile, nil, expectedErr
+	}
+	if !matching {
+		proof.ExpectedTaxAssessment = expected
+		profile.Evidence, err = json.Marshal(proof)
+		return profile, []string{"provider_tax_sync_stale_at_tax_point"}, err
+	}
+	if proof.VATValidationMode == "outage_grace" {
+		return profile, []string{"vat_evidence_requires_document_review"}, nil
+	}
 	profile.Evidence, err = json.Marshal(proof)
 	return profile, nil, err
 }

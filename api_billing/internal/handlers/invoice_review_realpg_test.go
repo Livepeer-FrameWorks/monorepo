@@ -18,6 +18,11 @@ import (
 )
 
 func TestPostpaidTaxReviewHoldsAndResumesSameInvoice_RealPG(t *testing.T) {
+	t.Run("incomplete_profile", func(t *testing.T) { testPostpaidTaxReviewHoldsAndResumesSameInvoice(t, false) })
+	t.Run("retained_VAT_conflicts_with_country", func(t *testing.T) { testPostpaidTaxReviewHoldsAndResumesSameInvoice(t, true) })
+}
+
+func testPostpaidTaxReviewHoldsAndResumesSameInvoice(t *testing.T, malformedVAT bool) {
 	db := startPurserUsageRealPG(t)
 	for key, value := range map[string]string{"SUPPLIER_NAME": "DDVTech B.V.", "SUPPLIER_ADDRESS": "Leiden NL", "SUPPLIER_VAT_NUMBER": "NL853319145B01", "SUPPLIER_REGISTRATION_NUMBER": "59104694", "SUPPLIER_COUNTRY": "NL"} {
 		appconfigtest.Set(t, key, value)
@@ -26,6 +31,11 @@ func TestPostpaidTaxReviewHoldsAndResumesSameInvoice_RealPG(t *testing.T) {
 	tenant := seedPrepaidLedgerTenant(t, db)
 	if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET billing_model='postpaid',billing_name=NULL WHERE tenant_id=$1::uuid`, tenant); err != nil {
 		t.Fatal(err)
+	}
+	if malformedVAT {
+		if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET billing_name='Buyer',billing_email='buyer@example.test',billing_customer_type='business',tax_id='NL853319145B01',billing_address='{"street":"Main1","city":"Berlin","postal_code":"10115","country":"DE"}' WHERE tenant_id=$1::uuid`, tenant); err != nil {
+			t.Fatal(err)
+		}
 	}
 	start := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
 	amount := decimal.NewFromInt(100)
@@ -56,7 +66,7 @@ func TestPostpaidTaxReviewHoldsAndResumesSameInvoice_RealPG(t *testing.T) {
 		t.Fatalf("unsafe held invoice: status=%s issued=%v credit=%d anomalies=%d events=%d", status, issued, credit, anomalies, events)
 	}
 	run.draftInvoiceID = result.invoiceID
-	if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET billing_name='Buyer',billing_email='buyer@example.test',billing_customer_type='consumer',billing_address='{"street":"Main1","city":"Leiden","postal_code":"2332ED","country":"NL"}' WHERE tenant_id=$1::uuid`, tenant); err != nil {
+	if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET billing_name='Buyer',billing_email='buyer@example.test',billing_customer_type='consumer',tax_id=NULL,billing_address='{"street":"Main1","city":"Leiden","postal_code":"2332ED","country":"NL"}' WHERE tenant_id=$1::uuid`, tenant); err != nil {
 		t.Fatal(err)
 	}
 	if err := write(); err != nil {

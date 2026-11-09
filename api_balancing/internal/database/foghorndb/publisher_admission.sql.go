@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"time"
 )
 
 const confirmPublisherAdmission = `-- name: ConfirmPublisherAdmission :one
@@ -200,13 +201,14 @@ func (q *Queries) ListLegacyPublisherClaimReleasesByExecution(ctx context.Contex
 }
 
 const listPublisherAbandonmentsToForward = `-- name: ListPublisherAbandonmentsToForward :many
-SELECT node_id,start_trigger_uuid FROM foghorn.ingest_admission_abandonments
+SELECT node_id,start_trigger_uuid,created_at AS queued_at FROM foghorn.ingest_admission_abandonments
 WHERE publisher_lease_settled_at IS NULL ORDER BY created_at LIMIT 32
 `
 
 type ListPublisherAbandonmentsToForwardRow struct {
-	NodeID           string `db:"node_id" json:"node_id"`
-	StartTriggerUuid string `db:"start_trigger_uuid" json:"start_trigger_uuid"`
+	NodeID           string    `db:"node_id" json:"node_id"`
+	StartTriggerUuid string    `db:"start_trigger_uuid" json:"start_trigger_uuid"`
+	QueuedAt         time.Time `db:"queued_at" json:"queued_at"`
 }
 
 // Execution markers precede tenant discovery and are scoped to a node.
@@ -219,7 +221,7 @@ func (q *Queries) ListPublisherAbandonmentsToForward(ctx context.Context) ([]Lis
 	items := []ListPublisherAbandonmentsToForwardRow{}
 	for rows.Next() {
 		var i ListPublisherAbandonmentsToForwardRow
-		if err := rows.Scan(&i.NodeID, &i.StartTriggerUuid); err != nil {
+		if err := rows.Scan(&i.NodeID, &i.StartTriggerUuid, &i.QueuedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -235,7 +237,7 @@ func (q *Queries) ListPublisherAbandonmentsToForward(ctx context.Context) ([]Lis
 
 const listPublisherAdmissionsToSettle = `-- name: ListPublisherAdmissionsToSettle :many
 SELECT generation, tenant_id, stream_internal_name, node_id, start_trigger_uuid,
-       publisher_admission_version, stream_id, reason
+       publisher_admission_version, stream_id, reason, started_at AS queued_at
 FROM (
   (SELECT COALESCE(session.id::text,'')::text AS generation, COALESCE(session.tenant_id::text,'')::text AS tenant_id,
           COALESCE(session.stream_internal_name,'')::text AS stream_internal_name,
@@ -269,14 +271,15 @@ ORDER BY started_at LIMIT 32
 `
 
 type ListPublisherAdmissionsToSettleRow struct {
-	Generation                string `db:"generation" json:"generation"`
-	TenantID                  string `db:"tenant_id" json:"tenant_id"`
-	StreamInternalName        string `db:"stream_internal_name" json:"stream_internal_name"`
-	NodeID                    string `db:"node_id" json:"node_id"`
-	StartTriggerUuid          string `db:"start_trigger_uuid" json:"start_trigger_uuid"`
-	PublisherAdmissionVersion int16  `db:"publisher_admission_version" json:"publisher_admission_version"`
-	StreamID                  string `db:"stream_id" json:"stream_id"`
-	Reason                    string `db:"reason" json:"reason"`
+	Generation                string    `db:"generation" json:"generation"`
+	TenantID                  string    `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName        string    `db:"stream_internal_name" json:"stream_internal_name"`
+	NodeID                    string    `db:"node_id" json:"node_id"`
+	StartTriggerUuid          string    `db:"start_trigger_uuid" json:"start_trigger_uuid"`
+	PublisherAdmissionVersion int16     `db:"publisher_admission_version" json:"publisher_admission_version"`
+	StreamID                  string    `db:"stream_id" json:"stream_id"`
+	Reason                    string    `db:"reason" json:"reason"`
+	QueuedAt                  time.Time `db:"queued_at" json:"queued_at"`
 }
 
 // Local marker completion is independent of global lease forwarding. Bound the
@@ -299,6 +302,7 @@ func (q *Queries) ListPublisherAdmissionsToSettle(ctx context.Context, admission
 			&i.PublisherAdmissionVersion,
 			&i.StreamID,
 			&i.Reason,
+			&i.QueuedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -314,7 +318,8 @@ func (q *Queries) ListPublisherAdmissionsToSettle(ctx context.Context, admission
 }
 
 const listPublisherLeaseReleases = `-- name: ListPublisherLeaseReleases :many
-SELECT id::text AS generation, tenant_id::text AS tenant_id, stream_internal_name, ingest_cluster_id, start_trigger_uuid, node_id
+SELECT id::text AS generation, tenant_id::text AS tenant_id, stream_internal_name, ingest_cluster_id, start_trigger_uuid, node_id,
+       COALESCE(ended_at,NOW())::timestamptz AS queued_at
 FROM foghorn.ingest_sessions
 WHERE publisher_admission_version=1 AND ended_at IS NOT NULL AND publisher_lease_released_at IS NULL
 ORDER BY ended_at LIMIT 100
@@ -327,6 +332,7 @@ type ListPublisherLeaseReleasesRow struct {
 	IngestClusterID    sql.NullString `db:"ingest_cluster_id" json:"ingest_cluster_id"`
 	StartTriggerUuid   string         `db:"start_trigger_uuid" json:"start_trigger_uuid"`
 	NodeID             string         `db:"node_id" json:"node_id"`
+	QueuedAt           time.Time      `db:"queued_at" json:"queued_at"`
 }
 
 func (q *Queries) ListPublisherLeaseReleases(ctx context.Context) ([]ListPublisherLeaseReleasesRow, error) {
@@ -345,6 +351,7 @@ func (q *Queries) ListPublisherLeaseReleases(ctx context.Context) ([]ListPublish
 			&i.IngestClusterID,
 			&i.StartTriggerUuid,
 			&i.NodeID,
+			&i.QueuedAt,
 		); err != nil {
 			return nil, err
 		}

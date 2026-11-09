@@ -1948,6 +1948,23 @@ features:
       docs:
         pages: [operators/running-upgrades.mdx]
 
+  - slug: cluster-diagnostics
+    name: Cluster diagnostics
+    area: infrastructure
+    kind: foundation
+    audience: platform
+    status: shipped
+    description: Read-only operator diagnostics trace streams, nodes, billing and webhooks alongside cluster service, media-authority, network and resource checks.
+    related: [rollout-orchestrator, media-placement]
+    required_surfaces:
+      cli: { required: true }
+      docs: { required: true }
+    surfaces:
+      cli:
+        commands: ["cluster diagnose"]
+      docs:
+        pages: [operators/cli-reference.mdx, operators/media-placement.mdx]
+
   - slug: cluster-backup-restore
     name: Cluster backup and restore
     area: infrastructure
@@ -2027,6 +2044,48 @@ features:
       docs:
         pages: [builders/billing.mdx]
     subitems:
+      - slug: vat-invoicing
+        name: VAT assessment and original tax documents
+        description: Shared personal/business tax assessment, exclusive VAT, frozen invoice evidence, original Stripe documents, and tax-aware Mollie and prepaid billing.
+        status: shipped
+        depends_on: [billing]
+        required_surfaces:
+          graphql: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+          mcp:
+            required: false
+            reason: "Tax is assessed by the existing billing flows; customers do not select exemptions through a separate tool."
+        surfaces:
+          graphql:
+            queries: [billingDetails, invoice, invoicesConnection]
+            mutations: [updateBillingDetails]
+          webapp:
+            routes: ["/account/billing", "/account/balance"]
+          docs:
+            pages: [builders/billing.mdx, operators/billing-financials.mdx]
+
+      - slug: financial-evidence-archive
+        name: Financial evidence archive and tax review
+        kind: foundation
+        audience: platform
+        status: shipped
+        description: Paginated read-only Purser and Stripe evidence with hashes and exceptions, plus audited acknowledgment of exact retained tax-review evidence. The archive is not a reconciled close or journal export.
+        depends_on: [billing]
+        required_surfaces:
+          cli: { required: true }
+          docs: { required: true }
+        surfaces:
+          cli:
+            commands:
+              [
+                "admin billing finance audit",
+                "admin billing finance reviews list",
+                "admin billing finance reviews acknowledge",
+              ]
+          docs:
+            pages: [operators/billing-financials.mdx]
+
       - slug: usage-caps
         name: Usage caps, alerts, retention cost preview
         description: Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes.

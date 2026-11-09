@@ -494,6 +494,26 @@ func (q *Queries) GetOpenIngestSessionCluster(ctx context.Context, arg GetOpenIn
 	return column_1, err
 }
 
+const getStopSessionsGeneration = `-- name: GetStopSessionsGeneration :one
+SELECT COALESCE((SELECT id::text FROM foghorn.ingest_sessions
+ WHERE tenant_id=$1::uuid AND node_id=$2
+   AND stream_internal_name=$3 AND ended_at IS NULL
+ LIMIT 1), '')::text AS generation
+`
+
+type GetStopSessionsGenerationParams struct {
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+	NodeID       string `db:"node_id" json:"node_id"`
+	InternalName string `db:"internal_name" json:"internal_name"`
+}
+
+func (q *Queries) GetStopSessionsGeneration(ctx context.Context, arg GetStopSessionsGenerationParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getStopSessionsGeneration, arg.TenantID, arg.NodeID, arg.InternalName)
+	var generation string
+	err := row.Scan(&generation)
+	return generation, err
+}
+
 const hasActiveStreamIngestSession = `-- name: HasActiveStreamIngestSession :one
 SELECT EXISTS (SELECT 1 FROM foghorn.ingest_sessions WHERE tenant_id  =  $1::uuid AND stream_internal_name  =  $2 AND ended_at IS NULL)
 `

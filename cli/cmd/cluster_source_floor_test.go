@@ -123,14 +123,14 @@ func TestSourceFloorRefusal(t *testing.T) {
 	}
 }
 
-func TestEnforceSourceFloorSkipsDetectionWithoutDeclaredFloors(t *testing.T) {
+func TestEnforceSourceFloorSkipsDetectionForCurrentContractWithoutDeclaredFloors(t *testing.T) {
 	restore := stubSourceFloor(t, func() bool { return false }, floorsForNextRelease, func(context.Context, io.Writer, *ssh.Pool, *inventory.Manifest) ([]runningInstance, error) {
 		t.Fatal("running versions were read although no release declares min_source_version")
 		return nil, nil
 	})
 	defer restore()
 	rc := &resolvedCluster{Manifest: &inventory.Manifest{}}
-	if err := enforceSourceFloor(context.Background(), &bytes.Buffer{}, rc, nil, "v0.3.11"); err != nil {
+	if err := enforceSourceFloor(context.Background(), &bytes.Buffer{}, rc, nil, "v0.3.14-rc4"); err != nil {
 		t.Fatalf("enforceSourceFloor: %v", err)
 	}
 }

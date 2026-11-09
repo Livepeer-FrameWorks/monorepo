@@ -171,5 +171,6 @@ releases:
     rollback_disabled:
       - commodore
       - foghorn
+      - purser
     capabilities: [accounts_bootstrap]
     min_cli_version: v0.3.14-rc4

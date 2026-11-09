@@ -34,6 +34,7 @@ var shipped = []string{
 	"streamcrafter",
 	"streams",
 	"tenant-events",
+	"vat-invoicing",
 	"viewer-protocol-selection",
 	"viewer-routing",
 	"vod",

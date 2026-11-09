@@ -7,6 +7,11 @@ SELECT COUNT(*)::integer
 FROM foghorn.ingest_sessions
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid
   AND ended_at IS NULL;
+-- name: GetStopSessionsGeneration :one
+SELECT COALESCE((SELECT id::text FROM foghorn.ingest_sessions
+ WHERE tenant_id=sqlc.arg(tenant_id)::uuid AND node_id=sqlc.arg(node_id)
+   AND stream_internal_name=sqlc.arg(internal_name) AND ended_at IS NULL
+ LIMIT 1), '')::text AS generation;
 -- name: LockIngestSessionByTrigger :one
 SELECT id::text AS id, stream_internal_name, COALESCE(ended_at IS NOT NULL, false)::boolean AS ended, connector_pid FROM foghorn.ingest_sessions
 WHERE tenant_id  =  sqlc.arg(tenant_id)::uuid AND node_id  =  sqlc.arg(node_id) AND start_trigger_uuid  =  sqlc.arg(start_trigger_uuid) FOR UPDATE;

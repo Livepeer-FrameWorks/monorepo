@@ -591,7 +591,7 @@ func TestSendWithRelay_LocalSuccess(t *testing.T) {
 	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", pool)
 	setCommandRelay(t, r)
 
-	err := SendStopSessions("node-1", &ipcpb.StopSessionsRequest{})
+	err := SendInvalidateSessions("node-1", &ipcpb.InvalidateSessionsRequest{})
 	if err != nil {
 		t.Fatalf("expected nil error when local send succeeds, got %v", err)
 	}

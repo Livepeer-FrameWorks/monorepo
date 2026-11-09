@@ -5,9 +5,16 @@ set -uo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 work=$(mktemp -d "${TMPDIR:-/tmp}/fw-stack-lib-test.XXXXXX")
-cleanup() {
+stop_publishers() {
   local pid
-  while read -r pid; do kill "$pid" 2>/dev/null; done <"$work/pids" 2>/dev/null
+  [ -f "$work/pids" ] || return 0
+  while read -r pid; do
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done <"$work/pids"
+}
+cleanup() {
+  stop_publishers
   rm -rf "$work"
 }
 trap cleanup EXIT
@@ -107,7 +114,18 @@ asked_active_since_start() { grep -qs "projection_state='active'" "$work/session
 expect "only an active session opened by this publish counts" asked_active_since_start
 
 # A publisher that never gets admitted within the timeout is reported as such.
+stop_publishers
 rm -f "$work/pids" "$work/polls" "$work/session-queries"
+previous_case_publisher_stopped() {
+  local _attempt
+  for _attempt in {1..100}; do
+    kill -0 "$second" 2>/dev/null || return 0
+    command sleep 0.01
+  done
+  kill "$second" 2>/dev/null || true
+  return 1
+}
+expect 'resetting a fixture releases its admitted publisher and inherited admission lock' previous_case_publisher_stopped
 pg() {
   case "$2" in
   *commodore.streams*) echo "internal-1" ;;
@@ -124,7 +142,8 @@ expect "unadmitted publishers are stopped" publishers_stopped
 
 placement_retries_refused_setup() (
   trap - EXIT
-  rm -f "$work/pids" "$work/polls" "$work/session-queries"
+  stop_publishers
+rm -f "$work/pids" "$work/polls" "$work/session-queries"
   PASS=0 FAIL=0 BLOCKED=0
   export STACK_PLACEMENT_SECONDS=2
   need() { return 0; }

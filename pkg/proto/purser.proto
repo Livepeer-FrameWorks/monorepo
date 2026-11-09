@@ -30,7 +30,8 @@ service BillingService {
   // Read-only financial evidence pages; requires a platform-operator JWT.
   rpc AdminFinancialAuditPage(AdminFinancialAuditPageRequest) returns (AdminFinancialAuditPageResponse);
   // Record a reviewed establishment proof against an unchanged customer profile.
-  rpc AdminRecordBusinessEvidence(AdminRecordBusinessEvidenceRequest) returns (AdminRecordBusinessEvidenceResponse);
+  rpc AdminListBillingTaxReviews(AdminListBillingTaxReviewsRequest) returns (AdminListBillingTaxReviewsResponse);
+  rpc AdminAcknowledgeBillingTaxReview(AdminAcknowledgeBillingTaxReviewRequest) returns (AdminAcknowledgeBillingTaxReviewResponse);
   // Read-only support snapshot; requires a platform-operator JWT.
   rpc DiagnoseBilling(DiagnoseBillingRequest) returns (DiagnoseBillingResponse);
   // Billing tiers
@@ -457,25 +458,27 @@ message AdminFinancialAuditPageResponse {
   google.protobuf.Timestamp effective_through = 4; // Fixed exclusive cutoff for all pages of one archive.
 }
 
-message AdminRecordBusinessEvidenceRequest {
+message AdminListBillingTaxReviewsRequest {
   string tenant_id = 1;
-  string profile_sha256 = 2;
-  string reference = 3;
-  google.protobuf.Timestamp valid_until = 4;
-  bool revoke = 5; // Revoke all earlier approvals for this tenant; omit profile_sha256 and valid_until.
-  int64 expected_revision = 6; // Approval must match the evidence revision returned with the reviewed profile.
+  string provider = 2; // Optional exact network/provider scope.
+  string category = 3; // Optional exact anomaly kind.
+  string status = 4; // open (default), resolved, all.
+  string after_id = 5;
+  int32 limit = 6;
 }
-
-message AdminRecordBusinessEvidenceResponse {
-  string id = 1;
-  string tenant_id = 2;
-  string profile_sha256 = 3;
-  string country = 4;
-  string reference = 5;
-  google.protobuf.Timestamp valid_until = 6;
-  google.protobuf.Timestamp recorded_at = 7;
-  bool revoked = 8;
-  int64 revision = 9;
+message AdminListBillingTaxReviewsResponse {
+  repeated bytes records_json = 1; // Includes original evidence and its evidence_sha256.
+  string next_cursor = 2;
+}
+message AdminAcknowledgeBillingTaxReviewRequest {
+  string tenant_id = 1;
+  string review_id = 2;
+  string evidence_sha256 = 3; // Must match the evidence actually reviewed.
+  string reason = 4;
+}
+message AdminAcknowledgeBillingTaxReviewResponse {
+  bytes record_json = 1;
+  bool acknowledged = 2;
 }
 
 message UpdateBillingDetailsRequest {

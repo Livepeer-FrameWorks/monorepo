@@ -1,6 +1,13 @@
 -- Deterministic local demo fixture owned by purser.
 -- Applied explicitly by `make seed-demo`; never loaded by database first boot.
 
+-- Local fixtures use the same effective-dated lookup as issued invoices.
+INSERT INTO purser.vat_rate_periods
+    (country_code, rate_bps, effective_from, source, source_reference, source_checked_on)
+VALUES ('NL', 2100, DATE '2026-01-01', 'Local Netherlands VAT fixture',
+        'https://www.belastingdienst.nl/wps/wcm/connect/nl/btw/content/btw-tarieven', DATE '2026-01-01')
+ON CONFLICT (country_code, effective_from) DO NOTHING;
+
 -- Billing tiers required by the demo subscription rows below. Production
 -- clusters reconcile the canonical catalog through purser bootstrap; this file
 -- is only the Docker dev/demo fixture loaded on a fresh volume.

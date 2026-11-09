@@ -65,7 +65,7 @@ func cryptoAdvanceAssessment(profile CryptoBillingProfile, kind string, cash fx.
 	if frozen == nil || frozen.PolicyVersion != billing.CurrentCryptoTopupTaxPolicy || frozen.Advance == nil {
 		return invoiceTaxAssessment{}, fmt.Errorf("exclusive crypto advance assessment required")
 	}
-	decision, err := frozen.validatedDecision()
+	decision, err := frozen.ValidatedDecision()
 	if err != nil {
 		return invoiceTaxAssessment{}, err
 	}
@@ -79,9 +79,6 @@ func cryptoAdvanceAssessment(profile CryptoBillingProfile, kind string, cash fx.
 	a := invoiceTaxAssessment{Advance: &money, DocumentKind: kind, Decision: decision, Customer: profile, Supplier: frozen.Supplier, Net: money.NetEUR, VAT: money.VATEUR, Gross: money.GrossEUR, TaxPoint: at, Validation: frozen.VATValidation, ValidationMode: frozen.VATValidationMode}
 	if frozen.VATValidationMode == "outage_grace" {
 		a.ReviewReasons = append(a.ReviewReasons, "vies_outage_grace")
-	}
-	if decision.PolicyValidUntil != nil && !at.Before(*decision.PolicyValidUntil) {
-		a.ReviewReasons = append(a.ReviewReasons, "tax_policy_expired")
 	}
 	a.ReviewRequired = len(a.ReviewReasons) > 0
 	return a, nil
@@ -227,22 +224,6 @@ func issueReviewedCryptoAdvanceTx(ctx context.Context, tx *sql.Tx, tenant, sourc
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	if len(a.Decision.BusinessEstablishment) > 0 {
-		fingerprint, err := CryptoBusinessProfileFingerprint(a.Customer)
-		if err == nil {
-			h := &X402Handler{taxDB: tx}
-			var proof json.RawMessage
-			proof, _, err = h.loadBusinessReview(ctx, tenant, fingerprint, a.Decision.Country, a.TaxPoint)
-			if err == nil {
-				a.ConfirmationBusinessReview = proof
-			} else if !errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("read confirmation business evidence: %w", err)
-			}
-		}
-		if err != nil {
-			a.ReviewReasons = append(a.ReviewReasons, "business_evidence_unavailable")
-		}
-	}
 	a.ReviewRequired = len(a.ReviewReasons) > 0
 	id, _, err := issueFundedAdvanceInvoiceTx(ctx, tx, tenant, source, reference, paymentReference, a, cash, a.TaxPoint, balanceBefore, transactionID)
 	if err != nil {
@@ -253,7 +234,7 @@ func issueReviewedCryptoAdvanceTx(ctx context.Context, tx *sql.Tx, tenant, sourc
 		if err != nil {
 			return err
 		}
-		return q.RecordCryptoAccountingAnomaly(ctx, purserdb.RecordCryptoAccountingAnomalyParams{TenantID: tenant, Kind: "tax_assessment_review", Network: "tax", ReferenceType: "invoice", ReferenceID: id, AmountCents: a.Gross, Detail: "Confirmed crypto advance retained its accepted tax claim; expired, revoked or outage evidence requires review", EvidenceJson: evidence})
+		return q.RecordBillingTaxReview(ctx, purserdb.RecordBillingTaxReviewParams{TenantID: tenant, Kind: "tax_assessment_review", Network: "tax", ReferenceType: "invoice", ReferenceID: id, AmountCents: a.Gross, Detail: "Confirmed crypto advance retained its accepted tax claim; the retained evidence requires review", EvidenceJson: evidence})
 	}
 	return nil
 }

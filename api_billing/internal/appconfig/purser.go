@@ -8,8 +8,6 @@ import (
 	"reflect"
 	"strings"
 
-	billingtax "frameworks/api_billing/internal/tax"
-
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/countries"
 )
@@ -77,15 +75,12 @@ type PurserRuntime struct {
 	StripeWebhookSecret string `env:"STRIPE_WEBHOOK_SECRET" secret:"true" desc:"Signing secret that verifies Stripe webhooks. Empty rejects every Stripe webhook. Re-read after an env-file reload." introduced:"v0.3.0"`
 	MollieAPIKey        string `env:"MOLLIE_API_KEY" secret:"true" desc:"Mollie API key. Enables the Mollie client at startup; checkout and provider availability re-read it after an env-file reload." introduced:"v0.3.0"`
 
-	SupplierName                    string `env:"SUPPLIER_NAME" desc:"Supplier legal name on billing documents and crypto invoices. Outside development Purser refuses to start without the complete SUPPLIER_* set, since every invoice, statement and credit note states it." introduced:"v0.3.0"`
-	SupplierAddress                 string `env:"SUPPLIER_ADDRESS" desc:"Supplier postal address on billing documents and crypto invoices." introduced:"v0.3.0"`
-	SupplierVATNumber               string `env:"SUPPLIER_VAT_NUMBER" desc:"Supplier VAT number on billing documents and crypto invoices." introduced:"v0.3.0"`
-	SupplierRegistrationNumber      string `env:"SUPPLIER_REGISTRATION_NUMBER" desc:"Supplier company registration number on billing documents and crypto invoices." introduced:"v0.3.0"`
-	SupplierCountry                 string `env:"SUPPLIER_COUNTRY" desc:"Supplier country, normalized to a two-letter country code, for crypto invoices and crypto deposit readiness." introduced:"v0.3.0"`
-	VIESEndpoint                    string `env:"VIES_ENDPOINT" desc:"EU VIES SOAP endpoint that validates customer VAT numbers. Empty uses the European Commission service. Re-read after an env-file reload." introduced:"v0.3.0"`
-	EUConsumerVATMode               string `env:"EU_CONSUMER_VAT_MODE" desc:"Cross-border digital-service consumer VAT regime: destination. Empty holds foreign consumer decisions. Only destination is accepted. Re-read after reload." introduced:"v0.3.14"`
-	CryptoTaxPolicyJSON             string `env:"CRYPTO_TAX_POLICY_JSON" desc:"Reviewed supplier tax policy JSON: validity window, explicit non-EU rates and evidence references. Tenant establishment proofs are recorded separately through the operator finance commands. Covers the service and applicable regional rules. Empty holds unsupported destinations. Does not register or file tax. Re-read after reload." introduced:"v0.3.14"`
-	EUConsumerDestinationRegistered bool   `env:"EU_CONSUMER_DESTINATION_REGISTERED" default:"false" desc:"Operator confirmation that OSS or applicable destination VAT registration is in place for cross-border EU consumer services. Does not elect the scheme or file returns." introduced:"v0.3.14"`
+	SupplierName               string `env:"SUPPLIER_NAME" desc:"Supplier legal name on billing documents and crypto invoices. Outside development Purser refuses to start without the complete SUPPLIER_* set, since every invoice, statement and credit note states it." introduced:"v0.3.0"`
+	SupplierAddress            string `env:"SUPPLIER_ADDRESS" desc:"Supplier postal address on billing documents and crypto invoices." introduced:"v0.3.0"`
+	SupplierVATNumber          string `env:"SUPPLIER_VAT_NUMBER" desc:"Supplier VAT number on billing documents and crypto invoices." introduced:"v0.3.0"`
+	SupplierRegistrationNumber string `env:"SUPPLIER_REGISTRATION_NUMBER" desc:"Supplier company registration number on billing documents and crypto invoices." introduced:"v0.3.0"`
+	SupplierCountry            string `env:"SUPPLIER_COUNTRY" desc:"Supplier country, normalized to a two-letter country code, for crypto invoices and crypto deposit readiness." introduced:"v0.3.0"`
+	VIESEndpoint               string `env:"VIES_ENDPOINT" desc:"EU VIES SOAP endpoint that validates customer VAT numbers. Empty uses the European Commission service. Re-read after an env-file reload." introduced:"v0.3.0"`
 
 	HDWalletXpub         string `env:"HD_WALLET_XPUB" secret:"true" desc:"Extended public key that initializes HD wallet deposit address state at startup when the database has none. A different stored key is kept and the mismatch is logged." introduced:"v0.3.0"`
 	X402GasWalletPrivkey string `env:"X402_GAS_WALLET_PRIVKEY" secret:"true" desc:"Hex private key of the gas wallet that submits self-facilitated x402 settlements and funds Livepeer TicketBroker deposits." introduced:"v0.3.0"`
@@ -128,9 +123,6 @@ type PurserRuntime struct {
 // crypto invoicing needs it too. Without it document downloads would fail
 // for every tenant.
 func (c *Purser) Validate() error {
-	if err := c.PurserRuntime.Validate(); err != nil {
-		return err
-	}
 	if missing := c.MissingSupplierIdentity(); len(missing) > 0 && !c.IsDevelopment() {
 		return fmt.Errorf("%s required outside development: billing documents state the supplier", strings.Join(missing, ", "))
 	}
@@ -264,17 +256,6 @@ type PurserFinancialAudit struct {
 func (c *PurserFinancialAudit) Validate() error {
 	if strings.TrimSpace(c.StripeSecretKey) == "" {
 		return fmt.Errorf("financial-audit requires STRIPE_SECRET_KEY")
-	}
-	return nil
-}
-
-// Validate rejects unusable setup before it reaches customer payment requests.
-func (r *PurserRuntime) Validate() error {
-	if r.EUConsumerVATMode != "" && r.EUConsumerVATMode != "destination" {
-		return fmt.Errorf("EU_CONSUMER_VAT_MODE must be destination or empty")
-	}
-	if _, err := billingtax.DecodeOperatorPolicy(r.CryptoTaxPolicyJSON, r.SupplierCountry); err != nil {
-		return fmt.Errorf("CRYPTO_TAX_POLICY_JSON: %w", err)
 	}
 	return nil
 }

@@ -16,6 +16,9 @@ type ControlMetrics struct {
 	// PublisherAdmissionDuration records request-owned phase durations in seconds.
 	// Labels are fixed phase/outcome enums; identities never become labels.
 	PublisherAdmissionDuration *prometheus.HistogramVec
+	// PublisherRecoveryOldestPending is the oldest queued item's Unix timestamp,
+	// or zero for an empty queue. Its age remains observable during an outage.
+	PublisherRecoveryOldestPending *prometheus.GaugeVec
 	// MistTriggers counts MistTrigger messages received/processed over the HelmsmanControl stream.
 	// Labels: trigger_type, blocking ("true"|"false"), status
 	MistTriggers *prometheus.CounterVec

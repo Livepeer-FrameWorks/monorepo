@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # stack-scenario: default
-# staging: unsafe, creates a tenant and records establishment review fixtures
+# staging: unsafe, creates isolated billing tenants and provider payments
+# Stripe/VIES/chain use a deployed simulator; Mollie is covered by real-PostgreSQL tests, without a deployed Mollie fake.
 . "$(dirname "$0")/../lib.sh"
 need jq curl python3 openssl || finish
-[ "${STACK_TARGET:-stack}" != staging ] || { blocked 'establishment fixtures are stack-only'; finish; }
+[ "${STACK_TARGET:-stack}" != staging ] || { blocked 'billing fixtures are stack-only'; finish; }
 [ -x "$STACK_REPO/bin/cli" ] || { blocked 'operator CLI missing'; finish; }
 # shellcheck source=scripts/stack/cli-context.sh
 . "$STACK_LIB_DIR/cli-context.sh"
@@ -42,17 +43,11 @@ check 'business profile can omit VAT number' json_has "$(profile business)" '.er
 opjwt=$(login_session operator@stack.test stack-operator-password "$STACK_STATE_DIR/finance-operator.cookies")
 [ -n "$opjwt" ] || { fail 'finance operator login'; finish; }
 operator_cli() { FW_USER_TOKEN="$opjwt" "$CLI" "$@"; }
-if FW_USER_TOKEN="$jwt" "$CLI" admin billing finance tax-profile --tenant-id "$tenant" >"$STACK_STATE_DIR/finance-denied.out" 2>&1; then
- fail 'customer inspected operator tax evidence'
+if FW_USER_TOKEN="$jwt" "$CLI" admin billing finance reviews list --tenant-id "$tenant" >"$STACK_STATE_DIR/finance-denied.out" 2>&1; then
+ fail 'customer inspected operator tax reviews'
 else
- check 'customer evidence access denied by authorization' grep -qi 'PermissionDenied\|platform.operator' "$STACK_STATE_DIR/finance-denied.out"
+ check 'customer tax review access denied by authorization' grep -qi 'PermissionDenied\|platform.operator' "$STACK_STATE_DIR/finance-denied.out"
 fi
-inspection=$(operator_cli admin billing finance tax-profile --tenant-id "$tenant")
-check 'operator sees reviewed identity and revision' json_has "$inspection" '.profile.name == "Stack Buyer" and (.profile_sha256|length)==64 and .evidence_revision==0'
-fingerprint=$(printf '%s' "$inspection" | jq -r .profile_sha256)
-expiry=$(python3 -c 'from datetime import datetime,timedelta,timezone;print((datetime.now(timezone.utc)+timedelta(hours=1)).isoformat())')
-approved=$(operator_cli admin billing finance record-business-evidence --tenant-id "$tenant" --profile-sha256 "$fingerprint" --expected-revision 0 --reference stack-establishment-proof --valid-until "$expiry")
-check 'operator approval retained against exact profile' json_has "$approved" '.country=="US" and .revision=="1" and .reference=="stack-establishment-proof"'
 # Deployed Purser talks to isolated external provider simulators. This driver
 # uses public RPCs and real request signatures; it cannot issue invoices itself.
 [ -x "$STACK_REPO/bin/stack-billing-runner" ] || { blocked 'billing test driver missing'; finish; }
@@ -66,20 +61,13 @@ deployed_crypto() {
   "$STACK_REPO/bin/stack-billing-runner" -test.run '^TestStackDeployedCryptoTax$' -test.v -test.timeout 120s
 }
 check 'deployed non-EU business settles exactly one zero-tax invoice and net credit' deployed_crypto 0
-revoked=$(operator_cli admin billing finance record-business-evidence --tenant-id "$tenant" --revoke --reference stack-proof-revoked)
-check 'operator revocation has next revision' json_has "$revoked" '.revoked==true and .revision=="2"'
-if operator_cli admin billing finance record-business-evidence --tenant-id "$tenant" --profile-sha256 "$fingerprint" --expected-revision 0 --reference stale-proof --valid-until "$expiry" >"$STACK_STATE_DIR/finance-stale.out" 2>&1; then
- fail 'stale approval revived revoked proof'
-else
- check 'stale approval rejected' grep -q Aborted "$STACK_STATE_DIR/finance-stale.out"
-fi
 check 'NL consumer profile saved' json_has "$(profile consumer NL)" '.errors == null'
 check 'deployed NL consumer settles one invoice with 21% VAT on top and net credit' deployed_crypto 2100
 deployed_stripe() {
  local timeout=120s
- # Hold/recovery follows the deployed worker's real five-minute cadence.
- [ "$1" != TestStackDeployedStripeHeldRenewalRecovery ] || timeout=16m
- STACK_BILLING_TENANT_ID="$tenant" STACK_BILLING_FALLBACK_TENANT_IDS="${STACK_BILLING_FALLBACK_TENANT_IDS:-}" STACK_BILLING_DATABASE_URL="$STACK_BILLING_DATABASE_URL" STACK_BILLING_DEPLOYED=1 \
+ # Reconciliation follows the deployed worker's real five-minute cadence.
+ [ "$1" != TestStackDeployedStripeNoHoldRenewalOutcomes ] || timeout=16m
+ STACK_BILLING_TENANT_ID="$tenant" STACK_BILLING_STALE_RATE_TENANT_ID="${STACK_BILLING_STALE_RATE_TENANT_ID:-}" STACK_BILLING_FALLBACK_TENANT_IDS="${STACK_BILLING_FALLBACK_TENANT_IDS:-}" STACK_BILLING_DATABASE_URL="$STACK_BILLING_DATABASE_URL" STACK_BILLING_DEPLOYED=1 \
   "$STACK_REPO/bin/stack-billing-runner" -test.run "^$1$" -test.v -test.timeout "$timeout"
 }
 check 'deployed NL card top-up collects gross and credits net once' deployed_stripe TestStackDeployedCardTopupTax
@@ -97,9 +85,8 @@ with zipfile.ZipFile(path) as z:
  m=json.loads(z.read('manifest.json'))
  assert m['schema_version']==2 and m['posting_ready'] is False
  for name,digest in m['sha256'].items():assert hashlib.sha256(z.read(name)).hexdigest()==digest,name
- rows=[json.loads(line) for line in z.read('evidence/business_establishment_reviews.jsonl').splitlines()]
- mine=[r for r in rows if r['tenant_id']==tenant]
- assert len(mine)==2 and {r['revision'] for r in mine}=={1,2},mine
+ assert 'evidence/billing_tax_reviews.jsonl' in z.namelist()
+ assert 'evidence/provider_tax_profiles.jsonl' in z.namelist()
  assert 'exception_records.csv' in z.namelist() and 'exceptions.csv' in z.namelist()
  assert m['occurrence_through_exclusive'] and len(m['page_observations'])>1
 PY
@@ -130,15 +117,9 @@ PY
 grant_notice_tenants=()
 grant_notice_recipients=()
 regular_invoice() {
- local country=$1 type=$2 vat=$3 rate=$4 result proof inspection fingerprint
+ local country=$1 type=$2 vat=$3 rate=$4 result
  fresh_invoice_tenant "$country" || return 1
  json_has "$(profile "$type" "$country" "$vat")" '.errors == null' || return 1
- if [ "$country" = US ]; then
-  inspection=$(operator_cli admin billing finance tax-profile --tenant-id "$tenant") || return 1
-  fingerprint=$(printf '%s' "$inspection" | jq -r .profile_sha256)
-  proof=$(operator_cli admin billing finance record-business-evidence --tenant-id "$tenant" --profile-sha256 "$fingerprint" --expected-revision 0 --reference stack-invoice-establishment --valid-until "$expiry") || return 1
-  json_has "$proof" '.revision=="1"' || return 1
- fi
  # A large invoice-only fixture fee makes two seconds of real proration worth
  # enough cents to verify VAT rounding, without rewriting issued documents.
  operator_cli admin billing grant set --tenant-id "$tenant" --tier production --base-fee 1000000.00 --collection invoice --reason 'stack tax invoice matrix' --output json >/dev/null || return 1
@@ -167,18 +148,34 @@ paid_stripe_upgrade() {
  deployed_stripe TestStackDeployedStripePaidUpgradeOriginalTax
 }
 check 'deployed paid Stripe upgrade credits original zero VAT and charges new 21 percent fee' paid_stripe_upgrade
-held_stripe_renewal() {
- local fallback_tenants="" label
- for label in business eu-consumer foreign-consumer invalid-claim business-proof; do
+nohold_stripe_renewal() {
+ local fallback_tenants="" stale_tenant label
+ for label in business eu-consumer foreign-consumer invalid-claim; do
   fresh_invoice_tenant "stripe-fallback-$label" || return 1
   json_has "$(profile business AT ATU12345678)" '.errors == null' || return 1
   fallback_tenants="${fallback_tenants:+$fallback_tenants,}$tenant"
  done
- fresh_invoice_tenant stripe-hold || return 1
+ fresh_invoice_tenant stripe-stale-rate || return 1
+ json_has "$(profile business AT ATU12345678)" '.errors == null' || return 1
+ stale_tenant=$tenant
+ fresh_invoice_tenant stripe-nohold || return 1
  json_has "$(profile consumer NL)" '.errors == null' || return 1
- STACK_BILLING_FALLBACK_TENANT_IDS="$fallback_tenants" deployed_stripe TestStackDeployedStripeHeldRenewalRecovery
+ STACK_BILLING_STALE_RATE_TENANT_ID="$stale_tenant" STACK_BILLING_FALLBACK_TENANT_IDS="$fallback_tenants" deployed_stripe TestStackDeployedStripeNoHoldRenewalOutcomes || return 1
+ operator_cli admin billing finance reviews list --tenant-id "$stale_tenant" --provider stripe >"$STACK_STATE_DIR/finance-stale-reviews.jsonl" || return 1
+ jq -se 'any(.[]; .kind == "provider_tax_document_review" and .status == "open" and (.evidence_sha256|length)==64)' "$STACK_STATE_DIR/finance-stale-reviews.jsonl" >/dev/null || return 1
+ local stale_archive="$STACK_STATE_DIR/finance-stale-$stale_tenant.zip"
+ operator_cli admin billing finance audit --provider none --output "$stale_archive" || return 1
+ python3 - "$stale_archive" "$stale_tenant" <<'PYPROOF'
+import json,sys,zipfile
+with zipfile.ZipFile(sys.argv[1]) as z:
+ reviews=[json.loads(x) for x in z.read('evidence/billing_tax_reviews.jsonl').splitlines()]
+ mine=[r for r in reviews if r['tenant_id']==sys.argv[2] and r['kind']=='provider_tax_document_review']
+ assert mine and all(r['status']=='open' for r in mine),mine
+ expectations=[json.loads(x) for x in z.read('evidence/provider_tax_assessments.jsonl').splitlines()]
+ assert any(r['tenant_id']==sys.argv[2] and r['assessment']['rate_bps']==2100 for r in expectations),expectations
+PYPROOF
 }
-check 'deployed held-invoice matrix covers processing, decline, SCA, unrelated overdue and retained operator reviews' held_stripe_renewal
+check 'deployed no-hold renewals preserve declines, SCA, processing, overdue debt and fallback reviews' nohold_stripe_renewal
 purser_grant_notices_delivered() {
  local index result messages recipient
  [ "${#grant_notice_tenants[@]}" = 3 ] && [ "${#grant_notice_recipients[@]}" = 3 ] || return 1

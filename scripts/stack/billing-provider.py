@@ -213,7 +213,11 @@ class Provider:
                 if prior != identity:
                     return self.invalid("idempotency key reused with different parameters")
                 return copy.deepcopy(response)
-            fault = self.faults.pop((method, path), None)
+            fault = self.faults.get((method, path))
+            if fault:
+                fault["remaining"] = fault.get("remaining", 1) - 1
+                if fault["remaining"] <= 0:
+                    del self.faults[(method, path)]
             if fault and not fault["after_execution"]:
                 started = fault.get("execution_started", False)
                 response = fault["status"], {"error": {"type": "api_error" if started else "invalid_request_error", "message": "Simulated endpoint failure before state changes" if started else "Simulated conflict before endpoint execution"}}
@@ -253,7 +257,10 @@ class Provider:
                 return 200, {"configured": True}
             if path == "/__test/fault":
                 data = json.loads(body)
-                self.faults[(data["method"], data["path"])] = data
+                if data.get("remaining", 1) == 0:
+                    self.faults.pop((data["method"], data["path"]), None)
+                else:
+                    self.faults[(data["method"], data["path"])] = data
                 return 200, {"configured": True}
             if path == "/__test/collect":
                 data = json.loads(body)
@@ -305,7 +312,7 @@ class Provider:
                     extra["billing_reason"] = "subscription_update"
                 else:
                     extra.update({"status": "open", "default_tax_rates": copy.deepcopy(original["default_tax_rates"]), "status_transitions": {"finalized_at": int(time.time())}})
-                    extra["metadata"].update({"frameworks_tax_recovered_hold": "true", "frameworks_tax_profile": original["metadata"]["frameworks_tax_profile"]})
+                    extra["metadata"]["frameworks_tax_profile"] = original["metadata"]["frameworks_tax_profile"]
                     self.recalculate(extra)
                 sub["latest_invoice"] = latest
                 return 200, extra

@@ -59,3 +59,23 @@ CREATE OR REPLACE TRIGGER provider_tax_profile_guard BEFORE UPDATE ON purser.pro
 CREATE OR REPLACE TRIGGER provider_tax_profile_retention_guard BEFORE DELETE ON purser.provider_tax_profiles FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
 CREATE INDEX IF NOT EXISTS idx_provider_documents_tenant_id ON purser.provider_billing_documents(tenant_id,id);
 CREATE INDEX IF NOT EXISTS idx_provider_tax_profiles_tenant_id ON purser.provider_tax_profiles(tenant_id,id);
+
+-- Accepted recurring terms are retained before provider synchronization. An
+-- append-only history distinguishes a return to an earlier profile from its
+-- first use and fixes which expected terms existed when a renewal was issued.
+CREATE TABLE IF NOT EXISTS purser.provider_tax_assessments (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+ tenant_id UUID NOT NULL,
+ profile_sha256 TEXT NOT NULL CHECK(length(profile_sha256)=64),
+ assessed_at TIMESTAMPTZ NOT NULL,
+ assessment JSONB NOT NULL CHECK(jsonb_typeof(assessment)='object'),
+ retention_until TIMESTAMPTZ NOT NULL DEFAULT NOW()+INTERVAL '10 years'
+);
+CREATE INDEX IF NOT EXISTS idx_provider_tax_assessments_at_point
+ ON purser.provider_tax_assessments(tenant_id,assessed_at DESC,id DESC);
+CREATE OR REPLACE TRIGGER provider_tax_assessment_guard
+ BEFORE UPDATE ON purser.provider_tax_assessments
+ FOR EACH ROW EXECUTE FUNCTION purser.retain_provider_tax_profile();
+CREATE OR REPLACE TRIGGER provider_tax_assessment_retention_guard
+ BEFORE DELETE ON purser.provider_tax_assessments
+ FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();

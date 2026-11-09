@@ -14,7 +14,9 @@ package queries
 // the session from its first connect to its last disconnect or final.
 //
 // Stale-close, the prepaid reservation overlay and the live usage queries all
-// read this definition, so they agree on which lifecycle is open.
+// read this definition, so they agree on which lifecycle is open. Older rows
+// have no last_connected_at: only connect/disconnect projections update
+// last_updated, so a value after the last disconnect is the retained connect.
 func ViewerLifecyclesCTE(where string) string {
 	return `viewer_current AS (
 		SELECT * FROM periscope.viewer_sessions_current FINAL
@@ -28,8 +30,10 @@ func ViewerLifecyclesCTE(where string) string {
 	), viewer_lifecycles AS (
 		SELECT tenant_id, stream_id, node_id, session_id, cluster_id, connector, country_code, city, latitude, longitude,
 		       connected_at, disconnected_at, session_duration, bytes_transferred, last_updated,
-		       ifNull(c.last_connected_at, c.connected_at) AS lifecycle_connected_at,
-		       toInt64(toUnixTimestamp(ifNull(c.last_connected_at, c.connected_at))) * 1000 AS lifecycle_connected_at_ms,
+		       ifNull(c.last_connected_at,
+		           if(c.connected_at IS NOT NULL AND c.last_updated > ifNull(c.disconnected_at, toDateTime(0)),
+		              c.last_updated, c.connected_at)) AS lifecycle_connected_at,
+		       toInt64(toUnixTimestamp(lifecycle_connected_at)) * 1000 AS lifecycle_connected_at_ms,
 		       (lifecycle_connected_at IS NOT NULL
 		           AND ifNull(c.disconnected_at, toDateTime(0)) < lifecycle_connected_at
 		           AND ifNull(f.last_ended_at_ms, 0) < lifecycle_connected_at_ms) AS lifecycle_open,

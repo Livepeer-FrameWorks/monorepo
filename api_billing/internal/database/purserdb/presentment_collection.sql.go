@@ -10,8 +10,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 const activateAdvanceBilledSubscription = `-- name: ActivateAdvanceBilledSubscription :execrows
@@ -328,79 +326,6 @@ func (q *Queries) GetProviderSettlement(ctx context.Context, arg GetProviderSett
 		&i.FeeCents,
 		&i.NetCents,
 		&i.ExchangeRate,
-	)
-	return i, err
-}
-
-const getSubscriptionForInvoice = `-- name: GetSubscriptionForInvoice :one
-SELECT ts.tenant_id::text AS tenant_id,
-       ts.billing_email,
-       ts.tier_id,
-       ts.status,
-       ts.billing_period_start,
-       ts.billing_period_end,
-       ts.mollie_next_payment_date,
-       ts.stripe_subscription_id,
-       ts.mollie_subscription_id,
-       ts.payment_method,
-       ts.stripe_customer_id,
-       ts.presentment_currency::text AS presentment_currency,
-       EXISTS (
-           SELECT 1 FROM purser.mollie_customers mc WHERE mc.tenant_id = ts.tenant_id
-       )::boolean AS has_mollie_customer,
-       bt.tier_name,
-       bt.display_name,
-       bt.billing_period,
-       ts.billing_model
-FROM purser.tenant_subscriptions ts
-JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
-WHERE ts.tenant_id = $1::text::uuid
-  AND ts.status = 'active'
-`
-
-type GetSubscriptionForInvoiceRow struct {
-	TenantID              string         `db:"tenant_id" json:"tenant_id"`
-	BillingEmail          sql.NullString `db:"billing_email" json:"billing_email"`
-	TierID                uuid.UUID      `db:"tier_id" json:"tier_id"`
-	Status                string         `db:"status" json:"status"`
-	BillingPeriodStart    sql.NullTime   `db:"billing_period_start" json:"billing_period_start"`
-	BillingPeriodEnd      sql.NullTime   `db:"billing_period_end" json:"billing_period_end"`
-	MollieNextPaymentDate sql.NullTime   `db:"mollie_next_payment_date" json:"mollie_next_payment_date"`
-	StripeSubscriptionID  sql.NullString `db:"stripe_subscription_id" json:"stripe_subscription_id"`
-	MollieSubscriptionID  sql.NullString `db:"mollie_subscription_id" json:"mollie_subscription_id"`
-	PaymentMethod         sql.NullString `db:"payment_method" json:"payment_method"`
-	StripeCustomerID      sql.NullString `db:"stripe_customer_id" json:"stripe_customer_id"`
-	PresentmentCurrency   string         `db:"presentment_currency" json:"presentment_currency"`
-	HasMollieCustomer     bool           `db:"has_mollie_customer" json:"has_mollie_customer"`
-	TierName              string         `db:"tier_name" json:"tier_name"`
-	DisplayName           string         `db:"display_name" json:"display_name"`
-	BillingPeriod         string         `db:"billing_period" json:"billing_period"`
-	BillingModel          string         `db:"billing_model" json:"billing_model"`
-}
-
-// The columns ListSubscriptionsDueForInvoice returns, for one tenant whose
-// period is closed early.
-func (q *Queries) GetSubscriptionForInvoice(ctx context.Context, tenantID string) (GetSubscriptionForInvoiceRow, error) {
-	row := q.db.QueryRowContext(ctx, getSubscriptionForInvoice, tenantID)
-	var i GetSubscriptionForInvoiceRow
-	err := row.Scan(
-		&i.TenantID,
-		&i.BillingEmail,
-		&i.TierID,
-		&i.Status,
-		&i.BillingPeriodStart,
-		&i.BillingPeriodEnd,
-		&i.MollieNextPaymentDate,
-		&i.StripeSubscriptionID,
-		&i.MollieSubscriptionID,
-		&i.PaymentMethod,
-		&i.StripeCustomerID,
-		&i.PresentmentCurrency,
-		&i.HasMollieCustomer,
-		&i.TierName,
-		&i.DisplayName,
-		&i.BillingPeriod,
-		&i.BillingModel,
 	)
 	return i, err
 }

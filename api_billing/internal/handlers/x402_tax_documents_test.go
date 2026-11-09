@@ -80,7 +80,7 @@ func TestCryptoQuoteFreezesTaxAssessmentBeforePayment(t *testing.T) {
 	if decodeErr := json.Unmarshal(raw, &captured); decodeErr != nil {
 		t.Fatal(decodeErr)
 	}
-	d, err := captured.TaxAssessment.validatedDecision()
+	d, err := captured.TaxAssessment.ValidatedDecision()
 	if err != nil || d.RateBPS != 2100 || d.Source != "Dutch VAT" {
 		t.Fatalf("settlement changed an accepted tax assessment: %+v %v", d, err)
 	}

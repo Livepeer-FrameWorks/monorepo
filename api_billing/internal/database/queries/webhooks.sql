@@ -203,11 +203,6 @@ WHERE id = sqlc.arg(payment_id)::text::uuid
   AND status = 'pending'
   AND (tx_id IS NULL OR tx_id = sqlc.arg(transaction_id) OR tx_id LIKE 'mollie-overage-intent:%');
 
--- name: GetBillingInvoiceTenant :one
-SELECT tenant_id::text AS tenant_id
-FROM purser.billing_invoices
-WHERE id = sqlc.arg(invoice_id)::text::uuid;
-
 -- name: GetStripePaymentMappingByIntent :one
 SELECT invoice.tenant_id::text AS tenant_id, payment.id::text AS payment_id
 FROM purser.billing_payments payment

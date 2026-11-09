@@ -62,3 +62,9 @@ ON purser.crypto_invoices(tenant_id,issued_at DESC,id DESC)
 WHERE tax_validation_status<>'location_review';
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_credit_notes_document_time
 ON purser.credit_notes(tenant_id,issued_at DESC,id DESC);
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_billing_tax_reviews_tenant_id
+ON purser.crypto_accounting_anomalies(tenant_id,id);
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_provider_tax_assessments_audit
+ON purser.provider_tax_assessments(tenant_id,id);

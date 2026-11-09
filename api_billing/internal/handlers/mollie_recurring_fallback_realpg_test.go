@@ -38,6 +38,18 @@ func TestNativeMollieIncompleteRecurringProfileCollectsDutchVAT_RealPG(t *testin
 		return copied
 	}
 	path := "/v2/customers/customer/subscriptions/subscription"
+	svc := &Service{db: db, mollieClient: client, logger: logging.NewLogger()}
+	jobs := &JobManager{db: db, billing: svc, logger: logging.NewLogger()}
+	fixture.route("GET", path, func(recordedProviderRequest) (int, any) {
+		return 503, map[string]any{"status": 503, "title": "temporarily unavailable"}
+	})
+	if err := jobs.reconcileMollieTaxTenant(t.Context(), tenant); err == nil {
+		t.Fatal("provider read failure disappeared")
+	}
+	var expectedBeforeProviderRead int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM purser.provider_tax_assessments WHERE tenant_id=$1::uuid AND (assessment->>'rate_bps')::int=2100`, tenant).Scan(&expectedBeforeProviderRead); err != nil || expectedBeforeProviderRead != 1 {
+		t.Fatalf("provider GET failure discarded accepted domestic terms: count%d err%v", expectedBeforeProviderRead, err)
+	}
 	fixture.route("GET", path, func(recordedProviderRequest) (int, any) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -57,8 +69,6 @@ func TestNativeMollieIncompleteRecurringProfileCollectsDutchVAT_RealPG(t *testin
 		state["amount"], state["metadata"] = body["amount"], body["metadata"]
 		return 200, copyState()
 	})
-	svc := &Service{db: db, mollieClient: client, logger: logging.NewLogger()}
-	jobs := &JobManager{db: db, billing: svc, logger: logging.NewLogger()}
 	if err := jobs.reconcileMollieTaxTenant(t.Context(), tenant); err != nil {
 		t.Fatalf("incomplete existing recurring profile blocked Dutch VAT collection: %v", err)
 	}

@@ -14,7 +14,7 @@ WHERE tenant_id=sqlc.arg(tenant_id)::uuid AND node_id=sqlc.arg(node_id) AND star
 -- Local marker completion is independent of global lease forwarding. Bound the
 -- marker work before joining sessions, including executions that never minted.
 SELECT generation, tenant_id, stream_internal_name, node_id, start_trigger_uuid,
-       publisher_admission_version, stream_id, reason
+       publisher_admission_version, stream_id, reason, started_at AS queued_at
 FROM (
   (SELECT COALESCE(session.id::text,'')::text AS generation, COALESCE(session.tenant_id::text,'')::text AS tenant_id,
           COALESCE(session.stream_internal_name,'')::text AS stream_internal_name,
@@ -56,7 +56,8 @@ WHERE marker.node_id=sqlc.arg(node_id) AND marker.start_trigger_uuid=sqlc.arg(tr
     WHERE session.node_id=marker.node_id AND session.start_trigger_uuid=marker.start_trigger_uuid AND session.ended_at IS NULL);
 
 -- name: ListPublisherLeaseReleases :many
-SELECT id::text AS generation, tenant_id::text AS tenant_id, stream_internal_name, ingest_cluster_id, start_trigger_uuid, node_id
+SELECT id::text AS generation, tenant_id::text AS tenant_id, stream_internal_name, ingest_cluster_id, start_trigger_uuid, node_id,
+       COALESCE(ended_at,NOW())::timestamptz AS queued_at
 FROM foghorn.ingest_sessions
 WHERE publisher_admission_version=1 AND ended_at IS NOT NULL AND publisher_lease_released_at IS NULL
 ORDER BY ended_at LIMIT 100;
@@ -77,7 +78,7 @@ WHERE session.tenant_id=released.tenant_id::uuid AND session.id=released.generat
 
 -- name: ListPublisherAbandonmentsToForward :many
 -- Execution markers precede tenant discovery and are scoped to a node.
-SELECT node_id,start_trigger_uuid FROM foghorn.ingest_admission_abandonments
+SELECT node_id,start_trigger_uuid,created_at AS queued_at FROM foghorn.ingest_admission_abandonments
 WHERE publisher_lease_settled_at IS NULL ORDER BY created_at LIMIT 32;
 
 -- name: MarkPublisherAbandonmentForwarded :execrows

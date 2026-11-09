@@ -132,19 +132,20 @@ func (s *PurserServer) GetCryptoReadiness(ctx context.Context, _ *emptypb.Empty)
 		add("custody.xpub", fmt.Errorf("HD wallet xpub is not initialized"), "")
 	}
 	add("tax.topup_policy", nil, handlers.CryptoTopupTaxPolicyRef)
+	add("tax.supplier_identity", cryptoTaxSupplierReadiness(), "complete Dutch supplier identity")
 	if s.x402handler == nil {
 		add("x402.facilitator", fmt.Errorf("x402 handler is unavailable"), "")
 	} else {
 		add("x402.facilitator", s.x402handler.Readiness(ctx), "official v2 facilitator reachable and supported")
 	}
 	queries := purserdb.New(s.db)
-	currentVATRates, vatRateErr := queries.CountCurrentEUVATRates(ctx)
+	currentVATRates, vatRateErr := queries.CountCurrentDutchVATRates(ctx)
 	if vatRateErr != nil {
 		add("tax.vat_rate_catalog", fmt.Errorf("read effective VAT rates: %w", vatRateErr), "")
-	} else if currentVATRates != 27 {
-		add("tax.vat_rate_catalog", fmt.Errorf("effective VAT rate catalog has %d of 27 EU countries", currentVATRates), "")
+	} else if currentVATRates != 1 {
+		add("tax.vat_rate_catalog", fmt.Errorf("expected one effective positive Dutch VAT rate, found %d", currentVATRates), "")
 	} else {
-		add("tax.vat_rate_catalog", nil, "27 effective-dated EU standard rates")
+		add("tax.vat_rate_catalog", nil, "effective-dated Dutch VAT rate")
 	}
 	openAnomalies, anomalyErr := queries.CountOpenCryptoAccountingAnomalies(ctx)
 	if anomalyErr != nil {
@@ -185,6 +186,16 @@ func (s *PurserServer) GetCryptoReadiness(ctx context.Context, _ *emptypb.Empty)
 		response.ProductionEligible = false
 	}
 	return response, nil
+}
+
+func cryptoTaxSupplierReadiness() error {
+	if !strings.EqualFold(strings.TrimSpace(appconfig.Runtime().SupplierCountry), "NL") {
+		return fmt.Errorf("SUPPLIER_COUNTRY must be NL for the Dutch billing policy")
+	}
+	if !handlers.ConfiguredDocumentSupplier().Complete() {
+		return fmt.Errorf("complete SUPPLIER_NAME, SUPPLIER_ADDRESS, SUPPLIER_VAT_NUMBER and SUPPLIER_REGISTRATION_NUMBER are required")
+	}
+	return nil
 }
 
 func sweepNetwork(name string) (handlers.NetworkConfig, error) {

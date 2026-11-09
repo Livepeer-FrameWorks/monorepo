@@ -2,29 +2,12 @@ package handlers
 
 import (
 	"encoding/json"
-	"strings"
 
 	"frameworks/api_billing/internal/appconfig"
+	billingtax "frameworks/api_billing/internal/tax"
 )
 
-// DocumentSupplier is the supplier identity a billing document states.
-type DocumentSupplier struct {
-	Name               string `json:"name"`
-	Address            string `json:"address"`
-	VATNumber          string `json:"vat_number"`
-	RegistrationNumber string `json:"registration_number"`
-}
-
-// Complete reports whether all legal seller fields needed by an issued
-// document are present in the retained supplier identity.
-func (s DocumentSupplier) Complete() bool {
-	for _, value := range []string{s.Name, s.Address, s.VATNumber, s.RegistrationNumber} {
-		if strings.TrimSpace(value) == "" {
-			return false
-		}
-	}
-	return true
-}
+type DocumentSupplier = billingtax.Supplier
 
 // ConfiguredDocumentSupplier is the supplier identity Purser is configured
 // with.

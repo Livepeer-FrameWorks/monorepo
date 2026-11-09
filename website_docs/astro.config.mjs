@@ -409,6 +409,7 @@ export default defineConfig({
                 { slug: "operators/postgres-migrations" },
                 { slug: "operators/clickhouse-migrations" },
                 { slug: "operators/yugabyte-layout" },
+                { slug: "operators/selfhosted-edge-rollout" },
               ],
             },
             {
@@ -417,6 +418,8 @@ export default defineConfig({
                 { slug: "operators/dns" },
                 { slug: "operators/mesh-bootstrap" },
                 { slug: "operators/multi-cluster" },
+                { slug: "operators/media-placement" },
+                { slug: "operators/network-observations" },
               ],
             },
             {
@@ -424,6 +427,8 @@ export default defineConfig({
               items: [
                 { slug: "operators/operations" },
                 { slug: "operators/trial-accounts" },
+                { slug: "operators/billing-financials" },
+                { slug: "operators/crypto-payments" },
                 { slug: "operators/alerting" },
                 { slug: "operators/media-storage" },
                 { slug: "operators/dvr" },

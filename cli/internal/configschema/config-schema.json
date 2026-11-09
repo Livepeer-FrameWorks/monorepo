@@ -1759,25 +1759,6 @@
           "description": "EU VIES SOAP endpoint that validates customer VAT numbers. Empty uses the European Commission service. Re-read after an env-file reload."
         },
         {
-          "key": "EU_CONSUMER_VAT_MODE",
-          "type": "string",
-          "introduced": "v0.3.14",
-          "description": "Cross-border digital-service consumer VAT regime: destination. Empty holds foreign consumer decisions. Only destination is accepted. Re-read after reload."
-        },
-        {
-          "key": "CRYPTO_TAX_POLICY_JSON",
-          "type": "string",
-          "introduced": "v0.3.14",
-          "description": "Reviewed supplier tax policy JSON: validity window, explicit non-EU rates and evidence references. Tenant establishment proofs are recorded separately through the operator finance commands. Covers the service and applicable regional rules. Empty holds unsupported destinations. Does not register or file tax. Re-read after reload."
-        },
-        {
-          "key": "EU_CONSUMER_DESTINATION_REGISTERED",
-          "type": "boolean",
-          "default": "false",
-          "introduced": "v0.3.14",
-          "description": "Operator confirmation that OSS or applicable destination VAT registration is in place for cross-border EU consumer services. Does not elect the scheme or file returns."
-        },
-        {
           "key": "HD_WALLET_XPUB",
           "type": "string",
           "secret": true,

@@ -557,7 +557,8 @@ func main() {
 		artifactDeletionOutcomes.WithLabelValues(outcome).Add(0)
 	}
 	control.SetMetrics(&control.ControlMetrics{
-		PublisherAdmissionDuration: metricsCollector.NewHistogram("publisher_admission_duration_seconds", "Publisher admission phase duration including pool and lock waits", []string{"phase", "outcome"}, []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 3, 4, 8}),
+		PublisherAdmissionDuration:     metricsCollector.NewHistogram("publisher_admission_duration_seconds", "Publisher admission phase duration including pool and lock waits", []string{"phase", "outcome"}, []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 3, 4, 8}),
+		PublisherRecoveryOldestPending: metricsCollector.NewGauge("publisher_admission_recovery_oldest_pending_timestamp_seconds", "Oldest pending publisher recovery item Unix timestamp, or zero when empty", []string{"queue"}),
 		MistTriggers: metricsCollector.NewCounter(
 			"control_mist_triggers_total",
 			"MistTrigger messages received/processed over the HelmsmanControl stream",

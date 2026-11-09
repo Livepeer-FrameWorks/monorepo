@@ -43,7 +43,8 @@ var (
 // authority for control-plane hosts; nothing is recorded. When no catalog release declares min_source_version the
 // check reads nothing. A cluster verified for a target is not re-read for the next service in the same run.
 func enforceSourceFloor(ctx context.Context, out io.Writer, rc *resolvedCluster, sshPool *ssh.Pool, target string) error {
-	if !sourceFloorsDeclaredFn() {
+	hasFloors := sourceFloorsDeclaredFn()
+	if !hasFloors && releases.CompareSemver(target, purserImmutableInvoiceBoundary) >= 0 {
 		return nil
 	}
 	if rc.sourceFloorVerifiedFor == target {
@@ -56,6 +57,13 @@ func enforceSourceFloor(ctx context.Context, out io.Writer, rc *resolvedCluster,
 	}
 	if err != nil {
 		return fmt.Errorf("[source floor] read running release versions: %w", err)
+	}
+	if !hasFloors {
+		if err := purserTaxRollbackRefusal(instances, target); err != nil {
+			return err
+		}
+		rc.sourceFloorVerifiedFor = target
+		return nil
 	}
 	if err := sourceFloorRefusal(instances, target, sourceFloorForFn); err != nil {
 		return err
@@ -91,6 +99,9 @@ func describeSourceFloor(target string) string {
 // `git describe` suffix. An instance whose version cannot be read as a release, or whose release is newer than this
 // CLI's catalog, is refused because its floor cannot be evaluated.
 func sourceFloorRefusal(instances []runningInstance, target string, floorFor func(string) (string, bool)) error {
+	if err := purserTaxRollbackRefusal(instances, target); err != nil {
+		return err
+	}
 	targetBase := releases.BaseVersion(target)
 	targetFloor, known := floorFor(targetBase)
 	if !known {
@@ -124,6 +135,32 @@ func sourceFloorRefusal(instances []runningInstance, target string, floorFor fun
 		return nil
 	}
 	return fmt.Errorf("[source floor] refusing to move the cluster to %s:\n  - %s", target, strings.Join(problems, "\n  - "))
+}
+
+// Before rc4, Purser adjusts issued invoice lines in place. Once the immutable
+// invoice contract is installed, restoring that binary cannot safely bill them.
+const purserImmutableInvoiceBoundary = "v0.3.14-rc4"
+
+func purserTaxRollbackRefusal(instances []runningInstance, target string) error {
+	if releases.CompareSemver(target, purserImmutableInvoiceBoundary) >= 0 {
+		return nil
+	}
+	for _, instance := range instances {
+		if instance.Service != "purser" {
+			continue
+		}
+		current := releases.StripGitDescribeSuffix(strings.TrimSpace(instance.Version))
+		if current != "" && !strings.HasPrefix(current, "v") {
+			current = "v" + current
+		}
+		if releases.ValidateVersion(current) != nil {
+			return fmt.Errorf("[source floor] cannot verify Purser's immutable invoice contract on %s from version %q; refusing downgrade", instance.Host, instance.Version)
+		}
+		if releases.CompareSemver(current, purserImmutableInvoiceBoundary) >= 0 {
+			return fmt.Errorf("[source floor] purser on %s runs %s with immutable issued invoices; moving to %s is unsupported, recover forward or restore no earlier than %s", instance.Host, current, target, purserImmutableInvoiceBoundary)
+		}
+	}
+	return nil
 }
 
 // runningReleaseBase reads a detected version as a release: a `git describe` suffix is stripped, a missing leading v is

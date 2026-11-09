@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
+	"time"
 )
 
 type fakeBillingDiagnosis struct {
@@ -128,6 +129,30 @@ func TestStreamDiagnosisMapsCellsAndRetainsPartialResults(t *testing.T) {
 }
 
 type fakeNodeInventory struct{}
+
+type slowNodeInventory struct{ fakeNodeInventory }
+
+func (slowNodeInventory) GetNode(ctx context.Context, id string) (*quartermasterpb.NodeResponse, error) {
+	time.Sleep(20 * time.Second)
+	return fakeNodeInventory{}.GetNode(ctx, id)
+}
+
+func TestNodeDiagnosisBudgetsIndependentReads(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var out bytes.Buffer
+		health := func(ctx context.Context, _, _ string) (*controlpb.GetNodeHealthResponse, error) {
+			select {
+			case <-time.After(20 * time.Second):
+				return &controlpb.GetNodeHealthResponse{}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		if err := runNodeDiagnose(t.Context(), &out, slowNodeInventory{}, health, perCellFoghornManifest(), "operator-jwt", "edge-one", "", false); err != nil {
+			t.Fatalf("successful independent node reads must each receive their own budget: %v", err)
+		}
+	})
+}
 
 func (fakeNodeInventory) GetNode(context.Context, string) (*quartermasterpb.NodeResponse, error) {
 	return &quartermasterpb.NodeResponse{Node: &quartermasterpb.InfrastructureNode{Id: "node-uuid", NodeId: "edge-one", ClusterId: "media-eu", EnrollmentOrigin: "runtime_enrolled"}}, nil
