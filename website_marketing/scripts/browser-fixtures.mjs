@@ -56,7 +56,8 @@ async function waitForServer(url, child, timeoutMs) {
 
 const port = await freePort();
 const origin = `http://127.0.0.1:${port}`;
-const devServer = spawn("pnpm", ["exec", "react-router", "dev"], {
+// Rebuild optimized dependencies so fixture startup does not inherit another run's Vite cache.
+const devServer = spawn("pnpm", ["exec", "react-router", "dev", "--force"], {
   cwd: siteDir,
   env: {
     ...process.env,
@@ -92,6 +93,14 @@ try {
   try {
     for (const [fixture, query] of cases) {
       const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+      const diagnostics = [];
+      const recordDiagnostic = (message) => {
+        if (diagnostics.length < 20) diagnostics.push(message.slice(0, 500));
+      };
+      page.on("pageerror", (error) => recordDiagnostic(`pageerror: ${error.message}`));
+      page.on("requestfailed", (request) =>
+        recordDiagnostic(`requestfailed: ${request.failure()?.errorText} ${request.url()}`)
+      );
       const url = `${origin}/@fs${join(fixtureDir, fixture)}?${query}`;
       let status = "timeout";
       let report = "";
@@ -110,7 +119,11 @@ try {
       } finally {
         await page.close();
       }
-      if (status !== "pass") failed += 1;
+      if (status !== "pass") {
+        failed += 1;
+        console.error(`Browser diagnostics: ${diagnostics.join("\n") || "none captured"}`);
+        console.error(serverLog.slice(-4000));
+      }
       console.log(`${status === "pass" ? "PASS" : "FAIL"} ${fixture}?${query} (${status})`);
       for (const line of String(report).trim().split("\n")) console.log(`    ${line}`);
     }
