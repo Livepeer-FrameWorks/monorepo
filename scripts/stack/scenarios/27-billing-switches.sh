@@ -54,6 +54,17 @@ print(json.loads(base64.urlsafe_b64decode(p)).get('tenant_id',''))
 PY
 )
 [ -n "$tenant" ] || { fail 'billing tenant JWT has no tenant_id'; finish; }
+
+# The phase-close invoice needs the same complete legal buyer as a normal
+# purchase. The US business fixture preserves this scenario's zero Dutch VAT.
+details=$(gql 'mutation($input:UpdateBillingDetailsInput!){updateBillingDetails(input:$input){email customerType}}' \
+  "$(jq -cn --arg email "$email" '{input:{email:$email,name:"Stack Billing Buyer",company:"Stack Billing LLC",customerType:"business",vatNumber:"",address:{street:"1 Main Street",city:"Seattle",postalCode:"98101",country:"US"}}}')" "$jwt")
+if json_has "$details" '.errors == null and .data.updateBillingDetails.customerType == "business" and .data.updateBillingDetails.email != null'; then
+  pass 'billing tenant completed its legal billing profile'
+else
+  fail 'billing tenant completed its legal billing profile'
+  finish
+fi
 if set_prepaid=$(cli_json admin billing set-tier --tenant-id "$tenant" --tier payg --billing-model prepaid \
   --reason 'stack billing switch test' --output json); then
   pass 'operator assigned prepaid tier'
