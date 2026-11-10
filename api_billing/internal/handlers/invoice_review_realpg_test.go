@@ -11,6 +11,7 @@ import (
 	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/google/uuid"
@@ -99,7 +100,7 @@ func testPostpaidTaxReviewHoldsAndResumesSameInvoice(t *testing.T, malformedVAT 
 func TestPostpaidTaxReviewCannotAdvanceBillingPhase_RealPG(t *testing.T) {
 	db := startPurserUsageRealPG(t)
 	start := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Microsecond)
-	tenant := newPhaseTenant(t, db, "postpaid", start, start.AddDate(0, 1, 0), 1000)
+	tenant := newPhaseTenant(t, db, "postpaid", start, billing.NextMonthlyAnniversary(start), 1000)
 	if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET billing_name=NULL WHERE tenant_id=$1::uuid`, tenant.id); err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +148,7 @@ func TestPostpaidTaxReviewCannotAdvanceBillingPhase_RealPG(t *testing.T) {
 func TestPostpaidPricingReviewIsNotReportedAsTaxReview_RealPG(t *testing.T) {
 	db := startPurserUsageRealPG(t)
 	start := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Microsecond)
-	tenant := newPhaseTenant(t, db, "postpaid", start, start.AddDate(0, 1, 0), 1000)
+	tenant := newPhaseTenant(t, db, "postpaid", start, billing.NextMonthlyAnniversary(start), 1000)
 	closing, err := PreparePostpaidPhaseClose(t.Context(), db, logging.NewLogger(), tenant.svc, tenant.id)
 	if err != nil {
 		t.Fatal(err)

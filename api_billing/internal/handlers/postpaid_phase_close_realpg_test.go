@@ -358,7 +358,7 @@ func TestPostpaidPhaseCloseCollectsTheClosingInvoice_RealPG(t *testing.T) {
 			} {
 				args := []any{tenantID}
 				if strings.Contains(statement, "tenant_subscriptions") {
-					args = []any{tenantID, supporterID, periodStart, periodStart.AddDate(0, 1, 0)}
+					args = []any{tenantID, supporterID, periodStart, billing.NextMonthlyAnniversary(periodStart)}
 				}
 				if _, err := db.ExecContext(ctx, statement, args...); err != nil {
 					t.Fatalf("seed: %v\n%s", err, statement)
