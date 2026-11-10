@@ -189,6 +189,9 @@ func (s *Service) ProcessTierUpgrade(ctx context.Context, tenantID, id string) (
 			}
 			return taxErr
 		}
+		if startErr := StartAssessedTaxHandling(ctx, tx, tenantID); startErr != nil {
+			return startErr
+		}
 		if !accountClosed && !row.RecoveryRequestedAt.Valid {
 			if _, err = PrepareProviderBillingBoundary(ctx, s.db, s.logger, s, tenantID, row.RequestedAt); err != nil {
 				return err

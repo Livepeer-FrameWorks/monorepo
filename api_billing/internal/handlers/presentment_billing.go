@@ -316,7 +316,14 @@ func (jm *JobManager) chargeAdvanceBaseFee(ctx context.Context, tenantID string,
 			netCents = baseEUR.Shift(2).IntPart()
 		}
 		collectCents := max(netCents, 0)
-		taxAssessment, taxErr := assessInvoiceTaxTx(ctx, tx, tenantID, collectCents, now)
+		untaxed, taxErr := keepsUnassessedTax(ctx, tx, tenantID)
+		if taxErr != nil {
+			return taxErr
+		}
+		taxAssessment := unassessedInvoiceTax(collectCents, now)
+		if !untaxed {
+			taxAssessment, taxErr = assessInvoiceTaxTx(ctx, tx, tenantID, collectCents, now)
+		}
 		if taxErr != nil {
 			var review *billingtax.ReviewError
 			if !billingtax.IsTransient(taxErr) && errors.As(taxErr, &review) {
@@ -397,8 +404,10 @@ func (jm *JobManager) chargeAdvanceBaseFee(ctx context.Context, tenantID string,
 		if lineErr := persistInvoiceLineItems(ctx, tx, invoiceID, tenantID, lines); lineErr != nil {
 			return lineErr
 		}
-		if taxErr = freezeInvoiceTaxTx(ctx, tx, tenantID, invoiceID, taxAssessment, record); taxErr != nil {
-			return taxErr
+		if !untaxed {
+			if taxErr = freezeInvoiceTaxTx(ctx, tx, tenantID, invoiceID, taxAssessment, record); taxErr != nil {
+				return taxErr
+			}
 		}
 		if previous.reduction != nil {
 			if reduceErr := reducePreviousBaseFeeInvoiceTx(ctx, tx, tenantID, *previous.reduction, now); reduceErr != nil {

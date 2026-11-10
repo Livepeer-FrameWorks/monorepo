@@ -57,6 +57,7 @@ func TestPaidMollieUpgradeRetainsCurrentTaxOnExistingNetBeforePurchase(t *testin
 				store.WillReturnError(failure)
 			} else {
 				store.WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec("-- name: StartAssessedTaxHandling").WithArgs("tenant").WillReturnResult(sqlmock.NewResult(0, 1))
 				expectation := mock.ExpectExec("-- name: RetainProviderTaxExpectation").WithArgs("tenant", sqlmock.AnyArg(), sqlmock.AnyArg(), retainedUpgradeTaxArg{profile: retained, recorded: &expectationRecorded})
 				if tc.expectationFail {
 					expectation.WillReturnError(failure)

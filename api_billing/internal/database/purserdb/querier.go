@@ -1013,6 +1013,7 @@ type Querier interface {
 	// Its prospective subscription lives on the provider intent until activation.
 	StageTenantSubscriptionPendingStripe(ctx context.Context, arg StageTenantSubscriptionPendingStripeParams) error
 	StageTierUpgrade(ctx context.Context, arg StageTierUpgradeParams) error
+	StartAssessedTaxHandling(ctx context.Context, tenantID string) (int64, error)
 	// A switch between prepaid and postpaid closed the current phase at
 	// period_start: the next phase's period runs from there.
 	StartBillingPhase(ctx context.Context, arg StartBillingPhaseParams) (int64, error)
@@ -1037,6 +1038,9 @@ type Querier interface {
 	SumPrepaidUsageSettlementsForStatement(ctx context.Context, arg SumPrepaidUsageSettlementsForStatementParams) (SumPrepaidUsageSettlementsForStatementRow, error)
 	SuspendActiveTenantSubscription(ctx context.Context, tenantID string) (int64, error)
 	SuspendActiveTenantSubscriptions(ctx context.Context, tenantID string) (int64, error)
+	// A billing relationship with no tax_assessed_since keeps its untaxed
+	// treatment: no provider tax synchronization and no tax facts on its invoices.
+	TenantKeepsUnassessedTax(ctx context.Context, tenantID string) (bool, error)
 	// Settling first applies to a tenant on Free. A finalized invoice is owed until
 	// confirmed payments cover it.
 	TenantOwesInvoicesOnFree(ctx context.Context, tenantID string) (bool, error)

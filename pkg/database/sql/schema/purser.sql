@@ -4322,3 +4322,11 @@ CREATE OR REPLACE TRIGGER provider_tax_assessment_retention_guard
  FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
 
 CREATE INDEX IF NOT EXISTS idx_provider_tax_assessments_audit ON purser.provider_tax_assessments(tenant_id,id);
+
+-- tax_assessed_since is NULL for a billing relationship that keeps the untaxed
+-- treatment it was sold under. Rows present when this column is added keep NULL;
+-- rows created afterwards start assessed tax handling when they are created.
+ALTER TABLE purser.tenant_subscriptions
+    ADD COLUMN IF NOT EXISTS tax_assessed_since TIMESTAMPTZ;
+ALTER TABLE purser.tenant_subscriptions
+    ALTER COLUMN tax_assessed_since SET DEFAULT NOW();

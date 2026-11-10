@@ -35,6 +35,9 @@ Assessment purpose determines handling of an incomplete claim:
 - **Historical:** use accepted evidence at the original tax point; never
   reassess today's profile to rewrite an issued document.
 
+Recurring and invoice assessment apply to relationships with assessed tax
+handling; see [Relationships that predate assessed tax](#relationships-that-predate-assessed-tax).
+
 The Billing page shows incomplete/review-required recurring profiles. Each
 fallback invoice has its own operator review; acknowledging an older document
 does not hide later ones. Correcting details affects future collections.
@@ -46,6 +49,27 @@ recurring terms, leaves the actual collection settings unchanged and retries.
 A matching accepted checkout profile can establish this continuity before the
 first recurring setup. This does not turn current validation into historical
 proof or repair an issued document.
+
+## Relationships that predate assessed tax
+
+A billing relationship whose `tenant_subscriptions` row existed before
+assessed tax handling has no `tax_assessed_since` and keeps the treatment it
+was sold under:
+
+- recurring tax reconciliation does not touch its Stripe or Mollie customer,
+  tax IDs, subscription tax rates or collection amount, and stores no provider
+  tax profile, expectation or review;
+- its recurring Purser invoices (postpaid usage and advance base fees) are
+  collected for the net amount with no VAT line. They keep
+  `tax_status = 'legacy_unknown'` and are never held for a tax review.
+
+The relationship moves to assessed handling, and records `tax_assessed_since`,
+when the tenant saves a complete billing profile (name, email, street, city,
+postal code and a valid country), starts a Stripe or Mollie checkout, or upgrades
+its plan. Each of those paths already requires a complete saved profile. From then on
+its provider subscriptions and invoices follow the assessment rules above. A
+relationship created afterwards starts with assessed handling. One-off purchases
+such as prepaid top-ups are always assessed.
 
 ## Documents, money and providers
 

@@ -138,6 +138,7 @@ func TestPaidStripeUpgradeRetainsAndSyncsCurrentTaxBeforeProviderPurchase(t *tes
 				store.WillReturnError(tc.retainError)
 			} else {
 				store.WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec("-- name: StartAssessedTaxHandling").WithArgs("tenant").WillReturnResult(sqlmock.NewResult(0, 1))
 				expectation := mock.ExpectExec("-- name: RetainProviderTaxExpectation").WithArgs("tenant", sqlmock.AnyArg(), sqlmock.AnyArg(), retainedUpgradeTaxArg{profile: retained, recorded: &expectationRecorded})
 				if tc.expectationError != nil {
 					expectation.WillReturnError(tc.expectationError)
