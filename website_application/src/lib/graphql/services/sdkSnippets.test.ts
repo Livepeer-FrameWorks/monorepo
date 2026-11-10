@@ -12,6 +12,7 @@ import {
   type SdkSnippetInput,
 } from "./sdkSnippets";
 import type { IntrospectedSchema } from "./schemaUtils";
+import { version as sdkVersion } from "../../../../../pkg/graphql/public/catalog.json";
 
 const repoRoot = path.resolve(__dirname, "../../../../..");
 const read = (rel: string) => readFileSync(path.join(repoRoot, rel), "utf8");
@@ -141,14 +142,14 @@ describe("generateSdkSnippets: SDK query", () => {
 
   it("Go calls the generated function", () => {
     const go = snippets().goSdk;
-    expect(go).toContain("// Go SDK: go get github.com/Livepeer-FrameWorks/sdk-go@v0.5.0");
+    expect(go).toContain(`// Go SDK: go get github.com/Livepeer-FrameWorks/sdk-go@v${sdkVersion}`);
     expect(go).toContain('frameworks "github.com/Livepeer-FrameWorks/sdk-go"');
     expect(go).toContain('resp, err := frameworks.GetStream(ctx, client, "U3RyZWFtOjE=")');
   });
 
   it("Python calls the snake_case method", () => {
     const py = snippets().pythonSdk;
-    expect(py).toContain("# Python SDK: pip install livepeer-frameworks~=0.5.0");
+    expect(py).toContain(`# Python SDK: pip install livepeer-frameworks~=${sdkVersion}`);
     expect(py).toContain(
       'with FrameWorksClient(\n    url="https://bridge.example.com/graphql",\n    token="YOUR_API_TOKEN",\n) as fw:'
     );
@@ -231,7 +232,7 @@ describe("generateSdkSnippets: SDK subscription", () => {
 
   it("TypeScript uses the subscription client", () => {
     const ts = out().tsSdk;
-    expect(ts).toContain("npm install @livepeer-frameworks/api@^0.5.0 graphql-ws");
+    expect(ts).toContain(`npm install @livepeer-frameworks/api@^${sdkVersion} graphql-ws`);
     expect(ts).toContain(
       'import { createSubscriptionClient } from "@livepeer-frameworks/api/subscriptions";'
     );

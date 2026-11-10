@@ -9,7 +9,7 @@ class OperationInfo(TypedDict):
     identity: str
 
 
-SDK_VERSION: Final = "0.5.0"
+SDK_VERSION: Final = "0.5.1"
 SDK_LINE: Final = "0.5"
 MIN_SERVER_VERSION: Final = "v0.3.11"
 
