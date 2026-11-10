@@ -35,11 +35,12 @@ func TestCapabilityCatalogServices(t *testing.T) {
 func TestCapabilitiesForReturnsCopyForEngine(t *testing.T) {
 	postgres := CapabilitiesFor("periscope-metering", EnginePostgres)
 	clickhouse := CapabilitiesFor("periscope-metering", EngineClickHouse)
-	if len(postgres) != 2 || len(clickhouse) != 2 {
-		t.Fatalf("periscope-metering capabilities = postgres:%d clickhouse:%d, want 2 each", len(postgres), len(clickhouse))
+	if len(postgres) != 2 || len(clickhouse) != 3 {
+		t.Fatalf("periscope-metering capabilities = postgres:%d clickhouse:%d, want 2 and 3", len(postgres), len(clickhouse))
 	}
+	originalProbe := postgres[0].Probe
 	postgres[0].Probe = "broken"
-	if capabilityCatalog["periscope-metering"][0].Probe == "broken" {
+	if CapabilitiesFor("periscope-metering", EnginePostgres)[0].Probe != originalProbe {
 		t.Fatal("CapabilitiesFor returned catalog storage instead of a copy")
 	}
 }
@@ -48,8 +49,8 @@ func TestPeriscopeIngestDeclaresBothRuntimeStores(t *testing.T) {
 	if got := len(CapabilitiesFor("periscope-ingest", EnginePostgres)); got != 1 {
 		t.Fatalf("periscope-ingest PostgreSQL capabilities = %d, want 1", got)
 	}
-	if got := len(CapabilitiesFor("periscope-ingest", EngineClickHouse)); got != 4 {
-		t.Fatalf("periscope-ingest ClickHouse capabilities = %d, want 4", got)
+	if got := len(CapabilitiesFor("periscope-ingest", EngineClickHouse)); got != 5 {
+		t.Fatalf("periscope-ingest ClickHouse capabilities = %d, want 5", got)
 	}
 }
 

@@ -459,6 +459,7 @@ GROUP BY day, tenant_id, stream_id, internal_name;
 CREATE TABLE IF NOT EXISTS viewer_connection_events (
     event_id UUID,
     timestamp DateTime,
+    source_timestamp_ms Int64 DEFAULT toInt64(toUnixTimestamp(timestamp)) * 1000,
     tenant_id UUID,
     stream_id UUID,
     artifact_hash String DEFAULT '',
@@ -513,6 +514,8 @@ CREATE TABLE IF NOT EXISTS viewer_sessions_current (
     -- ended its session, so the latest connect starts the session's current
     -- lifecycle; it is open while no disconnect followed it.
     last_connected_at SimpleAggregateFunction(max, Nullable(DateTime)),
+    last_connected_at_ms SimpleAggregateFunction(max, Int64),
+    last_disconnected_at_ms SimpleAggregateFunction(max, Int64),
 
     connector SimpleAggregateFunction(any, LowCardinality(String)),
 
@@ -540,6 +543,8 @@ SELECT
     timestamp AS connected_at,
     CAST(NULL AS Nullable(DateTime)) AS disconnected_at,
     timestamp AS last_connected_at,
+    source_timestamp_ms AS last_connected_at_ms,
+    toInt64(0) AS last_disconnected_at_ms,
     connector,
     country_code,
     city,
@@ -563,6 +568,8 @@ SELECT
     CAST(NULL AS Nullable(DateTime)) AS connected_at,
     timestamp AS disconnected_at,
     CAST(NULL AS Nullable(DateTime)) AS last_connected_at,
+    toInt64(0) AS last_connected_at_ms,
+    source_timestamp_ms AS last_disconnected_at_ms,
     connector,
     country_code,
     city,

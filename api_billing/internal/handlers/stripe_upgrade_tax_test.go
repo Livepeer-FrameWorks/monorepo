@@ -19,11 +19,20 @@ import (
 	api "github.com/stripe/stripe-go/v85"
 )
 
-type retainedUpgradeTaxArg struct{ profile *billingstripe.TaxProfile }
+type retainedUpgradeTaxArg struct {
+	profile  *billingstripe.TaxProfile
+	recorded *bool
+}
 
 func (a retainedUpgradeTaxArg) Match(value driver.Value) bool {
 	raw, ok := value.([]byte)
-	return ok && json.Unmarshal(raw, a.profile) == nil
+	if !ok || json.Unmarshal(raw, a.profile) != nil {
+		return false
+	}
+	if a.recorded != nil {
+		*a.recorded = true
+	}
+	return true
 }
 
 type stripeUpgradeTaxBackend struct {
@@ -32,6 +41,7 @@ type stripeUpgradeTaxBackend struct {
 	subReads, taxUpdates, upgradeReads int
 	synced                             bool
 	allowUnretainedRead                bool
+	expectationRecorded                *bool
 }
 
 var errUpgradeTaxOrder = errors.New("upgrade reached after retained tax preflight")
@@ -39,6 +49,9 @@ var errUpgradeTaxOrder = errors.New("upgrade reached after retained tax prefligh
 func (b *stripeUpgradeTaxBackend) Call(method, path, key string, params api.ParamsContainer, out api.LastResponseSetter) error {
 	if b.profile.ProfileSHA == "" && !b.allowUnretainedRead {
 		return errors.New("provider called before tax assessment was retained")
+	}
+	if b.expectationRecorded != nil && !*b.expectationRecorded {
+		return errors.New("provider called before intended tax history was retained")
 	}
 	switch result := out.(type) {
 	case *api.Subscription:
@@ -99,13 +112,14 @@ func (*stripeUpgradeTaxBackend) SetMaxNetworkRetries(int64) {}
 
 func TestPaidStripeUpgradeRetainsAndSyncsCurrentTaxBeforeProviderPurchase(t *testing.T) {
 	for _, tc := range []struct {
-		name                   string
-		retainError, syncError error
-		wantUpgrade            bool
+		name                                     string
+		retainError, expectationError, syncError error
+		wantUpgrade                              bool
 	}{
-		{"profile0 replaces provider21 before upgrade", nil, nil, true},
-		{"unretained proof forbids provider call", errors.New("assessment store unavailable"), nil, false},
-		{"failed tax sync forbids upgrade", nil, errors.New("subscription tax unavailable"), false},
+		{"profile0 replaces provider21 before upgrade", nil, nil, nil, true},
+		{"unretained proof forbids provider call", errors.New("assessment store unavailable"), nil, nil, false},
+		{"unretained intended history forbids provider call", nil, errors.New("expectation store unavailable"), nil, false},
+		{"failed tax sync forbids upgrade", nil, nil, errors.New("subscription tax unavailable"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for key, value := range map[string]string{"SUPPLIER_NAME": "DDVTech B.V.", "SUPPLIER_ADDRESS": "Leiden NL", "SUPPLIER_VAT_NUMBER": "NL853319145B01", "SUPPLIER_REGISTRATION_NUMBER": "59104694", "SUPPLIER_COUNTRY": "NL"} {
@@ -117,14 +131,21 @@ func TestPaidStripeUpgradeRetainsAndSyncsCurrentTaxBeforeProviderPurchase(t *tes
 			}
 			defer db.Close()
 			retained := &billingstripe.TaxProfile{}
+			expectationRecorded := false
 			mock.ExpectQuery("-- name: GetCryptoDocumentBillingProfile").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow("buyer@example.test", "Buyer", "Buyer Ltd", []byte(`{"street":"Main1","city":"Toronto","postal_code":"M5V1A1","country":"CA"}`), nil, "business"))
 			store := mock.ExpectExec("-- name: StoreProviderTaxProfile").WithArgs("tenant", sqlmock.AnyArg(), retainedUpgradeTaxArg{profile: retained})
 			if tc.retainError != nil {
 				store.WillReturnError(tc.retainError)
 			} else {
 				store.WillReturnResult(sqlmock.NewResult(0, 1))
+				expectation := mock.ExpectExec("-- name: RetainProviderTaxExpectation").WithArgs("tenant", sqlmock.AnyArg(), sqlmock.AnyArg(), retainedUpgradeTaxArg{profile: retained, recorded: &expectationRecorded})
+				if tc.expectationError != nil {
+					expectation.WillReturnError(tc.expectationError)
+				} else {
+					expectation.WillReturnResult(sqlmock.NewResult(0, 1))
+				}
 			}
-			backend := &stripeUpgradeTaxBackend{profile: retained, syncError: tc.syncError}
+			backend := &stripeUpgradeTaxBackend{profile: retained, syncError: tc.syncError, expectationRecorded: &expectationRecorded}
 			previous := api.GetBackend(api.APIBackend)
 			api.SetBackend(api.APIBackend, backend)
 			t.Cleanup(func() { api.SetBackend(api.APIBackend, previous) })
@@ -136,6 +157,9 @@ func TestPaidStripeUpgradeRetainsAndSyncsCurrentTaxBeforeProviderPurchase(t *tes
 				}
 			} else {
 				expected := tc.retainError
+				if expected == nil {
+					expected = tc.expectationError
+				}
 				if expected == nil {
 					expected = tc.syncError
 				}

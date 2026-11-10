@@ -25,7 +25,7 @@ type CryptoTaxAssessment = billingtax.Assessment
 // legacyCryptoVATDecision applies the version predating assessed quote snapshots.
 // Foreign documents retain the legacy-policy reference for correction review;
 // these rules are never used to advertise new payment instructions.
-func (h *X402Handler) legacyCryptoVATDecision(ctx context.Context, tenantID string, profile CryptoBillingProfile, quotedAt, at time.Time) (vatDecision, error) {
+func (h *X402Handler) legacyCryptoVATDecision(ctx context.Context, tenantID string, profile CryptoBillingProfile, _ time.Time, at time.Time) (vatDecision, error) {
 	if address, err := parseBillingAddress(profile.Address); err == nil && countries.IsValid(address.Country) {
 		country := countries.Normalize(address.Country)
 		if billingtax.IsEU(country) {
@@ -35,22 +35,18 @@ func (h *X402Handler) legacyCryptoVATDecision(ctx context.Context, tenantID stri
 					return vatDecision{}, billingtax.Review("vat_number_invalid", "The retained VAT claim needs review before its tax invoice can be finalized")
 				}
 				digest := sha256.Sum256([]byte(canonical))
-				prior, priorErr := purserdb.New(h.taxDatabase()).GetVATValidationAtQuote(ctx, purserdb.GetVATValidationAtQuoteParams{TenantID: tenantID, VatNumberHash: hex.EncodeToString(digest[:]), QuotedAt: quotedAt})
+				prior, priorErr := purserdb.New(h.taxDatabase()).GetVATValidationAtQuote(ctx, purserdb.GetVATValidationAtQuoteParams{TenantID: tenantID, VatNumberHash: hex.EncodeToString(digest[:]), QuotedAt: at})
 				var proof vatVerification
+				if priorErr == nil && !prior.Valid {
+					return vatDecision{}, billingtax.Review("vat_number_invalid", "The retained VAT claim needs review before its tax invoice can be finalized")
+				}
 				if priorErr == nil && prior.Valid && prior.FreshAtQuote {
-					proof = vatVerification{Valid: true, Snapshot: prior.ValidationSnapshot, Mode: "legacy_quote"}
+					proof = vatVerification{Valid: true, Snapshot: prior.ValidationSnapshot, Mode: "legacy_payment"}
 				} else {
 					if priorErr != nil && !errors.Is(priorErr, sql.ErrNoRows) {
 						return vatDecision{}, fmt.Errorf("read retained legacy VAT evidence: %w", priorErr)
 					}
-					current, validationErr := h.validateVIESVATEvidence(ctx, tenantID, country, canonical)
-					if validationErr != nil {
-						return vatDecision{}, billingtax.Review("vat_validation_unavailable", "VAT verification is pending; the received payment remains recorded while its tax invoice awaits verification")
-					}
-					proof = current
-				}
-				if !proof.Valid {
-					return vatDecision{}, billingtax.Review("vat_number_invalid", "The retained VAT claim needs review before its tax invoice can be finalized")
+					return vatDecision{}, billingtax.Review("vat_evidence_missing_at_tax_point", "The received payment is recorded; its retained VAT evidence requires review at the original payment time")
 				}
 				if billingtax.IsEU(h.supplierCountry) && country != countries.Normalize(h.supplierCountry) {
 					return vatDecision{Verification: proof, Country: country, VIESValidated: true, ReverseCharge: true, Source: "Legacy quote with retained VIES validation", CheckedOn: at.Format("2006-01-02"), EffectiveFrom: at.Format("2006-01-02")}, nil

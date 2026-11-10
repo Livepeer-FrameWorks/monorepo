@@ -15,6 +15,7 @@ import (
 	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
 	"frameworks/api_billing/internal/subscriptions"
+	billingtax "frameworks/api_billing/internal/tax"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -317,6 +318,10 @@ func (jm *JobManager) chargeAdvanceBaseFee(ctx context.Context, tenantID string,
 		collectCents := max(netCents, 0)
 		taxAssessment, taxErr := assessInvoiceTaxTx(ctx, tx, tenantID, collectCents, now)
 		if taxErr != nil {
+			var review *billingtax.ReviewError
+			if !billingtax.IsTransient(taxErr) && errors.As(taxErr, &review) {
+				return &billingPhaseTaxReviewError{BillingBoundaryCondition: &BillingBoundaryCondition{Reason: review.Error()}, db: jm.db, tenant: tenantID, start: periodStart, end: periodEnd, net: collectCents, review: *review}
+			}
 			return taxErr
 		}
 		collectCents = taxAssessment.Gross
@@ -416,8 +421,12 @@ func (jm *JobManager) chargeAdvanceBaseFee(ctx context.Context, tenantID string,
 		if emailErr := enqueueInvoiceEmailTx(ctx, tx, invoiceID, tenantID, billingEmail.String, status); emailErr != nil {
 			return emailErr
 		}
+		if _, resolveErr := txQueries.ResolveBillingPhaseTaxReview(ctx, purserdb.ResolveBillingPhaseTaxReviewParams{TenantID: tenantID, ReferenceID: billingPhaseTaxReviewReference(tenantID, periodStart)}); resolveErr != nil {
+			return resolveErr
+		}
 		return enqueueInvoiceCreatedTx(ctx, tx, tenantID, invoiceID, status, collectCents, periodStart, periodEnd, dueAt)
 	})
+	err = RecordBillingPhaseTaxReview(ctx, err)
 	if err != nil || invoiceID == "" {
 		return err
 	}

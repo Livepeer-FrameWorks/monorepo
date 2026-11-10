@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"errors"
 
 	"frameworks/api_balancing/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -98,8 +99,8 @@ func (s *RelayServer) ForwardCommand(ctx context.Context, req *foghornrelaypb.Fo
 
 	if err != nil {
 		log.WithError(err).Warn("Relay local dispatch failed")
-		return &foghornrelaypb.ForwardCommandResponse{Delivered: false, Error: err.Error()}, nil
+		return &foghornrelaypb.ForwardCommandResponse{Delivered: false, Error: err.Error(), OwnerMissing: req.GetStopSessions() != nil && errors.Is(err, control.ErrNotConnected)}, nil
 	}
 	log.Debug("Relay local dispatch delivered")
-	return &foghornrelaypb.ForwardCommandResponse{Delivered: true}, nil
+	return &foghornrelaypb.ForwardCommandResponse{Delivered: true, StopEffectConfirmed: req.GetStopSessions() != nil}, nil
 }

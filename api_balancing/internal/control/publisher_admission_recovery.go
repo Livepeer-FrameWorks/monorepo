@@ -162,15 +162,38 @@ func earlierPublisherRecoveryItem(oldest, candidate time.Time) time.Time {
 	return oldest
 }
 
+var publisherRecoveryBacklog = struct {
+	sync.Mutex
+	oldest map[string]time.Time
+}{oldest: map[string]time.Time{"settlement": {}, "abandonment": {}, "lease_release": {}}}
+
 func observePublisherRecoveryQueue(queue string, oldest time.Time) {
+	publisherRecoveryBacklog.Lock()
+	defer publisherRecoveryBacklog.Unlock()
+	publisherRecoveryBacklog.oldest[queue] = oldest
+	publishPublisherRecoveryAge(queue, oldest, time.Now())
+}
+
+func publishPublisherRecoveryAge(queue string, oldest, now time.Time) {
 	if controlMetrics == nil || controlMetrics.PublisherRecoveryOldestPending == nil {
 		return
 	}
 	value := float64(0)
 	if !oldest.IsZero() {
-		value = float64(oldest.Unix())
+		value = max(0, now.Sub(oldest).Seconds())
 	}
 	controlMetrics.PublisherRecoveryOldestPending.WithLabelValues(queue).Set(value)
+}
+
+// RefreshPublisherRecoveryBacklog ages the last observed queue positions even
+// while a failed database read is backing off; only a successful empty read or
+// loss of leadership clears them.
+func RefreshPublisherRecoveryBacklog(now time.Time) {
+	publisherRecoveryBacklog.Lock()
+	defer publisherRecoveryBacklog.Unlock()
+	for queue, oldest := range publisherRecoveryBacklog.oldest {
+		publishPublisherRecoveryAge(queue, oldest, now)
+	}
 }
 
 // Followers must not continue advertising a backlog they no longer own.

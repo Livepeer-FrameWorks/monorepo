@@ -303,7 +303,7 @@ func writePostpaidInvoiceTx(ctx context.Context, tx *sql.Tx, run *postpaidInvoic
 		if marshalErr != nil {
 			return result, marshalErr
 		}
-		if err = queries.RecordCryptoAccountingAnomaly(ctx, purserdb.RecordCryptoAccountingAnomalyParams{TenantID: tenantID, Kind: "invoice_tax_review", Network: "tax", ReferenceType: "invoice", ReferenceID: result.invoiceID, AmountCents: netDec.Shift(2).IntPart(), Detail: taxReview.Error(), EvidenceJson: evidence}); err != nil {
+		if err = queries.RecordBillingTaxReview(ctx, purserdb.RecordBillingTaxReviewParams{TenantID: tenantID, Kind: "invoice_tax_review", Network: "tax", ReferenceType: "invoice", ReferenceID: result.invoiceID, AmountCents: netDec.Shift(2).IntPart(), Detail: taxReview.Error(), EvidenceJson: evidence}); err != nil {
 			return result, fmt.Errorf("record invoice tax review: %w", err)
 		}
 	}

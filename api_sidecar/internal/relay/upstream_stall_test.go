@@ -259,7 +259,7 @@ func TestColdBlockFillWithoutCacheFileStreamsUpstream(t *testing.T) {
 	store := NewBlockStore(filepath.Join(s.basePath, "vod", "nocachefile.mkv"), size)
 	// Keep the cache identity valid so initialization preserves the deliberate
 	// cache-file obstruction instead of retiring an untrusted generation.
-	if _, initErr := store.EnsureMeta("nocachefile", ".mkv", "", size); initErr != nil {
+	if _, initErr := store.prepareMetaFixture("nocachefile", ".mkv", "", size); initErr != nil {
 		t.Fatal(initErr)
 	}
 	if err := os.MkdirAll(store.BlockPath(0)+".tmp", 0o755); err != nil {

@@ -187,7 +187,8 @@ SELECT tax_document_kind, tax_profile_snapshot, quoted_at,
        COALESCE(eur_amount_cents, 0)::bigint AS eur_amount_cents,
        COALESCE(fx_units_per_eur::text, '')::text AS fx_units_per_eur,
        COALESCE(fx_source, '')::text AS fx_source,
-       COALESCE(fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date
+       COALESCE(fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date,
+       completed_at AS payment_confirmed_at
 FROM purser.crypto_wallets
 WHERE tenant_id = $1::text::uuid
   AND tx_hash = $2
@@ -211,6 +212,7 @@ type GetCryptoWalletTaxSnapshotRow struct {
 	FxUnitsPerEur       string          `db:"fx_units_per_eur" json:"fx_units_per_eur"`
 	FxSource            string          `db:"fx_source" json:"fx_source"`
 	FxReferenceDate     time.Time       `db:"fx_reference_date" json:"fx_reference_date"`
+	PaymentConfirmedAt  sql.NullTime    `db:"payment_confirmed_at" json:"payment_confirmed_at"`
 }
 
 func (q *Queries) GetCryptoWalletTaxSnapshot(ctx context.Context, arg GetCryptoWalletTaxSnapshotParams) (GetCryptoWalletTaxSnapshotRow, error) {
@@ -226,6 +228,7 @@ func (q *Queries) GetCryptoWalletTaxSnapshot(ctx context.Context, arg GetCryptoW
 		&i.FxUnitsPerEur,
 		&i.FxSource,
 		&i.FxReferenceDate,
+		&i.PaymentConfirmedAt,
 	)
 	return i, err
 }
@@ -419,7 +422,8 @@ SELECT quote.tax_document_kind, quote.tax_profile_snapshot, quote.created_at,
        COALESCE(quote.eur_amount_cents, 0)::bigint AS eur_amount_cents,
        COALESCE(quote.fx_units_per_eur::text, '')::text AS fx_units_per_eur,
        COALESCE(quote.fx_source, '')::text AS fx_source,
-       COALESCE(quote.fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date
+       COALESCE(quote.fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date,
+       nonce.confirmed_at AS payment_confirmed_at
 FROM purser.x402_nonces nonce
 JOIN purser.x402_payment_quotes quote ON quote.id = nonce.quote_id
 WHERE nonce.tenant_id = $1::text::uuid
@@ -443,6 +447,7 @@ type GetX402TaxSnapshotRow struct {
 	FxUnitsPerEur       string          `db:"fx_units_per_eur" json:"fx_units_per_eur"`
 	FxSource            string          `db:"fx_source" json:"fx_source"`
 	FxReferenceDate     time.Time       `db:"fx_reference_date" json:"fx_reference_date"`
+	PaymentConfirmedAt  sql.NullTime    `db:"payment_confirmed_at" json:"payment_confirmed_at"`
 }
 
 func (q *Queries) GetX402TaxSnapshot(ctx context.Context, arg GetX402TaxSnapshotParams) (GetX402TaxSnapshotRow, error) {
@@ -458,6 +463,7 @@ func (q *Queries) GetX402TaxSnapshot(ctx context.Context, arg GetX402TaxSnapshot
 		&i.FxUnitsPerEur,
 		&i.FxSource,
 		&i.FxReferenceDate,
+		&i.PaymentConfirmedAt,
 	)
 	return i, err
 }
@@ -491,10 +497,10 @@ INSERT INTO purser.crypto_invoices (
     $25, $26, $27::jsonb,
     $28, $29, $30,
     $31, $32,
-    $33, CURRENT_DATE,
-    $34, $35, $36,
-    $37::jsonb, $38,
-    $39, NOW()
+    $33, $34::date,
+    $35, $36, $37,
+    $38::jsonb, $39,
+    $40, NOW()
 )
 `
 
@@ -532,6 +538,7 @@ type InsertCryptoTopupInvoiceParams struct {
 	SupplierRegistrationNumber string          `db:"supplier_registration_number" json:"supplier_registration_number"`
 	ServiceDescription         string          `db:"service_description" json:"service_description"`
 	ServiceQuantity            int32           `db:"service_quantity" json:"service_quantity"`
+	ServiceDate                time.Time       `db:"service_date" json:"service_date"`
 	CustomerEmail              string          `db:"customer_email" json:"customer_email"`
 	CustomerName               string          `db:"customer_name" json:"customer_name"`
 	CustomerCompany            sql.NullString  `db:"customer_company" json:"customer_company"`
@@ -575,6 +582,7 @@ func (q *Queries) InsertCryptoTopupInvoice(ctx context.Context, arg InsertCrypto
 		arg.SupplierRegistrationNumber,
 		arg.ServiceDescription,
 		arg.ServiceQuantity,
+		arg.ServiceDate,
 		arg.CustomerEmail,
 		arg.CustomerName,
 		arg.CustomerCompany,
@@ -654,8 +662,8 @@ INSERT INTO purser.simplified_invoices (
     $25, $26, $27::jsonb,
     $28, $29, $30,
     $31, $32,
-    $33, CURRENT_DATE,
-    $34::jsonb, NOW()
+    $33, $34::date,
+    $35::jsonb, NOW()
 )
 `
 
@@ -693,6 +701,7 @@ type InsertSimplifiedCryptoTopupInvoiceParams struct {
 	SupplierRegistrationNumber sql.NullString  `db:"supplier_registration_number" json:"supplier_registration_number"`
 	ServiceDescription         sql.NullString  `db:"service_description" json:"service_description"`
 	ServiceQuantity            sql.NullInt32   `db:"service_quantity" json:"service_quantity"`
+	ServiceDate                time.Time       `db:"service_date" json:"service_date"`
 	CustomerSnapshot           json.RawMessage `db:"customer_snapshot" json:"customer_snapshot"`
 }
 
@@ -731,6 +740,7 @@ func (q *Queries) InsertSimplifiedCryptoTopupInvoice(ctx context.Context, arg In
 		arg.SupplierRegistrationNumber,
 		arg.ServiceDescription,
 		arg.ServiceQuantity,
+		arg.ServiceDate,
 		arg.CustomerSnapshot,
 	)
 	return err

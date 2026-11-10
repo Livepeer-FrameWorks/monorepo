@@ -277,7 +277,7 @@ INSERT INTO purser.crypto_invoices (
     sqlc.arg(evidence_conflict), sqlc.arg(tax_policy_ref), sqlc.arg(tax_assessment)::jsonb,
     sqlc.arg(supplier_name), sqlc.arg(supplier_address), sqlc.arg(supplier_vat_number),
     sqlc.arg(supplier_registration_number), sqlc.arg(service_description),
-    sqlc.arg(service_quantity), CURRENT_DATE,
+    sqlc.arg(service_quantity), sqlc.arg(service_date)::date,
     sqlc.arg(customer_email), sqlc.arg(customer_name), sqlc.narg(customer_company),
     sqlc.arg(customer_address)::jsonb, sqlc.narg(customer_vat_number),
     sqlc.arg(customer_vat_validated), NOW()
@@ -310,7 +310,7 @@ INSERT INTO purser.simplified_invoices (
     sqlc.arg(evidence_conflict), sqlc.arg(tax_policy_ref), sqlc.arg(tax_assessment)::jsonb,
     sqlc.arg(supplier_name), sqlc.arg(supplier_address), sqlc.arg(supplier_vat_number),
     sqlc.arg(supplier_registration_number), sqlc.arg(service_description),
-    sqlc.arg(service_quantity), CURRENT_DATE,
+    sqlc.arg(service_quantity), sqlc.arg(service_date)::date,
     sqlc.arg(customer_snapshot)::jsonb, NOW()
 );
 
@@ -371,7 +371,8 @@ SELECT quote.tax_document_kind, quote.tax_profile_snapshot, quote.created_at,
        COALESCE(quote.eur_amount_cents, 0)::bigint AS eur_amount_cents,
        COALESCE(quote.fx_units_per_eur::text, '')::text AS fx_units_per_eur,
        COALESCE(quote.fx_source, '')::text AS fx_source,
-       COALESCE(quote.fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date
+       COALESCE(quote.fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date,
+       nonce.confirmed_at AS payment_confirmed_at
 FROM purser.x402_nonces nonce
 JOIN purser.x402_payment_quotes quote ON quote.id = nonce.quote_id
 WHERE nonce.tenant_id = sqlc.arg(tenant_id)::text::uuid
@@ -386,7 +387,8 @@ SELECT tax_document_kind, tax_profile_snapshot, quoted_at,
        COALESCE(eur_amount_cents, 0)::bigint AS eur_amount_cents,
        COALESCE(fx_units_per_eur::text, '')::text AS fx_units_per_eur,
        COALESCE(fx_source, '')::text AS fx_source,
-       COALESCE(fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date
+       COALESCE(fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date,
+       completed_at AS payment_confirmed_at
 FROM purser.crypto_wallets
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND tx_hash = sqlc.arg(tx_hash)

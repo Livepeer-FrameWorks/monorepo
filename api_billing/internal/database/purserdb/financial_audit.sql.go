@@ -89,7 +89,11 @@ WITH records AS (
      FROM purser.crypto_accounting_anomalies r
      WHERE r.tenant_id=$1::text::uuid AND $2::text='billing_tax_reviews'
        AND r.kind IN ('provider_tax_review','provider_invoice_tax_review','provider_tax_document_review','provider_tax_evidence_review','invoice_tax_review','invoice_tax_evidence_review','tax_assessment_review','operator_tax_review_acknowledgement')
-       AND r.first_seen_at>=$3::timestamptz AND r.first_seen_at<$4::timestamptz
+       AND (
+           (r.first_seen_at>=$3::timestamptz AND r.first_seen_at<$4::timestamptz)
+           OR (r.last_seen_at>=$3::timestamptz AND r.last_seen_at<$4::timestamptz)
+           OR (r.resolved_at>=$3::timestamptz AND r.resolved_at<$4::timestamptz)
+       )
        AND r.id>=COALESCE(NULLIF($5::text,''),'00000000-0000-0000-0000-000000000000')::uuid
        AND r.id IS DISTINCT FROM NULLIF($5::text,'')::uuid
      ORDER BY r.id LIMIT 101)

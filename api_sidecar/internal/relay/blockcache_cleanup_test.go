@@ -13,7 +13,7 @@ import (
 func TestBlockCacheRetirementReturnsBeforeDeletionAndTracksDrain(t *testing.T) {
 	s := New(Options{BasePath: t.TempDir(), BlockSize: 8})
 	store := NewBlockStore(filepath.Join(t.TempDir(), "asset.mkv"), 8)
-	if _, err := store.EnsureMeta("h", ".mkv", "old", 8); err != nil {
+	if _, err := store.prepareMetaFixture("h", ".mkv", "old", 8); err != nil {
 		t.Fatal(err)
 	}
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -59,7 +59,7 @@ func TestBlockCacheRetirementBoundsDeletionWork(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 	for i := 0; i < 2; i++ {
 		store := NewBlockStore(filepath.Join(t.TempDir(), "asset.mkv"), 8)
-		if _, err := store.EnsureMeta("h", ".mkv", "old", 8); err != nil {
+		if _, err := store.prepareMetaFixture("h", ".mkv", "old", 8); err != nil {
 			t.Fatal(err)
 		}
 		entered := make(chan struct{})
@@ -70,7 +70,7 @@ func TestBlockCacheRetirementBoundsDeletionWork(t *testing.T) {
 		<-entered
 	}
 	store := NewBlockStore(filepath.Join(t.TempDir(), "asset.mkv"), 8)
-	if _, err := store.EnsureMeta("h", ".mkv", "old", 8); err != nil {
+	if _, err := store.prepareMetaFixture("h", ".mkv", "old", 8); err != nil {
 		t.Fatal(err)
 	}
 	unexpected := make(chan struct{}, 1)
@@ -95,7 +95,7 @@ func TestBlockCacheRetirementBoundsDeletionWork(t *testing.T) {
 func TestBlockCacheRetirementCleansAfterMetadataFailure(t *testing.T) {
 	s := New(Options{BasePath: t.TempDir(), BlockSize: 8})
 	store := NewBlockStore(filepath.Join(t.TempDir(), "asset.mkv"), 8)
-	if _, err := store.EnsureMeta("h", ".mkv", "old", 8); err != nil {
+	if _, err := store.prepareMetaFixture("h", ".mkv", "old", 8); err != nil {
 		t.Fatal(err)
 	}
 	var retired string
@@ -135,7 +135,7 @@ func TestBlockCacheRetirementDeleteFailureOnlyWarns(t *testing.T) {
 	logger, hook := logrustest.NewNullLogger()
 	s := New(Options{BasePath: t.TempDir(), BlockSize: 8, Logger: logger})
 	store := NewBlockStore(filepath.Join(t.TempDir(), "asset.mkv"), 8)
-	if _, err := store.EnsureMeta("h", ".mkv", "old", 8); err != nil {
+	if _, err := store.prepareMetaFixture("h", ".mkv", "old", 8); err != nil {
 		t.Fatal(err)
 	}
 	deleteErr := errors.New("retired deletion denied")
@@ -160,7 +160,7 @@ func TestBlockCacheRetirementDeleteFailureOnlyWarns(t *testing.T) {
 
 func TestBlockCacheRetirementToleratesConcurrentEviction(t *testing.T) {
 	store := NewBlockStore(filepath.Join(t.TempDir(), "asset.mkv"), 8)
-	if _, err := store.EnsureMeta("h", ".mkv", "old", 8); err != nil {
+	if _, err := store.prepareMetaFixture("h", ".mkv", "old", 8); err != nil {
 		t.Fatal(err)
 	}
 	store.renameDir = func(from, to string) error {
@@ -169,7 +169,7 @@ func TestBlockCacheRetirementToleratesConcurrentEviction(t *testing.T) {
 		}
 		return &os.LinkError{Op: "rename", Old: from, New: to, Err: os.ErrNotExist}
 	}
-	meta, err := store.EnsureMeta("h", ".mkv", "new", 8)
+	meta, err := store.prepareMetaFixture("h", ".mkv", "new", 8)
 	if err != nil || meta == nil || meta.Object != "new" {
 		t.Fatalf("concurrent eviction prevented fresh metadata: meta=%+v err=%v", meta, err)
 	}

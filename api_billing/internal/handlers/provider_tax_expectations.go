@@ -11,9 +11,9 @@ import (
 	billingstripe "frameworks/api_billing/internal/stripe"
 )
 
-// Record the intended terms before a provider write. A failed synchronization
-// must not make a later provider invoice's older tax metadata authoritative.
-func retainProviderTaxExpectation(ctx context.Context, db purserdb.DBTX, tenant string, p *billingstripe.TaxProfile) error {
+// RetainProviderTaxExpectation records intended terms before a provider write.
+// A failed synchronization must not make older provider tax metadata authoritative.
+func RetainProviderTaxExpectation(ctx context.Context, db purserdb.DBTX, tenant string, p *billingstripe.TaxProfile) error {
 	var assessment TaxAssessment
 	if err := json.Unmarshal(p.Evidence, &assessment); err != nil {
 		return err

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"frameworks/api_control/internal/database/commodoredb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	"google.golang.org/grpc/codes"
@@ -113,6 +114,9 @@ func (s *CommodoreServer) settleRetiredIngestCells(ctx context.Context, tenantID
 // ingestCellUnreachable reports whether a call failed without the cell
 // answering. Any answer, including Unimplemented, means the cell is running.
 func ingestCellUnreachable(err error) bool {
+	if grpcutil.StreamStopProgress(err) != nil {
+		return false
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}

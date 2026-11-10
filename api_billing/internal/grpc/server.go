@@ -4236,6 +4236,9 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *purse
 		if taxErr != nil {
 			return nil, billingTaxRequirementError(taxErr)
 		}
+		if taxErr = handlers.RetainProviderTaxExpectation(ctx, s.db, tenantID, taxProfile); taxErr != nil {
+			return nil, status.Error(codes.Unavailable, "retain cluster subscription tax before checkout")
+		}
 		taxRateID, prepareTaxErr := s.stripeClient.PrepareCustomerTax(ctx, tenantID, cust.ID, *taxProfile)
 		if prepareTaxErr != nil {
 			return nil, status.Error(codes.Unavailable, "prepare cluster subscription tax before checkout")
@@ -6744,6 +6747,9 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *purserpb.
 		taxProfile, taxErr := handlers.AssessStripeTaxProfile(ctx, s.db, tenantID, ctxkeys.GetClientIP(ctx))
 		if taxErr != nil {
 			return nil, billingTaxRequirementError(taxErr)
+		}
+		if taxErr = handlers.RetainProviderTaxExpectation(ctx, s.db, tenantID, taxProfile); taxErr != nil {
+			return nil, status.Error(codes.Unavailable, "retain subscription tax before checkout")
 		}
 		taxRateID, prepareTaxErr := s.stripeClient.PrepareCustomerTax(ctx, tenantID, customer.ID, *taxProfile)
 		if prepareTaxErr != nil {

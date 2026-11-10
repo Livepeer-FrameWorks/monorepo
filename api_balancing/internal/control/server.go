@@ -1040,6 +1040,7 @@ func (r *CommandRelay) forward(ctx context.Context, req *foghornrelaypb.ForwardC
 		return fmt.Errorf("relay: not configured")
 	}
 	commandType := RelayCommandType(req)
+	confirmedStop := req.GetStopSessions() != nil
 	requestID := RelayRequestID(req)
 	log := r.logger.WithFields(logging.Fields{
 		"target_node_id":  req.GetTargetNodeId(),
@@ -1078,7 +1079,9 @@ func (r *CommandRelay) forward(ctx context.Context, req *foghornrelaypb.ForwardC
 	}
 	client, err := r.pool.GetOrCreate(owner.InstanceID, owner.GRPCAddr)
 	if err != nil {
-		evictStale()
+		if !confirmedStop {
+			evictStale()
+		}
 		incRelayForward(commandType, "dial_error")
 		return fmt.Errorf("relay: dial %s: %w", owner.GRPCAddr, err)
 	}
@@ -1093,14 +1096,30 @@ func (r *CommandRelay) forward(ctx context.Context, req *foghornrelaypb.ForwardC
 		if status.Code(err) == codes.Unimplemented {
 			return fmt.Errorf("relay: peer %s does not implement ForwardCommand: %w", owner.InstanceID, err)
 		}
-		evictStale()
+		if !confirmedStop {
+			evictStale()
+		}
 		incRelayForward(commandType, "rpc_error")
 		log.WithError(err).Warn("Relay forward RPC failed")
 		return fmt.Errorf("relay: forward to %s: %w", owner.InstanceID, err)
 	}
 	if resp == nil {
-		evictStale()
+		if !confirmedStop {
+			evictStale()
+		}
 		return fmt.Errorf("relay: peer %s returned nil response", owner.InstanceID)
+	}
+	if confirmedStop {
+		if resp.GetOwnerMissing() {
+			evictStale()
+			return ErrNotConnected
+		}
+		if !resp.GetDelivered() || !resp.GetStopEffectConfirmed() {
+			incRelayForward(commandType, "effect_unconfirmed")
+			return fmt.Errorf("relay: peer %s did not confirm session termination: %s", owner.InstanceID, resp.GetError())
+		}
+		incRelayForward(commandType, "delivered")
+		return nil
 	}
 	if !resp.Delivered {
 		evictStale()
@@ -8136,6 +8155,9 @@ func SendStopSessions(nodeID string, req *ipcpb.StopSessionsRequest) error {
 
 func SendStopSessionsContext(ctx context.Context, nodeID string, req *ipcpb.StopSessionsRequest) error {
 	err := SendLocalStopSessionsContext(ctx, nodeID, req)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if !shouldRelay(nodeID, err) {
 		return err
 	}

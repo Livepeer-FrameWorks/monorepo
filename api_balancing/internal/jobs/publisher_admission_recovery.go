@@ -53,6 +53,7 @@ func (j *PublisherAdmissionRecoveryJob) reconcile() error {
 		control.ClearPublisherRecoveryBacklog()
 		return nil
 	}
+	control.RefreshPublisherRecoveryBacklog(j.now())
 	if j.now().Before(j.nextAttempt) {
 		return nil
 	}

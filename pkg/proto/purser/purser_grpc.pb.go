@@ -44,7 +44,7 @@ const (
 type BillingServiceClient interface {
 	// Read-only financial evidence pages; requires a platform-operator JWT.
 	AdminFinancialAuditPage(ctx context.Context, in *AdminFinancialAuditPageRequest, opts ...grpc.CallOption) (*AdminFinancialAuditPageResponse, error)
-	// Record a reviewed establishment proof against an unchanged customer profile.
+	// Read-only operator tax reviews, scoped to the requested tenant and filters.
 	AdminListBillingTaxReviews(ctx context.Context, in *AdminListBillingTaxReviewsRequest, opts ...grpc.CallOption) (*AdminListBillingTaxReviewsResponse, error)
 	AdminAcknowledgeBillingTaxReview(ctx context.Context, in *AdminAcknowledgeBillingTaxReviewRequest, opts ...grpc.CallOption) (*AdminAcknowledgeBillingTaxReviewResponse, error)
 	// Read-only support snapshot; requires a platform-operator JWT.
@@ -203,7 +203,7 @@ func (c *billingServiceClient) ListTenantBillingSnapshots(ctx context.Context, i
 type BillingServiceServer interface {
 	// Read-only financial evidence pages; requires a platform-operator JWT.
 	AdminFinancialAuditPage(context.Context, *AdminFinancialAuditPageRequest) (*AdminFinancialAuditPageResponse, error)
-	// Record a reviewed establishment proof against an unchanged customer profile.
+	// Read-only operator tax reviews, scoped to the requested tenant and filters.
 	AdminListBillingTaxReviews(context.Context, *AdminListBillingTaxReviewsRequest) (*AdminListBillingTaxReviewsResponse, error)
 	AdminAcknowledgeBillingTaxReview(context.Context, *AdminAcknowledgeBillingTaxReviewRequest) (*AdminAcknowledgeBillingTaxReviewResponse, error)
 	// Read-only support snapshot; requires a platform-operator JWT.

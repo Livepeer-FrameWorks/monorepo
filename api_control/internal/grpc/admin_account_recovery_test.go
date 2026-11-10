@@ -18,6 +18,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
@@ -32,6 +33,14 @@ type retirementRegistry struct {
 	foghornpb.UnimplementedTenantControlServiceServer
 	instances []*quartermasterpb.ServiceInstance
 	failure   error
+	stopError error
+}
+
+func (r *retirementRegistry) TerminateTenantStreams(context.Context, *foghorncontrolpb.TerminateTenantStreamsRequest) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
+	if r.stopError != nil {
+		return nil, r.stopError
+	}
+	return nil, status.Error(codes.Unimplemented, "method TerminateTenantStreams not implemented")
 }
 
 func (r *retirementRegistry) DiscoverServices(context.Context, *quartermasterpb.ServiceDiscoveryRequest) (*quartermasterpb.ServiceDiscoveryResponse, error) {

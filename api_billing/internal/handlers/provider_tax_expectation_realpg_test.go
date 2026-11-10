@@ -84,7 +84,7 @@ func TestProviderTaxExpectationHistoryAtPoint_RealPG(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err = retainProviderTaxExpectation(t.Context(), db, tenant, p); err != nil {
+		if err = RetainProviderTaxExpectation(t.Context(), db, tenant, p); err != nil {
 			t.Fatal(err)
 		}
 		profiles[index] = *p
@@ -99,7 +99,7 @@ func TestProviderTaxExpectationHistoryAtPoint_RealPG(t *testing.T) {
 			t.Fatalf("history lost accepted terms at point%d: match%v %s %v", index, matching, frozen, err)
 		}
 	}
-	if err := retainProviderTaxExpectation(t.Context(), db, tenant, &profiles[2]); err != nil {
+	if err := RetainProviderTaxExpectation(t.Context(), db, tenant, &profiles[2]); err != nil {
 		t.Fatal(err)
 	}
 	var count int

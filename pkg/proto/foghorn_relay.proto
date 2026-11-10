@@ -63,4 +63,6 @@ message ForwardCommandRequest {
 message ForwardCommandResponse {
   bool delivered = 1;
   string error = 2;
+  bool stop_effect_confirmed = 3;
+  bool owner_missing = 4;
 }

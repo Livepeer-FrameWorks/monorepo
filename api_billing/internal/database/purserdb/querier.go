@@ -112,6 +112,7 @@ type Querier interface {
 	// The caller holds the subscription lock and rechecks its inspection snapshot.
 	ClearEndedCheckoutSubscriptions(ctx context.Context, arg ClearEndedCheckoutSubscriptionsParams) error
 	ClearOpenInvoicePrepaidCredit(ctx context.Context, arg ClearOpenInvoicePrepaidCreditParams) error
+	ClearRejectedTierUpgrade(ctx context.Context, arg ClearRejectedTierUpgradeParams) error
 	ClearStagedStripeClusterSubscription(ctx context.Context, arg ClearStagedStripeClusterSubscriptionParams) error
 	ClearSubscriptionFreeFallback(ctx context.Context, tenantID string) (int64, error)
 	ClearTenantStripeCheckoutPending(ctx context.Context, arg ClearTenantStripeCheckoutPendingParams) error

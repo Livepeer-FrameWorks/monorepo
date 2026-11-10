@@ -348,7 +348,7 @@ func TestForward_Success(t *testing.T) {
 	}
 
 	fakeRelay := &fakeFoghornRelayClient{
-		resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true},
+		resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true, StopEffectConfirmed: true},
 	}
 	pool := &mockRelayPool{
 		client: &mockRelayClient{relay: fakeRelay},
@@ -547,7 +547,7 @@ func TestForward_AttachesRelayMetadata(t *testing.T) {
 		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
 
-	fakeRelay := &fakeFoghornRelayClient{resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true}}
+	fakeRelay := &fakeFoghornRelayClient{resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true, StopEffectConfirmed: true}}
 	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", &mockRelayPool{client: &mockRelayClient{relay: fakeRelay}})
 
 	err := r.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
@@ -610,7 +610,7 @@ func TestSendWithRelay_LocalFailRelay(t *testing.T) {
 	}
 
 	fakeRelay := &fakeFoghornRelayClient{
-		resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true},
+		resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true, StopEffectConfirmed: true},
 	}
 	pool := &mockRelayPool{
 		client: &mockRelayClient{relay: fakeRelay},
@@ -691,7 +691,7 @@ func TestSendWithRelay_MultipleSendTypes(t *testing.T) {
 	}
 
 	fakeRelay := &fakeFoghornRelayClient{
-		resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true},
+		resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true, StopEffectConfirmed: true},
 	}
 	pool := &mockRelayPool{
 		client: &mockRelayClient{relay: fakeRelay},
@@ -735,7 +735,7 @@ func TestPushOperationalMode_MixedLocalAndRemoteOwnership(t *testing.T) {
 		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
 
-	fakeRelay := &fakeFoghornRelayClient{resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true}}
+	fakeRelay := &fakeFoghornRelayClient{resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true, StopEffectConfirmed: true}}
 	pool := &mockRelayPool{client: &mockRelayClient{relay: fakeRelay}}
 	setCommandRelay(t, buildRelay(t, store, "self-instance", "10.0.0.1:9090", pool))
 
@@ -783,7 +783,7 @@ func TestSendRelayCoverageMatchesForwardCommandOneof(t *testing.T) {
 		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
 
-	fakeRelay := &fakeFoghornRelayClient{resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true}}
+	fakeRelay := &fakeFoghornRelayClient{resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true, StopEffectConfirmed: true}}
 	p := &mockRelayPool{client: &mockRelayClient{relay: fakeRelay}}
 	setCommandRelay(t, buildRelay(t, store, "self-instance", "10.0.0.1:9090", p))
 
@@ -849,7 +849,7 @@ func TestSendReclaimDVRSegmentRelaysToConnOwnerReplica(t *testing.T) {
 	if ok, err := store.AcquireConnOwnerFenced(context.Background(), "fw-stg-edge-eu", "foghorn-eu-1", "10.0.0.17:18019", 1); err != nil || !ok {
 		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
 	}
-	fakeRelay := &fakeFoghornRelayClient{resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true}}
+	fakeRelay := &fakeFoghornRelayClient{resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true, StopEffectConfirmed: true}}
 	setCommandRelay(t, buildRelay(t, store, "foghorn-eu-2", "10.0.0.18:18019", &mockRelayPool{client: &mockRelayClient{relay: fakeRelay}}))
 
 	req := &ipcpb.ReclaimDVRSegment{RequestId: "chapter-reclaim-c1-0", DvrHash: "dvr1", SegmentNames: []string{"42_1.ts"}}

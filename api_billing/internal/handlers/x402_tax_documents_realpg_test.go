@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -54,7 +55,7 @@ func TestCryptoTaxDocuments_RealPG(t *testing.T) { //nolint:funlen // The table 
 	tests := []taxCase{
 		{name: "frozen Greek business accepts GR prefix", freeze: true, amountCents: 500, legalName: "Original Buyer", email: "buyer@example.gr", company: "Original AE", country: "GR", vatNumber: "GR123456789", ipCountry: "GR", wantKind: "full", wantEvidence: "complete", wantTaxStatus: "reverse_charge"},
 		{name: "legacy Austrian VAT claim survives VIES outage", legacyVIESOutage: true, amountCents: 500, legalName: "Austrian Buyer", email: "buyer@example.at", company: "Buyer GmbH", country: "AT", vatNumber: "ATU12345678", ipCountry: "AT", wantKind: "full", wantEvidence: "complete", wantTaxStatus: "reverse_charge"},
-		{name: "legacy grace reverse charge is reviewed", legacyGrace: true, amountCents: 500, legalName: "Grace Buyer", email: "buyer@example.at", company: "Buyer GmbH", country: "AT", vatNumber: "ATU12345678", ipCountry: "AT", wantKind: "full", wantEvidence: "complete", wantTaxStatus: "reverse_charge"},
+		{name: "legacy expired proof requires historical review", legacyGrace: true, amountCents: 500, legalName: "Grace Buyer", email: "buyer@example.at", company: "Buyer GmbH", country: "AT", vatNumber: "ATU12345678", ipCountry: "AT", wantKind: "full"},
 		{name: "legacy German consumer", amountCents: 500, country: "DE", wantKind: "simplified", wantEvidence: "single_source", wantTaxStatus: "standard_vat"},
 		{name: "legacy US consumer", amountCents: 500, country: "US", wantKind: "simplified", wantEvidence: "single_source", wantTaxStatus: "legacy_review"},
 		{name: "frozen Dutch consumer identity", freeze: true, amountCents: 500, legalName: "Original Buyer", email: "buyer@example.nl", country: "NL", ipCountry: "NL", wantKind: "simplified", wantEvidence: "complete", wantTaxStatus: "standard_vat"},
@@ -179,12 +180,16 @@ func TestCryptoTaxDocuments_RealPG(t *testing.T) { //nolint:funlen // The table 
 				appconfigtest.Set(t, "VIES_ENDPOINT", "http://127.0.0.1:1")
 			}
 			txHash := fmt.Sprintf("0x%064x", index+1)
+			confirmedAt := time.Now().UTC()
+			if test.legacyVIESOutage {
+				confirmedAt = observedAt.Add(time.Minute)
+			}
 			if _, err := db.ExecContext(ctx, `
 				INSERT INTO purser.x402_nonces (
 					network, payer_address, nonce, tx_hash, tenant_id, amount_cents,
-					status, quote_id
-				) VALUES ('base', '0x0000000000000000000000000000000000000003', $1, $2, $3, $4, 'confirmed', $5)
-			`, fmt.Sprintf("0x%x", index+1), txHash, tenantID, test.amountCents, quoteID); err != nil {
+					status, quote_id, confirmed_at
+				) VALUES ('base', '0x0000000000000000000000000000000000000003', $1, $2, $3, $4, 'confirmed', $5, $6)
+			`, fmt.Sprintf("0x%x", index+1), txHash, tenantID, test.amountCents, quoteID, confirmedAt); err != nil {
 				t.Fatal(err)
 			}
 			if test.freeze {
@@ -201,6 +206,17 @@ func TestCryptoTaxDocuments_RealPG(t *testing.T) { //nolint:funlen // The table 
 				handler.countryFromIP = func(string) string { return "BE" }
 			}
 			invoiceNumber, err := handler.generateCryptoTopupInvoice(ctx, tenantID, test.amountCents, "x402_payment", txHash, "203.0.113.1", "base")
+			if test.legacyGrace {
+				var review *billingtax.ReviewError
+				if !errors.As(err, &review) || review.Code != "vat_evidence_missing_at_tax_point" || invoiceNumber != "" {
+					t.Fatalf("unproven historical payment became a reverse-charge invoice: invoice=%s err=%v", invoiceNumber, err)
+				}
+				var retained int64
+				if readErr := db.QueryRowContext(ctx, `SELECT amount_cents FROM purser.x402_nonces WHERE tenant_id=$1::uuid AND tx_hash=$2 AND status='confirmed'`, tenantID, txHash).Scan(&retained); readErr != nil || retained != test.amountCents {
+					t.Fatalf("review changed received money: amount=%d err=%v", retained, readErr)
+				}
+				return
+			}
 			if test.wantError {
 				if err == nil || !strings.Contains(err.Error(), "complete profile") {
 					t.Fatalf("generateCryptoTopupInvoice() error = %v", err)
@@ -239,12 +255,6 @@ func TestCryptoTaxDocuments_RealPG(t *testing.T) { //nolint:funlen // The table 
 				&grossCents, &netCents, &vatCents, &amountEURCents, &netEURCents, &vatEURCents, &vatRateBps,
 			); err != nil {
 				t.Fatal(err)
-			}
-			if test.legacyGrace {
-				var review bool
-				if err = db.QueryRowContext(ctx, `SELECT (tax_assessment->>'review_required')::boolean FROM purser.crypto_invoices WHERE tenant_id=$1 AND reference_id=$2`, tenantID, txHash).Scan(&review); err != nil || !review {
-					t.Fatalf("legacy outage grace invoice not marked for review: %t %v", review, err)
-				}
 			}
 			if evidence != test.wantEvidence || conflict != test.wantConflict || taxStatus != test.wantTaxStatus {
 				t.Fatalf("evidence/tax = (%s, %t, %s), want (%s, %t, %s)", evidence, conflict, taxStatus, test.wantEvidence, test.wantConflict, test.wantTaxStatus)

@@ -642,6 +642,10 @@ message StopSessionsRequest {
   google.protobuf.Timestamp expires_at = 5;
   repeated StopSessionsTarget targets = 6;
   string node_id = 7;
+  // Relative owning-request budget. A nonce authorization carries the owner's
+  // remaining budget; the edge subtracts its full measured challenge round trip.
+  uint32 remaining_timeout_ms = 8;
+  string authorization_nonce = 9;
 }
 
 // An empty generation means no publisher occupied the runtime at dispatch.
@@ -658,6 +662,9 @@ message StopSessionsResult {
   string tenant_id = 2;
   repeated string stream_names = 3;
   string error = 4;
+  // A challenge asks the current owner waiter to authorize this exact attempt.
+  // An effect result has an empty nonce and follows verified Mist termination.
+  string authorization_nonce = 5;
 }
 
 // InvalidateSessionsRequest tells Helmsman to re-run USER_NEW for active

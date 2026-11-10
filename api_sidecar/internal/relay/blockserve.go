@@ -186,7 +186,7 @@ func (s *Server) serveBlocksFrom(c *gin.Context, kind, hash, ext, localPath stri
 	renew = pin.renewer(renew)
 
 	// Build a BlockStore handle but defer disk-touching setup (mkdir,
-	// EnsureMeta) until after admission.
+	// prepareBlockStore) until after admission.
 	store := NewBlockStore(localPath, s.blockSize)
 	cacheDecision := admission.CacheMemoryOnly
 	if strictCache {
@@ -268,7 +268,7 @@ func (s *Server) serveBlocksFrom(c *gin.Context, kind, hash, ext, localPath stri
 				return "error", nil
 			}
 			if s.logger != nil {
-				s.logger.WithError(initErr).WithField("local_path", localPath).Debug("blockcache: EnsureMeta failed; degrading to memory-only")
+				s.logger.WithError(initErr).WithField("local_path", localPath).Debug("blockcache: prepareBlockStore failed; degrading to memory-only")
 			}
 			cacheDecision = admission.CacheMemoryOnly
 		}

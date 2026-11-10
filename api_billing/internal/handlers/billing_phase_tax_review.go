@@ -50,7 +50,7 @@ func (e *billingPhaseTaxReviewError) record(ctx context.Context) error {
 		return err
 	}
 	err = database.RetryPostgres(cleanup, 0, 0, func() error {
-		return purserdb.New(e.db).RecordCryptoAccountingAnomaly(cleanup, purserdb.RecordCryptoAccountingAnomalyParams{TenantID: e.tenant, Kind: "invoice_tax_review", Network: "tax", ReferenceType: "billing_phase", ReferenceID: billingPhaseTaxReviewReference(e.tenant, e.start), AmountCents: e.net, Detail: e.review.Error(), EvidenceJson: evidence})
+		return purserdb.New(e.db).RecordBillingTaxReview(cleanup, purserdb.RecordBillingTaxReviewParams{TenantID: e.tenant, Kind: "invoice_tax_review", Network: "tax", ReferenceType: "billing_phase", ReferenceID: billingPhaseTaxReviewReference(e.tenant, e.start), AmountCents: e.net, Detail: e.review.Error(), EvidenceJson: evidence})
 	})
 	if err != nil {
 		return fmt.Errorf("retain rejected billing phase tax review: %w", err)

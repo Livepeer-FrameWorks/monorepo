@@ -175,6 +175,20 @@ func (s *Service) ProcessTierUpgrade(ctx context.Context, tenantID, id string) (
 			}
 			return setTierUpgradeProgress(ctx, q, row, receipt)
 		}
+		if _, taxErr := assessInvoiceTaxTx(ctx, tx, tenantID, max(row.BaseCents, 0), time.Now().UTC()); taxErr != nil {
+			if review := permanentInvoiceTaxReview(taxErr); review != nil {
+				if recordErr := recordTierUpgradeTaxReview(ctx, q, row, review); recordErr != nil {
+					return recordErr
+				}
+				rejected = errors.Join(billing.ErrTierUpgradeRejected, taxErr)
+				row.State = "cancelled"
+				if progressErr := setTierUpgradeProgress(ctx, q, row, receipt); progressErr != nil {
+					return progressErr
+				}
+				return q.ClearRejectedTierUpgrade(ctx, purserdb.ClearRejectedTierUpgradeParams{TenantID: tenantID, ID: id})
+			}
+			return taxErr
+		}
 		if !accountClosed && !row.RecoveryRequestedAt.Valid {
 			if _, err = PrepareProviderBillingBoundary(ctx, s.db, s.logger, s, tenantID, row.RequestedAt); err != nil {
 				return err
@@ -309,6 +323,10 @@ func (s *Service) ProcessTierUpgrade(ctx context.Context, tenantID, id string) (
 			return setTierUpgradeProgress(ctx, q, row, receipt)
 		})
 		err = RecordBillingPhaseTaxReview(ctx, err)
+		var taxReview *tierUpgradeTaxReviewError
+		if errors.As(err, &taxReview) {
+			err = errors.Join(err, recordTierUpgradeTaxReview(ctx, purserdb.New(s.db), taxReview.upgrade, taxReview.review))
+		}
 		if err != nil {
 			return false, err
 		}
@@ -425,6 +443,9 @@ func (s *Service) providerTierUpgrade(ctx context.Context, row purserdb.GetTierU
 			profile, taxErr := AssessStripeTaxProfile(ctx, s.db, row.TenantID, ctxkeys.GetClientIP(ctx))
 			if taxErr != nil {
 				return billing.TierUpgradeReceipt{}, fmt.Errorf("retain paid-upgrade tax assessment: %w", taxErr)
+			}
+			if taxErr = RetainProviderTaxExpectation(ctx, s.db, row.TenantID, profile); taxErr != nil {
+				return billing.TierUpgradeReceipt{}, fmt.Errorf("retain paid-upgrade tax expectation: %w", taxErr)
 			}
 			if taxErr = s.stripeClient.SyncSubscriptionTax(ctx, row.TenantID, request.CustomerID, request.SubscriptionID, *profile); taxErr != nil {
 				return billing.TierUpgradeReceipt{}, fmt.Errorf("synchronize paid-upgrade tax: %w", taxErr)

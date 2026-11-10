@@ -57,6 +57,9 @@ func createUpgradeInvoiceTx(ctx context.Context, tx *sql.Tx, row purserdb.GetTie
 	now := time.Now().UTC()
 	taxAssessment, taxErr := assessInvoiceTaxTx(ctx, tx, row.TenantID, collectCents, now)
 	if taxErr != nil {
+		if review := permanentInvoiceTaxReview(taxErr); review != nil {
+			return &tierUpgradeTaxReviewError{upgrade: row, review: review}
+		}
 		return taxErr
 	}
 	collectCents = taxAssessment.Gross

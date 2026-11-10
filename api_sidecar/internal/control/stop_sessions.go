@@ -18,13 +18,15 @@ import (
 func handleConfirmedStopSessions(logger logging.Logger, req *ipcpb.StopSessionsRequest, connection *streamConn) {
 	ctx, cancel := context.WithTimeout(connection.stream.Context(), 10*time.Second)
 	defer cancel()
-	err := stopSessionsEffect(ctx, logger, req, func() bool { return stopSessionsNodeMatches(req, connection) })
+	err := stopSessionsEffectWithAuthorization(ctx, logger, req, func() bool { return stopSessionsNodeMatches(req, connection) }, func(ctx context.Context) (time.Duration, error) {
+		return authorizeStopSessions(ctx, req, connection)
+	})
 	result := &ipcpb.StopSessionsResult{RequestId: req.GetRequestId(), TenantId: req.GetTenantId(), StreamNames: slices.Clone(req.GetStreamNames())}
 	if err != nil {
 		result.Error = err.Error()
 		logger.WithError(err).WithField("tenant_id", req.GetTenantId()).Warn("Session termination remains pending")
 	}
-	if sendErr := connection.stream.Send(&ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_StopSessionsResult{StopSessionsResult: result}}); sendErr != nil {
+	if sendErr := sendStopSessionsMessage(ctx, connection, &ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_StopSessionsResult{StopSessionsResult: result}}); sendErr != nil {
 		logger.WithError(sendErr).Warn("Failed to acknowledge session termination")
 	}
 }
@@ -32,16 +34,32 @@ func handleConfirmedStopSessions(logger logging.Logger, req *ipcpb.StopSessionsR
 // Runtime generation locks cover validation, Mist's stop and verification. A
 // replacement publisher cannot acquire the same runtime between those steps.
 func stopSessionsEffect(ctx context.Context, logger logging.Logger, req *ipcpb.StopSessionsRequest, current func() bool) error {
+	return stopSessionsEffectWithAuthorization(ctx, logger, req, current, nil)
+}
+
+func stopSessionsEffectWithAuthorization(ctx context.Context, logger logging.Logger, req *ipcpb.StopSessionsRequest, current func() bool, authorize func(context.Context) (time.Duration, error)) error {
 	if len(req.GetStreamNames()) == 0 {
 		return errors.New("empty session termination scope")
 	}
 	confirmed := req.GetRequestId() != ""
 	if confirmed {
-		if current == nil || !current() || req.GetTenantId() == "" || req.GetExpiresAt() == nil || !req.ExpiresAt.IsValid() || !time.Now().Before(req.ExpiresAt.AsTime()) {
+		if current == nil || !current() || req.GetTenantId() == "" {
 			return errors.New("session termination connection or deadline is no longer current")
 		}
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithDeadline(ctx, req.ExpiresAt.AsTime())
+		if req.GetRemainingTimeoutMs() == 0 || authorize == nil {
+			return errors.New("session termination lacks a local budget or current-owner authorization")
+		}
+		ctx, cancel = context.WithTimeout(ctx, min(time.Duration(req.GetRemainingTimeoutMs())*time.Millisecond, 10*time.Second))
+		defer cancel()
+		remaining, err := authorize(ctx)
+		if err != nil {
+			return err
+		}
+		if remaining <= 0 || !current() || ctx.Err() != nil {
+			return errors.New("session termination authorization is no longer current")
+		}
+		ctx, cancel = context.WithTimeout(ctx, remaining)
 		defer cancel()
 	}
 	cfg := currentConfig

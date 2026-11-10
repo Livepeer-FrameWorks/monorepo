@@ -251,7 +251,7 @@ const insertViewerConnectionEvent = `INSERT INTO viewer_connection_events (
 	country_code, city, latitude, longitude,
 	client_bucket_h3, client_bucket_res, node_bucket_h3, node_bucket_res,
 	event_type, session_duration, bytes_transferred,
-	source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+	source_region, stream_origin_region, stream_origin_cluster_id, schema_version, source_timestamp_ms
 )`
 
 type ViewerConnectionEventRow struct {
@@ -297,7 +297,7 @@ func PrepareViewerConnectionEvent(ctx context.Context, db BatchPreparer) (*Write
 			row.CountryCode, row.City, row.Latitude, row.Longitude,
 			row.ClientBucketH3, row.ClientBucketRes, row.NodeBucketH3, row.NodeBucketRes,
 			row.EventType, row.SessionDuration, row.BytesTransferred,
-			row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion,
+			row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion, row.Timestamp.UnixMilli(),
 		}
 	})
 }

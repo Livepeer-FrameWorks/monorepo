@@ -17,6 +17,9 @@ package queries
 // read this definition, so they agree on which lifecycle is open. Older rows
 // have no last_connected_at: only connect/disconnect projections update
 // last_updated, so a value after the last disconnect is the retained connect.
+// Millisecond projections distinguish a disconnect followed by a reconnect in
+// the same second. Equal or retained second-only timestamps stay closed: their
+// original ordering cannot be recovered safely from the aggregate.
 func ViewerLifecyclesCTE(where string) string {
 	return `viewer_current AS (
 		SELECT * FROM periscope.viewer_sessions_current FINAL
@@ -32,10 +35,13 @@ func ViewerLifecyclesCTE(where string) string {
 		       connected_at, disconnected_at, session_duration, bytes_transferred, last_updated,
 		       ifNull(c.last_connected_at,
 		           if(c.connected_at IS NOT NULL AND c.last_updated > ifNull(c.disconnected_at, toDateTime(0)),
-		              c.last_updated, c.connected_at)) AS lifecycle_connected_at,
-		       toInt64(toUnixTimestamp(lifecycle_connected_at)) * 1000 AS lifecycle_connected_at_ms,
+		              c.last_updated, c.connected_at)) AS legacy_lifecycle_connected_at,
+		       nullIf(greatest(ifNull(toInt64(toUnixTimestamp(legacy_lifecycle_connected_at)) * 1000, 0),
+		                       c.last_connected_at_ms), 0) AS lifecycle_connected_at_ms,
+		       fromUnixTimestamp64Milli(lifecycle_connected_at_ms) AS lifecycle_connected_at,
 		       (lifecycle_connected_at IS NOT NULL
-		           AND ifNull(c.disconnected_at, toDateTime(0)) < lifecycle_connected_at
+		           AND greatest(ifNull(toInt64(toUnixTimestamp(c.disconnected_at)) * 1000, 0),
+		                        c.last_disconnected_at_ms) < lifecycle_connected_at_ms
 		           AND ifNull(f.last_ended_at_ms, 0) < lifecycle_connected_at_ms) AS lifecycle_open,
 		       if(lifecycle_open, lifecycle_connected_at, ifNull(c.connected_at, c.disconnected_at)) AS lifecycle_started_at,
 		       if(lifecycle_open, now(),

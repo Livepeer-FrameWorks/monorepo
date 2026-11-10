@@ -29,7 +29,7 @@ import "x402.proto";
 service BillingService {
   // Read-only financial evidence pages; requires a platform-operator JWT.
   rpc AdminFinancialAuditPage(AdminFinancialAuditPageRequest) returns (AdminFinancialAuditPageResponse);
-  // Record a reviewed establishment proof against an unchanged customer profile.
+  // Read-only operator tax reviews, scoped to the requested tenant and filters.
   rpc AdminListBillingTaxReviews(AdminListBillingTaxReviewsRequest) returns (AdminListBillingTaxReviewsResponse);
   rpc AdminAcknowledgeBillingTaxReview(AdminAcknowledgeBillingTaxReviewRequest) returns (AdminAcknowledgeBillingTaxReviewResponse);
   // Read-only support snapshot; requires a platform-operator JWT.
