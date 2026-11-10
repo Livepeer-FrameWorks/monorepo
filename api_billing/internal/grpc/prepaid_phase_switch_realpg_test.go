@@ -14,6 +14,7 @@ import (
 	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"frameworks/api_billing/internal/handlers"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
@@ -33,7 +34,7 @@ func TestPrepaidToPostpaidSwitchInvoicesOnlyUsageFromTheSwitch_RealPG(t *testing
 	ctx := context.Background()
 	tenantID, paygID, supporterID := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	periodStart := time.Now().UTC().Truncate(time.Hour).Add(-10 * 24 * time.Hour)
-	periodEnd := periodStart.AddDate(0, 1, 0)
+	periodEnd := billing.NextMonthlyAnniversary(periodStart)
 	dimensionKey := fmt.Sprintf("%x", sha256.Sum256([]byte("{}")))
 	exec := func(t *testing.T, query string, args ...any) {
 		t.Helper()

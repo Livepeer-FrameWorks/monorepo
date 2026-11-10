@@ -116,7 +116,7 @@ func TestPurserInvoicedClusterMonthlyFeeProratesByActiveTime_RealPG(t *testing.T
 	}
 
 	start := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	end := start.AddDate(0, 1, 0)
+	end := billing.NextMonthlyAnniversary(start)
 
 	tenant := insertSubscription(t, start.AddDate(0, 0, -10), time.Time{})
 	cents, credit := monthlyLine(t, tenant, start, end)
@@ -125,7 +125,7 @@ func TestPurserInvoicedClusterMonthlyFeeProratesByActiveTime_RealPG(t *testing.T
 	change := start.Add(10*24*time.Hour + 7*time.Hour)
 	closed, closedCredit := monthlyLine(t, tenant, start, change)
 	assertLine(t, "period closed early by a tier change", closed, closedCredit, proratedMonthlyCents(3000, start, change, start, time.Time{}))
-	next, nextCredit := monthlyLine(t, tenant, change, change.AddDate(0, 1, 0))
+	next, nextCredit := monthlyLine(t, tenant, change, billing.NextMonthlyAnniversary(change))
 	assertLine(t, "period started at the change", next, nextCredit, 3000)
 
 	lateStart := start.Add(15*24*time.Hour + 3*time.Hour)
@@ -150,7 +150,7 @@ func TestPurserInvoicedClusterMonthlyFeeProratesByActiveTime_RealPG(t *testing.T
 		t.Fatal(err)
 	}
 	periodStart := now.AddDate(0, 0, -10).Truncate(time.Second)
-	periodEnd := periodStart.AddDate(0, 1, 0)
+	periodEnd := billing.NextMonthlyAnniversary(periodStart)
 	cents, credit = monthlyLine(t, reactivated, periodStart, periodEnd)
 	assertLine(t, "reactivated inside the period", cents, credit, proratedMonthlyCents(3000, periodStart, periodEnd, reactivatedAt, time.Time{}))
 

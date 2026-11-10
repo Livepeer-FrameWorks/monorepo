@@ -18,7 +18,7 @@ import (
 func TestAdvanceBaseFeeTaxReviewIsVisibleAndStable_RealPG(t *testing.T) {
 	f := newTierChangeFixture(t, "20.00", firstBaseFeePaid)
 	start := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
-	if _, err := f.db.Exec(`UPDATE purser.tenant_subscriptions SET billing_name=NULL,billing_period_start=$2,billing_period_end=$3 WHERE tenant_id=$1::uuid`, f.tenantID, start, start.AddDate(0, 1, 0)); err != nil {
+	if _, err := f.db.Exec(`UPDATE purser.tenant_subscriptions SET billing_name=NULL,billing_period_start=$2,billing_period_end=$3 WHERE tenant_id=$1::uuid`, f.tenantID, start, billing.NextMonthlyAnniversary(start)); err != nil {
 		t.Fatal(err)
 	}
 	for attempt := range 2 {

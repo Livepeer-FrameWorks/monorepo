@@ -11,6 +11,7 @@ import (
 
 	"frameworks/api_billing/internal/appconfig/appconfigtest"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/google/uuid"
 )
@@ -67,7 +68,7 @@ func TestPostpaidPrepaidCreditIsTakenWhenTheInvoiceIsFinalized_RealPG(t *testing
 	appconfigtest.Set(t, "WAIVE_USAGE_CHARGES", "false")
 	db := startPurserUsageRealPG(t)
 	periodStart := time.Now().UTC().Truncate(time.Hour).Add(-10 * 24 * time.Hour)
-	periodEnd := periodStart.AddDate(0, 1, 0)
+	periodEnd := billing.NextMonthlyAnniversary(periodStart)
 	seedCompleteMetering(t, db, periodStart.AddDate(0, -1, 0), periodEnd.AddDate(0, 1, 0))
 	tenant := newPhaseTenant(t, db, "postpaid", periodStart, periodEnd, 1000)
 
@@ -117,7 +118,7 @@ func TestReturnOpenInvoicePrepaidCredit_RealPG(t *testing.T) {
 	ctx := context.Background()
 	tenantID, supporterID := uuid.NewString(), uuid.NewString()
 	periodStart := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	periodEnd := periodStart.AddDate(0, 1, 0)
+	periodEnd := billing.NextMonthlyAnniversary(periodStart)
 	for _, statement := range []struct {
 		sql  string
 		args []any

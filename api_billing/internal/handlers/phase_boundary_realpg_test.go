@@ -302,7 +302,7 @@ func TestUsageReportInFlightAtASwitchIsBilledByExactlyOnePhase_RealPG(t *testing
 	now := time.Now().UTC()
 	periodStart := now.Truncate(time.Hour).Add(-10 * 24 * time.Hour)
 	seedCompleteMetering(t, db, periodStart.AddDate(0, -1, 0), periodStart.AddDate(0, 2, 0))
-	tenant := newPhaseTenant(t, db, "postpaid", periodStart, periodStart.AddDate(0, 1, 0), 0)
+	tenant := newPhaseTenant(t, db, "postpaid", periodStart, billing.NextMonthlyAnniversary(periodStart), 0)
 	tenant.receive(t, egressReport(tenant.id, strings.Repeat("1", 64), periodStart.Add(2*time.Hour), 100))
 
 	// The report's transaction begins before the switch is rated and writes
@@ -422,7 +422,7 @@ func TestUsageProcessedUnderTheModelATenantLeftIsPaidOnceByItsPhase_RealPG(t *te
 	ctx := context.Background()
 	now := time.Now().UTC()
 	periodStart := now.Truncate(time.Hour).Add(-10 * 24 * time.Hour)
-	periodEnd := periodStart.AddDate(0, 1, 0)
+	periodEnd := billing.NextMonthlyAnniversary(periodStart)
 
 	t.Run("to prepaid", func(t *testing.T) {
 		db := startPurserUsageRealPG(t)
@@ -512,7 +512,7 @@ func TestUsageCorrectionStraddlingASwitchIsBilledOnce_RealPG(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	periodStart := now.Truncate(time.Hour).Add(-10 * 24 * time.Hour)
-	periodEnd := periodStart.AddDate(0, 1, 0)
+	periodEnd := billing.NextMonthlyAnniversary(periodStart)
 	seedCompleteMetering(t, db, periodStart.AddDate(0, -1, 0), periodEnd.AddDate(0, 1, 0))
 	tenant := newPhaseTenant(t, db, "postpaid", periodStart, periodEnd, 0)
 	tenant.receive(t, egressReport(tenant.id, strings.Repeat("9", 64), periodStart.Add(2*time.Hour), 100))
@@ -614,7 +614,7 @@ func TestEarlyClosedPeriodKeepsItsInvoiceCreditFromTheNextDraft_RealPG(t *testin
 	periodStart := time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC)
 	closeAt := time.Date(2026, 3, 10, 0, 0, 0, 0, time.UTC)
 	seedCompleteMetering(t, db, periodStart.AddDate(0, -1, 0), closeAt.AddDate(0, 1, 0))
-	tenant := newPhaseTenant(t, db, "postpaid", periodStart, periodStart.AddDate(0, 1, 0), 1000)
+	tenant := newPhaseTenant(t, db, "postpaid", periodStart, billing.NextMonthlyAnniversary(periodStart), 1000)
 	if _, err := db.ExecContext(ctx, `UPDATE purser.billing_tiers SET base_price = 0 WHERE id = $1`, tenant.supporterID); err != nil {
 		t.Fatal(err)
 	}
@@ -635,7 +635,7 @@ func TestEarlyClosedPeriodKeepsItsInvoiceCreditFromTheNextDraft_RealPG(t *testin
 
 	if _, err := db.ExecContext(ctx, `
 		UPDATE purser.tenant_subscriptions SET billing_period_start = $2, billing_period_end = $3, next_billing_date = $3
-		WHERE tenant_id = $1`, tenant.id, closeAt, closeAt.AddDate(0, 1, 0)); err != nil {
+		WHERE tenant_id = $1`, tenant.id, closeAt, billing.NextMonthlyAnniversary(closeAt)); err != nil {
 		t.Fatal(err)
 	}
 	tenant.receive(t, egressReport(tenant.id, strings.Repeat("d", 64), closeAt.Add(time.Hour), 1))
@@ -842,7 +842,7 @@ func TestPrepaidSettlementWaitsForASwitchClosingItsPhase_RealPG(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	periodStart := now.Truncate(time.Hour).Add(-10 * 24 * time.Hour)
-	periodEnd := periodStart.AddDate(0, 1, 0)
+	periodEnd := billing.NextMonthlyAnniversary(periodStart)
 	seedCompleteMetering(t, db, periodStart.AddDate(0, -1, 0), periodEnd.AddDate(0, 1, 0))
 	tenant := newPhaseTenant(t, db, "prepaid", periodStart, periodEnd, 1000)
 	tenant.receive(t, egressReport(tenant.id, strings.Repeat("f", 64), periodStart.Add(2*time.Hour), 200))

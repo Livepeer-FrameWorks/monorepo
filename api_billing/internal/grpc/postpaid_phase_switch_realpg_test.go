@@ -12,6 +12,7 @@ import (
 
 	"frameworks/api_billing/internal/appconfig/appconfigtest"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"github.com/google/uuid"
@@ -31,7 +32,7 @@ func TestPostpaidToPrepaidSwitchInvoicesThePostpaidPhase_RealPG(t *testing.T) { 
 	ctx := context.Background()
 	tenantID, paygID, supporterID := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	periodStart := time.Now().UTC().Truncate(time.Hour).Add(-10 * 24 * time.Hour)
-	periodEnd := periodStart.AddDate(0, 1, 0)
+	periodEnd := billing.NextMonthlyAnniversary(periodStart)
 	exec := func(t *testing.T, query string, args ...any) {
 		t.Helper()
 		if _, err := db.ExecContext(ctx, query, args...); err != nil {
@@ -78,7 +79,7 @@ func TestPostpaidToPrepaidSwitchInvoicesThePostpaidPhase_RealPG(t *testing.T) { 
 		t.Fatalf("read the invoice of the postpaid phase: %v; the 150 GiB of postpaid usage and the base fee up to the switch were never billed", err)
 	}
 	seconds := decimal.NewFromInt(int64(switchAt.Sub(periodStart) / time.Second))
-	month := decimal.NewFromInt(int64(periodStart.AddDate(0, 1, 0).Sub(periodStart) / time.Second))
+	month := decimal.NewFromInt(int64(periodEnd.Sub(periodStart) / time.Second))
 	wantBase := decimal.NewFromInt(7900).Mul(seconds).Div(month).Round(0).Shift(-2)
 	wantAmount := wantBase.Add(decimal.RequireFromString("3.00"))
 	if !strings.HasPrefix(number, "INV-") || status != "pending" || !invoiceEnd.Equal(switchAt) || metered != "3.00" ||
@@ -116,7 +117,7 @@ func TestPrepaidPostpaidPrepaidRoundTripBillsEachPhaseOnce_RealPG(t *testing.T) 
 	ctx := context.Background()
 	tenantID, paygID, supporterID := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	periodStart := time.Now().UTC().Truncate(time.Hour).Add(-10 * 24 * time.Hour)
-	periodEnd := periodStart.AddDate(0, 1, 0)
+	periodEnd := billing.NextMonthlyAnniversary(periodStart)
 	exec := func(t *testing.T, query string, args ...any) {
 		t.Helper()
 		if _, err := db.ExecContext(ctx, query, args...); err != nil {
