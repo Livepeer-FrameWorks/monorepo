@@ -7,7 +7,32 @@ package purserdb
 
 import (
 	"context"
+	"time"
 )
+
+const providerDocumentPredatesAssessedTax = `-- name: ProviderDocumentPredatesAssessedTax :one
+SELECT EXISTS (
+    SELECT 1 FROM purser.tenant_subscriptions
+    WHERE tenant_id = $1::text::uuid
+      AND (tax_assessed_since IS NULL
+           OR $2::timestamptz < date_trunc('second', tax_assessed_since))
+)::boolean AS predates_assessed_tax
+`
+
+type ProviderDocumentPredatesAssessedTaxParams struct {
+	TenantID string    `db:"tenant_id" json:"tenant_id"`
+	IssuedAt time.Time `db:"issued_at" json:"issued_at"`
+}
+
+// A provider document issued while the tenant's relationship kept its untaxed
+// treatment. Provider timestamps have whole-second precision, so a document in
+// the same second as the move to assessed handling counts as assessed.
+func (q *Queries) ProviderDocumentPredatesAssessedTax(ctx context.Context, arg ProviderDocumentPredatesAssessedTaxParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, providerDocumentPredatesAssessedTax, arg.TenantID, arg.IssuedAt)
+	var predates_assessed_tax bool
+	err := row.Scan(&predates_assessed_tax)
+	return predates_assessed_tax, err
+}
 
 const startAssessedTaxHandling = `-- name: StartAssessedTaxHandling :execrows
 UPDATE purser.tenant_subscriptions

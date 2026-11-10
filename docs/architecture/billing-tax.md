@@ -62,6 +62,11 @@ was sold under:
 - its recurring Purser invoices (postpaid usage and advance base fees) are
   collected for the net amount with no VAT line. They keep
   `tax_status = 'legacy_unknown'` and are never held for a tax review.
+- the Stripe invoices it is issued, and their credit notes, carry no Purser
+  tax profile. Purser imports them as `legacy_unknown` without a document
+  review. The decision uses the invoice's issue time, so an invoice issued
+  before `tax_assessed_since` keeps this treatment after the move; one issued
+  later without a tax profile is a synchronization failure and is reviewed.
 
 The relationship moves to assessed handling, and records `tax_assessed_since`,
 when the tenant saves a complete billing profile (name, email, street, city,

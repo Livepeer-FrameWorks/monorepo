@@ -82,8 +82,9 @@ treatment until the customer saves a complete billing profile, starts a new
 checkout or upgrades the plan. Until then Purser does not change its Stripe or
 Mollie customer, tax IDs, subscription tax rates or collection amount, and its
 recurring Purser invoices are issued for the net amount without a VAT line or a
-tax review hold. Those invoices remain marked `legacy_unknown` in the finance
-export. The `tenant_subscriptions.tax_assessed_since` timestamp records when a
+tax review hold. Those invoices, and the Stripe invoices and credit notes issued
+for the subscription in that time, remain marked `legacy_unknown` in the finance
+export and do not create an operator review. The `tenant_subscriptions.tax_assessed_since` timestamp records when a
 customer moved to assessed handling.
 
 New purchases require relevant billing details and claim validation. Once a

@@ -66,11 +66,19 @@ func (s *Service) importStripeTaxDocument(ctx context.Context, kind string, raw 
 		assessment = existing.TaxAssessment
 		taxReady = existing.TaxStatus == "ready"
 	} else if kind == "provider_invoice" {
-		assessment, reviewReasons, err = s.assessImportedStripeInvoice(ctx, tenant, doc)
-		if err != nil {
-			return err
+		unassessed, unassessedErr := stripeInvoicePredatesAssessedTax(ctx, queries, tenant, doc)
+		if unassessedErr != nil {
+			return unassessedErr
 		}
-		taxReady = len(reviewReasons) == 0
+		if unassessed {
+			assessment = unassessedProviderDocumentAssessment
+		} else {
+			assessment, reviewReasons, err = s.assessImportedStripeInvoice(ctx, tenant, doc)
+			if err != nil {
+				return err
+			}
+			taxReady = len(reviewReasons) == 0
+		}
 	}
 	if lookupErr != nil && kind == "provider_credit_note" && doc.SourceInvoiceID != "" {
 		parent, parentErr := queries.FindProviderBillingDocument(ctx, purserdb.FindProviderBillingDocumentParams{TenantID: tenant, ProviderDocumentID: doc.SourceInvoiceID, DocumentKind: "provider_invoice"})
@@ -89,10 +97,8 @@ func (s *Service) importStripeTaxDocument(ctx context.Context, kind string, raw 
 		}
 		doc.Supplier, doc.Customer, assessment = parent.SupplierSnapshot, parent.CustomerSnapshot, parent.TaxAssessment
 		taxReady = parent.TaxStatus == "ready"
-		if !taxReady {
+		if !taxReady && !providerDocumentPredatesAssessedTax(assessment) {
 			reviewReasons = append(reviewReasons, "source_invoice_tax_review")
-		}
-		if !taxReady {
 			assessment, err = stripeTaxAssessmentReview(assessment, reviewReasons)
 			if err != nil {
 				return err
@@ -143,6 +149,33 @@ func (s *Service) importStripeTaxDocument(ctx context.Context, kind string, raw 
 		return err
 	}
 	return pdfErr
+}
+
+// unassessedProviderDocumentAssessment marks a Stripe document issued under a
+// relationship's untaxed treatment. Credit notes copy it from their invoice.
+var unassessedProviderDocumentAssessment = json.RawMessage(`{"tax_handling":"unassessed"}`)
+
+// stripeInvoicePredatesAssessedTax reports an invoice that Stripe issued without a
+// Purser tax profile while the tenant's relationship kept its untaxed treatment.
+// Purser does not synchronize such a relationship, so the missing profile is by
+// design and the document stays legacy_unknown without a review. The decision
+// uses the immutable issue time, so redelivery reaches the same result.
+func stripeInvoicePredatesAssessedTax(ctx context.Context, q *purserdb.Queries, tenant string, doc billingstripe.ProviderTaxDocument) (bool, error) {
+	if doc.ProfileSHA != "" {
+		return false, nil
+	}
+	predates, err := q.ProviderDocumentPredatesAssessedTax(ctx, purserdb.ProviderDocumentPredatesAssessedTaxParams{TenantID: tenant, IssuedAt: doc.IssuedAt})
+	if err != nil {
+		return false, fmt.Errorf("read tenant tax handling at document issue: %w", err)
+	}
+	return predates, nil
+}
+
+func providerDocumentPredatesAssessedTax(assessment json.RawMessage) bool {
+	var marker struct {
+		TaxHandling string `json:"tax_handling"`
+	}
+	return json.Unmarshal(assessment, &marker) == nil && marker.TaxHandling == "unassessed"
 }
 
 func (s *Service) assessImportedStripeInvoice(ctx context.Context, tenant string, doc billingstripe.ProviderTaxDocument) (json.RawMessage, []string, error) {
@@ -230,6 +263,9 @@ func retainProviderDocumentTaxReview(ctx context.Context, q *purserdb.Queries, t
 		}
 		_, err = q.ResolveProviderDocumentTaxReview(ctx, purserdb.ResolveProviderDocumentTaxReviewParams{TenantID: tenant, DocumentID: id, DocumentKind: kind})
 		return err
+	}
+	if providerDocumentPredatesAssessedTax(retained.TaxAssessment) {
+		return nil
 	}
 	return q.RecordBillingTaxReview(ctx, purserdb.RecordBillingTaxReviewParams{TenantID: tenant, Kind: "provider_tax_document_review", Network: "stripe", ReferenceType: kind, ReferenceID: id, AmountCents: 0, Detail: "Original Stripe document has unverified tax setup; review the retained document and billing profile", EvidenceJson: retained.TaxAssessment})
 }

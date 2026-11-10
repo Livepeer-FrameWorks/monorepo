@@ -893,6 +893,10 @@ type Querier interface {
 	PrepaidUsageSettlementExists(ctx context.Context, reportID string) (bool, error)
 	PrepareProviderBillingPaymentAttemptRetry(ctx context.Context, arg PrepareProviderBillingPaymentAttemptRetryParams) error
 	PromotePrepaidTenantSubscription(ctx context.Context, arg PromotePrepaidTenantSubscriptionParams) (string, error)
+	// A provider document issued while the tenant's relationship kept its untaxed
+	// treatment. Provider timestamps have whole-second precision, so a document in
+	// the same second as the move to assessed handling counts as assessed.
+	ProviderDocumentPredatesAssessedTax(ctx context.Context, arg ProviderDocumentPredatesAssessedTaxParams) (bool, error)
 	// Service-wide recovery inventory; tenant filtering would hide stuck work.
 	ProviderWebhookInboxRepeatedFailures(ctx context.Context) (int64, error)
 	ProviderWebhookReceivedAt(ctx context.Context, arg ProviderWebhookReceivedAtParams) (time.Time, error)
