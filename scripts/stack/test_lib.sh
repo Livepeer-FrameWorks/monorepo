@@ -184,6 +184,70 @@ placement_setup_is_measured() {
 }
 expect "placement measures a live session after its first setup publisher is refused" placement_setup_is_measured
 
+recording_setup_case() (
+  local mode=$1 outer_pids="$work/pids"
+  work="$work/recording-$mode"
+  mkdir -p "$work"
+  trap - EXIT
+  PUB=""
+  log() { :; }
+  # Advance only the fixture's admission clock; no live publishers or real
+  # network calls are needed to exercise the scenario's readiness boundary.
+  date() {
+    local now=$(($(cat "$work/clock" 2>/dev/null || echo 0) + 10))
+    echo "$now" >"$work/clock"
+    echo "$now"
+  }
+  create_stream() {
+    local n=$(($(cat "$work/streams" 2>/dev/null || echo 0) + 1))
+    echo "$n" >"$work/streams"
+    printf '{"streamKey":"key-%s"}\n' "$n"
+  }
+  internal_name_of_key() { echo "$1"; }
+  publish() {
+    local key=$2 n=$(($(cat "$work/attempts-$2" 2>/dev/null || echo 0) + 1))
+    echo "$n" >"$work/attempts-$key"
+    echo "$key" >"$work/current-key"
+    command sleep 300 >/dev/null 2>&1 &
+    echo $! >>"$work/pids"
+    echo $! >>"$outer_pids"
+    echo $!
+  }
+  admitted_generation() {
+    local key=$(cat "$work/current-key") pid=$(tail -1 "$work/pids")
+    if [ "$(cat "$work/attempts-$key")" = 1 ] || { [ "$mode" = persistent ] && [ "$key" = key-2 ]; }; then
+      kill "$pid" 2>/dev/null || true
+    else
+      echo "generation-$key"
+    fi
+  }
+  sed -n '/^STALLS=4$/,/^stall_dvrs()/p' "$here/scenarios/04-recording.sh" |
+    sed '$d' >"$work/setup.sh"
+  . "$work/setup.sh"
+  echo setup-completed
+) >"$work/recording-$1.log" 2>&1
+recording_setup_recovers_transient_refusal() {
+  recording_setup_case transient || return 1
+  grep -qs setup-completed "$work/recording-transient.log" &&
+    [ "$(cat "$work/recording-transient/attempts-key-1")" -gt 1 ] &&
+    [ "$(cat "$work/recording-transient/streams")" = 4 ]
+}
+recording_setup_refusal_cleans_prior_publishers() {
+  recording_setup_case persistent && return 1
+  ! grep -qs setup-completed "$work/recording-persistent.log" || return 1
+  local pid state attempt
+  while read -r pid; do
+    for attempt in {1..100}; do
+      state=$(ps -o stat= -p "$pid" 2>/dev/null || true)
+      [ -z "$state" ] || [[ "$state" = Z* ]] && break
+      command sleep 0.01
+    done
+    [ -z "$state" ] || [[ "$state" = Z* ]] || return 1
+  done <"$work/recording-persistent/pids"
+}
+expect 'recording setup waits for admitted publishers after transient refusal' recording_setup_recovers_transient_refusal
+expect 'recording setup fails persistent refusal and releases earlier publishers' recording_setup_refusal_cleans_prior_publishers
+
 # A deployed target keeps what a run leaves behind, so the run deletes its own
 # objects at exit: every stream its ledger created, and every stream, VOD and
 # clip of the tenant named as a scenario's ("stack-" streams, "stack " assets),
