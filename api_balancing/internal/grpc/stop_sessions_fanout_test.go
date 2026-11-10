@@ -30,9 +30,9 @@ func (s *concurrentStopStream) Send(message *ipcpb.ControlMessage) error {
 }
 
 func TestTerminateTenantStreamsDispatchesNodesConcurrently(t *testing.T) {
+	manager := state.ResetDefaultManagerForTests()
+	t.Cleanup(manager.Shutdown)
 	synctest.Test(t, func(t *testing.T) {
-		manager := state.ResetDefaultManagerForTests()
-		t.Cleanup(manager.Shutdown)
 		entered, release := make(chan struct{}, 2), make(chan struct{})
 		streams := map[string]ipcpb.HelmsmanControl_ConnectServer{
 			"node-a": &concurrentStopStream{entered: entered, release: release},
