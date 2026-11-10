@@ -10,7 +10,7 @@ export interface OperationInfo {
 }
 
 /** The SDK package version. */
-export const sdkVersion = "0.5.0";
+export const sdkVersion = "0.5.1";
 
 /** The SDK compatibility line; under 0.x each minor version is its own line. */
 export const sdkLine = "0.5";
