@@ -116,10 +116,10 @@ func TestCleanTmps(t *testing.T) {
 	}
 }
 
-// EnsureMeta keeps the blocks of the object it recorded, drops them for
+// prepareMetaFixture keeps the blocks of the object it recorded, drops them for
 // another object, and records the first known object over an unknown one
 // without dropping anything.
-func TestEnsureMetaObjectIdentity(t *testing.T) {
+func TestPrepareMetaFixtureObjectIdentity(t *testing.T) {
 	cases := []struct {
 		name         string
 		recorded     string
@@ -135,13 +135,13 @@ func TestEnsureMetaObjectIdentity(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := NewBlockStore(filepath.Join(t.TempDir(), "vod", "h.mkv"), 8)
-			if _, err := s.EnsureMeta("h", "mkv", tc.recorded, 16); err != nil {
+			if _, err := s.prepareMetaFixture("h", "mkv", tc.recorded, 16); err != nil {
 				t.Fatal(err)
 			}
 			if err := s.WriteBlock(0, []byte("01234567")); err != nil {
 				t.Fatal(err)
 			}
-			m, err := s.EnsureMeta("h", "mkv", tc.resolved, 16)
+			m, err := s.prepareMetaFixture("h", "mkv", tc.resolved, 16)
 			if err != nil {
 				t.Fatal(err)
 			}

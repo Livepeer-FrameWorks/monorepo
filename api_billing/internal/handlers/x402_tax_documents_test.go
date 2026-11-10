@@ -35,8 +35,8 @@ func TestLegacyForeignQuoteStillProducesItsTaxDocument(t *testing.T) {
 	at := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
 	mock.ExpectQuery("-- name: GetExistingCryptoTaxDocumentNumber").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT quote.tax_document_kind, quote.tax_profile_snapshot").WithArgs("tenant-1", "0xtx").WillReturnRows(sqlmock.NewRows([]string{
-		"tax_document_kind", "tax_profile_snapshot", "created_at", "original_amount_cents", "original_currency", "eur_amount_cents", "fx_units_per_eur", "fx_source", "fx_reference_date",
-	}).AddRow("simplified", []byte(`{"address":{"country":"US"}}`), at, int64(1096), "USD", int64(1000), "1.0960000000", "ecb", at))
+		"tax_document_kind", "tax_profile_snapshot", "created_at", "original_amount_cents", "original_currency", "eur_amount_cents", "fx_units_per_eur", "fx_source", "fx_reference_date", "payment_confirmed_at",
+	}).AddRow("simplified", []byte(`{"address":{"country":"US"}}`), at, int64(1096), "USD", int64(1000), "1.0960000000", "ecb", at, at.Add(time.Hour)))
 	mock.ExpectBegin()
 	mock.ExpectExec("-- name: AcquireCryptoTaxDocumentLock").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("-- name: GetExistingCryptoTaxDocumentNumber").WillReturnError(sql.ErrNoRows)
@@ -246,15 +246,15 @@ func TestLoadCryptoTaxSnapshotUsesLockedQuoteRate(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{
 			"tax_document_kind", "tax_profile_snapshot", "created_at",
 			"original_amount_cents", "original_currency", "eur_amount_cents",
-			"fx_units_per_eur", "fx_source", "fx_reference_date",
-		}).AddRow("simplified", []byte(`{}`), observedAt, int64(1096), "USD", int64(1000), "1.0960000000", "ecb", observedAt))
+			"fx_units_per_eur", "fx_source", "fx_reference_date", "payment_confirmed_at",
+		}).AddRow("simplified", []byte(`{}`), observedAt, int64(1096), "USD", int64(1000), "1.0960000000", "ecb", observedAt, observedAt.Add(time.Hour)))
 
 	snapshot, err := (&X402Handler{db: db}).loadCryptoTaxSnapshot(context.Background(), "tenant-1", "x402_payment", "0xtx")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if snapshot.DocumentKind != "simplified" || snapshot.FX.OriginalMinor != 1096 || snapshot.FX.OriginalCurrency != "USD" ||
-		snapshot.FX.EURMinor != 1000 || snapshot.FX.UnitsPerEUR.String() != "1.096" || !snapshot.FXRateObservedAt.Equal(observedAt) {
+		snapshot.FX.EURMinor != 1000 || snapshot.FX.UnitsPerEUR.String() != "1.096" || !snapshot.FXRateObservedAt.Equal(observedAt) || !snapshot.ConfirmedAt.Equal(observedAt.Add(time.Hour)) {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

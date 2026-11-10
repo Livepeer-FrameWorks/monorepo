@@ -93,7 +93,7 @@ func TestRecurringTaxVIESOutageDoesNotBecomeDomesticFallback_RealPG(t *testing.T
 	if err != nil || !accepted.ReverseCharge {
 		t.Fatalf("fixture never established reverse charge: %+v %v", accepted, err)
 	}
-	if err = retainProviderTaxExpectation(t.Context(), db, tenant, accepted); err != nil {
+	if err = RetainProviderTaxExpectation(t.Context(), db, tenant, accepted); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = db.Exec(`UPDATE purser.vat_validation_evidence SET checked_at=NOW()-INTERVAL '10 days',expires_at=NOW()-INTERVAL '9 days' WHERE tenant_id=$1::uuid`, tenant); err != nil {

@@ -76,7 +76,11 @@ WITH records AS (
      FROM purser.crypto_accounting_anomalies r
      WHERE r.tenant_id=sqlc.arg(tenant_id)::text::uuid AND sqlc.arg(source)::text='billing_tax_reviews'
        AND r.kind IN ('provider_tax_review','provider_invoice_tax_review','provider_tax_document_review','provider_tax_evidence_review','invoice_tax_review','invoice_tax_evidence_review','tax_assessment_review','operator_tax_review_acknowledgement')
-       AND r.first_seen_at>=sqlc.arg(from_at)::timestamptz AND r.first_seen_at<sqlc.arg(through_at)::timestamptz
+       AND (
+           (r.first_seen_at>=sqlc.arg(from_at)::timestamptz AND r.first_seen_at<sqlc.arg(through_at)::timestamptz)
+           OR (r.last_seen_at>=sqlc.arg(from_at)::timestamptz AND r.last_seen_at<sqlc.arg(through_at)::timestamptz)
+           OR (r.resolved_at>=sqlc.arg(from_at)::timestamptz AND r.resolved_at<sqlc.arg(through_at)::timestamptz)
+       )
        AND r.id>=COALESCE(NULLIF(sqlc.arg(after_id)::text,''),'00000000-0000-0000-0000-000000000000')::uuid
        AND r.id IS DISTINCT FROM NULLIF(sqlc.arg(after_id)::text,'')::uuid
      ORDER BY r.id LIMIT 101)

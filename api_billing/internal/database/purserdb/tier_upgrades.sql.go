@@ -58,6 +58,29 @@ func (q *Queries) ClearCancelledTierUpgrade(ctx context.Context, tenantID string
 	return err
 }
 
+const clearRejectedTierUpgrade = `-- name: ClearRejectedTierUpgrade :exec
+UPDATE purser.tenant_subscriptions AS subscription
+SET pending_tier_id=NULL,pending_effective_at=NULL,pending_reason=NULL,updated_at=NOW()
+WHERE subscription.tenant_id=$1::text::uuid
+ AND subscription.pending_reason='tier_upgrade'
+ AND EXISTS (
+  SELECT 1 FROM purser.subscription_tier_upgrades upgrade
+  WHERE upgrade.tenant_id=subscription.tenant_id AND upgrade.id=$2::text::uuid
+   AND upgrade.state='cancelled' AND upgrade.tier_id=subscription.pending_tier_id
+   AND upgrade.requested_at=subscription.pending_effective_at
+ )
+`
+
+type ClearRejectedTierUpgradeParams struct {
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	ID       string `db:"id" json:"id"`
+}
+
+func (q *Queries) ClearRejectedTierUpgrade(ctx context.Context, arg ClearRejectedTierUpgradeParams) error {
+	_, err := q.db.ExecContext(ctx, clearRejectedTierUpgrade, arg.TenantID, arg.ID)
+	return err
+}
+
 const enqueueTierUpgrade = `-- name: EnqueueTierUpgrade :exec
 INSERT INTO purser.provider_webhook_inbox AS inbox (provider, event_key, headers, raw_payload)
 VALUES ('tier_upgrade', 'tier-upgrade:'||$1::text,

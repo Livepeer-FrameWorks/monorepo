@@ -72,8 +72,8 @@ func TestTerminateTenantStreams_OnlyTargetTenant(t *testing.T) {
 
 	// The stop_sessions command must carry the requesting tenant + reason and the
 	// victim stream name — and nothing about the bystander.
-	if len(victimStream.sent) != 1 {
-		t.Fatalf("expected one control message to node-victim, got %d", len(victimStream.sent))
+	if len(victimStream.sent) != 2 || victimStream.sent[1].GetStopSessionsRequest().GetAuthorizationNonce() == "" {
+		t.Fatalf("expected scoped stop and nonce permit to node-victim, got %d messages", len(victimStream.sent))
 	}
 	stop := victimStream.sent[0].GetStopSessionsRequest()
 	if stop == nil {
@@ -393,7 +393,7 @@ func TestTerminateStreamSessions_ScopedOwnerKeepsBystander(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.GetStreamsTerminated() != 1 || len(connected.sent) != 1 || len(connected.sent[0].GetStopSessionsRequest().GetStreamNames()) != 1 || connected.sent[0].GetStopSessionsRequest().GetStreamNames()[0] != "owner-stream" {
+	if response.GetStreamsTerminated() != 1 || len(connected.sent) != 2 || len(connected.sent[0].GetStopSessionsRequest().GetStreamNames()) != 1 || connected.sent[0].GetStopSessionsRequest().GetStreamNames()[0] != "owner-stream" {
 		t.Fatalf("owner termination touched another owner's stream: response=%v sent=%v", response, connected.sent)
 	}
 }

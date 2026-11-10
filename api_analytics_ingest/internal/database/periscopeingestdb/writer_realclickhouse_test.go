@@ -21,6 +21,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	dbqueries "github.com/Livepeer-FrameWorks/monorepo/pkg/database/queries"
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 	"github.com/google/uuid"
 )
@@ -142,6 +143,9 @@ func TestEveryTypedWriterAppendsToCurrentClickHouse(t *testing.T) {
 
 	ctx := context.Background()
 	wrapped := nativeContractConn{Conn: conn}
+	t.Run("same-second viewer lifecycle", func(t *testing.T) {
+		verifySameSecondViewerLifecycle(t, conn)
+	})
 	for _, contract := range writerContracts {
 		contract := contract
 		t.Run(contract.name, func(t *testing.T) {
@@ -186,6 +190,53 @@ func TestEveryTypedWriterAppendsToCurrentClickHouse(t *testing.T) {
 		verifyNetworkWorkAccounting(t, conn)
 		verifyNetworkGatewayRollups(t, conn)
 	})
+}
+
+func verifySameSecondViewerLifecycle(t *testing.T, conn driver.Conn) {
+	t.Helper()
+	ctx := t.Context()
+	tenant, stream := uuid.New(), uuid.New()
+	start := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
+	type lifecycleEvent struct {
+		kind string
+		at   time.Time
+	}
+	cases := []struct {
+		name     string
+		events   []lifecycleEvent
+		wantOpen uint8
+	}{
+		{"resumed", []lifecycleEvent{{"connect", start.Add(-time.Minute)}, {"disconnect", start.Add(100 * time.Millisecond)}, {"connect", start.Add(800 * time.Millisecond)}}, 1},
+		{"closed", []lifecycleEvent{{"connect", start.Add(100 * time.Millisecond)}, {"disconnect", start.Add(800 * time.Millisecond)}}, 0},
+		{"indistinguishable", []lifecycleEvent{{"connect", start}, {"disconnect", start}}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Reverse delivery must not change the source-time ordering.
+			for i := len(tc.events) - 1; i >= 0; i-- {
+				event := tc.events[i]
+				writer, err := PrepareViewerConnectionEvent(ctx, nativeContractConn{Conn: conn})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := writer.Append(ViewerConnectionEventRow{EventID: uuid.New(), Timestamp: event.at, TenantID: tenant, StreamID: stream, InternalName: "same-second", SessionID: tc.name, NodeID: "precision-edge", CountryCode: "NL", EventType: event.kind}); err != nil {
+					t.Fatal(err)
+				}
+				if err := writer.Send(); err != nil {
+					t.Fatal(err)
+				}
+				_ = writer.Close()
+			}
+			var open uint8
+			query := "WITH " + dbqueries.ViewerLifecyclesCTE("tenant_id=toUUID(?) AND session_id=?") + " SELECT lifecycle_open FROM viewer_lifecycles"
+			if err := conn.QueryRow(ctx, query, tenant.String(), tc.name).Scan(&open); err != nil {
+				t.Fatal(err)
+			}
+			if open != tc.wantOpen {
+				t.Fatalf("same-second %s lifecycle open=%d, want %d", tc.name, open, tc.wantOpen)
+			}
+		})
+	}
 }
 
 func representativeValue(typ reflect.Type, includeNullableValues bool) reflect.Value {

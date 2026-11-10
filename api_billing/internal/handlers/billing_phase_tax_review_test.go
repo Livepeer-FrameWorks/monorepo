@@ -36,7 +36,7 @@ func TestPhaseReviewIsRecordedExplicitlyAfterTransactionReturns(t *testing.T) {
 		t.Fatalf("transaction performed unexpected business writes: %v", checkErr)
 	}
 	cancel()
-	mock.ExpectExec("-- name: RecordCryptoAccountingAnomaly").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("-- name: RecordBillingTaxReview").WillReturnResult(sqlmock.NewResult(0, 1))
 	if err = RecordBillingPhaseTaxReview(ctx, err); !errors.Is(err, refusal) {
 		t.Fatalf("explicit caller lost the refusal: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestPhaseReviewRecordPreservesFailureWithoutHandlingOtherErrors(t *testing.
 	defer db.Close()
 	noticeFailure := errors.New("record unavailable")
 	refusal := &billingPhaseTaxReviewError{BillingBoundaryCondition: &BillingBoundaryCondition{Reason: "requires tax review"}, db: db}
-	mock.ExpectExec("-- name: RecordCryptoAccountingAnomaly").WillReturnError(noticeFailure)
+	mock.ExpectExec("-- name: RecordBillingTaxReview").WillReturnError(noticeFailure)
 	result := RecordBillingPhaseTaxReview(context.Background(), refusal)
 	if !errors.Is(result, refusal) || !errors.Is(result, noticeFailure) {
 		t.Fatalf("record failure lost either cause: %v", result)

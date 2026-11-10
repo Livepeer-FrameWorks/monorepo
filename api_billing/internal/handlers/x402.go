@@ -1560,7 +1560,10 @@ func (h *X402Handler) generateCryptoTopupInvoice(ctx context.Context, tenantID s
 	// Use the accepted assessment; legacy quotes retain their explicitly versioned policy.
 	var vatDecision vatDecision
 	policyRef := legacyCryptoTopupTaxPolicyRef
-	confirmedAt := time.Now().UTC()
+	confirmedAt := taxSnapshot.ConfirmedAt
+	if confirmedAt.IsZero() {
+		return "", billingtax.Review("payment_confirmation_time_required", "The received payment requires review of its original confirmation time before issuing its tax document")
+	}
 	vatDecision, err = h.cryptoSettlementVATDecision(ctx, tenantID, profile, taxSnapshot.FXRateObservedAt, confirmedAt)
 	if profile.TaxAssessment != nil {
 		policyRef = profile.TaxAssessment.PolicyVersion
@@ -1677,7 +1680,7 @@ func (h *X402Handler) generateCryptoTopupInvoice(ctx context.Context, tenantID s
 				EvidenceConflict: evidenceConflict, TaxPolicyRef: nullable(policyRef), TaxAssessment: assessmentJSON,
 				SupplierName: supplier.Name, SupplierAddress: supplier.Address, SupplierVatNumber: supplier.VATNumber,
 				SupplierRegistrationNumber: supplier.RegistrationNumber, ServiceDescription: "FrameWorks prepaid usage credit",
-				ServiceQuantity: 1, CustomerEmail: profile.Email, CustomerName: profile.Name,
+				ServiceQuantity: 1, ServiceDate: confirmedAt, CustomerEmail: profile.Email, CustomerName: profile.Name,
 				CustomerCompany: nullable(profile.Company), CustomerAddress: profile.Address,
 				CustomerVatNumber: nullable(profile.VATNumber), CustomerVatValidated: vatDecision.VIESValidated,
 			})
@@ -1700,6 +1703,7 @@ func (h *X402Handler) generateCryptoTopupInvoice(ctx context.Context, tenantID s
 				SupplierRegistrationNumber: nullable(supplier.RegistrationNumber),
 				ServiceDescription:         nullable("FrameWorks prepaid usage credit"),
 				ServiceQuantity:            sql.NullInt32{Int32: 1, Valid: true},
+				ServiceDate:                confirmedAt,
 			})
 		}
 
@@ -2014,6 +2018,7 @@ type cryptoTaxSnapshot struct {
 	FX               fx.Record
 	FXRateSource     string
 	FXRateObservedAt time.Time
+	ConfirmedAt      time.Time
 }
 
 func (h *X402Handler) loadCryptoTaxSnapshot(ctx context.Context, tenantID, referenceType, referenceID string) (cryptoTaxSnapshot, error) {
@@ -2029,6 +2034,7 @@ func (h *X402Handler) loadCryptoTaxSnapshot(ctx context.Context, tenantID, refer
 		})
 		err = queryErr
 		snapshot.DocumentKind, raw, snapshot.FXRateObservedAt = row.TaxDocumentKind, row.TaxProfileSnapshot, row.CreatedAt
+		snapshot.ConfirmedAt = row.PaymentConfirmedAt.Time
 		record, recordErr = storedFXRecord(row.OriginalAmountCents, row.OriginalCurrency, row.EurAmountCents, row.FxUnitsPerEur, row.FxSource, row.FxReferenceDate)
 		snapshot.FXRateSource = "European Central Bank reference rate locked by x402 quote"
 	case "crypto_payment":
@@ -2037,6 +2043,7 @@ func (h *X402Handler) loadCryptoTaxSnapshot(ctx context.Context, tenantID, refer
 		})
 		err = queryErr
 		snapshot.DocumentKind, raw = row.TaxDocumentKind, row.TaxProfileSnapshot
+		snapshot.ConfirmedAt = row.PaymentConfirmedAt.Time
 		if row.QuotedAt.Valid {
 			snapshot.FXRateObservedAt = row.QuotedAt.Time
 		}

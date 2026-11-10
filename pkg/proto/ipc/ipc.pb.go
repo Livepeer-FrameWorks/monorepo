@@ -5423,16 +5423,20 @@ func (x *UpdateApplyResult) GetComponents() []*ComponentApplyResult {
 // StopSessionsRequest tells Helmsman to stop all sessions for the given streams
 // Used when a tenant is suspended due to insufficient balance
 type StopSessionsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	StreamNames   []string               `protobuf:"bytes,1,rep,name=stream_names,json=streamNames,proto3" json:"stream_names,omitempty"` // Internal stream names to stop
-	TenantId      string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`          // For logging/audit
-	Reason        string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`                              // e.g., "insufficient_balance", "suspended"
-	RequestId     string                 `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	Targets       []*StopSessionsTarget  `protobuf:"bytes,6,rep,name=targets,proto3" json:"targets,omitempty"`
-	NodeId        string                 `protobuf:"bytes,7,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	StreamNames []string               `protobuf:"bytes,1,rep,name=stream_names,json=streamNames,proto3" json:"stream_names,omitempty"` // Internal stream names to stop
+	TenantId    string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`          // For logging/audit
+	Reason      string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`                              // e.g., "insufficient_balance", "suspended"
+	RequestId   string                 `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	ExpiresAt   *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	Targets     []*StopSessionsTarget  `protobuf:"bytes,6,rep,name=targets,proto3" json:"targets,omitempty"`
+	NodeId      string                 `protobuf:"bytes,7,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	// Relative owning-request budget. A nonce authorization carries the owner's
+	// remaining budget; the edge subtracts its full measured challenge round trip.
+	RemainingTimeoutMs uint32 `protobuf:"varint,8,opt,name=remaining_timeout_ms,json=remainingTimeoutMs,proto3" json:"remaining_timeout_ms,omitempty"`
+	AuthorizationNonce string `protobuf:"bytes,9,opt,name=authorization_nonce,json=authorizationNonce,proto3" json:"authorization_nonce,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *StopSessionsRequest) Reset() {
@@ -5514,6 +5518,20 @@ func (x *StopSessionsRequest) GetNodeId() string {
 	return ""
 }
 
+func (x *StopSessionsRequest) GetRemainingTimeoutMs() uint32 {
+	if x != nil {
+		return x.RemainingTimeoutMs
+	}
+	return 0
+}
+
+func (x *StopSessionsRequest) GetAuthorizationNonce() string {
+	if x != nil {
+		return x.AuthorizationNonce
+	}
+	return ""
+}
+
 // An empty generation means no publisher occupied the runtime at dispatch.
 // A later publisher must not be stopped by that command.
 type StopSessionsTarget struct {
@@ -5571,13 +5589,16 @@ func (x *StopSessionsTarget) GetSourceGeneration() string {
 // Success confirms Mist reports no sessions for the exact requested scope.
 // A failed, missing or retired-connection result leaves revocation pending.
 type StopSessionsResult struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	TenantId      string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	StreamNames   []string               `protobuf:"bytes,3,rep,name=stream_names,json=streamNames,proto3" json:"stream_names,omitempty"`
-	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	RequestId   string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	TenantId    string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	StreamNames []string               `protobuf:"bytes,3,rep,name=stream_names,json=streamNames,proto3" json:"stream_names,omitempty"`
+	Error       string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	// A challenge asks the current owner waiter to authorize this exact attempt.
+	// An effect result has an empty nonce and follows verified Mist termination.
+	AuthorizationNonce string `protobuf:"bytes,5,opt,name=authorization_nonce,json=authorizationNonce,proto3" json:"authorization_nonce,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *StopSessionsResult) Reset() {
@@ -5634,6 +5655,13 @@ func (x *StopSessionsResult) GetStreamNames() []string {
 func (x *StopSessionsResult) GetError() string {
 	if x != nil {
 		return x.Error
+	}
+	return ""
+}
+
+func (x *StopSessionsResult) GetAuthorizationNonce() string {
+	if x != nil {
+		return x.AuthorizationNonce
 	}
 	return ""
 }
@@ -23800,7 +23828,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\x0etarget_release\x18\x02 \x01(\tR\rtargetRelease\x12E\n" +
 	"\n" +
 	"components\x18\x03 \x03(\v2%.helmsmancontrol.ComponentApplyResultR\n" +
-	"components\"\x9f\x02\n" +
+	"components\"\x82\x03\n" +
 	"\x13StopSessionsRequest\x12!\n" +
 	"\fstream_names\x18\x01 \x03(\tR\vstreamNames\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x16\n" +
@@ -23810,16 +23838,19 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"expires_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12=\n" +
 	"\atargets\x18\x06 \x03(\v2#.helmsmancontrol.StopSessionsTargetR\atargets\x12\x17\n" +
-	"\anode_id\x18\a \x01(\tR\x06nodeId\"f\n" +
+	"\anode_id\x18\a \x01(\tR\x06nodeId\x120\n" +
+	"\x14remaining_timeout_ms\x18\b \x01(\rR\x12remainingTimeoutMs\x12/\n" +
+	"\x13authorization_nonce\x18\t \x01(\tR\x12authorizationNonce\"f\n" +
 	"\x12StopSessionsTarget\x12#\n" +
 	"\rinternal_name\x18\x01 \x01(\tR\finternalName\x12+\n" +
-	"\x11source_generation\x18\x02 \x01(\tR\x10sourceGeneration\"\x89\x01\n" +
+	"\x11source_generation\x18\x02 \x01(\tR\x10sourceGeneration\"\xba\x01\n" +
 	"\x12StopSessionsResult\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12!\n" +
 	"\fstream_names\x18\x03 \x03(\tR\vstreamNames\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"s\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\x12/\n" +
+	"\x13authorization_nonce\x18\x05 \x01(\tR\x12authorizationNonce\"s\n" +
 	"\x19InvalidateSessionsRequest\x12!\n" +
 	"\fstream_names\x18\x01 \x03(\tR\vstreamNames\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x16\n" +

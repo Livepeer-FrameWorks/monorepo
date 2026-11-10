@@ -18,7 +18,7 @@ func TestBlockCacheSlowRetiredDeletionDoesNotBlockSameAsset(t *testing.T) {
 	s := New(Options{BasePath: t.TempDir(), BlockSize: 8})
 	waitFillsOnCleanup(t, s)
 	store := NewBlockStore(filepath.Join(t.TempDir(), "asset.mkv"), 8)
-	if _, err := store.EnsureMeta("h", ".mkv", "old", 8); err != nil {
+	if _, err := store.prepareMetaFixture("h", ".mkv", "old", 8); err != nil {
 		t.Fatal(err)
 	}
 	oldFile, err := os.Create(store.tmpPath(0))
@@ -117,7 +117,7 @@ func TestBlockCacheSlowRetiredDeletionDoesNotBlockSameAsset(t *testing.T) {
 
 func TestBlockCacheRetiredDeletionFailureCannotDamageReplacement(t *testing.T) {
 	store := NewBlockStore(filepath.Join(t.TempDir(), "asset.mkv"), 8)
-	if _, err := store.EnsureMeta("h", ".mkv", "old", 8); err != nil {
+	if _, err := store.prepareMetaFixture("h", ".mkv", "old", 8); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.WriteBlock(0, []byte("OLD-BODY")); err != nil {
@@ -129,7 +129,7 @@ func TestBlockCacheRetiredDeletionFailureCannotDamageReplacement(t *testing.T) {
 		retired = path
 		return deleteErr
 	}
-	meta, err := store.EnsureMeta("h", ".mkv", "new", 8)
+	meta, err := store.prepareMetaFixture("h", ".mkv", "new", 8)
 	if !errors.Is(err, deleteErr) || meta == nil || meta.Object != "new" {
 		t.Fatalf("replacement after cleanup failure: meta=%+v err=%v", meta, err)
 	}
@@ -160,7 +160,7 @@ func TestBlockCacheRetiredDeletionFailureCannotDamageReplacement(t *testing.T) {
 
 func TestBlockCacheMetadataFailureAfterDetachCannotRestoreOldBlocks(t *testing.T) {
 	store := NewBlockStore(filepath.Join(t.TempDir(), "asset.mkv"), 8)
-	if _, err := store.EnsureMeta("h", ".mkv", "old", 8); err != nil {
+	if _, err := store.prepareMetaFixture("h", ".mkv", "old", 8); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.WriteBlock(0, []byte("OLD-BODY")); err != nil {
@@ -174,7 +174,7 @@ func TestBlockCacheMetadataFailureAfterDetachCannotRestoreOldBlocks(t *testing.T
 		retired = to
 		return os.WriteFile(from, []byte("metadata write fault"), 0o644)
 	}
-	if _, err := store.EnsureMeta("h", ".mkv", "new", 8); err == nil {
+	if _, err := store.prepareMetaFixture("h", ".mkv", "new", 8); err == nil {
 		t.Fatal("replacement ignored a metadata creation failure")
 	}
 	if _, statErr := os.Stat(retired); !os.IsNotExist(statErr) {
@@ -187,7 +187,7 @@ func TestBlockCacheMetadataFailureAfterDetachCannotRestoreOldBlocks(t *testing.T
 		t.Fatal(err)
 	}
 	store.renameDir = os.Rename
-	if meta, err := store.EnsureMeta("h", ".mkv", "new", 8); err != nil || meta.Object != "new" || store.HasBlock(0) {
+	if meta, err := store.prepareMetaFixture("h", ".mkv", "new", 8); err != nil || meta.Object != "new" || store.HasBlock(0) {
 		t.Fatalf("retry reused old blocks after metadata failure: meta=%+v err=%v", meta, err)
 	}
 }

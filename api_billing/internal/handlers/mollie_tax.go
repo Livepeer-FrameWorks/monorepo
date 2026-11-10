@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -26,7 +27,14 @@ func AssessMollieTaxTerms(ctx context.Context, db *sql.DB, tenant string, net in
 	if err != nil {
 		return nil, err
 	}
-	return billingmollie.NewTaxTerms(profile.ProfileSHA, net, profile.RateBPS)
+	terms, err := billingmollie.NewTaxTerms(profile.ProfileSHA, net, profile.RateBPS)
+	if err != nil {
+		return nil, err
+	}
+	if err = RetainProviderTaxExpectation(ctx, db, tenant, profile); err != nil {
+		return nil, err
+	}
+	return terms, nil
 }
 
 func mollieSubscriptionNet(tenant string, sub *mollieapi.Subscription) (int64, error) {
@@ -79,7 +87,7 @@ func (jm *JobManager) reconcileMollieTaxTenant(ctx context.Context, tenant strin
 	if err != nil {
 		return err
 	}
-	if err = retainProviderTaxExpectation(ctx, jm.db, tenant, profile); err != nil {
+	if err = RetainProviderTaxExpectation(ctx, jm.db, tenant, profile); err != nil {
 		return err
 	}
 	for _, row := range rows {
@@ -206,7 +214,8 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 		if profile.IncompleteProfile {
 			reviewReason = "Recurring payment charged Dutch VAT while its billing tax claim requires review"
 		}
-		if normalized, normalizationErr := normalizeProviderTaxProfile(profile); normalizationErr == nil {
+		normalized, normalizationErr := normalizeProviderTaxProfile(profile)
+		if normalizationErr == nil {
 			profile = normalized
 		} else {
 			reviewReason = "Accepted payment legal profile requires review"
@@ -235,11 +244,17 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 		assessment.ProviderAssessment = append(json.RawMessage(nil), profile.Evidence...)
 		assessment.ReviewRequired = proof.ReviewRequired
 		assessment.ReviewReasons = append([]string(nil), proof.ReviewReasons...)
+		if normalizationErr != nil {
+			assessment.ReviewReasons = append(assessment.ReviewReasons, "accepted_profile_invalid")
+		}
+		for _, reason := range reasons {
+			if !slices.Contains(assessment.ReviewReasons, reason) {
+				assessment.ReviewReasons = append(assessment.ReviewReasons, reason)
+			}
+		}
 		if reviewReason != "" {
 			assessment.ReviewRequired = true
-			if !profile.IncompleteProfile {
-				assessment.ReviewReasons = append(assessment.ReviewReasons, reasons...)
-			} else if len(assessment.ReviewReasons) == 0 {
+			if profile.IncompleteProfile && len(assessment.ReviewReasons) == 0 {
 				assessment.ReviewReasons = append(assessment.ReviewReasons, "billing_profile_incomplete_domestic_vat")
 			}
 		}
@@ -257,7 +272,7 @@ func (s *Service) issueMollieNativeTaxInvoice(ctx context.Context, tenant string
 			return err
 		}
 		if reviewReason != "" {
-			evidence, marshalErr := json.Marshal(map[string]any{"review_required": true, "payment_id": payment.ID, "accepted_profile": sha, "reason": reviewReason})
+			evidence, marshalErr := json.Marshal(map[string]any{"review_required": true, "payment_id": payment.ID, "accepted_profile": sha, "reason": reviewReason, "review_reasons": assessment.ReviewReasons})
 			if marshalErr != nil {
 				return marshalErr
 			}

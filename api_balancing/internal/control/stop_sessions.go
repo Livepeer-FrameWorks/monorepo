@@ -15,13 +15,16 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const StopSessionsAckProtocolMin int32 = 9
+const StopSessionsAckProtocolMin int32 = 10
 
 type stopSessionsWaiter struct {
 	connection *conn
 	tenant     string
 	names      []string
 	result     chan error
+	ctx        context.Context
+	command    *ipcpb.StopSessionsRequest
+	authorized string
 }
 
 var stopSessionsWaiters = struct {
@@ -37,6 +40,43 @@ func acceptStopSessionsResult(result *ipcpb.StopSessionsResult, session NodeSess
 	if !ok || !connIsCurrentlyRegistered(session.NodeID(), waiter.connection) || waiter.connection.superseded.Load() ||
 		waiter.connection.fence != session.Fence || waiter.connection.clusterID != session.ClusterID ||
 		result.GetTenantId() != waiter.tenant || !slices.Equal(result.GetStreamNames(), waiter.names) {
+		return false
+	}
+	if waiter.ctx.Err() != nil {
+		return false
+	}
+	if nonce := result.GetAuthorizationNonce(); nonce != "" {
+		if _, err := uuid.Parse(nonce); err != nil || result.GetError() != "" {
+			return false
+		}
+		stopSessionsWaiters.Lock()
+		current, exists := stopSessionsWaiters.byID[result.GetRequestId()]
+		if !exists || current.result != waiter.result || current.authorized != "" || current.ctx.Err() != nil {
+			stopSessionsWaiters.Unlock()
+			return false
+		}
+		current.authorized = nonce
+		stopSessionsWaiters.byID[result.GetRequestId()] = current
+		stopSessionsWaiters.Unlock()
+		go func() {
+			permit := proto.CloneOf(waiter.command)
+			deadline, _ := waiter.ctx.Deadline()
+			remaining := time.Until(deadline).Milliseconds()
+			if remaining <= 0 {
+				return
+			}
+			permit.AuthorizationNonce = nonce
+			permit.RemainingTimeoutMs = uint32(remaining)
+			if err := sendOnConnBounded(waiter.ctx, session.NodeID(), waiter.connection, &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_StopSessionsRequest{StopSessionsRequest: permit}}, 3*time.Second); err != nil {
+				select {
+				case waiter.result <- err:
+				default:
+				}
+			}
+		}()
+		return true
+	}
+	if waiter.authorized == "" {
 		return false
 	}
 	var resultErr error
@@ -80,7 +120,12 @@ func SendLocalStopSessionsContext(ctx context.Context, nodeID string, req *ipcpb
 	command.RequestId = uuid.NewString()
 	command.NodeId = nodeID
 	deadline, _ := ctx.Deadline()
-	command.ExpiresAt = timestamppb.New(deadline)
+	remaining := time.Until(deadline).Milliseconds()
+	if remaining <= 0 {
+		return context.DeadlineExceeded
+	}
+	command.RemainingTimeoutMs = uint32(remaining)
+	command.AuthorizationNonce = ""
 	command.Targets = nil
 	for _, name := range command.StreamNames {
 		if name == "" {
@@ -96,7 +141,7 @@ func SendLocalStopSessionsContext(ctx context.Context, nodeID string, req *ipcpb
 		}
 		command.Targets = append(command.Targets, &ipcpb.StopSessionsTarget{InternalName: name, SourceGeneration: generation})
 	}
-	waiter := stopSessionsWaiter{connection: c, tenant: command.TenantId, names: slices.Clone(command.StreamNames), result: make(chan error, 1)}
+	waiter := stopSessionsWaiter{connection: c, tenant: command.TenantId, names: slices.Clone(command.StreamNames), result: make(chan error, 1), ctx: ctx, command: command}
 	stopSessionsWaiters.Lock()
 	stopSessionsWaiters.byID[command.RequestId] = waiter
 	stopSessionsWaiters.Unlock()
@@ -110,6 +155,9 @@ func SendLocalStopSessionsContext(ctx context.Context, nodeID string, req *ipcpb
 	}
 	select {
 	case err := <-waiter.result:
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if !connIsCurrentlyRegistered(nodeID, c) || c.superseded.Load() {
 			return ErrConnSuperseded
 		}

@@ -4990,26 +4990,48 @@ func (s *FoghornGRPCServer) terminateStreamSessions(ctx context.Context, tenantI
 	// Send stop_sessions to each node
 	sessionsTerminated := int32(0)
 	var failed bool
-	for nodeID, nodeStreams := range streamsByNode {
-		stopReq := &ipcpb.StopSessionsRequest{
-			StreamNames: nodeStreams,
-			TenantId:    tenantID,
-			Reason:      reason,
-		}
-		if err := control.SendStopSessionsContext(ctx, nodeID, stopReq); err != nil {
-			s.logger.WithFields(logging.Fields{
-				"node_id":   nodeID,
-				"tenant_id": tenantID,
-				"error":     err,
-			}).Warn("Failed to send stop_sessions to node")
-			failed = true
-		} else {
-			sessionsTerminated += int32(len(nodeStreams))
-			for _, name := range nodeStreams {
-				acknowledged[name] = true
+	var resultMu sync.Mutex
+	var stops sync.WaitGroup
+	type stopTarget struct {
+		nodeID string
+		names  []string
+	}
+	targets := make(chan stopTarget)
+	for range min(len(streamsByNode), 8) {
+		stops.Go(func() {
+			for target := range targets {
+				callCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+				err := control.SendStopSessionsContext(callCtx, target.nodeID, &ipcpb.StopSessionsRequest{StreamNames: target.names, TenantId: tenantID, Reason: reason})
+				cancel()
+				if err != nil {
+					s.logger.WithFields(logging.Fields{"node_id": target.nodeID, "tenant_id": tenantID, "error": err}).Warn("Failed to confirm stop_sessions on node")
+				}
+				resultMu.Lock()
+				if err != nil {
+					failed = true
+				} else {
+					sessionsTerminated += int32(len(target.names))
+					for _, name := range target.names {
+						acknowledged[name] = true
+					}
+				}
+				resultMu.Unlock()
 			}
+		})
+	}
+dispatch:
+	for nodeID, names := range streamsByNode {
+		select {
+		case targets <- stopTarget{nodeID: nodeID, names: names}:
+		case <-ctx.Done():
+			resultMu.Lock()
+			failed = true
+			resultMu.Unlock()
+			break dispatch
 		}
 	}
+	close(targets)
+	stops.Wait()
 
 	allStreamNames := make([]string, 0, len(acknowledged))
 	for name := range acknowledged {

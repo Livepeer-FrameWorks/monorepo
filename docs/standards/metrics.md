@@ -651,3 +651,13 @@ Database phases include pool and lock waiting; use the existing pool metrics
 and database diagnostics to separate those causes. The lease phase includes the
 central call and exceptional ended-owner recovery. SQL call-count bounds are
 checked by the WAN regression rather than inferred from histogram samples.
+
+`foghorn_publisher_admission_recovery_oldest_pending_seconds{queue}` is the age
+in seconds of the oldest pending item. Its bounded queues are `settlement`,
+`abandonment`, and `lease_release`. Settlement starts when an abandonment marker
+is created or an unconfirmed admission's response window expires; abandonment
+starts at its marker, and lease release starts when its session ends. A long
+running publisher therefore does not create an old backlog when it first ends.
+The leader advances the age from its last successful observation during database
+or authority outages and retry backoff. Empty queues and followers publish zero;
+tenant, node, stream and execution identifiers are never labels.

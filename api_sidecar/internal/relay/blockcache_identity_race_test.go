@@ -16,7 +16,7 @@ import (
 
 func TestBlockCacheReplacementDoesNotBlessFailedInvalidation(t *testing.T) {
 	store := NewBlockStore(filepath.Join(t.TempDir(), "asset.mkv"), 8)
-	if _, err := store.EnsureMeta("h", ".mkv", "old", 8); err != nil {
+	if _, err := store.prepareMetaFixture("h", ".mkv", "old", 8); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.WriteBlock(0, []byte("OLD-BODY")); err != nil {
@@ -24,7 +24,7 @@ func TestBlockCacheReplacementDoesNotBlessFailedInvalidation(t *testing.T) {
 	}
 	renameErr := errors.New("rename denied")
 	store.renameDir = func(string, string) error { return renameErr }
-	if _, err := store.EnsureMeta("h", ".mkv", "new", 8); !errors.Is(err, renameErr) {
+	if _, err := store.prepareMetaFixture("h", ".mkv", "new", 8); !errors.Is(err, renameErr) {
 		t.Fatalf("invalidation error=%v, want %v", err, renameErr)
 	}
 	meta, err := store.LoadMeta()
@@ -39,7 +39,7 @@ func TestBlockCacheReplacementDoesNotBlessFailedInvalidation(t *testing.T) {
 
 func TestBlockCacheReplacementRetryDropsPartiallyInvalidatedBlocks(t *testing.T) {
 	store := NewBlockStore(filepath.Join(t.TempDir(), "asset.mkv"), 8)
-	if _, err := store.EnsureMeta("h", ".mkv", "old", 8); err != nil {
+	if _, err := store.prepareMetaFixture("h", ".mkv", "old", 8); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.WriteBlock(0, []byte("OLD-BODY")); err != nil {
@@ -47,14 +47,14 @@ func TestBlockCacheReplacementRetryDropsPartiallyInvalidatedBlocks(t *testing.T)
 	}
 	renameErr := errors.New("rename denied")
 	store.renameDir = func(string, string) error { return renameErr }
-	if _, err := store.EnsureMeta("h", ".mkv", "new", 8); !errors.Is(err, renameErr) {
+	if _, err := store.prepareMetaFixture("h", ".mkv", "new", 8); !errors.Is(err, renameErr) {
 		t.Fatalf("first invalidation error=%v, want %v", err, renameErr)
 	}
 	if err := os.Remove(store.MetaPath()); err != nil {
 		t.Fatal(err)
 	}
 	store.renameDir = os.Rename
-	meta, err := store.EnsureMeta("h", ".mkv", "new", 8)
+	meta, err := store.prepareMetaFixture("h", ".mkv", "new", 8)
 	if err != nil || meta.Object != "new" {
 		t.Fatalf("replacement retry: meta=%+v err=%v", meta, err)
 	}
@@ -66,7 +66,7 @@ func TestBlockCacheReplacementRetryDropsPartiallyInvalidatedBlocks(t *testing.T)
 func TestObsoleteBlockFillCannotPublishOrRemoveReplacementTmp(t *testing.T) {
 	s := New(Options{BasePath: t.TempDir(), BlockSize: 8})
 	store := NewBlockStore(filepath.Join(t.TempDir(), "asset.mkv"), 8)
-	if _, err := store.EnsureMeta("h", ".mkv", "old", 8); err != nil {
+	if _, err := store.prepareMetaFixture("h", ".mkv", "old", 8); err != nil {
 		t.Fatal(err)
 	}
 	file, err := os.OpenFile(store.tmpPath(0), os.O_CREATE|os.O_WRONLY, 0o644)
@@ -79,7 +79,7 @@ func TestObsoleteBlockFillCannotPublishOrRemoveReplacementTmp(t *testing.T) {
 		t.Fatal(err)
 	}
 	fill := &blockFill{tmpPath: store.tmpPath(0), blockPath: store.BlockPath(0), object: "old", diskInfo: fileInfo, changed: make(chan struct{})}
-	if _, prepareErr := store.EnsureMeta("h", ".mkv", "new", 8); prepareErr != nil {
+	if _, prepareErr := store.prepareMetaFixture("h", ".mkv", "new", 8); prepareErr != nil {
 		t.Fatal(prepareErr)
 	}
 	if writeErr := os.WriteFile(store.tmpPath(0), []byte("NEW-BODY"), 0o644); writeErr != nil {
@@ -107,7 +107,7 @@ func TestBlockFillClaimRejectsAnotherObjectsMetadata(t *testing.T) {
 	s := New(Options{BasePath: t.TempDir(), BlockSize: 8})
 	waitFillsOnCleanup(t, s)
 	store := NewBlockStore(filepath.Join(t.TempDir(), "asset.mkv"), 8)
-	if _, err := store.EnsureMeta("h", ".mkv", "new", 8); err != nil {
+	if _, err := store.prepareMetaFixture("h", ".mkv", "new", 8); err != nil {
 		t.Fatal(err)
 	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -125,7 +125,7 @@ func TestMemoryFallbackDoesNotReadAnotherObjectsDiskBlock(t *testing.T) {
 	s := New(Options{BasePath: t.TempDir(), BlockSize: 8})
 	waitFillsOnCleanup(t, s)
 	store := NewBlockStore(filepath.Join(t.TempDir(), "asset.mkv"), 8)
-	if _, err := store.EnsureMeta("h", ".mkv", "old", 8); err != nil {
+	if _, err := store.prepareMetaFixture("h", ".mkv", "old", 8); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.WriteBlock(0, []byte("OLD-BODY")); err != nil {

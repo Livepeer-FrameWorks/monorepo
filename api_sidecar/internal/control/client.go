@@ -57,10 +57,11 @@ const foghornInternalServerName = "foghorn.internal"
 //     and deactivation results.
 //   - Version 7 = reports the processing jobs it is running in Register, so Foghorn can re-dispatch the
 //     jobs a restarted sidecar lost (ProcessingJobInventoryProtocolMin on Foghorn).
-//   - Version 9 = acknowledges session termination only after verifying Mist session counts.
 //   - Version 8 = honors the video choice carried by restream activation and passes the
 //     corresponding media policy to a capable Mist controller.
-const controlProtocolVersion int32 = 9
+//   - Version 9 = acknowledges session termination only after verifying Mist session counts.
+//   - Version 10 = authorizes a session stop against its live owner waiter and uses local duration budgets.
+const controlProtocolVersion int32 = 10
 
 // DeleteClipFunc is the function type for clip deletion
 type DeleteClipFunc func(clipHash string) (uint64, error)
@@ -2205,7 +2206,9 @@ func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 				}
 			case *ipcpb.ControlMessage_StopSessionsRequest:
 				// Handle stop sessions request from Foghorn (billing suspension)
-				if x.StopSessionsRequest.GetRequestId() == "" {
+				if x.StopSessionsRequest.GetAuthorizationNonce() != "" {
+					acceptStopSessionsAuthorization(x.StopSessionsRequest, connection)
+				} else if x.StopSessionsRequest.GetRequestId() == "" {
 					go handleStopSessions(logger, x.StopSessionsRequest)
 				} else if stopSessionsNodeMatches(x.StopSessionsRequest, connection) {
 					go handleConfirmedStopSessions(logger, x.StopSessionsRequest, connection)

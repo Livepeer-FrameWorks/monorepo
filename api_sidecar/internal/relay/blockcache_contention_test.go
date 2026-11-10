@@ -19,7 +19,7 @@ func TestBlockCacheSlowInvalidationDoesNotBlockOtherStores(t *testing.T) {
 	waitFillsOnCleanup(t, s)
 	newStore := func(name string) *BlockStore {
 		store := NewBlockStore(filepath.Join(t.TempDir(), name), 8)
-		if _, err := store.EnsureMeta("h", ".mkv", "old", 8); err != nil {
+		if _, err := store.prepareMetaFixture("h", ".mkv", "old", 8); err != nil {
 			t.Fatal(err)
 		}
 		return store
@@ -136,7 +136,7 @@ func TestBlockCacheReplacementSerializesSeparateHandlesOfSameDirectory(t *testin
 	s := New(Options{BasePath: t.TempDir(), BlockSize: 8})
 	path := filepath.Join(t.TempDir(), "asset.mkv")
 	store := NewBlockStore(path, 8)
-	if _, err := store.EnsureMeta("h", ".mkv", "old", 8); err != nil {
+	if _, err := store.prepareMetaFixture("h", ".mkv", "old", 8); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.WriteBlock(0, []byte("OLD-BODY")); err != nil {

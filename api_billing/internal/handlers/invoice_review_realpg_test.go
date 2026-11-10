@@ -66,6 +66,15 @@ func testPostpaidTaxReviewHoldsAndResumesSameInvoice(t *testing.T, malformedVAT 
 		t.Fatalf("unsafe held invoice: status=%s issued=%v credit=%d anomalies=%d events=%d", status, issued, credit, anomalies, events)
 	}
 	run.draftInvoiceID = result.invoiceID
+	if _, err := db.Exec(`UPDATE purser.crypto_accounting_anomalies SET status='resolved',resolved_at=NOW(),resolution_note='Operator acknowledged retained facts' WHERE tenant_id=$1::uuid AND kind='invoice_tax_review'`, tenant); err != nil {
+		t.Fatal(err)
+	}
+	if err := write(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM purser.crypto_accounting_anomalies WHERE tenant_id=$1::uuid AND kind='invoice_tax_review' AND status='open'`, tenant).Scan(&anomalies); err != nil || anomalies != 0 {
+		t.Fatalf("identical held invoice reopened acknowledged facts: open=%d err=%v", anomalies, err)
+	}
 	if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET billing_name='Buyer',billing_email='buyer@example.test',billing_customer_type='consumer',tax_id=NULL,billing_address='{"street":"Main1","city":"Leiden","postal_code":"2332ED","country":"NL"}' WHERE tenant_id=$1::uuid`, tenant); err != nil {
 		t.Fatal(err)
 	}

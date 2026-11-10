@@ -75,6 +75,18 @@ UPDATE purser.tenant_subscriptions
 SET pending_tier_id = NULL, pending_effective_at = NULL, pending_reason = NULL, updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND pending_reason = 'tier_upgrade';
 
+-- name: ClearRejectedTierUpgrade :exec
+UPDATE purser.tenant_subscriptions AS subscription
+SET pending_tier_id=NULL,pending_effective_at=NULL,pending_reason=NULL,updated_at=NOW()
+WHERE subscription.tenant_id=sqlc.arg(tenant_id)::text::uuid
+ AND subscription.pending_reason='tier_upgrade'
+ AND EXISTS (
+  SELECT 1 FROM purser.subscription_tier_upgrades upgrade
+  WHERE upgrade.tenant_id=subscription.tenant_id AND upgrade.id=sqlc.arg(id)::text::uuid
+   AND upgrade.state='cancelled' AND upgrade.tier_id=subscription.pending_tier_id
+   AND upgrade.requested_at=subscription.pending_effective_at
+ );
+
 -- name: GetTierUpgradeInvoice :one
 SELECT i.id::text AS id, i.status, i.presentment_amount_cents,
     COALESCE(i.presentment_currency, i.currency)::text AS currency,

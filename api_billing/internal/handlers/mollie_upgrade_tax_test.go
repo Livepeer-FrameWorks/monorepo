@@ -26,13 +26,14 @@ func (fn upgradeMollieTransport) RoundTrip(r *http.Request) (*http.Response, err
 
 func TestPaidMollieUpgradeRetainsCurrentTaxOnExistingNetBeforePurchase(t *testing.T) {
 	for _, tc := range []struct {
-		name, country, oldRate, oldGross, newGross string
-		legacy, retainFail, syncFail               bool
+		name, country, oldRate, oldGross, newGross    string
+		legacy, retainFail, expectationFail, syncFail bool
 	}{
 		{name: "21 to zero retains old net", country: "CA", oldRate: "2100", oldGross: "24.20", newGross: "20.00"},
 		{name: "zero to 21 retains old net", country: "NL", oldRate: "0", oldGross: "20.00", newGross: "24.20"},
 		{name: "legacy amount is existing net", country: "NL", oldGross: "20.00", newGross: "24.20", legacy: true},
 		{name: "unretained proof forbids writes", country: "CA", oldRate: "2100", oldGross: "24.20", retainFail: true},
+		{name: "unretained intended history forbids writes", country: "CA", oldRate: "2100", oldGross: "24.20", expectationFail: true},
 		{name: "failed tax sync forbids purchase", country: "CA", oldRate: "2100", oldGross: "24.20", syncFail: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -45,6 +46,7 @@ func TestPaidMollieUpgradeRetainsCurrentTaxOnExistingNetBeforePurchase(t *testin
 			}
 			defer db.Close()
 			retained := &billingstripe.TaxProfile{}
+			expectationRecorded := false
 			mock.ExpectQuery("-- name: GetCryptoDocumentBillingProfile").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow("buyer@example.test", "Buyer", "Buyer Ltd", []byte(fmt.Sprintf(`{"street":"Main1","city":"Town","postal_code":"1234AB","country":%q}`, tc.country)), nil, "business"))
 			if tc.country == "NL" {
 				mock.ExpectQuery("-- name: GetEffectiveVATRate").WillReturnRows(sqlmock.NewRows([]string{"rate_bps", "source", "source_checked_on", "effective_from"}).AddRow(2100, "Dutch VAT", "2026-01-01", "2026-01-01"))
@@ -55,6 +57,12 @@ func TestPaidMollieUpgradeRetainsCurrentTaxOnExistingNetBeforePurchase(t *testin
 				store.WillReturnError(failure)
 			} else {
 				store.WillReturnResult(sqlmock.NewResult(0, 1))
+				expectation := mock.ExpectExec("-- name: RetainProviderTaxExpectation").WithArgs("tenant", sqlmock.AnyArg(), sqlmock.AnyArg(), retainedUpgradeTaxArg{profile: retained, recorded: &expectationRecorded})
+				if tc.expectationFail {
+					expectation.WillReturnError(failure)
+				} else {
+					expectation.WillReturnResult(sqlmock.NewResult(0, 1))
+				}
 			}
 			reads, writes := 0, 0
 			synced := false
@@ -64,7 +72,7 @@ func TestPaidMollieUpgradeRetainsCurrentTaxOnExistingNetBeforePurchase(t *testin
 				}
 				if r.Method == http.MethodPatch {
 					writes++
-					if retained.ProfileSHA == "" || tc.retainFail {
+					if retained.ProfileSHA == "" || tc.retainFail || !expectationRecorded {
 						return nil, errors.New("provider write before retained proof")
 					}
 					if tc.syncFail {
@@ -107,8 +115,8 @@ func TestPaidMollieUpgradeRetainsCurrentTaxOnExistingNetBeforePurchase(t *testin
 			}
 			service := &Service{db: db, logger: logging.NewLogger(), mollieClient: client}
 			_, err = service.providerTierUpgrade(context.Background(), purserdb.GetTierUpgradeRow{Provider: "mollie", TenantID: "tenant"}, billing.TierUpgradeRequest{ID: "upgrade", TenantID: "tenant", CustomerID: "customer", SubscriptionID: "sub", BaseCents: 5000})
-			if tc.retainFail || tc.syncFail {
-				if !errors.Is(err, failure) || synced || (tc.retainFail && writes != 0) {
+			if tc.retainFail || tc.expectationFail || tc.syncFail {
+				if !errors.Is(err, failure) || synced || ((tc.retainFail || tc.expectationFail) && writes != 0) {
 					t.Fatalf("failed preflight reached purchase: err=%v reads=%d writes=%d", err, reads, writes)
 				}
 			} else if !errors.Is(err, errUpgradeTaxOrder) || !synced || writes != 1 || reads != 3 {

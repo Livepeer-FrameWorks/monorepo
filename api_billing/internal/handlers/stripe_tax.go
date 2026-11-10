@@ -155,7 +155,7 @@ func (jm *JobManager) reconcileStripeTaxTenant(ctx context.Context, tenant strin
 		}
 		return failure
 	}
-	if err = retainProviderTaxExpectation(ctx, jm.db, tenant, assessed); err != nil {
+	if err = RetainProviderTaxExpectation(ctx, jm.db, tenant, assessed); err != nil {
 		return err
 	}
 	var failures error

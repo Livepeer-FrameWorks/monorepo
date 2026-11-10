@@ -14,14 +14,14 @@ WHERE tenant_id=sqlc.arg(tenant_id)::uuid AND node_id=sqlc.arg(node_id) AND star
 -- Local marker completion is independent of global lease forwarding. Bound the
 -- marker work before joining sessions, including executions that never minted.
 SELECT generation, tenant_id, stream_internal_name, node_id, start_trigger_uuid,
-       publisher_admission_version, stream_id, reason, started_at AS queued_at
+       publisher_admission_version, stream_id, reason, queued_at
 FROM (
   (SELECT COALESCE(session.id::text,'')::text AS generation, COALESCE(session.tenant_id::text,'')::text AS tenant_id,
           COALESCE(session.stream_internal_name,'')::text AS stream_internal_name,
           abandoned.node_id, abandoned.start_trigger_uuid,
           COALESCE(session.publisher_admission_version,0)::smallint AS publisher_admission_version,
           COALESCE(session.stream_id::text,'')::text AS stream_id, 'admission_abandoned'::text AS reason,
-          COALESCE(session.started_at,abandoned.created_at) AS started_at
+          abandoned.created_at AS queued_at
    FROM (
      SELECT node_id,start_trigger_uuid,created_at FROM foghorn.ingest_admission_abandonments
      WHERE publisher_sessions_settled_at IS NULL ORDER BY created_at LIMIT 32
@@ -36,7 +36,8 @@ FROM (
   UNION ALL
   (SELECT session.id::text, session.tenant_id::text, session.stream_internal_name,
           session.node_id, session.start_trigger_uuid, session.publisher_admission_version,
-          COALESCE(session.stream_id::text, '')::text, 'admission_lapsed'::text, session.started_at
+          COALESCE(session.stream_id::text, '')::text, 'admission_lapsed'::text,
+          session.started_at + (sqlc.arg(admission_window_ms)::bigint * INTERVAL '1 millisecond')
    FROM foghorn.ingest_sessions session
    WHERE session.ended_at IS NULL AND session.publisher_admission_version=1 AND session.projection_state='pending'
      AND session.started_at < NOW() - (sqlc.arg(admission_window_ms)::bigint * INTERVAL '1 millisecond')
@@ -44,7 +45,7 @@ FROM (
        WHERE abandoned.node_id=session.node_id AND abandoned.start_trigger_uuid=session.start_trigger_uuid)
    ORDER BY session.started_at LIMIT 32)
 ) candidates
-ORDER BY started_at LIMIT 32;
+ORDER BY queued_at LIMIT 32;
 
 -- name: MarkPublisherSessionsSettled :execrows
 -- The durable marker prevents a later mint; keep local work queued while any

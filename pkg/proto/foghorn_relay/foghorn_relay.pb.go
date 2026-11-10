@@ -364,11 +364,13 @@ func (*ForwardCommandRequest_DrainStream) isForwardCommandRequest_Command() {}
 func (*ForwardCommandRequest_ReclaimDvrSegment) isForwardCommandRequest_Command() {}
 
 type ForwardCommandResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Delivered     bool                   `protobuf:"varint,1,opt,name=delivered,proto3" json:"delivered,omitempty"`
-	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	Delivered           bool                   `protobuf:"varint,1,opt,name=delivered,proto3" json:"delivered,omitempty"`
+	Error               string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	StopEffectConfirmed bool                   `protobuf:"varint,3,opt,name=stop_effect_confirmed,json=stopEffectConfirmed,proto3" json:"stop_effect_confirmed,omitempty"`
+	OwnerMissing        bool                   `protobuf:"varint,4,opt,name=owner_missing,json=ownerMissing,proto3" json:"owner_missing,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *ForwardCommandResponse) Reset() {
@@ -415,6 +417,20 @@ func (x *ForwardCommandResponse) GetError() string {
 	return ""
 }
 
+func (x *ForwardCommandResponse) GetStopEffectConfirmed() bool {
+	if x != nil {
+		return x.StopEffectConfirmed
+	}
+	return false
+}
+
+func (x *ForwardCommandResponse) GetOwnerMissing() bool {
+	if x != nil {
+		return x.OwnerMissing
+	}
+	return false
+}
+
 var File_foghorn_relay_proto protoreflect.FileDescriptor
 
 const file_foghorn_relay_proto_rawDesc = "" +
@@ -444,10 +460,12 @@ const file_foghorn_relay_proto_rawDesc = "" +
 	"\x16retract_managed_stream\x18\x1b \x01(\v2%.helmsmancontrol.RetractManagedStreamH\x00R\x14retractManagedStream\x12H\n" +
 	"\fdrain_stream\x18\x1c \x01(\v2#.helmsmancontrol.DrainStreamRequestH\x00R\vdrainStream\x12T\n" +
 	"\x13reclaim_dvr_segment\x18\x1e \x01(\v2\".helmsmancontrol.ReclaimDVRSegmentH\x00R\x11reclaimDvrSegmentB\t\n" +
-	"\acommandJ\x04\b\x11\x10\x12J\x04\b\v\x10\fJ\x04\b\x1d\x10\x1eJ\x04\b\x14\x10\x15R\adefrostR\tclip_pullR\x11dvr_update_sourceR\x15activate_push_targets\"L\n" +
+	"\acommandJ\x04\b\x11\x10\x12J\x04\b\v\x10\fJ\x04\b\x1d\x10\x1eJ\x04\b\x14\x10\x15R\adefrostR\tclip_pullR\x11dvr_update_sourceR\x15activate_push_targets\"\xa5\x01\n" +
 	"\x16ForwardCommandResponse\x12\x1c\n" +
 	"\tdelivered\x18\x01 \x01(\bR\tdelivered\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error2m\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\x122\n" +
+	"\x15stop_effect_confirmed\x18\x03 \x01(\bR\x13stopEffectConfirmed\x12#\n" +
+	"\rowner_missing\x18\x04 \x01(\bR\fownerMissing2m\n" +
 	"\fFoghornRelay\x12]\n" +
 	"\x0eForwardCommand\x12$.foghorn_relay.ForwardCommandRequest\x1a%.foghorn_relay.ForwardCommandResponseBPZNgithub.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay;foghornrelaypbb\x06proto3"
 

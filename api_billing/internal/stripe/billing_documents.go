@@ -142,7 +142,7 @@ func ParseProviderTaxDocument(kind string, raw json.RawMessage) (ProviderTaxDocu
 	if doc.PDFURL == "" {
 		doc.PDFURL = payload.PDF
 	}
-	if doc.ProfileSHA == "" || payload.Metadata["frameworks_tax_recovered_hold"] == "true" {
+	if doc.ProfileSHA == "" {
 		doc.ProfileSHA = payload.Metadata["frameworks_tax_profile"]
 	}
 	if doc.Net != nil {
