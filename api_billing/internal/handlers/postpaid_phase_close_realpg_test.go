@@ -430,7 +430,7 @@ func TestPostpaidPhaseCloseRetriesWhenThePhaseChangedSinceRating_RealPG(t *testi
 		INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model, billing_email,
 			billing_period_start, billing_period_end, next_billing_date, presentment_currency)
 		VALUES ($1, $2, 'active', 'postpaid', 'billing@example.com', $3, $4, $4, 'EUR') RETURNING id::text`,
-		tenantID, supporterID, periodStart, periodStart.AddDate(0, 1, 0)).Scan(&subscriptionID); err != nil {
+		tenantID, supporterID, periodStart, billing.NextMonthlyAnniversary(periodStart)).Scan(&subscriptionID); err != nil {
 		t.Fatal(err)
 	}
 	seedContractBillingIdentity(t, db, tenantID)

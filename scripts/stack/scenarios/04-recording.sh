@@ -187,14 +187,18 @@ STALLS=4
 log "$STALLS stalled publishers end their streams without a failed recording"
 STALL_INTERNALS=()
 STALL_PUBS=()
+trap 'kill "$PUB" 2>/dev/null; for p in "${STALL_PUBS[@]}"; do kill -CONT "$p" 2>/dev/null; kill "$p" 2>/dev/null; done' EXIT
 for i in $(seq 1 "$STALLS"); do
   SN=$(create_stream "stack-recording-stall-$i-$(date +%s)" true)
   KN=$(echo "$SN" | jq -r '.streamKey // empty')
   [ -n "$KN" ] || { fail "createStream: $SN"; finish; }
   STALL_INTERNALS+=("$(internal_name_of_key "$KN")")
-  STALL_PUBS+=("$(publish "$EDGE_A_RTMP" "$KN" 854x480 15 600)")
+  if ! STALL_PUB=$(publish_until_admitted "$EDGE_A_RTMP" "$KN" 854x480 15 600); then
+    fail "stalled publisher $i was not admitted"
+    finish
+  fi
+  STALL_PUBS+=("$STALL_PUB")
 done
-trap 'kill "$PUB" 2>/dev/null; for p in "${STALL_PUBS[@]}"; do kill -CONT "$p" 2>/dev/null; kill "$p" 2>/dev/null; done' EXIT
 stall_dvrs() { # stall_dvrs <internal name>: "status|segments" per recording, oldest first
   pg "$FOGHORN_A_DB" "SELECT a.status, (SELECT count(*) FROM foghorn.dvr_segments s WHERE s.artifact_hash = a.artifact_hash)
     FROM foghorn.artifacts a WHERE a.tenant_id='$STACK_TENANT_ID' AND a.artifact_type='dvr'
