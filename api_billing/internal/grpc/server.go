@@ -7909,6 +7909,19 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *purserpb.U
 		if rowsAffected == 0 {
 			return status.Error(codes.NotFound, "no active subscription found for tenant")
 		}
+		saved := handlers.BillingProfile{Name: before.BillingName, Email: before.BillingEmail, Address: before.BillingAddress}
+		if update.Name != nil {
+			saved.Name = *update.Name
+		}
+		if update.Email != nil {
+			saved.Email = *update.Email
+		}
+		if update.Address != nil {
+			saved.Address = addressJSON
+		}
+		if startErr := handlers.StartAssessedTaxHandlingForSavedProfile(ctx, tx, tenantID, saved); startErr != nil {
+			return txStatusErrorf(startErr, codes.Internal, "database error: %v", startErr)
+		}
 		if len(changedFields) > 0 {
 			if eventErr := billingevents.NewAndEnqueue(ctx, tx, tenantID, tenantID, &publicv1.BillingDetailsUpdated{
 				ChangedFields: changedFields,

@@ -21,8 +21,18 @@ func AssessRecurringProviderTaxProfile(ctx context.Context, db *sql.DB, tenant, 
 	return AssessProviderTaxProfileAt(ctx, db, tenant, clientIP, billingtax.Recurring, time.Now().UTC())
 }
 
+// AssessStripeTaxProfile assesses a checkout or plan change, which requires a
+// complete saved profile. A successful assessment moves the tenant's billing
+// relationship to assessed tax handling.
 func AssessStripeTaxProfile(ctx context.Context, db *sql.DB, tenant, clientIP string) (*billingstripe.TaxProfile, error) {
-	return AssessProviderTaxProfileAt(ctx, db, tenant, clientIP, billingtax.Checkout, time.Now().UTC())
+	profile, err := AssessProviderTaxProfileAt(ctx, db, tenant, clientIP, billingtax.Checkout, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	if err = StartAssessedTaxHandling(ctx, db, tenant); err != nil {
+		return nil, err
+	}
+	return profile, nil
 }
 
 func AssessProviderTaxProfileAt(ctx context.Context, db *sql.DB, tenant, clientIP string, purpose billingtax.Purpose, at time.Time) (*billingstripe.TaxProfile, error) {
@@ -131,6 +141,10 @@ func (jm *JobManager) reconcileStripeTaxTenant(ctx context.Context, tenant strin
 	}
 	if len(subscriptions) == 0 {
 		return nil
+	}
+	untaxed, err := keepsUnassessedTax(ctx, jm.db, tenant)
+	if err != nil || untaxed {
+		return err
 	}
 	assessed, err := AssessRecurringProviderTaxProfile(ctx, jm.db, tenant, "")
 	if err != nil {

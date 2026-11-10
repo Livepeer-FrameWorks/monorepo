@@ -83,6 +83,10 @@ func (jm *JobManager) reconcileMollieTaxTenant(ctx context.Context, tenant strin
 	if len(rows) == 0 {
 		return nil
 	}
+	untaxed, err := keepsUnassessedTax(ctx, jm.db, tenant)
+	if err != nil || untaxed {
+		return err
+	}
 	profile, err := AssessRecurringProviderTaxProfile(ctx, jm.db, tenant, "")
 	if err != nil {
 		return err

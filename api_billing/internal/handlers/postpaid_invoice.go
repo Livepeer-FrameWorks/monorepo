@@ -191,9 +191,18 @@ func writePostpaidInvoiceTx(ctx context.Context, tx *sql.Tx, run *postpaidInvoic
 	var taxAssessment invoiceTaxAssessment
 	var taxReview *billingtax.ReviewError
 	grossDec := netDec
+	untaxed := false
 	if !heldForReview {
 		var taxErr error
-		taxAssessment, taxErr = assessInvoiceTaxTx(ctx, tx, tenantID, netDec.Shift(2).IntPart(), issuedAt)
+		untaxed, taxErr = keepsUnassessedTax(ctx, tx, tenantID)
+		if taxErr != nil {
+			return result, taxErr
+		}
+		if untaxed {
+			taxAssessment = unassessedInvoiceTax(netDec.Shift(2).IntPart(), issuedAt)
+		} else {
+			taxAssessment, taxErr = assessInvoiceTaxTx(ctx, tx, tenantID, netDec.Shift(2).IntPart(), issuedAt)
+		}
 		if taxErr != nil {
 			if billingtax.IsTransient(taxErr) || !errors.As(taxErr, &taxReview) {
 				return result, fmt.Errorf("assess invoice tax: %w", taxErr)
@@ -320,8 +329,10 @@ func writePostpaidInvoiceTx(ctx context.Context, tx *sql.Tx, run *postpaidInvoic
 		if err != nil {
 			return result, err
 		}
-		if err = freezeInvoiceTaxTx(ctx, tx, tenantID, result.invoiceID, taxAssessment, result.presentment); err != nil {
-			return result, err
+		if !untaxed {
+			if err = freezeInvoiceTaxTx(ctx, tx, tenantID, result.invoiceID, taxAssessment, result.presentment); err != nil {
+				return result, err
+			}
 		}
 		if _, err = queries.ResolveInvoiceTaxReview(ctx, purserdb.ResolveInvoiceTaxReviewParams{TenantID: tenantID, InvoiceID: result.invoiceID}); err != nil {
 			return result, fmt.Errorf("resolve invoice tax review: %w", err)

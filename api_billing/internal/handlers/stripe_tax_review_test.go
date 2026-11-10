@@ -65,6 +65,7 @@ func TestStripeTaxReconciliationContinuesOtherTenantSubscriptions(t *testing.T) 
 	}
 	defer db.Close()
 	mock.ExpectQuery("-- name: ListTenantStripeTaxSubscriptions").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"customer_id", "subscription_id"}).AddRow("customer", "broken").AddRow("customer", "sub"))
+	expectAssessedTaxHandling(mock, "tenant")
 	mock.ExpectQuery("-- name: GetCryptoDocumentBillingProfile").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow("buyer@example.test", "Buyer", "Buyer Ltd", []byte(`{"street":"Main1","city":"Toronto","postal_code":"M5V1A1","country":"CA"}`), nil, "business"))
 	retained := &billingstripe.TaxProfile{}
 	mock.ExpectExec("-- name: StoreProviderTaxProfile").WithArgs("tenant", sqlmock.AnyArg(), retainedUpgradeTaxArg{profile: retained}).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -113,6 +114,7 @@ func TestStripeTaxAssessmentFailuresNeverPauseCollection(t *testing.T) {
 			}
 			defer db.Close()
 			mock.ExpectQuery("-- name: ListTenantStripeTaxSubscriptions").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"customer_id", "subscription_id"}).AddRow("customer", "sub"))
+			expectAssessedTaxHandling(mock, "tenant")
 			mock.ExpectQuery("-- name: GetCryptoDocumentBillingProfile").WithArgs("tenant").WillReturnError(tc.err)
 			if tc.fallback {
 				mock.ExpectQuery("-- name: GetEffectiveVATRate").WillReturnRows(sqlmock.NewRows([]string{"rate_bps", "source", "source_checked_on", "effective_from"}).AddRow(2100, "Dutch effective rate", "2026-11-01", "2026-01-01"))
@@ -162,6 +164,7 @@ func TestLegacyWhitespaceOnlyBillingIdentityReportsWithoutPausingCollection(t *t
 	}
 	defer db.Close()
 	mock.ExpectQuery("-- name: ListTenantStripeTaxSubscriptions").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"customer_id", "subscription_id"}).AddRow("customer", "sub"))
+	expectAssessedTaxHandling(mock, "tenant")
 	mock.ExpectQuery("-- name: GetCryptoDocumentBillingProfile").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow(" buyer@example.test ", " Buyer ", " Buyer Ltd ", []byte(`{"street":" \t ","city":" Toronto ","postal_code":" M5V1A1 ","country":" CA "}`), nil, "business"))
 	mock.ExpectQuery("-- name: GetEffectiveVATRate").WillReturnRows(sqlmock.NewRows([]string{"rate_bps", "source", "source_checked_on", "effective_from"}).AddRow(2100, "Dutch effective rate", "2026-11-01", "2026-01-01"))
 	mock.ExpectExec("-- name: StoreProviderTaxProfile").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -195,6 +198,7 @@ func TestStripeTaxConfigurationFailureDoesNotMutateProvider(t *testing.T) {
 	}
 	defer db.Close()
 	mock.ExpectQuery("-- name: ListTenantStripeTaxSubscriptions").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"customer_id", "subscription_id"}).AddRow("customer", "sub"))
+	expectAssessedTaxHandling(mock, "tenant")
 	b := &taxReviewBackend{}
 	previous := api.GetBackend(api.APIBackend)
 	api.SetBackend(api.APIBackend, b)

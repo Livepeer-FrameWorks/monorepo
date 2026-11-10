@@ -97,6 +97,7 @@ func TestCreateCheckoutSessionExpiresStripeSessionWhenLocalStageFails(t *testing
 	mock.ExpectQuery("SELECT billing_email, billing_name, billing_company").WithArgs("tenant-a").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow("billing@example.com", "Example Customer", "Example", []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), nil, "consumer"))
 	mock.ExpectQuery("SELECT rate_bps, source, source_checked_on::text AS source_checked_on").WillReturnRows(sqlmock.NewRows([]string{"rate_bps", "source", "source_checked_on", "effective_from"}).AddRow(2100, "Dutch VAT", "2026-01-01", "2026-01-01"))
 	mock.ExpectExec("-- name: StoreProviderTaxProfile").WithArgs("tenant-a", sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("-- name: StartAssessedTaxHandling").WithArgs("tenant-a").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("-- name: RetainProviderTaxExpectation").WithArgs("tenant-a", sqlmock.AnyArg(), sqlmock.AnyArg(), recordedTaxExpectationArg{&expectationRecorded}).WillReturnResult(sqlmock.NewResult(0, 1))
 	expectProviderRequestJournal(mock, "tenant-a", "stripe_checkout", "test-stripe")
 	// Record provider_session_id once Stripe returns the session.
@@ -193,6 +194,7 @@ func TestCreateMollieSubscriptionCancelsProviderSubscriptionWhenLocalPersistFail
 	mock.ExpectQuery("SELECT billing_email, billing_name, billing_company").WithArgs("tenant-a").WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "billing_address", "tax_id", "customer_type"}).AddRow("billing@example.com", "Example Customer", "Example", []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), nil, "consumer"))
 	mock.ExpectQuery("SELECT rate_bps, source, source_checked_on::text AS source_checked_on").WillReturnRows(sqlmock.NewRows([]string{"rate_bps", "source", "source_checked_on", "effective_from"}).AddRow(2100, "Dutch VAT", "2026-01-01", "2026-01-01"))
 	mock.ExpectExec("-- name: StoreProviderTaxProfile").WithArgs("tenant-a", sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("-- name: StartAssessedTaxHandling").WithArgs("tenant-a").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("-- name: RetainProviderTaxExpectation").WithArgs("tenant-a", sqlmock.AnyArg(), sqlmock.AnyArg(), recordedTaxExpectationArg{&expectationRecorded}).WillReturnResult(sqlmock.NewResult(0, 1))
 	expectProviderRequestJournal(mock, "tenant-a", "mollie_subscription", "test-mollie")
 	// Record provider_subscription_id once Mollie returns the subscription.

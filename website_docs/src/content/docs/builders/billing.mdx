@@ -284,6 +284,13 @@ as customer-supplied billing data; format checking is not tax-authority
 validation and does not, by itself, establish reverse-charge eligibility. Leave
 the identifier blank when the customer is not VAT registered.
 
+A subscription you started before VAT handling was introduced keeps its existing
+tax treatment: renewals and invoices are charged as before, with no VAT added.
+It moves to the current VAT treatment when you save a complete billing profile
+(name, email, street, city, postal code and country), start a new checkout or
+upgrade your plan. Customers outside the EU then see invoices stating that Dutch
+VAT is outside scope, at 0%.
+
 <Aside type="caution">
   FrameWorks renders immutable numbered invoices, confirmed-payment receipts, simplified invoices,
   and linked credit notes, with a database-enforced ten-year retention floor. Operators must still
