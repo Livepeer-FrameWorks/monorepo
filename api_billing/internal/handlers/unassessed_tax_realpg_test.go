@@ -5,7 +5,10 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -162,4 +165,87 @@ func TestExistingMollieRelationshipKeepsItsCollectionAmount_RealPG(t *testing.T)
 	if requests := len(fixture.requests); requests != 0 || expectations != 0 {
 		t.Fatalf("existing untaxed Mollie relationship was synchronized to assessed tax: mollie requests=%d expectations=%d", requests, expectations)
 	}
+}
+
+// Stripe issues the renewals of an existing relationship without a Purser tax
+// profile because Purser deliberately does not synchronize it. Those documents
+// are untaxed by design; only a document issued after the relationship moved to
+// assessed handling and still lacking the profile is a synchronization failure.
+func TestStripeDocumentsOfUnassessedRelationshipNeedNoTaxReview_RealPG(t *testing.T) {
+	db := startPurserUsageRealPG(t)
+	ctx := context.Background()
+	tenant := seedPrepaidLedgerTenant(t, db)
+	customer := "cus_" + tenant
+	if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET payment_method='stripe',stripe_customer_id=$2,tax_assessed_since=NULL WHERE tenant_id=$1::uuid`, tenant, customer); err != nil {
+		t.Fatal(err)
+	}
+	fixture, client := installStripeFixture(t)
+	fixture.route("GET", "/v1/account", func(recordedProviderRequest) (int, any) {
+		return 200, map[string]any{"id": "acct_frameworks", "object": "account"}
+	})
+	previous := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = previous })
+	http.DefaultTransport = providerPDFTestTransport{next: previous, handler: fixtureRoundTripper{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write([]byte("%PDF-1.4\nOriginal " + r.URL.Path + "\n%%EOF"))
+	})}}
+	svc := &Service{db: db, stripeClient: client, logger: logging.NewLogger()}
+	importDocument := func(t *testing.T, kind string, document map[string]any) {
+		t.Helper()
+		raw, err := json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = svc.importStripeTaxDocument(ctx, kind, raw); err != nil {
+			t.Fatalf("import %s %v: %v", kind, document["id"], err)
+		}
+	}
+	invoice := func(id string, issued time.Time) map[string]any {
+		return map[string]any{"id": id, "customer": customer, "number": "DDV-" + id, "status": "paid", "currency": "eur", "total": 900, "total_excluding_tax": 900, "total_taxes": []any{}, "created": issued.Unix(), "invoice_pdf": "https://invoice.stripe.com/" + id + ".pdf", "account_name": "DDVTech B.V.", "customer_name": "Supporter"}
+	}
+	stored := func(t *testing.T, kind, id string) (string, string, json.RawMessage, int) {
+		t.Helper()
+		var docID, taxStatus string
+		var assessment json.RawMessage
+		if err := db.QueryRow(`SELECT id::text,tax_status,tax_assessment FROM purser.provider_billing_documents WHERE tenant_id=$1::uuid AND provider_document_id=$2 AND document_kind=$3`, tenant, id, kind).Scan(&docID, &taxStatus, &assessment); err != nil {
+			t.Fatal(err)
+		}
+		var reviews int
+		if err := db.QueryRow(`SELECT count(*) FROM purser.crypto_accounting_anomalies WHERE tenant_id=$1::uuid AND kind='provider_tax_document_review' AND reference_id=$2`, tenant, docID).Scan(&reviews); err != nil {
+			t.Fatal(err)
+		}
+		return docID, taxStatus, assessment, reviews
+	}
+	assessedSince := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Second)
+
+	t.Run("renewal_of_unassessed_relationship", func(t *testing.T) {
+		renewal := invoice("in_unassessed_renewal", time.Now().Add(-time.Hour))
+		importDocument(t, "provider_invoice", renewal)
+		importDocument(t, "provider_invoice", renewal)
+		importDocument(t, "provider_credit_note", map[string]any{"id": "cn_unassessed_renewal", "invoice": "in_unassessed_renewal", "customer": customer, "number": "CN-unassessed", "status": "issued", "currency": "eur", "total": 300, "total_excluding_tax": 300, "total_taxes": []any{}, "created": time.Now().Unix(), "pdf": "https://invoice.stripe.com/cn_unassessed_renewal.pdf"})
+		for kind, id := range map[string]string{"provider_invoice": "in_unassessed_renewal", "provider_credit_note": "cn_unassessed_renewal"} {
+			_, taxStatus, assessment, reviews := stored(t, kind, id)
+			if taxStatus != "legacy_unknown" || strings.Contains(string(assessment), "review_required") || reviews != 0 {
+				t.Fatalf("untaxed %s of an unassessed relationship was flagged for tax review: tax_status=%s assessment=%s operator reviews=%d", kind, taxStatus, assessment, reviews)
+			}
+		}
+	})
+
+	if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET tax_assessed_since=$2 WHERE tenant_id=$1::uuid`, tenant, assessedSince); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("document_issued_before_assessed_handling", func(t *testing.T) {
+		importDocument(t, "provider_invoice", invoice("in_before_assessed", assessedSince.Add(-time.Hour)))
+		_, taxStatus, assessment, reviews := stored(t, "provider_invoice", "in_before_assessed")
+		if taxStatus != "legacy_unknown" || strings.Contains(string(assessment), "review_required") || reviews != 0 {
+			t.Fatalf("untaxed invoice issued before assessed handling was flagged for tax review: tax_status=%s assessment=%s operator reviews=%d", taxStatus, assessment, reviews)
+		}
+	})
+	t.Run("document_issued_after_assessed_handling_without_profile", func(t *testing.T) {
+		importDocument(t, "provider_invoice", invoice("in_after_assessed", assessedSince.Add(time.Hour)))
+		_, taxStatus, assessment, reviews := stored(t, "provider_invoice", "in_after_assessed")
+		if taxStatus != "legacy_unknown" || !strings.Contains(string(assessment), "provider_tax_sync_missing") || reviews != 1 {
+			t.Fatalf("assessed invoice without a synchronized tax profile was not reviewed: tax_status=%s assessment=%s operator reviews=%d", taxStatus, assessment, reviews)
+		}
+	})
 }
