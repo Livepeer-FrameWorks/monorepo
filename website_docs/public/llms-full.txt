@@ -15612,8 +15612,8 @@ Every billing tier ships the same standard ladder, for both live streams and VOD
 | --------- | --------- | --------------------------------- |
 | 360p      | 900 kbps  | 640×360                           |
 | 480p      | 1600 kbps | 850×480                           |
-| 720p      | 3200 kbps | 1280×720                          |
-| 1080p     | 6500 kbps | 1920×1080                         |
+| 720p      | 4500 kbps | 1280×720                          |
+| 1080p     | 7800 kbps | 1920×1080                         |
 
 Sources smaller than 640×360 get no video renditions. Renditions keep the source frame rate and use
 `H264ConstrainedHigh`. Audio compatibility processes generate Opus when the incoming audio is not
