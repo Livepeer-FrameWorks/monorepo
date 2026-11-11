@@ -410,3 +410,34 @@ func TestBootstrapEdgeNode_ServedClusterValidation(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func TestValidateBootstrapTokenSeparatesRendezvousFromPrivateIdentity(t *testing.T) {
+	srv, _, mock := newMockQuartermasterServer(t)
+	mock.ExpectQuery(`SELECT kind, tenant_id, cluster_id`).WithArgs(hashBootstrapToken("bt_private")).
+		WillReturnRows(sqlmock.NewRows([]string{"kind", "tenant_id", "cluster_id", "expected_ip", "expires_at", "usage_limit", "usage_count", "used_at", "metadata"}).
+			AddRow("edge_node", "tenant-1", "private-new", nil, time.Now().Add(time.Hour), nil, int32(0), nil, []byte(`{}`)))
+	mock.ExpectQuery(`SELECT COALESCE\(NULLIF\(c\.base_url`).WithArgs("private-new").WillReturnRows(sqlmock.NewRows([]string{"root"}).AddRow("frameworks.network"))
+	mock.ExpectQuery(`(?s)si\.metadata->>'external_grpc_port'`).WithArgs("private-new").WillReturnRows(sqlmock.NewRows([]string{"port"}).AddRow("18029"))
+	mock.ExpectQuery(`SELECT control\.cluster_id`).WithArgs("private-new", "tenant-1").WillReturnRows(sqlmock.NewRows([]string{"cell", "root"}).AddRow("media-us-1", "frameworks.network"))
+	mock.ExpectQuery(`(?s)si\.metadata->>'external_grpc_port'`).WithArgs("media-us-1").WillReturnRows(sqlmock.NewRows([]string{"port"}).AddRow("18029"))
+	response, err := srv.ValidateBootstrapToken(serviceCtx(), &quartermasterpb.ValidateBootstrapTokenRequest{Token: "bt_private"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !response.Valid || response.GetClusterId() != "private-new" || response.GetTenantId() != "tenant-1" {
+		t.Fatalf("token binding changed: %v", response)
+	}
+	field := response.ProtoReflect().Descriptor().Fields().ByName("bootstrap_foghorn_grpc_addr")
+	if field == nil {
+		t.Fatal("bootstrap advertises only the unready private identity; no trusted rendezvous contract")
+	}
+	if got := response.ProtoReflect().Get(field).String(); got != "foghorn.media-us-1.frameworks.network:18029" {
+		t.Fatalf("bootstrap rendezvous=%q", got)
+	}
+	if response.GetFoghornGrpcAddr() != "foghorn.private-new.frameworks.network:18029" {
+		t.Fatal("persistent private identity was replaced by the cell")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

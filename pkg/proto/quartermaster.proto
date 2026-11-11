@@ -47,6 +47,9 @@ service TenantService {
   // Source: pkg/api/quartermaster/types.go:GetClusterRoutingRequest
   rpc GetClusterRouting(GetClusterRoutingRequest) returns (ClusterRoutingResponse);
 
+  // Control delivery inventory does not evaluate admission or call billing.
+  rpc GetTenantControlRecipients(GetTenantControlRecipientsRequest) returns (GetTenantControlRecipientsResponse);
+
   // Describe what the tenant can use now: custom subdomain and custom domain
   // eligibility, and per entitled cluster the media verbs placement accepts.
   // The cluster set is the GetClusterRouting peer set; media capabilities
@@ -1793,6 +1796,11 @@ message ValidateBootstrapTokenResponse {
   // for cluster-bound tokens so a stateless rendezvous (Bridge bootstrapEdge)
   // can route without a second lookup. Empty for non-cluster tokens.
   string foghorn_grpc_addr = 7; // json:"foghorn_grpc_addr,omitempty"
+  // Public HA rendezvous of the bound cluster's assigned control cell.
+  // foghorn_grpc_addr remains the persistent cluster identity for cell moves.
+  string bootstrap_foghorn_grpc_addr = 8; // json:"bootstrap_foghorn_grpc_addr,omitempty"
+  // Authoritative controller binding for non-consuming preregistration.
+  string bootstrap_control_cell_id = 9; // json:"bootstrap_control_cell_id,omitempty"
 }
 
 // ============================================================================
@@ -2393,4 +2401,21 @@ message CreateEnrollmentTokenRequest {
   optional string tenant_id = 2;         // Defaults to JWT tenant
   optional string name = 3;              // Token display name
   optional string ttl = 4;              // e.g. "720h" (default: 30 days)
+}
+
+message GetTenantControlRecipientsRequest {
+  string tenant_id = 1;
+  // Service-owned execution/authority history, retained after access removal.
+  repeated string historical_cluster_ids = 2;
+}
+
+message TenantControlRecipient {
+  string cell_id = 1;
+  repeated string source_cluster_ids = 2;
+}
+
+message GetTenantControlRecipientsResponse {
+  repeated TenantControlRecipient recipients = 1;
+  bool complete = 2;
+  repeated string unresolved_cluster_ids = 3;
 }

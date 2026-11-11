@@ -775,6 +775,7 @@ class GraphQLClient(BaseClient):
               bootstrapEdge(input: $input) {
                 __typename
                 ...BootstrapEdgeResponseDefaultFields
+                ...BootstrapEdgePendingDefaultFields
                 ...ValidationErrorDefaultFields
                 ...AuthErrorDefaultFields
               }
@@ -783,6 +784,12 @@ class GraphQLClient(BaseClient):
             fragment AuthErrorDefaultFields on AuthError {
               message
               code
+            }
+
+            fragment BootstrapEdgePendingDefaultFields on BootstrapEdgePending {
+              clusterId
+              phase
+              retryAfterSeconds
             }
 
             fragment BootstrapEdgeResponseDefaultFields on BootstrapEdgeResponse {

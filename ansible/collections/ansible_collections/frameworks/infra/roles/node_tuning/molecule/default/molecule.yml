@@ -27,7 +27,7 @@ platforms:
 provisioner:
   name: ansible
   playbooks:
-    prepare: ../../../../molecule/prepare-apt.yml
+    prepare: prepare.yml
 
 verifier:
   name: ansible

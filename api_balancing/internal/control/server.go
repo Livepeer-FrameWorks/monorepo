@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -613,20 +614,30 @@ var servedClustersClient atomic.Pointer[qmclient.GRPCClient]
 var navigatorClient *navclient.Client
 var configSeedApplyAckWriter configSeedApplyAckRecorder
 var serverCert serverCertHolder
+
+var certRefreshRequests = make(chan struct{}, 1)
+
+var publicCertAssignmentMu sync.Mutex
+
+func requestCertRefresh() {
+	select {
+	case certRefreshRequests <- struct{}{}:
+	default:
+	}
+}
+
 var errStreamNotCurrent = errors.New("helmsman control stream is not current for node")
 var errConfigSeedApplyAckDurabilityUnavailable = errors.New("ConfigSeed apply ACK durability unavailable")
 var errConfigSeedApplyAckIdentityMissing = errors.New("ConfigSeed apply ACK requires a registered node and cluster")
 
 // serverCertHolder stores the current server TLS certificate set, updated
-// atomically by the CertRefreshLoop when file-based or Navigator-backed TLS
-// material changes.
+// atomically by the CertRefreshLoop when Navigator-backed TLS material changes.
 type serverCertHolder struct {
 	certs atomic.Pointer[serverCertSet]
 }
 
 type serverCertSet struct {
-	defaultCert *tls.Certificate
-	byName      map[string]*tls.Certificate
+	byName map[string]*tls.Certificate
 }
 
 type configSeedApplyAckRecorder interface {
@@ -647,11 +658,11 @@ func (h *serverCertHolder) StoreBundles(bundles []*ipcpb.TLSCertBundle) error {
 		if err != nil {
 			return fmt.Errorf("parse TLS leaf certificate %q: %w", bundle.GetBundleId(), err)
 		}
+		if now := time.Now(); now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) {
+			return fmt.Errorf("TLS bundle %q certificate is outside its validity interval", bundle.GetBundleId())
+		}
 		cert.Leaf = leaf
 		certPtr := &cert
-		if set.defaultCert == nil {
-			set.defaultCert = certPtr
-		}
 		names := tlsBundleNames(bundle)
 		for _, name := range names {
 			if !certCoversBundleName(cert.Leaf, name) {
@@ -660,7 +671,7 @@ func (h *serverCertHolder) StoreBundles(bundles []*ipcpb.TLSCertBundle) error {
 			set.byName[name] = certPtr
 		}
 	}
-	if set.defaultCert == nil {
+	if len(set.byName) == 0 {
 		return fmt.Errorf("no usable TLS bundles")
 	}
 	h.certs.Store(set)
@@ -673,7 +684,7 @@ func (h *serverCertHolder) Loaded() bool {
 
 func (h *serverCertHolder) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	set := h.certs.Load()
-	if set == nil || set.defaultCert == nil {
+	if set == nil || len(set.byName) == 0 {
 		return nil, fmt.Errorf("no TLS certificate loaded")
 	}
 	serverName := ""
@@ -682,15 +693,22 @@ func (h *serverCertHolder) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Cert
 	}
 	if serverName != "" {
 		if cert := set.byName[serverName]; cert != nil {
-			return cert, nil
+			return usableServerCertificate(cert)
 		}
 		for pattern, cert := range set.byName {
 			if cert != nil && wildcardMatches(pattern, serverName) {
-				return cert, nil
+				return usableServerCertificate(cert)
 			}
 		}
 	}
-	return set.defaultCert, nil
+	return nil, fmt.Errorf("no public TLS certificate for SNI %q", serverName)
+}
+
+func usableServerCertificate(cert *tls.Certificate) (*tls.Certificate, error) {
+	if cert == nil || cert.Leaf == nil || time.Now().Before(cert.Leaf.NotBefore) || !time.Now().Before(cert.Leaf.NotAfter) {
+		return nil, fmt.Errorf("server TLS certificate is outside its validity interval")
+	}
+	return cert, nil
 }
 
 func tlsBundleNames(bundle *ipcpb.TLSCertBundle) []string {
@@ -1290,7 +1308,11 @@ func GetLocalClusterID() string {
 
 // AddServedCluster registers an additional cluster served by this Foghorn.
 func AddServedCluster(id string) {
-	servedClusters.Load().Store(id, true)
+	publicCertAssignmentMu.Lock()
+	defer publicCertAssignmentMu.Unlock()
+	if _, loaded := servedClusters.Load().LoadOrStore(id, true); !loaded {
+		requestCertRefresh()
+	}
 }
 
 func isServedCluster(id string) bool {
@@ -1355,7 +1377,10 @@ func applyServedClustersRefresh(clusterIDs, releasedClusterIDs []string) {
 			fresh.Store(clusterID, true)
 		}
 	}
+	publicCertAssignmentMu.Lock()
 	servedClusters.Store(fresh)
+	publicCertAssignmentMu.Unlock()
+	requestCertRefresh()
 
 	released := make(map[string]struct{}, len(releasedClusterIDs))
 	for _, clusterID := range releasedClusterIDs {
@@ -10529,31 +10554,35 @@ var lastPushedTLSState sync.Map // connID -> tls state fingerprint (cert hash or
 func StartCertRefreshLoop(ctx context.Context, interval time.Duration, log logging.Logger) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	publicTicker := time.NewTicker(30 * time.Second)
+	defer publicTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-certRefreshRequests:
+			refreshPublicTLSBundlesContext(ctx, log)
+		case <-publicTicker.C:
+			refreshPublicTLSBundlesContext(ctx, log)
 		case <-ticker.C:
 			refreshTLSBundles(log)
 		}
 	}
 }
 
-func refreshTLSBundles(log logging.Logger) {
-	// Refresh the server's own TLS certificates. The Foghorn control listener
-	// serves both internal mesh callers and public cluster-FQDN callers.
+func refreshPublicTLSBundles(log logging.Logger) {
+	refreshPublicTLSBundlesContext(context.Background(), log)
+}
+
+func refreshPublicTLSBundlesContext(ctx context.Context, log logging.Logger) {
+	// The external listener serves public identities only. Its mesh listener
+	// independently owns the file-based internal certificate.
 	if serverCert.Loaded() {
 		bundles := []*ipcpb.TLSCertBundle{}
-		if settings := appconfig.Current(); settings.CertPath != "" || settings.KeyPath != "" {
-			certFile, keyFile := settings.CertPath, settings.KeyPath
-			if bundle, err := fileServerTLSBundle(certFile, keyFile); err == nil {
-				bundles = append(bundles, bundle)
-			} else {
-				log.WithError(err).Warn("Failed to refresh file-based server TLS certificate")
-			}
-		}
+		assigned := servedClusterIDsForTLS()
+		sort.Strings(assigned)
 		rootDomain := platformRootDomain()
-		navBundles, certErr := fetchServedClusterTLSBundles(rootDomain)
+		navBundles, certErr := fetchServedClusterTLSBundles(ctx, rootDomain)
 		if certErr == nil && len(navBundles) > 0 {
 			bundles = append(bundles, navBundles...)
 		} else if navigatorClient != nil {
@@ -10564,7 +10593,17 @@ func refreshTLSBundles(log logging.Logger) {
 			return
 		}
 		if len(bundles) > 0 {
-			if err := serverCert.StoreBundles(bundles); err == nil {
+			publicCertAssignmentMu.Lock()
+			current := servedClusterIDsForTLS()
+			sort.Strings(current)
+			if !slices.Equal(assigned, current) {
+				publicCertAssignmentMu.Unlock()
+				requestCertRefresh()
+				return
+			}
+			err := serverCert.StoreBundles(bundles)
+			publicCertAssignmentMu.Unlock()
+			if err == nil {
 				bundleIDs := make([]string, 0, len(bundles))
 				for _, bundle := range bundles {
 					bundleIDs = append(bundleIDs, bundle.GetBundleId())
@@ -10573,6 +10612,11 @@ func refreshTLSBundles(log logging.Logger) {
 			}
 		}
 	}
+
+}
+
+func refreshTLSBundles(log logging.Logger) {
+	refreshPublicTLSBundles(log)
 
 	registry.mu.RLock()
 	nodes := make([]struct {
@@ -10775,10 +10819,14 @@ func fetchClusterTLSBundle(nodeID string) (*ipcpb.TLSCertBundle, bool, error) {
 }
 
 func fetchClusterTLSBundleByClusterID(clusterID, rootDomain string) (*ipcpb.TLSCertBundle, bool, error) {
+	return fetchClusterTLSBundleByClusterIDContext(context.Background(), clusterID, rootDomain)
+}
+
+func fetchClusterTLSBundleByClusterIDContext(ctx context.Context, clusterID, rootDomain string) (*ipcpb.TLSCertBundle, bool, error) {
 	if navigatorClient == nil {
 		return nil, false, errors.New("cluster TLS authority is unavailable")
 	}
-	bundleID, wildcardDomain, ok, lookupErr := desiredClusterTLSBundleLookup(clusterID, rootDomain)
+	bundleID, wildcardDomain, ok, lookupErr := desiredClusterTLSBundleLookupContext(ctx, clusterID, rootDomain)
 	if lookupErr != nil {
 		return nil, false, lookupErr
 	}
@@ -10786,7 +10834,7 @@ func fetchClusterTLSBundleByClusterID(clusterID, rootDomain string) (*ipcpb.TLSC
 		return nil, false, fmt.Errorf("cluster %q has no valid TLS bundle identity", clusterID)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	certResp, certErr := navigatorClient.GetTLSBundle(ctx, &dnspb.GetTLSBundleRequest{BundleId: bundleID})
 	if certErr != nil {
@@ -10824,33 +10872,13 @@ func navigatorTLSBundleFound(resp *dnspb.GetTLSBundleResponse) (bool, error) {
 	return resp.GetFound(), nil
 }
 
-func fileServerTLSBundle(certFile, keyFile string) (*ipcpb.TLSCertBundle, error) {
-	if strings.TrimSpace(certFile) == "" || strings.TrimSpace(keyFile) == "" {
-		return nil, fmt.Errorf("both GRPC_TLS_CERT_PATH and GRPC_TLS_KEY_PATH are required together")
-	}
-	certPEM, err := os.ReadFile(certFile)
-	if err != nil {
-		return nil, fmt.Errorf("read cert file %q: %w", certFile, err)
-	}
-	keyPEM, err := os.ReadFile(keyFile)
-	if err != nil {
-		return nil, fmt.Errorf("read key file %q: %w", keyFile, err)
-	}
-	return &ipcpb.TLSCertBundle{
-		BundleId: "file:" + certFile,
-		Domain:   "foghorn.internal",
-		CertPem:  string(certPEM),
-		KeyPem:   string(keyPEM),
-	}, nil
-}
-
 func waitForServedClusterTLSBundles(ctx context.Context, rootDomain string) ([]*ipcpb.TLSCertBundle, error) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
 	var lastErr error
 	for {
-		bundles, err := fetchServedClusterTLSBundles(rootDomain)
+		bundles, err := fetchServedClusterTLSBundles(ctx, rootDomain)
 		if err == nil && len(bundles) > 0 {
 			return bundles, nil
 		}
@@ -10869,9 +10897,9 @@ func waitForServedClusterTLSBundles(ctx context.Context, rootDomain string) ([]*
 	}
 }
 
-func fetchServedClusterTLSBundles(rootDomain string) ([]*ipcpb.TLSCertBundle, error) {
+func fetchServedClusterTLSBundles(ctx context.Context, rootDomain string) ([]*ipcpb.TLSCertBundle, error) {
 	return collectServedClusterTLSBundles(servedClusterIDsForTLS(), func(clusterID string) (*ipcpb.TLSCertBundle, bool, error) {
-		return fetchClusterTLSBundleByClusterID(clusterID, rootDomain)
+		return fetchClusterTLSBundleByClusterIDContext(ctx, clusterID, rootDomain)
 	})
 }
 
@@ -10914,6 +10942,10 @@ func servedClusterIDsForTLS() []string {
 }
 
 func clusterTLSBundleLookup(clusterID, rootDomain string) (string, string, bool) {
+	return clusterTLSBundleLookupContext(context.Background(), clusterID, rootDomain)
+}
+
+func clusterTLSBundleLookupContext(ctx context.Context, clusterID, rootDomain string) (string, string, bool) {
 	rootDomain = strings.Trim(strings.TrimSpace(rootDomain), ".")
 	if rootDomain == "" {
 		return "", "", false
@@ -10921,8 +10953,8 @@ func clusterTLSBundleLookup(clusterID, rootDomain string) (string, string, bool)
 
 	clusterName := ""
 	if getClusterFn != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		cluster, err := getClusterFn(ctx, strings.TrimSpace(clusterID))
+		lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		cluster, err := getClusterFn(lookupCtx, strings.TrimSpace(clusterID))
 		cancel()
 		if err == nil && cluster != nil {
 			clusterName = cluster.GetClusterName()
@@ -10938,12 +10970,16 @@ func clusterTLSBundleLookup(clusterID, rootDomain string) (string, string, bool)
 }
 
 func desiredClusterTLSBundleLookup(clusterID, rootDomain string) (string, string, bool, error) {
-	legacyBundleID, wildcardDomain, ok := clusterTLSBundleLookup(clusterID, rootDomain)
+	return desiredClusterTLSBundleLookupContext(context.Background(), clusterID, rootDomain)
+}
+
+func desiredClusterTLSBundleLookupContext(ctx context.Context, clusterID, rootDomain string) (string, string, bool, error) {
+	legacyBundleID, wildcardDomain, ok := clusterTLSBundleLookupContext(ctx, clusterID, rootDomain)
 	if !ok {
 		return "", "", false, nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	after := ""
@@ -11118,6 +11154,10 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *fogho
 		return nil, status.Errorf(codes.PermissionDenied, "token kind %q is not valid for edge enrollment", valResp.GetKind())
 	}
 
+	if owner := strings.TrimSpace(valResp.GetBootstrapControlCellId()); owner != "" && owner != strings.TrimSpace(localClusterID) {
+		return nil, grpcutil.BootstrapPendingError(grpcutil.BootstrapControlCellChanged, time.Second)
+	}
+
 	// Use token's bound cluster_id if available, otherwise fall back to env
 	clusterID := valResp.GetClusterId()
 	if clusterID == "" {
@@ -11146,6 +11186,12 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *fogho
 	edgeDomain := pkgdns.EdgeNodeFQDN(nodeID, clusterSlug, rootDomain)
 	poolDomain := fmt.Sprintf("edge.%s.%s", clusterSlug, rootDomain)
 	foghornAddr := net.JoinHostPort("foghorn."+clusterSlug+"."+rootDomain, strconv.Itoa(appconfig.Current().ExternalGRPCPort()))
+	if !allowInsecureControlGRPC() {
+		if _, certErr := serverCert.GetCertificate(&tls.ClientHelloInfo{ServerName: "foghorn." + clusterSlug + "." + rootDomain}); certErr != nil {
+			requestCertRefresh()
+			return nil, grpcutil.BootstrapPendingError(grpcutil.BootstrapPublicIdentityPending, 2*time.Second)
+		}
+	}
 
 	resp := &foghornpb.PreRegisterEdgeResponse{
 		NodeId:           nodeID,

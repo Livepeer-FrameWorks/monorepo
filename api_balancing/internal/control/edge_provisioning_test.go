@@ -3,9 +3,14 @@ package control
 import (
 	"context"
 
+	"crypto/tls"
 	"frameworks/api_balancing/internal/appconfig"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +21,9 @@ import (
 // and returns a cleanup function that restores it to nil.
 func setMockValidator(t *testing.T, resp *quartermasterpb.ValidateBootstrapTokenResponse) {
 	t.Helper()
+	settings := *appconfig.Current()
+	settings.AllowInsecure = true
+	useFoghornConfig(t, &settings)
 	validateBootstrapTokenFn = func(_ context.Context, _ string) (*quartermasterpb.ValidateBootstrapTokenResponse, error) {
 		return resp, nil
 	}
@@ -332,5 +340,53 @@ func TestPreRegisterEdgeAdvertisesConfiguredExternalGRPCPort(t *testing.T) {
 	}
 	if resp.FoghornGrpcAddr != "foghorn.us-west-1.example.com:18129" {
 		t.Fatalf("foghorn_grpc_addr = %q, want the configured external listener port 18129", resp.FoghornGrpcAddr)
+	}
+}
+
+func TestPreRegisterEdgeWaitsForPrivatePublicIdentity(t *testing.T) {
+	setMockValidator(t, &quartermasterpb.ValidateBootstrapTokenResponse{Valid: true, Kind: "edge_node", ClusterId: "new-private", TenantId: "owner"})
+	useFoghornConfig(t, &appconfig.Foghorn{PlatformRootDomain: "example.com"})
+	old := serverCert.certs.Load()
+	t.Cleanup(func() { serverCert.certs.Store(old) })
+	serverCert.certs.Store(nil)
+	if err := serverCert.StoreBundles([]*ipcpb.TLSCertBundle{testTLSBundle(t, "cluster:media-us-1", "*.media-us-1.example.com")}); err != nil {
+		t.Fatal(err)
+	}
+	srv := &EdgeProvisioningServer{}
+	req := &foghornpb.PreRegisterEdgeRequest{EnrollmentToken: "bound-token", PreferredNodeId: "edge-fixed"}
+	resp, err := srv.PreRegisterEdge(context.Background(), req)
+	if resp != nil || status.Code(err) != codes.Unavailable {
+		t.Fatalf("unready private identity advertised: resp=%v err=%v", resp, err)
+	}
+	pending := false
+	for _, detail := range status.Convert(err).Details() {
+		if info, ok := detail.(*errdetails.ErrorInfo); ok && info.Reason == "BOOTSTRAP_PUBLIC_IDENTITY_PENDING" {
+			pending = true
+		}
+	}
+	if !pending {
+		t.Fatalf("pending identity not classified: %v", err)
+	}
+	bundle := testTLSBundle(t, "cluster:new-private", "*.new-private.example.com")
+	if storeErr := serverCert.StoreBundles([]*ipcpb.TLSCertBundle{bundle}); storeErr != nil {
+		t.Fatal(storeErr)
+	}
+	resp, err = srv.PreRegisterEdge(context.Background(), req)
+	if err != nil || resp.GetClusterId() != "new-private" || resp.GetFoghornGrpcAddr() != "foghorn.new-private.example.com:18029" {
+		t.Fatalf("ready private identity lost binding: resp=%v err=%v", resp, err)
+	}
+	if _, err := serverCert.GetCertificate(&tls.ClientHelloInfo{ServerName: "foghorn.new-private.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPreRegisterEdgeDoesNotClaimAnotherControlCellsCluster(t *testing.T) {
+	old := localClusterID
+	localClusterID = "cell-eu"
+	t.Cleanup(func() { localClusterID = old })
+	setMockValidator(t, &quartermasterpb.ValidateBootstrapTokenResponse{Valid: true, Kind: "edge_node", TenantId: "owner", ClusterId: "foreign-private-controller", BootstrapControlCellId: "cell-us"})
+	response, err := (&EdgeProvisioningServer{}).PreRegisterEdge(t.Context(), &foghornpb.PreRegisterEdgeRequest{EnrollmentToken: "bound-token", PreferredNodeId: "fixed-node"})
+	if response != nil || status.Code(err) != codes.Unavailable || isServedCluster("foreign-private-controller") {
+		t.Fatalf("advisory call claimed a foreign controller's cluster: response=%v err=%v served=%v", response, err, isServedCluster("foreign-private-controller"))
 	}
 }

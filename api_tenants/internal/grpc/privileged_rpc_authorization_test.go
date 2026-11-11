@@ -97,6 +97,10 @@ func TestPrivilegedRPCsRejectTenantJWTBeforeStorage(t *testing.T) {
 			return err
 		}},
 		{"UpsertTLSBundle", func() error { _, err := s.UpsertTLSBundle(ctx, &quartermasterpb.UpsertTLSBundleRequest{}); return err }},
+		{"GetTenantControlRecipients", func() error {
+			_, err := s.GetTenantControlRecipients(ctx, &quartermasterpb.GetTenantControlRecipientsRequest{TenantId: "tenant-1"})
+			return err
+		}},
 		{"ListTLSBundles", func() error { _, err := s.ListTLSBundles(ctx, &quartermasterpb.ListTLSBundlesRequest{}); return err }},
 		{"UpsertIngressSite", func() error {
 			_, err := s.UpsertIngressSite(ctx, &quartermasterpb.UpsertIngressSiteRequest{})

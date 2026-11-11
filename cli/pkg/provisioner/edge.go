@@ -148,7 +148,7 @@ func (c *EdgeProvisionConfig) requireEnrollmentToken() error {
 //	[5-6] install + start (frameworks.infra.edge role, mode + OS aware)
 //	[7] public HTTPS verify after ConfigSeed activation
 func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) error {
-	_, err := e.provision(ctx, host, config)
+	_, err := e.provision(ctx, host, config, nil)
 	return err
 }
 
@@ -156,10 +156,16 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 // check mode with --diff) and returns the check-mode verdict.
 func (e *EdgeProvisioner) DryRun(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) (EdgeInspection, error) {
 	config.DryRun = true
-	return e.provision(ctx, host, config)
+	return e.provision(ctx, host, config, nil)
 }
 
-func (e *EdgeProvisioner) provision(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) (EdgeInspection, error) {
+// ProvisionWithProgress records completed installation before HTTPS verification.
+func (e *EdgeProvisioner) ProvisionWithProgress(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, onInstalled func() error) error {
+	_, err := e.provision(ctx, host, config, onInstalled)
+	return err
+}
+
+func (e *EdgeProvisioner) provision(ctx context.Context, host inventory.Host, config EdgeProvisionConfig, onInstalled func() error) (EdgeInspection, error) {
 	mode := config.resolvedMode()
 	if mode != "native" && mode != "container" {
 		return EdgeInspection{}, fmt.Errorf("invalid edge mode %q (valid: container, native; 'docker' is a deprecated alias for container)", config.Mode)
@@ -254,6 +260,12 @@ func (e *EdgeProvisioner) provision(ctx context.Context, host inventory.Host, co
 	fmt.Printf("[5-6/7] Installing edge stack (%s, %s)...\n", mode, remoteOS)
 	if err := runEdgeRole(ctx, e.sshPool, host, &config, remoteOS, remoteArch, false); err != nil {
 		return EdgeInspection{}, fmt.Errorf("edge role apply failed: %w", err)
+	}
+
+	if onInstalled != nil {
+		if err := onInstalled(); err != nil {
+			return EdgeInspection{}, err
+		}
 	}
 
 	domain := config.verificationDomain()

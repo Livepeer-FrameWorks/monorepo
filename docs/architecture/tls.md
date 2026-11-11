@@ -242,3 +242,48 @@ certificate's validity.
 The Ed25519 media-authority trust set and X25519 cell seal keys are separate
 from both TLS systems above. Their production render/custody rules are described
 in [Media-cluster authority](media-authority.md).
+
+## Private-edge bootstrap and persistent control identity
+
+Quartermaster returns two public endpoint roles for a cluster-bound edge token.
+`bootstrap_foghorn_grpc_addr` is the assigned control cell's existing Foghorn DNS
+pool, used by Bridge's narrow `PreRegisterEdge` rendezvous. `foghorn_grpc_addr`
+remains the private cluster's persistent control hostname. Both use verified TLS;
+public bootstrap uses system trust and the requested hostname. Token validation
+and preregistration remain non-consuming. Enrollment consumes the token when
+Quartermaster creates the node.
+
+Private-cluster creation atomically records the wildcard certificate intent with
+ownership, access and Foghorn assignments. Preregistration reports
+`BOOTSTRAP_PUBLIC_IDENTITY_PENDING` until the answering replica has a valid
+certificate for the persistent private hostname. Navigator reconciles desired
+certificate intent; Foghorn coalesces certificate refresh hints and repairs its
+public SNI set every 30 seconds. Full edge ConfigSeed certificate refresh retains
+its separate interval. The public holder contains Navigator certificates only,
+rejects unknown or missing SNI, and rejects expired leaves at selection time.
+Internal listeners retain their independent file-based mesh certificate.
+
+Bootstrap's client resolves the cell pool and uses round-robin verified
+subchannels. Its advisory retries preserve the token and preferred node identity,
+with per-attempt and operation cancellation. A private-identity pending member
+does not prevent a ready replica from answering within that operation. Caller
+cancellation wins over the last observed pending state. Those retries have their own policy
+and do not open the circuit breaker used by durable media-control calls.
+
+The address returned for Helmsman's persistent connection stays private-cluster
+scoped. On control-cell reassignment, Quartermaster's assignments and private DNS
+move to the new cell; the old Foghorn releases the control stream, and Helmsman
+re-resolves that private name, tries the returned addresses and retains its
+hostname as SNI. Persisting the old cell's bootstrap pool on the edge would
+prevent this move.
+
+## ConfigSeed acceptance and DNS publication
+
+Navigator acknowledges a ConfigSeed apply result after validating and persisting
+its authority, revision and delivery fences. External DNS publication runs from
+the service-owned alias worker, with four workers and one in-flight job per
+tenant. RPC wake hints are coalesced and nonblocking. Periodic reconciliation
+reads durable state and waits for bounded queue capacity, so inventory beyond
+the 256-entry hint buffer is still visited. Provider failures and caller
+cancellation do not undo an accepted ACK; service cancellation stops queued
+repair work. Existing alias revision/CAS checks remain authoritative at publish.

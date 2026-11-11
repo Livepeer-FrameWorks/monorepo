@@ -6,6 +6,7 @@ from ..._forward import OpenUnion, UnknownMember
 from .base_model import BaseModel
 from .fragments import (
     AuthErrorDefault,
+    BootstrapEdgePendingDefault,
     BootstrapEdgeResponseDefault,
     BootstrapEdgeResponseDefaultTelemetry,  # noqa: F401
     ValidationErrorDefault,
@@ -21,6 +22,7 @@ class BootstrapEdge(BaseModel):
     bootstrap_edge: Annotated[
         Union[
             "BootstrapEdgeBootstrapEdgeBootstrapEdgeResponse",
+            "BootstrapEdgeBootstrapEdgeBootstrapEdgePending",
             "BootstrapEdgeBootstrapEdgeValidationError",
             "BootstrapEdgeBootstrapEdgeAuthError",
             UnknownMember,
@@ -35,6 +37,10 @@ class BootstrapEdge(BaseModel):
 
 class BootstrapEdgeBootstrapEdgeBootstrapEdgeResponse(BootstrapEdgeResponseDefault):
     typename__: Literal["BootstrapEdgeResponse"] = Field(alias="__typename")
+
+
+class BootstrapEdgeBootstrapEdgeBootstrapEdgePending(BootstrapEdgePendingDefault):
+    typename__: Literal["BootstrapEdgePending"] = Field(alias="__typename")
 
 
 class BootstrapEdgeBootstrapEdgeValidationError(ValidationErrorDefault):

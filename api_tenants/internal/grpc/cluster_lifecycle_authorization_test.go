@@ -56,6 +56,22 @@ func TestAPITokenPermissionsAreExact(t *testing.T) {
 	}
 }
 
+func TestInfrastructureWriteScopeIncludesRead(t *testing.T) {
+	ctx := context.WithValue(tenantCtx("tenant-1", "owner"), ctxkeys.KeyAuthType, "api_token")
+	ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{"infrastructure:write"})
+	private, err := authorizeTenantReadActor(ctx, "tenant-1")
+	if err != nil || !private {
+		t.Fatalf("write-scoped owner cannot read owned infrastructure: private=%v err=%v", private, err)
+	}
+	if _, err := authorizeTenantReadActor(ctx, "tenant-2"); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("write scope crossed tenant boundary: %v", err)
+	}
+	ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{"infrastructure:read"})
+	if err := requireTenantResourceActor(ctx, "tenant-1", authz.ActionManageEdgeCluster); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("read scope allowed write: %v", err)
+	}
+}
+
 func TestMarketplaceReadBindsRequestedTenantToAuthenticatedTenant(t *testing.T) {
 	ctx := tenantCtx("tenant-1", "member")
 	if _, err := authorizeMarketplaceReadActor(ctx, "tenant-2"); status.Code(err) != codes.PermissionDenied {

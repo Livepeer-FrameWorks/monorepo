@@ -58,14 +58,21 @@ type tenantAckAuthority interface {
 }
 
 // NavigatorServer holds dependencies for the gRPC and HTTP server
+type configSeedApplyResultRecorder interface {
+	RecordConfigSeedApplyResult(context.Context, string, string, uint64, uint64, []string, []string, map[string]string, time.Time) ([]string, logic.ConfigSeedApplyDiscarded, error)
+}
+
+type tenantAliasWaker interface{ WakeTenant(string) }
+
 type NavigatorServer struct {
 	dnspb.UnimplementedNavigatorServiceServer
-	DNSManager        *logic.DNSManager
-	CertManager       *logic.CertManager
-	InternalCAManager *logic.InternalCAManager
-	AliasPublisher    *worker.AliasApplyStateWorker
-	Quartermaster     tenantAckAuthority
-	TenantClusters    tenantClusterAuthority
+	DNSManager          *logic.DNSManager
+	CertManager         *logic.CertManager
+	ApplyResultRecorder configSeedApplyResultRecorder
+	InternalCAManager   *logic.InternalCAManager
+	AliasPublisher      tenantAliasWaker
+	Quartermaster       tenantAckAuthority
+	TenantClusters      tenantClusterAuthority
 	// Reconciler also owns the per-instance physical infra DNS sync; SyncDNS calls
 	// it so a node/service change refreshes <service>.<node>.infra.<root> at once
 	// instead of waiting for the periodic reconcile tick.
@@ -750,7 +757,7 @@ func (s *NavigatorServer) RemoveTenantAliasSubdomain(ctx context.Context, req *d
 }
 
 // ReportConfigSeedApplyResult persists edge cert readiness ACKs observed
-// by Foghorn, then reconciles affected tenant DNS immediately.
+// by Foghorn, then wakes durable tenant DNS reconciliation.
 func (s *NavigatorServer) ReportConfigSeedApplyResult(ctx context.Context, req *dnspb.ReportConfigSeedApplyResultRequest) (*dnspb.ReportConfigSeedApplyResultResponse, error) {
 	appliedAt := time.Unix(req.GetAppliedAt(), 0).UTC()
 	filter := s.filterTenantBundlesForCluster(ctx, req.GetClusterId(), req.GetAppliedBundleIds(), req.GetFailedBundleIds())
@@ -772,7 +779,14 @@ func (s *NavigatorServer) ReportConfigSeedApplyResult(ctx context.Context, req *
 	if filter.err != nil && len(filter.applied) == 0 && len(filter.failed) == 0 {
 		return nil, status.Errorf(tenantAckAuthorityErrorCode(filter.err), "validate tenant apply ACK authority: %v", filter.err)
 	}
-	affected, discarded, err := s.CertManager.RecordConfigSeedApplyResult(ctx,
+	recorder := s.ApplyResultRecorder
+	if recorder == nil && s.CertManager != nil {
+		recorder = s.CertManager
+	}
+	if recorder == nil {
+		return nil, status.Error(codes.Unavailable, "ConfigSeed apply recorder unavailable")
+	}
+	affected, discarded, err := recorder.RecordConfigSeedApplyResult(ctx,
 		req.GetNodeId(),
 		req.GetClusterId(),
 		req.GetSeedVersion(),
@@ -814,9 +828,7 @@ func (s *NavigatorServer) ReportConfigSeedApplyResult(ctx context.Context, req *
 			republish = tenantIDsFromBundles(filter.applied, filter.failed)
 		}
 		for _, tenantID := range republish {
-			if pubErr := s.AliasPublisher.PublishTenantAlias(ctx, tenantID); pubErr != nil {
-				s.Logger.WithError(pubErr).WithField("tenant_id", tenantID).Warn("Failed to publish tenant alias after apply ACK")
-			}
+			s.AliasPublisher.WakeTenant(tenantID)
 		}
 	}
 	if filter.err != nil {
@@ -1062,9 +1074,7 @@ func (s *NavigatorServer) RemoveTenantAliasCluster(ctx context.Context, req *dns
 		return nil, status.Errorf(codes.Internal, "remove tenant alias cluster: %v", err)
 	}
 	if s.AliasPublisher != nil {
-		if err := s.AliasPublisher.PublishTenantAlias(ctx, req.GetTenantId()); err != nil {
-			s.Logger.WithError(err).WithField("tenant_id", req.GetTenantId()).Warn("Failed to republish tenant alias after cluster removal")
-		}
+		s.AliasPublisher.WakeTenant(req.GetTenantId())
 	}
 	return &dnspb.RemoveTenantAliasClusterResponse{Accepted: true}, nil
 }

@@ -230,7 +230,7 @@ func (c *retryingGrantCache) InvalidateTenantCache(context.Context, string, stri
 	return &foghorncontrolpb.InvalidateTenantCacheResponse{}, c.err
 }
 
-func TestSubscriptionRefreshDeliversDespiteCacheFailure(t *testing.T) {
+func TestSubscriptionRefreshProgressesAndRetriesCacheFailure(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -241,10 +241,46 @@ func TestSubscriptionRefreshDeliversDespiteCacheFailure(t *testing.T) {
 	cache := &retryingGrantCache{err: errors.New("Commodore unavailable")}
 	refresh := &recordingRefreshClient{}
 	server := &PurserServer{db: db, commodoreClient: cache}
-	mock.ExpectExec(`UPDATE purser\.media_authority_refresh_outbox`).WithArgs(id, int64(4)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.media_authority_refresh_outbox`).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), id, int64(4)).WillReturnResult(sqlmock.NewResult(0, 1))
 	delivered, err := server.deliverMediaAuthorityRefreshRow(context.Background(), refresh, row)
-	if err != nil || !delivered || refresh.calls != 1 || cache.calls != 1 {
+	if err != nil || delivered || refresh.calls != 1 || cache.calls != 1 {
 		t.Fatalf("delivery=%v err=%v refresh=%d cache=%d", delivered, err, refresh.calls, cache.calls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type failingRefreshCache struct{ recordingCommodoreCache }
+
+func (*failingRefreshCache) InvalidateTenantCache(ctx context.Context, _, _ string) (*foghorncontrolpb.InvalidateTenantCacheResponse, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return nil, errors.New("recipient unavailable")
+}
+
+func TestPurserRefreshRetainsFailedCacheObligationAfterAuthorityAcceptance(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	id := uuid.MustParse("10000000-0000-0000-0000-000000000011")
+	mock.ExpectExec(`UPDATE purser\.media_authority_refresh_outbox`).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), id, int64(7)).WillReturnResult(sqlmock.NewResult(0, 1))
+	client := &recordingRefreshClient{}
+	s := &PurserServer{db: db, commodoreClient: &failingRefreshCache{}}
+	delivered, err := s.deliverMediaAuthorityRefreshRow(context.Background(), client, purserdb.ClaimMediaAuthorityRefreshBatchRow{
+		ID: id.String(), TenantID: "tenant-1", SourceEventID: "same-event", Reason: "subscription_authority_changed", Attempts: 1, Revision: 7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delivered {
+		t.Fatal("cache failure disappeared behind accepted authority refresh")
+	}
+	if client.calls != 1 {
+		t.Fatalf("authority work blocked by cache failure: calls=%d", client.calls)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

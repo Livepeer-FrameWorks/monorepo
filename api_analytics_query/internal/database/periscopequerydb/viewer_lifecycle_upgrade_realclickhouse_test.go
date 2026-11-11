@@ -76,8 +76,8 @@ func TestRetainedViewerLifecycleStaysReservedAfterUpgrade_RealClickHouse(t *test
 	found := false
 	for rows.Next() {
 		var owner, servingCluster string
-		var minutes, egress float64
-		if err := rows.Scan(&owner, &servingCluster, &minutes, &egress); err != nil {
+		var minutes, egress, unresolvedAge float64
+		if err := rows.Scan(&owner, &servingCluster, &minutes, &egress, &unresolvedAge); err != nil {
 			t.Fatal(err)
 		}
 		if owner == tenant {
@@ -93,4 +93,66 @@ func TestRetainedViewerLifecycleStaysReservedAfterUpgrade_RealClickHouse(t *test
 	if !found {
 		t.Fatal("retained resumed viewer lost its active reservation after upgrade")
 	}
+}
+
+func TestLongLivedViewerRetainsTrustedServingCluster_RealClickHouse(t *testing.T) {
+	db := startContractClickHouse(t)
+	ctx := t.Context()
+	const tenant = "5eed0005-7a11-4e5e-8001-5eed00000011"
+	const stream = "5eed0005-7a11-4e5e-8001-5eed00000012"
+	connected := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Second)
+	if _, err := db.ExecContext(ctx, `INSERT INTO periscope.viewer_connection_events
+ (event_id,timestamp,tenant_id,stream_id,internal_name,session_id,node_id,cluster_id,event_type)
+ VALUES(generateUUIDv4(),?,?,?,?,?,?,?,'connect')`, connected, tenant, stream, "long-live", "long-session", "edge-long", "serving-us"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO periscope.client_qoe_samples
+ (timestamp,tenant_id,stream_id,session_id,node_id,connection_time,bytes_downloaded)
+ VALUES(now(),?,?,?,?,?,?)`, tenant, stream, "long-session", "edge-long", float64(48*3600), uint64(1024)); err != nil {
+		t.Fatal(err)
+	}
+	assertAttribution := func(want string) {
+		t.Helper()
+		rows, err := ActiveViewerReservations.Query(ctx, db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		found := false
+		for rows.Next() {
+			var owner, cluster string
+			var minutes, egress, unresolvedAge float64
+			if err := rows.Scan(&owner, &cluster, &minutes, &egress, &unresolvedAge); err != nil {
+				t.Fatal(err)
+			}
+			if owner == tenant {
+				found = true
+				if want == "" && unresolvedAge < 47*3600 {
+					t.Fatalf("oldest unresolved lifecycle age=%v, want at least 47 hours", unresolvedAge)
+				}
+				if cluster != want {
+					t.Fatalf("old active viewer serving cluster=%q want=%q", cluster, want)
+				}
+			}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if !found {
+			t.Fatal("old active viewer disappeared")
+		}
+	}
+	assertAttribution("serving-us")
+	// Conflicting trusted evidence for the same lifecycle must remain explicit.
+	if _, err := db.ExecContext(ctx, `INSERT INTO periscope.viewer_connection_events
+ (event_id,timestamp,tenant_id,stream_id,internal_name,session_id,node_id,cluster_id,event_type)
+ VALUES(generateUUIDv4(),?,?,?,?,?,?,?,'connect')`, connected, tenant, stream, "long-live", "long-session", "edge-long", "conflicting-eu"); err != nil {
+		t.Fatal(err)
+	}
+	assertAttribution("")
+	// Raw TTL/removal cannot erase previously materialized conflict evidence.
+	if _, err := db.ExecContext(ctx, "TRUNCATE TABLE periscope.viewer_connection_events"); err != nil {
+		t.Fatal(err)
+	}
+	assertAttribution("")
 }

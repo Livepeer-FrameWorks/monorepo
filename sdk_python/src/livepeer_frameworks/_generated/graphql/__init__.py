@@ -59,6 +59,7 @@ from .base_model import BaseModel
 from .bootstrap_edge import (
     BootstrapEdge,
     BootstrapEdgeBootstrapEdgeAuthError,
+    BootstrapEdgeBootstrapEdgeBootstrapEdgePending,
     BootstrapEdgeBootstrapEdgeBootstrapEdgeResponse,
     BootstrapEdgeBootstrapEdgeValidationError,
 )
@@ -377,6 +378,7 @@ from .fragments import (
     BillingTierDefaultEntitlements,
     BillingTierDefaultFeatures,
     BillingTierDefaultPricingRules,
+    BootstrapEdgePendingDefault,
     BootstrapEdgeResponseDefault,
     BootstrapEdgeResponseDefaultTelemetry,
     BufferEventDefault,
@@ -2320,9 +2322,11 @@ __all__ = [
     "BillingTierDefaultPricingRules",
     "BootstrapEdge",
     "BootstrapEdgeBootstrapEdgeAuthError",
+    "BootstrapEdgeBootstrapEdgeBootstrapEdgePending",
     "BootstrapEdgeBootstrapEdgeBootstrapEdgeResponse",
     "BootstrapEdgeBootstrapEdgeValidationError",
     "BootstrapEdgeInput",
+    "BootstrapEdgePendingDefault",
     "BootstrapEdgeResponseDefault",
     "BootstrapEdgeResponseDefaultTelemetry",
     "BufferEventDefault",

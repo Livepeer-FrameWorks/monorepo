@@ -39,6 +39,11 @@
       ansible.builtin.import_tasks: limits.yml
       tags: [configure, limits]
 
+    - name: Node_tuning | resolved listener policy
+      ansible.builtin.import_tasks: resolved.yml
+      when: (ansible_facts['service_mgr'] | default('')) == "systemd"
+      tags: [configure, resolved]
+
     - name: Node_tuning | verify convergence
       ansible.builtin.import_tasks: verify.yml
       # Check mode predicts file/unit changes without applying them, so runtime

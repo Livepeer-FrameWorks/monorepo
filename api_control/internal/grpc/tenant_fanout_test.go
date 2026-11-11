@@ -12,6 +12,7 @@ import (
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -152,13 +153,41 @@ func newTenantFanoutTestServer(t *testing.T, route *clusterRoute) *CommodoreServ
 	pool := foghornclient.NewPool(foghornclient.PoolConfig{Logger: logrus.New()})
 	t.Cleanup(func() { _ = pool.Close() })
 
-	return &CommodoreServer{
+	server := &CommodoreServer{
 		db:            db,
 		logger:        logrus.New(),
 		foghornPool:   pool,
 		routeCache:    map[string]*clusterRoute{"tenant-1": route},
 		routeCacheTTL: time.Minute,
 	}
+	server.controlRecipientLookup = func(_ context.Context, request *quartermasterpb.GetTenantControlRecipientsRequest) (*quartermasterpb.GetTenantControlRecipientsResponse, error) {
+		response := &quartermasterpb.GetTenantControlRecipientsResponse{Complete: true}
+		targets := buildClusterFanoutTargets(route)
+		seen := map[string]bool{}
+		for _, target := range targets {
+			if target.clusterID != "" && !seen[target.clusterID] {
+				response.Recipients = append(response.Recipients, &quartermasterpb.TenantControlRecipient{CellId: target.clusterID})
+				seen[target.clusterID] = true
+			}
+			if target.addr != "" {
+				server.foghornDiscovery.Store(target.clusterID, &foghornDiscoveryEntry{at: time.Now(), addrs: []string{target.addr}})
+			}
+		}
+		for cell := range missingTenantFanoutCells(route, targets) {
+			if !seen[cell] {
+				response.Recipients = append(response.Recipients, &quartermasterpb.TenantControlRecipient{CellId: cell})
+			}
+		}
+		for _, cell := range request.GetHistoricalClusterIds() {
+			if !seen[cell] {
+				response.Recipients = append(response.Recipients, &quartermasterpb.TenantControlRecipient{CellId: cell, SourceClusterIds: []string{cell}})
+				seen[cell] = true
+			}
+		}
+
+		return response, nil
+	}
+	return server
 }
 
 func TestTerminateTenantStreams_FailsWhenAllDialAttemptsFail(t *testing.T) {
@@ -230,25 +259,21 @@ func TestInvalidateTenantCache_DeduplicatesTargets(t *testing.T) {
 	}
 }
 
-func TestTerminateTenantStreams_DeduplicatesByAddrWhenClusterIDMissing(t *testing.T) {
-	goodAddr := startTenantControlTestServer(t, &testTenantControlServer{
-		terminateResp: &foghorncontrolpb.TerminateTenantStreamsResponse{StreamsTerminated: 7, SessionsTerminated: 9},
-	})
-
-	server := newTenantFanoutTestServer(t, &clusterRoute{
-		clusterPeers: []*clusterpeerpb.TenantClusterPeer{
-			{ClusterId: "", FoghornGrpcAddr: goodAddr},
-			{ClusterId: "", FoghornGrpcAddr: goodAddr},
-		},
-		resolvedAt: time.Now(),
-	})
-
-	resp, err := server.TerminateTenantStreams(serviceCtx(), &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: "tenant-1", Reason: "suspended"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestBuildClusterFanoutTargetsDeduplicatesAddressOnlyPeers(t *testing.T) {
+	addr := "foghorn.internal:18019"
+	targets := buildClusterFanoutTargets(&clusterRoute{foghornAddr: addr, clusterPeers: []*clusterpeerpb.TenantClusterPeer{{FoghornGrpcAddr: addr}, {FoghornGrpcAddr: addr}}})
+	if len(targets) != 1 || targets[0].addr != addr {
+		t.Fatalf("legacy address-only peer deduplication=%v", targets)
 	}
-	if resp.StreamsTerminated != 7 || resp.SessionsTerminated != 9 {
-		t.Fatalf("expected single-target result (7/9), got %d/%d", resp.StreamsTerminated, resp.SessionsTerminated)
+}
+
+func TestTenantControlRejectsRecipientWithoutCanonicalCell(t *testing.T) {
+	server := newTenantFanoutTestServer(t, &clusterRoute{})
+	server.controlRecipientLookup = func(_ context.Context, request *quartermasterpb.GetTenantControlRecipientsRequest) (*quartermasterpb.GetTenantControlRecipientsResponse, error) {
+		return &quartermasterpb.GetTenantControlRecipientsResponse{Complete: true, Recipients: []*quartermasterpb.TenantControlRecipient{{}}}, nil
+	}
+	if _, err := server.InvalidateTenantCache(serviceCtx(), &foghorncontrolpb.InvalidateTenantCacheRequest{TenantId: "tenant-1"}); status.Code(err) != codes.Unavailable {
+		t.Fatalf("malformed inventory became authoritative empty: %v", err)
 	}
 }
 
@@ -345,17 +370,16 @@ func TestTenantStopUsesBothRecipientSourcesIndependently(t *testing.T) {
 				}
 				expect.WillReturnError(status.Error(codes.Unavailable, "inventory unavailable"))
 			} else {
-				delete(server.routeCache, "tenant-1")
-				code := codes.NotFound
-				if source == "route unavailable" {
-					code = codes.Unavailable
+				server.controlRecipientLookup = func(ctx context.Context, _ *quartermasterpb.GetTenantControlRecipientsRequest) (*quartermasterpb.GetTenantControlRecipientsResponse, error) {
+					if source == "no entitlements" {
+						return &quartermasterpb.GetTenantControlRecipientsResponse{Complete: true}, nil
+					}
+					if source == "route hangs" {
+						<-ctx.Done()
+						return nil, ctx.Err()
+					}
+					return nil, status.Error(codes.Unavailable, "owner inventory unavailable")
 				}
-				fake := &quartermasterRoutingFake{routingErr: status.Error(code, "no active entitled cluster")}
-				if source == "route hangs" {
-					fake.routingErr = nil
-					fake.gate = make(chan struct{})
-				}
-				server.quartermasterClient = startQuartermasterRoutingFake(t, fake)
 				mock.ExpectQuery("ListAccountIngestCells").WithArgs("tenant-1", "").WillReturnRows(sqlmock.NewRows([]string{"cell_id"}).AddRow("recorded"))
 				server.foghornDiscovery.Store("recorded", &foghornDiscoveryEntry{at: time.Now(), addrs: []string{addr}})
 			}

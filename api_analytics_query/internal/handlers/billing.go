@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -80,12 +81,16 @@ type BillingSummarizer struct {
 	systemTenantID             string
 	restreamBillingEffectiveMS int64
 	metrics                    *BillingMetrics
+	viewerAttributionReady     func(context.Context) (bool, error)
 }
 
 // BillingMetrics contains bounded-cardinality metering pipeline outcomes.
 type BillingMetrics struct {
-	ProjectionDivergences *prometheus.CounterVec
-	MalformedFactsSkipped *prometheus.CounterVec
+	ReservationTenantSnapshots *prometheus.CounterVec
+	UnresolvedServingTenants   *prometheus.GaugeVec
+	UnresolvedServingOldestAge *prometheus.GaugeVec
+	ProjectionDivergences      *prometheus.CounterVec
+	MalformedFactsSkipped      *prometheus.CounterVec
 }
 
 type usageProducer interface {
@@ -94,6 +99,7 @@ type usageProducer interface {
 
 // BillingConfig is the startup configuration of a BillingSummarizer.
 type BillingConfig struct {
+	ViewerAttributionReady func(context.Context) (bool, error)
 	// SourceID and SourceRegion must already be normalized with
 	// scheduler.NormalizeSourceIdentity.
 	SourceID     string
@@ -151,6 +157,7 @@ func NewBillingSummarizer(yugaDB database.PostgresConn, clickhouse database.Clic
 		systemTenantID:             cfg.SystemTenantID.String(),
 		restreamBillingEffectiveMS: restreamBillingEffectiveAtUnixMS,
 		metrics:                    cfg.Metrics,
+		viewerAttributionReady:     cfg.ViewerAttributionReady,
 	}
 	bs.resolvePrimaryCluster = func(tenantID string) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -186,30 +193,45 @@ func (bs *BillingSummarizer) reportID(tenantID, clusterID string, startTime, end
 }
 
 type activeViewerReservation struct {
-	TenantID        string
-	ClusterID       string
-	DeliveredMinute float64
-	EgressGB        float64
+	TenantID             string
+	ClusterID            string
+	DeliveredMinute      float64
+	EgressGB             float64
+	UnresolvedAgeSeconds float64
 }
 
 // PublishUsageReservations emits replaceable, absolute holds for open viewer
 // sessions. USER_END remains the final rated fact; these values only make
 // prepaid admission responsive while a long connection is still in flight.
 func (bs *BillingSummarizer) PublishUsageReservations(ctx context.Context) error {
-	rows, err := periscopequerydb.ActiveViewerReservations.Query(ctx, bs.clickhouse)
+	query := periscopequerydb.ActiveViewerReservations
+	if bs.viewerAttributionReady != nil {
+		ready, readyErr := bs.viewerAttributionReady(ctx)
+		if readyErr != nil {
+			return fmt.Errorf("load serving attribution migration state: %w", readyErr)
+		}
+		if ready {
+			query = periscopequerydb.ActiveViewerReservationsDurable
+		}
+	}
+	rows, err := query.Query(ctx, bs.clickhouse)
 	if err != nil {
 		return fmt.Errorf("query active viewer reservations: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	current := map[string]activeViewerReservation{}
+	blockedTenants := map[string]bool{}
+	var oldestUnresolvedSeconds float64
 	for rows.Next() {
 		var reservation activeViewerReservation
-		if scanErr := rows.Scan(&reservation.TenantID, &reservation.ClusterID, &reservation.DeliveredMinute, &reservation.EgressGB); scanErr != nil {
+		if scanErr := rows.Scan(&reservation.TenantID, &reservation.ClusterID, &reservation.DeliveredMinute, &reservation.EgressGB, &reservation.UnresolvedAgeSeconds); scanErr != nil {
 			return fmt.Errorf("scan active viewer reservation: %w", scanErr)
 		}
 		if strings.TrimSpace(reservation.ClusterID) == "" {
-			return fmt.Errorf("active viewer reservation missing serving cluster for tenant %s", reservation.TenantID)
+			blockedTenants[reservation.TenantID] = true
+			oldestUnresolvedSeconds = max(oldestUnresolvedSeconds, sanitizeFloat(reservation.UnresolvedAgeSeconds))
+			continue
 		}
 		reservation.DeliveredMinute = sanitizeFloat(reservation.DeliveredMinute)
 		reservation.EgressGB = sanitizeFloat(reservation.EgressGB)
@@ -218,26 +240,42 @@ func (bs *BillingSummarizer) PublishUsageReservations(ctx context.Context) error
 	if rowsErr := rows.Err(); rowsErr != nil {
 		return fmt.Errorf("iterate active viewer reservations: %w", rowsErr)
 	}
+	if closeErr := rows.Close(); closeErr != nil {
+		return fmt.Errorf("close active viewer reservation snapshot: %w", closeErr)
+	}
+
+	if bs.metrics != nil {
+		if bs.metrics.UnresolvedServingTenants != nil {
+			bs.metrics.UnresolvedServingTenants.WithLabelValues().Set(float64(len(blockedTenants)))
+		}
+		if bs.metrics.UnresolvedServingOldestAge != nil {
+			bs.metrics.UnresolvedServingOldestAge.WithLabelValues().Set(oldestUnresolvedSeconds)
+		}
+	}
 
 	previousKeys, err := bs.postgresQueries.ListReservationKeys(ctx, bs.sourceID)
 	if err != nil {
 		return fmt.Errorf("query previous reservation keys: %w", err)
 	}
 	for _, previous := range previousKeys {
+		if blockedTenants[previous.TenantID] {
+			continue
+		}
 		key := previous.TenantID + "\x00" + previous.ClusterID
 		if _, ok := current[key]; !ok {
 			current[key] = activeViewerReservation{TenantID: previous.TenantID, ClusterID: previous.ClusterID}
 		}
 	}
-	if len(current) == 0 {
-		return nil
-	}
 
 	periodEnd := time.Now().UTC().Truncate(time.Minute)
 	periodStart := periodEnd.Add(-time.Minute)
 	sequence := uint64(periodEnd.Unix())
-	summaries := make([]models.UsageSummary, 0, len(current))
+	byTenant := map[string][]models.UsageSummary{}
+	reservationsByTenant := map[string][]activeViewerReservation{}
 	for _, reservation := range current {
+		if blockedTenants[reservation.TenantID] {
+			continue
+		}
 		summary := models.UsageSummary{
 			ReportKind: "reservation", SourceID: bs.sourceID, SourceRegion: bs.sourceRegion,
 			Sequence: sequence, TenantID: reservation.TenantID, ClusterID: reservation.ClusterID,
@@ -246,27 +284,54 @@ func (bs *BillingSummarizer) PublishUsageReservations(ctx context.Context) error
 		summary.ReportID = bs.reportID(summary.TenantID, summary.ClusterID, periodStart, periodEnd, summary.ReportKind)
 		summary.Meters = appendMeter(summary.Meters, "delivered_minutes", "minute", reservation.DeliveredMinute, nil)
 		summary.Meters = appendMeter(summary.Meters, "egress_gb", "gibibyte", reservation.EgressGB, nil)
-		summaries = append(summaries, summary)
+		byTenant[reservation.TenantID] = append(byTenant[reservation.TenantID], summary)
+		reservationsByTenant[reservation.TenantID] = append(reservationsByTenant[reservation.TenantID], reservation)
 	}
-	if err := bs.sendUsageToPurser(summaries); err != nil {
-		return err
+	var failures []error
+	for tenantID := range blockedTenants {
+		bs.observeReservationTenant("blocked_attribution")
+		failures = append(failures, fmt.Errorf("active viewer reservation has unresolved serving attribution for tenant %s", tenantID))
 	}
-	for _, reservation := range current {
-		if reservation.DeliveredMinute == 0 && reservation.EgressGB == 0 {
-			if err := bs.postgresQueries.DeleteReservationKey(ctx, meteringdb.DeleteReservationKeyParams{
-				SourceID: bs.sourceID, TenantID: reservation.TenantID, ClusterID: reservation.ClusterID,
-			}); err != nil {
-				return fmt.Errorf("release reservation key: %w", err)
-			}
+	tenantIDs := make([]string, 0, len(byTenant))
+	for tenantID := range byTenant {
+		tenantIDs = append(tenantIDs, tenantID)
+	}
+	sort.Strings(tenantIDs)
+	for _, tenantID := range tenantIDs {
+		if ctx.Err() != nil {
+			return errors.Join(append(failures, ctx.Err())...)
+		}
+		summaries := byTenant[tenantID]
+		sort.Slice(summaries, func(i, j int) bool { return summaries[i].ClusterID < summaries[j].ClusterID })
+		if err := bs.sendUsageToPurser(summaries); err != nil {
+			bs.observeReservationTenant("send_failed")
+			failures = append(failures, fmt.Errorf("publish reservations for tenant %s: %w", tenantID, err))
 			continue
 		}
-		if err := bs.postgresQueries.UpsertReservationKey(ctx, meteringdb.UpsertReservationKeyParams{
-			SourceID: bs.sourceID, TenantID: reservation.TenantID, ClusterID: reservation.ClusterID, LastSequence: int64(sequence),
-		}); err != nil {
-			return fmt.Errorf("persist reservation key: %w", err)
+		bs.observeReservationTenant("acknowledged")
+		for _, reservation := range reservationsByTenant[tenantID] {
+			if reservation.DeliveredMinute == 0 && reservation.EgressGB == 0 {
+				if err := bs.postgresQueries.DeleteReservationKey(ctx, meteringdb.DeleteReservationKeyParams{
+					SourceID: bs.sourceID, TenantID: reservation.TenantID, ClusterID: reservation.ClusterID,
+				}); err != nil {
+					failures = append(failures, fmt.Errorf("release reservation key: %w", err))
+				}
+				continue
+			}
+			if err := bs.postgresQueries.UpsertReservationKey(ctx, meteringdb.UpsertReservationKeyParams{
+				SourceID: bs.sourceID, TenantID: reservation.TenantID, ClusterID: reservation.ClusterID, LastSequence: int64(sequence),
+			}); err != nil {
+				failures = append(failures, fmt.Errorf("persist reservation key: %w", err))
+			}
 		}
 	}
-	return nil
+	return errors.Join(failures...)
+}
+
+func (bs *BillingSummarizer) observeReservationTenant(outcome string) {
+	if bs.metrics != nil && bs.metrics.ReservationTenantSnapshots != nil {
+		bs.metrics.ReservationTenantSnapshots.WithLabelValues(outcome).Inc()
+	}
 }
 
 // getActiveTenants retrieves all active tenant IDs from the canonical

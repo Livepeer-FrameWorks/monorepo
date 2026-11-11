@@ -40,6 +40,16 @@ sidebar:
 - **externalIp**: `String` — External IP of the edge being bootstrapped (helps Foghorn assign a domain).
 - **preferredNodeId**: `String` — Caller-supplied node id hint; Foghorn may ignore.
 
+## BootstrapEdgePending
+
+**object**
+
+Enrollment is accepted for retry while the public identity converges.
+
+- **clusterId**: `String!`
+- **phase**: `String!`
+- **retryAfterSeconds**: `Int!`
+
 ## BootstrapEdgeResponse
 
 **object**
@@ -62,6 +72,7 @@ Result of a successful bootstrapEdge call. Carries everything the edge needs to 
 **union**
 
 - Member: [BootstrapEdgeResponse](/builders/api-schema/clusters-types/#bootstrapedgeresponse)
+- Member: [BootstrapEdgePending](/builders/api-schema/clusters-types/#bootstrapedgepending)
 - Member: [ValidationError](/builders/api-schema/shared/#validationerror)
 - Member: [AuthError](/builders/api-schema/shared/#autherror)
 

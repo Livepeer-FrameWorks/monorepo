@@ -30,7 +30,10 @@ type DB interface {
 // Migration is one declared service-owned data migration. Run is the worker
 // loop; Verify is an optional read-only assertion that the result is correct.
 type Migration struct {
-	ID                  string
+	ID string
+	// StateNamespace separates one service's logical datasets in shared state.
+	// The CLI/catalog ID stays stable; empty preserves existing storage keys.
+	StateNamespace      string
 	Service             string
 	IntroducedIn        string
 	RequiredBeforePhase string // postdeploy | contract
@@ -122,10 +125,18 @@ func Register(m Migration) {
 			panic("datamigrate.Register: invalid dependency for " + m.ID)
 		}
 	}
+	if strings.TrimSpace(m.StateNamespace) != m.StateNamespace || strings.ContainsAny(m.StateNamespace, "@\x00") {
+		panic("datamigrate.Register: invalid state namespace")
+	}
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	if _, exists := registry[m.ID]; exists {
 		panic("datamigrate.Register: duplicate ID " + m.ID)
+	}
+	for _, existing := range registry {
+		if storageMigrationID(existing.ID, existing.StateNamespace) == storageMigrationID(m.ID, m.StateNamespace) {
+			panic("datamigrate.Register: duplicate state identity " + m.ID)
+		}
 	}
 	registry[m.ID] = m
 }
@@ -208,4 +219,18 @@ func resetForTest() {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	registry = map[string]Migration{}
+}
+
+func migrationStateID(id string) string {
+	if migration := Lookup(id); migration != nil && migration.StateNamespace != "" {
+		return storageMigrationID(id, migration.StateNamespace)
+	}
+	return id
+}
+
+func storageMigrationID(id, namespace string) string {
+	if namespace == "" {
+		return id
+	}
+	return id + "@" + namespace
 }

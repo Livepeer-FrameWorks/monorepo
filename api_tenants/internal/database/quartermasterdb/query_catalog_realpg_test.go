@@ -976,6 +976,12 @@ func runConvertedRuntimeWriteAdapters(t *testing.T, ctx context.Context, db *sql
 		ClusterID: sql.NullString{String: privateClusterID, Valid: true}, ExpiresAt: now.Add(time.Hour)}); err != nil {
 		t.Fatalf("create private edge bootstrap token: %v", err)
 	}
+	if _, _, err := queries.GetBootstrapControlCell(ctx, privateClusterID, tenantID); err != nil {
+		t.Fatalf("get bootstrap control cell: %v", err)
+	}
+	if _, err := queries.ListTenantControlRecipients(ctx, tenantID, []string{privateClusterID}); err != nil {
+		t.Fatalf("list tenant control recipients: %v", err)
+	}
 	if _, err := queries.GetClusterPublicRootDomain(ctx, privateClusterID); err != nil {
 		t.Fatalf("get cluster public root domain: %v", err)
 	}

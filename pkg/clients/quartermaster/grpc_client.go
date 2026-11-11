@@ -1110,3 +1110,8 @@ func (c *GRPCClient) DeleteTenant(ctx context.Context, tenantID string) error {
 	_, err := c.tenant.DeleteTenant(ctx, &quartermasterpb.DeleteTenantRequest{TenantId: tenantID})
 	return err
 }
+
+// GetTenantControlRecipients resolves control delivery without admission reads.
+func (c *GRPCClient) GetTenantControlRecipients(ctx context.Context, req *quartermasterpb.GetTenantControlRecipientsRequest) (*quartermasterpb.GetTenantControlRecipientsResponse, error) {
+	return c.tenant.GetTenantControlRecipients(ctx, req)
+}

@@ -79,7 +79,7 @@ func LoadJob(ctx context.Context, db *sql.DB, id string) (JobState, error) {
 	}
 	row := db.QueryRowContext(ctx, `
 		SELECT id, release_version, status, started_at, completed_at, COALESCE(last_error, ''), updated_at
-		FROM _data_migrations WHERE id = $1`, id)
+		FROM _data_migrations WHERE id = $1`, migrationStateID(id))
 
 	var s JobState
 	var startedAt, completedAt sql.NullTime
@@ -98,6 +98,9 @@ func LoadJob(ctx context.Context, db *sql.DB, id string) (JobState, error) {
 	case err != nil:
 		return JobState{}, fmt.Errorf("load job %q: %w", id, err)
 	}
+	if migrationStateID(id) != id {
+		s.ID = id
+	}
 	if startedAt.Valid {
 		s.StartedAt = &startedAt.Time
 	}
@@ -115,7 +118,7 @@ func LoadRuns(ctx context.Context, db *sql.DB, id string) ([]RunState, error) {
 		       COALESCE(last_error, ''), started_at, updated_at, completed_at
 		FROM _data_migration_runs
 		WHERE id = $1
-		ORDER BY scope_kind, scope_value`, id)
+		ORDER BY scope_kind, scope_value`, migrationStateID(id))
 	if err != nil {
 		if fwdb.SQLState(err) == "42P01" {
 			return []RunState{}, nil
@@ -134,6 +137,9 @@ func LoadRuns(ctx context.Context, db *sql.DB, id string) ([]RunState, error) {
 			&r.AttemptCount, &r.Scanned, &r.Changed, &r.Skipped, &r.Errors,
 			&r.LastError, &startedAt, &r.UpdatedAt, &completedAt); err != nil {
 			return nil, err
+		}
+		if migrationStateID(id) != id {
+			r.ID = id
 		}
 		if leaseOwner.Valid {
 			r.LeaseOwner = leaseOwner.String
@@ -160,7 +166,7 @@ func LoadRun(ctx context.Context, db *sql.DB, id string, scope ScopeKey) (RunSta
 		       COALESCE(last_error, ''), started_at, updated_at, completed_at
 		FROM _data_migration_runs
 		WHERE id = $1 AND scope_kind = $2 AND scope_value = $3`,
-		id, scope.Kind, scope.Value)
+		migrationStateID(id), scope.Kind, scope.Value)
 
 	var r RunState
 	var leaseOwner sql.NullString
@@ -170,6 +176,9 @@ func LoadRun(ctx context.Context, db *sql.DB, id string, scope ScopeKey) (RunSta
 		&r.AttemptCount, &r.Scanned, &r.Changed, &r.Skipped, &r.Errors,
 		&r.LastError, &startedAt, &r.UpdatedAt, &completedAt); err != nil {
 		return RunState{}, fmt.Errorf("load run %q/%s: %w", id, scope, err)
+	}
+	if migrationStateID(id) != id {
+		r.ID = id
 	}
 	if leaseOwner.Valid {
 		r.LeaseOwner = leaseOwner.String
@@ -200,7 +209,7 @@ func MarkJobRunning(ctx context.Context, db *sql.DB, id, releaseVersion string) 
 			release_version = EXCLUDED.release_version,
 			started_at = COALESCE(_data_migrations.started_at, NOW()),
 			updated_at = NOW()`,
-		id, releaseVersion, string(StatusRunning), string(StatusPaused), string(StatusCompleted))
+		migrationStateID(id), releaseVersion, string(StatusRunning), string(StatusPaused), string(StatusCompleted))
 	if err != nil {
 		return fmt.Errorf("mark job running %q: %w", id, err)
 	}
@@ -212,7 +221,7 @@ func MarkJobCompleted(ctx context.Context, db *sql.DB, id string) error {
 	_, err := db.ExecContext(ctx, `
 		UPDATE _data_migrations
 		SET status = $2, completed_at = NOW(), updated_at = NOW(), last_error = NULL
-		WHERE id = $1`, id, string(StatusCompleted))
+		WHERE id = $1`, migrationStateID(id), string(StatusCompleted))
 	if err != nil {
 		return fmt.Errorf("mark job completed %q: %w", id, err)
 	}
@@ -228,7 +237,7 @@ func MarkJobFailed(ctx context.Context, db *sql.DB, id string, runErr error) err
 	_, err := db.ExecContext(ctx, `
 		UPDATE _data_migrations
 		SET status = $2, last_error = $3, updated_at = NOW()
-		WHERE id = $1`, id, string(StatusFailed), msg)
+		WHERE id = $1`, migrationStateID(id), string(StatusFailed), msg)
 	if err != nil {
 		return fmt.Errorf("mark job failed %q: %w", id, err)
 	}
@@ -241,7 +250,7 @@ func UpsertRun(ctx context.Context, db *sql.DB, id string, scope ScopeKey) error
 		INSERT INTO _data_migration_runs (id, scope_kind, scope_value, status, updated_at)
 		VALUES ($1, $2, $3, $4, NOW())
 		ON CONFLICT (id, scope_kind, scope_value) DO NOTHING`,
-		id, scope.Kind, scope.Value, string(StatusPending))
+		migrationStateID(id), scope.Kind, scope.Value, string(StatusPending))
 	if err != nil {
 		return fmt.Errorf("upsert run %q/%s: %w", id, scope, err)
 	}
@@ -264,7 +273,7 @@ func Checkpoint(ctx context.Context, db *sql.DB, id string, scope ScopeKey, p Pr
 		    error_count = $9,
 		    updated_at = NOW()
 		WHERE id = $1 AND scope_kind = $2 AND scope_value = $3`,
-		id, scope.Kind, scope.Value, string(StatusRunning),
+		migrationStateID(id), scope.Kind, scope.Value, string(StatusRunning),
 		checkpoint, p.Scanned, p.Changed, p.Skipped, p.Errors)
 	if err != nil {
 		return fmt.Errorf("checkpoint %q/%s: %w", id, scope, err)
@@ -279,7 +288,7 @@ func MarkRunCompleted(ctx context.Context, db *sql.DB, id string, scope ScopeKey
 		SET status = $4, completed_at = NOW(), updated_at = NOW(), last_error = NULL,
 		    lease_owner = NULL, lease_expires_at = NULL
 		WHERE id = $1 AND scope_kind = $2 AND scope_value = $3`,
-		id, scope.Kind, scope.Value, string(StatusCompleted))
+		migrationStateID(id), scope.Kind, scope.Value, string(StatusCompleted))
 	if err != nil {
 		return fmt.Errorf("mark run completed %q/%s: %w", id, scope, err)
 	}
@@ -297,7 +306,7 @@ func MarkRunFailed(ctx context.Context, db *sql.DB, id string, scope ScopeKey, r
 		UPDATE _data_migration_runs
 		SET status = $4, last_error = $5, updated_at = NOW()
 		WHERE id = $1 AND scope_kind = $2 AND scope_value = $3`,
-		id, scope.Kind, scope.Value, string(StatusFailed), msg)
+		migrationStateID(id), scope.Kind, scope.Value, string(StatusFailed), msg)
 	if err != nil {
 		return fmt.Errorf("mark run failed %q/%s: %w", id, scope, err)
 	}
@@ -320,7 +329,7 @@ func PauseJob(ctx context.Context, db *sql.DB, id, releaseVersion string) error 
 			END,
 			updated_at = NOW()
 		RETURNING status`,
-			id, releaseVersion, string(StatusPaused), string(StatusCompleted)).Scan(&status); err != nil {
+			migrationStateID(id), releaseVersion, string(StatusPaused), string(StatusCompleted)).Scan(&status); err != nil {
 			return fmt.Errorf("pause job %q: %w", id, err)
 		}
 		if status == StatusCompleted {
@@ -330,7 +339,7 @@ func PauseJob(ctx context.Context, db *sql.DB, id, releaseVersion string) error 
 		UPDATE _data_migration_runs
 		SET status=$2, lease_owner=NULL, lease_expires_at=NULL, updated_at=NOW()
 		WHERE id=$1 AND status <> $3`,
-			id, string(StatusPaused), string(StatusCompleted)); err != nil {
+			migrationStateID(id), string(StatusPaused), string(StatusCompleted)); err != nil {
 			return fmt.Errorf("pause runs %q: %w", id, err)
 		}
 		return nil
@@ -342,7 +351,7 @@ func PauseJob(ctx context.Context, db *sql.DB, id, releaseVersion string) error 
 func ResumeJob(ctx context.Context, db *sql.DB, id string) error {
 	return fwdb.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `UPDATE _data_migrations SET status=$2, updated_at=NOW() WHERE id=$1 AND status=$3`,
-			id, string(StatusPending), string(StatusPaused))
+			migrationStateID(id), string(StatusPending), string(StatusPaused))
 		if err != nil {
 			return fmt.Errorf("resume job %q: %w", id, err)
 		}
@@ -352,7 +361,7 @@ func ResumeJob(ctx context.Context, db *sql.DB, id string) error {
 		}
 		if rows == 0 {
 			var status Status
-			if scanErr := tx.QueryRowContext(ctx, `SELECT status FROM _data_migrations WHERE id=$1`, id).Scan(&status); scanErr != nil {
+			if scanErr := tx.QueryRowContext(ctx, `SELECT status FROM _data_migrations WHERE id=$1`, migrationStateID(id)).Scan(&status); scanErr != nil {
 				if errors.Is(scanErr, sql.ErrNoRows) {
 					return fmt.Errorf("resume job %q: not paused", id)
 				}
@@ -367,7 +376,7 @@ func ResumeJob(ctx context.Context, db *sql.DB, id string) error {
 		UPDATE _data_migration_runs
 		SET status=$2, updated_at=NOW()
 		WHERE id=$1 AND status=$3`,
-			id, string(StatusPending), string(StatusPaused)); err != nil {
+			migrationStateID(id), string(StatusPending), string(StatusPaused)); err != nil {
 			return fmt.Errorf("resume runs %q: %w", id, err)
 		}
 		return nil
@@ -421,7 +430,7 @@ func MarkJobCompletedIfScopesCompleted(ctx context.Context, db *sql.DB, id strin
 		            AND run.scope_value = want.scope_value
 		            AND run.status = $2
 		      )
-		  )`, id, string(StatusCompleted), pq.Array(kinds), pq.Array(values))
+		  )`, migrationStateID(id), string(StatusCompleted), pq.Array(kinds), pq.Array(values))
 	if err != nil {
 		return false, fmt.Errorf("complete job when scopes done %q: %w", id, err)
 	}

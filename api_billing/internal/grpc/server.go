@@ -4819,7 +4819,7 @@ func (s *PurserServer) invalidateTenantCache(ctx context.Context, tenantID, reas
 	if s.commodoreClient == nil {
 		return nil
 	}
-	invalidateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	invalidateCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if _, err := s.commodoreClient.InvalidateTenantCache(invalidateCtx, tenantID, reason); err != nil {
 		return err

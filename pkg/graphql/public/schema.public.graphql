@@ -851,6 +851,15 @@ input BootstrapEdgeInput {
 }
 
 """
+Enrollment is accepted for retry while the public identity converges.
+"""
+type BootstrapEdgePending {
+  clusterId: String!
+  phase: String!
+  retryAfterSeconds: Int!
+}
+
+"""
 Result of a successful bootstrapEdge call. Carries everything the edge
 needs to come online: its identity, its assigned Foghorn for runtime
 traffic, and (if the cluster issues per-node certs) its initial TLS
@@ -869,7 +878,7 @@ type BootstrapEdgeResponse {
   telemetry: EdgeTelemetrySetup
 }
 
-union BootstrapEdgeResult = BootstrapEdgeResponse | ValidationError | AuthError
+union BootstrapEdgeResult = BootstrapEdgeResponse | BootstrapEdgePending | ValidationError | AuthError
 
 """
 A bootstrap token for provisioning new infrastructure nodes.

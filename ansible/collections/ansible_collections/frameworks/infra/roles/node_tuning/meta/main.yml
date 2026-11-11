@@ -31,6 +31,11 @@ argument_specs:
           Tuning profile. `core` applies the general server baseline; `edge`
           additionally applies video-delivery sysctl knobs (BBR, FQ qdisc,
           tcp_notsent_lowat).
+      node_tuning_disable_multicast_resolution:
+        type: bool
+        required: false
+        default: true
+        description: Disable LLMNR and mDNS on an existing systemd resolver.
       node_tuning_masked_units:
         type: list
         elements: str

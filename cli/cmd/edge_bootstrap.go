@@ -2,7 +2,11 @@ package cmd
 
 import (
 	"context"
+	"crypto/tls"
+	"errors"
 	"fmt"
+	"net"
+	"time"
 
 	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/pkg/clients/bridge"
@@ -33,13 +37,38 @@ func bootstrapEdgeViaBridge(ctx context.Context, ctxCfg fwcfg.Context, enrollmen
 	}
 
 	bc := bridge.New(ctxCfg.Endpoints.BridgeURL)
-	out, err := bc.BootstrapEdge(ctx, bridge.EdgeBootstrapInput{
-		Token:           enrollmentToken,
-		ExternalIP:      externalIP,
-		PreferredNodeID: preferredNodeID,
-	})
-	if err != nil {
-		return nil, err
+	operationCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	var out *bridge.EdgeBootstrapResult
+	for {
+		var err error
+		out, err = bc.BootstrapEdge(operationCtx, bridge.EdgeBootstrapInput{
+			Token: enrollmentToken, ExternalIP: externalIP, PreferredNodeID: preferredNodeID,
+		})
+		if err == nil {
+			break
+		}
+		var pending *bridge.EdgeBootstrapPending
+		if !errors.As(err, &pending) {
+			return nil, err
+		}
+		delay := pending.RetryAfter
+		if delay < time.Second {
+			delay = time.Second
+		}
+		if delay > 5*time.Second {
+			delay = 5 * time.Second
+		}
+		if err := waitBootstrapRetry(operationCtx, delay); err != nil {
+			return nil, fmt.Errorf("bootstrap still pending for cluster %s at %s; resume that cluster: %w", pending.ClusterID, pending.Phase, err)
+		}
+	}
+	for {
+		if err := verifyBootstrapControlEndpoint(operationCtx, out.FoghornGRPCAddr, nil); err == nil {
+			break
+		} else if waitErr := waitBootstrapRetry(operationCtx, 2*time.Second); waitErr != nil {
+			return nil, fmt.Errorf("public control identity for cluster %s is not reachable: %w: %w", out.ClusterID, err, waitErr)
+		}
 	}
 
 	resp := &foghornpb.PreRegisterEdgeResponse{
@@ -59,4 +88,52 @@ func bootstrapEdgeViaBridge(ctx context.Context, ctxCfg fwcfg.Context, enrollmen
 		}
 	}
 	return resp, nil
+}
+
+func waitBootstrapRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// verifyBootstrapControlEndpoint retains hostname verification while trying
+// every DNS member. A failed replica must not strand an otherwise ready pool.
+func verifyBootstrapControlEndpoint(ctx context.Context, addr string, config *tls.Config) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	ips, err := net.DefaultResolver.LookupHost(ctx, host)
+	if err != nil {
+		return err
+	}
+	if config == nil {
+		config = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	config = config.Clone()
+	config.ServerName = host
+	var failures []error
+	for _, ip := range ips {
+		dialCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		dialer := tls.Dialer{NetDialer: &net.Dialer{}, Config: config}
+		conn, dialErr := dialer.DialContext(dialCtx, "tcp", net.JoinHostPort(ip, port))
+		cancel()
+		if dialErr == nil {
+			_ = conn.Close()
+			return nil
+		}
+		failures = append(failures, dialErr)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+	if len(failures) == 0 {
+		return fmt.Errorf("public control hostname has no addresses")
+	}
+	return errors.Join(failures...)
 }

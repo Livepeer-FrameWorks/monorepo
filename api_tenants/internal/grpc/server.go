@@ -7825,6 +7825,12 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *q
 		if addr, lookupErr := s.lookupClusterPublicFoghornGRPC(ctx, tokenRow.ClusterID.String); lookupErr == nil {
 			resp.FoghornGrpcAddr = addr
 		}
+		if tokenRow.Kind == "edge_node" {
+			if addr, cellID, lookupErr := s.lookupBootstrapFoghornGRPC(ctx, tokenRow.ClusterID.String, resp.TenantId); lookupErr == nil {
+				resp.BootstrapFoghornGrpcAddr = addr
+				resp.BootstrapControlCellId = cellID
+			}
+		}
 	}
 	if len(tokenRow.Metadata) > 0 {
 		var metadataMap map[string]any
@@ -7833,6 +7839,26 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *q
 		}
 	}
 	return resp, nil
+}
+
+func (s *QuartermasterServer) lookupBootstrapFoghornGRPC(ctx context.Context, clusterID, tenantID string) (string, string, error) {
+	var controlCellID, rootDomain string
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var queryErr error
+		controlCellID, rootDomain, queryErr = quartermasterdb.New(s.db).GetBootstrapControlCell(ctx, clusterID, tenantID)
+		return queryErr
+	})
+	if err != nil {
+		return "", "", err
+	}
+	if strings.TrimSpace(rootDomain) == "" {
+		return "", "", fmt.Errorf("control cell %q has no public root domain", controlCellID)
+	}
+	port, err := s.clusterFoghornExternalGRPCPort(ctx, controlCellID)
+	if err != nil {
+		return "", "", err
+	}
+	return publicFoghornGRPCAddr(controlCellID, rootDomain, port), controlCellID, nil
 }
 
 func (s *QuartermasterServer) lookupClusterPublicFoghornGRPC(ctx context.Context, clusterID string) (string, error) {
@@ -9662,6 +9688,24 @@ func (s *QuartermasterServer) createOwnedPrivateCluster(ctx context.Context, cre
 			return status.Errorf(codes.Unavailable, "no running Foghorn in control cell %q", create.controlCell.controlCellID)
 		}
 
+		rootDomain := dns.NormalizeDomainScope(create.controlCell.baseURL)
+		if rootDomain == "" {
+			return status.Error(codes.FailedPrecondition, "control cell has no public root domain")
+		}
+		// Desired TLS shares the cluster transaction; Navigator can reconcile it
+		// even when the immediate DNS wakeup is lost.
+		privateDomain := dns.SanitizeLabel(create.clusterID) + "." + rootDomain
+		domains, marshalErr := marshalStringSliceJSON([]string{privateDomain, "*." + privateDomain})
+		if marshalErr != nil {
+			return marshalErr
+		}
+		if _, err = txQueries.UpsertTLSBundle(ctx, quartermasterdb.UpsertTLSBundleParams{
+			BundleID: "cluster:" + dns.SanitizeLabel(create.clusterID), ClusterID: create.clusterID,
+			DomainsJSON: domains, Issuer: "navigator",
+		}); err != nil {
+			return txStatusErrorf(err, codes.Internal, "stage private cluster TLS: %v", err)
+		}
+
 		if err = txQueries.CreateEdgeBootstrapTokenRecord(ctx, quartermasterdb.CreateEdgeBootstrapTokenRecordParams{
 			ID: create.tokenID, TokenHash: hashBootstrapToken(create.token), TokenPrefix: tokenPrefix(create.token),
 			Name: fmt.Sprintf("Bootstrap token for %s", create.clusterName), TenantID: create.tenantID,
@@ -10142,12 +10186,7 @@ func hasTenantActionPermission(permissions []string, action authz.Action) bool {
 	default:
 		return false
 	}
-	for _, permission := range permissions {
-		if strings.TrimSpace(permission) == required {
-			return true
-		}
-	}
-	return false
+	return auth.PermissionGranted(permissions, required)
 }
 
 // authorizeTenantReadActor allows every same-tenant session to read the
@@ -10185,12 +10224,7 @@ func authorizeTenantReadActor(ctx context.Context, tenantID string) (bool, error
 }
 
 func hasAPITokenPermission(permissions []string, required string) bool {
-	for _, permission := range permissions {
-		if strings.TrimSpace(permission) == required {
-			return true
-		}
-	}
-	return false
+	return auth.PermissionGranted(permissions, required)
 }
 
 func requireOwnedResourceActor(ctx context.Context, ownerTenantID sql.NullString, action authz.Action) error {

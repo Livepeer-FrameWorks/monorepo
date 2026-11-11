@@ -21,6 +21,17 @@
         that: reserved_ports.stdout | trim == "51820"
         fail_msg: "net.ipv4.ip_local_reserved_ports is {{ reserved_ports.stdout | trim }}, want 51820"
 
+    - name: Read actual UDP and TCP listeners
+      ansible.builtin.command: ss -H -lntu
+      register: resolved_listeners
+      changed_when: false
+
+    - name: Assert multicast resolver listeners are closed
+      ansible.builtin.assert:
+        that:
+          - resolved_listeners.stdout is not regex(':(5353|5355)(\s|$)')
+        fail_msg: "systemd-resolved still exposes multicast name-resolution listeners"
+
     - name: Rerun for idempotence
       ansible.builtin.include_role:
         name: frameworks.infra.node_tuning

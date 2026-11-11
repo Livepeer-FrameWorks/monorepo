@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -611,4 +613,133 @@ func (d *fakeTenantAliasDNS) ReconcileRecordSet(_ context.Context, _ int64, name
 	}
 	d.records[name] = append([]bunny.Record(nil), desired...)
 	return nil
+}
+
+type scheduledAliasStore struct {
+	tenantAliasStore
+	listed    []store.TenantAlias
+	arrived   chan string
+	slow      chan struct{}
+	slowCalls atomic.Int64
+}
+
+func (s *scheduledAliasStore) ListTenantAliasesByStatus(context.Context, []string) ([]store.TenantAlias, error) {
+	return s.listed, nil
+}
+func (s *scheduledAliasStore) ListTenantAliasRetirements(context.Context) ([]store.TenantAliasRetirement, error) {
+	return nil, nil
+}
+func (s *scheduledAliasStore) GetTenantAlias(ctx context.Context, id string) (*store.TenantAlias, error) {
+	select {
+	case s.arrived <- id:
+	default:
+	}
+	if id == "slow" {
+		s.slowCalls.Add(1)
+		select {
+		case <-s.slow:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return &store.TenantAlias{TenantID: id, Status: "cert_failed"}, nil
+}
+
+func TestAliasWorkerSlowTenantDoesNotStarveWakeAndShutdown(t *testing.T) {
+	st := &scheduledAliasStore{arrived: make(chan string, 8), slow: make(chan struct{})}
+	w := NewAliasApplyStateWorker(st, nil, nil, logging.NewLogger(), time.Hour, "example.com", "cdn", 300)
+	w.WakeTenant("slow")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { w.Start(ctx); close(done) }()
+	select {
+	case id := <-st.arrived:
+		if id != "slow" {
+			t.Fatalf("first tenant=%s", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("accepted wake was lost")
+	}
+	for range 1000 {
+		w.WakeTenant("slow")
+	}
+	w.WakeTenant("fast")
+	select {
+	case id := <-st.arrived:
+		if id != "fast" {
+			t.Fatalf("duplicate in-flight tenant was scheduled: %s", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("slow tenant starved healthy tenant")
+	}
+	if st.slowCalls.Load() != 1 {
+		t.Fatal("in-flight tenant was not coalesced")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("worker ignored lifecycle shutdown")
+	}
+}
+
+func TestAliasWorkerPeriodicScanRepairsLostWakeAfterRestart(t *testing.T) {
+	st := &scheduledAliasStore{listed: []store.TenantAlias{{TenantID: "persisted", Status: "cert_issued"}}, arrived: make(chan string, 8)}
+	w := NewAliasApplyStateWorker(st, nil, nil, logging.NewLogger(), time.Hour, "example.com", "cdn", 300)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { w.Start(ctx); close(done) }()
+	select {
+	case id := <-st.arrived:
+		if id != "persisted" {
+			t.Fatalf("repaired tenant=%s", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("durable state depended on a retained wake")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not stop")
+	}
+}
+
+type overflowAliasStore struct{ scheduledAliasStore }
+
+func (s *overflowAliasStore) GetTenantAlias(ctx context.Context, id string) (*store.TenantAlias, error) {
+	timer := time.NewTimer(time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	s.arrived <- id
+	return &store.TenantAlias{TenantID: id, Status: "cert_failed"}, nil
+}
+
+func TestAliasWorkerDurableScanVisitsTenantsBeyondWakeQueueCapacity(t *testing.T) {
+	st := &overflowAliasStore{scheduledAliasStore: scheduledAliasStore{arrived: make(chan string, 1024)}}
+	for i := range 600 {
+		st.listed = append(st.listed, store.TenantAlias{TenantID: fmt.Sprintf("tenant-%04d", i), Status: "cert_issued"})
+	}
+	w := NewAliasApplyStateWorker(st, nil, nil, logging.NewLogger(), time.Hour, "example.com", "cdn", 300)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { w.Start(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	seen := map[string]bool{}
+	for len(seen) < 600 {
+		select {
+		case id := <-st.arrived:
+			seen[id] = true
+		case <-deadline.C:
+			t.Fatalf("durable scan dropped tenants beyond queue capacity: visited=%d want=600", len(seen))
+		}
+	}
 }

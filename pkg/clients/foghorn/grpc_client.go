@@ -42,6 +42,7 @@ type GRPCClient struct {
 	relay     foghornrelaypb.FoghornRelayClient
 	logger    logging.Logger
 	timeout   time.Duration
+	bootstrap bool
 }
 
 // GRPCConfig represents the configuration for the Foghorn gRPC client
@@ -64,6 +65,9 @@ type GRPCConfig struct {
 	ServerName string
 	// AllowInsecure disables TLS for operator-local/debug gRPC paths.
 	AllowInsecure bool
+	// Bootstrap uses the public replica pool without queueing an interactive RPC
+	// behind an unusable TLS channel. Durable callers retain wait-for-ready.
+	Bootstrap bool
 }
 
 // authInterceptor propagates service authentication to Foghorn. Commodore has
@@ -163,25 +167,23 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	}
 
 	// Connect to gRPC server with auth interceptor for user context and service token fallback
-	conn, err := grpc.NewClient(
-		config.GRPCAddr,
+	target := config.GRPCAddr
+	var replicaOpts []grpc.DialOption
+	if config.Bootstrap {
+		target, replicaOpts = grpcutil.ReplicaTarget(config.GRPCAddr)
+	}
+	unaryInterceptors := []grpc.UnaryClientInterceptor{timeoutInterceptor(config.Timeout), authInterceptor(config.ServiceToken)}
+	streamInterceptors := []grpc.StreamClientInterceptor{streamAuthInterceptor(config.ServiceToken)}
+	if !config.Bootstrap {
+		unaryInterceptors = append(unaryInterceptors, clients.FailsafeUnaryInterceptorWithMethodIsolation(
+			breakerName, map[string]string{foghornpb.MediaAuthorityControlService_ApplyMediaAuthority_FullMethodName: breakerName + "-media-authority"}, config.Logger))
+		streamInterceptors = append(streamInterceptors, clients.FailsafeStreamInterceptor(breakerName, config.Logger))
+	}
+	opts := []grpc.DialOption{
 		transport,
-		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
-		grpc.WithChainUnaryInterceptor(
-			timeoutInterceptor(config.Timeout),
-			authInterceptor(config.ServiceToken),
-			clients.FailsafeUnaryInterceptorWithMethodIsolation(
-				breakerName,
-				map[string]string{
-					foghornpb.MediaAuthorityControlService_ApplyMediaAuthority_FullMethodName: breakerName + "-media-authority",
-				},
-				config.Logger,
-			),
-		),
-		grpc.WithChainStreamInterceptor(
-			streamAuthInterceptor(config.ServiceToken),
-			clients.FailsafeStreamInterceptor(breakerName, config.Logger),
-		),
+		grpc.WithDefaultCallOptions(grpc.WaitForReady(!config.Bootstrap)),
+		grpc.WithChainUnaryInterceptor(unaryInterceptors...),
+		grpc.WithChainStreamInterceptor(streamInterceptors...),
 		// PeerChannel is open for the life of a federation peering and carries no
 		// frames at all on a cluster with no live streams. Without pings a path
 		// black-holed by a NAT or firewall idle reap is never noticed: the receive
@@ -189,7 +191,9 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		// lifecycle broadcast after that is enqueued into a mailbox whose Send is
 		// already doomed. PermitWithoutStream is off; the stream is always open.
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{Time: 30 * time.Second, Timeout: 10 * time.Second}),
-	)
+	}
+	opts = append(opts, replicaOpts...)
+	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Foghorn gRPC: %w", err)
 	}
@@ -208,6 +212,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		relay:     foghornrelaypb.NewFoghornRelayClient(conn),
 		logger:    config.Logger,
 		timeout:   config.Timeout,
+		bootstrap: config.Bootstrap,
 	}, nil
 }
 
@@ -623,9 +628,50 @@ func (c *GRPCClient) InvalidateTenantCache(ctx context.Context, tenantID, reason
 
 // PreRegisterEdge validates an enrollment token and returns an assigned domain for the edge.
 func (c *GRPCClient) PreRegisterEdge(ctx context.Context, req *foghornpb.PreRegisterEdgeRequest) (*foghornpb.PreRegisterEdgeResponse, error) {
+	callerCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	return c.edge.PreRegisterEdge(ctx, req)
+	if !c.bootstrap {
+		return c.edge.PreRegisterEdge(ctx, req)
+	}
+	var lastPending error
+	operationError := func() error {
+		if callerCtx.Err() != nil {
+			return status.FromContextError(callerCtx.Err()).Err()
+		}
+		if lastPending != nil {
+			return lastPending
+		}
+		return status.FromContextError(ctx.Err()).Err()
+	}
+	// Preregistration does not consume the credential. Reuse its identity while
+	// round robin can reach another replica, including one whose private public
+	// certificate is ready before its peers. A cell move needs new owner routing.
+	for {
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, 2*time.Second)
+		resp, err := c.edge.PreRegisterEdge(attemptCtx, req, grpc.WaitForReady(false))
+		attemptCancel()
+		reason, _, pending := grpcutil.BootstrapState(err)
+		if pending && reason == grpcutil.BootstrapPublicIdentityPending {
+			lastPending = err
+		}
+		if ctx.Err() != nil {
+			return nil, operationError()
+		}
+		if status.Code(err) != codes.Unavailable && status.Code(err) != codes.DeadlineExceeded {
+			return resp, err
+		}
+		if pending && reason == grpcutil.BootstrapControlCellChanged {
+			return nil, err
+		}
+		timer := time.NewTimer(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, operationError()
+		case <-timer.C:
+		}
+	}
 }
 
 // =============================================================================

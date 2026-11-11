@@ -638,6 +638,15 @@ export interface BillingTier {
 }
 
 
+/** Enrollment is accepted for retry while the public identity converges. */
+export interface BootstrapEdgePending {
+    clusterId: Scalars['String']
+    phase: Scalars['String']
+    retryAfterSeconds: Scalars['Int']
+    __typename: 'BootstrapEdgePending'
+}
+
+
 /**
  * Result of a successful bootstrapEdge call. Carries everything the edge
  * needs to come online: its identity, its assigned Foghorn for runtime
@@ -658,7 +667,7 @@ export interface BootstrapEdgeResponse {
     __typename: 'BootstrapEdgeResponse'
 }
 
-export type BootstrapEdgeResult = (BootstrapEdgeResponse | ValidationError | AuthError) & { __isUnion?: true }
+export type BootstrapEdgeResult = (BootstrapEdgeResponse | BootstrapEdgePending | ValidationError | AuthError) & { __isUnion?: true }
 
 
 /**
@@ -7590,6 +7599,16 @@ externalIp?: (Scalars['String'] | null),
 preferredNodeId?: (Scalars['String'] | null)}
 
 
+/** Enrollment is accepted for retry while the public identity converges. */
+export interface BootstrapEdgePendingGenqlSelection{
+    clusterId?: boolean | number
+    phase?: boolean | number
+    retryAfterSeconds?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+
 /**
  * Result of a successful bootstrapEdge call. Carries everything the edge
  * needs to come online: its identity, its assigned Foghorn for runtime
@@ -7613,6 +7632,7 @@ export interface BootstrapEdgeResponseGenqlSelection{
 
 export interface BootstrapEdgeResultGenqlSelection{
     on_BootstrapEdgeResponse?:BootstrapEdgeResponseGenqlSelection,
+    on_BootstrapEdgePending?:BootstrapEdgePendingGenqlSelection,
     on_ValidationError?:ValidationErrorGenqlSelection,
     on_AuthError?:AuthErrorGenqlSelection,
     on_Error?: ErrorGenqlSelection,
@@ -15685,6 +15705,14 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
+    const BootstrapEdgePending_possibleTypes: string[] = ['BootstrapEdgePending']
+    export const isBootstrapEdgePending = (obj?: { __typename?: any } | null): obj is BootstrapEdgePending => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isBootstrapEdgePending"')
+      return BootstrapEdgePending_possibleTypes.includes(obj.__typename)
+    }
+
+
+
     const BootstrapEdgeResponse_possibleTypes: string[] = ['BootstrapEdgeResponse']
     export const isBootstrapEdgeResponse = (obj?: { __typename?: any } | null): obj is BootstrapEdgeResponse => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isBootstrapEdgeResponse"')
@@ -15693,7 +15721,7 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
-    const BootstrapEdgeResult_possibleTypes: string[] = ['BootstrapEdgeResponse','ValidationError','AuthError']
+    const BootstrapEdgeResult_possibleTypes: string[] = ['BootstrapEdgeResponse','BootstrapEdgePending','ValidationError','AuthError']
     export const isBootstrapEdgeResult = (obj?: { __typename?: any } | null): obj is BootstrapEdgeResult => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isBootstrapEdgeResult"')
       return BootstrapEdgeResult_possibleTypes.includes(obj.__typename)

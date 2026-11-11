@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"frameworks/api_analytics_query/internal/appconfig"
 	"frameworks/api_analytics_query/internal/database/periscopequerydb"
+	"frameworks/api_analytics_query/internal/datamigrations"
 	"frameworks/api_analytics_query/internal/handlers"
 	"frameworks/api_analytics_query/internal/scheduler"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
@@ -18,6 +21,13 @@ import (
 
 func main() {
 	if version.HandleCLI() {
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "data-migrations" {
+		logger := logging.NewLoggerWithService("periscope-metering")
+		if err := runDataMigrationCommand(os.Args[1:], logger); err != nil {
+			logger.WithError(err).Fatal("Data migration command failed")
+		}
 		return
 	}
 	logger := logging.NewLoggerWithService("periscope-metering")
@@ -50,6 +60,8 @@ func main() {
 	clickhouse := database.MustConnectClickHouse(chConfig, logger)
 	defer func() { _ = clickhouse.Close() }()
 
+	datamigrations.RegisterViewerServingAttribution(sourceID, func() (database.ClickHouseConn, error) { return clickhouse, nil })
+
 	health := monitoring.NewHealthChecker("periscope-metering", version.Version)
 	metrics := monitoring.NewMetricsCollector("periscope-metering", version.Version, version.GitCommit)
 	health.AddCheck("postgres", monitoring.DatabaseHealthCheck(postgres))
@@ -62,6 +74,9 @@ func main() {
 	readiness.AddCheck("clickhouse", monitoring.DatabaseHealthCheck(clickhouse))
 
 	billingMetrics := &handlers.BillingMetrics{
+		ReservationTenantSnapshots: metrics.NewCounter("billing_reservation_tenant_snapshots_total", "Reservation tenant snapshots by bounded publication outcome", []string{"outcome"}),
+		UnresolvedServingTenants:   metrics.NewGauge("billing_reservation_unresolved_tenants", "Tenants whose current reservation snapshot lacks unambiguous serving attribution", nil),
+		UnresolvedServingOldestAge: metrics.NewGauge("billing_reservation_unresolved_oldest_age_seconds", "Age of the oldest open lifecycle with unresolved serving attribution", nil),
 		ProjectionDivergences: metrics.NewCounter(
 			"projection_divergence_billing_total",
 			"Projection divergence rows skipped safely by billing outcome and source table",
@@ -75,6 +90,10 @@ func main() {
 	}
 	tasks := scheduler.NewScheduler(postgres, clickhouse, logger, scheduler.Config{
 		Billing: handlers.BillingConfig{
+			ViewerAttributionReady: func(ctx context.Context) (bool, error) {
+				state, err := datamigrate.LoadJob(ctx, postgres, datamigrations.ViewerServingAttributionID)
+				return state.Status == datamigrate.StatusCompleted, err
+			},
 			SourceID:                       sourceID,
 			SourceRegion:                   sourceRegion,
 			KafkaBrokers:                   cfg.KafkaBrokers,

@@ -19,6 +19,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -26,6 +27,8 @@ import (
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Infrastructure pagination constants
@@ -1504,15 +1507,20 @@ func (r *Resolver) DoBootstrapEdge(ctx context.Context, input model.BootstrapEdg
 	if val.GetKind() != "edge_node" {
 		return &model.ValidationError{Message: "Token is not an edge bootstrap token"}, nil
 	}
-	addr := val.GetFoghornGrpcAddr()
+	addr := val.GetBootstrapFoghornGrpcAddr()
+	if addr == "" {
+		addr = val.GetFoghornGrpcAddr()
+	}
 	if addr == "" {
 		return &model.ValidationError{Message: "Cluster has no Foghorn assignment yet"}, nil
 	}
 
 	fh, err := fhclient.NewGRPCClient(fhclient.GRPCConfig{
-		GRPCAddr: addr,
-		Timeout:  30 * time.Second,
-		Logger:   r.Logger,
+		GRPCAddr:  addr,
+		UseTLS:    true,
+		Timeout:   8 * time.Second,
+		Logger:    r.Logger,
+		Bootstrap: true,
 	})
 	if err != nil {
 		r.Logger.WithError(err).WithField("foghorn_addr", addr).Log(gatewayerrors.LogLevel(err), "dial Foghorn for bootstrapEdge")
@@ -1530,8 +1538,18 @@ func (r *Resolver) DoBootstrapEdge(ctx context.Context, input model.BootstrapEdg
 
 	preResp, err := fh.PreRegisterEdge(ctx, preReq)
 	if err != nil {
-		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Foghorn PreRegisterEdge failed")
-		return &model.ValidationError{Message: fmt.Sprintf("PreRegisterEdge failed: %v", err)}, nil
+		if reason, retryAfter, pending := grpcutil.BootstrapState(err); pending {
+			phase := "public_identity"
+			if reason == grpcutil.BootstrapControlCellChanged {
+				phase = "control_assignment"
+			}
+			return &model.BootstrapEdgePending{ClusterID: val.GetClusterId(), Phase: phase, RetryAfterSeconds: int(retryAfter / time.Second)}, nil
+		}
+
+		if status.Code(err) == codes.Unavailable || status.Code(err) == codes.DeadlineExceeded {
+			return &model.BootstrapEdgePending{ClusterID: val.GetClusterId(), Phase: "control_transport", RetryAfterSeconds: 2}, nil
+		}
+		return &model.ValidationError{Message: "Failed to establish the assigned public control connection; retry enrollment for this cluster"}, nil
 	}
 
 	out := &model.BootstrapEdgeResponse{

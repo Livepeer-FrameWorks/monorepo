@@ -116,7 +116,7 @@ func genericServiceRoleConfig(serviceName string, port int) ServiceRoleConfig {
 		DefaultPort: port,
 	}
 	switch serviceName {
-	case "quartermaster", "commodore", "foghorn", "purser":
+	case "quartermaster", "commodore", "foghorn", "purser", "periscope-metering":
 		cfg.DataMigrations = true
 	case "metabase":
 		cfg.ContainerPort = servicedefs.MetabaseContainerPort

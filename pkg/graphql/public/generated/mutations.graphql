@@ -94,6 +94,7 @@ mutation BootstrapEdge(
   bootstrapEdge(input: $input) {
     __typename
     ...BootstrapEdgeResponseDefaultFields
+    ...BootstrapEdgePendingDefaultFields
     ...ValidationErrorDefaultFields
     ...AuthErrorDefaultFields
   }

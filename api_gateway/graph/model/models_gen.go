@@ -599,6 +599,15 @@ type BootstrapEdgeInput struct {
 	PreferredNodeID *string `json:"preferredNodeId,omitempty"`
 }
 
+// Enrollment is accepted for retry while the public identity converges.
+type BootstrapEdgePending struct {
+	ClusterID         string `json:"clusterId"`
+	Phase             string `json:"phase"`
+	RetryAfterSeconds int    `json:"retryAfterSeconds"`
+}
+
+func (BootstrapEdgePending) IsBootstrapEdgeResult() {}
+
 // Result of a successful bootstrapEdge call. Carries everything the edge
 // needs to come online: its identity, its assigned Foghorn for runtime
 // traffic, and (if the cluster issues per-node certs) its initial TLS

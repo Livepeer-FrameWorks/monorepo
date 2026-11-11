@@ -28,6 +28,23 @@ func placementAPITestContext() context.Context {
 	return context.WithValue(clientstest.AuthedCtx("tenant"), ctxkeys.KeyUserID, "user")
 }
 
+func TestPlacementWriteScopeIncludesRead(t *testing.T) {
+	ctx := context.WithValue(placementAPITestContext(), ctxkeys.KeyAuthType, "api_token")
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "owner")
+	ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{"placement:write"})
+	if err := placementAuthorization(ctx, false); err != nil {
+		t.Fatalf("write-scoped owner cannot read placement: %v", err)
+	}
+	ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{"placement:read"})
+	if err := placementAuthorization(ctx, true); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("read scope allowed placement write: %v", err)
+	}
+	ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{"streams:write"})
+	if err := placementAuthorization(ctx, false); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("unrelated scope allowed placement read: %v", err)
+	}
+}
+
 func TestPlacementAPIInputPreservesExactIntent(t *testing.T) {
 	input := placementAPITestInput()
 	wire, err := placementReviewInput(input)
@@ -234,7 +251,7 @@ func TestPlacementAPIApplyAndRecoverKeepExactChange(t *testing.T) {
 	}
 }
 
-func TestPlacementAPIScopedTokenReadAndWriteRemainIndependent(t *testing.T) {
+func TestPlacementAPIScopedTokenWriteIncludesReadAndKeepsRoleBoundary(t *testing.T) {
 	for _, role := range []string{"owner", "admin", "member", "viewer"} {
 		for _, scope := range []string{"placement:read", "placement:write", "infrastructure:write"} {
 			t.Run(role+"/"+scope, func(t *testing.T) {
@@ -242,7 +259,7 @@ func TestPlacementAPIScopedTokenReadAndWriteRemainIndependent(t *testing.T) {
 				ctx = context.WithValue(ctx, ctxkeys.KeyRole, role)
 				ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{scope})
 				r := &Resolver{Clients: clientstest.Clients(clientstest.WithCommodore(&clientstest.FakeCommodore{}))}
-				if (r.placementAccess(ctx, false) == nil) != (scope == "placement:read") {
+				if (r.placementAccess(ctx, false) == nil) != (scope == "placement:read" || scope == "placement:write") {
 					t.Fatal("placement read scope or tenant membership was lost")
 				}
 				wantManage := scope == "placement:write" && (role == "owner" || role == "admin")

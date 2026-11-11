@@ -1,0 +1,8 @@
+---
+- name: Node_tuning | restart active resolver
+  ansible.builtin.systemd_service:
+    name: systemd-resolved
+    state: restarted
+  when:
+    - "'systemd-resolved.service' in ansible_facts.services"
+    - ansible_facts.services['systemd-resolved.service'].state == "running"

@@ -314,6 +314,12 @@ export const scalarFields = {
         "preferredNodeId",
         "__typename"
     ],
+    "BootstrapEdgePending": [
+        "clusterId",
+        "phase",
+        "retryAfterSeconds",
+        "__typename"
+    ],
     "BootstrapEdgeResponse": [
         "nodeId",
         "edgeDomain",
@@ -4034,7 +4040,7 @@ export const scalarFields = {
 /** The concrete types each union and interface resolves to. */
 export interface PossibleTypes {
     AbortVodUploadResult: 'AuthError' | 'DeleteSuccess' | 'NotFoundError'
-    BootstrapEdgeResult: 'AuthError' | 'BootstrapEdgeResponse' | 'ValidationError'
+    BootstrapEdgeResult: 'AuthError' | 'BootstrapEdgePending' | 'BootstrapEdgeResponse' | 'ValidationError'
     ChangeBillingTierResult: 'AuthError' | 'ChangeBillingTierPayload' | 'ValidationError'
     ClusterSubscriptionResult: 'AuthError' | 'ClusterSubscription' | 'NotFoundError' | 'ValidationError'
     CompleteVodUploadResult: 'AuthError' | 'NotFoundError' | 'ValidationError' | 'VodAsset'

@@ -1,6 +1,9 @@
 ---
 node_tuning_profile: core
 
+# Server profiles use unicast DNS; multicast discovery has no public listener.
+node_tuning_disable_multicast_resolution: true
+
 node_tuning_purge_snapd: true
 node_tuning_mask_e2scrub: true
 

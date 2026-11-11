@@ -2,13 +2,12 @@ package resolvers
 
 import (
 	"context"
-	"slices"
-	"strings"
 	"time"
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
@@ -41,7 +40,7 @@ func placementAuthorization(ctx context.Context, manage bool) error {
 	if ctxkeys.GetTenantID(ctx) == "" || ctxkeys.GetUserID(ctx) == "" {
 		return status.Error(codes.Unauthenticated, "Tenant authentication is required.")
 	}
-	if ctxkeys.GetAuthType(ctx) == "api_token" && !slices.ContainsFunc(ctxkeys.GetPermissions(ctx), func(value string) bool { return strings.TrimSpace(value) == permission }) {
+	if ctxkeys.GetAuthType(ctx) == "api_token" && !auth.PermissionGranted(ctxkeys.GetPermissions(ctx), permission) {
 		return status.Error(codes.PermissionDenied, "The API token does not include the required placement scope.")
 	}
 	if err := middleware.RequireTenantAction(ctx, permission, action, ctxkeys.GetTenantID(ctx)); err != nil {
