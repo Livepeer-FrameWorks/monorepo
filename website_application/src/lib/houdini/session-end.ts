@@ -38,7 +38,7 @@ export function endSession(reason: SessionEnd): Promise<void> {
     } catch {
       // Storage can be unavailable; the login page then shows no reason.
     }
-    await auth.logout();
+    auth.clearLocalSession();
   })().finally(() => {
     ending = null;
   });

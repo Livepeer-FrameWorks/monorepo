@@ -47,6 +47,34 @@ func TestDelegatedJWTReplayInterceptorConsumesJTIOnce(t *testing.T) {
 	}
 }
 
+func TestWalletRPCAssertionReplayIsRejected(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	expiry := time.Now().Add(time.Minute)
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "wallet")
+	ctx = context.WithValue(ctx, ctxkeys.KeyJWTID, "wallet-jti")
+	ctx = context.WithValue(ctx, ctxkeys.KeyJWTExpiresAt, expiry)
+	for _, first := range []bool{true, false} {
+		mock.ExpectQuery(regexp.QuoteMeta("WITH claimed AS")).WithArgs("wallet-jti", expiry).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(first))
+	}
+	interceptor := DelegatedJWTReplayInterceptor(db, "commodore")
+	calls := 0
+	handler := func(context.Context, any) (any, error) { calls++; return nil, nil }
+	if _, err := interceptor(ctx, nil, &grpc.UnaryServerInfo{}, handler); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := interceptor(ctx, nil, &grpc.UnaryServerInfo{}, handler); status.Code(err) != codes.Unauthenticated || calls != 1 {
+		t.Fatalf("wallet assertion replay: err=%v handler calls=%d", err, calls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDelegatedJWTReplayInterceptorFailsClosedOnStoreError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

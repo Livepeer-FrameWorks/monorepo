@@ -2,11 +2,13 @@ package middleware
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"frameworks/api_gateway/internal/attribution"
 	"frameworks/api_gateway/internal/clients"
@@ -16,6 +18,7 @@ import (
 )
 
 type AuthResult struct {
+	SessionID     string
 	UserID        string
 	TenantID      string
 	Email         string
@@ -48,7 +51,7 @@ func AuthenticateRequest(ctx context.Context, r *http.Request, clients *clients.
 	}
 
 	if opts.AllowWallet && r.Header.Get("X-Wallet-Address") != "" {
-		return authenticateWallet(ctx, r, clients, logger)
+		return authenticateWallet(ctx, r, clients, jwtSecret, logger)
 	}
 
 	token, _ := bearerToken(r.Header.Get("Authorization"))
@@ -77,16 +80,24 @@ func bearerToken(authHeader string) (string, bool) {
 }
 
 // authenticateWallet validates the X-Wallet-* headers of r through Commodore.
-func authenticateWallet(ctx context.Context, r *http.Request, clients *clients.ServiceClients, logger logging.Logger) (*AuthResult, error) {
+func authenticateWallet(ctx context.Context, r *http.Request, clients *clients.ServiceClients, jwtSecret []byte, logger logging.Logger) (*AuthResult, error) {
 	walletAddr := r.Header.Get("X-Wallet-Address")
 	signature := r.Header.Get("X-Wallet-Signature")
 	message := r.Header.Get("X-Wallet-Message")
+	// SIWE challenges contain newlines, which HTTP field values cannot carry.
+	// Keep accepting the older single-line representation when it is supplied.
+	if decoded, err := base64.StdEncoding.DecodeString(message); err == nil && utf8.Valid(decoded) && strings.Contains(string(decoded), "\n") {
+		message = string(decoded)
+	}
 	if signature == "" || message == "" {
 		return nil, fmt.Errorf("missing wallet auth headers")
 	}
 
 	attr := attribution.FromRequest(r, "wallet", "wallet_ethereum")
-	resp, err := clients.Commodore.WalletLogin(ctx, walletAddr, message, signature, attr)
+	if clients == nil || clients.Commodore == nil {
+		return nil, ErrAuthBackendUnavailable
+	}
+	resp, err := clients.Commodore.VerifyWalletAuth(ctx, walletAddr, message, signature, attr)
 	if err != nil {
 		if logger != nil {
 			logger.WithError(err).Warn("Wallet auth failed")
@@ -96,26 +107,28 @@ func authenticateWallet(ctx context.Context, r *http.Request, clients *clients.S
 	if resp == nil || resp.User == nil {
 		return nil, fmt.Errorf("wallet auth returned no user")
 	}
-	var expiresAt *time.Time
-	if resp.ExpiresAt != nil {
-		value := resp.ExpiresAt.AsTime()
-		expiresAt = &value
-	}
-
 	email := ""
 	if resp.User.Email != nil {
 		email = *resp.User.Email
 	}
+	token, err := auth.GenerateWalletBearerJWT(resp.User.Id, resp.User.TenantId, email, resp.User.Role, resp.WalletAddress, jwtSecret)
+	if err != nil {
+		return nil, fmt.Errorf("wallet credential could not be created: %w", err)
+	}
+	claims, err := auth.ValidateWalletBearerJWT(token, jwtSecret)
+	if err != nil {
+		return nil, err
+	}
 	return &AuthResult{
-		UserID:           resp.User.Id,
-		TenantID:         resp.User.TenantId,
-		Email:            email,
-		Role:             resp.User.Role,
-		AuthType:         "wallet",
-		JWTToken:         resp.Token,
-		WalletAddress:    walletAddr,
-		PlatformOperator: resp.User.PlatformOperator,
-		ExpiresAt:        expiresAt,
+		UserID:        resp.User.Id,
+		TenantID:      resp.User.TenantId,
+		Email:         email,
+		Role:          resp.User.Role,
+		AuthType:      "wallet",
+		JWTToken:      token,
+		WalletAddress: resp.WalletAddress,
+		ExpiresAt:     &claims.ExpiresAt.Time,
+		IssuedAt:      &claims.IssuedAt.Time,
 	}, nil
 }
 
@@ -140,6 +153,7 @@ func AuthenticateBearerToken(ctx context.Context, token string, clients *clients
 	claims, err := validateSessionJWT(token, jwtSecret)
 	if err == nil {
 		result := &AuthResult{
+			SessionID:        claims.SessionID,
 			UserID:           claims.UserID,
 			TenantID:         claims.TenantID,
 			Email:            claims.Email,
@@ -157,6 +171,11 @@ func AuthenticateBearerToken(ctx context.Context, token string, clients *clients
 			result.IssuedAt = &issuedAt
 		}
 		return result, nil
+	}
+	if errors.Is(err, auth.ErrDelegatedJWT) {
+		if walletClaims, walletErr := auth.ValidateWalletBearerJWT(token, jwtSecret); walletErr == nil {
+			return authenticateWalletBearer(ctx, token, walletClaims, clients)
+		}
 	}
 	if errors.Is(err, auth.ErrDelegatedJWT) {
 		return nil, fmt.Errorf("%w: internal delegated token is not an ingress credential", ErrInvalidCredential)
@@ -200,6 +219,27 @@ func AuthenticateBearerToken(ctx context.Context, token string, clients *clients
 	return nil, ErrInvalidCredential
 }
 
+func authenticateWalletBearer(ctx context.Context, token string, claims *auth.Claims, clients *clients.ServiceClients) (*AuthResult, error) {
+	if clients == nil || clients.Commodore == nil {
+		return nil, ErrAuthBackendUnavailable
+	}
+	response, err := clients.Commodore.ValidateSession(ctx, token)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrAuthBackendUnavailable, err)
+	}
+	if response.GetAccountDeactivated() {
+		return nil, ErrAccountDeactivated
+	}
+	if !response.GetValid() {
+		return nil, ErrInvalidCredential
+	}
+	return &AuthResult{
+		UserID: claims.UserID, TenantID: claims.TenantID, Email: claims.Email, Role: claims.Role,
+		AuthType: "wallet", WalletAddress: claims.WalletAddress, JWTToken: token,
+		ExpiresAt: &claims.ExpiresAt.Time, IssuedAt: &claims.IssuedAt.Time,
+	}, nil
+}
+
 // ApplyAuthToContext injects auth values into a context for downstream handlers.
 func ApplyAuthToContext(ctx context.Context, auth *AuthResult) context.Context {
 	if auth == nil {
@@ -210,9 +250,8 @@ func ApplyAuthToContext(ctx context.Context, auth *AuthResult) context.Context {
 	ctx = context.WithValue(ctx, ctxkeys.KeyEmail, auth.Email)
 	ctx = context.WithValue(ctx, ctxkeys.KeyRole, auth.Role)
 	ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, auth.AuthType)
-	if auth.PlatformOperator {
-		ctx = context.WithValue(ctx, ctxkeys.KeyPlatformOperator, true)
-	}
+	ctx = context.WithValue(ctx, ctxkeys.KeySessionID, auth.SessionID)
+	ctx = context.WithValue(ctx, ctxkeys.KeyPlatformOperator, auth.PlatformOperator)
 	if auth.JWTToken != "" {
 		ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, auth.JWTToken)
 	}

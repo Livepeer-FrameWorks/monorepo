@@ -294,11 +294,8 @@ func GraphQLWebsocketInit(serviceClients *clients.ServiceClients, jwtSecret []by
 		}
 
 		if req, ok := ctx.Value(ctxkeys.KeyHTTPRequest).(*http.Request); ok && req != nil && req.Header.Get("X-Wallet-Address") != "" {
-			if result, err := authenticateWallet(ctx, req, serviceClients, logger); err == nil {
-				id := websocketIdentity{tenantID: result.TenantID}
-				if result.ExpiresAt != nil {
-					id.expiresAt = *result.ExpiresAt
-				}
+			if result, err := authenticateWallet(ctx, req, serviceClients, jwtSecret, logger); err == nil {
+				id := bearerIdentity(result.JWTToken, result)
 				ctx = withWebsocketIdentity(ApplyAuthToContext(ctx, result), id)
 			}
 		}

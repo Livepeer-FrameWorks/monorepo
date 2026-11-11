@@ -212,7 +212,7 @@ func authInterceptor(serviceToken string, delegatedJWTSecret ...[]byte) grpc.Una
 		if len(delegatedJWTSecret) > 0 {
 			delegatedSecret = delegatedJWTSecret[0]
 		}
-		if ctxkeys.GetAuthType(ctx) == "api_token" && !forceServiceAuth {
+		if (ctxkeys.GetAuthType(ctx) == "api_token" || ctxkeys.GetAuthType(ctx) == "wallet") && !forceServiceAuth {
 			assertion, err := clients.DelegatedJWTForRPC(ctx, "periscope", delegatedSecret)
 			if err != nil {
 				return status.Errorf(codes.Unauthenticated, "mint Periscope delegation: %v", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
@@ -211,6 +212,108 @@ func TestGRPCStreamAuthInterceptorRejectsJWTForServiceOnlyMethod(t *testing.T) {
 	})
 	if status.Code(err) != codes.PermissionDenied || called {
 		t.Fatalf("service-only stream JWT result err=%v called=%v", err, called)
+	}
+}
+
+func TestGRPCInterceptorsRejectRevokedSession(t *testing.T) {
+	secret := []byte("session-state-test")
+	token, err := auth.GenerateJWT("user", "tenant", "user@example.com", "member", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+token))
+	cfg := GRPCAuthConfig{JWTSecret: secret, ValidateSession: func(context.Context, string) error {
+		return status.Error(codes.Unauthenticated, "session signed out")
+	}}
+	called := false
+	_, err = GRPCAuthInterceptor(cfg)(ctx, nil, &grpc.UnaryServerInfo{FullMethod: "/test/Unary"}, func(context.Context, any) (any, error) {
+		called = true
+		return nil, nil
+	})
+	if status.Code(err) != codes.Unauthenticated || called {
+		t.Fatalf("revoked unary session: err=%v handler called=%v", err, called)
+	}
+	err = GRPCStreamAuthInterceptor(cfg)(nil, &fakeServerStream{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: "/test/Stream"}, func(any, grpc.ServerStream) error {
+		called = true
+		return nil
+	})
+	if status.Code(err) != codes.Unauthenticated || called {
+		t.Fatalf("revoked streaming session: err=%v handler called=%v", err, called)
+	}
+}
+
+func TestGRPCSessionCheckPreservesServiceAndAPITokenAuth(t *testing.T) {
+	secret := []byte("separate-auth-paths")
+	delegated, err := auth.GenerateDelegatedAPITokenJWT("user", "tenant", "user@example.com", "member", "token", []string{"streams:read"}, "commodore", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := auth.GenerateJWT("user", "tenant", "user@example.com", "member", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := GRPCAuthConfig{
+		ServiceToken: "service-token", JWTSecret: secret, DelegatedJWTAudience: "commodore",
+		ValidateSession: func(context.Context, string) error {
+			return status.Error(codes.Unavailable, "session state unavailable")
+		},
+	}
+	for _, tc := range []struct {
+		name, token string
+		want        codes.Code
+	}{
+		{"service", "service-token", codes.OK},
+		{"API token", delegated, codes.OK},
+		{"interactive outage", session, codes.Unavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+tc.token))
+			called := false
+			_, err := GRPCAuthInterceptor(cfg)(ctx, nil, &grpc.UnaryServerInfo{FullMethod: "/test/Unary"}, func(context.Context, any) (any, error) {
+				called = true
+				return nil, nil
+			})
+			if status.Code(err) != tc.want || called != (tc.want == codes.OK) {
+				t.Fatalf("unary: err=%v handler called=%v", err, called)
+			}
+			called = false
+			err = GRPCStreamAuthInterceptor(cfg)(nil, &fakeServerStream{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: "/test/Stream"}, func(any, grpc.ServerStream) error {
+				called = true
+				return nil
+			})
+			if status.Code(err) != tc.want || called != (tc.want == codes.OK) {
+				t.Fatalf("stream: err=%v handler called=%v", err, called)
+			}
+		})
+	}
+}
+
+func TestGRPCWalletDelegationRequiresServiceAudience(t *testing.T) {
+	secret := []byte("wallet-rpc-test")
+	assertion, err := auth.GenerateDelegatedWalletJWT("user", "tenant", "", "owner", "0xwallet", "commodore", time.Now().Add(time.Minute), secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, audience := range []string{"commodore", "purser"} {
+		ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+assertion))
+		cfg := GRPCAuthConfig{JWTSecret: secret, DelegatedJWTAudience: audience, ValidateSession: func(context.Context, string) error {
+			t.Fatal("wallet RPC assertion took the interactive-session path")
+			return nil
+		}}
+		called := false
+		_, err := GRPCAuthInterceptor(cfg)(ctx, nil, &grpc.UnaryServerInfo{FullMethod: "/test/Call"}, func(ctx context.Context, _ any) (any, error) {
+			called = true
+			if ctxkeys.GetAuthType(ctx) != "wallet" || ctxkeys.GetWalletAddress(ctx) != "0xwallet" || ctxkeys.IsPlatformOperator(ctx) {
+				t.Fatal("wallet assertion lost its identity or acquired platform privileges")
+			}
+			return nil, nil
+		})
+		if audience == "commodore" && (err != nil || !called) {
+			t.Fatalf("intended RPC rejected: %v", err)
+		}
+		if audience != "commodore" && (status.Code(err) != codes.Unauthenticated || called) {
+			t.Fatalf("wrong audience accepted: %v", err)
+		}
 	}
 }
 

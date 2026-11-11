@@ -2,8 +2,6 @@ package middleware
 
 import (
 	"context"
-	"errors"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -15,7 +13,7 @@ import (
 // ErrSessionRevoked rejects a session token whose user's sessions were
 // revoked (sign-out, password reset, refresh-token reuse) at or after the
 // second it was issued.
-var ErrSessionRevoked = errors.New("session signed out")
+var ErrSessionRevoked = auth.ErrSessionRevoked
 
 // sessionRevocationRetention is how long a revocation can still concern a
 // verifying token: every token it covers was issued no later than the
@@ -28,50 +26,9 @@ const (
 	sessionBackfillRetryMax   = 30 * time.Second
 )
 
-// SessionRevocations holds, per user, the latest revocation of the user's
-// sessions this replica learned, for as long as a token it covers can still
-// verify. A session token issued in or before that second is refused.
-type SessionRevocations struct {
-	mu      sync.RWMutex
-	cutoffs map[websocketUserKey]time.Time
-}
+type SessionRevocations = auth.SessionRevocations
 
-// NewSessionRevocations returns an empty set.
-func NewSessionRevocations() *SessionRevocations {
-	return &SessionRevocations{cutoffs: map[websocketUserKey]time.Time{}}
-}
-
-// Record keeps revokedAt as the user's cutoff unless a later one is held,
-// and forgets cutoffs that no verifying token can still predate.
-func (r *SessionRevocations) Record(tenantID, userID string, revokedAt time.Time) {
-	if r == nil || tenantID == "" || userID == "" {
-		return
-	}
-	key := websocketUserKey{tenantID: tenantID, userID: userID}
-	expired := time.Now().Add(-sessionRevocationRetention)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for k, cutoff := range r.cutoffs {
-		if cutoff.Before(expired) {
-			delete(r.cutoffs, k)
-		}
-	}
-	if prev, ok := r.cutoffs[key]; !ok || revokedAt.After(prev) {
-		r.cutoffs[key] = revokedAt
-	}
-}
-
-// Revoked reports whether a session token of the user issued at issuedAt is
-// covered by a recorded revocation.
-func (r *SessionRevocations) Revoked(tenantID, userID string, issuedAt time.Time) bool {
-	if r == nil {
-		return false
-	}
-	r.mu.RLock()
-	cutoff, ok := r.cutoffs[websocketUserKey{tenantID: tenantID, userID: userID}]
-	r.mu.RUnlock()
-	return ok && sessionTokenCoveredBy(issuedAt, cutoff)
-}
+func NewSessionRevocations() *SessionRevocations { return auth.NewSessionRevocations() }
 
 // sessionTokenCoveredBy reports whether a revocation at revokedAt covers a
 // session token issued at issuedAt. Token issue times have whole-second
@@ -96,14 +53,13 @@ func EnforceSessionRevocations(revocations *SessionRevocations) {
 // were revoked after it was issued. A replica that has not learned of a
 // revocation serves the locally valid token.
 func validateSessionJWT(token string, secret []byte) (*auth.Claims, error) {
-	claims, err := auth.ValidateInteractiveJWT(token, secret)
-	if err != nil {
-		return nil, err
-	}
-	if claims.IssuedAt != nil && enforcedSessionRevocations.Load().Revoked(claims.TenantID, claims.UserID, claims.IssuedAt.Time) {
-		return nil, ErrSessionRevoked
-	}
-	return claims, nil
+	return ValidateSessionJWT(token, secret)
+}
+
+// ValidateSessionJWT applies the same replica revocation state to handlers
+// that need to recheck a session's signed platform privileges.
+func ValidateSessionJWT(token string, secret []byte) (*auth.Claims, error) {
+	return auth.ValidateRevocableSessionJWT(token, secret, enforcedSessionRevocations.Load())
 }
 
 // RecentSessionRevocations lists, across tenants, the session revocations
@@ -165,6 +121,8 @@ func (s *WebsocketSessions) backfillSessionRevocations(list RecentSessionRevocat
 			}
 			if rev.GetAccountDeactivated() {
 				s.CloseDeactivatedUser(rev.GetTenantId(), rev.GetUserId(), rev.GetRevokedAt().AsTime())
+			} else if rev.GetSessionId() != "" {
+				s.CloseSession(rev.GetTenantId(), rev.GetUserId(), rev.GetSessionId(), rev.GetRevokedAt().AsTime())
 			} else {
 				s.CloseUserSessions(rev.GetTenantId(), rev.GetUserId(), rev.GetRevokedAt().AsTime())
 			}

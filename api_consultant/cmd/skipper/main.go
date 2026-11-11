@@ -621,11 +621,12 @@ func main() {
 		Reports:            &reportStoreAdapter{store: reportStore},
 	})
 	grpcAuthCfg := middleware.GRPCAuthConfig{
-		ServiceToken:   serviceToken,
-		JWTSecret:      []byte(jwtSecret),
-		MetadataPolicy: metadataPolicy,
-		Logger:         logger,
-		SkipMethods:    []string{"/grpc.health.v1.Health/Check", "/grpc.health.v1.Health/Watch"},
+		ServiceToken:    serviceToken,
+		JWTSecret:       []byte(jwtSecret),
+		ValidateSession: commodoreClient.CheckSession,
+		MetadataPolicy:  metadataPolicy,
+		Logger:          logger,
+		SkipMethods:     []string{"/grpc.health.v1.Health/Check", "/grpc.health.v1.Health/Watch"},
 	}
 	serverOpts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(
@@ -676,7 +677,10 @@ func main() {
 		DebugConfigOptions: configOptions,
 	})
 	apiGroup := router.Group("/api/skipper")
-	jwtOpts := []auth.JWTOption{auth.WithServiceIdentity(serviceToken, systemTenantID)}
+	jwtOpts := []auth.JWTOption{
+		auth.WithServiceIdentity(serviceToken, systemTenantID),
+		auth.WithSessionValidation(commodoreClient.CheckSession),
+	}
 	apiGroup.Use(auth.JWTAuthMiddleware([]byte(jwtSecret), jwtOpts...))
 	apiGroup.Use(skipperContextBridge())
 	apiGroup.Use(metering.AccessMiddleware(metering.AccessMiddlewareConfig{
@@ -814,23 +818,19 @@ func main() {
 	router.Any("/mcp/spoke/*path", gin.WrapH(http.Handler(spokeHandler)))
 
 	// MCP notification endpoint — per-tenant server for tenant-isolated sessions.
-	jwtSecretBytes := []byte(jwtSecret)
 	mcpHandler := mcp.NewStreamableHTTPHandler(
 		func(r *http.Request) *mcp.Server {
-			token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if token == "" {
+			tenantID := ctxkeys.GetTenantID(r.Context())
+			if tenantID == "" {
 				return nil
 			}
-			claims, err := auth.ValidateInteractiveJWT(token, jwtSecretBytes)
-			if err != nil || claims.TenantID == "" {
-				return nil
-			}
-			return mcpManager.ServerForTenant(claims.TenantID)
+			return mcpManager.ServerForTenant(tenantID)
 		},
 		&mcp.StreamableHTTPOptions{Stateless: false},
 	)
-	router.Any("/mcp/notify", gin.WrapH(http.Handler(mcpHandler)))
-	router.Any("/mcp/notify/*path", gin.WrapH(http.Handler(mcpHandler)))
+	notificationHandler := notificationSessionAuth(mcpHandler, []byte(jwtSecret), commodoreClient.CheckSession)
+	router.Any("/mcp/notify", gin.WrapH(notificationHandler))
+	router.Any("/mcp/notify/*path", gin.WrapH(notificationHandler))
 
 	// Embedded web UI — enabled by default, set SKIPPER_WEB_UI=false to disable.
 	if appCfg.WebUIEnabled {

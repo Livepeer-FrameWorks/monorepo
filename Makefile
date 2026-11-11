@@ -707,7 +707,10 @@ build-bin-cli: cli-embed-assets
 	cd cli && go build $(GO_TAG_FLAGS) $(call component_ldflags,cli,cli) -o ../bin/cli .
 
 # This driver exists only in the stack test binary; it cannot ship in Purser.
-.PHONY: build-stack-billing-runner verify-stack-fixtures
+.PHONY: build-stack-billing-runner build-stack-walletsign verify-stack-fixtures
+build-stack-walletsign:
+	cd scripts/stack/walletsign && go build -buildvcs=false -o ../../../bin/stack-walletsign .
+
 build-stack-billing-runner:
 	cd api_billing && go test -tags stack_verify -c -o ../bin/stack-billing-runner ./internal/handlers
 
@@ -1497,6 +1500,7 @@ verify-schema-migrations-core: verify-foghorn-test-selection test-purser-free-fa
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-pull-source-events -tags schema_verify -run 'TestPullSourceEventRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-api-tokens -tags schema_verify -run 'TestAPITokenRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-native-auth -tags schema_verify -run 'TestNativeAuthorizationRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-auth-sessions -tags schema_verify -run '^TestAuthSessionLifecycle_RealPG$$|^TestPasswordLoginCannotCrossPasswordReset_RealPG$$|^TestPasswordResetDrainsOldRefreshRotation_RealPG$$' -count=1 -timeout 300s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-bootstrap -tags schema_verify -run 'TestBootstrapRepositoryReplay_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestPeerDiscoveryCanonicalControlCells_RealPG|TestPeerDiscoveryAddressIsStableAcrossReplicaHeartbeats_RealPG|TestManualQueryAdapters_RealPG|TestConvertedRuntimeAdapters_RealPG|TestDNSEntitlementExpandPreservesPaidAliasesUntilObservation_RealPG|TestListTenantEffectiveAccessUsesCanonicalActiveGrantPredicate_RealPG|TestMediaPlacementInventory_RealPG|TestMediaCapacityConsent_RealPG|TestMediaAuthorityRefreshCoalescing_RealPG|TestListHealthyServiceNodesConsistentRead_RealPG|TestPrivateClusterControlCellFoghorns_RealPG|TestTenantControlRecipientsCanonicalizeWithoutAdmission_RealPG|TestClusterControlCellReassignment_RealPG|TestServiceEventOutboxScopeAndLeaseToken_RealPG|TestVisibleClusterGatewayPresence_RealPG|TestOutboxesPruneDelivered_RealPG|TestFoghornControlListenerSelectedByMarker_RealPG' -count=1 -timeout 600s ./internal/database/quartermasterdb/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-data-migrations -tags schema_verify -run 'TestTenantDNSEntitlementsRunAndVerifyRealPG|TestNodeIdentityKeyGateUsesRemediationOwnershipRealPG' -count=1 -timeout 600s ./internal/datamigrations/
@@ -1597,6 +1601,17 @@ verify-commodore-db:
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-pull-source-events -tags schema_verify -run 'TestPullSourceEventRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-api-tokens -tags schema_verify -run 'TestAPITokenRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-native-auth -tags schema_verify -run 'TestNativeAuthorizationRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-auth-sessions -tags schema_verify -run '^TestAuthSessionLifecycle_RealPG$$|^TestPasswordLoginCannotCrossPasswordReset_RealPG$$|^TestPasswordResetDrainsOldRefreshRotation_RealPG$$' -count=1 -timeout 300s ./internal/grpc/
+
+.PHONY: verify-auth-sessions verify-yugabyte-auth-sessions
+verify-auth-sessions:
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-auth-session-storage -tags schema_verify -run '^TestAuthSessionsSchema_RealPG$$|^TestGeneratedQueryCatalogPrepares_RealPG$$' -count=1 -timeout 300s ./internal/database/commodoredb/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-auth-sessions -tags schema_verify -run '^TestAuthSessionLifecycle_RealPG$$|^TestPasswordLoginCannotCrossPasswordReset_RealPG$$|^TestPasswordResetDrainsOldRefreshRotation_RealPG$$|^TestNativeAuthorizationRepository_RealPG$$' -count=1 -timeout 300s ./internal/grpc/
+	@$(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory verify-yugabyte-auth-sessions
+
+verify-yugabyte-auth-sessions: verify-yugabyte-shared-fixture
+	@$(CONTRACT_GO_TEST) api_control yugabyte/commodore-auth-session-storage -tags schema_verify -run '^TestAuthSessionsSchema_RealYugabyte$$|^TestGeneratedQueryCatalogPrepares_RealYugabyte$$' -count=1 -timeout 600s ./internal/database/commodoredb/
+	@$(CONTRACT_GO_TEST) api_control yugabyte/commodore-auth-sessions -tags schema_verify -run '^TestAuthSessionLifecycle_RealYugabyte$$|^TestPasswordLoginCannotCrossPasswordReset_RealYugabyte$$|^TestPasswordResetDrainsOldRefreshRotation_RealYugabyte$$' -count=1 -timeout 300s ./internal/grpc/
 
 verify-quartermaster-db:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-quartermaster-db requires a running Docker daemon"; exit 1; }
@@ -1908,6 +1923,7 @@ verify-yugabyte-commodore-contracts-a: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_control yugabyte/commodore-query-catalog -tags schema_verify -run '$(COMMODORE_QUERY_CATALOG_REALYB_TESTS)' -count=1 -timeout 1200s ./internal/database/commodoredb/
 	@$(CONTRACT_GO_TEST) api_control yugabyte/commodore-placement-a -tags schema_verify -run '^($(COMMODORE_PLACEMENT_REALYB_TESTS_A))$$' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_control yugabyte/commodore-account-email -tags schema_verify -run '^TestAccountEmailOutbox_(RetriesUntilDelivered|AbandonsRejectedRecipient)_RealYugabyte$$' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control yugabyte/commodore-auth-sessions -tags schema_verify -run '^TestAuthSessionLifecycle_RealYugabyte$$|^TestPasswordLoginCannotCrossPasswordReset_RealYugabyte$$|^TestPasswordResetDrainsOldRefreshRotation_RealYugabyte$$' -count=1 -timeout 300s ./internal/grpc/
 
 verify-yugabyte-commodore-contracts-b: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_control yugabyte/commodore-placement-b -tags schema_verify -run '^($(COMMODORE_PLACEMENT_REALYB_TESTS_B))$$' -count=1 -timeout 600s ./internal/grpc/

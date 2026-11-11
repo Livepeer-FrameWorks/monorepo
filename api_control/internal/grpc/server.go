@@ -3372,7 +3372,10 @@ func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *commodorepb
 // after the second the token was issued (JWT iat has whole-second precision,
 // so a token issued in the revocation's second counts as revoked).
 func (s *CommodoreServer) ValidateSession(ctx context.Context, req *commodorepb.ValidateSessionRequest) (*commodorepb.ValidateSessionResponse, error) {
-	claims, err := auth.ValidateInteractiveJWT(req.GetToken(), s.settings().JWTSecret)
+	claims, err := auth.ValidateRevocableSessionJWT(req.GetToken(), s.settings().JWTSecret, nil)
+	if errors.Is(err, auth.ErrDelegatedJWT) {
+		claims, err = auth.ValidateWalletBearerJWT(req.GetToken(), s.settings().JWTSecret)
+	}
 	if err != nil {
 		//nolint:nilerr // a token that does not verify is an invalid session, not a failed check
 		return &commodorepb.ValidateSessionResponse{Valid: false}, nil
@@ -3398,7 +3401,46 @@ func (s *CommodoreServer) ValidateSession(ctx context.Context, req *commodorepb.
 			return &commodorepb.ValidateSessionResponse{Valid: false}, nil
 		}
 	}
+	if claims.AuthType == "wallet" {
+		linked, err := commodoredb.New(s.db).HasUserWallet(ctx, commodoredb.HasUserWalletParams{
+			TenantID: claims.TenantID, UserID: claims.UserID, WalletAddress: claims.WalletAddress,
+		})
+		if err != nil {
+			return nil, status.Error(codes.Internal, "wallet state unavailable")
+		}
+		return &commodorepb.ValidateSessionResponse{Valid: linked}, nil
+	}
+	if claims.SessionID != "" {
+		if _, err := uuid.Parse(claims.SessionID); err != nil {
+			//nolint:nilerr // A malformed session ID is an invalid credential, not a failed state check.
+			return &commodorepb.ValidateSessionResponse{Valid: false}, nil
+		}
+		session, err := commodoredb.New(s.db).GetAuthSession(ctx, commodoredb.GetAuthSessionParams{
+			TenantID: claims.TenantID, UserID: claims.UserID, ID: claims.SessionID,
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			return &commodorepb.ValidateSessionResponse{Valid: false}, nil
+		}
+		if err != nil {
+			return nil, status.Error(codes.Internal, "session state unavailable")
+		}
+		now := time.Now()
+		if session.RevokedAt.Valid || !session.IdleExpiresAt.After(now) || !session.AbsoluteExpiresAt.After(now) {
+			return &commodorepb.ValidateSessionResponse{Valid: false}, nil
+		}
+	}
 	return &commodorepb.ValidateSessionResponse{Valid: true}, nil
+}
+
+func (s *CommodoreServer) checkSession(ctx context.Context, token string) error {
+	response, err := s.ValidateSession(ctx, &commodorepb.ValidateSessionRequest{Token: token})
+	if err != nil {
+		return status.Error(codes.Unavailable, "session state unavailable")
+	}
+	if !response.GetValid() {
+		return status.Error(codes.Unauthenticated, "session signed out")
+	}
+	return nil
 }
 
 // maxSessionRevocationLookback bounds ListRecentSessionRevocations: a
@@ -3427,6 +3469,22 @@ func (s *CommodoreServer) ListRecentSessionRevocations(ctx context.Context, req 
 		resp.Revocations = append(resp.Revocations, &commodorepb.SessionRevocation{
 			TenantId: row.TenantID, UserId: row.ID, RevokedAt: timestamppb.New(row.SessionsRevokedAt.Time),
 			AccountDeactivated: !row.IsActive,
+		})
+	}
+	if !req.GetIncludeAuthSessions() {
+		return resp, nil
+	}
+	sessions, err := commodoredb.New(s.db).ListAuthSessionRevocationsSince(ctx, sql.NullTime{Time: since, Valid: true})
+	if err != nil {
+		return nil, status.Error(codes.Internal, "session revocations unavailable")
+	}
+	for _, session := range sessions {
+		if !session.RevokedAt.Valid {
+			continue
+		}
+		resp.Revocations = append(resp.Revocations, &commodorepb.SessionRevocation{
+			TenantId: session.TenantID, UserId: session.UserID, SessionId: session.ID,
+			RevokedAt: timestamppb.New(session.RevokedAt.Time),
 		})
 	}
 	return resp, nil
@@ -4864,46 +4922,18 @@ func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginReque
 		s.logger.WithError(updateErr).Debug("Failed to update last_login_at")
 	}
 
-	// Generate JWT access token
-	jwtSecret := s.settings().JWTSecret
-	token, err := auth.GenerateSessionJWT(user.ID, user.TenantID, user.Email, user.Role, platformRoles(user.PlatformOperator), time.Now(), jwtSecret)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to generate JWT")
-		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
-	}
-
-	// Generate refresh token and store in DB
-	refreshToken, err := generateRandomString(40)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to generate refresh token: %v", err)
-	}
-	refreshHash := hashToken(refreshToken)
-	refreshExpiry := time.Now().Add(30 * 24 * time.Hour) // 30 days
-
+	var response *commodorepb.AuthResponse
 	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
-		if insertErr := commodoredb.New(tx).InsertRefreshToken(ctx, commodoredb.InsertRefreshTokenParams{
-			TenantID:  user.TenantID,
-			UserID:    user.ID,
-			TokenHash: refreshHash,
-			ExpiresAt: refreshExpiry,
-		}); insertErr != nil {
-			return insertErr
-		}
-		return s.enqueueAuthEventTx(ctx, tx, eventAuthLoginSucceeded, user.ID, user.TenantID, "password", "")
+		var issueErr error
+		info := sessionContextFromRequest(ctx, "password", "web")
+		info.passwordHash = user.PasswordHash
+		response, issueErr = s.issueUserSessionTx(ctx, tx, user.ID, user.TenantID, info)
+		return issueErr
 	})
 	if err != nil {
-		s.logger.WithError(err).Error("Failed to store refresh token")
-		return nil, status.Errorf(codes.Internal, "failed to create session: %v", err)
+		return nil, sessionIssueError(err)
 	}
-
-	expiresAt := time.Now().Add(15 * time.Minute)
-
-	return &commodorepb.AuthResponse{
-		Token:        token,
-		RefreshToken: refreshToken,
-		User:         user.toProtoUser("", ""),
-		ExpiresAt:    timestamppb.New(expiresAt),
-	}, nil
+	return response, nil
 }
 
 // Register creates a new user account
@@ -5131,238 +5161,20 @@ func (s *CommodoreServer) GetMe(ctx context.Context, req *commodorepb.GetMeReque
 	return result, nil
 }
 
-// Logout ends every session of the calling user on every device: it deletes
-// the user's refresh tokens and revokes the access tokens issued so far for
-// realtime connections (revokeUserSessionsTx). The caller clears its own
-// cookies whatever happens here, so a failure is logged and the logout is
-// still acknowledged.
-func (s *CommodoreServer) Logout(ctx context.Context, req *commodorepb.LogoutRequest) (*commodorepb.LogoutResponse, error) {
-	userID, tenantID, err := extractUserContext(ctx)
+// Logout revokes only the session named by the authenticated caller.
+func (s *CommodoreServer) Logout(ctx context.Context, _ *commodorepb.LogoutRequest) (*commodorepb.LogoutResponse, error) {
+	if _, _, err := sessionOwner(ctx); err != nil {
+		return nil, err
+	}
+	currentID := ctxkeys.GetSessionID(ctx)
+	if _, err := uuid.Parse(currentID); err != nil {
+		return nil, status.Error(codes.FailedPrecondition, "refresh this legacy session before signing out")
+	}
+	_, err := s.revokeSession(ctx, &commodorepb.RevokeSessionRequest{SessionId: currentID}, "logout")
 	if err != nil {
-		//nolint:nilerr // graceful logout even without user context
-		return &commodorepb.LogoutResponse{
-			Success: true,
-			Message: "logged out successfully",
-		}, nil
+		return nil, err
 	}
-
-	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
-		if deleteErr := commodoredb.New(tx).DeleteRefreshTokensForUser(ctx, commodoredb.DeleteRefreshTokensForUserParams{
-			UserID: userID, TenantID: tenantID,
-		}); deleteErr != nil {
-			return deleteErr
-		}
-		return s.revokeUserSessionsTx(ctx, tx, userID, tenantID, internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_LOGOUT)
-	})
-	if err != nil {
-		s.logger.WithError(err).WithFields(logging.Fields{
-			"user_id":   userID,
-			"tenant_id": tenantID,
-		}).Error("Failed to end the user's sessions during logout")
-	}
-
-	return &commodorepb.LogoutResponse{
-		Success: true,
-		Message: "logged out successfully",
-	}, nil
-}
-
-// RefreshToken exchanges a refresh token for a new access token. Rotation is
-// transactional (lock -> issue -> rotate -> commit) so a request can never
-// leave a half-rotated session behind. Replay of a rotated token within the
-// grace period is a legitimate concurrent-tab race and issues a fresh pair;
-// replay after the grace period is theft UNLESS the recorded successor was
-// never used, which means our rotation response never reached the client
-// (e.g. laptop slept mid-refresh) and the session is recovered instead.
-func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.RefreshTokenRequest) (*commodorepb.AuthResponse, error) {
-	refreshToken := req.GetRefreshToken()
-	if refreshToken == "" {
-		return nil, status.Error(codes.InvalidArgument, "refresh token required")
-	}
-
-	tokenHash := hashToken(refreshToken)
-
-	var (
-		userID, tenantID   string
-		user               commodoreUserRecord
-		token              string
-		newRefreshToken    string
-		sessionInvalidated bool
-	)
-	txErr := s.withStatusTx(ctx,
-		func(err error) error { return status.Errorf(codes.Internal, "failed to begin transaction: %v", err) },
-		func(err error) error {
-			if sessionInvalidated {
-				s.logger.WithError(err).Error("Failed to commit session revocation")
-				return status.Error(codes.Unauthenticated, "session invalidated")
-			}
-			return status.Errorf(codes.Internal, "failed to commit: %v", err)
-		},
-		func(tx *sql.Tx) error {
-			sessionInvalidated = false
-			txQueries := commodoredb.New(tx)
-
-			refreshRow, err := txQueries.LockRefreshTokenByHash(ctx, tokenHash)
-
-			if errors.Is(err, sql.ErrNoRows) {
-				return status.Error(codes.Unauthenticated, "invalid or expired refresh token")
-			}
-			if err != nil {
-				s.logger.WithError(err).Error("Database error validating refresh token")
-				return txStatus(status.Errorf(codes.Internal, "database error: %v", err), err)
-			}
-			tokenID := refreshRow.ID
-			userID = refreshRow.UserID
-			tenantID = refreshRow.TenantID
-			revoked := refreshRow.Revoked
-			rotatedAt := refreshRow.RotatedAt
-			replacedBy := refreshRow.ReplacedBy
-
-			rotateCurrent := !revoked
-			var staleSuccessorID string
-
-			if revoked {
-				if rotatedAt.Valid && time.Since(rotatedAt.Time) <= refreshTokenReuseGracePeriod {
-					// Concurrent refreshes (multiple tabs, timer + 401-retry) replay
-					// the just-rotated token; issue a fresh pair instead of failing.
-					s.logger.WithFields(logging.Fields{
-						"user_id":    userID,
-						"tenant_id":  tenantID,
-						"rotated_at": rotatedAt.Time,
-					}).Info("Refresh token replayed within rotation grace period; issuing fresh session")
-				} else {
-					successorUsed := true
-					if replacedBy.Valid {
-						successorRevoked, successorErr := txQueries.GetRefreshTokenSuccessorState(ctx, replacedBy.String)
-						switch {
-						case successorErr == nil:
-							successorUsed = successorRevoked
-						case errors.Is(successorErr, sql.ErrNoRows):
-							// Successor gone (e.g. explicit logout); treat as used.
-						default:
-							s.logger.WithError(successorErr).Error("Database error checking refresh token successor")
-							return txStatus(status.Errorf(codes.Internal, "database error: %v", successorErr), successorErr)
-						}
-					}
-					if successorUsed {
-						// Old token and its replacement are both in play: two parties
-						// share this session line. Revoke everything.
-						s.logger.WithFields(logging.Fields{
-							"user_id":   userID,
-							"tenant_id": tenantID,
-						}).Warn("Refresh token reuse detected, revoking all user sessions")
-						if revokeErr := txQueries.RevokeRefreshTokensForUser(ctx, commodoredb.RevokeRefreshTokensForUserParams{
-							UserID: userID, TenantID: tenantID,
-						}); revokeErr != nil {
-							s.logger.WithError(revokeErr).WithFields(logging.Fields{
-								"user_id":   userID,
-								"tenant_id": tenantID,
-							}).Error("Failed to revoke sessions after refresh token reuse detection")
-							return txStatus(status.Error(codes.Unauthenticated, "session invalidated"), revokeErr)
-						}
-						if revokeErr := s.revokeUserSessionsTx(ctx, tx, userID, tenantID, internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE); revokeErr != nil {
-							s.logger.WithError(revokeErr).WithFields(logging.Fields{
-								"user_id":   userID,
-								"tenant_id": tenantID,
-							}).Error("Failed to revoke access tokens after refresh token reuse detection")
-							return txStatus(status.Error(codes.Unauthenticated, "session invalidated"), revokeErr)
-						}
-						// The revocation commits; the caller still receives Unauthenticated.
-						sessionInvalidated = true
-						return nil
-					}
-					// The replacement we issued was never used: the rotation response
-					// never reached the client. Recover the session instead of
-					// treating the client as an attacker.
-					staleSuccessorID = replacedBy.String
-					s.logger.WithFields(logging.Fields{
-						"user_id":   userID,
-						"tenant_id": tenantID,
-					}).Warn("Refresh token rotation response was lost; recovering session with fresh tokens")
-				}
-			}
-
-			userRow, err := txQueries.GetRefreshUser(ctx, commodoredb.GetRefreshUserParams{ID: userID, TenantID: tenantID})
-
-			if err != nil {
-				return txStatus(status.Error(codes.Unauthenticated, "user not found"), err)
-			}
-			user, err = commodoreUserFromRefreshRow(userRow)
-			if err != nil {
-				return status.Error(codes.Unauthenticated, "user not found")
-			}
-
-			if !user.IsActive {
-				return status.Error(codes.Unauthenticated, "account deactivated")
-			}
-
-			// Generate new access token
-			jwtSecret := s.settings().JWTSecret
-			token, err = auth.GenerateSessionJWT(userID, tenantID, user.Email, user.Role, platformRoles(user.PlatformOperator), time.Now(), jwtSecret)
-			if err != nil {
-				return status.Errorf(codes.Internal, "failed to generate token: %v", err)
-			}
-
-			// Generate new refresh token
-			newRefreshToken, err = generateRandomString(40)
-			if err != nil {
-				return status.Errorf(codes.Internal, "failed to generate refresh token: %v", err)
-			}
-			newRefreshHash := hashToken(newRefreshToken)
-			refreshExpiry := time.Now().Add(30 * 24 * time.Hour)
-
-			newTokenID, err := txQueries.InsertRotatedRefreshToken(ctx, commodoredb.InsertRotatedRefreshTokenParams{
-				TenantID: tenantID, UserID: userID, TokenHash: newRefreshHash, ExpiresAt: refreshExpiry,
-			})
-			if err != nil {
-				s.logger.WithError(err).Error("Failed to store new refresh token")
-				return txStatus(status.Errorf(codes.Internal, "failed to store refresh token: %v", err), err)
-			}
-
-			if rotateCurrent {
-				// Revoke the old refresh token (don't delete - keep for reuse detection)
-				if err := txQueries.RotateRefreshToken(ctx, commodoredb.RotateRefreshTokenParams{
-					ID: tokenID, ReplacedBy: sql.NullString{String: newTokenID, Valid: true},
-				}); err != nil {
-					s.logger.WithError(err).Error("Failed to rotate refresh token")
-					return txStatus(status.Errorf(codes.Internal, "failed to rotate refresh token: %v", err), err)
-				}
-			} else if staleSuccessorID != "" {
-				// Retire the undelivered successor and re-point the presented token
-				// at its actual replacement so a repeated lost response still
-				// resolves as recovery, not theft.
-				if err := txQueries.RevokeRefreshTokenByID(ctx, staleSuccessorID); err != nil {
-					s.logger.WithError(err).Error("Failed to retire undelivered refresh token successor")
-					return txStatus(status.Errorf(codes.Internal, "failed to rotate refresh token: %v", err), err)
-				}
-				if err := txQueries.RelinkRefreshToken(ctx, commodoredb.RelinkRefreshTokenParams{
-					ID: tokenID, ReplacedBy: sql.NullString{String: newTokenID, Valid: true},
-				}); err != nil {
-					s.logger.WithError(err).Error("Failed to re-link recovered refresh token")
-					return txStatus(status.Errorf(codes.Internal, "failed to rotate refresh token: %v", err), err)
-				}
-			}
-			if err := s.enqueueAuthEventTx(ctx, tx, eventAuthTokenRefreshed, userID, tenantID, "refresh_token", ""); err != nil {
-				return txStatus(status.Errorf(codes.Internal, "failed to record token refresh: %v", err), err)
-			}
-			return nil
-		})
-	if txErr != nil {
-		return nil, txErr
-	}
-	if sessionInvalidated {
-		s.domainEventsCommittedNotify()
-		return nil, status.Error(codes.Unauthenticated, "session invalidated")
-	}
-
-	expiresAt := time.Now().Add(15 * time.Minute)
-
-	return &commodorepb.AuthResponse{
-		Token:        token,
-		RefreshToken: newRefreshToken,
-		User:         user.toProtoUser(userID, tenantID),
-		ExpiresAt:    timestamppb.New(expiresAt),
-	}, nil
+	return &commodorepb.LogoutResponse{Success: true, Message: "signed out of this session"}, nil
 }
 
 // ============================================================================
@@ -5516,7 +5328,7 @@ func (s *CommodoreServer) ExchangeAuthorizationCode(ctx context.Context, req *co
 			}
 
 			userID, tenantID = authorizationRow.UserID, authorizationRow.TenantID
-			resp, err = s.issueUserSessionTx(ctx, tx, userID, tenantID, "pkce")
+			resp, err = s.issueUserSessionTx(ctx, tx, userID, tenantID, sessionContextFromRequest(ctx, "pkce", authorizationRow.ClientID))
 			return err
 		})
 	if txErr != nil {
@@ -5575,59 +5387,6 @@ func (s *CommodoreServer) withStatusTx(ctx context.Context, onBegin, onCommit fu
 		return se.status
 	}
 	return err
-}
-
-// issueUserSessionTx issues a new access + refresh token pair for the given
-// user inside an open transaction. The caller is responsible for committing
-// and for emitting the login event once the commit succeeds.
-// Returns the same AuthResponse shape as Login.
-func (s *CommodoreServer) issueUserSessionTx(ctx context.Context, tx *sql.Tx, userID, tenantID, authType string) (*commodorepb.AuthResponse, error) {
-	queries := commodoredb.New(tx)
-	userRow, err := queries.GetRefreshUser(ctx, commodoredb.GetRefreshUserParams{ID: userID, TenantID: tenantID})
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.Unauthenticated, "user not found")
-	}
-	if err != nil {
-		return nil, txStatus(status.Errorf(codes.Internal, "database error: %v", err), err)
-	}
-	user, err := commodoreUserFromRefreshRow(userRow)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	if !user.IsActive {
-		return nil, status.Error(codes.Unauthenticated, "account deactivated")
-	}
-
-	jwtSecret := s.settings().JWTSecret
-	token, err := auth.GenerateSessionJWT(userID, tenantID, user.Email, user.Role, platformRoles(user.PlatformOperator), time.Now(), jwtSecret)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
-	}
-
-	refreshToken, err := generateRandomString(40)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to generate refresh token: %v", err)
-	}
-	refreshHash := hashToken(refreshToken)
-	refreshExpiry := time.Now().Add(30 * 24 * time.Hour)
-
-	if err := queries.InsertRefreshToken(ctx, commodoredb.InsertRefreshTokenParams{
-		TenantID: tenantID, UserID: userID, TokenHash: refreshHash, ExpiresAt: refreshExpiry,
-	}); err != nil {
-		return nil, txStatus(status.Errorf(codes.Internal, "failed to store refresh token: %v", err), err)
-	}
-	if err := s.enqueueAuthEventTx(ctx, tx, eventAuthLoginSucceeded, userID, tenantID, authType, ""); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to record sign-in: %v", err)
-	}
-
-	expiresAt := time.Now().Add(15 * time.Minute)
-
-	return &commodorepb.AuthResponse{
-		Token:        token,
-		RefreshToken: refreshToken,
-		User:         user.toProtoUser(userID, tenantID),
-		ExpiresAt:    timestamppb.New(expiresAt),
-	}, nil
 }
 
 // Crockford-style base32 alphabet (drops I, L, O, U) so user_codes can be
@@ -5822,7 +5581,7 @@ func (s *CommodoreServer) PollDeviceAuthorization(ctx context.Context, req *comm
 			// Approved — issue session and consume the row (DELETE so a re-poll
 			// returns ACCESS_DENIED on missing row).
 			userID, tenantID = deviceRow.UserID.String, deviceRow.TenantID.String
-			resp, err = s.issueUserSessionTx(ctx, tx, userID, tenantID, "device_code")
+			resp, err = s.issueUserSessionTx(ctx, tx, userID, tenantID, sessionContextFromRequest(ctx, "device_code", deviceRow.ClientID))
 			if err != nil {
 				return err
 			}
@@ -6234,6 +5993,9 @@ func (s *CommodoreServer) ResetPassword(ctx context.Context, req *commodorepb.Re
 		if resetErr != nil {
 			return resetErr
 		}
+		if lockErr := lockUserRefreshTokensTx(ctx, tx, userID, tenantID); lockErr != nil {
+			return lockErr
+		}
 		if deleteErr := txQueries.DeleteRefreshTokensForUser(ctx, commodoredb.DeleteRefreshTokensForUserParams{
 			UserID: userID, TenantID: tenantID,
 		}); deleteErr != nil {
@@ -6462,33 +6224,31 @@ func (s *CommodoreServer) consumeWalletChallenge(ctx context.Context, walletAddr
 	return nil
 }
 
-// WalletLogin authenticates via Ethereum wallet signature
-// If the wallet is not linked to any account, creates a new one (auto-provisioning)
-func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.WalletLoginRequest) (*commodorepb.AuthResponse, error) { //nolint:govet // Challenge consumption is an independent failure scope.
+func (s *CommodoreServer) verifyWalletProof(ctx context.Context, req *commodorepb.WalletLoginRequest) (commodoreUserRecord, string, bool, error) {
 	walletAddr := req.GetWalletAddress()
 	message := req.GetMessage()
 	signature := req.GetSignature()
 
 	if walletAddr == "" || message == "" || signature == "" {
-		return nil, status.Error(codes.InvalidArgument, "wallet_address, message, and signature required")
+		return commodoreUserRecord{}, "", false, status.Error(codes.InvalidArgument, "wallet_address, message, and signature required")
 	}
 
 	// Normalize before signature verification and challenge consumption so all
 	// callers share one address identity regardless of checksum casing.
 	normalizedAddr, err := auth.NormalizeEthAddress(walletAddr)
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid address: %v", err)
+		return commodoreUserRecord{}, "", false, status.Errorf(codes.InvalidArgument, "invalid address: %v", err)
 	}
 	valid, err := auth.VerifyEthSignature(normalizedAddr, message, signature)
 	if err != nil {
 		s.logger.WithError(err).WithField("wallet", normalizedAddr).Warn("Wallet signature verification failed")
-		return nil, status.Errorf(codes.InvalidArgument, "signature verification failed: %v", err)
+		return commodoreUserRecord{}, "", false, status.Errorf(codes.InvalidArgument, "signature verification failed: %v", err)
 	}
 	if !valid {
-		return nil, status.Error(codes.Unauthenticated, "invalid signature")
+		return commodoreUserRecord{}, "", false, status.Error(codes.Unauthenticated, "invalid signature")
 	}
 	if challengeErr := s.consumeWalletChallenge(ctx, normalizedAddr, message); challengeErr != nil {
-		return nil, challengeErr
+		return commodoreUserRecord{}, "", false, challengeErr
 	}
 
 	// Resolve or create wallet identity (single source of truth)
@@ -6505,22 +6265,51 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.Wall
 		Attribution:   attr,
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to resolve wallet user: %v", err)
+		return commodoreUserRecord{}, "", false, status.Errorf(codes.Internal, "failed to resolve wallet user: %v", err)
 	}
 
 	userID := walletResp.GetUserId()
 	tenantID := walletResp.GetTenantId()
-	isNewUser := walletResp.GetIsNew()
 
 	queries := commodoredb.New(s.db)
 	profileRow, err := queries.GetUserProfile(ctx, commodoredb.GetUserProfileParams{ID: userID, TenantID: tenantID})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to fetch user: %v", err)
+		return commodoreUserRecord{}, "", false, status.Errorf(codes.Internal, "failed to fetch user: %v", err)
 	}
 	profile, err := commodoreUserFromProfileRow(profileRow)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to fetch user: %v", err)
+		return commodoreUserRecord{}, "", false, status.Errorf(codes.Internal, "failed to fetch user: %v", err)
 	}
+
+	return profile, normalizedAddr, walletResp.GetIsNew(), nil
+
+}
+
+// VerifyWalletAuth consumes one signature challenge without creating an
+// interactive session, refresh credential or sign-in event.
+func (s *CommodoreServer) VerifyWalletAuth(ctx context.Context, req *commodorepb.WalletLoginRequest) (*commodorepb.WalletAuthResponse, error) {
+	if !middleware.IsServiceCall(ctx) {
+		return nil, status.Error(codes.PermissionDenied, "service authentication required")
+	}
+	profile, address, _, err := s.verifyWalletProof(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if !profile.IsActive {
+		return nil, status.Error(codes.Unauthenticated, "account deactivated")
+	}
+	return &commodorepb.WalletAuthResponse{User: profile.toProtoUser(profile.ID, profile.TenantID), WalletAddress: address}, nil
+}
+
+// WalletLogin authenticates via Ethereum wallet signature
+// If the wallet is not linked to any account, creates a new one (auto-provisioning)
+func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.WalletLoginRequest) (*commodorepb.AuthResponse, error) { //nolint:govet // Challenge consumption is an independent failure scope.
+	profile, normalizedAddr, isNewUser, err := s.verifyWalletProof(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	userID, tenantID := profile.ID, profile.TenantID
+	queries := commodoredb.New(s.db)
 
 	// Update last_auth_at on wallet identity
 	if touchErr := queries.TouchWalletIdentityAuth(ctx, commodoredb.TouchWalletIdentityAuthParams{
@@ -6534,47 +6323,23 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.Wall
 		s.logger.WithError(touchErr).Debug("Failed to update wallet user last_login_at")
 	}
 
-	// Generate JWT
-	jwtSecret := s.settings().JWTSecret
-	token, err := auth.GenerateSessionJWT(userID, tenantID, profile.Email, profile.Role, platformRoles(profile.PlatformOperator), time.Now(), jwtSecret)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
-	}
 	if !profile.IsActive {
 		if recordErr := s.recordLoginFailed(ctx, userID, tenantID, "wallet", sharedauthority.ReasonAccountInactive); recordErr != nil {
 			return nil, recordErr
 		}
 		return nil, status.Error(codes.Unauthenticated, "account deactivated")
 	}
-
-	refreshToken, err := generateRandomString(40)
+	var response *commodorepb.AuthResponse
+	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
+		var issueErr error
+		response, issueErr = s.issueUserSessionTx(ctx, tx, userID, tenantID, sessionContextFromRequest(ctx, "wallet", "web"))
+		return issueErr
+	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to generate refresh token: %v", err)
+		return nil, sessionIssueError(err)
 	}
-	refreshHash := hashToken(refreshToken)
-	refreshExpiry := time.Now().Add(30 * 24 * time.Hour)
-	if err := s.withEventTx(ctx, func(tx *sql.Tx) error {
-		if insertErr := commodoredb.New(tx).InsertRefreshToken(ctx, commodoredb.InsertRefreshTokenParams{
-			TenantID: tenantID, UserID: userID, TokenHash: refreshHash, ExpiresAt: refreshExpiry,
-		}); insertErr != nil {
-			return insertErr
-		}
-		return s.enqueueAuthEventTx(ctx, tx, eventAuthLoginSucceeded, userID, tenantID, "wallet", "")
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create wallet session: %v", err)
-	}
-	expiresAt := time.Now().Add(15 * time.Minute)
-
-	// Build user response
-	user := profile.toProtoUser(userID, tenantID)
-
-	return &commodorepb.AuthResponse{
-		Token:        token,
-		RefreshToken: refreshToken,
-		User:         user,
-		ExpiresAt:    timestamppb.New(expiresAt),
-		IsNewUser:    isNewUser,
-	}, nil
+	response.IsNewUser = isNewUser
+	return response, nil
 }
 
 // LinkWallet links a wallet to the authenticated user's account
@@ -10362,6 +10127,7 @@ func commodoreServiceOnlyMethods() []string {
 	return []string{
 		commodorepb.InternalService_ValidateAPIToken_FullMethodName,
 		commodorepb.InternalService_ValidateSession_FullMethodName,
+		commodorepb.InternalService_VerifyWalletAuth_FullMethodName,
 		commodorepb.InternalService_ListRecentSessionRevocations_FullMethodName,
 		commodorepb.InternalService_ResolveStreamContext_FullMethodName,
 		commodorepb.InternalService_ListManagedStreams_FullMethodName,
@@ -10396,12 +10162,11 @@ func commodoreServiceOnlyMethods() []string {
 	}
 }
 
-// NewGRPCServer creates a new gRPC server for Commodore with all services registered
-func NewGRPCServer(ctx context.Context, cfg CommodoreServerConfig) (*grpc.Server, error) {
-	// Chain auth interceptor with logging interceptor
-	grpcAuthCfg := middleware.GRPCAuthConfig{
+func commodoreAuthConfig(cfg CommodoreServerConfig, server *CommodoreServer) middleware.GRPCAuthConfig {
+	return middleware.GRPCAuthConfig{
 		ServiceToken:         cfg.ServiceToken,
 		JWTSecret:            cfg.JWTSecret,
+		ValidateSession:      server.checkSession,
 		DelegatedJWTAudience: "commodore",
 		MetadataPolicy:       cfg.MetadataPolicy,
 		Logger:               cfg.Logger,
@@ -10411,6 +10176,12 @@ func NewGRPCServer(ctx context.Context, cfg CommodoreServerConfig) (*grpc.Server
 		},
 		ServiceOnlyMethods: commodoreServiceOnlyMethods(),
 	}
+}
+
+// NewGRPCServer creates a new gRPC server for Commodore with all services registered
+func NewGRPCServer(ctx context.Context, cfg CommodoreServerConfig) (*grpc.Server, error) {
+	commodoreServer := NewCommodoreServer(cfg)
+	grpcAuthCfg := commodoreAuthConfig(cfg, commodoreServer)
 	authInterceptor := middleware.GRPCAuthInterceptor(grpcAuthCfg)
 
 	// GRPCMetricsInterceptor sits outermost so Unauthenticated /
@@ -10447,7 +10218,6 @@ func NewGRPCServer(ctx context.Context, cfg CommodoreServerConfig) (*grpc.Server
 	}
 
 	server := grpcutil.NewServer(opts...)
-	commodoreServer := NewCommodoreServer(cfg)
 
 	// Background worker that replays per-cluster invalidation rows whose
 	// synchronous Foghorn dispatch failed or returned a partial-success

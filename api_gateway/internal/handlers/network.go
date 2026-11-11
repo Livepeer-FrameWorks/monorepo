@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/networkobserver"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -99,7 +99,7 @@ func (h *NetworkHandlers) ProberRelay(path string) gin.HandlerFunc {
 func (h *NetworkHandlers) Public(c *gin.Context) { h.serve(c, false) }
 func (h *NetworkHandlers) Diagnostics(c *gin.Context) {
 	// A JWT alone grants no access to platform-wide customer correlation.
-	claims, err := auth.ValidateInteractiveJWT(ctxkeys.GetJWTToken(c.Request.Context()), h.JWTSecret)
+	claims, err := middleware.ValidateSessionJWT(ctxkeys.GetJWTToken(c.Request.Context()), h.JWTSecret)
 	allowed := err == nil && claims.HasRole("platform_operator")
 	if h.Logger != nil {
 		h.Logger.WithFields(logging.Fields{"audit": "platform_admin_read", "surface": "network_diagnostics", "operator_id": ctxkeys.GetUserID(c.Request.Context()), "allowed": allowed}).Info("Platform network diagnostics access")

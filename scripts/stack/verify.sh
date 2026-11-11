@@ -82,6 +82,9 @@ fi
 if printf '%s\n' "${scenarios[@]}" | grep -Eq '/(27|54)-'; then
   make build-stack-billing-runner || exit 1
 fi
+if printf '%s\n' "${scenarios[@]}" | grep -Eq '/57-'; then
+  make build-stack-walletsign || exit 1
+fi
 repeat=${STACK_REPEAT:-1}
 case "$repeat" in
   '' | *[!0-9]*) echo "STACK_REPEAT must be an integer from 1 to 100" >&2; exit 1 ;;

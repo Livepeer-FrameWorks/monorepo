@@ -86,6 +86,9 @@ func (s *CommodoreServer) AdminSetUserActive(ctx context.Context, req *commodore
 			return err
 		}
 		if !req.GetActive() {
+			if err = lockUserRefreshTokensTx(ctx, tx, user.ID, tenantID); err != nil {
+				return err
+			}
 			if err = q.RevokeRefreshTokensForUser(ctx, commodoredb.RevokeRefreshTokensForUserParams{UserID: user.ID, TenantID: tenantID}); err != nil {
 				return err
 			}
@@ -237,6 +240,9 @@ func (s *CommodoreServer) AdminDeactivateTenant(ctx context.Context, req *commod
 		}
 		for _, userID := range users {
 			if _, err = q.SetAccountUserActive(ctx, commodoredb.SetAccountUserActiveParams{TenantID: tenantID, UserID: userID, Active: false}); err != nil {
+				return err
+			}
+			if err = lockUserRefreshTokensTx(ctx, tx, userID, tenantID); err != nil {
 				return err
 			}
 			if err = q.RevokeRefreshTokensForUser(ctx, commodoredb.RevokeRefreshTokensForUserParams{UserID: userID, TenantID: tenantID}); err != nil {

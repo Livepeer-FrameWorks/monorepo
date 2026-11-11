@@ -322,6 +322,20 @@ services:
   # Scenarios run here (docker compose exec). The Docker socket is for fault
   # injection into this slot's own project only: scripts/stack/lib.sh always
   # passes -p "$COMPOSE_PROJECT_NAME".
+  # Session revocation scenarios exercise the real notification auth path.
+  # No model calls or knowledge crawls are needed for that transport contract.
+  skipper:
+    environment:
+      LLM_PROVIDER: ""
+      EMBEDDING_PROVIDER: ""
+      UTILITY_LLM_PROVIDER: ""
+      LLM_API_KEY: ""
+      EMBEDDING_API_KEY: ""
+      UTILITY_LLM_API_KEY: ""
+      SITEMAPS: ""
+      SKIPPER_SITEMAPS_DIR: ""
+      SKIPPER_WEB_UI: "false"
+
   stack-runner:
     build:
       context: scripts/stack
@@ -382,6 +396,7 @@ services:
   foghorn-2:
     environment:
       <<: *stack-s3-cell-a
+      FOGHORN_INTERNAL_HTTP_BIND_ADDR: 0.0.0.0
       PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS: "true"
       # Mist's balancer source for the edges this replica controls. The dev
       # fallback is <FOGHORN_HOST>:18008, but this replica serves public HTTP

@@ -2,8 +2,12 @@ package middleware
 
 import (
 	"context"
+	"encoding/base64"
+	"errors"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -160,6 +164,7 @@ func TestAuthenticateRequestWalletSuccess(t *testing.T) {
 		GRPCAddr:      addr,
 		Timeout:       5 * time.Second,
 		AllowInsecure: true,
+		ServiceToken:  "test-service",
 	})
 	if err != nil {
 		t.Fatalf("failed to create commodore client: %v", err)
@@ -188,6 +193,9 @@ func TestAuthenticateRequestWalletSuccess(t *testing.T) {
 	}
 	if result.WalletAddress != "0xabc" {
 		t.Fatalf("unexpected wallet address: %s", result.WalletAddress)
+	}
+	if got := server.walletLogins.Load(); got != 0 {
+		t.Fatalf("wallet header called interactive WalletLogin %d times; want verify-only", got)
 	}
 }
 
@@ -259,16 +267,127 @@ func startInternalService(t *testing.T, server commodorepb.InternalServiceServer
 type fakeCommodoreService struct {
 	commodorepb.UnimplementedInternalServiceServer
 	commodorepb.UnimplementedUserServiceServer
-	walletResp *commodorepb.AuthResponse
-	walletErr  error
+	walletResp    *commodorepb.AuthResponse
+	walletErr     error
+	walletLogins  atomic.Int32
+	walletValid   atomic.Bool
+	walletMessage atomic.Pointer[string]
 }
 
 func newFakeCommodoreService(_ any, walletResp *commodorepb.AuthResponse) *fakeCommodoreService {
-	return &fakeCommodoreService{walletResp: walletResp}
+	fake := &fakeCommodoreService{walletResp: walletResp}
+	fake.walletValid.Store(true)
+	return fake
 }
 
 func (f *fakeCommodoreService) WalletLogin(ctx context.Context, _ *commodorepb.WalletLoginRequest) (*commodorepb.AuthResponse, error) {
+	f.walletLogins.Add(1)
 	return f.walletResp, f.walletErr
+}
+
+func (f *fakeCommodoreService) VerifyWalletAuth(_ context.Context, req *commodorepb.WalletLoginRequest) (*commodorepb.WalletAuthResponse, error) {
+	message := req.GetMessage()
+	f.walletMessage.Store(&message)
+	if f.walletResp == nil {
+		return nil, f.walletErr
+	}
+	return &commodorepb.WalletAuthResponse{User: f.walletResp.User, WalletAddress: req.WalletAddress}, f.walletErr
+}
+
+func (f *fakeCommodoreService) ValidateSession(context.Context, *commodorepb.ValidateSessionRequest) (*commodorepb.ValidateSessionResponse, error) {
+	return &commodorepb.ValidateSessionResponse{Valid: f.walletValid.Load()}, nil
+}
+
+func TestWalletHeaderBearerHandoffCreatesNoInteractiveSession(t *testing.T) {
+	server := newFakeCommodoreService(nil, &commodorepb.AuthResponse{User: &commodorepb.User{
+		Id: "wallet-user", TenantId: "wallet-tenant", Role: "owner", PlatformOperator: true,
+	}})
+	address, cleanup := startCommodoreService(t, server, server)
+	defer cleanup()
+	client, err := commodore.NewGRPCClient(commodore.GRPCConfig{GRPCAddr: address, AllowInsecure: true, ServiceToken: "service"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	services := &clients.ServiceClients{Commodore: client}
+	secret := []byte("wallet-handoff")
+	var last *AuthResult
+	for range 3 {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
+		req.Header.Set("X-Wallet-Address", "0xwallet")
+		req.Header.Set("X-Wallet-Message", base64.StdEncoding.EncodeToString([]byte("Sign in to FrameWorks.\nNonce: fixture")))
+		req.Header.Set("X-Wallet-Signature", "signature")
+		last, err = AuthenticateRequest(context.Background(), req, services, secret, AuthOptions{AllowWallet: true}, nil)
+		if err != nil || last.SessionID != "" || last.PlatformOperator {
+			t.Fatalf("header result=%+v err=%v", last, err)
+		}
+		if _, bearerErr := auth.ValidateWalletBearerJWT(last.JWTToken, secret); bearerErr != nil {
+			t.Fatalf("MCP handoff bearer: %v", bearerErr)
+		}
+	}
+	if got := server.walletLogins.Load(); got != 0 {
+		t.Fatalf("header requests called interactive login %d times", got)
+	}
+	if got := server.walletMessage.Load(); got == nil || *got != "Sign in to FrameWorks.\nNonce: fixture" {
+		t.Fatalf("SIWE message was not transported verbatim: %v", got)
+	}
+	bearer, err := AuthenticateBearerToken(context.Background(), last.JWTToken, services, secret)
+	if err != nil || bearer.AuthType != "wallet" || bearer.SessionID != "" || bearer.PlatformOperator {
+		t.Fatalf("handoff result=%+v err=%v", bearer, err)
+	}
+	server.walletValid.Store(false)
+	if _, err := AuthenticateBearerToken(context.Background(), last.JWTToken, services, secret); !errors.Is(err, ErrInvalidCredential) {
+		t.Fatalf("unlinked/revoked wallet bearer accepted: %v", err)
+	}
+	watch := websocketIdentityWatch{serviceClients: services, jwtSecret: secret}
+	if err := watch.check(context.Background(), bearerIdentity(last.JWTToken, last)); !errors.Is(err, ErrInvalidCredential) {
+		t.Fatalf("wallet socket credential remained active: %v", err)
+	}
+}
+
+func TestWalletHeaderMessageDecodesOnlyMultilineUTF8(t *testing.T) {
+	server := newFakeCommodoreService(nil, &commodorepb.AuthResponse{User: &commodorepb.User{
+		Id: "wallet-user", TenantId: "wallet-tenant", Role: "owner",
+	}})
+	address, cleanup := startCommodoreService(t, server, server)
+	defer cleanup()
+	client, err := commodore.NewGRPCClient(commodore.GRPCConfig{GRPCAddr: address, AllowInsecure: true, ServiceToken: "service"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	services := &clients.ServiceClients{Commodore: client}
+	encode := base64.StdEncoding.EncodeToString
+	multiline := "Sign in to FrameWorks café.\nNonce: fixture"
+	for _, tc := range []struct {
+		name, header, want string
+	}{
+		{"multiline UTF8", encode([]byte(multiline)), multiline},
+		{"single line UTF8", encode([]byte("single line")), encode([]byte("single line"))},
+		{"invalid UTF8 with newline", encode([]byte{0xff, '\n', 0xfe}), encode([]byte{0xff, '\n', 0xfe})},
+		{"legacy plaintext", "Sign in to FrameWorks", "Sign in to FrameWorks"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", nil)
+			req.Header.Set("X-Wallet-Address", "0xwallet")
+			req.Header.Set("X-Wallet-Message", tc.header)
+			req.Header.Set("X-Wallet-Signature", "signature")
+			if _, authErr := AuthenticateRequest(t.Context(), req, services, []byte("wallet-transport"), AuthOptions{AllowWallet: true}, nil); authErr != nil {
+				t.Fatal(authErr)
+			}
+			if got := server.walletMessage.Load(); got == nil || *got != tc.want {
+				t.Fatalf("verified message = %v, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestApplyAuthClearsPriorPlatformOperatorGrant(t *testing.T) {
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyPlatformOperator, true)
+	ctx = ApplyAuthToContext(ctx, &AuthResult{UserID: "wallet-user", TenantID: "wallet-tenant", Role: "owner", AuthType: "wallet"})
+	if ctxkeys.IsPlatformOperator(ctx) {
+		t.Fatal("programmatic wallet identity inherited the previous identity's platform grant")
+	}
 }
 
 func startCommodoreService(t *testing.T, internalServer commodorepb.InternalServiceServer, userServer commodorepb.UserServiceServer) (string, func()) {

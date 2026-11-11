@@ -16,6 +16,7 @@ import (
 	signalmanclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/signalman"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
 	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
@@ -73,6 +74,7 @@ type SubscriptionManager struct {
 type CredentialSockets interface {
 	CloseAPIToken(tenantID, tokenID string) int
 	CloseUserSessions(tenantID, userID string, revokedAt time.Time) int
+	CloseSession(tenantID, userID, sessionID string, revokedAt time.Time) int
 	CloseDeactivatedUser(tenantID, userID string, revokedAt time.Time) int
 }
 
@@ -477,8 +479,10 @@ func (sm *SubscriptionManager) applyCredentialRevocation(key signalmanclient.Str
 			tenantID = event.GetTenantId()
 		}
 		if revocation, ok := revokedUserSessions(tenantID, event); ok {
-			if revocation.GetReason() == internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_OPERATOR_DEACTIVATION {
+			if revocation.GetAccountDeactivated() {
 				holder.sockets.CloseDeactivatedUser(tenantID, revocation.GetUserId(), revocation.GetRevokedAt().AsTime())
+			} else if revocation.GetSessionId() != "" {
+				holder.sockets.CloseSession(tenantID, revocation.GetUserId(), revocation.GetSessionId(), revocation.GetRevokedAt().AsTime())
 			} else {
 				holder.sockets.CloseUserSessions(tenantID, revocation.GetUserId(), revocation.GetRevokedAt().AsTime())
 			}
@@ -902,19 +906,33 @@ func (sm *SubscriptionManager) watchRevocationStream(ctx context.Context, key si
 }
 
 // revokedUserSessions decodes only the matching tenant's session-revocation event.
-func revokedUserSessions(tenantID string, event *signalmanpb.SignalmanEvent) (*internalv1.UserSessionsRevoked, bool) {
+func revokedUserSessions(tenantID string, event *signalmanpb.SignalmanEvent) (*commodorepb.SessionRevocation, bool) {
 	if event.GetEventType() != signalmanpb.EventType_EVENT_TYPE_TENANT_EVENT || event.GetTenantId() != tenantID {
 		return nil, false
 	}
 	tenantEvent := event.GetData().GetTenantEvent()
-	if tenantEvent.GetType() != "user.sessions_revoked" {
+	result := &commodorepb.SessionRevocation{TenantId: tenantID}
+	switch tenantEvent.GetType() {
+	case "user.sessions_revoked":
+		var payload internalv1.UserSessionsRevoked
+		if err := tenantEvent.GetData().UnmarshalTo(&payload); err != nil {
+			return nil, false
+		}
+		result.UserId, result.RevokedAt = payload.GetUserId(), payload.GetRevokedAt()
+		result.AccountDeactivated = payload.GetReason() == internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_OPERATOR_DEACTIVATION
+	case "auth_session.revoked":
+		var payload internalv1.AuthSessionRevoked
+		if err := tenantEvent.GetData().UnmarshalTo(&payload); err != nil || payload.GetSessionId() == "" {
+			return nil, false
+		}
+		result.UserId, result.SessionId, result.RevokedAt = payload.GetUserId(), payload.GetSessionId(), payload.GetRevokedAt()
+	default:
 		return nil, false
 	}
-	var payload internalv1.UserSessionsRevoked
-	if err := tenantEvent.GetData().UnmarshalTo(&payload); err != nil || payload.GetUserId() == "" || !payload.GetRevokedAt().IsValid() {
+	if result.GetUserId() == "" || !result.GetRevokedAt().IsValid() {
 		return nil, false
 	}
-	return &payload, true
+	return result, true
 }
 
 // revokedAPITokenID returns the revoked token's ID when event is tenantID's

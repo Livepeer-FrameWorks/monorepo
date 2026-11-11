@@ -28,6 +28,9 @@ type GRPCAuthConfig struct {
 	ServiceToken string
 	// JWTSecret is the secret for validating user JWTs (as bytes)
 	JWTSecret []byte
+	// ValidateSession checks authoritative state for interactive JWTs. Service
+	// credentials and audience-bound programmatic assertions bypass this check.
+	ValidateSession func(context.Context, string) error
 	// Logger for auth events
 	Logger logging.Logger
 	// SkipMethods is a list of method names to skip auth (e.g., health checks)
@@ -124,6 +127,11 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 				if serviceOnlyMap[info.FullMethod] {
 					return nil, status.Error(codes.PermissionDenied, "method requires service authentication")
 				}
+				if claims.AuthType == "" && cfg.ValidateSession != nil {
+					if err := cfg.ValidateSession(ctx, token); err != nil {
+						return nil, err
+					}
+				}
 				// JWT is valid - add claims to context
 				ctx = context.WithValue(ctx, ctxkeys.KeyUserID, claims.UserID)
 				ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, claims.TenantID)
@@ -132,6 +140,7 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 					ctx = context.WithValue(ctx, ctxkeys.KeyPlatformOperator, true)
 				}
 				ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, token)
+				ctx = context.WithValue(ctx, ctxkeys.KeySessionID, claims.SessionID)
 				ctx = context.WithValue(ctx, ctxkeys.KeyJWTID, claims.ID)
 				if claims.ExpiresAt != nil {
 					ctx = context.WithValue(ctx, ctxkeys.KeyJWTExpiresAt, claims.ExpiresAt.Time)
@@ -143,6 +152,9 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 				ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, authType)
 				if authType == "api_token" {
 					ctx = context.WithValue(ctx, ctxkeys.KeyAPITokenID, claims.TokenID)
+				}
+				if authType == "wallet" {
+					ctx = context.WithValue(ctx, ctxkeys.KeyWalletAddr, claims.WalletAddress)
 				}
 				if len(claims.Permissions) > 0 {
 					ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, claims.Permissions)
@@ -239,6 +251,11 @@ func GRPCStreamAuthInterceptor(cfg GRPCAuthConfig) grpc.StreamServerInterceptor 
 				if serviceOnlyMap[info.FullMethod] {
 					return status.Error(codes.PermissionDenied, "method requires service authentication")
 				}
+				if claims.AuthType == "" && cfg.ValidateSession != nil {
+					if err := cfg.ValidateSession(ctx, token); err != nil {
+						return err
+					}
+				}
 				ctx = context.WithValue(ctx, ctxkeys.KeyUserID, claims.UserID)
 				ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, claims.TenantID)
 				ctx = context.WithValue(ctx, ctxkeys.KeyRole, claims.Role)
@@ -246,6 +263,7 @@ func GRPCStreamAuthInterceptor(cfg GRPCAuthConfig) grpc.StreamServerInterceptor 
 					ctx = context.WithValue(ctx, ctxkeys.KeyPlatformOperator, true)
 				}
 				ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, token)
+				ctx = context.WithValue(ctx, ctxkeys.KeySessionID, claims.SessionID)
 				ctx = context.WithValue(ctx, ctxkeys.KeyJWTID, claims.ID)
 				if claims.ExpiresAt != nil {
 					ctx = context.WithValue(ctx, ctxkeys.KeyJWTExpiresAt, claims.ExpiresAt.Time)
@@ -257,6 +275,9 @@ func GRPCStreamAuthInterceptor(cfg GRPCAuthConfig) grpc.StreamServerInterceptor 
 				ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, authType)
 				if authType == "api_token" {
 					ctx = context.WithValue(ctx, ctxkeys.KeyAPITokenID, claims.TokenID)
+				}
+				if authType == "wallet" {
+					ctx = context.WithValue(ctx, ctxkeys.KeyWalletAddr, claims.WalletAddress)
 				}
 				if len(claims.Permissions) > 0 {
 					ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, claims.Permissions)
@@ -311,7 +332,7 @@ SELECT EXISTS (SELECT 1 FROM claimed)`, table),
 }
 
 func (g *delegatedJWTReplayGuard) consume(ctx context.Context) error {
-	if ctxkeys.GetAuthType(ctx) != "api_token" {
+	if ctxkeys.GetAuthType(ctx) != "api_token" && ctxkeys.GetAuthType(ctx) != "wallet" {
 		return nil
 	}
 	jti := ctxkeys.GetJWTID(ctx)
@@ -339,7 +360,7 @@ func (g *delegatedJWTReplayGuard) consume(ctx context.Context) error {
 	return nil
 }
 
-// DelegatedJWTReplayInterceptor atomically consumes each delegated API-token
+// DelegatedJWTReplayInterceptor atomically consumes each delegated assertion's
 // JTI. Callers mint one assertion per RPC attempt, so a conflict is an actual
 // replay rather than another call made by the same Gateway request.
 func DelegatedJWTReplayInterceptor(db *sql.DB, schema string) grpc.UnaryServerInterceptor {
@@ -370,11 +391,17 @@ func validateDelegatedJWT(claims *auth.Claims, audience string) error {
 	if claims.AuthType == "" && len(claims.Audience) == 0 {
 		return nil
 	}
-	if claims.AuthType != "api_token" || audience == "" || !slices.Contains([]string(claims.Audience), audience) {
+	if (claims.AuthType != "api_token" && claims.AuthType != "wallet") || audience == "" || !slices.Contains([]string(claims.Audience), audience) {
 		return status.Error(codes.Unauthenticated, "invalid delegated token audience")
 	}
-	if claims.TokenID == "" || claims.Subject != claims.TokenID || claims.ID == "" || claims.IssuedAt == nil || claims.ExpiresAt == nil {
+	if claims.ID == "" || claims.IssuedAt == nil || claims.ExpiresAt == nil {
 		return status.Error(codes.Unauthenticated, "invalid delegated token claims")
+	}
+	if claims.AuthType == "api_token" && (claims.TokenID == "" || claims.Subject != claims.TokenID) {
+		return status.Error(codes.Unauthenticated, "invalid delegated token claims")
+	}
+	if claims.AuthType == "wallet" && (claims.WalletAddress == "" || claims.Subject != claims.WalletAddress || claims.TokenID != "" || claims.SessionID != "" || len(claims.Roles) != 0 || len(claims.Audience) != 1) {
+		return status.Error(codes.Unauthenticated, "invalid delegated wallet claims")
 	}
 	if claims.ExpiresAt.Sub(claims.IssuedAt.Time) > auth.DelegatedAPITokenTTL+auth.JWTClockSkewLeeway {
 		return status.Error(codes.Unauthenticated, "invalid delegated token lifetime")

@@ -7,9 +7,11 @@ import (
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/networkobserver"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	obs "github.com/Livepeer-FrameWorks/monorepo/pkg/networkobservation"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/grpc/metadata"
 	"io"
 	"net/http"
@@ -147,6 +149,39 @@ func TestNetworkDiagnosticsRequiresPlatformOperator(t *testing.T) {
 		} else if response.Code != 403 {
 			t.Fatalf("tenant administrator accessed operator diagnostics: %d", response.Code)
 		}
+	}
+}
+
+func TestNetworkDiagnosticsRejectsRevokedSession(t *testing.T) {
+	h, _, _ := networkFixture(t)
+	revocations := middleware.NewSessionRevocations()
+	middleware.EnforceSessionRevocations(revocations)
+	t.Cleanup(func() { middleware.EnforceSessionRevocations(nil) })
+	revocations.RecordSession("tenant", "operator", "revoked", time.Now())
+	for _, sid := range []string{"revoked", "other-device"} {
+		t.Run(sid, func(t *testing.T) {
+			token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, auth.Claims{
+				UserID: "operator", TenantID: "tenant", SessionID: sid,
+				Roles:            []string{auth.RolePlatformOperator},
+				RegisteredClaims: jwt.RegisteredClaims{IssuedAt: jwt.NewNumericDate(time.Now()), ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute))},
+			}).SignedString(h.JWTSecret)
+			if err != nil {
+				t.Fatal(err)
+			}
+			router := gin.New()
+			router.GET("/diagnostics", h.Diagnostics)
+			ctx := context.WithValue(context.Background(), ctxkeys.KeyJWTToken, token)
+			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/diagnostics", nil)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, req)
+			want := http.StatusOK
+			if sid == "revoked" {
+				want = http.StatusForbidden
+			}
+			if response.Code != want {
+				t.Fatalf("session %s: status=%d want=%d", sid, response.Code, want)
+			}
+		})
 	}
 }
 

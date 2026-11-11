@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -47,13 +49,20 @@ type APIKeyIdentity struct {
 }
 
 type jwtMiddlewareConfig struct {
-	apiKeys        map[string]APIKeyIdentity
-	serviceToken   string
-	systemTenantID uuid.UUID
+	apiKeys         map[string]APIKeyIdentity
+	serviceToken    string
+	systemTenantID  uuid.UUID
+	validateSession func(context.Context, string) error
 }
 
 // JWTOption configures optional behaviour for JWTAuthMiddleware.
 type JWTOption func(*jwtMiddlewareConfig)
+
+// WithSessionValidation checks service-owned session state after signature
+// verification; static API keys and service credentials bypass this check.
+func WithSessionValidation(check func(context.Context, string) error) JWTOption {
+	return func(cfg *jwtMiddlewareConfig) { cfg.validateSession = check }
+}
 
 // IsWebSocketUpgrade reports whether the request carries the two HTTP upgrade
 // tokens required for a WebSocket handshake. Header token matching is
@@ -138,8 +147,18 @@ func JWTAuthMiddleware(secret []byte, opts ...JWTOption) gin.HandlerFunc {
 		}
 
 		// Try JWT validation
-		claims, err := ValidateInteractiveJWT(token, secret)
+		claims, err := ValidateRevocableSessionJWT(token, secret, nil)
 		if err == nil {
+			if cfg.validateSession != nil {
+				if err := cfg.validateSession(c.Request.Context(), token); err != nil {
+					if errors.Is(err, ErrSessionRevoked) {
+						c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Session signed out"})
+					} else {
+						c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "Session state unavailable"})
+					}
+					return
+				}
+			}
 			c.Set(string(ctxkeys.KeyUserID), claims.UserID)
 			c.Set(string(ctxkeys.KeyTenantID), claims.TenantID)
 			c.Set(string(ctxkeys.KeyEmail), claims.Email)

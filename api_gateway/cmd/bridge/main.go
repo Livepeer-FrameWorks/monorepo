@@ -317,6 +317,7 @@ func main() {
 		DebugConfig:        func() any { return liveConfig.Get() },
 		DebugConfigOptions: configOptions,
 	})
+	app.Use(middleware.CaptureAuthClientMetadata(trustedProxies))
 
 	// Public API routes (no auth required)
 	{

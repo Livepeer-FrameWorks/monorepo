@@ -73,8 +73,72 @@ func TestAuthInterceptorForcedServiceCredentialDropsCallerIdentity(t *testing.T)
 	}
 }
 
+func TestAuthInterceptorForwardsVerifiedClientMetadata(t *testing.T) {
+	ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("x-client-ip", "spoofed", "x-client-user-agent-bin", "stale-agent"))
+	client := ctxkeys.AuthClientMetadata{IP: "203.0.113.4", UserAgent: "Browser/1", DeviceLabel: "Marco’s Mac", Version: "0.3.15"}
+	ctx = ctxkeys.WithAuthClientMetadata(ctx, client)
+	err := authInterceptor("service-token")(ctx, "/commodore.UserService/Login", nil, nil, nil, func(ctx context.Context, _ string, _, _ any, _ *grpc.ClientConn, _ ...grpc.CallOption) error {
+		md, _ := metadata.FromOutgoingContext(ctx)
+		for key, want := range map[string]string{"x-client-ip": client.IP, "x-client-user-agent-bin": client.UserAgent, "x-device-label-bin": client.DeviceLabel, "x-client-version-bin": client.Version} {
+			if got := md.Get(key); len(got) != 1 || got[0] != want {
+				t.Errorf("client provenance %s=%v want %q", key, got, want)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 type tenantBillingLookupStub struct {
 	commodorepb.UnimplementedInternalServiceServer
+}
+
+type sessionStateStub struct {
+	commodorepb.UnimplementedInternalServiceServer
+	valid atomic.Bool
+}
+
+func (s *sessionStateStub) ValidateSession(ctx context.Context, req *commodorepb.ValidateSessionRequest) (*commodorepb.ValidateSessionResponse, error) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	if got := md.Get("authorization"); len(got) != 1 || got[0] != "Bearer service-token" {
+		return nil, status.Error(codes.PermissionDenied, "service credential required")
+	}
+	if req.GetToken() != "interactive-token" {
+		return nil, status.Error(codes.InvalidArgument, "unexpected session")
+	}
+	return &commodorepb.ValidateSessionResponse{Valid: s.valid.Load()}, nil
+}
+
+func TestCheckSessionDoesNotCacheAcceptedTokens(t *testing.T) {
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &sessionStateStub{}
+	service.valid.Store(true)
+	server := grpc.NewServer()
+	commodorepb.RegisterInternalServiceServer(server, service)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { server.Stop(); _ = listener.Close() })
+	client, err := NewGRPCClient(GRPCConfig{GRPCAddr: listener.Addr().String(), ServiceToken: "service-token", AllowInsecure: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyJWTToken, "interactive-token")
+	if err := client.CheckSession(ctx, "interactive-token"); err != nil {
+		t.Fatalf("active session: %v", err)
+	}
+	service.valid.Store(false)
+	if err := client.CheckSession(ctx, "interactive-token"); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("revoked session: %v", err)
+	}
+	var unavailable *GRPCClient
+	if err := unavailable.CheckSession(ctx, "interactive-token"); status.Code(err) != codes.Unavailable {
+		t.Fatalf("missing session service: %v", err)
+	}
 }
 
 func (tenantBillingLookupStub) GetTenantUserCount(context.Context, *commodorepb.GetTenantUserCountRequest) (*commodorepb.GetTenantUserCountResponse, error) {
