@@ -99,3 +99,79 @@ func TestBillingWebhookConfigurationPropagatesProviderFailure(t *testing.T) {
 		t.Fatalf("provider check failure hidden: %v", err)
 	}
 }
+
+func allBillingEventsExcept(absent string) []string {
+	var events []string
+	for _, event := range requiredBillingWebhookEvents {
+		if event != absent {
+			events = append(events, event)
+		}
+	}
+	return events
+}
+
+func TestBillingWebhookConfigurationReportsTypedMissingEvent(t *testing.T) {
+	installBackend(t, &financialAuditBackend{call: func(_, _, _ string, _ api.ParamsContainer, out api.LastResponseSetter) error {
+		out.(*billingWebhookEndpoints).Data = []*api.WebhookEndpoint{{
+			URL: "https://gateway.example/webhooks/billing/stripe", Status: "enabled", EnabledEvents: allBillingEventsExcept("charge.updated"),
+		}}
+		return nil
+	}})
+	err := (&Client{}).CheckBillingWebhookEndpoint(context.Background(), "https://gateway.example")
+	var reason *BillingWebhookError
+	if !errors.As(err, &reason) || reason.Reason != BillingWebhookMissingEvents ||
+		len(reason.MissingEvents) != 1 || reason.MissingEvents[0] != "charge.updated" || !strings.Contains(reason.Error(), "charge.updated") {
+		t.Fatalf("missing charge.updated not reported as a typed reason: %#v", err)
+	}
+}
+
+func TestBillingWebhookConfigurationNamesExpectedURLWhenNoEndpointMatches(t *testing.T) {
+	installBackend(t, &financialAuditBackend{call: func(_, _, _ string, _ api.ParamsContainer, out api.LastResponseSetter) error {
+		out.(*billingWebhookEndpoints).Data = []*api.WebhookEndpoint{{URL: "https://other.example/webhooks/billing/stripe", Status: "enabled", EnabledEvents: []string{"*"}}}
+		return nil
+	}})
+	err := (&Client{}).CheckBillingWebhookEndpoint(context.Background(), "https://gateway.example/")
+	var reason *BillingWebhookError
+	if !errors.As(err, &reason) || reason.Reason != BillingWebhookNoEndpoint ||
+		reason.ExpectedURL != "https://gateway.example/webhooks/billing/stripe" || !strings.Contains(reason.Error(), reason.ExpectedURL) {
+		t.Fatalf("no-endpoint failure does not name the expected URL: %#v", err)
+	}
+}
+
+func TestBillingWebhookConfigurationReportsPermissionWithoutSecrets(t *testing.T) {
+	for _, status := range []int{401, 403} {
+		installBackend(t, &financialAuditBackend{call: func(_, _, _ string, _ api.ParamsContainer, _ api.LastResponseSetter) error {
+			return &api.Error{HTTPStatusCode: status, Type: api.ErrorTypeInvalidRequest, Code: "secret_key_required",
+				Msg: "The provided key 'rk_live_privatekey' does not have the required permissions"}
+		}})
+		err := (&Client{secretKey: "rk_live_privatekey"}).CheckBillingWebhookEndpoint(context.Background(), "https://gateway.example")
+		var reason *BillingWebhookError
+		if !errors.As(err, &reason) || reason.Reason != BillingWebhookPermissionDenied || reason.StripeCode != "secret_key_required" ||
+			!strings.Contains(reason.Error(), "cannot read webhook endpoints") || !strings.Contains(reason.Error(), "secret_key_required") {
+			t.Fatalf("HTTP %d permission failure not reported: %#v", status, err)
+		}
+		if strings.Contains(reason.Error(), "privatekey") {
+			t.Fatalf("permission reason leaked the API key: %s", reason.Error())
+		}
+	}
+}
+
+func TestBillingWebhookConfigurationReportsTimeoutAndTransport(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want BillingWebhookReason
+	}{
+		{context.DeadlineExceeded, BillingWebhookTimeout},
+		{errors.New("dial tcp: connection refused for sk_live_privatekey"), BillingWebhookTransport},
+	} {
+		installBackend(t, &financialAuditBackend{call: func(_, _, _ string, _ api.ParamsContainer, _ api.LastResponseSetter) error { return tc.err }})
+		err := (&Client{}).CheckBillingWebhookEndpoint(context.Background(), "https://gateway.example")
+		var reason *BillingWebhookError
+		if !errors.As(err, &reason) || reason.Reason != tc.want || !errors.Is(err, tc.err) {
+			t.Fatalf("provider failure %v: want reason %s, got %#v", tc.err, tc.want, err)
+		}
+		if strings.Contains(reason.Error(), "privatekey") {
+			t.Fatalf("transport reason leaked the API key: %s", reason.Error())
+		}
+	}
+}

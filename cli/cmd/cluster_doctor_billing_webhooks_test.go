@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,8 @@ import (
 
 	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
+
+	"github.com/spf13/cobra"
 )
 
 func TestDoctorRegistersBillingWebhookCheckForPurserAlias(t *testing.T) {
@@ -44,5 +47,29 @@ func TestDoctorBillingWebhookEndpointFailsClosed(t *testing.T) {
 				t.Fatalf("webhook probe status=%s result=%+v commands=%v", status, result, commands)
 			}
 		})
+	}
+}
+
+func TestDoctorBillingWebhookFailLineNamesMissingEvent(t *testing.T) {
+	body := `{"status":"unhealthy","read_only":true,"reason":"missing_events","missing_events":["charge.updated"],` +
+		`"message":"Stripe webhook endpoint https://gateway.example/webhooks/billing/stripe is missing required events: charge.updated"}`
+	var commands []string
+	runner, err := replyRunnerFor(func(_, command string) (string, int) {
+		if strings.Contains(command, "/dev/null") {
+			return "503", 0
+		}
+		return body + "\n503", 0
+	}, &commands)(inventory.Host{Name: "core"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := checkServiceHTTPWithRunner(context.Background(), runner, "127.0.0.1", 18003, "/health/billing-webhooks", &health.CheckResult{Metadata: map[string]string{}})
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+	printHealthResult(cmd, "Stripe billing webhooks (purser)", result)
+	line := out.String()
+	if result.OK || !strings.HasPrefix(line, "[FAIL]") || !strings.Contains(line, "returned 503") || !strings.Contains(line, "charge.updated") || strings.Contains(line, "{") {
+		t.Fatalf("doctor FAIL line does not name the missing event: %q", line)
 	}
 }
