@@ -20,6 +20,7 @@ type Querier interface {
 	AcquirePublisherLease(ctx context.Context, arg AcquirePublisherLeaseParams) (AcquirePublisherLeaseRow, error)
 	ActivateMediaPlacementPolicy(ctx context.Context, arg ActivateMediaPlacementPolicyParams) (int64, error)
 	AdminGetUserByEmail(ctx context.Context, email string) (AdminGetUserByEmailRow, error)
+	AdoptAuthSessionRefreshFamily(ctx context.Context, arg AdoptAuthSessionRefreshFamilyParams) (sql.NullString, error)
 	// Settles unfinished rows of the pre-obligation inbox so their targets can be
 	// folded into obligations. Leased rows belong to a replica still draining the
 	// inbox and are left alone.
@@ -107,6 +108,7 @@ type Querier interface {
 	// Platform operators belong to the system tenant, so its lock serializes this global guard.
 	CountActivePlatformOperators(ctx context.Context, tenantID string) (int64, error)
 	CountActiveSigningKeys(ctx context.Context, tenantID string) (int64, error)
+	CountAuthSessions(ctx context.Context, arg CountAuthSessionsParams) (int32, error)
 	CountFailedTenantAccountClosures(ctx context.Context) (int64, error)
 	// Platform-wide recovery metric; a single failed call may recover after backoff.
 	CountRepeatedTenantAccountClosureFailures(ctx context.Context) (int64, error)
@@ -197,6 +199,7 @@ type Querier interface {
 	GetArtifactDeletionMarkerForUpdate(ctx context.Context, arg GetArtifactDeletionMarkerForUpdateParams) (int64, error)
 	GetArtifactMediaAuthoritySource(ctx context.Context, authorityID string) (GetArtifactMediaAuthoritySourceRow, error)
 	GetArtifactRouteByContent(ctx context.Context, dollar_1 string) (GetArtifactRouteByContentRow, error)
+	GetAuthSession(ctx context.Context, arg GetAuthSessionParams) (CommodoreAuthSession, error)
 	GetBootstrapMistNativeStream(ctx context.Context, arg GetBootstrapMistNativeStreamParams) (GetBootstrapMistNativeStreamRow, error)
 	GetBootstrapOwnerUser(ctx context.Context, tenantID string) (string, error)
 	GetBootstrapPullStream(ctx context.Context, arg GetBootstrapPullStreamParams) (GetBootstrapPullStreamRow, error)
@@ -247,10 +250,15 @@ type Querier interface {
 	GetPublisherLease(ctx context.Context, arg GetPublisherLeaseParams) (GetPublisherLeaseRow, error)
 	GetPullMediaAuthoritySecret(ctx context.Context, streamID string) (GetPullMediaAuthoritySecretRow, error)
 	GetPushTargetStreamOwner(ctx context.Context, arg GetPushTargetStreamOwnerParams) (string, error)
+	// The credential hash resolves the owner before taking the user lock.
+	GetRefreshTokenOwnerByHash(ctx context.Context, tokenHash string) (GetRefreshTokenOwnerByHashRow, error)
+	GetRefreshTokenSession(ctx context.Context, arg GetRefreshTokenSessionParams) (sql.NullString, error)
 	GetRefreshTokenSuccessorState(ctx context.Context, id string) (bool, error)
 	GetRefreshUser(ctx context.Context, arg GetRefreshUserParams) (GetRefreshUserRow, error)
 	// An activation supersedes a pending user stop; a permanently closed tenant does not.
 	GetRevokedStreamIngest(ctx context.Context, arg GetRevokedStreamIngestParams) (string, error)
+	GetSessionPasswordHash(ctx context.Context, arg GetSessionPasswordHashParams) (string, error)
+	GetSessionRefreshSuccessor(ctx context.Context, arg GetSessionRefreshSuccessorParams) (GetSessionRefreshSuccessorRow, error)
 	GetSigningKey(ctx context.Context, arg GetSigningKeyParams) (GetSigningKeyRow, error)
 	GetSigningKeyCursor(ctx context.Context, arg GetSigningKeyCursorParams) (sql.NullTime, error)
 	GetStreamAdmissionByKey(ctx context.Context, streamKey string) (GetStreamAdmissionByKeyRow, error)
@@ -300,7 +308,9 @@ type Querier interface {
 	GetVerificationUser(ctx context.Context, verificationToken sql.NullString) (GetVerificationUserRow, error)
 	GetWalletIdentityByAddress(ctx context.Context, arg GetWalletIdentityByAddressParams) (GetWalletIdentityByAddressRow, error)
 	HardDeleteFinalizedStream(ctx context.Context, arg HardDeleteFinalizedStreamParams) (int64, error)
+	HasUserWallet(ctx context.Context, arg HasUserWalletParams) (bool, error)
 	InsertAPIToken(ctx context.Context, arg InsertAPITokenParams) error
+	InsertAuthSession(ctx context.Context, arg InsertAuthSessionParams) (CommodoreAuthSession, error)
 	InsertAuthorizationCode(ctx context.Context, arg InsertAuthorizationCodeParams) error
 	InsertConvergedClip(ctx context.Context, arg InsertConvergedClipParams) error
 	InsertCreatedPullSource(ctx context.Context, arg InsertCreatedPullSourceParams) error
@@ -315,6 +325,7 @@ type Querier interface {
 	InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) error
 	InsertRegisteredUser(ctx context.Context, arg InsertRegisteredUserParams) error
 	InsertRotatedRefreshToken(ctx context.Context, arg InsertRotatedRefreshTokenParams) (string, error)
+	InsertSessionRefreshToken(ctx context.Context, arg InsertSessionRefreshTokenParams) (string, error)
 	InsertSigningKeyAudit(ctx context.Context, arg InsertSigningKeyAuditParams) error
 	InsertStreamKey(ctx context.Context, arg InsertStreamKeyParams) error
 	InsertVODUploadRegistration(ctx context.Context, arg InsertVODUploadRegistrationParams) error
@@ -339,6 +350,9 @@ type Querier interface {
 	ListActiveMediaAuthorityCells(ctx context.Context, arg ListActiveMediaAuthorityCellsParams) ([]string, error)
 	ListActivePlaybackSigningKeys(ctx context.Context, tenantID string) ([]ListActivePlaybackSigningKeysRow, error)
 	ListArtifactMediaAuthoritySources(ctx context.Context) ([]ListArtifactMediaAuthoritySourcesRow, error)
+	// Platform-wide delivery/backfill is the only cross-tenant session read.
+	ListAuthSessionRevocationsSince(ctx context.Context, revokedAt sql.NullTime) ([]ListAuthSessionRevocationsSinceRow, error)
+	ListAuthSessions(ctx context.Context, arg ListAuthSessionsParams) ([]CommodoreAuthSession, error)
 	// One page of placement scopes whose change is still unresolved. Activation is
 	// otherwise only ever derived as a side effect of an acknowledgement, so
 	// anything that interrupts the acknowledgement that would have activated a
@@ -411,6 +425,7 @@ type Querier interface {
 	// A cell with no row has attested nothing.
 	ListMediaCellAuthorityFeatures(ctx context.Context, cellIds []string) ([]ListMediaCellAuthorityFeaturesRow, error)
 	ListMediaCellPlacementCapabilities(ctx context.Context, cellIds []string) ([]ListMediaCellPlacementCapabilitiesRow, error)
+	ListOldestAuthSessions(ctx context.Context, arg ListOldestAuthSessionsParams) ([]CommodoreAuthSession, error)
 	// Private operator read, fenced by tenant and ordered through the tenant-time index.
 	ListOperatorAccountAudit(ctx context.Context, arg ListOperatorAccountAuditParams) ([]ListOperatorAccountAuditRow, error)
 	ListParkedMediaAuthorityObligationCounts(ctx context.Context) ([]ListParkedMediaAuthorityObligationCountsRow, error)
@@ -465,6 +480,9 @@ type Querier interface {
 	ListWarmTenantIDs(ctx context.Context) ([]string, error)
 	LockArtifactCatalogKey(ctx context.Context, hashtext string) error
 	LockArtifactCreationIdentity(ctx context.Context, lockKey string) error
+	LockAuthSession(ctx context.Context, arg LockAuthSessionParams) (CommodoreAuthSession, error)
+	LockAuthSessionRefreshTokens(ctx context.Context, arg LockAuthSessionRefreshTokensParams) ([]string, error)
+	LockAuthSessionUser(ctx context.Context, arg LockAuthSessionUserParams) (string, error)
 	LockAuthorizationCode(ctx context.Context, codeHash string) (LockAuthorizationCodeRow, error)
 	LockCurrentTenantMediaAuthority(ctx context.Context, tenantID string) (LockCurrentTenantMediaAuthorityRow, error)
 	LockDeviceAuthorizationByHash(ctx context.Context, deviceCodeHash string) (LockDeviceAuthorizationByHashRow, error)
@@ -498,6 +516,7 @@ type Querier interface {
 	LockStreamPullSourcePins(ctx context.Context, arg LockStreamPullSourcePinsParams) ([]string, error)
 	LockTenantAccountState(ctx context.Context, tenantID string) (sql.NullTime, error)
 	LockUserAuthenticationMethods(ctx context.Context, arg LockUserAuthenticationMethodsParams) (sql.NullBool, error)
+	LockUserRefreshTokensForRevocation(ctx context.Context, arg LockUserRefreshTokensForRevocationParams) ([]string, error)
 	LookupClipPolicyByInternalName(ctx context.Context, internalName string) (LookupClipPolicyByInternalNameRow, error)
 	LookupClipPolicyByPlaybackID(ctx context.Context, playbackID string) (LookupClipPolicyByPlaybackIDRow, error)
 	LookupDVRPolicyByInternalName(ctx context.Context, internalName string) (LookupDVRPolicyByInternalNameRow, error)
@@ -571,6 +590,7 @@ type Querier interface {
 	// row is processing again under its token, and that lease belongs to it.
 	ReleaseSupersededMediaAuthorityObligation(ctx context.Context, arg ReleaseSupersededMediaAuthorityObligationParams) (int64, error)
 	RelinkRefreshToken(ctx context.Context, arg RelinkRefreshTokenParams) error
+	RenameAuthSession(ctx context.Context, arg RenameAuthSessionParams) (int64, error)
 	// A compile in flight extends its lease on the obligation and on the target's
 	// claim row, so the lease stays short and a worker that stopped without
 	// settling holds its target only until the lease lapses. Only the claim that
@@ -622,6 +642,10 @@ type Querier interface {
 	// was_active is the state before this update, so a repeated revoke is
 	// recognisable as no change.
 	RevokeAPIToken(ctx context.Context, arg RevokeAPITokenParams) (RevokeAPITokenRow, error)
+	RevokeAllAuthSessions(ctx context.Context, arg RevokeAllAuthSessionsParams) ([]CommodoreAuthSession, error)
+	RevokeAuthSession(ctx context.Context, arg RevokeAuthSessionParams) (CommodoreAuthSession, error)
+	RevokeAuthSessionRefreshTokens(ctx context.Context, arg RevokeAuthSessionRefreshTokensParams) error
+	RevokeOtherAuthSessions(ctx context.Context, arg RevokeOtherAuthSessionsParams) ([]CommodoreAuthSession, error)
 	RevokeRefreshTokenByID(ctx context.Context, id string) error
 	RevokeRefreshTokensForUser(ctx context.Context, arg RevokeRefreshTokensForUserParams) error
 	RevokeSigningKey(ctx context.Context, arg RevokeSigningKeyParams) (RevokeSigningKeyRow, error)
@@ -663,6 +687,7 @@ type Querier interface {
 	TerminalizeArtifactCreationIntent(ctx context.Context, arg TerminalizeArtifactCreationIntentParams) (int64, error)
 	TerminalizeClaimedArtifactCreationIntent(ctx context.Context, arg TerminalizeClaimedArtifactCreationIntentParams) (int64, error)
 	TouchAPITokenLastUsed(ctx context.Context, tokenID string) error
+	TouchAuthSession(ctx context.Context, arg TouchAuthSessionParams) (CommodoreAuthSession, error)
 	TouchDeviceAuthorizationPoll(ctx context.Context, id string) error
 	TouchUserLastLogin(ctx context.Context, arg TouchUserLastLoginParams) error
 	TouchWalletIdentityAuth(ctx context.Context, arg TouchWalletIdentityAuthParams) error

@@ -324,6 +324,13 @@ func subscribeAs(t *testing.T, client signalmanpb.SignalmanServiceClient, userID
 // all tenants. A tenant user's stream cannot subscribe to the channel, and
 // neither CHANNEL_EVENTS nor CHANNEL_ALL carries it.
 func TestSessionRevocationsReachOnlyServiceStreams(t *testing.T) {
+	for _, named := range []bool{false, true} {
+		t.Run(map[bool]string{false: "user", true: "session"}[named], func(t *testing.T) { testSessionRevocationAudience(t, named) })
+	}
+}
+
+func testSessionRevocationAudience(t *testing.T, named bool) {
+	t.Helper()
 	server, client := startSignalman(t)
 	m := testDomainMetrics()
 	handlers := wireDomainEvents(t, server, m)
@@ -341,8 +348,13 @@ func TestSessionRevocationsReachOnlyServiceStreams(t *testing.T) {
 	user := streamEvents(userStream)
 	waitForConnections(t, client, 6)
 
-	revoked := &internalv1.UserSessionsRevoked{
+	var revoked proto.Message = &internalv1.UserSessionsRevoked{
 		UserId: userID, RevokedAt: timestamppb.Now(), Reason: internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_LOGOUT,
+	}
+	eventType := "user.sessions_revoked"
+	if named {
+		revoked = &internalv1.AuthSessionRevoked{UserId: userID, SessionId: uuid.NewString(), RevokedAt: timestamppb.Now(), Reason: internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_LOGOUT}
+		eventType = "auth_session.revoked"
 	}
 	record, ev := domainRecord(t, "domain.events", tenantID, userID, revoked)
 	if record.Headers[events.HeaderVisibility] != events.VisibilityInternal {
@@ -358,7 +370,7 @@ func TestSessionRevocationsReachOnlyServiceStreams(t *testing.T) {
 	}
 	tenantEvent := got.GetData().GetTenantEvent()
 	payload, err := tenantEvent.GetData().UnmarshalNew()
-	if tenantEvent.GetId() != ev.ID || tenantEvent.GetType() != "user.sessions_revoked" || err != nil || !proto.Equal(payload, revoked) {
+	if tenantEvent.GetId() != ev.ID || tenantEvent.GetType() != eventType || err != nil || !proto.Equal(payload, revoked) {
 		t.Fatalf("tenant event = %v (%v), want %s carrying %v", tenantEvent, err, ev.ID, revoked)
 	}
 	if got := nextEvent(platformWide, 2*time.Second); got.GetTenantId() != tenantID || got.GetData().GetTenantEvent().GetId() != ev.ID {

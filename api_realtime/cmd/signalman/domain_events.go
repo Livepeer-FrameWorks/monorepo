@@ -52,6 +52,10 @@ func registerDomainEventSubscriptions(reg handlerRegistrar, prefixes []string, h
 // CHANNEL_SESSIONS, which only service streams may subscribe to.
 const sessionRevocationType = "user.sessions_revoked"
 
+func isSessionRevocationType(eventType string) bool {
+	return eventType == sessionRevocationType || eventType == "auth_session.revoked"
+}
+
 // newDomainEventHandler delivers public domain events to the subscribers of
 // their tenant on CHANNEL_EVENTS, and user.sessions_revoked to the service
 // streams of its tenant on CHANNEL_SESSIONS, once per event ID within the
@@ -73,7 +77,7 @@ func newDomainEventHandler(hub tenantEventHub, window *eventIDWindow, m *metrics
 		channel := signalmanpb.Channel_CHANNEL_EVENTS
 		switch {
 		case msg.Headers[events.HeaderVisibility] == events.VisibilityPublic:
-		case msg.Headers[events.HeaderVisibility] == events.VisibilityInternal && msg.Headers[events.HeaderType] == sessionRevocationType:
+		case msg.Headers[events.HeaderVisibility] == events.VisibilityInternal && isSessionRevocationType(msg.Headers[events.HeaderType]):
 			channel = signalmanpb.Channel_CHANNEL_SESSIONS
 		default:
 			m.RecordDomainEventDropped(dropNotPublic)
@@ -95,7 +99,7 @@ func newDomainEventHandler(hub tenantEventHub, window *eventIDWindow, m *metrics
 			}
 			return fmt.Errorf("parse domain event: %w", err)
 		}
-		if channel == signalmanpb.Channel_CHANNEL_SESSIONS && (rec.Spec.Public() || rec.Type != sessionRevocationType) {
+		if channel == signalmanpb.Channel_CHANNEL_SESSIONS && (rec.Spec.Public() || !isSessionRevocationType(rec.Type)) {
 			m.RecordDomainEventDropped(dropRegistryInternal)
 			return nil
 		}

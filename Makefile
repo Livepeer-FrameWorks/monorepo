@@ -100,10 +100,14 @@ sqlc:
 	cd api_dns && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
 	cd api_consultant && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
 	cd api_analytics_query && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
-	cd api_control && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
+	@$(MAKE) --no-print-directory sqlc-commodore
 	cd api_tenants && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
 	cd api_balancing && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
 	cd api_incidents && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
+
+.PHONY: sqlc-commodore
+sqlc-commodore:
+	cd api_control && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
 
 sqlc-check: sqlc
 	@git diff --exit-code -- api_billing/internal/database/purserdb
@@ -1287,6 +1291,8 @@ FOGHORN_QUERY_CATALOG_REALPG_TESTS := $(FOGHORN_QUERY_CATALOG_REALPG_TESTS)|Test
 FOGHORN_QUERY_CATALOG_REALYB_TESTS_B := $(FOGHORN_QUERY_CATALOG_REALYB_TESTS_B)|TestPublisherRecoverySelectionSkipsActiveSessions_RealYugabyte|TestPublisherLookupPlansBounded_RealYugabyte
 FOGHORN_QUERY_CATALOG_REALYB_TESTS := $(FOGHORN_QUERY_CATALOG_REALYB_TESTS_A)|$(FOGHORN_QUERY_CATALOG_REALYB_TESTS_B)
 COMMODORE_QUERY_CATALOG_REALYB_TESTS := TestGeneratedQueryCatalogPrepares_RealYugabyte|TestArtifactCreationCommandAckLease_RealYugabyte|TestServiceEventOutboxPrunesDelivered_RealYugabyte
+COMMODORE_QUERY_CATALOG_REALPG_TESTS := $(COMMODORE_QUERY_CATALOG_REALPG_TESTS)|TestAuthSessionsSchema_RealPG
+COMMODORE_QUERY_CATALOG_REALYB_TESTS := $(COMMODORE_QUERY_CATALOG_REALYB_TESTS)|TestAuthSessionsSchema_RealYugabyte
 COMMODORE_QUERY_CATALOG_REALPG_TESTS := $(COMMODORE_QUERY_CATALOG_REALPG_TESTS)|TestStreamFinalizationCascadeBounded_RealPG
 COMMODORE_QUERY_CATALOG_REALYB_TESTS := $(COMMODORE_QUERY_CATALOG_REALYB_TESTS)|TestStreamFinalizationCascadeBounded_RealYugabyte
 COMMODORE_PLACEMENT_REALYB_TESTS_A := TestMediaPlacementRepository_RealYugabyte|TestMediaPlacementManagement_RealYugabyte|TestMediaPlacementOptions_RealYugabyte|TestMediaPlacementPreview_RealYugabyte

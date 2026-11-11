@@ -286,6 +286,24 @@ func (q *Queries) GetWalletIdentityByAddress(ctx context.Context, arg GetWalletI
 	return i, err
 }
 
+const hasUserWallet = `-- name: HasUserWallet :one
+SELECT EXISTS (SELECT 1 FROM commodore.wallet_identities
+WHERE tenant_id = $1 AND user_id = $2 AND chain_type = 'ethereum' AND wallet_address = $3)
+`
+
+type HasUserWalletParams struct {
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
+	UserID        string `db:"user_id" json:"user_id"`
+	WalletAddress string `db:"wallet_address" json:"wallet_address"`
+}
+
+func (q *Queries) HasUserWallet(ctx context.Context, arg HasUserWalletParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, hasUserWallet, arg.TenantID, arg.UserID, arg.WalletAddress)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const insertRefreshToken = `-- name: InsertRefreshToken :exec
 INSERT INTO commodore.refresh_tokens (tenant_id, user_id, token_hash, expires_at)
 VALUES ($1, $2, $3, $4)
@@ -582,7 +600,7 @@ func (q *Queries) RevokeRefreshTokensForUser(ctx context.Context, arg RevokeRefr
 
 const revokeUserSessions = `-- name: RevokeUserSessions :one
 UPDATE commodore.users
-SET sessions_revoked_at = NOW()
+SET sessions_revoked_at = GREATEST(sessions_revoked_at, clock_timestamp())
 WHERE id = $1 AND tenant_id = $2
 RETURNING sessions_revoked_at
 `

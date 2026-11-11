@@ -45,7 +45,7 @@ message TenantClusterUnassigned {
 
 enum SessionRevocationReason {
   SESSION_REVOCATION_REASON_UNSPECIFIED = 0;
-  // The user signed out, which ends every one of the user's sessions.
+  // An explicit sign-out. Its scope follows the enclosing revocation event.
   SESSION_REVOCATION_REASON_LOGOUT = 1;
   SESSION_REVOCATION_REASON_PASSWORD_RESET = 2;
   // A rotated refresh token was replayed after its grace period, so two
@@ -65,6 +65,16 @@ message UserSessionsRevoked {
   string user_id = 1;
   google.protobuf.Timestamp revoked_at = 2;
   SessionRevocationReason reason = 3;
+}
+
+// AuthSessionRevoked ends exactly one interactive session. Its distinct type
+// prevents consumers that only support user-wide revocation from broadening it.
+message AuthSessionRevoked {
+  option (frameworks.events.event) = {type: "auth_session.revoked", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "auth_sessions"};
+  string user_id = 1;
+  string session_id = 2;
+  google.protobuf.Timestamp revoked_at = 3;
+  SessionRevocationReason reason = 4;
 }
 
 // ClusterCreated and ClusterUpdated describe infrastructure, so they are
