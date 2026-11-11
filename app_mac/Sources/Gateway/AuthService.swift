@@ -4,21 +4,29 @@ import Foundation
 import Network
 import Security
 
+@MainActor
 class AuthService {
   static let shared = AuthService()
   private let gateway = GatewayClient.shared
   private let browserLoginTimeoutSeconds = 5 * 60
   private var browserLoginServer: BrowserLoginCallbackServer?
+  private let refreshCoordinator = AuthRefreshCoordinator()
+  private var refreshTimer: Task<Void, Never>?
+  private var loggingOut = false
 
   private init() {}
 
   // MARK: - Login
 
   func loginWithBrowser(appState: AppState) async throws {
+    guard !loggingOut else { throw CancellationError() }
+    let loginBridge = gateway.baseURL
+    let loginGateway = GatewayClient()
+    loginGateway.baseURL = loginBridge
     let verifier = try randomBase64URL(byteCount: 32)
     let challenge = base64URLEncode(Data(SHA256.hash(data: Data(verifier.utf8))))
     let state = try randomBase64URL(byteCount: 16)
-    let webappBaseURL = try await fetchWebappBaseURL()
+    let webappBaseURL = try await fetchWebappBaseURL(gateway: loginGateway)
 
     let server = BrowserLoginCallbackServer()
     browserLoginServer?.stop()
@@ -62,21 +70,29 @@ class AuthService {
     let response = try await exchangeAuthorizationCode(
       code: code,
       verifier: verifier,
-      redirectURI: redirectURI
+      redirectURI: redirectURI, gateway: loginGateway
     )
-    try saveTokens(from: response, httpResponse: nil)
+    try Task.checkCancellation()
+    guard !loggingOut else { throw CancellationError() }
+    guard GatewayClient.sameBridge(loginBridge, gateway.baseURL) else { throw AuthError.bridgeChanged }
+    refreshTimer?.cancel()
+    await refreshCoordinator.close()
+    guard !loggingOut else { throw CancellationError() }
+    try saveTokens(from: response, httpResponse: nil, bridge: loginBridge)
+    await refreshCoordinator.open()
     guard let user = response.user else {
       throw AuthError.missingUser
     }
 
     await MainActor.run {
       appState.isAuthenticated = true
+      appState.authError = nil
       appState.userEmail = user.email
       appState.userId = user.id
       appState.tenantId = user.tenantId
     }
 
-    scheduleTokenRefresh(expiresAt: response.expiresAt, appState: appState)
+    scheduleTokenRefresh(appState: appState)
   }
 
   func cancelBrowserLogin() {
@@ -93,55 +109,50 @@ class AuthService {
 
   // MARK: - Refresh
 
-  func refreshToken(appState: AppState) async throws {
-    guard let refreshToken = KeychainHelper.load(key: "refresh_token") else {
-      throw AuthError.noRefreshToken
-    }
-
-    let body = try JSONSerialization.data(withJSONObject: [
-      "refresh_token": refreshToken
-    ])
-
-    let (data, httpResponse) = try await gateway.requestWithResponse(
-      method: "POST",
-      path: "/auth/refresh",
-      body: body,
-      authenticated: false,
-      headers: ["Cookie": "refresh_token=\(refreshToken)"]
-    )
-    let response = try JSONDecoder().decode(AuthResponse.self, from: data)
-
-    try saveTokens(from: response, httpResponse: httpResponse)
-    if let user = response.user {
-      await MainActor.run {
-        appState.userEmail = user.email
-        appState.userId = user.id
-        appState.tenantId = user.tenantId
+  func refreshToken(appState: AppState, forLogout: Bool = false) async throws {
+    guard !loggingOut || forLogout else { throw CancellationError() }
+    try await refreshCoordinator.run { [self] in
+      let loginBridge = gateway.baseURL
+      guard let refreshToken = gateway.boundCredential("refresh_token") else {
+        throw AuthError.noRefreshToken
       }
-    }
 
-    scheduleTokenRefresh(expiresAt: response.expiresAt, appState: appState)
+      let refreshGateway = GatewayClient()
+      refreshGateway.baseURL = loginBridge
+      let refresher = AuthTokenRefresher(transport: { path, body, headers in
+        try await refreshGateway.requestWithResponse(method: "POST", path: path, body: body, authenticated: false, headers: headers)
+      })
+      let (data, httpResponse) = try await refresher.refresh(refreshToken)
+      let response = try JSONDecoder().decode(AuthResponse.self, from: data)
+
+      try Task.checkCancellation()
+      guard GatewayClient.sameBridge(loginBridge, gateway.baseURL) else { throw AuthError.bridgeChanged }
+      try saveTokens(from: response, httpResponse: httpResponse, bridge: loginBridge)
+      if let user = response.user {
+        await MainActor.run {
+          appState.userEmail = user.email
+          appState.userId = user.id
+          appState.tenantId = user.tenantId
+        }
+      }
+
+      scheduleTokenRefresh(appState: appState)
+    }
   }
 
   // MARK: - Session Restore
 
   func restoreSession(appState: AppState) async -> Bool {
-    guard KeychainHelper.load(key: "user_session") != nil else {
-      if KeychainHelper.load(key: "refresh_token") != nil {
-        do {
-          try await refreshToken(appState: appState)
-          return await restoreSession(appState: appState)
-        } catch {
-          await logout(appState: appState)
-          return false
-        }
-      }
-      await logout(appState: appState)
-      return false
-    }
-
+    guard gateway.accessToken != nil || gateway.boundCredential("refresh_token") != nil else { return false }
+    let recovery = AuthSessionRecovery(
+      fetchUser: { [self] in try await gateway.request(method: "GET", path: "/auth/me") },
+      refresh: { [self] in try await refreshToken(appState: appState) },
+      clearCredentials: { [self] in await clearLocalSession(appState: appState) })
     do {
-      let data = try await gateway.request(method: "GET", path: "/auth/me")
+      guard let data = try await recovery.restore(
+        hasAccessToken: gateway.accessToken != nil,
+        hasRefreshToken: gateway.boundCredential("refresh_token") != nil)
+      else { return false }
       let user = try decodeMeResponse(data)
 
       await MainActor.run {
@@ -150,25 +161,53 @@ class AuthService {
         appState.userId = user.id
         appState.tenantId = user.tenantId
       }
+      scheduleTokenRefresh(appState: appState)
       return true
     } catch {
-      // Token expired — try refresh
-      do {
-        try await refreshToken(appState: appState)
-        return await restoreSession(appState: appState)
-      } catch {
-        await logout(appState: appState)
-        return false
-      }
+      if error is CancellationError { return false }
+      scheduleSessionRetry(appState: appState)
+      return false
     }
   }
 
   // MARK: - Logout
 
-  func logout(appState: AppState) async {
-    _ = try? await gateway.request(method: "POST", path: "/auth/logout")
+  func logout(appState: AppState) async -> Bool {
+    guard !loggingOut else { return false }
+    loggingOut = true
+    defer { loggingOut = false }
+    cancelBrowserLogin()
+    refreshTimer?.cancel()
+    await refreshCoordinator.finishPending()
+    let logoutBridge = gateway.baseURL
+    let logoutGateway = GatewayClient()
+    logoutGateway.baseURL = logoutBridge
+    let logout = AuthSessionLogout(
+      revoke: { _ = try await logoutGateway.request(method: "POST", path: "/auth/logout") },
+      refresh: { [self] in
+        guard GatewayClient.sameBridge(logoutBridge, gateway.baseURL) else { throw AuthError.bridgeChanged }
+        try await refreshToken(appState: appState, forLogout: true)
+      },
+      clearCredentials: { [self] in await clearLocalSession(appState: appState) })
+    do {
+      try await logout.logout(named: AuthSessionRecovery.hasSessionID(accessToken: logoutGateway.accessToken),
+        canRefresh: logoutGateway.boundCredential("refresh_token") != nil)
+      appState.authError = nil
+      return true
+    } catch {
+      appState.authError = "Could not sign out this session. Please try again."
+      scheduleSessionRetry(appState: appState)
+      return false
+    }
+  }
+
+  private func clearLocalSession(appState: AppState) async {
+    await refreshCoordinator.close()
+    refreshTimer?.cancel()
+    refreshTimer = nil
     KeychainHelper.delete(key: "user_session")
     KeychainHelper.delete(key: "refresh_token")
+    KeychainHelper.delete(key: "user_session_bridge")
 
     await MainActor.run {
       appState.isAuthenticated = false
@@ -182,14 +221,31 @@ class AuthService {
 
   // MARK: - Token Refresh Timer
 
-  private func scheduleTokenRefresh(expiresAt: String?, appState: AppState) {
-    // JWT expires in 15min, refresh at 12min
-    let refreshDelay: TimeInterval = 12 * 60
-    DispatchQueue.main.asyncAfter(deadline: .now() + refreshDelay) { [weak self] in
-      guard appState.isAuthenticated else { return }
-      Task {
-        try? await self?.refreshToken(appState: appState)
+  private func scheduleTokenRefresh(appState: AppState) {
+    refreshTimer?.cancel()
+    let delay = AuthSessionRecovery.refreshDelay(accessToken: gateway.accessToken)
+    refreshTimer = Task { [weak self] in
+      try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+      guard !Task.isCancelled, let self else { return }
+      do {
+        try await refreshToken(appState: appState)
+      } catch {
+        if error is CancellationError { return }
+        if AuthSessionRecovery.refreshRejected(error) {
+          await clearLocalSession(appState: appState)
+        } else {
+          scheduleSessionRetry(appState: appState)
+        }
       }
+    }
+  }
+
+  private func scheduleSessionRetry(appState: AppState) {
+    refreshTimer?.cancel()
+    refreshTimer = Task { [weak self] in
+      try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+      guard !Task.isCancelled, let self else { return }
+      _ = await restoreSession(appState: appState)
     }
   }
 
@@ -213,7 +269,7 @@ class AuthService {
     return base.url
   }
 
-  private func fetchWebappBaseURL() async throws -> String {
+  private func fetchWebappBaseURL(gateway: GatewayClient) async throws -> String {
     let data = try await gateway.request(
       method: "GET",
       path: "/auth/webapp-url",
@@ -266,7 +322,7 @@ class AuthService {
   private func exchangeAuthorizationCode(
     code: String,
     verifier: String,
-    redirectURI: String
+    redirectURI: String, gateway: GatewayClient
   ) async throws -> AuthResponse {
     let body = try JSONSerialization.data(withJSONObject: [
       "code": code,
@@ -284,7 +340,7 @@ class AuthService {
     return try JSONDecoder().decode(AuthResponse.self, from: data)
   }
 
-  private func saveTokens(from response: AuthResponse, httpResponse: HTTPURLResponse?) throws {
+  private func saveTokens(from response: AuthResponse, httpResponse: HTTPURLResponse?, bridge: String) throws {
     let cookies = httpResponse.map(cookiesByName(from:)) ?? [:]
     let accessToken = response.token ?? cookies["access_token"]
     let refreshToken = response.refreshToken ?? cookies["refresh_token"]
@@ -293,10 +349,11 @@ class AuthService {
       throw AuthError.missingAccessToken
     }
 
+    guard let refreshToken, !refreshToken.isEmpty else { throw AuthError.missingRefreshToken }
+    KeychainHelper.delete(key: "user_session_bridge")
     try KeychainHelper.save(key: "user_session", value: accessToken)
-    if let refreshToken, !refreshToken.isEmpty {
-      try KeychainHelper.save(key: "refresh_token", value: refreshToken)
-    }
+    try KeychainHelper.save(key: "refresh_token", value: refreshToken)
+    try KeychainHelper.save(key: "user_session_bridge", value: bridge)
   }
 
   private func cookiesByName(from response: HTTPURLResponse) -> [String: String] {
@@ -400,6 +457,8 @@ private struct WebappURLResponse: Decodable {
 }
 
 enum AuthError: LocalizedError {
+  case bridgeChanged
+  case missingRefreshToken
   case noRefreshToken
   case missingAccessToken
   case missingUser
@@ -415,6 +474,8 @@ enum AuthError: LocalizedError {
 
   var errorDescription: String? {
     switch self {
+    case .bridgeChanged: return "Bridge changed during sign in; start sign in again"
+    case .missingRefreshToken: return "Authentication response did not include a refresh token"
     case .noRefreshToken: return "No refresh token available"
     case .missingAccessToken: return "Authentication response did not include an access token"
     case .missingUser: return "Authentication response did not include user details"

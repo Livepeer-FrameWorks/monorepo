@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"frameworks/cli/internal/credentials"
 )
 
 // Client is a thin GraphQL POST helper. One instance per CLI invocation
@@ -22,6 +24,7 @@ import (
 type Client struct {
 	baseURL string
 	http    *http.Client
+	refresh func(context.Context, string, string) (string, error)
 }
 
 // New returns a Client targeting the given Bridge base URL (e.g.
@@ -31,6 +34,7 @@ func New(baseURL string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		http:    &http.Client{Timeout: 75 * time.Second},
+		refresh: credentials.RefreshUserAuth,
 	}
 }
 
@@ -39,6 +43,10 @@ func New(baseURL string) *Client {
 // set of public operations (bootstrapEdge, the public read-only
 // queries). variables may be nil.
 func (c *Client) Do(ctx context.Context, query, jwt string, variables map[string]any, out any) error {
+	return c.do(ctx, query, jwt, variables, out, true)
+}
+
+func (c *Client) do(ctx context.Context, query, jwt string, variables map[string]any, out any, retry bool) error {
 	if c.baseURL == "" {
 		return fmt.Errorf("bridge: empty base URL")
 	}
@@ -66,6 +74,15 @@ func (c *Client) Do(ctx context.Context, query, jwt string, variables map[string
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("bridge: read response: %w", err)
+	}
+	if resp.StatusCode == http.StatusUnauthorized && jwt != "" && retry && c.refresh != nil {
+		fresh, refreshErr := c.refresh(ctx, c.baseURL, jwt)
+		if refreshErr != nil {
+			return refreshErr
+		}
+		if fresh != "" && fresh != jwt {
+			return c.do(ctx, query, fresh, variables, out, false)
+		}
 	}
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("bridge: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))

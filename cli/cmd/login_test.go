@@ -133,10 +133,11 @@ func TestSaveLoginTokensStoresRefreshAndClearsStaleRefreshForTokenFlag(t *testin
 		credentials.AccountUserRefresh: "old-refresh",
 	}}
 	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 
-	if err := saveLoginTokens(cmd, store, "access-token", "refresh-token"); err != nil {
+	if err := saveLoginTokens(cmd, store, "https://bridge.example", "access-token", "refresh-token"); err != nil {
 		t.Fatalf("saveLoginTokens with refresh: %v", err)
 	}
 	if got := store.entries[credentials.AccountUserSession]; got != "access-token" {
@@ -146,7 +147,10 @@ func TestSaveLoginTokensStoresRefreshAndClearsStaleRefreshForTokenFlag(t *testin
 		t.Fatalf("refresh token = %q", got)
 	}
 
-	if err := saveLoginTokens(cmd, store, "api-token", ""); err != nil {
+	if got := store.entries[credentials.AccountUserBridge]; got != "https://bridge.example" {
+		t.Fatalf("login Bridge = %q", got)
+	}
+	if err := saveLoginTokens(cmd, store, "https://bridge.example", "api-token", ""); err != nil {
 		t.Fatalf("saveLoginTokens token-only: %v", err)
 	}
 	if got := store.entries[credentials.AccountUserSession]; got != "api-token" {

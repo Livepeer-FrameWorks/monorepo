@@ -440,6 +440,10 @@ func (h *AuthHandlers) Logout() gin.HandlerFunc {
 
 		resp, err := h.commodore.Logout(c.Request.Context(), token)
 		if err != nil {
+			if status.Code(err) == codes.FailedPrecondition {
+				c.JSON(http.StatusConflict, gin.H{"error": "renew this session before signing out", "error_code": "SESSION_REFRESH_REQUIRED"})
+				return
+			}
 			h.logger.WithError(err).Error("Logout failed")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "logout failed"})
 			return
@@ -679,29 +683,57 @@ func (h *AuthHandlers) AuthorizeComplete() gin.HandlerFunc {
 	}
 }
 
-// OAuthToken handles POST /auth/oauth/token — the native client's loopback
-// receiver calls this with the PKCE authorization code and verifier to obtain
-// a real session. Tokens are returned in the body (not cookies) because the
-// native client stores them in OS Keychain/credential store.
+// OAuthToken exchanges PKCE codes or refresh tokens for native clients.
+// Tokens are returned in JSON; browser cookies are never read or modified.
 func (h *AuthHandlers) OAuthToken() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		c.Header("Pragma", "no-cache")
 		var req struct {
-			Code         string `json:"code" binding:"required"`
-			CodeVerifier string `json:"code_verifier" binding:"required"`
-			ClientID     string `json:"client_id" binding:"required"`
-			RedirectURI  string `json:"redirect_uri" binding:"required"`
+			GrantType    string `json:"grant_type"`
+			RefreshToken string `json:"refresh_token"`
+			Code         string `json:"code"`
+			CodeVerifier string `json:"code_verifier"`
+			ClientID     string `json:"client_id"`
+			RedirectURI  string `json:"redirect_uri"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 			return
 		}
 
-		resp, err := h.commodore.ExchangeAuthorizationCode(c.Request.Context(), &commodorepb.ExchangeAuthorizationCodeRequest{
-			Code:         req.Code,
-			CodeVerifier: req.CodeVerifier,
-			ClientId:     req.ClientID,
-			RedirectUri:  req.RedirectURI,
-		})
+		var resp *commodorepb.AuthResponse
+		var err error
+		switch req.GrantType {
+		case "refresh_token":
+			if strings.TrimSpace(req.RefreshToken) == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+				return
+			}
+			resp, err = h.commodore.RefreshToken(c.Request.Context(), req.RefreshToken)
+			if err != nil {
+				h.logger.WithError(err).Debug("Native token refresh failed")
+				if status.Code(err) == codes.Unauthenticated {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_grant"})
+				} else {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "temporarily_unavailable"})
+				}
+				return
+			}
+		case "", "authorization_code":
+			// The tray's code exchange may omit grant_type.
+			if req.Code == "" || req.CodeVerifier == "" || req.ClientID == "" || req.RedirectURI == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+				return
+			}
+			resp, err = h.commodore.ExchangeAuthorizationCode(c.Request.Context(), &commodorepb.ExchangeAuthorizationCodeRequest{
+				Code: req.Code, CodeVerifier: req.CodeVerifier,
+				ClientId: req.ClientID, RedirectUri: req.RedirectURI,
+			})
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported_grant_type"})
+			return
+		}
 		if err != nil {
 			h.logger.WithError(err).Debug("ExchangeAuthorizationCode failed")
 			if isAuthServiceUnavailable(err) {

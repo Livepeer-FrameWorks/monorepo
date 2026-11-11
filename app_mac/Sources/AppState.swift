@@ -10,6 +10,7 @@ class AppState: ObservableObject {
   @Published var userEmail: String?
   @Published var userId: String?
   @Published var tenantId: String?
+  @Published var authError: String?
   @Published var loginBridgeURLDraft = AppState.hostedBridgeURL
 
   // Edge

@@ -69,6 +69,131 @@ func TestAuthHandlers_InvalidJSONBindingsReturnBadRequest(t *testing.T) {
 	}
 }
 
+func TestOAuthTokenRefreshGrant(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"success", nil, http.StatusOK},
+		{"revoked", status.Error(codes.Unauthenticated, "secret internal detail"), http.StatusBadRequest},
+		{"unavailable", status.Error(codes.Unavailable, "database offline"), http.StatusServiceUnavailable},
+		{"rotation conflict", status.Error(codes.Aborted, "concurrent refresh"), http.StatusServiceUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got string
+			h := &AuthHandlers{logger: logging.NewLogger(), commodore: &clientstest.FakeCommodore{
+				RefreshTokenFn: func(_ context.Context, token string) (*commodorepb.AuthResponse, error) {
+					got = token
+					return &commodorepb.AuthResponse{Token: "new-access", RefreshToken: "new-refresh", ExpiresAt: timestamppb.Now()}, tc.err
+				},
+			}}
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/auth/oauth/token", strings.NewReader(`{"grant_type":"refresh_token","refresh_token":"native-refresh"}`))
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Request.AddCookie(&http.Cookie{Name: refreshTokenCookie, Value: "browser-refresh"})
+			h.OAuthToken()(c)
+			if rec.Code != tc.want || got != "native-refresh" {
+				t.Fatalf("status=%d refresh=%q body=%s", rec.Code, got, rec.Body.String())
+			}
+			if len(rec.Result().Cookies()) != 0 {
+				t.Fatal("native refresh must not change browser cookies")
+			}
+			if rec.Header().Get("Cache-Control") != "no-store" {
+				t.Fatal("token response must not be cached")
+			}
+			if tc.err == nil && !strings.Contains(rec.Body.String(), `"refresh_token":"new-refresh"`) {
+				t.Fatalf("rotated token missing: %s", rec.Body.String())
+			}
+			if tc.err != nil && strings.Contains(rec.Body.String(), tc.err.Error()) {
+				t.Fatal("internal error leaked")
+			}
+		})
+	}
+}
+
+func TestOAuthTokenRejectsInvalidGrantRequests(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, body := range []string{
+		`{"grant_type":"refresh_token"}`,
+		`{"grant_type":"refresh_token","refresh_token":"   "}`,
+		`{"grant_type":"client_credentials","refresh_token":"secret"}`,
+		`{"grant_type":"authorization_code","code":"code"}`,
+		`{}`,
+	} {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/auth/oauth/token", strings.NewReader(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+		h := &AuthHandlers{logger: logging.NewLogger()}
+		h.OAuthToken()(c)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("request=%s status=%d", body, rec.Code)
+		}
+	}
+}
+
+type oauthCodeCommodore struct {
+	*clientstest.FakeCommodore
+	request *commodorepb.ExchangeAuthorizationCodeRequest
+}
+
+type logoutCommodore struct {
+	*clientstest.FakeCommodore
+	err error
+}
+
+func (f *logoutCommodore) Logout(context.Context, string) (*commodorepb.LogoutResponse, error) {
+	return nil, f.err
+}
+
+func TestLogoutLegacySessionRequiresRefreshWithoutClearingCookies(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := &AuthHandlers{logger: logging.NewLogger(), commodore: &logoutCommodore{
+		err: status.Error(codes.FailedPrecondition, "refresh this legacy session before signing out"),
+	}}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/auth/logout", nil)
+	h.Logout()(c)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "SESSION_REFRESH_REQUIRED") {
+		t.Fatalf("legacy logout: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(rec.Header().Values("Set-Cookie")) != 0 {
+		t.Fatal("legacy renewal response discarded the refresh credential")
+	}
+}
+
+func (f *oauthCodeCommodore) ExchangeAuthorizationCode(_ context.Context, req *commodorepb.ExchangeAuthorizationCodeRequest) (*commodorepb.AuthResponse, error) {
+	f.request = req
+	return &commodorepb.AuthResponse{Token: "access", RefreshToken: "refresh", ExpiresAt: timestamppb.Now()}, nil
+}
+
+func TestOAuthTokenPreservesPKCECodeExchange(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, grant := range []string{"", "authorization_code"} {
+		fake := &oauthCodeCommodore{FakeCommodore: &clientstest.FakeCommodore{}}
+		h := &AuthHandlers{logger: logging.NewLogger(), commodore: fake}
+		body, err := json.Marshal(map[string]string{
+			"grant_type": grant, "code": "auth-code", "code_verifier": "verifier",
+			"client_id": "tray-mac", "redirect_uri": "http://127.0.0.1:1234/callback",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/auth/oauth/token", strings.NewReader(string(body)))
+		c.Request.Header.Set("Content-Type", "application/json")
+		h.OAuthToken()(c)
+		if rec.Code != http.StatusOK || fake.request.GetCode() != "auth-code" || fake.request.GetCodeVerifier() != "verifier" || fake.request.GetClientId() != "tray-mac" {
+			t.Fatalf("grant=%q status=%d request=%v", grant, rec.Code, fake.request)
+		}
+	}
+}
+
 func TestVerifyEmailAcceptsTokenOnlyInJSONBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var gotToken string

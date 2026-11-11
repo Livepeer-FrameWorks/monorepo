@@ -3805,31 +3805,63 @@ frameworks context check
 
 ### frameworks login
 
-Authenticate with the FrameWorks platform using your user session token
-(the same credential the macOS tray uses).
+Sign in through your browser using a device code. The CLI opens the webapp,
+shows a code to approve, and saves its own access and refresh tokens.
 
 ```bash
 frameworks login
+frameworks login --no-browser --bridge-url https://bridge.example.com --timeout 10m
 ```
 
-**Token storage.** The session is written to the platform-native credential store and never appears in shell history:
+Use `--no-browser` to print the approval URL without opening it. `--bridge-url`
+overrides the active context's Bridge endpoint (the hosted Bridge is the fallback).
+`--timeout` limits the approval wait and defaults to five minutes. `--token`
+stores an existing API or session token instead of starting device authorization;
+a token imported this way has no refresh credential.
 
-- **macOS:** Keychain service `com.livepeer.frameworks`, account `user_session`.
+**Token storage.** Credentials are written to the platform-native store:
+
+- **macOS:** Keychain service `com.livepeer.frameworks`, accounts `cli_session`
+  and `cli_refresh`, with the issuing Bridge saved as `cli_bridge_url`.
 - **Other platforms:** `$XDG_DATA_HOME/frameworks/credentials` with mode `0600`.
 
-For CI/automation, set `FW_USER_TOKEN` in the environment — it overrides whatever the store holds. Run `frameworks config path --kind credentials` to print the active backend (e.g. `keychain:com.livepeer.frameworks` on macOS).
+The CLI renews stored session tokens when resolving credentials within one minute
+of expiry. Bridge GraphQL requests retry once after a 401 using the stored refresh
+credential. Refresh goes only to the Bridge used for login. Temporary refresh
+failures retain stored credentials for a later retry. A Bridge that returns the
+older HTTP 400 `invalid request` response uses the legacy refresh-cookie endpoint
+on that same Bridge. Token rejections, unsupported grants and outages never
+trigger this fallback.
 
-The platform `SERVICE_TOKEN` is **not** a user credential. It is loaded from your manifest `env_files` (gitops) during `cluster provision` and admin commands. There is no `login --service-account`.
+CLI and Mac tray credentials are independent. If you previously used their shared
+keychain entry, run `frameworks login` again to establish a separate CLI login.
+The tray keeps its existing login.
+
+For CI/automation, set `FW_USER_TOKEN` in the environment — it overrides the store
+and the CLI does not refresh or modify it. The tray uses this override for child
+CLI processes. Run `frameworks config path --kind credentials` to print the active
+backend (e.g. `keychain:com.livepeer.frameworks` on macOS).
+
+The platform `SERVICE_TOKEN` is **not** a user credential. It is loaded from your
+manifest `env_files` (gitops) during `cluster provision` and admin commands. There
+is no `login --service-account`.
 
 ### frameworks logout
 
-Clear the stored user session.
+Revoke the stored CLI session, then clear its local credentials.
 
 ```bash
 frameworks logout
 ```
 
-Deletes both `user_session` and `refresh_token` so a running tray can't silently repopulate them. The gitops-sourced `SERVICE_TOKEN` is unaffected — logout does not touch platform configuration.
+This revokes the stored CLI session on the Bridge used at login, then clears its
+local credentials. It leaves the Mac tray's credentials, `FW_USER_TOKEN` and the
+gitops-sourced `SERVICE_TOKEN` unchanged. A network failure retains credentials
+so you can retry server revocation.
+
+`frameworks logout --local` clears credentials without contacting Bridge. Older
+platforms without named sessions support local sign-out only; their server
+session remains valid until it expires or is revoked.
 
 ---
 

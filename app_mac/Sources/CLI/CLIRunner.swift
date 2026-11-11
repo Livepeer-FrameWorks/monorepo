@@ -75,7 +75,7 @@ actor CLIRunner {
     // we'd invert the precedence and make Keychain override an explicit
     // env override.
     if (env["FW_USER_TOKEN"] ?? "").isEmpty,
-       let token = KeychainHelper.load(key: "user_session") {
+       let token = GatewayClient.shared.accessToken {
       env["FW_USER_TOKEN"] = token
     }
     if let extra = environment {
@@ -116,7 +116,7 @@ actor CLIRunner {
 
     var env = ProcessInfo.processInfo.environment
     if (env["FW_USER_TOKEN"] ?? "").isEmpty,
-       let token = KeychainHelper.load(key: "user_session") {
+       let token = GatewayClient.shared.accessToken {
       env["FW_USER_TOKEN"] = token
     }
     process.environment = env
