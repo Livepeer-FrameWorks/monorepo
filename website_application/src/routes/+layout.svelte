@@ -7,6 +7,7 @@
   import { page } from "$app/stores";
   import { base, resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
+  import { toast } from "$lib/stores/toast";
   import { createTrailingRevalidator } from "$lib/auth/revalidation";
   import { loadStreamingConfig } from "$lib/stores/streaming-config.svelte";
   import { loadCapabilities, clearCapabilities } from "$lib/stores/capabilities.svelte";
@@ -160,9 +161,13 @@
     unsubscribeAuth();
   });
 
-  function logout() {
-    auth.logout();
-    goto(loginPath);
+  async function logout() {
+    const result = await auth.logout();
+    if (result.success) {
+      await goto(loginPath);
+    } else {
+      toast.error(result.error || "Could not sign out this session. Please try again.");
+    }
   }
 
   function handleComingSoon(event: CustomEvent) {

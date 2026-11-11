@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"time"
@@ -66,9 +67,10 @@ type RequestWalletChallengeInput struct {
 }
 
 type WalletChallengeResult struct {
-	Message   string `json:"message"`
-	ExpiresAt string `json:"expires_at"`
-	NextStep  string `json:"next_step"`
+	Message       string `json:"message"`
+	HeaderMessage string `json:"header_message"`
+	ExpiresAt     string `json:"expires_at"`
+	NextStep      string `json:"next_step"`
 }
 
 type ListLinkedWalletsInput struct{}
@@ -135,9 +137,10 @@ func handleRequestWalletChallenge(ctx context.Context, args RequestWalletChallen
 		return toolError("Authentication service returned an incomplete wallet challenge")
 	}
 	return toolSuccess(WalletChallengeResult{
-		Message:   resp.GetMessage(),
-		ExpiresAt: resp.GetExpiresAt().AsTime().UTC().Format(time.RFC3339),
-		NextStep:  "Sign message verbatim with EIP-191 personal_sign, then reconnect once using the X-Wallet-* headers. Save the returned X-Access-Token and use it as a bearer token for subsequent MCP requests.",
+		Message:       resp.GetMessage(),
+		HeaderMessage: base64.StdEncoding.EncodeToString([]byte(resp.GetMessage())),
+		ExpiresAt:     resp.GetExpiresAt().AsTime().UTC().Format(time.RFC3339),
+		NextStep:      "Sign message verbatim with EIP-191 personal_sign. Reconnect once using header_message for X-Wallet-Message and the address/signature headers. Save X-Access-Token as a bearer for subsequent MCP requests; it expires after 15 minutes and cannot be refreshed.",
 	})
 }
 

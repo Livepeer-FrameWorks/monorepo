@@ -86,11 +86,11 @@ EVM wallet identity system. Signature auth is currently Ethereum (EIP-191); Base
 
 ### Headers
 
-| Header               | Description                               |
-| -------------------- | ----------------------------------------- |
-| `X-Wallet-Address`   | 0x-prefixed Ethereum address              |
-| `X-Wallet-Signature` | EIP-191 `personal_sign` signature         |
-| `X-Wallet-Message`   | Exact server-issued, single-use challenge |
+| Header               | Description                                 |
+| -------------------- | ------------------------------------------- |
+| `X-Wallet-Address`   | 0x-prefixed Ethereum address                |
+| `X-Wallet-Signature` | EIP-191 `personal_sign` signature           |
+| `X-Wallet-Message`   | Base64 of the UTF-8 server-issued challenge |
 
 ### Challenge issuance and exchange
 
@@ -118,7 +118,17 @@ Expiration Time: 2026-08-20T00:05:00Z
 - `WalletLogin` verifies the EIP-191 signature and atomically consumes the
   matching unexpired challenge. Concurrent exchange or replay has one winner.
 - REST login returns a refreshable HttpOnly-cookie session. MCP header exchange
-  returns `X-Access-Token`; the client then switches to bearer/API-token auth.
+  verifies the proof without creating a session or refresh row and returns
+  `X-Access-Token`, a 15-minute, non-refreshable wallet bearer. The client then
+  switches to bearer/API-token auth. Each bearer request checks that its owner
+  is active, the wallet remains linked, and no user-wide revocation covers it.
+- Sign the original challenge bytes, then base64-encode those bytes for the
+  header: SIWE messages contain newlines, which HTTP headers cannot carry.
+  `request_wallet_challenge` returns `header_message` ready for that header.
+- Wallet bearers carry `auth_type=wallet` and audience `bridge`, without a
+  session ID or platform-operator grant. Bridge mints a fresh, one-use,
+  audience-bound assertion for each downstream RPC, capped by the original
+  bearer's expiry and the one-minute internal assertion lifetime.
 - x402 is not accepted as authentication and cannot issue a session.
 - REST and MCP wallet bootstrap calls share the public per-IP abuse bucket.
   Authentication throttling returns 429 and never produces an x402 challenge.
@@ -472,7 +482,8 @@ idempotent, and open-world annotations are derived from the same policy, but
 remain advisory hints; authorization never trusts client interpretation of
 annotations.
 
-JWT and wallet sessions use the represented interactive user's existing role.
+Interactive sessions and wallet bearers use their owner's tenant role.
+Platform-operator grants require an interactive session.
 API tokens are fail-closed and require the tool's exact domain scope:
 `account:read`, `settings:write`, `billing:*`, `streams:*`, `analytics:read`,
 `support:read`, `infrastructure:*`, `developer:*`, `consultant:use`, or

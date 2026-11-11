@@ -38,8 +38,8 @@ var (
 // authenticated with at connection_init.
 type websocketIdentity struct {
 	// credential is the bearer token re-checked while the connection is open.
-	// Wallet connections have none: re-running wallet login would mint a new
-	// session, so they are bounded by expiresAt only.
+	// Wallet header connections retain their non-refreshable bearer so their
+	// owner and linked-wallet state can be rechecked without another signature.
 	credential string
 	tenantID   string
 	// tokenID is the API token's ID; empty for sessions.
@@ -47,6 +47,7 @@ type websocketIdentity struct {
 	// userID identifies the owner of either credential type. For sessions,
 	// issuedAt bounds which tokens a session revocation covers.
 	userID    string
+	sessionID string
 	issuedAt  time.Time
 	expiresAt time.Time
 }
@@ -71,8 +72,8 @@ func websocketIdentityFrom(ctx context.Context) (websocketIdentity, bool) {
 }
 
 func bearerIdentity(token string, result *AuthResult) websocketIdentity {
-	id := websocketIdentity{credential: token, tenantID: result.TenantID, tokenID: result.TokenID, userID: result.UserID}
-	if result.AuthType == "jwt" {
+	id := websocketIdentity{credential: token, tenantID: result.TenantID, tokenID: result.TokenID, userID: result.UserID, sessionID: result.SessionID}
+	if result.AuthType == "jwt" || result.AuthType == "wallet" {
 		if result.IssuedAt != nil {
 			id.issuedAt = *result.IssuedAt
 		}
@@ -227,7 +228,7 @@ func (s *WebsocketSessions) register(session *websocketSession) (unregister func
 	if id.isSession() {
 		// CloseUserSessions records under s.mu, so a revocation either is
 		// seen here or finds this connection registered.
-		if s.revocations.Revoked(id.tenantID, id.userID, id.issuedAt) {
+		if s.revocations.SessionRevoked(id.tenantID, id.userID, id.sessionID, id.issuedAt) {
 			return func() {}, true
 		}
 		addSession(s.byUser, userKey, session)
@@ -388,6 +389,26 @@ func (s *WebsocketSessions) CloseAPIToken(tenantID, tokenID string) int {
 // stops delivering events before this returns.
 func (s *WebsocketSessions) CloseUserSessions(tenantID, userID string, revokedAt time.Time) int {
 	return s.closeUserSessions(tenantID, userID, revokedAt, ErrWebsocketCredentialRevoked)
+}
+
+// CloseSession records revocation before closing only this session's sockets.
+func (s *WebsocketSessions) CloseSession(tenantID, userID, sessionID string, revokedAt time.Time) int {
+	if s == nil || tenantID == "" || userID == "" || sessionID == "" {
+		return 0
+	}
+	s.mu.Lock()
+	s.revocations.RecordSession(tenantID, userID, sessionID, revokedAt)
+	var sessions []*websocketSession
+	for session := range s.byUser[websocketUserKey{tenantID: tenantID, userID: userID}] {
+		if session.id.sessionID == sessionID {
+			sessions = append(sessions, session)
+		}
+	}
+	s.mu.Unlock()
+	for _, session := range sessions {
+		session.close(ErrWebsocketCredentialRevoked)
+	}
+	return len(sessions)
 }
 
 // CloseDeactivatedUser closes, with 4403 and reason "account deactivated",

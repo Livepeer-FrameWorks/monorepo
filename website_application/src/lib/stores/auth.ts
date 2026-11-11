@@ -184,8 +184,16 @@ function createAuthStore() {
     return false;
   }
 
+  function clearLocalSession() {
+    stopRefreshLoop();
+    disconnectWebSocket();
+    localStorage.removeItem("user");
+    set({ isAuthenticated: false, user: null, loading: false, error: null, initialized: true });
+  }
+
   return {
     subscribe,
+    clearLocalSession,
 
     async issueWalletChallenge(address: string, chainId: number): Promise<string> {
       const response = await authAPI.post<WalletChallengeResponse>("/wallet-challenge", {
@@ -340,25 +348,42 @@ function createAuthStore() {
       }
     },
 
-    async logout() {
+    async logout(): Promise<LoginResponse> {
       try {
-        // Backend clears all auth cookies
-        await authAPI.post("/logout");
+        try {
+          await authAPI.post("/logout");
+        } catch (error) {
+          if (
+            !error ||
+            typeof error !== "object" ||
+            !("response" in error) ||
+            !error.response ||
+            typeof error.response !== "object" ||
+            !("status" in error.response) ||
+            (error.response.status !== 401 &&
+              !(
+                error.response.status === 409 &&
+                getAuthErrorResponse(error)?.error_code === "SESSION_REFRESH_REQUIRED"
+              ))
+          ) {
+            throw error;
+          }
+          const refreshed = await refreshAuthSession();
+          if (refreshed === "transient") {
+            throw new Error("Session renewal unavailable");
+          }
+          if (refreshed === "ok") {
+            await authAPI.post("/logout");
+          }
+        }
       } catch {
-        // Ignore errors - clear local state anyway
+        const message = "Could not sign out this session. Please try again.";
+        update((state) => ({ ...state, error: message }));
+        return { success: false, error: message };
       }
 
-      stopRefreshLoop();
-      disconnectWebSocket();
-      localStorage.removeItem("user");
-
-      set({
-        isAuthenticated: false,
-        user: null,
-        loading: false,
-        error: null,
-        initialized: true,
-      });
+      clearLocalSession();
+      return { success: true };
     },
 
     async resendVerification(email: string, turnstileToken?: string): Promise<LoginResponse> {

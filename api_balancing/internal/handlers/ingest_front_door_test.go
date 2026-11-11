@@ -45,6 +45,12 @@ type ingestCommodoreFake struct {
 	streamContext     func(context.Context, *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error)
 	streamContextHits atomic.Int32
 	validateKeyHits   atomic.Int32
+	sessionValid      bool
+	sessionErr        error
+}
+
+func (f *ingestCommodoreFake) ValidateSession(context.Context, *commodorepb.ValidateSessionRequest) (*commodorepb.ValidateSessionResponse, error) {
+	return &commodorepb.ValidateSessionResponse{Valid: f.sessionValid}, f.sessionErr
 }
 
 func (f *ingestCommodoreFake) ResolveStreamContext(ctx context.Context, req *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {

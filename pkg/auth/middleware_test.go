@@ -93,6 +93,26 @@ func TestJWTAuthMiddleware(t *testing.T) {
 
 }
 
+func TestJWTAuthMiddlewareRejectsRevokedSession(t *testing.T) {
+	secret := []byte("session-check")
+	token, err := GenerateJWT("user", "tenant", "user@example.com", "member", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.Use(JWTAuthMiddleware(secret, WithSessionValidation(func(context.Context, string) error {
+		return ErrSessionRevoked
+	})))
+	router.GET("/api", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked session status=%d want=401", response.Code)
+	}
+}
+
 func TestJWTAuthMiddlewareRejectsDelegatedAPITokenJWT(t *testing.T) {
 	secret := []byte("secret")
 	token, err := GenerateDelegatedAPITokenJWT("u1", "t1", "u@example.com", "admin", "token1", []string{"streams:read"}, "quartermaster", secret)

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/base64"
 	"strings"
 	"testing"
 	"time"
@@ -45,6 +46,9 @@ func TestHandleRequestWalletChallenge(t *testing.T) {
 	}
 	if gotAddress != "0xabc" || gotChainID != 8453 {
 		t.Fatalf("challenge args = %q/%d", gotAddress, gotChainID)
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(result.HeaderMessage); err != nil || string(decoded) != result.Message {
+		t.Fatalf("header message does not preserve signed bytes: %q, %v", decoded, err)
 	}
 }
 

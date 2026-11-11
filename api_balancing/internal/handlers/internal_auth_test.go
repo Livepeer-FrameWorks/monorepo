@@ -10,9 +10,12 @@ import (
 	"frameworks/api_balancing/internal/appconfig"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestInternalOperatorIngressRejectsDelegatedAPIToken(t *testing.T) {
+	startIngestCommodoreFake(t, &ingestCommodoreFake{sessionValid: true})
 	gin.SetMode(gin.TestMode)
 	secret := []byte("foghorn-internal-auth-secret")
 	useFoghornConfig(t, &appconfig.Foghorn{JWTSecret: string(secret), ServiceToken: "service-secret"})
@@ -49,6 +52,38 @@ func TestInternalOperatorIngressRejectsDelegatedAPIToken(t *testing.T) {
 			router.ServeHTTP(resp, req)
 			if resp.Code != tc.wantStatus {
 				t.Fatalf("status = %d, want %d", resp.Code, tc.wantStatus)
+			}
+		})
+	}
+}
+
+func TestInternalOperatorIngressRejectsRevokedSession(t *testing.T) {
+	secret := []byte("foghorn-session-test")
+	useFoghornConfig(t, &appconfig.Foghorn{JWTSecret: string(secret), ServiceToken: "service-secret"})
+	token, err := auth.GenerateSessionJWT("operator", "tenant", "operator@example.com", "owner", []string{auth.RolePlatformOperator}, time.Time{}, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		valid bool
+		err   error
+		want  int
+	}{
+		{"revoked", false, nil, http.StatusForbidden},
+		{"outage", false, status.Error(codes.Unavailable, "offline"), http.StatusServiceUnavailable},
+		{"active", true, nil, http.StatusNoContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			startIngestCommodoreFake(t, &ingestCommodoreFake{sessionValid: tc.valid, sessionErr: tc.err})
+			router := gin.New()
+			router.GET("/internal", RequireInternalMutation(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/internal", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, req)
+			if response.Code != tc.want {
+				t.Fatalf("status=%d want=%d", response.Code, tc.want)
 			}
 		})
 	}

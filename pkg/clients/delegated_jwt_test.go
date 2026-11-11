@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
@@ -37,6 +38,35 @@ func TestDelegatedJWTForRPCMintsFreshAudienceBoundJTI(t *testing.T) {
 	}
 	if firstClaims.TokenID != "token-1" || firstClaims.TenantID != "tenant-1" || len(firstClaims.Audience) != 1 || firstClaims.Audience[0] != "purser" {
 		t.Fatalf("unexpected delegated claims: %+v", firstClaims)
+	}
+}
+
+func TestWalletDelegationPreservesOwnerAndCannotExtendBearer(t *testing.T) {
+	secret := []byte("wallet-delegation")
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "wallet")
+	ctx = context.WithValue(ctx, ctxkeys.KeyUserID, "user")
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant")
+	ctx = context.WithValue(ctx, ctxkeys.KeyWalletAddr, "0xwallet")
+	expiry := time.Now().Add(20 * time.Second)
+	ctx = context.WithValue(ctx, ctxkeys.KeyJWTExpiresAt, expiry)
+	first, err := DelegatedJWTForRPC(ctx, "commodore", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := DelegatedJWTForRPC(ctx, "commodore", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := auth.ValidateJWT(first, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := auth.ValidateJWT(second, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.ID == b.ID || a.Subject != "0xwallet" || a.UserID != "user" || a.TenantID != "tenant" || a.AuthType != "wallet" || a.ExpiresAt.After(expiry) || len(a.Roles) != 0 || a.SessionID != "" {
+		t.Fatalf("wallet assertion changed identity or lifetime: %+v", a)
 	}
 }
 

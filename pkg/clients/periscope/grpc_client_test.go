@@ -27,6 +27,32 @@ type retryDelegationStub struct {
 	jtis   []string
 }
 
+func TestAuthInterceptorDelegatesWalletBearerToPeriscope(t *testing.T) {
+	secret := []byte("wallet-periscope")
+	bearer, err := auth.GenerateWalletBearerJWT("user", "tenant", "", "member", "0xwallet", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "wallet")
+	ctx = context.WithValue(ctx, ctxkeys.KeyUserID, "user")
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant")
+	ctx = context.WithValue(ctx, ctxkeys.KeyWalletAddr, "0xwallet")
+	ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, bearer)
+	ctx = context.WithValue(ctx, ctxkeys.KeyJWTExpiresAt, time.Now().Add(30*time.Second))
+	err = authInterceptor("service", secret)(ctx, "/periscope.AggregatedAnalyticsService/GetTenantDailyStats", nil, nil, nil,
+		func(ctx context.Context, _ string, _, _ any, _ *grpc.ClientConn, _ ...grpc.CallOption) error {
+			md, _ := metadata.FromOutgoingContext(ctx)
+			claims, parseErr := auth.ValidateJWT(strings.TrimPrefix(md.Get("authorization")[0], "Bearer "), secret)
+			if parseErr != nil || len(claims.Audience) != 1 || claims.Audience[0] != "periscope" {
+				t.Fatalf("wallet credential was not delegated to Periscope: claims=%+v err=%v", claims, parseErr)
+			}
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (s *retryDelegationStub) GetTenantDailyStats(ctx context.Context, _ *periscopepb.GetTenantDailyStatsRequest) (*periscopepb.GetTenantDailyStatsResponse, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	header := md.Get("authorization")

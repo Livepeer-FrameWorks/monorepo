@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
@@ -22,6 +23,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -118,6 +120,22 @@ func authInterceptor(serviceToken string, delegatedJWTSecret ...[]byte) grpc.Una
 		md.Delete("authorization")
 		md.Delete("x-user-id")
 		md.Delete("x-tenant-id")
+		clientInfo := ctxkeys.GetAuthClientMetadata(ctx)
+		if clientInfo.IP == "" {
+			clientInfo.IP = ctxkeys.GetClientIP(ctx)
+		}
+		for key, value := range map[string]string{
+			"x-client-ip": clientInfo.IP, "x-client-user-agent-bin": clientInfo.UserAgent,
+			"x-device-label-bin": clientInfo.DeviceLabel, "x-client-version-bin": clientInfo.Version,
+		} {
+			md.Delete(key)
+			if value != "" {
+				md.Set(key, value)
+			}
+		}
+		for _, key := range []string{"x-client-user-agent", "x-device-label", "x-client-version"} {
+			md.Delete(key)
+		}
 
 		if userID := ctxkeys.GetUserID(ctx); userID != "" && !forceServiceAuth {
 			md.Set("x-user-id", userID)
@@ -688,12 +706,51 @@ func (c *GRPCClient) ValidateSession(ctx context.Context, token string) (*commod
 	})
 }
 
+// CheckSession fails closed when the owning service cannot confirm that an
+// interactive credential remains active. It never caches an accepted token.
+func (c *GRPCClient) CheckSession(ctx context.Context, token string) error {
+	if c == nil {
+		return status.Error(codes.Unavailable, "session state unavailable")
+	}
+	response, err := c.ValidateSession(ctx, token)
+	if err != nil {
+		return status.Error(codes.Unavailable, "session state unavailable")
+	}
+	if !response.GetValid() {
+		return fmt.Errorf("%w: %w", auth.ErrSessionRevoked, status.Error(codes.Unauthenticated, "session signed out"))
+	}
+	return nil
+}
+
+func (c *GRPCClient) VerifyWalletAuth(ctx context.Context, address, message, signature string, attribution *commonpb.SignupAttribution) (*commodorepb.WalletAuthResponse, error) {
+	return c.internal.VerifyWalletAuth(withServiceAuth(ctx), &commodorepb.WalletLoginRequest{
+		WalletAddress: address, Message: message, Signature: signature, Attribution: attribution,
+	})
+}
+
+func (c *GRPCClient) ListSessions(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*commodorepb.ListSessionsResponse, error) {
+	return c.user.ListSessions(ctx, &commodorepb.ListSessionsRequest{Pagination: pagination})
+}
+
+func (c *GRPCClient) RevokeSession(ctx context.Context, sessionID string) (*commodorepb.RevokeSessionResponse, error) {
+	return c.user.RevokeSession(ctx, &commodorepb.RevokeSessionRequest{SessionId: sessionID})
+}
+
+func (c *GRPCClient) RevokeOtherSessions(ctx context.Context) (*commodorepb.RevokeOtherSessionsResponse, error) {
+	return c.user.RevokeOtherSessions(ctx, &emptypb.Empty{})
+}
+
+func (c *GRPCClient) RenameSession(ctx context.Context, sessionID, label string) (*commodorepb.AuthSession, error) {
+	return c.user.RenameSession(ctx, &commodorepb.RenameSessionRequest{SessionId: sessionID, Label: label})
+}
+
 // ListRecentSessionRevocations returns, across tenants, every user whose
 // sessions were revoked after since (clamped by Commodore to a session
 // token's lifetime).
 func (c *GRPCClient) ListRecentSessionRevocations(ctx context.Context, since time.Time) (*commodorepb.ListRecentSessionRevocationsResponse, error) {
 	return c.internal.ListRecentSessionRevocations(withServiceAuth(ctx), &commodorepb.ListRecentSessionRevocationsRequest{
-		Since: timestamppb.New(since),
+		Since:               timestamppb.New(since),
+		IncludeAuthSessions: true,
 	})
 }
 

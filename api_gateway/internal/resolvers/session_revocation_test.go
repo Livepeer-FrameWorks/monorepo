@@ -22,29 +22,52 @@ import (
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/99designs/gqlgen/graphql/handler"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const replicaJWTSecret = "jwt-secret"
 
-func sessionToken(t *testing.T, userID, tenantID string) string {
+func sessionToken(t *testing.T, userID, tenantID string, sessionIDs ...string) string {
 	t.Helper()
 	token, err := auth.GenerateSessionJWT(userID, tenantID, userID+"@example.com", "owner", nil, time.Now(), []byte(replicaJWTSecret))
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(sessionIDs) > 0 {
+		claims, err := auth.ValidateInteractiveJWT(token, []byte(replicaJWTSecret))
+		if err != nil {
+			t.Fatal(err)
+		}
+		claims.SessionID = sessionIDs[0]
+		token, err = jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(replicaJWTSecret))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	return token
 }
 
-func sessionsRevokedEvent(t *testing.T, tenantID, userID string, revokedAt time.Time) *signalmanpb.SignalmanEvent {
+func sessionsRevokedEvent(t *testing.T, tenantID, userID string, revokedAt time.Time, sessionIDs ...string) *signalmanpb.SignalmanEvent {
 	t.Helper()
-	data, err := anypb.New(&internalv1.UserSessionsRevoked{
+	var sessionID string
+	if len(sessionIDs) > 0 {
+		sessionID = sessionIDs[0]
+	}
+	var payload proto.Message = &internalv1.UserSessionsRevoked{
 		UserId: userID, RevokedAt: timestamppb.New(revokedAt), Reason: internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_LOGOUT,
-	})
+	}
+	eventType := "user.sessions_revoked"
+	if sessionID != "" {
+		payload = &internalv1.AuthSessionRevoked{UserId: userID, SessionId: sessionID, RevokedAt: timestamppb.New(revokedAt), Reason: internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_LOGOUT}
+		eventType = "auth_session.revoked"
+	}
+	data, err := anypb.New(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,8 +76,27 @@ func sessionsRevokedEvent(t *testing.T, tenantID, userID string, revokedAt time.
 		Channel:   signalmanpb.Channel_CHANNEL_SESSIONS,
 		TenantId:  &tenantID,
 		Data: &signalmanpb.EventData{Payload: &signalmanpb.EventData_TenantEvent{TenantEvent: &signalmanpb.TenantEvent{
-			Id: "evt-logout-" + userID, Type: "user.sessions_revoked", Data: data,
+			Id: "evt-logout-" + userID, Type: eventType, Data: data,
 		}}},
+	}
+}
+
+func TestNamedSessionRevocationLeavesAnotherDeviceConnected(t *testing.T) {
+	sc := validatorClients(t, nil)
+	broker := newSignalmanBroker()
+	replica := newBridgeReplica(t, broker, sc)
+	lost := openTokenSocket(t, replica, sessionToken(t, "user", "tenant", "lost-device"))
+	current := openTokenSocket(t, replica, sessionToken(t, "user", "tenant", "current"))
+	otherTenant := openTokenSocket(t, replica, sessionToken(t, "user", "other-tenant", "lost-device"))
+	broker.waitStreams(t, "", signalmanpb.Channel_CHANNEL_SESSIONS, 1)
+	broker.publish(t, "", signalmanpb.Channel_CHANNEL_SESSIONS, sessionsRevokedEvent(t, "tenant", "user", time.Now(), "lost-device"))
+	if code := socketCloseCode(t, lost, 2*time.Second); code != middleware.WebsocketCloseForbidden {
+		t.Fatalf("lost device close=%d", code)
+	}
+	for _, conn := range []*websocket.Conn{current, otherTenant} {
+		if code := socketCloseCode(t, conn, 300*time.Millisecond); code != 0 {
+			t.Fatalf("another session closed: %d", code)
+		}
 	}
 }
 
@@ -111,6 +153,14 @@ func (r *recordingSockets) CloseAPIToken(tenantID, tokenID string) int {
 func (r *recordingSockets) CloseUserSessions(tenantID, userID string, _ time.Time) int {
 	r.mu.Lock()
 	r.sessions = append(r.sessions, tenantID+"/"+userID)
+	r.mu.Unlock()
+	r.seen <- struct{}{}
+	return 0
+}
+
+func (r *recordingSockets) CloseSession(tenantID, userID, sessionID string, _ time.Time) int {
+	r.mu.Lock()
+	r.sessions = append(r.sessions, tenantID+"/"+userID+"/"+sessionID)
 	r.mu.Unlock()
 	r.seen <- struct{}{}
 	return 0

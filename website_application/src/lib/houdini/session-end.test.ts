@@ -2,11 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { writable } from "svelte/store";
 
 const state = writable({ isAuthenticated: true });
-const logout = vi.fn(async () => {
+const clearLocalSession = vi.fn(() => {
   state.set({ isAuthenticated: false });
 });
+const logout = vi.fn();
 vi.mock("$app/environment", () => ({ browser: true }));
-vi.mock("$lib/stores/auth", () => ({ auth: { subscribe: state.subscribe, logout } }));
+vi.mock("$lib/stores/auth", () => ({
+  auth: { subscribe: state.subscribe, clearLocalSession, logout },
+}));
 
 const values = new Map<string, string>();
 vi.stubGlobal("sessionStorage", {
@@ -20,13 +23,15 @@ const { endSession, takeSessionEnd } = await import("./session-end");
 beforeEach(() => {
   values.clear();
   logout.mockClear();
+  clearLocalSession.mockClear();
 });
 
 describe("endSession", () => {
   it("signs a signed-in tab out once and leaves the reason for the login page", async () => {
     state.set({ isAuthenticated: true });
     await Promise.all([endSession("deactivated"), endSession("deactivated")]);
-    expect(logout).toHaveBeenCalledTimes(1);
+    expect(clearLocalSession).toHaveBeenCalledTimes(1);
+    expect(logout).not.toHaveBeenCalled();
     expect(takeSessionEnd()).toBe("deactivated");
     expect(takeSessionEnd()).toBeNull();
   });
@@ -35,6 +40,7 @@ describe("endSession", () => {
     state.set({ isAuthenticated: false });
     await endSession("expired");
     expect(logout).not.toHaveBeenCalled();
+    expect(clearLocalSession).not.toHaveBeenCalled();
     expect(takeSessionEnd()).toBeNull();
   });
 });

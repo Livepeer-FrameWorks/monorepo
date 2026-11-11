@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"net/http"
 	"strings"
+	"time"
 
 	"frameworks/api_balancing/internal/appconfig"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 
 	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // RequireInternalRead accepts the provider service credential or a platform-
@@ -59,9 +62,20 @@ func requireInternalIdentity(mutation bool) gin.HandlerFunc {
 			}
 		}
 
-		claims, err := auth.ValidateInteractiveJWT(token, []byte(appconfig.Current().JWTSecret))
+		claims, err := auth.ValidateRevocableSessionJWT(token, []byte(appconfig.Current().JWTSecret), nil)
 		if err != nil || !claims.HasRole(auth.RolePlatformOperator) {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "platform operator authorization required"})
+			return
+		}
+		checkCtx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+		err = commodoreClient.CheckSession(checkCtx, token)
+		cancel()
+		if err != nil {
+			if status.Code(err) == codes.Unauthenticated {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "platform operator authorization required"})
+			} else {
+				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "session state unavailable"})
+			}
 			return
 		}
 		ctx := context.WithValue(c.Request.Context(), ctxkeys.KeyAuthType, "jwt")

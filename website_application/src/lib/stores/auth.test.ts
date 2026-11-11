@@ -24,6 +24,55 @@ describe("auth store", () => {
     installLocalStorage();
   });
 
+  it.each(["outage", "expired access", "expired refresh", "legacy access", "refresh outage"])(
+    "handles logout with %s without losing a live server session",
+    async (scenario) => {
+      const authAPI = {
+        get: vi.fn(),
+        post: vi.fn().mockResolvedValue({
+          data: { user: { id: "user-1", email: "user@example.com" } },
+        }),
+      };
+      const refreshAuthSession = vi
+        .fn()
+        .mockResolvedValue(
+          scenario === "expired refresh"
+            ? "unauthorized"
+            : scenario === "refresh outage"
+              ? "transient"
+              : "ok"
+        );
+      const disconnectWebSocket = vi.fn();
+      vi.doMock("$lib/authAPI.js", () => ({ authAPI }));
+      vi.doMock("$lib/auth/refresh", () => ({ refreshAuthSession }));
+      vi.doMock("$app/environment", () => ({ browser: false }));
+      vi.doMock("./realtime.js", () => ({ initializeWebSocket: vi.fn(), disconnectWebSocket }));
+      const { auth } = await import("./auth");
+      const { get } = await import("svelte/store");
+      await auth.login("user@example.com", "password");
+      authAPI.post.mockReset();
+      authAPI.post.mockRejectedValueOnce({
+        response: {
+          status: scenario === "outage" ? 503 : scenario === "legacy access" ? 409 : 401,
+          data: { error_code: "SESSION_REFRESH_REQUIRED" },
+        },
+      });
+      authAPI.post.mockResolvedValue({ data: { success: true } });
+
+      const result = await auth.logout();
+
+      const retained = scenario === "outage" || scenario === "refresh outage";
+      expect(get(auth).isAuthenticated).toBe(retained);
+      expect(localStorage.getItem("user") !== null).toBe(retained);
+      expect(disconnectWebSocket).toHaveBeenCalledTimes(retained ? 0 : 1);
+      expect(refreshAuthSession).toHaveBeenCalledTimes(scenario === "outage" ? 0 : 1);
+      expect(authAPI.post).toHaveBeenCalledTimes(
+        scenario === "expired access" || scenario === "legacy access" ? 2 : 1
+      );
+      expect(result.success).toBe(!retained);
+    }
+  );
+
   it("shares concurrent auth checks so only one refresh request is sent", async () => {
     const authAPI = {
       get: vi.fn().mockRejectedValue(new Error("expired")),
