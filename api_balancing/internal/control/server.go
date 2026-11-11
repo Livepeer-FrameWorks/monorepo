@@ -6390,10 +6390,9 @@ func FoghornBalancerBase(clusterID string) string {
 	return foghornBalancerBase(clusterID)
 }
 
-// foghornBalancerBase returns the public HTTP base URL Helmsman should use for
-// MistServer's balance:<base> source. Runtime cluster state wins: edge nodes get
-// their cluster-scoped Foghorn DNS name. Env overrides are fallback escape
-// hatches for non-managed deployments.
+// foghornBalancerBase addresses the serving control cell's public Foghorn pool.
+// A private media cluster has no independent Foghorn deployment; its identity
+// belongs in the signed capability, not in the transport hostname.
 func foghornBalancerBase(clusterID string) string {
 	settings := appconfig.Current()
 	if v := settings.PublicBaseURL; v != "" {
@@ -6406,6 +6405,11 @@ func foghornBalancerBase(clusterID string) string {
 		if h := settings.AdvertiseHost; h != "" {
 			return fmt.Sprintf("http://%s:18008", h)
 		}
+	}
+	if cellID := strings.TrimSpace(settings.MediaAuthorityCellID); cellID != "" {
+		clusterID = cellID
+	} else if servingClusterID := strings.TrimSpace(settings.ClusterID); servingClusterID != "" {
+		clusterID = servingClusterID
 	}
 	if clusterID != "" {
 		rootDomain := platformRootDomain()

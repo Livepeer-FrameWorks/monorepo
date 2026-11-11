@@ -104,6 +104,51 @@ func (q *Queries) IngestClaimOwnerEnded(ctx context.Context, arg IngestClaimOwne
 	return ended, err
 }
 
+const ingestClaimOwnerState = `-- name: IngestClaimOwnerState :one
+SELECT COALESCE(bool_or(ingest_cluster_id = $1::text AND ended_at IS NOT NULL)
+         AND NOT bool_or(ended_at IS NULL), false)::boolean AS ended,
+       COALESCE(bool_or(ended_at IS NULL AND projection_state = 'active'), false)::boolean AS active,
+       COALESCE(bool_or(ended_at IS NULL)
+         AND bool_and(ended_at IS NOT NULL OR (
+           ingest_cluster_id = $1::text AND node_id = $2::text
+           AND projection_state = 'pending'
+           AND started_at < NOW() - ($3::bigint * INTERVAL '1 millisecond')
+         )), false)::boolean AS lapsed
+FROM foghorn.ingest_sessions
+WHERE tenant_id = $4::text::uuid
+  AND stream_internal_name = $5
+  AND start_trigger_uuid = $6
+`
+
+type IngestClaimOwnerStateParams struct {
+	IngestClusterID    string `db:"ingest_cluster_id" json:"ingest_cluster_id"`
+	NodeID             string `db:"node_id" json:"node_id"`
+	AdmissionWindowMs  int64  `db:"admission_window_ms" json:"admission_window_ms"`
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	ClaimToken         string `db:"claim_token" json:"claim_token"`
+}
+
+type IngestClaimOwnerStateRow struct {
+	Ended  bool `db:"ended" json:"ended"`
+	Active bool `db:"active" json:"active"`
+	Lapsed bool `db:"lapsed" json:"lapsed"`
+}
+
+func (q *Queries) IngestClaimOwnerState(ctx context.Context, arg IngestClaimOwnerStateParams) (IngestClaimOwnerStateRow, error) {
+	row := q.db.QueryRowContext(ctx, ingestClaimOwnerState,
+		arg.IngestClusterID,
+		arg.NodeID,
+		arg.AdmissionWindowMs,
+		arg.TenantID,
+		arg.StreamInternalName,
+		arg.ClaimToken,
+	)
+	var i IngestClaimOwnerStateRow
+	err := row.Scan(&i.Ended, &i.Active, &i.Lapsed)
+	return i, err
+}
+
 const ingestRegistrationCutoff = `-- name: IngestRegistrationCutoff :one
 SELECT NOW()::timestamptz AS cutoff
 `

@@ -47,6 +47,23 @@ Raw Mist triggers from every region reach the aggregator through MirrorMaker2, w
 
 A tenant-private cluster is controlled by one platform Foghorn cell, recorded as `control_cell_id`. Every running Foghorn of that cell serves the cluster, so losing one replica leaves its siblings serving it, and provisioning runs never remove those assignments. An operator moves a cluster to another cell with `frameworks admin clusters reassign-control-cell`; the previous cell releases the cluster's edges, they reconnect to the new cell, and the move completes once no live edge is observed by another cell. See [foghorn-ha.md](foghorn-ha.md) for the control-cell model and reassignment flow.
 
+Operator node inspection resolves a private cluster's current controller through
+Quartermaster before choosing its manifest Foghorn pool. A private cluster needs
+no matching static Foghorn service entry. The original private node identity is
+preserved in the health request, and a later invocation re-resolves assignment
+after a cell move.
+
+Mist balancer URLs address the serving control cell's public Foghorn pool.
+The signed capability retains the edge's private cluster and node identities;
+controller routing does not broaden its source-lookup authority. The public
+source route accepts Mist's optional final slash and rejects extra operations.
+
+Federated lifecycle refreshes use the tenant retained with the stream's tracked
+generation and revision. Incomplete volatile stream state cannot erase that
+ownership; conflicting state withholds the refresh. Initial broadcasts reject
+missing or conflicting tenant identity, and receiving cells retain their tenant
+and peer-channel identity checks.
+
 ## Media placement
 
 Which clusters may ingest or serve a stream is decided by media placement policy: tenant and stream rules compiled by Commodore into signed media authority and enforced by Foghorn at routing and final admission. See [media-authority.md](media-authority.md).

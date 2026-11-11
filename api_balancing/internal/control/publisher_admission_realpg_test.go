@@ -40,6 +40,7 @@ func testPublisherAdmissionOperations(t *testing.T, conn *sql.DB, dsn string) {
 	previous := db
 	SetDB(conn)
 	t.Cleanup(func() { SetDB(previous) })
+	t.Run("push-target confirmation and replay", func(t *testing.T) { testPublisherPushTargetConfirmation(t, conn) })
 	repository := NewPublisherAdmissionRepository(conn)
 	logger := logging.NewLogger()
 	ctx := t.Context()

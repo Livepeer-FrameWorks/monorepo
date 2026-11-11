@@ -322,7 +322,9 @@ func AuthorizedMistSourceHandler(c *gin.Context) {
 		c.String(http.StatusForbidden, "balancer capability permits source lookup only")
 		return
 	}
-	rest := strings.TrimPrefix(compatibilityPath, sourceByNodePathPrefix)
+	// Mist's URL serialization may add one final slash. It does not grant a
+	// second path operation or alter the node authenticated by the capability.
+	rest := strings.TrimSuffix(strings.TrimPrefix(compatibilityPath, sourceByNodePathPrefix), "/")
 	if strings.Contains(rest, "/") {
 		c.String(http.StatusForbidden, "balancer capability permits source lookup only")
 		return

@@ -210,7 +210,11 @@ func (r *RedisStateStore) SetNode(nodeID string, state *NodeState) error {
 }
 
 func (r *RedisStateStore) GetAllNodes() (map[string]*NodeState, error) {
-	return scanRedisMap(r, "{"+r.clusterID+"}:nodes:*", func(data string) (*NodeState, string, error) {
+	return r.GetAllNodesContext(context.Background())
+}
+
+func (r *RedisStateStore) GetAllNodesContext(ctx context.Context) (map[string]*NodeState, error) {
+	return scanRedisKeyedMapContext(ctx, r, "{"+r.clusterID+"}:nodes:*", func(_, data string) (*NodeState, string, error) {
 		var n NodeState
 		if err := json.Unmarshal([]byte(data), &n); err != nil {
 			return nil, "", err
@@ -607,11 +611,17 @@ func scanRedisMap[T any](r *RedisStateStore, pattern string, parser redisScanner
 
 // scanRedisKeyedMap is scanRedisMap for values whose identity is in the key.
 func scanRedisKeyedMap[T any](r *RedisStateStore, pattern string, parser func(key, data string) (T, string, error)) (map[string]T, error) {
-	ctx := context.Background()
+	return scanRedisKeyedMapContext(context.Background(), r, pattern, parser)
+}
+
+func scanRedisKeyedMapContext[T any](ctx context.Context, r *RedisStateStore, pattern string, parser func(key, data string) (T, string, error)) (map[string]T, error) {
 	cursor := uint64(0)
 	result := make(map[string]T)
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		keys, next, err := r.client.Scan(ctx, cursor, pattern, 100).Result()
 		if err != nil {
 			return nil, err
@@ -620,6 +630,9 @@ func scanRedisKeyedMap[T any](r *RedisStateStore, pattern string, parser func(ke
 		for _, key := range keys {
 			value, err := r.client.Get(ctx, key).Result()
 			if err != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
 				if stateLogger != nil {
 					stateLogger.WithError(err).WithField("key", key).Warn("Failed to GET redis key during scan")
 				}

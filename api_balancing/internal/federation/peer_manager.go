@@ -2391,13 +2391,17 @@ func (pm *PeerManager) refreshRemoteLiveStreams(sm *state.StreamStateManager, on
 		if !tracked || !membership.Active || membership.SourceRevision <= 0 {
 			continue
 		}
+		if strings.TrimSpace(membership.TenantID) == "" || (ss.TenantID != "" && ss.TenantID != membership.TenantID) {
+			pm.logger.WithField("internal_name", ss.InternalName).Warn("Withholding lifecycle refresh with missing or conflicting tenant ownership")
+			continue
+		}
 		seen[ss.InternalName] = true
 		lifecycle := &foghornfederationpb.PeerMessage{
 			ClusterId: pm.clusterID,
 			Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{
 				StreamLifecycle: &foghornfederationpb.StreamLifecycleEvent{
 					InternalName:   ss.InternalName,
-					TenantId:       ss.TenantID,
+					TenantId:       membership.TenantID,
 					ClusterId:      pm.clusterID,
 					IsLive:         true,
 					TimestampUnix:  now,
@@ -2409,7 +2413,7 @@ func (pm *PeerManager) refreshRemoteLiveStreams(sm *state.StreamStateManager, on
 			if (only != "" && peerID != only) || !ps.connected || ps.stream == nil {
 				continue
 			}
-			if !pm.shouldSendStreamToPeer(peerID, ps, ss.InternalName, ss.TenantID) {
+			if !pm.shouldSendStreamToPeer(peerID, ps, ss.InternalName, membership.TenantID) {
 				continue
 			}
 			pm.enqueue(peerID, ps, lifecycle)
@@ -2558,6 +2562,9 @@ func (pm *PeerManager) BroadcastStreamLifecycle(ctx context.Context, internalNam
 	if sourceRevision <= 0 {
 		return errors.New("federation stream lifecycle requires a positive source revision")
 	}
+	if strings.TrimSpace(tenantID) == "" {
+		return errors.New("federation stream lifecycle requires tenant ownership")
+	}
 	msg := &foghornfederationpb.PeerMessage{
 		ClusterId: pm.clusterID,
 		Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{
@@ -2578,6 +2585,9 @@ func (pm *PeerManager) BroadcastStreamLifecycle(ctx context.Context, internalNam
 	defer pm.mu.RUnlock()
 	// Locally served virtual clusters already see this cell's lifecycle; they
 	// are never connected, so requiring them would fail every broadcast.
+	if membership, tracked := pm.streamMemberships[internalName]; tracked && membership.TenantID != tenantID {
+		return errors.New("federation stream lifecycle conflicts with tracked tenant ownership")
+	}
 	required := make(map[string]*peerState)
 	for peerID, streams := range pm.streamPeers {
 		if streams[internalName] && !pm.servedLocally(pm.peers[peerID]) {

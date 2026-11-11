@@ -1966,7 +1966,8 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 	usedLocalAdmission := usedOutageIdentity
 	if !usedOutageIdentity && p.commodoreClient != nil {
 		leaseStarted := time.Now()
-		err = commodoreOutage.Call(admissionCtx, func(callCtx context.Context) error {
+		claimClient := publisherClaimClient{client: p.commodoreClient, backoff: commodoreOutage}
+		err = func() error {
 			var callErr error
 			if admissionRepository != nil && localValidation.GetValid() {
 				tenantBytes, encodeErr := proto.MarshalOptions{Deterministic: true}.Marshal(localAuthority.tenant.Authority)
@@ -1982,19 +1983,23 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 					ClusterId: ingestClusterID, ControlCellId: p.mediaAuthorityStore.CellID(), ExecutionToken: claimToken, NodeId: trigger.GetNodeId(),
 					TenantAuthorityVersion: localAuthority.tenant.Version, ObjectAuthorityVersion: localAuthority.object.Version,
 					TenantPayloadSha256: tenantDigest[:], ObjectPayloadSha256: objectDigest[:]}
-				streamValidation, callErr = control.ClaimPublishedIngestPlacement(callCtx, p.commodoreClient, leaseRequest, localValidation, trigger.GetNodeId(), p.logger)
+				streamValidation, callErr = control.ClaimPublishedIngestPlacement(admissionCtx, claimClient, leaseRequest, localValidation, trigger.GetNodeId(), p.logger)
 				publishedLease = callErr == nil
 				return callErr
 			}
 			if p.publisherAdmissions != nil && !control.PublisherSettlementRequiresCompatibility(admissionCtx) {
-				streamValidation, callErr = control.ClaimExecutedIngestPlacement(callCtx, p.commodoreClient, pushRewrite.GetStreamName(), identity.GetTenantId(), identity.GetInternalName(), trigger.GetNodeId(), ingestClusterID, claimToken, trigger.GetControlCellId(), p.logger)
+				streamValidation, callErr = control.ClaimExecutedIngestPlacement(admissionCtx, claimClient, pushRewrite.GetStreamName(), identity.GetTenantId(), identity.GetInternalName(), trigger.GetNodeId(), ingestClusterID, claimToken, trigger.GetControlCellId(), p.logger)
 			} else {
-				streamValidation, callErr = control.ClaimIngestPlacement(callCtx, p.commodoreClient, pushRewrite.GetStreamName(),
+				streamValidation, callErr = control.ClaimIngestPlacement(admissionCtx, claimClient, pushRewrite.GetStreamName(),
 					identity.GetTenantId(), identity.GetInternalName(), trigger.GetNodeId(), ingestClusterID, claimToken, p.logger)
 			}
 			return callErr
-		})
+		}()
 		control.ObservePublisherAdmissionPhase("lease", leaseStarted, err)
+	}
+	if recoveryErr, incomplete := errors.AsType[*control.IngestClaimRecoveryError](err); incomplete {
+		p.logger.WithError(recoveryErr).WithField("node_id", trigger.GetNodeId()).Warn("Publisher ownership recovery incomplete")
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT, "publisher ownership recovery is temporarily unavailable")
 	}
 	if errors.Is(err, control.ErrPublisherAuthorityStale) {
 		p.mediaAuthorityStore.RefreshAuthorityAsync(localauthority.AuthorityLookup{InternalName: identity.GetInternalName()})

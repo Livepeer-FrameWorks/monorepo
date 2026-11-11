@@ -200,6 +200,19 @@ Use the normal release plan/dry-run/apply workflow from the
 
 ## Verification and diagnosis
 
+Central-service attempt deadlines cover individual Commodore RPCs. The composed
+claim operation also reads local owner state and may retire a lapsed pending
+generation, release its exact lease, and claim again; those local transitions use
+the publisher's remaining operation lifetime. A local recovery error preserves
+the known owner and cannot open Commodore's outage backoff or authorize outage
+ingest against it. An active owner is refused without a pending-session mutation
+or remote lookup for optional playback-ID event enrichment.
+
+Confirmation with push targets persists both its admission effect and its exact
+target revision in the same transaction. The PostgreSQL function uses distinct
+variable names and a named conflict constraint; schema verification must execute
+the nonempty push-target branch as well as no-target admission and replay.
+
 `make verify-publisher-admission` runs ownership, capacity, idempotency,
 confirmation-loss, expiry, abandonment and settlement races on PostgreSQL and
 Yugabyte. `make verify-ingest-admission-wan` injects 110 and 150 ms RTT through

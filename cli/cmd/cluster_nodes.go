@@ -1330,7 +1330,36 @@ func clusterNodesFoghornClientFor(cmd *cobra.Command, clusterID string) (*fhclie
 func clusterNodesFoghornClient(ctx context.Context, resolver *controlplane.Resolver, ctxCfg fwcfg.Context, clusterID string) (*fhclient.GRPCClient, error) {
 	ep, entry, err := clusterNodesFoghornEndpoint(ctx, resolver, clusterID)
 	if err != nil {
-		return nil, err
+		manifest, manifestErr := resolver.Manifest(ctx)
+		if manifestErr != nil || manifest == nil || strings.TrimSpace(clusterID) == "" {
+			return nil, err
+		}
+		// A tenant-private cluster is a resource served by a control cell,
+		// rather than another statically provisioned Foghorn deployment.
+		qmEndpoint, lookupErr := resolver.ResolveGRPC(ctx, "quartermaster")
+		if lookupErr != nil {
+			return nil, fmt.Errorf("resolve controller for cluster %q: %w", clusterID, lookupErr)
+		}
+		qm, lookupErr := qmclient.NewGRPCClient(clusterNodesQuartermasterGRPCConfig(qmEndpoint, ctxCfg))
+		if lookupErr != nil {
+			return nil, fmt.Errorf("connect to cluster controller inventory: %w", lookupErr)
+		}
+		defer func() { _ = qm.Close() }()
+		lookupCtx, cancel := clusterNodesRPCContext(ctx, ctxCfg, 5*time.Second)
+		defer cancel()
+		owner, lookupErr := qm.GetCluster(lookupCtx, clusterID)
+		if lookupErr != nil {
+			return nil, fmt.Errorf("read controller for cluster %q: %w", clusterID, lookupErr)
+		}
+		cluster := owner.GetCluster()
+		cell := strings.TrimSpace(cluster.GetControlCellId())
+		if cluster.GetClusterId() != clusterID || cell == "" || cell == clusterID {
+			return nil, fmt.Errorf("cluster %q has no resolvable assigned controller: %w", clusterID, err)
+		}
+		ep, entry, err = clusterNodesFoghornEndpoint(ctx, resolver, cell)
+		if err != nil {
+			return nil, fmt.Errorf("resolve cluster %q assigned controller %q: %w", clusterID, cell, err)
+		}
 	}
 	fh, err := fhclient.NewGRPCClient(clusterNodesFoghornGRPCConfig(ep, ctxCfg))
 	if err != nil {

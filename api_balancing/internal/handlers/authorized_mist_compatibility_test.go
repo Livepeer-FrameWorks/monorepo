@@ -79,3 +79,34 @@ func TestAuthorizedMistCompatibilityRejectsOperationsOutsideSourceLookup(t *test
 		})
 	}
 }
+
+func TestAuthorizedMistCompatibilityAllowsOneTrailingSlash(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	settings := &appconfig.Foghorn{BalancerCapabilitySecret: "capability-test-secret"}
+	settings.PublicBaseURL = "https://foghorn.example"
+	useFoghornConfig(t, settings)
+	base, err := url.Parse(control.FoghornBalancerSourceForNode("private-cluster", "private-node"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"", "/", "//", "/other", "%2fother"} {
+		t.Run(suffix, func(t *testing.T) {
+			// No source query reaches MistSourceHandler's deterministic 400,
+			// without a live stream, DNS or database lookup.
+			router := gin.New()
+			router.NoRoute(AuthorizedMistSourceHandler)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, base.String()+suffix, nil))
+			want := http.StatusForbidden
+			switch suffix {
+			case "", "/":
+				want = http.StatusBadRequest
+			case "%2fother":
+				want = http.StatusUnauthorized
+			}
+			if response.Code != want {
+				t.Fatalf("source suffix %q status=%d body=%q, want %d", suffix, response.Code, response.Body.String(), want)
+			}
+		})
+	}
+}
