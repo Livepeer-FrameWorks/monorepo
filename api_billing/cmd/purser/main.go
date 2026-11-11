@@ -367,7 +367,7 @@ func main() {
 			return stripeClient.CheckBillingWebhookEndpoint(ctx, appconfig.Runtime().GatewayPublicBaseURL())
 		}
 	}
-	router.GET("/health/billing-webhooks", billingWebhookHealth(webhookCheck))
+	router.GET("/health/billing-webhooks", billingWebhookHealth(webhookCheck, logger))
 
 	grpcServerConfig := pursergrpc.GRPCServerConfig{
 		DB:                  db,

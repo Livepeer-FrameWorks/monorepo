@@ -450,15 +450,20 @@ func executeLivepeerCurl(ctx context.Context, target livepeerMutationTarget, cur
 	return result.Stdout, nil
 }
 
+// splitCurlStatus splits curl output written with -w '\n%{http_code}' into the body and the status
+// on its last line. An empty body leaves only the status.
 func splitCurlStatus(output string) (string, int, error) {
 	output = strings.TrimSpace(output)
-	idx := strings.LastIndexByte(output, '\n')
-	if idx < 0 {
-		return "", 0, fmt.Errorf("gateway CLI response did not include an HTTP status")
+	if output == "" {
+		return "", 0, fmt.Errorf("curl response did not include an HTTP status")
 	}
+	idx := strings.LastIndexByte(output, '\n')
 	status, err := strconv.Atoi(strings.TrimSpace(output[idx+1:]))
 	if err != nil {
-		return "", 0, fmt.Errorf("invalid gateway CLI HTTP status: %w", err)
+		return "", 0, fmt.Errorf("invalid curl HTTP status: %w", err)
+	}
+	if idx < 0 {
+		return "", status, nil
 	}
 	return strings.TrimSpace(output[:idx]), status, nil
 }

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1743,7 +1744,11 @@ func checkServiceHTTPWithRunner(ctx context.Context, runner fwssh.Runner, addres
 		result.Status, result.Error = "unhealthy", fmt.Sprintf("ssh probe: %v", err)
 		return result
 	}
-	status := strings.TrimSpace(commandResult.Stdout)
+	body, code, parseErr := splitCurlStatus(commandResult.Stdout)
+	status := strconv.Itoa(code)
+	if parseErr != nil {
+		status = strings.TrimSpace(commandResult.Stdout)
+	}
 	result.Metadata["status_code"] = status
 	if commandResult.ExitCode != 0 {
 		result.Status = "unhealthy"
@@ -1760,7 +1765,31 @@ func checkServiceHTTPWithRunner(ctx context.Context, runner fwssh.Runner, addres
 		result.Status = "unhealthy"
 	}
 	result.Error = fmt.Sprintf("local HTTP endpoint returned %s", status)
+	if reason := doctorHTTPBodyReason(body); reason != "" {
+		result.Error += ": " + reason
+	}
 	return result
+}
+
+// doctorHTTPBodyReason extracts the "message" (or "reason") a failing health endpoint returns in its JSON
+// body, so the doctor line says why the probe failed and not only the status code.
+func doctorHTTPBodyReason(body string) string {
+	var payload struct {
+		Message string `json:"message"`
+		Reason  string `json:"reason"`
+	}
+	if json.Unmarshal([]byte(body), &payload) != nil {
+		return ""
+	}
+	reason := payload.Message
+	if reason == "" {
+		reason = payload.Reason
+	}
+	reason = strings.Join(strings.Fields(reason), " ")
+	if len(reason) > 400 {
+		reason = reason[:400] + "..."
+	}
+	return reason
 }
 
 func checkHostLocalTCP(ctx context.Context, sshPool *fwssh.Pool, host inventory.Host, port int) *health.CheckResult {
@@ -1823,7 +1852,7 @@ func doctorHTTPProbeCommand(port int, path string) string {
 
 func doctorHTTPProbeCommandAt(address string, port int, path string) string {
 	url := "http://" + net.JoinHostPort(address, strconv.Itoa(port)) + path
-	return "curl -sS -o /dev/null -w '%{http_code}' --max-time 5 " + fwssh.ShellQuote(url)
+	return "curl -sS -w '\\n%{http_code}' --max-time 5 " + fwssh.ShellQuote(url)
 }
 
 // doctorServiceProbeAddress is where a service answers a shell on its own
