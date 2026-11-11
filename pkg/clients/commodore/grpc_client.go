@@ -732,6 +732,10 @@ func (c *GRPCClient) ListSessions(ctx context.Context, pagination *commonpb.Curs
 	return c.user.ListSessions(ctx, &commodorepb.ListSessionsRequest{Pagination: pagination})
 }
 
+func (c *GRPCClient) ChangePassword(ctx context.Context, currentPassword, newPassword string) (*commodorepb.ChangePasswordResponse, error) {
+	return c.user.ChangePassword(ctx, &commodorepb.ChangePasswordRequest{CurrentPassword: currentPassword, NewPassword: newPassword})
+}
+
 func (c *GRPCClient) RevokeSession(ctx context.Context, sessionID string) (*commodorepb.RevokeSessionResponse, error) {
 	return c.user.RevokeSession(ctx, &commodorepb.RevokeSessionRequest{SessionId: sessionID})
 }

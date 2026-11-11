@@ -17,6 +17,25 @@ SELECT id FROM commodore.users WHERE tenant_id = $1 AND id = $2 FOR UPDATE;
 SELECT COALESCE(password_hash, '')::text FROM commodore.users
 WHERE tenant_id = $1 AND id = $2;
 
+-- name: ChangeSessionPassword :exec
+UPDATE commodore.users
+SET password_hash = $3, reset_token = NULL, reset_token_expires = NULL, updated_at = NOW()
+WHERE tenant_id = $1 AND id = $2;
+
+-- name: DeleteOtherLegacyRefreshTokens :exec
+WITH RECURSIVE current_family AS (
+    SELECT root.id, root.replaced_by FROM commodore.refresh_tokens root
+    WHERE root.tenant_id = $1 AND root.user_id = $2 AND root.session_id = $3
+    UNION
+    SELECT r.id, r.replaced_by FROM current_family f
+    JOIN commodore.refresh_tokens r ON r.tenant_id = $1 AND r.user_id = $2
+      AND (r.id = f.replaced_by OR r.replaced_by = f.id)
+    WHERE r.session_id IS NULL OR r.session_id = $3
+)
+DELETE FROM commodore.refresh_tokens r
+WHERE r.tenant_id = $1 AND r.user_id = $2 AND r.session_id IS NULL
+  AND NOT EXISTS (SELECT 1 FROM current_family f WHERE f.id = r.id);
+
 -- name: GetAuthSession :one
 SELECT * FROM commodore.auth_sessions
 WHERE tenant_id = $1 AND user_id = $2 AND id = $3;

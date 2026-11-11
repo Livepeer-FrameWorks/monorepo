@@ -53,6 +53,7 @@ enum SessionRevocationReason {
   SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE = 3;
   // A platform operator deactivated the user or closed the tenant account.
   SESSION_REVOCATION_REASON_OPERATOR_DEACTIVATION = 4;
+  SESSION_REVOCATION_REASON_PASSWORD_CHANGE = 5;
 }
 
 // UserSessionsRevoked ends every interactive session of a user: each access

@@ -37,6 +37,7 @@ const (
 	SessionRevocationReason_SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE SessionRevocationReason = 3
 	// A platform operator deactivated the user or closed the tenant account.
 	SessionRevocationReason_SESSION_REVOCATION_REASON_OPERATOR_DEACTIVATION SessionRevocationReason = 4
+	SessionRevocationReason_SESSION_REVOCATION_REASON_PASSWORD_CHANGE       SessionRevocationReason = 5
 )
 
 // Enum value maps for SessionRevocationReason.
@@ -47,6 +48,7 @@ var (
 		2: "SESSION_REVOCATION_REASON_PASSWORD_RESET",
 		3: "SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE",
 		4: "SESSION_REVOCATION_REASON_OPERATOR_DEACTIVATION",
+		5: "SESSION_REVOCATION_REASON_PASSWORD_CHANGE",
 	}
 	SessionRevocationReason_value = map[string]int32{
 		"SESSION_REVOCATION_REASON_UNSPECIFIED":           0,
@@ -54,6 +56,7 @@ var (
 		"SESSION_REVOCATION_REASON_PASSWORD_RESET":        2,
 		"SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE":   3,
 		"SESSION_REVOCATION_REASON_OPERATOR_DEACTIVATION": 4,
+		"SESSION_REVOCATION_REASON_PASSWORD_CHANGE":       5,
 	}
 )
 
@@ -1127,13 +1130,14 @@ const file_events_internal_v1_tenants_proto_rawDesc = "" +
 	"\x06active\x18\x02 \x01(\bR\x06active:$\xc2\xf3\x18 \n" +
 	"\x13user.active_changed\x10\x02\x18\x01\"\x05users\"D\n" +
 	"\x13TenantAccountClosed:-\xc2\xf3\x18)\n" +
-	"\x1auser.tenant_account_closed\x10\x02\x18\x01\"\atenants*\x80\x02\n" +
+	"\x1auser.tenant_account_closed\x10\x02\x18\x01\"\atenants*\xaf\x02\n" +
 	"\x17SessionRevocationReason\x12)\n" +
 	"%SESSION_REVOCATION_REASON_UNSPECIFIED\x10\x00\x12$\n" +
 	" SESSION_REVOCATION_REASON_LOGOUT\x10\x01\x12,\n" +
 	"(SESSION_REVOCATION_REASON_PASSWORD_RESET\x10\x02\x121\n" +
 	"-SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE\x10\x03\x123\n" +
-	"/SESSION_REVOCATION_REASON_OPERATOR_DEACTIVATION\x10\x04*\x94\x02\n" +
+	"/SESSION_REVOCATION_REASON_OPERATOR_DEACTIVATION\x10\x04\x12-\n" +
+	")SESSION_REVOCATION_REASON_PASSWORD_CHANGE\x10\x05*\x94\x02\n" +
 	"\x13ClusterRejectReason\x12%\n" +
 	"!CLUSTER_REJECT_REASON_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eCLUSTER_REJECT_REASON_CAPACITY\x10\x01\x12 \n" +

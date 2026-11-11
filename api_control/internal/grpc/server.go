@@ -8785,8 +8785,8 @@ func (s *CommodoreServer) RevokeAPIToken(ctx context.Context, req *commodorepb.R
 
 const (
 	// Replays of a rotated refresh token within this window are treated as
-	// concurrent-tab races (fresh tokens issued), not theft. Access tokens
-	// are 15-minute bearer tokens, so this is not a weaker exposure.
+	// concurrent-tab races, not theft. A loser gets a retryable response
+	// without minting another refresh head.
 	refreshTokenReuseGracePeriod = 10 * time.Minute
 
 	eventAuthLoginSucceeded     = "auth_login_succeeded"

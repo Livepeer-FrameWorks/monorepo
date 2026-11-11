@@ -76,6 +76,14 @@ API tokens, wallet handoff bearers and service credentials cannot manage a
 user's interactive sessions. The owner always comes from verified context,
 including for platform operators. Logout revokes the current named session.
 
+`ChangePassword` requires an interactive named session and proof of the current
+password. It rechecks that proof under the owner lock, changes the password,
+invalidates outstanding password-reset tokens and revokes other sessions in one
+transaction. The current access token and refresh family remain usable, including
+a sid-less successor written by an older issuer. A concurrent password change
+cannot reuse a proof against the previous hash. Failed revocation-event storage
+rolls the credential change and revocations back together.
+
 Named revocation deletes only the connected refresh family and emits
 `auth_session.revoked`. It locks existing chain rows before deleting, then uses
 a fresh statement snapshot to include an in-flight older issuer's sid-less
@@ -140,6 +148,6 @@ and are validated after deployment. The service-owned
 `commodore_auth_sessions_v0_3_15` data migration must finish before contract.
 No session-ownership `NOT NULL` contract ships in the foundation migration.
 
-The self-service UI, security email, activity reader, password-change flow,
+The self-service UI, security email, activity reader, password-change UI,
 authorization consent metadata and retention sweep remain tracked in
 [the account-security RFC](../rfcs/RFC_account_security_sessions.md).

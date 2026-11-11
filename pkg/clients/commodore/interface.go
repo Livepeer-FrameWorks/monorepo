@@ -84,6 +84,7 @@ type Interface interface {
 	RevokeSession(ctx context.Context, sessionID string) (*commodorepb.RevokeSessionResponse, error)
 	RevokeOtherSessions(ctx context.Context) (*commodorepb.RevokeOtherSessionsResponse, error)
 	RenameSession(ctx context.Context, sessionID, label string) (*commodorepb.AuthSession, error)
+	ChangePassword(ctx context.Context, currentPassword, newPassword string) (*commodorepb.ChangePasswordResponse, error)
 	VerifyEmail(ctx context.Context, token string) (*commodorepb.VerifyEmailResponse, error)
 	ResendVerification(ctx context.Context, email, turnstileToken string) (*commodorepb.ResendVerificationResponse, error)
 	ForgotPassword(ctx context.Context, email, turnstileToken string) (*commodorepb.ForgotPasswordResponse, error)
