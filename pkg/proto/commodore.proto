@@ -1607,6 +1607,7 @@ service UserService {
   rpc RevokeSession(RevokeSessionRequest) returns (RevokeSessionResponse);
   rpc RevokeOtherSessions(google.protobuf.Empty) returns (RevokeOtherSessionsResponse);
   rpc RenameSession(RenameSessionRequest) returns (AuthSession);
+  rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse);
 
   // Email verification
   rpc VerifyEmail(VerifyEmailRequest) returns (VerifyEmailResponse);
@@ -1777,6 +1778,16 @@ message RevokeOtherSessionsResponse { int32 revoked_count = 1; }
 message RenameSessionRequest {
   string session_id = 1;
   string label = 2;
+}
+
+message ChangePasswordRequest {
+  string current_password = 1;
+  string new_password = 2;
+}
+
+message ChangePasswordResponse {
+  bool success = 1;
+  int32 revoked_count = 2;
 }
 
 message VerifyEmailRequest {

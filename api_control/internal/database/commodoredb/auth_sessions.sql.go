@@ -58,6 +58,23 @@ func (q *Queries) AdoptAuthSessionRefreshFamily(ctx context.Context, arg AdoptAu
 	return session_id, err
 }
 
+const changeSessionPassword = `-- name: ChangeSessionPassword :exec
+UPDATE commodore.users
+SET password_hash = $3, reset_token = NULL, reset_token_expires = NULL, updated_at = NOW()
+WHERE tenant_id = $1 AND id = $2
+`
+
+type ChangeSessionPasswordParams struct {
+	TenantID     string         `db:"tenant_id" json:"tenant_id"`
+	ID           string         `db:"id" json:"id"`
+	PasswordHash sql.NullString `db:"password_hash" json:"password_hash"`
+}
+
+func (q *Queries) ChangeSessionPassword(ctx context.Context, arg ChangeSessionPasswordParams) error {
+	_, err := q.db.ExecContext(ctx, changeSessionPassword, arg.TenantID, arg.ID, arg.PasswordHash)
+	return err
+}
+
 const countAuthSessions = `-- name: CountAuthSessions :one
 SELECT COUNT(*)::INTEGER FROM commodore.auth_sessions
 WHERE tenant_id = $1 AND user_id = $2 AND revoked_at IS NULL
@@ -74,6 +91,32 @@ func (q *Queries) CountAuthSessions(ctx context.Context, arg CountAuthSessionsPa
 	var column_1 int32
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const deleteOtherLegacyRefreshTokens = `-- name: DeleteOtherLegacyRefreshTokens :exec
+WITH RECURSIVE current_family AS (
+    SELECT root.id, root.replaced_by FROM commodore.refresh_tokens root
+    WHERE root.tenant_id = $1 AND root.user_id = $2 AND root.session_id = $3
+    UNION
+    SELECT r.id, r.replaced_by FROM current_family f
+    JOIN commodore.refresh_tokens r ON r.tenant_id = $1 AND r.user_id = $2
+      AND (r.id = f.replaced_by OR r.replaced_by = f.id)
+    WHERE r.session_id IS NULL OR r.session_id = $3
+)
+DELETE FROM commodore.refresh_tokens r
+WHERE r.tenant_id = $1 AND r.user_id = $2 AND r.session_id IS NULL
+  AND NOT EXISTS (SELECT 1 FROM current_family f WHERE f.id = r.id)
+`
+
+type DeleteOtherLegacyRefreshTokensParams struct {
+	TenantID  string         `db:"tenant_id" json:"tenant_id"`
+	UserID    string         `db:"user_id" json:"user_id"`
+	SessionID sql.NullString `db:"session_id" json:"session_id"`
+}
+
+func (q *Queries) DeleteOtherLegacyRefreshTokens(ctx context.Context, arg DeleteOtherLegacyRefreshTokensParams) error {
+	_, err := q.db.ExecContext(ctx, deleteOtherLegacyRefreshTokens, arg.TenantID, arg.UserID, arg.SessionID)
+	return err
 }
 
 const getAuthSession = `-- name: GetAuthSession :one

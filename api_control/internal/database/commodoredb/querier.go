@@ -36,6 +36,7 @@ type Querier interface {
 	ArtifactIdentifierExists(ctx context.Context, internalName string) (bool, error)
 	BackoffArtifactCreationCommandAck(ctx context.Context, arg BackoffArtifactCreationCommandAckParams) error
 	BeginMediaAuthorityCompile(ctx context.Context, scopeKey string) (int64, error)
+	ChangeSessionPassword(ctx context.Context, arg ChangeSessionPasswordParams) error
 	ClaimAccountEmailBatch(ctx context.Context, batchSize int32) ([]ClaimAccountEmailBatchRow, error)
 	ClaimArtifactCreationCommandAcks(ctx context.Context, arg ClaimArtifactCreationCommandAcksParams) ([]ClaimArtifactCreationCommandAcksRow, error)
 	ClaimArtifactCreationIntents(ctx context.Context, arg ClaimArtifactCreationIntentsParams) ([]ClaimArtifactCreationIntentsRow, error)
@@ -134,6 +135,7 @@ type Querier interface {
 	DeleteDeviceAuthorization(ctx context.Context, id string) error
 	DeleteExpiredMediaAuthorityDeliveries(ctx context.Context, arg DeleteExpiredMediaAuthorityDeliveriesParams) (int64, error)
 	DeleteOrphanedMediaAuthorityVersions(ctx context.Context, arg DeleteOrphanedMediaAuthorityVersionsParams) (int64, error)
+	DeleteOtherLegacyRefreshTokens(ctx context.Context, arg DeleteOtherLegacyRefreshTokensParams) error
 	DeletePushTarget(ctx context.Context, arg DeletePushTargetParams) (string, error)
 	DeleteRefreshTokensForUser(ctx context.Context, arg DeleteRefreshTokensForUserParams) error
 	DeleteRetiredMediaAuthorityTargets(ctx context.Context, arg DeleteRetiredMediaAuthorityTargetsParams) (int64, error)

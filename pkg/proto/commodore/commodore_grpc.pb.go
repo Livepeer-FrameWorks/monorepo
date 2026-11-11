@@ -3000,6 +3000,7 @@ const (
 	UserService_RevokeSession_FullMethodName              = "/commodore.UserService/RevokeSession"
 	UserService_RevokeOtherSessions_FullMethodName        = "/commodore.UserService/RevokeOtherSessions"
 	UserService_RenameSession_FullMethodName              = "/commodore.UserService/RenameSession"
+	UserService_ChangePassword_FullMethodName             = "/commodore.UserService/ChangePassword"
 	UserService_VerifyEmail_FullMethodName                = "/commodore.UserService/VerifyEmail"
 	UserService_ResendVerification_FullMethodName         = "/commodore.UserService/ResendVerification"
 	UserService_ForgotPassword_FullMethodName             = "/commodore.UserService/ForgotPassword"
@@ -3044,6 +3045,7 @@ type UserServiceClient interface {
 	RevokeSession(ctx context.Context, in *RevokeSessionRequest, opts ...grpc.CallOption) (*RevokeSessionResponse, error)
 	RevokeOtherSessions(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*RevokeOtherSessionsResponse, error)
 	RenameSession(ctx context.Context, in *RenameSessionRequest, opts ...grpc.CallOption) (*AuthSession, error)
+	ChangePassword(ctx context.Context, in *ChangePasswordRequest, opts ...grpc.CallOption) (*ChangePasswordResponse, error)
 	// Email verification
 	VerifyEmail(ctx context.Context, in *VerifyEmailRequest, opts ...grpc.CallOption) (*VerifyEmailResponse, error)
 	ResendVerification(ctx context.Context, in *ResendVerificationRequest, opts ...grpc.CallOption) (*ResendVerificationResponse, error)
@@ -3188,6 +3190,16 @@ func (c *userServiceClient) RenameSession(ctx context.Context, in *RenameSession
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AuthSession)
 	err := c.cc.Invoke(ctx, UserService_RenameSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *userServiceClient) ChangePassword(ctx context.Context, in *ChangePasswordRequest, opts ...grpc.CallOption) (*ChangePasswordResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ChangePasswordResponse)
+	err := c.cc.Invoke(ctx, UserService_ChangePassword_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -3479,6 +3491,7 @@ type UserServiceServer interface {
 	RevokeSession(context.Context, *RevokeSessionRequest) (*RevokeSessionResponse, error)
 	RevokeOtherSessions(context.Context, *emptypb.Empty) (*RevokeOtherSessionsResponse, error)
 	RenameSession(context.Context, *RenameSessionRequest) (*AuthSession, error)
+	ChangePassword(context.Context, *ChangePasswordRequest) (*ChangePasswordResponse, error)
 	// Email verification
 	VerifyEmail(context.Context, *VerifyEmailRequest) (*VerifyEmailResponse, error)
 	ResendVerification(context.Context, *ResendVerificationRequest) (*ResendVerificationResponse, error)
@@ -3565,6 +3578,9 @@ func (UnimplementedUserServiceServer) RevokeOtherSessions(context.Context, *empt
 }
 func (UnimplementedUserServiceServer) RenameSession(context.Context, *RenameSessionRequest) (*AuthSession, error) {
 	return nil, status.Error(codes.Unimplemented, "method RenameSession not implemented")
+}
+func (UnimplementedUserServiceServer) ChangePassword(context.Context, *ChangePasswordRequest) (*ChangePasswordResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ChangePassword not implemented")
 }
 func (UnimplementedUserServiceServer) VerifyEmail(context.Context, *VerifyEmailRequest) (*VerifyEmailResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method VerifyEmail not implemented")
@@ -3826,6 +3842,24 @@ func _UserService_RenameSession_Handler(srv interface{}, ctx context.Context, de
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(UserServiceServer).RenameSession(ctx, req.(*RenameSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _UserService_ChangePassword_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ChangePasswordRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).ChangePassword(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_ChangePassword_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).ChangePassword(ctx, req.(*ChangePasswordRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -4358,6 +4392,10 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RenameSession",
 			Handler:    _UserService_RenameSession_Handler,
+		},
+		{
+			MethodName: "ChangePassword",
+			Handler:    _UserService_ChangePassword_Handler,
 		},
 		{
 			MethodName: "VerifyEmail",
