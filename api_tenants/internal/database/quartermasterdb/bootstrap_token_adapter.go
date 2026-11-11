@@ -196,3 +196,19 @@ func (q *Queries) GetClusterFoghornExternalGRPCPort(ctx context.Context, cluster
 	`, clusterID).Scan(&port)
 	return port, err
 }
+
+// GetBootstrapControlCell resolves the public rendezvous independently of the
+// private cluster identity used by an enrolled edge across control-cell moves.
+func (q *Queries) GetBootstrapControlCell(ctx context.Context, clusterID, tenantID string) (string, string, error) {
+	var controlCellID, rootDomain string
+	err := q.db.QueryRowContext(ctx, `
+		SELECT control.cluster_id, COALESCE(control.base_url, '')
+		FROM quartermaster.infrastructure_clusters c
+		JOIN quartermaster.infrastructure_clusters control
+		  ON control.cluster_id = COALESCE(NULLIF(c.control_cell_id, ''), c.cluster_id)
+		 AND control.is_active = true
+		WHERE c.cluster_id = $1 AND c.is_active = true
+		  AND (c.owner_tenant_id IS NULL OR c.owner_tenant_id::text = $2)
+	`, clusterID, tenantID).Scan(&controlCellID, &rootDomain)
+	return controlCellID, rootDomain, err
+}

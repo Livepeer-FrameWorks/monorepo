@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // EdgeBootstrapInput mirrors the GraphQL BootstrapEdgeInput.
@@ -34,6 +35,17 @@ type EdgeBootstrapResult struct {
 	Telemetry        *EdgeTelemetrySetup `json:"telemetry,omitempty"`
 }
 
+// EdgeBootstrapPending retains the cluster identity while DNS/TLS converges.
+type EdgeBootstrapPending struct {
+	ClusterID  string
+	Phase      string
+	RetryAfter time.Duration
+}
+
+func (p *EdgeBootstrapPending) Error() string {
+	return fmt.Sprintf("bootstrap pending for cluster %s at %s", p.ClusterID, p.Phase)
+}
+
 // BootstrapEdge calls the public bootstrapEdge mutation. No JWT — the
 // bootstrap token in the input is the credential.
 func (c *Client) BootstrapEdge(ctx context.Context, in EdgeBootstrapInput) (*EdgeBootstrapResult, error) {
@@ -53,6 +65,7 @@ mutation BootstrapEdge($input: BootstrapEdgeInput!) {
       internalCaBundle
       telemetry { enabled writeUrl bearerToken }
     }
+    ... on BootstrapEdgePending { clusterId phase retryAfterSeconds }
     ... on ValidationError { message field }
     ... on AuthError { message }
   }
@@ -61,7 +74,9 @@ mutation BootstrapEdge($input: BootstrapEdgeInput!) {
 		BootstrapEdge struct {
 			Typename string `json:"__typename"`
 			EdgeBootstrapResult
-			Message string `json:"message,omitempty"`
+			Message           string `json:"message,omitempty"`
+			Phase             string `json:"phase,omitempty"`
+			RetryAfterSeconds int    `json:"retryAfterSeconds,omitempty"`
 		} `json:"bootstrapEdge"`
 	}
 	if err := c.Do(ctx, query, "", map[string]any{"input": in}, &resp); err != nil {
@@ -71,6 +86,8 @@ mutation BootstrapEdge($input: BootstrapEdgeInput!) {
 	case "BootstrapEdgeResponse":
 		out := resp.BootstrapEdge.EdgeBootstrapResult
 		return &out, nil
+	case "BootstrapEdgePending":
+		return nil, &EdgeBootstrapPending{ClusterID: resp.BootstrapEdge.ClusterID, Phase: resp.BootstrapEdge.Phase, RetryAfter: time.Duration(resp.BootstrapEdge.RetryAfterSeconds) * time.Second}
 	case "ValidationError", "AuthError":
 		return nil, fmt.Errorf("bootstrapEdge: %s", resp.BootstrapEdge.Message)
 	default:

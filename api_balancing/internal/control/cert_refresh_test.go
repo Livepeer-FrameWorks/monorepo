@@ -172,6 +172,23 @@ func TestServerCertHolderRejectsEmptyBundles(t *testing.T) {
 	}
 }
 
+func TestServerCertHolderRejectsUnknownPublicIdentity(t *testing.T) {
+	var holder serverCertHolder
+	if err := holder.StoreBundles([]*ipcpb.TLSCertBundle{
+		testTLSBundle(t, "cluster:media-us-1", "*.media-us-1.frameworks.network"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"foghorn.new-private.frameworks.network", "", "deeper.foghorn.media-us-1.frameworks.network"} {
+		t.Run(name, func(t *testing.T) {
+			cert, err := holder.GetCertificate(&tls.ClientHelloInfo{ServerName: name})
+			if err == nil || cert != nil {
+				t.Fatalf("unknown public identity received fallback certificate: name=%q cert=%v err=%v", name, cert != nil, err)
+			}
+		})
+	}
+}
+
 func TestRefreshTLSBundles_UsesCanonicalID(t *testing.T) {
 	// Save and restore global registry
 	oldRegistry := registry
@@ -637,5 +654,26 @@ func TestRefreshTLSBundles_PushesOnStateChange(t *testing.T) {
 	}
 	if val.(string) != tlsStateNoCert {
 		t.Fatalf("expected state %q, got %q", tlsStateNoCert, val)
+	}
+}
+
+func TestServerCertHolderRejectsExpiredRetainedLeaf(t *testing.T) {
+	var holder serverCertHolder
+	if err := holder.StoreBundles([]*ipcpb.TLSCertBundle{testTLSBundle(t, "cluster:media-us-1", "*.media-us-1.frameworks.network")}); err != nil {
+		t.Fatal(err)
+	}
+	cert := holder.certs.Load().byName["*.media-us-1.frameworks.network"]
+	cert.Leaf.NotAfter = time.Now().Add(-time.Second)
+	if cert, err := holder.GetCertificate(&tls.ClientHelloInfo{ServerName: "foghorn.media-us-1.frameworks.network"}); err == nil || cert != nil {
+		t.Fatal("expired last-good certificate remained usable")
+	}
+}
+
+func TestServerCertHolderRejectsBundleWithoutRoutingIdentity(t *testing.T) {
+	var holder serverCertHolder
+	bundle := testTLSBundle(t, "cluster:missing-name", "*.media-us-1.frameworks.network")
+	bundle.Domain = ""
+	if err := holder.StoreBundles([]*ipcpb.TLSCertBundle{bundle}); err == nil {
+		t.Fatal("public listener accepted a certificate without declared routing identity")
 	}
 }

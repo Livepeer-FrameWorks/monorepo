@@ -221,3 +221,18 @@ host-wide, so co-located services on a Redis host run with it too.
 - **`cluster os update --check` will not flag updates without `--refresh`
   if apt lists are stale.** Document operator practice: run with
   `--refresh` weekly, without it for quick spot-checks.
+
+## Multicast name resolution
+
+On systemd hosts, `node_tuning_disable_multicast_resolution` defaults to true.
+The role owns `resolved.conf.d/70-frameworks-unicast.conf`, setting `LLMNR=no`
+and `MulticastDNS=no`. A policy change restarts an already running
+`systemd-resolved`; it does not enable an absent or disabled resolver. Setting
+the option false removes only this managed drop-in. Normal unicast DNS remains
+configured through the host's existing resolver inputs.
+
+Molecule starts a real resolver with multicast enabled before convergence and
+checks the actual TCP/UDP listeners for ports 5353/5355 afterwards. Host
+rollouts still use the supported provision/update flow and a subsequent runtime
+doctor check. A repository change does not establish that existing production
+hosts have converged.

@@ -28,3 +28,11 @@ type PeriscopeMetering struct {
 	GRPCTLSCAPath                  string `env:"GRPC_TLS_CA_PATH" desc:"CA bundle used to verify the Quartermaster gRPC server." introduced:"v0.3.0"`
 	GRPCAllowInsecure              bool   `env:"GRPC_ALLOW_INSECURE" default:"false" desc:"Allows a plaintext Quartermaster connection when no TLS material is configured. Development only." introduced:"v0.3.0"`
 }
+
+// PeriscopeMeteringDataMigrations validates only the stores a migration needs.
+type PeriscopeMeteringDataMigrations struct {
+	MeteringSourceID     string `env:"METERING_SOURCE_ID" required:"true" desc:"Logical billing dataset whose migration state is read or advanced." introduced:"v0.3.0"`
+	MeteringSourceRegion string `env:"METERING_SOURCE_REGION" required:"true" desc:"Region of the configured logical billing dataset." introduced:"v0.3.0"`
+	config.Postgres
+	config.ClickHouse
+}

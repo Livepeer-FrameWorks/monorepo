@@ -174,6 +174,7 @@ type CommodoreServer struct {
 	logger                    logging.Logger
 	foghornPool               *foghornclient.FoghornPool
 	quartermasterClient       *qmclient.GRPCClient
+	controlRecipientLookup    func(context.Context, *quartermasterpb.GetTenantControlRecipientsRequest) (*quartermasterpb.GetTenantControlRecipientsResponse, error)
 	navigatorClient           *navigator.Client
 	purserClient              *purserclient.GRPCClient
 	streamAdmissionBilling    streamAdmissionBilling
@@ -11136,55 +11137,70 @@ func (s *CommodoreServer) DeleteVodAsset(ctx context.Context, req *sharedpb.Dele
 	return resp, nil
 }
 
-// tenantControlFanoutTargets combines entitlement routing with durable ingest
-// recipients. Either source can fail without suppressing delivery to the other.
+// tenantControlFanoutTargets resolves current access and execution history
+// through the inventory owner, without invoking tenant admission or Purser.
 func (s *CommodoreServer) tenantControlFanoutTargets(ctx context.Context, tenantID string) ([]clusterFanoutTarget, error) {
-	// Discovery cannot consume the delivery window of recipients the other
-	// source already knows. Keep two thirds of a caller's budget for fanout.
 	lookupBudget := routeBuildTimeout / 3
 	if deadline, ok := ctx.Deadline(); ok {
 		lookupBudget = min(lookupBudget, time.Until(deadline)/3)
 	}
-	lookupCtx, cancelLookup := context.WithTimeout(ctx, lookupBudget)
-	defer cancelLookup()
-	var route *clusterRoute
-	var cells []string
-	var routeErr, cellsErr error
-	var sources sync.WaitGroup
-	sources.Add(2)
-	go func() {
-		defer sources.Done()
-		route, routeErr = s.resolveClusterRouteForTenant(lookupCtx, tenantID)
-	}()
-	go func() {
-		defer sources.Done()
-		cells, cellsErr = commodoredb.New(s.db).ListAccountIngestCells(lookupCtx, commodoredb.ListAccountIngestCellsParams{TenantID: tenantID, StreamID: ""})
-	}()
-	sources.Wait()
-	// NotFound is an authoritative empty entitlement set, not an empty ingest set.
-	if status.Code(routeErr) == codes.NotFound {
-		routeErr = nil
+	historyCtx, historyCancel := context.WithTimeout(ctx, lookupBudget)
+	cells, historyErr := commodoredb.New(s.db).ListAccountIngestCells(historyCtx, commodoredb.ListAccountIngestCellsParams{TenantID: tenantID, StreamID: ""})
+	historyCancel()
+	lookup := s.controlRecipientLookup
+	if lookup == nil && s.quartermasterClient != nil {
+		lookup = s.quartermasterClient.GetTenantControlRecipients
 	}
-	coverageErr := errors.Join(routeErr, cellsErr)
+	var inventory *quartermasterpb.GetTenantControlRecipientsResponse
+	var inventoryErr error
+	if lookup == nil {
+		inventoryErr = status.Error(codes.Unavailable, "control recipient inventory unavailable")
+	} else {
+		inventoryCtx, cancel := context.WithTimeout(ctx, lookupBudget)
+		inventory, inventoryErr = lookup(inventoryCtx, &quartermasterpb.GetTenantControlRecipientsRequest{TenantId: tenantID, HistoricalClusterIds: cells})
+		cancel()
+		if inventoryErr == nil && (inventory == nil || !inventory.GetComplete() || len(inventory.GetUnresolvedClusterIds()) > 0) {
+			inventoryErr = status.Error(codes.Unavailable, "control recipient inventory incomplete")
+		}
+	}
+
+	seen := map[string]bool{}
+	mapped := map[string]string{}
+	var targets []clusterFanoutTarget
+	add := func(cell string) {
+		if cell != "" && !seen[cell] {
+			targets = append(targets, clusterFanoutTarget{clusterID: cell})
+			seen[cell] = true
+		}
+	}
+	var malformedErr error
+	for _, recipient := range inventory.GetRecipients() {
+		if strings.TrimSpace(recipient.GetCellId()) == "" {
+			malformedErr = status.Error(codes.Unavailable, "control recipient has no canonical cell identity")
+			continue
+		}
+		add(recipient.GetCellId())
+		for _, clusterID := range recipient.GetSourceClusterIds() {
+			mapped[clusterID] = recipient.GetCellId()
+		}
+	}
+	// A complete owner response classifies historical central clusters out and
+	// maps removed private clusters to their controller. During an inventory
+	// failure, still attempt unmapped recorded cells as partial progress.
+	if inventoryErr != nil {
+		for _, cell := range cells {
+			if canonical := mapped[cell]; canonical != "" {
+				cell = canonical
+			}
+			add(cell)
+		}
+	}
+
+	coverageErr := errors.Join(historyErr, inventoryErr, malformedErr)
 	if coverageErr != nil {
 		s.routeCacheMu.Lock()
 		delete(s.routeCache, tenantID)
 		s.routeCacheMu.Unlock()
-	}
-	targets := buildClusterFanoutTargets(route)
-	seen := map[string]bool{}
-	for _, target := range targets {
-		seen[target.clusterID] = true
-	}
-	missing := missingTenantFanoutCells(route, targets)
-	for _, cell := range cells {
-		missing[cell] = true
-	}
-	for cell := range missing {
-		if !seen[cell] {
-			targets = append(targets, clusterFanoutTarget{clusterID: cell})
-			seen[cell] = true
-		}
 	}
 	return targets, coverageErr
 }
@@ -11199,25 +11215,51 @@ func dispatchTenantControl[T any](
 	deliver func(context.Context, *foghornclient.GRPCClient) (T, error),
 ) []tenantControlDelivery[T] {
 	results := make([]tenantControlDelivery[T], len(targets))
+	workers := min(8, len(targets))
+	jobs := make(chan int)
 	var calls sync.WaitGroup
-	for i, target := range targets {
+	for range workers {
 		calls.Add(1)
 		go func() {
 			defer calls.Done()
-			var client *foghornclient.GRPCClient
-			if target.addr == "" {
-				client, results[i].err = s.resolveFoghornForClusterDirect(ctx, target.clusterID)
-			} else {
-				client, results[i].err = s.foghornPool.GetOrCreate(foghornPoolKey(target.clusterID, target.addr), target.addr)
-			}
-			if results[i].err == nil {
-				results[i].response, results[i].err = deliver(ctx, client)
-			}
-			if results[i].err != nil {
-				s.forgetFoghornDiscovery(target.clusterID)
+			for index := range jobs {
+				target := targets[index]
+				callCtx, cancel := ctx, context.CancelFunc(func() {})
+				if deadline, ok := ctx.Deadline(); ok {
+					// Reserve a share for later waves when early cells hang.
+					rounds := (len(targets) - index + workers - 1) / workers
+					callCtx, cancel = context.WithTimeout(ctx, time.Until(deadline)/time.Duration(rounds))
+				}
+				var client *foghornclient.GRPCClient
+				if callCtx.Err() != nil {
+					results[index].err = callCtx.Err()
+				} else if target.addr == "" {
+					client, results[index].err = s.resolveFoghornForClusterDirect(callCtx, target.clusterID)
+				} else {
+					client, results[index].err = s.foghornPool.GetOrCreate(foghornPoolKey(target.clusterID, target.addr), target.addr)
+				}
+				if results[index].err == nil {
+					results[index].response, results[index].err = deliver(callCtx, client)
+				}
+				cancel()
+				if results[index].err != nil {
+					s.forgetFoghornDiscovery(target.clusterID)
+				}
 			}
 		}()
 	}
+dispatch:
+	for index := range targets {
+		select {
+		case jobs <- index:
+		case <-ctx.Done():
+			for pending := index; pending < len(targets); pending++ {
+				results[pending].err = ctx.Err()
+			}
+			break dispatch
+		}
+	}
+	close(jobs)
 	calls.Wait()
 	return results
 }

@@ -1,0 +1,33 @@
+---
+- name: Prepare package repositories
+  ansible.builtin.import_playbook: ../../../../molecule/prepare-apt.yml
+
+- name: Prepare an active multicast resolver
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Install the systemd resolver
+      ansible.builtin.apt:
+        name: systemd-resolved
+        state: present
+
+    - name: Create the resolver drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        mode: "0755"
+
+    - name: Enable multicast resolution before convergence
+      ansible.builtin.copy:
+        dest: /etc/systemd/resolved.conf.d/10-molecule-multicast.conf
+        mode: "0644"
+        content: |
+          [Resolve]
+          LLMNR=yes
+          MulticastDNS=yes
+
+    - name: Start the unconverged resolver
+      ansible.builtin.systemd_service:
+        name: systemd-resolved
+        state: restarted

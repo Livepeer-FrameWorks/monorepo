@@ -39,7 +39,7 @@ func Acquire(ctx context.Context, db *sql.DB, id string, scope ScopeKey, owner s
 			      SELECT 1 FROM _data_migrations
 			      WHERE id = $1 AND status <> $8
 			  )`,
-		id, scope.Kind, scope.Value, owner, ttl.Seconds(),
+		migrationStateID(id), scope.Kind, scope.Value, owner, ttl.Seconds(),
 		string(StatusRunning), string(StatusCompleted), string(StatusPaused))
 	if err != nil {
 		return false, fmt.Errorf("acquire lease %q/%s: %w", id, scope, err)
@@ -61,7 +61,7 @@ func Heartbeat(ctx context.Context, db *sql.DB, id string, scope ScopeKey, owner
 		UPDATE _data_migration_runs
 		SET lease_expires_at = NOW() + ($4 * INTERVAL '1 second'), updated_at = NOW()
 		WHERE id = $1 AND scope_kind = $2 AND scope_value = $3 AND lease_owner = $5`,
-		id, scope.Kind, scope.Value, ttl.Seconds(), owner)
+		migrationStateID(id), scope.Kind, scope.Value, ttl.Seconds(), owner)
 	if err != nil {
 		return false, fmt.Errorf("heartbeat lease %q/%s: %w", id, scope, err)
 	}
@@ -79,7 +79,7 @@ func Release(ctx context.Context, db *sql.DB, id string, scope ScopeKey, owner s
 		UPDATE _data_migration_runs
 		SET lease_owner = NULL, lease_expires_at = NULL, updated_at = NOW()
 		WHERE id = $1 AND scope_kind = $2 AND scope_value = $3 AND lease_owner = $4`,
-		id, scope.Kind, scope.Value, owner)
+		migrationStateID(id), scope.Kind, scope.Value, owner)
 	if err != nil {
 		return fmt.Errorf("release lease %q/%s: %w", id, scope, err)
 	}

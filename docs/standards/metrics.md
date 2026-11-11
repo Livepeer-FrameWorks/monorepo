@@ -661,3 +661,20 @@ running publisher therefore does not create an old backlog when it first ends.
 The leader advances the age from its last successful observation during database
 or authority outages and retry backoff. Empty queues and followers publish zero;
 tenant, node, stream and execution identifiers are never labels.
+
+### Bootstrap, reservation attribution and placement replicas
+
+`foghorn_federation_placement_replica_duration_seconds{phase,outcome}` measures
+one remote placement attempt. `phase` is `observe` or `prepare`; `outcome` is a
+gRPC status code. Structured logs carry cell, address, attempt index, authority
+and generation fences, duration and remaining caller/attempt budget. Tenant,
+stream, node and replica identities are never metric labels.
+
+Periscope metering exposes `periscope_metering_billing_reservation_tenant_snapshots_total`
+with `outcome=blocked_attribution|send_failed|acknowledged`. Acknowledged means
+Kafka accepted that tenant's reports; PostgreSQL bookkeeping can still fail and
+cause idempotent replay. Its `billing_reservation_unresolved_tenants` and
+`billing_reservation_unresolved_oldest_age_seconds` gauges, under the same
+service prefix, describe the last successfully read source snapshot. Query or
+scan failure preserves the previous gauges and fails the worker; it cannot
+turn missing input into zero holds. Neither gauge has tenant labels.

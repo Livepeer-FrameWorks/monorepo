@@ -225,8 +225,8 @@ func testResumedViewerLifecycleIsReserved(t *testing.T, ctx context.Context, ch 
 	held := map[string]float64{}
 	for rows.Next() {
 		var tenant, clusterID string
-		var minutes, egressGB float64
-		if err := rows.Scan(&tenant, &clusterID, &minutes, &egressGB); err != nil {
+		var minutes, egressGB, unresolvedAge float64
+		if err := rows.Scan(&tenant, &clusterID, &minutes, &egressGB, &unresolvedAge); err != nil {
 			t.Fatal(err)
 		}
 		if tenant == tenantID {

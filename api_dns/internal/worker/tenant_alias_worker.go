@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"frameworks/api_dns/internal/bunnyrecords"
@@ -92,6 +93,9 @@ type AliasApplyStateWorker struct {
 	tenantZoneLabel    string
 	healthStaleSeconds int
 	dnsRecordsDisabled bool
+	wakeMu             sync.Mutex
+	wakes              chan string
+	pending            map[string]struct{}
 }
 
 // tenantAliasStore is the subset of store.Store this worker uses.
@@ -115,6 +119,8 @@ func NewAliasApplyStateWorker(s tenantAliasStore, bunnyClient *bunny.Client, edg
 	}
 	w := &AliasApplyStateWorker{
 		store:              s,
+		wakes:              make(chan string, 256),
+		pending:            make(map[string]struct{}),
 		edges:              edges,
 		logger:             logger,
 		interval:           interval,
@@ -138,11 +144,93 @@ func (w *AliasApplyStateWorker) SetDNSRecordsEnabled(enabled bool) {
 	w.dnsRecordsDisabled = !enabled
 }
 
-// Start runs the worker until ctx is cancelled. Runs one pass
-// immediately and then on the configured interval.
+// WakeTenant hints that durable alias state changed. A lost or coalesced hint
+// is repaired by the periodic scan; the caller never waits for the DNS provider.
+func (w *AliasApplyStateWorker) WakeTenant(tenantID string) {
+	w.enqueueTenant(context.Background(), tenantID, false)
+}
+
+func (w *AliasApplyStateWorker) enqueueTenant(ctx context.Context, tenantID string, wait bool) bool {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return true
+	}
+	w.wakeMu.Lock()
+	if w.wakes == nil {
+		w.wakes = make(chan string, 256)
+		w.pending = make(map[string]struct{})
+	}
+	if _, exists := w.pending[tenantID]; exists {
+		w.wakeMu.Unlock()
+		return true
+	}
+	w.pending[tenantID] = struct{}{}
+	queue := w.wakes
+	if !wait {
+		select {
+		case queue <- tenantID:
+			w.wakeMu.Unlock()
+			return true
+		default:
+			delete(w.pending, tenantID)
+			w.wakeMu.Unlock()
+			return false
+		}
+	}
+	w.wakeMu.Unlock()
+	// The durable scan must visit the full inventory. Only RPC hints may drop
+	// on overflow; holding the mutex while waiting would block worker completion.
+	select {
+	case queue <- tenantID:
+		return true
+	case <-ctx.Done():
+		w.wakeMu.Lock()
+		delete(w.pending, tenantID)
+		w.wakeMu.Unlock()
+		return false
+	}
+}
+
+// Start reconciles accepted durable state with bounded per-tenant concurrency.
 func (w *AliasApplyStateWorker) Start(ctx context.Context) {
-	w.logger.WithField("dns_records_enabled", !w.dnsRecordsDisabled).Info("Starting tenant alias worker")
-	ticker := time.NewTicker(w.interval)
+	w.wakeMu.Lock()
+	if w.wakes == nil {
+		w.wakes = make(chan string, 256)
+		w.pending = make(map[string]struct{})
+	}
+	queue := w.wakes
+	w.wakeMu.Unlock()
+	var workers sync.WaitGroup
+	for range 4 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case tenantID := <-queue:
+					jobCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+					alias, err := w.store.GetTenantAlias(jobCtx, tenantID)
+					if err == nil {
+						w.reconcileTenantAlias(jobCtx, *alias)
+					} else if ctx.Err() == nil && !errors.Is(err, store.ErrNotFound) {
+						w.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to load pending tenant alias")
+					}
+					cancel()
+					w.wakeMu.Lock()
+					delete(w.pending, tenantID)
+					w.wakeMu.Unlock()
+				}
+			}
+		}()
+	}
+	defer workers.Wait()
+	interval := w.interval
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	w.runOnce(ctx)
 	for {
@@ -156,17 +244,19 @@ func (w *AliasApplyStateWorker) Start(ctx context.Context) {
 }
 
 func (w *AliasApplyStateWorker) runOnce(ctx context.Context) {
-	aliases, err := w.listAllAliasesForReconcile(ctx)
+	scanCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	aliases, err := w.listAllAliasesForReconcile(scanCtx)
 	if err != nil {
 		w.logger.WithError(err).Warn("Failed to list tenant aliases for apply state worker")
 		return
 	}
-
+	w.processRetirements(scanCtx)
 	for _, alias := range aliases {
-		w.reconcileTenantAlias(ctx, alias)
+		if !w.enqueueTenant(ctx, alias.TenantID, true) {
+			return
+		}
 	}
-
-	w.processRetirements(ctx)
 }
 
 // listAllAliasesForReconcile returns aliases the DNS worker needs to act
@@ -187,14 +277,14 @@ func (w *AliasApplyStateWorker) reconcileTenantAlias(ctx context.Context, alias 
 	if alias.Status != "cert_issued" {
 		return
 	}
-	if err := w.PublishTenantAlias(ctx, alias.TenantID); err != nil {
+	if err := w.PublishTenantAlias(ctx, alias.TenantID); err != nil && !errors.Is(ctx.Err(), context.Canceled) {
 		log.WithError(err).Warn("Failed to publish tenant smart record set")
 	}
 }
 
 // PublishTenantAlias reconciles one tenant's Bunny smart record sets from
-// currently applied/in_dns edge rows. It is called both by the periodic
-// worker and immediately after Foghorn reports a new ACK.
+// currently applied/in_dns edge rows. Wakes and periodic repair both run it
+// from the worker lifecycle, independently of the ACK request context.
 func (w *AliasApplyStateWorker) PublishTenantAlias(ctx context.Context, tenantID string) error {
 	if w.dnsRecordsDisabled {
 		return nil

@@ -90,3 +90,28 @@ Tenant, stream, cluster, node, hostname, fingerprint, and token values belong on
 - **Enrollment:** reissue and consume a scoped token; never mutate fingerprint keys directly.
 - **Purser:** replay the authoritative entitlement reconciliation with a fresh observation; never infer current access from a tier-name allowlist.
 - **Navigator:** leave failed outbox rows pending and restore idempotent delivery; never manually publish DNS that contradicts Quartermaster desired state.
+
+## Recovering enrollment while public identity converges
+
+With CLI v0.3.15, edge deployment waits through typed bootstrap pending responses
+while the private DNS/certificate becomes usable. Each attempt is bounded and the
+operation stops after two minutes or caller cancellation. The token is not
+consumed by preregistration.
+
+After cluster creation, the CLI retains its exact ID and writes a private,
+nonsecret progress receipt under the platform user cache's
+`frameworks/edge-deploy` directory. It records enrollment, preregistration,
+installation and HTTPS verification as those phases complete. A failed later
+phase does not report an already created cluster as absent.
+
+Resume the reported cluster through the supported enrollment flow:
+
+```sh
+frameworks edge deploy --cluster-id <reported-cluster-id> --ssh <host> --mode native --email <operator-email>
+```
+
+Use the same customer identity/context. Ownership is checked by the server when
+it issues the replacement enrollment token. The receipt contains no bootstrap
+credential; resuming issues a fresh token after ownership verification.
+The edge's runtime control hostname remains private-cluster scoped so its
+controller can move between cells.

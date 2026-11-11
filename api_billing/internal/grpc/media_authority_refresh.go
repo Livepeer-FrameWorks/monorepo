@@ -12,8 +12,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/google/uuid"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 const (
@@ -139,6 +137,7 @@ func (s *PurserServer) deliverMediaAuthorityRefreshRow(ctx context.Context, clie
 	if parseErr != nil {
 		return false, fmt.Errorf("parse refresh id %q: %w", row.ID, parseErr)
 	}
+	var invalidationErr error
 	// Subscription/status changes create this row in the same owner
 	// transaction. Converge Quartermaster before refreshing Commodore and only
 	// complete the row after both obligations succeed, so a crash or remote
@@ -148,12 +147,11 @@ func (s *PurserServer) deliverMediaAuthorityRefreshRow(ctx context.Context, clie
 			s.incMediaAuthorityRefreshFailure("entitlement_reconcile")
 			return false, s.failMediaAuthorityRefresh(ctx, queries, id, row, fmt.Errorf("reconcile tenant entitlements: %w", reconcileErr))
 		}
-		if err := s.invalidateTenantCache(ctx, row.TenantID, row.Reason); err != nil {
-			if status.Code(err) != codes.NotFound {
-				s.incMediaAuthorityRefreshFailure("cache_invalidation")
-				if s.logger != nil {
-					s.logger.WithError(err).WithField("tenant_id", row.TenantID).Warn("Tenant cache invalidation failed; continuing media authority refresh")
-				}
+		invalidationErr = s.invalidateTenantCache(ctx, row.TenantID, row.Reason)
+		if invalidationErr != nil {
+			s.incMediaAuthorityRefreshFailure("cache_invalidation")
+			if s.logger != nil {
+				s.logger.WithError(invalidationErr).WithField("tenant_id", row.TenantID).Warn("Tenant cache invalidation pending; continuing media authority refresh")
 			}
 		}
 	}
@@ -163,6 +161,9 @@ func (s *PurserServer) deliverMediaAuthorityRefreshRow(ctx context.Context, clie
 	if callErr != nil {
 		s.incMediaAuthorityRefreshFailure("commodore_delivery")
 		return false, s.failMediaAuthorityRefresh(ctx, queries, id, row, callErr)
+	}
+	if invalidationErr != nil {
+		return false, s.failMediaAuthorityRefresh(ctx, queries, id, row, fmt.Errorf("cache invalidation pending after authority acceptance: %w", invalidationErr))
 	}
 	completed, err := queries.CompleteMediaAuthorityRefresh(ctx, purserdb.CompleteMediaAuthorityRefreshParams{ID: id, Revision: row.Revision})
 	if err != nil {

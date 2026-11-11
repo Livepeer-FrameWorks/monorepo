@@ -1,0 +1,32 @@
+---
+- name: Node_tuning | discover resolver service state
+  ansible.builtin.service_facts:
+
+- name: Node_tuning | ensure resolver policy directory
+  ansible.builtin.file:
+    path: /etc/systemd/resolved.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: node_tuning_disable_multicast_resolution | bool
+
+- name: Node_tuning | disable multicast name resolution
+  ansible.builtin.copy:
+    dest: /etc/systemd/resolved.conf.d/70-frameworks-unicast.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Resolve]
+      LLMNR=no
+      MulticastDNS=no
+  when: node_tuning_disable_multicast_resolution | bool
+  notify: Node_tuning | restart active resolver
+
+- name: Node_tuning | release unmanaged resolver policy
+  ansible.builtin.file:
+    path: /etc/systemd/resolved.conf.d/70-frameworks-unicast.conf
+    state: absent
+  when: not (node_tuning_disable_multicast_resolution | bool)
+  notify: Node_tuning | restart active resolver

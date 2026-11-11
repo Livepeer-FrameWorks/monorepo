@@ -2,7 +2,13 @@ package cmd
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
+	"frameworks/cli/pkg/clients/bridge"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -19,6 +25,16 @@ func newDeployTestCmd() (*cobra.Command, *bytes.Buffer) {
 	cmd.SetOut(buf)
 	cmd.SetErr(buf)
 	return cmd, buf
+}
+
+func TestRenderEdgeDeployResultRetainsCreatedClusterAfterPreregisterFailure(t *testing.T) {
+	cmd, buf := newDeployTestCmd()
+	renderEdgeDeployResult(cmd, edgeDeployResultFields{
+		modeA: true, bridgeCreated: true, failed: errors.New("public identity pending"),
+	})
+	if strings.Contains(buf.String(), "not created") || !strings.Contains(buf.String(), "created via Bridge") {
+		t.Fatalf("committed cluster disappeared from partial result: %s", buf.String())
+	}
 }
 
 func TestRenderEdgeDeployResult_modeASuccess(t *testing.T) {
@@ -136,5 +152,86 @@ func TestApplyEdgeDeployTelemetryConfigRequiresTokenForTelemetryURL(t *testing.T
 
 	if err := applyEdgeDeployTelemetryConfig(cfg, resp); err == nil {
 		t.Fatal("expected missing telemetry token to fail")
+	}
+}
+
+func TestEnrollmentResumeUsesCommittedClusterInsteadOfCreatingAnother(t *testing.T) {
+	creates, tokens := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Query     string
+			Variables map[string]any
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(body.Query, "mutation CreateEdgeCluster") {
+			creates++
+			_, _ = w.Write([]byte(`{"data":{"createEdgeCluster":{"__typename":"CreateEdgeClusterResponse","clusterId":"committed-private","clusterName":"Test","bootstrapToken":"fake-once"}}}`))
+		} else {
+			tokens++
+			encoded, _ := json.Marshal(body.Variables)
+			if !strings.Contains(string(encoded), "committed-private") {
+				t.Error("resume did not bind to the committed ID")
+			}
+			_, _ = w.Write([]byte(`{"data":{"createEnrollmentToken":{"__typename":"CreateEnrollmentTokenResponse","bootstrapToken":{"token":"fake-resume","id":"token-2"}}}}`))
+		}
+	}))
+	defer server.Close()
+	cfg := &deployConfig{clusterName: "Test"}
+	cmd, _ := newDeployTestCmd()
+	client := bridge.New(server.URL)
+	token, created, err := resolveEnrollmentToken(context.Background(), cmd, client, "fake-session", cfg)
+	if err != nil || !created || token != "fake-once" || cfg.clusterID != "committed-private" {
+		t.Fatalf("committed identity lost: created=%v id=%s err=%v", created, cfg.clusterID, err)
+	}
+	if _, created, err := resolveEnrollmentToken(context.Background(), cmd, client, "fake-session", cfg); err != nil || created {
+		t.Fatalf("resume recreated cluster: created=%v err=%v", created, err)
+	}
+	if creates != 1 || tokens != 1 {
+		t.Fatalf("duplicate side effects: creates=%d tokens=%d", creates, tokens)
+	}
+}
+
+func TestDeployReceiptAtomicallyRetainsPrivateNonsecretProgress(t *testing.T) {
+	dir := t.TempDir()
+	receipt := edgeDeployReceipt{ClusterID: "private-cluster", BridgeURL: "https://bridge.example", SSHTarget: "kansas", Phase: "enrollment_issued", ClusterCreated: true, EnrollmentTokenIssued: true}
+	path, err := writeEdgeDeployReceipt(dir, receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("receipt mode=%o", info.Mode().Perm())
+	}
+	receipt.Phase = "pre_registered"
+	receipt.NodeID = "owned-node"
+	newPath, err := writeEdgeDeployReceipt(dir, receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newPath != path {
+		t.Fatal("receipt lost its stable identity")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["phase"] != "pre_registered" || decoded["node_id"] != "owned-node" {
+		t.Fatal("partial JSON/progress lost after replacement")
+	}
+	for key := range decoded {
+		if strings.Contains(key, "token") && key != "enrollment_token_issued" {
+			t.Fatalf("credential field persisted: %s", key)
+		}
 	}
 }

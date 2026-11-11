@@ -1936,6 +1936,9 @@ processingCustomizable: boolean }, /** Priced behaviors per meter (rating engine
 pricingRules: Array<{ meter: string, model: string, currency: string, includedQuantity: string, unitPrice: string, configJson: string }>, /** Non-billing grants (e.g. recording_retention_days). Values are JSON-encoded strings. */
 entitlements: Array<{ key: string, value: string }> };
 
+/** Enrollment is accepted for retry while the public identity converges. */
+export type BootstrapEdgePendingDefaultFieldsFragment = { clusterId: string, phase: string, retryAfterSeconds: number };
+
 /** Result of a successful bootstrapEdge call. Carries everything the edge needs to come online: its identity, its assigned Foghorn for runtime traffic, and (if the cluster issues per-node certs) its initial TLS material plus the cluster's internal CA bundle. */
 export type BootstrapEdgeResponseDefaultFieldsFragment = { nodeId: string, edgeDomain: string, poolDomain: string | null, clusterSlug: string, clusterId: string, foghornGrpcAddr: string, certPem: string | null, keyPem: string | null, internalCaBundle: string | null, telemetry: { enabled: boolean, writeUrl: string | null, bearerToken: string | null } | null };
 
@@ -4696,6 +4699,7 @@ export type BootstrapEdgeMutationVariables = Exact<{
 export type BootstrapEdgeMutation = { /** Bootstrap a new edge using only an opaque bootstrap token. Public — the bootstrap token is itself the credential. Bridge resolves the token's cluster via Quartermaster, finds the cluster's assigned Foghorn, and proxies a PreRegisterEdge call so the operator never has to know cluster topology. */
 bootstrapEdge:
     | { __typename: 'AuthError', message: string, code: string | null }
+    | { __typename: 'BootstrapEdgePending', clusterId: string, phase: string, retryAfterSeconds: number }
     | { __typename: 'BootstrapEdgeResponse', nodeId: string, edgeDomain: string, poolDomain: string | null, clusterSlug: string, clusterId: string, foghornGrpcAddr: string, certPem: string | null, keyPem: string | null, internalCaBundle: string | null, telemetry: { enabled: boolean, writeUrl: string | null, bearerToken: string | null } | null }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
@@ -11156,6 +11160,14 @@ export const BillingTierDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocume
   isEnterprise
 }
     `, {"fragmentName":"BillingTierDefaultFields"}) as unknown as TypedDocumentString<BillingTierDefaultFieldsFragment, unknown>;
+/** Enrollment is accepted for retry while the public identity converges. */
+export const BootstrapEdgePendingDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
+    fragment BootstrapEdgePendingDefaultFields on BootstrapEdgePending {
+  clusterId
+  phase
+  retryAfterSeconds
+}
+    `, {"fragmentName":"BootstrapEdgePendingDefaultFields"}) as unknown as TypedDocumentString<BootstrapEdgePendingDefaultFieldsFragment, unknown>;
 /** Result of a successful bootstrapEdge call. Carries everything the edge needs to come online: its identity, its assigned Foghorn for runtime traffic, and (if the cluster issues per-node certs) its initial TLS material plus the cluster's internal CA bundle. */
 export const BootstrapEdgeResponseDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment BootstrapEdgeResponseDefaultFields on BootstrapEdgeResponse {
@@ -17489,6 +17501,7 @@ export const BootstrapEdgeDocument = /*#__PURE__*/ new TypedDocumentString(`
   bootstrapEdge(input: $input) {
     __typename
     ...BootstrapEdgeResponseDefaultFields
+    ...BootstrapEdgePendingDefaultFields
     ...ValidationErrorDefaultFields
     ...AuthErrorDefaultFields
   }
@@ -17496,6 +17509,11 @@ export const BootstrapEdgeDocument = /*#__PURE__*/ new TypedDocumentString(`
     fragment AuthErrorDefaultFields on AuthError {
   message
   code
+}
+fragment BootstrapEdgePendingDefaultFields on BootstrapEdgePending {
+  clusterId
+  phase
+  retryAfterSeconds
 }
 fragment BootstrapEdgeResponseDefaultFields on BootstrapEdgeResponse {
   nodeId

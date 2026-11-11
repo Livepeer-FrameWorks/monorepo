@@ -113,6 +113,10 @@ func SanitizeError(err error) error {
 	if reason, retryAfter, ok := PlaybackStreamState(st.Err()); ok && reason == StreamStartingReason && st.Code() == codes.Unavailable {
 		return StreamStartingError(retryAfter)
 	}
+	if reason, retryAfter, ok := BootstrapState(st.Err()); ok {
+		return BootstrapPendingError(reason, retryAfter)
+	}
+
 	return status.Error(st.Code(), messageForCode(st.Code()))
 }
 

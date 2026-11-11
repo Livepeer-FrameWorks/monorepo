@@ -117,6 +117,7 @@ Mode B — Pre-existing token (no login needed):
 				storageBytes:       storageBytes,
 			}
 
+			deployCfg.receipt = &edgeDeployReceipt{}
 			if modeA {
 				bridgeCreated, err = deployAutomatic(ctx, cmd, &deployCfg, &nodeID, &domain, &clusterSlug)
 			} else {
@@ -127,13 +128,17 @@ Mode B — Pre-existing token (no login needed):
 			}
 
 			renderEdgeDeployResult(cmd, edgeDeployResultFields{
-				modeA:         modeA,
-				bridgeCreated: bridgeCreated,
-				nodeID:        nodeID,
-				domain:        domain,
-				clusterSlug:   clusterSlug,
-				provisioned:   provisioned,
-				failed:        err,
+				modeA:            modeA,
+				bridgeCreated:    bridgeCreated,
+				clusterID:        deployCfg.clusterID,
+				enrollmentIssued: deployCfg.enrollmentToken != "",
+				installed:        deployCfg.receipt.Installed,
+				httpsVerified:    deployCfg.receipt.HTTPSVerified,
+				nodeID:           nodeID,
+				domain:           domain,
+				clusterSlug:      clusterSlug,
+				provisioned:      provisioned,
+				failed:           err,
 			})
 			if err != nil {
 				return err
@@ -174,6 +179,8 @@ Mode B — Pre-existing token (no login needed):
 }
 
 type deployConfig struct {
+	receipt            *edgeDeployReceipt
+	receiptPath        string
 	clusterID          string
 	clusterName        string
 	controlClusterID   string
@@ -229,12 +236,21 @@ func deployAutomatic(ctx context.Context, cmd *cobra.Command, cfg *deployConfig,
 		return false, fmt.Errorf("automatic deployment requires user authentication; run 'frameworks login' first")
 	}
 
+	if cfg.receipt == nil {
+		cfg.receipt = &edgeDeployReceipt{}
+	}
+	cfg.receipt.BridgeURL = cliCtx.Endpoints.BridgeURL
 	bc := bridge.New(cliCtx.Endpoints.BridgeURL)
-	token, created, err := resolveEnrollmentToken(ctx, cmd, bc, jwt, *cfg)
+	token, created, err := resolveEnrollmentToken(ctx, cmd, bc, jwt, cfg)
 	if err != nil {
-		return false, err
+		return created, err
 	}
 	cfg.enrollmentToken = token
+	cfg.receipt.ClusterCreated = created
+	if err := cfg.recordDeployPhase("enrollment_issued"); err != nil {
+		return created, err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "  Deployment receipt: %s\n", cfg.receiptPath)
 
 	return created, runEdgeDeploy(ctx, cmd, cliCtx, *cfg, nodeID, domain, clusterSlug)
 }
@@ -242,7 +258,7 @@ func deployAutomatic(ctx context.Context, cmd *cobra.Command, cfg *deployConfig,
 // resolveEnrollmentToken finds or creates an edge cluster via Bridge and
 // returns the issued bootstrap token plus whether a NEW cluster was created
 // (vs. reusing an existing one — used by the result block's "cluster" field).
-func resolveEnrollmentToken(ctx context.Context, cmd *cobra.Command, bc *bridge.Client, jwt string, cfg deployConfig) (string, bool, error) {
+func resolveEnrollmentToken(ctx context.Context, cmd *cobra.Command, bc *bridge.Client, jwt string, cfg *deployConfig) (string, bool, error) {
 	if cfg.clusterID != "" {
 		fmt.Fprintf(cmd.OutOrStdout(), "Creating enrollment token for cluster %s...\n", cfg.clusterID)
 		var ttl *string
@@ -269,6 +285,7 @@ func resolveEnrollmentToken(ctx context.Context, cmd *cobra.Command, bc *bridge.
 	if err != nil {
 		return "", false, err
 	}
+	cfg.clusterID = created.ClusterID
 	fmt.Fprintf(cmd.OutOrStdout(), "  Cluster: %s (%s)\n", created.ClusterName, created.ClusterID)
 	return created.BootstrapToken, true, nil
 }
@@ -293,6 +310,18 @@ func runEdgeDeploy(ctx context.Context, cmd *cobra.Command, cliCtx fwcfg.Context
 		return fmt.Errorf("pre-registration failed: %w", err)
 	}
 
+	if cfg.clusterID == "" {
+		cfg.clusterID = resp.GetClusterId()
+	}
+	if cfg.receipt == nil {
+		cfg.receipt = &edgeDeployReceipt{}
+	}
+	cfg.receipt.BridgeURL = cliCtx.Endpoints.BridgeURL
+	cfg.receipt.NodeID = resp.GetNodeId()
+	if err := cfg.recordDeployPhase("pre_registered"); err != nil {
+		return err
+	}
+
 	if nodeID != nil {
 		*nodeID = resp.GetNodeId()
 	}
@@ -313,21 +342,31 @@ func runEdgeDeploy(ctx context.Context, cmd *cobra.Command, cliCtx fwcfg.Context
 		foghornGRPC = addr
 	}
 
+	var provisionErr error
 	if cfg.sshTarget != "" {
-		return deployViaSSH(ctx, cmd, cfg, resp, foghornGRPC)
+		provisionErr = deployViaSSH(ctx, cmd, cfg, resp, foghornGRPC)
+	} else {
+		provisionErr = deployLocal(ctx, cmd, cfg, resp, foghornGRPC)
 	}
-
-	return deployLocal(ctx, cmd, cfg, resp, foghornGRPC)
+	if provisionErr != nil {
+		return provisionErr
+	}
+	cfg.receipt.HTTPSVerified = true
+	return cfg.recordDeployPhase("https_verified")
 }
 
 type edgeDeployResultFields struct {
-	modeA         bool
-	bridgeCreated bool
-	nodeID        string
-	domain        string
-	clusterSlug   string
-	provisioned   bool
-	failed        error
+	modeA            bool
+	bridgeCreated    bool
+	clusterID        string
+	enrollmentIssued bool
+	installed        bool
+	httpsVerified    bool
+	nodeID           string
+	domain           string
+	clusterSlug      string
+	provisioned      bool
+	failed           error
 }
 
 func renderEdgeDeployResult(cmd *cobra.Command, f edgeDeployResultFields) {
@@ -339,7 +378,7 @@ func renderEdgeDeployResult(cmd *cobra.Command, f edgeDeployResultFields) {
 		if f.bridgeCreated {
 			clusterDetail = "created via Bridge"
 		}
-		clusterOK = f.clusterSlug != ""
+		clusterOK = f.bridgeCreated || f.clusterID != "" || f.clusterSlug != ""
 		if !clusterOK {
 			clusterDetail = "not created"
 		}
@@ -347,22 +386,26 @@ func renderEdgeDeployResult(cmd *cobra.Command, f edgeDeployResultFields) {
 		clusterDetail = "N/A (token mode)"
 	}
 
-	enrollmentOK := f.nodeID != ""
+	enrollmentOK := f.enrollmentIssued || f.nodeID != ""
 	enrollmentDetail := "issued"
 	if !enrollmentOK {
 		enrollmentDetail = "not issued"
 	}
 
-	stackOK := f.provisioned
+	stackOK := f.installed || f.provisioned
 	stackDetail := "edge stack up"
 	if !stackOK {
 		stackDetail = "provisioning did not complete"
 	}
 
-	httpsOK := f.provisioned
+	httpsOK := f.httpsVerified || f.provisioned
 	httpsDetail := "https tls reachable"
 	if !httpsOK {
 		httpsDetail = "not verified"
+	}
+
+	if f.failed != nil && f.clusterID != "" {
+		fmt.Fprintf(out, "Resume this cluster with --cluster-id %s\n", f.clusterID)
 	}
 
 	ux.Result(out, []ux.ResultField{
@@ -370,8 +413,8 @@ func renderEdgeDeployResult(cmd *cobra.Command, f edgeDeployResultFields) {
 		{Key: "enrollment", OK: enrollmentOK, Detail: enrollmentDetail},
 		{Key: "stack", OK: stackOK, Detail: stackDetail},
 		{Key: "https", OK: httpsOK, Detail: httpsDetail},
-		{Key: "node", OK: enrollmentOK, Detail: f.nodeID},
-		{Key: "domain", OK: enrollmentOK, Detail: f.domain},
+		{Key: "node", OK: f.nodeID != "", Detail: f.nodeID},
+		{Key: "domain", OK: f.domain != "", Detail: f.domain},
 	})
 }
 
@@ -425,7 +468,10 @@ func deployViaSSH(ctx context.Context, cmd *cobra.Command, cfg deployConfig, res
 
 	ep := provisioner.NewEdgeProvisioner(pool)
 	fmt.Fprintln(cmd.OutOrStdout(), "Provisioning edge node via SSH...")
-	return ep.Provision(ctx, host, epConfig)
+	return ep.ProvisionWithProgress(ctx, host, epConfig, func() error {
+		cfg.receipt.Installed = true
+		return cfg.recordDeployPhase("installed")
+	})
 }
 
 func deployLocal(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp *foghornpb.PreRegisterEdgeResponse, foghornGRPC string) error {
@@ -485,7 +531,10 @@ func deployLocal(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp
 	ep := provisioner.NewEdgeProvisioner(pool)
 
 	fmt.Fprintln(cmd.OutOrStdout(), "Provisioning edge locally (user LaunchAgent, no admin required)...")
-	return ep.Provision(ctx, host, epConfig)
+	return ep.ProvisionWithProgress(ctx, host, epConfig, func() error {
+		cfg.receipt.Installed = true
+		return cfg.recordDeployPhase("installed")
+	})
 }
 
 func applyEdgeDeployTelemetryConfig(cfg *provisioner.EdgeProvisionConfig, resp *foghornpb.PreRegisterEdgeResponse) error {

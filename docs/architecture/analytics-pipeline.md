@@ -678,3 +678,40 @@ If billing or analytics data appears to “freeze”, check:
 
 - consumer group lag for the relevant group (Periscope Ingest, Purser)
 - service logs around handler errors (schema mismatches often show here first)
+
+## Serving attribution for active reservations
+
+`viewer_lifecycle_serving_attribution` retains trusted serving-cluster evidence
+from connect events, keyed by tenant, stream, node, session and the exact connect
+millisecond. Its connect-only materialized view merges unique cluster evidence;
+duplicate delivery is idempotent. One distinct cluster resolves attribution;
+missing or conflicting evidence leaves the lifecycle unresolved. Disconnect and
+QoE updates do not select a serving cluster, and origin attribution is separate.
+The `any` cluster field in `viewer_sessions_current` is not a billing fallback.
+
+This projection retains identity independently of the raw connect table's
+90-day TTL, alongside the existing lifecycle projection. The reservation reader
+joins the current lifecycle using `lifecycle_connected_at_ms` and preserves the
+shared resume, disconnect, final-event and liveness ordering.
+
+The v0.3.15 owner migration
+`periscope_viewer_serving_attribution_v0_3_15` copies retained trusted evidence
+for current open lifecycles, in checkpointed tenant batches. Its standard
+migration state and leases are namespaced by `METERING_SOURCE_ID`. A different
+logical ClickHouse dataset cannot inherit this source's completion. An empty
+dataset has an explicit verified dataset scope. New connects are captured by the
+view while backfill runs. Replaying an interrupted batch merges the same evidence.
+
+Until verified backfill completion, the reader merges retained raw evidence for
+active keys with projection evidence, so a partially copied lifecycle cannot
+hide a conflicting cluster. After completion it reads durable attribution only.
+History no longer retained by any trusted source remains unresolved.
+
+Reservation publication evaluates the complete source snapshot before releasing
+old holds. An unresolved tenant receives no fabricated complete or zero report;
+other tenants can publish current reservations and previous-key releases. Kafka
+publication and PostgreSQL key bookkeeping remain separate: bookkeeping advances
+for an acknowledged tenant batch, and retries preserve report IDs and sequences.
+Existing hold expiry still applies to a blocked tenant; skipping it does not
+extend authorization or hold validity. Finalized USER_END facts remain the source
+of invoice usage.

@@ -670,3 +670,17 @@ Before deploying a release that raises the floor, confirm every live cluster has
 the complete pre-floor migration set (so folding doesn't strand a partially-migrated
 cluster). With the migration doctor: `cluster doctor` surfaces ledger gaps. A fresh
 cluster born from the baseline legitimately has no pre-floor ledger rows and needs none.
+
+### Logical datasets sharing migration state
+
+An adopting service can set `datamigrate.Migration.StateNamespace` when separate
+logical datasets share its PostgreSQL migration ledger. The catalog and CLI keep
+the declared migration ID; state, checkpoints and leases resolve to that dataset's
+storage identity. An empty namespace preserves existing keys. Registration rejects
+colliding storage identities. Periscope Metering binds the viewer-attribution
+backfill namespace to its validated `METERING_SOURCE_ID`, and reads completion
+through the same registration before enabling its durable-only reader.
+
+Metadata listing opens neither PostgreSQL nor ClickHouse. The Periscope migration
+command validates source/store configuration separately from Kafka and service
+runtime configuration and opens ClickHouse only when migration work needs it.

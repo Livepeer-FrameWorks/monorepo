@@ -8748,6 +8748,86 @@ func (v *BootstrapEdgeBootstrapEdgeAuthError) __premarshalJSON() (*__premarshalB
 	return &retval, nil
 }
 
+// BootstrapEdgeBootstrapEdgeBootstrapEdgePending includes the requested fields of the GraphQL type BootstrapEdgePending.
+// The GraphQL type's documentation follows.
+//
+// Enrollment is accepted for retry while the public identity converges.
+type BootstrapEdgeBootstrapEdgeBootstrapEdgePending struct {
+	Typename                          *string `json:"__typename"`
+	BootstrapEdgePendingDefaultFields `json:"-"`
+}
+
+// GetTypename returns BootstrapEdgeBootstrapEdgeBootstrapEdgePending.Typename, and is useful for accessing the field via an interface.
+func (v *BootstrapEdgeBootstrapEdgeBootstrapEdgePending) GetTypename() *string { return v.Typename }
+
+// GetClusterId returns BootstrapEdgeBootstrapEdgeBootstrapEdgePending.ClusterId, and is useful for accessing the field via an interface.
+func (v *BootstrapEdgeBootstrapEdgeBootstrapEdgePending) GetClusterId() string {
+	return v.BootstrapEdgePendingDefaultFields.ClusterId
+}
+
+// GetPhase returns BootstrapEdgeBootstrapEdgeBootstrapEdgePending.Phase, and is useful for accessing the field via an interface.
+func (v *BootstrapEdgeBootstrapEdgeBootstrapEdgePending) GetPhase() string {
+	return v.BootstrapEdgePendingDefaultFields.Phase
+}
+
+// GetRetryAfterSeconds returns BootstrapEdgeBootstrapEdgeBootstrapEdgePending.RetryAfterSeconds, and is useful for accessing the field via an interface.
+func (v *BootstrapEdgeBootstrapEdgeBootstrapEdgePending) GetRetryAfterSeconds() int {
+	return v.BootstrapEdgePendingDefaultFields.RetryAfterSeconds
+}
+
+func (v *BootstrapEdgeBootstrapEdgeBootstrapEdgePending) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*BootstrapEdgeBootstrapEdgeBootstrapEdgePending
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.BootstrapEdgeBootstrapEdgeBootstrapEdgePending = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.BootstrapEdgePendingDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalBootstrapEdgeBootstrapEdgeBootstrapEdgePending struct {
+	Typename *string `json:"__typename"`
+
+	ClusterId string `json:"clusterId"`
+
+	Phase string `json:"phase"`
+
+	RetryAfterSeconds int `json:"retryAfterSeconds"`
+}
+
+func (v *BootstrapEdgeBootstrapEdgeBootstrapEdgePending) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *BootstrapEdgeBootstrapEdgeBootstrapEdgePending) __premarshalJSON() (*__premarshalBootstrapEdgeBootstrapEdgeBootstrapEdgePending, error) {
+	var retval __premarshalBootstrapEdgeBootstrapEdgeBootstrapEdgePending
+
+	retval.Typename = v.Typename
+	retval.ClusterId = v.BootstrapEdgePendingDefaultFields.ClusterId
+	retval.Phase = v.BootstrapEdgePendingDefaultFields.Phase
+	retval.RetryAfterSeconds = v.BootstrapEdgePendingDefaultFields.RetryAfterSeconds
+	return &retval, nil
+}
+
 // BootstrapEdgeBootstrapEdgeBootstrapEdgeResponse includes the requested fields of the GraphQL type BootstrapEdgeResponse.
 // The GraphQL type's documentation follows.
 //
@@ -8891,6 +8971,7 @@ func (v *BootstrapEdgeBootstrapEdgeBootstrapEdgeResponse) __premarshalJSON() (*_
 //
 // BootstrapEdgeBootstrapEdgeBootstrapEdgeResult is implemented by the following types:
 // BootstrapEdgeBootstrapEdgeAuthError
+// BootstrapEdgeBootstrapEdgeBootstrapEdgePending
 // BootstrapEdgeBootstrapEdgeBootstrapEdgeResponse
 // BootstrapEdgeBootstrapEdgeValidationError
 type BootstrapEdgeBootstrapEdgeBootstrapEdgeResult interface {
@@ -8900,6 +8981,8 @@ type BootstrapEdgeBootstrapEdgeBootstrapEdgeResult interface {
 }
 
 func (v *BootstrapEdgeBootstrapEdgeAuthError) implementsGraphQLInterfaceBootstrapEdgeBootstrapEdgeBootstrapEdgeResult() {
+}
+func (v *BootstrapEdgeBootstrapEdgeBootstrapEdgePending) implementsGraphQLInterfaceBootstrapEdgeBootstrapEdgeBootstrapEdgeResult() {
 }
 func (v *BootstrapEdgeBootstrapEdgeBootstrapEdgeResponse) implementsGraphQLInterfaceBootstrapEdgeBootstrapEdgeBootstrapEdgeResult() {
 }
@@ -8922,6 +9005,9 @@ func __unmarshalBootstrapEdgeBootstrapEdgeBootstrapEdgeResult(b []byte, v *Boots
 	switch tn.TypeName {
 	case "AuthError":
 		*v = new(BootstrapEdgeBootstrapEdgeAuthError)
+		return json.Unmarshal(b, *v)
+	case "BootstrapEdgePending":
+		*v = new(BootstrapEdgeBootstrapEdgeBootstrapEdgePending)
 		return json.Unmarshal(b, *v)
 	case "BootstrapEdgeResponse":
 		*v = new(BootstrapEdgeBootstrapEdgeBootstrapEdgeResponse)
@@ -8952,6 +9038,18 @@ func __marshalBootstrapEdgeBootstrapEdgeBootstrapEdgeResult(v *BootstrapEdgeBoot
 		result := struct {
 			TypeName string `json:"__typename"`
 			*__premarshalBootstrapEdgeBootstrapEdgeAuthError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *BootstrapEdgeBootstrapEdgeBootstrapEdgePending:
+		typename = "BootstrapEdgePending"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalBootstrapEdgeBootstrapEdgeBootstrapEdgePending
 		}{typename, premarshaled}
 		return json.Marshal(result)
 	case *BootstrapEdgeBootstrapEdgeBootstrapEdgeResponse:
@@ -9090,6 +9188,25 @@ func (v *BootstrapEdgeInput) GetExternalIp() *string { return v.ExternalIp }
 
 // GetPreferredNodeId returns BootstrapEdgeInput.PreferredNodeId, and is useful for accessing the field via an interface.
 func (v *BootstrapEdgeInput) GetPreferredNodeId() *string { return v.PreferredNodeId }
+
+// BootstrapEdgePendingDefaultFields includes the GraphQL fields of BootstrapEdgePending requested by the fragment BootstrapEdgePendingDefaultFields.
+// The GraphQL type's documentation follows.
+//
+// Enrollment is accepted for retry while the public identity converges.
+type BootstrapEdgePendingDefaultFields struct {
+	ClusterId         string `json:"clusterId"`
+	Phase             string `json:"phase"`
+	RetryAfterSeconds int    `json:"retryAfterSeconds"`
+}
+
+// GetClusterId returns BootstrapEdgePendingDefaultFields.ClusterId, and is useful for accessing the field via an interface.
+func (v *BootstrapEdgePendingDefaultFields) GetClusterId() string { return v.ClusterId }
+
+// GetPhase returns BootstrapEdgePendingDefaultFields.Phase, and is useful for accessing the field via an interface.
+func (v *BootstrapEdgePendingDefaultFields) GetPhase() string { return v.Phase }
+
+// GetRetryAfterSeconds returns BootstrapEdgePendingDefaultFields.RetryAfterSeconds, and is useful for accessing the field via an interface.
+func (v *BootstrapEdgePendingDefaultFields) GetRetryAfterSeconds() int { return v.RetryAfterSeconds }
 
 // BootstrapEdgeResponse is returned by BootstrapEdge on success.
 type BootstrapEdgeResponse struct {
@@ -126463,6 +126580,7 @@ mutation BootstrapEdge ($input: BootstrapEdgeInput!) {
 	bootstrapEdge(input: $input) {
 		__typename
 		... BootstrapEdgeResponseDefaultFields
+		... BootstrapEdgePendingDefaultFields
 		... ValidationErrorDefaultFields
 		... AuthErrorDefaultFields
 	}
@@ -126482,6 +126600,11 @@ fragment BootstrapEdgeResponseDefaultFields on BootstrapEdgeResponse {
 		writeUrl
 		bearerToken
 	}
+}
+fragment BootstrapEdgePendingDefaultFields on BootstrapEdgePending {
+	clusterId
+	phase
+	retryAfterSeconds
 }
 fragment ValidationErrorDefaultFields on ValidationError {
 	message

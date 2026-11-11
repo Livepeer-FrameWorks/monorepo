@@ -528,6 +528,12 @@ type ComplexityRoot struct {
 		TierName        func(childComplexity int) int
 	}
 
+	BootstrapEdgePending struct {
+		ClusterID         func(childComplexity int) int
+		Phase             func(childComplexity int) int
+		RetryAfterSeconds func(childComplexity int) int
+	}
+
 	BootstrapEdgeResponse struct {
 		CertPem          func(childComplexity int) int
 		ClusterID        func(childComplexity int) int
@@ -7262,6 +7268,25 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.BillingTier.TierName(childComplexity), true
+
+	case "BootstrapEdgePending.clusterId":
+		if e.ComplexityRoot.BootstrapEdgePending.ClusterID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BootstrapEdgePending.ClusterID(childComplexity), true
+	case "BootstrapEdgePending.phase":
+		if e.ComplexityRoot.BootstrapEdgePending.Phase == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BootstrapEdgePending.Phase(childComplexity), true
+	case "BootstrapEdgePending.retryAfterSeconds":
+		if e.ComplexityRoot.BootstrapEdgePending.RetryAfterSeconds == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BootstrapEdgePending.RetryAfterSeconds(childComplexity), true
 
 	case "BootstrapEdgeResponse.certPem":
 		if e.ComplexityRoot.BootstrapEdgeResponse.CertPem == nil {
@@ -27165,7 +27190,11 @@ union RevokeBootstrapTokenResult = DeleteSuccess | NotFoundError | AuthError
 # Cluster Marketplace Result Types
 union CreateEdgeClusterResult = CreateEdgeClusterResponse | ValidationError | AuthError
 union CreateEnrollmentTokenResult = CreateEnrollmentTokenResponse | ValidationError | AuthError
-union BootstrapEdgeResult = BootstrapEdgeResponse | ValidationError | AuthError
+union BootstrapEdgeResult =
+  | BootstrapEdgeResponse
+  | BootstrapEdgePending
+  | ValidationError
+  | AuthError
 union UpdateClusterResult = Cluster | ValidationError | NotFoundError | AuthError
 union CreateClusterInviteResult = ClusterInvite | ValidationError | NotFoundError | AuthError
 union RevokeClusterInviteResult = DeleteSuccess | NotFoundError | AuthError
@@ -31000,6 +31029,15 @@ type EdgeTelemetrySetup {
   enabled: Boolean!
   writeUrl: String
   bearerToken: String
+}
+
+"""
+Enrollment is accepted for retry while the public identity converges.
+"""
+type BootstrapEdgePending {
+  clusterId: String!
+  phase: String!
+  retryAfterSeconds: Int!
 }
 
 """
@@ -47252,6 +47290,93 @@ func (ec *executionContext) fieldContext_BillingTier_isEnterprise(_ context.Cont
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BootstrapEdgePending_clusterId(ctx context.Context, field graphql.CollectedField, obj *model.BootstrapEdgePending) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BootstrapEdgePending_clusterId,
+		func(ctx context.Context) (any, error) {
+			return obj.ClusterID, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_BootstrapEdgePending_clusterId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BootstrapEdgePending",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BootstrapEdgePending_phase(ctx context.Context, field graphql.CollectedField, obj *model.BootstrapEdgePending) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BootstrapEdgePending_phase,
+		func(ctx context.Context) (any, error) {
+			return obj.Phase, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_BootstrapEdgePending_phase(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BootstrapEdgePending",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BootstrapEdgePending_retryAfterSeconds(ctx context.Context, field graphql.CollectedField, obj *model.BootstrapEdgePending) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BootstrapEdgePending_retryAfterSeconds,
+		func(ctx context.Context) (any, error) {
+			return obj.RetryAfterSeconds, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_BootstrapEdgePending_retryAfterSeconds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BootstrapEdgePending",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
 		},
 	}
 	return fc, nil
@@ -142736,6 +142861,13 @@ func (ec *executionContext) _BootstrapEdgeResult(ctx context.Context, sel ast.Se
 			return graphql.Null
 		}
 		return ec._BootstrapEdgeResponse(ctx, sel, obj)
+	case model.BootstrapEdgePending:
+		return ec._BootstrapEdgePending(ctx, sel, &obj)
+	case *model.BootstrapEdgePending:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._BootstrapEdgePending(ctx, sel, obj)
 	default:
 		if typedObj, ok := obj.(graphql.Marshaler); ok {
 			return typedObj
@@ -151189,6 +151321,55 @@ func (ec *executionContext) _BillingTier(ctx context.Context, sel ast.SelectionS
 			out.Values[i] = ec._BillingTier_isEnterprise(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var bootstrapEdgePendingImplementors = []string{"BootstrapEdgePending", "BootstrapEdgeResult"}
+
+func (ec *executionContext) _BootstrapEdgePending(ctx context.Context, sel ast.SelectionSet, obj *model.BootstrapEdgePending) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, bootstrapEdgePendingImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("BootstrapEdgePending")
+		case "clusterId":
+			out.Values[i] = ec._BootstrapEdgePending_clusterId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "phase":
+			out.Values[i] = ec._BootstrapEdgePending_phase(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "retryAfterSeconds":
+			out.Values[i] = ec._BootstrapEdgePending_retryAfterSeconds(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
 			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))

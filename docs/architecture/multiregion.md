@@ -94,3 +94,24 @@ Every remaining operation still pays the physical database RTT. Autonomous
 regional durability requires a regional quorum and its own backup/failover
 policy; a remote read replica or an extra regional member of an EU-majority
 quorum does not make publisher writes local.
+
+## Background tenant control recipients
+
+Quartermaster's tenant-scoped `GetTenantControlRecipients` classifies media
+clusters and maps them to canonical Foghorn control cells without evaluating
+billing admission, capacity eligibility or health. Proven central-only access
+entries are excluded; tenant-private clusters use their assigned controller.
+Revoked access and unhealthy media cells can still require delivery.
+
+Commodore combines this inventory with its durable active/last ingest and media
+object/tenant authority targets. Historical execution cells remain recipients
+after access removal or controller movement. Independent discovery failures
+retain known delivery progress and incomplete coverage remains retryable. A
+missing canonical identity cannot become an authoritative empty inventory.
+Delivery concurrency is bounded and reserves caller time for later recipients.
+
+Purser's existing revision-fenced refresh row completes after required cache
+invalidation and authority-refresh acceptance both succeed. A failed invalidation
+still allows authority refresh to proceed, but keeps the row pending. Retries use
+the same source event ID, preserving Commodore's deduplication and authority
+validity. A recent-failure alert aging out is distinct from durable convergence.

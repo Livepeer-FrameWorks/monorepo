@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"frameworks/api_dns/internal/logic"
 	"reflect"
 	"testing"
+	"time"
 
 	"frameworks/api_dns/internal/store"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -245,5 +247,59 @@ func TestReportConfigSeedApplyResultRetriesTenantACKWhenAuthorityIsUnavailable(t
 	})
 	if resp != nil || status.Code(err) != codes.Unavailable {
 		t.Fatalf("response=%v code=%s err=%v, want Unavailable", resp, status.Code(err), err)
+	}
+}
+
+type testApplyRecorder struct {
+	committed bool
+	err       error
+}
+
+func (r *testApplyRecorder) RecordConfigSeedApplyResult(context.Context, string, string, uint64, uint64, []string, []string, map[string]string, time.Time) ([]string, logic.ConfigSeedApplyDiscarded, error) {
+	if r.err != nil {
+		return nil, logic.ConfigSeedApplyDiscarded{}, r.err
+	}
+	r.committed = true
+	return []string{"known"}, logic.ConfigSeedApplyDiscarded{}, nil
+}
+
+type testAliasPublisher struct {
+	recorder         *testApplyRecorder
+	wakes, publishes int
+	wakeBeforeCommit bool
+}
+
+func (p *testAliasPublisher) WakeTenant(string) {
+	p.wakes++
+	p.wakeBeforeCommit = !p.recorder.committed
+}
+func (p *testAliasPublisher) PublishTenantAlias(ctx context.Context, _ string) error {
+	p.publishes++
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestApplyAckDoesNotWaitForAliasProvider(t *testing.T) {
+	recorder := &testApplyRecorder{}
+	publisher := &testAliasPublisher{recorder: recorder}
+	s := &NavigatorServer{ApplyResultRecorder: recorder, AliasPublisher: publisher, TenantClusters: fixedTenantClusterAuthority{"known/cluster-1": "active"}, Logger: logging.NewLogger()}
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	response, err := s.ReportConfigSeedApplyResult(ctx, &dnspb.ReportConfigSeedApplyResultRequest{NodeId: "node-1", ClusterId: "cluster-1", SeedVersion: 1, DeliverySequence: 1, AppliedBundleIds: []string{"tenant:known"}})
+	if err != nil || !response.GetAccepted() {
+		t.Fatalf("validated durable ACK rejected: response=%v err=%v", response, err)
+	}
+	if ctx.Err() != nil || publisher.publishes != 0 || publisher.wakes != 1 || publisher.wakeBeforeCommit {
+		t.Fatalf("ACK waited on external publication or woke before commit: ctx=%v publishes=%d wakes=%d early=%v", ctx.Err(), publisher.publishes, publisher.wakes, publisher.wakeBeforeCommit)
+	}
+}
+
+func TestApplyAckPersistenceFailureDoesNotWakeOrAccept(t *testing.T) {
+	recorder := &testApplyRecorder{err: errors.New("database unavailable")}
+	publisher := &testAliasPublisher{recorder: recorder}
+	s := &NavigatorServer{ApplyResultRecorder: recorder, AliasPublisher: publisher, TenantClusters: fixedTenantClusterAuthority{"known/cluster-1": "active"}, Logger: logging.NewLogger()}
+	response, err := s.ReportConfigSeedApplyResult(t.Context(), &dnspb.ReportConfigSeedApplyResultRequest{NodeId: "node-1", ClusterId: "cluster-1", SeedVersion: 1, AppliedBundleIds: []string{"tenant:known"}})
+	if response != nil || status.Code(err) != codes.Internal || publisher.wakes != 0 {
+		t.Fatalf("failed durable write was accepted: response=%v err=%v wakes=%d", response, err, publisher.wakes)
 	}
 }

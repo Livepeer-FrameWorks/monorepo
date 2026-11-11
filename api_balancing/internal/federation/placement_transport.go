@@ -80,8 +80,18 @@ func (transport PlacementTransport) observe(ctx context.Context, cell balancer.P
 		if transport.Client == nil || len(addrs) == 0 {
 			return balancer.PlacementCellObservation{}, fmt.Errorf("placement destination cell %q has no federation address", cell.ID)
 		}
+		attemptIndex := 0
 		response, _, err = callCellReplicas(ctx, addrs, func(attemptCtx context.Context, addr string) (*placementpb.CandidateObservation, error) {
-			return transport.Client.QueryPlacementCandidates(attemptCtx, cell.ID, addr, query)
+			attemptIndex++
+			started := time.Now()
+			result, callErr := transport.Client.QueryPlacementCandidates(attemptCtx, cell.ID, addr, query)
+			recordPlacementReplica(transport.Logger, attemptCtx, "observe", started, logging.Fields{
+				"cell_id": cell.ID, "peer_addr": addr, "attempt_index": attemptIndex, "internal_name": req.InternalName,
+				"source_generation": req.SourceGeneration, "tenant_id": req.TenantID,
+				"tenant_authority_version": req.TenantAuthorityVersion, "object_authority_version": req.ObjectAuthorityVersion,
+				"operation_budget_remaining_ms": placementBudgetRemainingMS(ctx),
+			}, callErr)
+			return result, callErr
 		})
 	}
 	if err != nil {
@@ -150,8 +160,18 @@ func (transport PlacementTransport) Prepare(ctx context.Context, cell balancer.P
 		// The attempt id makes a repeated preparation on another replica
 		// return the same receipt instead of preparing twice.
 		var answered string
+		attemptIndex := 0
 		response, answered, err = callCellReplicas(ctx, addrs, func(attemptCtx context.Context, addr string) (*placementpb.Preparation, error) {
+			attemptIndex++
+			started := time.Now()
 			attemptResponse, attemptErr := transport.Client.PreparePlacement(attemptCtx, cell.ID, addr, query)
+			recordPlacementReplica(transport.Logger, attemptCtx, "prepare", started, logging.Fields{
+				"cell_id": cell.ID, "peer_addr": addr, "attempt_index": attemptIndex, "attempt_id": req.AttemptID,
+				"cluster_id": req.Choice.ClusterID, "node_id": req.Choice.NodeID, "internal_name": req.Route.InternalName,
+				"source_generation": req.Route.SourceGeneration, "tenant_id": req.Route.TenantID,
+				"tenant_authority_version": req.Route.TenantAuthorityVersion, "object_authority_version": req.Route.ObjectAuthorityVersion,
+				"operation_budget_remaining_ms": placementBudgetRemainingMS(ctx),
+			}, attemptErr)
 			if attemptErr != nil && transport.Logger != nil {
 				transport.Logger.WithError(attemptErr).WithFields(logging.Fields{
 					"cell_id": cell.ID, "peer_addr": addr, "replicas": len(addrs), "cluster_id": req.Choice.ClusterID, "node_id": req.Choice.NodeID,

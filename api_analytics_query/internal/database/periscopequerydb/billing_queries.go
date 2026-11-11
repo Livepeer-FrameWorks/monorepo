@@ -319,3 +319,5 @@ var EarliestCanonicalBillingFact = statement("billing.earliest_canonical_fact", 
 		SELECT minOrNull(ingested_at_ms) AS first_ms FROM periscope.api_requests WHERE tenant_id = ?
 	)
 `)
+
+var ActiveViewerReservationsDurable = statement("billing.active_viewer_reservations_durable", dbqueries.ActiveViewerReservationsDurable)

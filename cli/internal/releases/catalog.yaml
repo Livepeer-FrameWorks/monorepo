@@ -174,3 +174,10 @@ releases:
       - purser
     capabilities: [accounts_bootstrap]
     min_cli_version: v0.3.14-rc5
+  - version: v0.3.15
+    min_cli_version: v0.3.15
+    required_data_migrations:
+      - id: periscope_viewer_serving_attribution_v0_3_15
+        service: periscope-metering
+        introduced_in: v0.3.15
+        required_before_phase: postdeploy

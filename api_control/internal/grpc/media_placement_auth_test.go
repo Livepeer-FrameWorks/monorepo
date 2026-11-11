@@ -23,6 +23,7 @@ func TestMediaPlacementPermissionBoundary(t *testing.T) {
 		{"scoped owner write", "owner", "api_token", "placement:write", "tenant", true, true},
 		{"member token cannot elevate role", "member", "api_token", "placement:write", "tenant", true, false},
 		{"scoped read", "member", "api_token", "placement:read", "tenant", false, true},
+		{"write includes read", "member", "api_token", "placement:write", "tenant", false, true},
 		{"cross tenant read", "owner", "api_token", "placement:read", "other", false, false},
 		{"cross tenant write", "owner", "api_token", "placement:write", "other", true, false},
 	} {

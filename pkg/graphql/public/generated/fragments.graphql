@@ -674,6 +674,12 @@ fragment BillingTierDefaultFields on BillingTier {
   isEnterprise
 }
 
+fragment BootstrapEdgePendingDefaultFields on BootstrapEdgePending {
+  clusterId
+  phase
+  retryAfterSeconds
+}
+
 fragment BootstrapEdgeResponseDefaultFields on BootstrapEdgeResponse {
   nodeId
   edgeDomain

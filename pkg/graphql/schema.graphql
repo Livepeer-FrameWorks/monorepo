@@ -2386,7 +2386,11 @@ union RevokeBootstrapTokenResult = DeleteSuccess | NotFoundError | AuthError
 # Cluster Marketplace Result Types
 union CreateEdgeClusterResult = CreateEdgeClusterResponse | ValidationError | AuthError
 union CreateEnrollmentTokenResult = CreateEnrollmentTokenResponse | ValidationError | AuthError
-union BootstrapEdgeResult = BootstrapEdgeResponse | ValidationError | AuthError
+union BootstrapEdgeResult =
+  | BootstrapEdgeResponse
+  | BootstrapEdgePending
+  | ValidationError
+  | AuthError
 union UpdateClusterResult = Cluster | ValidationError | NotFoundError | AuthError
 union CreateClusterInviteResult = ClusterInvite | ValidationError | NotFoundError | AuthError
 union RevokeClusterInviteResult = DeleteSuccess | NotFoundError | AuthError
@@ -6221,6 +6225,15 @@ type EdgeTelemetrySetup {
   enabled: Boolean!
   writeUrl: String
   bearerToken: String
+}
+
+"""
+Enrollment is accepted for retry while the public identity converges.
+"""
+type BootstrapEdgePending {
+  clusterId: String!
+  phase: String!
+  retryAfterSeconds: Int!
 }
 
 """

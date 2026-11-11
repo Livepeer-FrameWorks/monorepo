@@ -38,6 +38,7 @@ func billingQueryContracts() []queryContract {
 	startMS, endMS := start.UnixMilli(), end.UnixMilli()
 	return []queryContract{
 		{ActiveViewerReservations, nil},
+		{ActiveViewerReservationsDurable, nil},
 		{ActiveTenants, []any{contractTenantID, "00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000003"}},
 		{PeakBandwidth, []any{contractTenantID, start, end}},
 		{MonthlyUniqueUsers, []any{contractTenantID, endMS, contractTenantID, startMS, endMS}},
