@@ -71,7 +71,7 @@ var PeriscopeMigrationCatalog = ClickHouseMigrationCatalog{
 		"tenant_usage_5m_store", "tenant_usage_daily_store", "tenant_usage_hourly_store",
 		"tenant_viewer_daily_store", "track_list_events", "viewer_city_daily_store",
 		"viewer_city_hourly_store", "viewer_connection_events", "viewer_geo_daily_store",
-		"viewer_geo_hourly_store", "viewer_hours_hourly_store", "viewer_sessions_anomalous",
+		"viewer_geo_hourly_store", "viewer_hours_hourly_store", "viewer_lifecycle_serving_attribution", "viewer_sessions_anomalous",
 		"viewer_sessions_current", "viewer_sessions_final", "viewer_usage_5m",
 		"vod_retention_buckets",
 	},
@@ -81,7 +81,7 @@ var PeriscopeMigrationCatalog = ClickHouseMigrationCatalog{
 		"orchestrator_discovery_1h_mv", "orchestrator_discovery_5m_mv",
 		"orchestrator_transcode_hourly_mv", "quality_tier_daily_mv",
 		"rebuffering_events_mv", "routing_cluster_hourly_mv", "stream_health_5m_mv",
-		"stream_viewer_5m_mv", "viewer_sessions_connect_mv", "viewer_sessions_disconnect_mv",
+		"stream_viewer_5m_mv", "viewer_lifecycle_serving_attribution_mv", "viewer_sessions_connect_mv", "viewer_sessions_disconnect_mv",
 	},
 	RefreshableMVs: []string{
 		"api_usage_daily_mv", "api_usage_hourly_mv", "processing_daily_mv",

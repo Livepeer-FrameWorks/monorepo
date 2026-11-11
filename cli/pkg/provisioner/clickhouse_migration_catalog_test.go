@@ -22,9 +22,9 @@ func TestClickHouseMigrationCatalogCoverage(t *testing.T) {
 	}
 	sql := string(data)
 
-	tableRe := regexp.MustCompile(`CREATE TABLE IF NOT EXISTS ([a-z0-9_]+)`)
-	mvRe := regexp.MustCompile(`CREATE MATERIALIZED VIEW IF NOT EXISTS ([a-z0-9_]+)`)
-	viewRe := regexp.MustCompile(`CREATE VIEW IF NOT EXISTS ([a-z0-9_]+)`)
+	tableRe := regexp.MustCompile(`CREATE TABLE IF NOT EXISTS (?:periscope\.)?([a-z0-9_]+)`)
+	mvRe := regexp.MustCompile(`CREATE MATERIALIZED VIEW IF NOT EXISTS (?:periscope\.)?([a-z0-9_]+)`)
+	viewRe := regexp.MustCompile(`CREATE VIEW IF NOT EXISTS (?:periscope\.)?([a-z0-9_]+)`)
 
 	var wantTables, wantViews, wantInsertMVs, wantRefreshMVs []string
 	for _, m := range tableRe.FindAllStringSubmatch(sql, -1) {

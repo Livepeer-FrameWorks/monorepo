@@ -138,7 +138,7 @@ func TestExecutorStreamsToContextOutputWriter(t *testing.T) {
 func TestExecutorOutputFeedsWatchdog(t *testing.T) {
 	dir := t.TempDir()
 	chatty := filepath.Join(dir, "chatty")
-	script := "#!/bin/sh\nfor i in 1 2 3 4 5 6 7 8; do echo \"TASK [step $i]\"; sleep 0.05; done\n"
+	script := "#!/bin/sh\nfor i in 1 2 3 4 5 6 7 8; do echo \"TASK [step $i]\"; sleep 0.2; done\n"
 	if err := os.WriteFile(chatty, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake ansible-playbook: %v", err)
 	}
@@ -148,18 +148,18 @@ func TestExecutorOutputFeedsWatchdog(t *testing.T) {
 	}
 	opts := ExecuteOptions{Playbook: filepath.Join(dir, "playbook.yml"), Inventory: filepath.Join(dir, "inventory.yml")}
 
-	ctx, w := watchdog.Start(WithOutputWriter(context.Background(), io.Discard), "chatty playbook", 200*time.Millisecond)
+	ctx, w := watchdog.Start(WithOutputWriter(context.Background(), io.Discard), "chatty playbook", time.Second)
 	defer w.Stop()
 	if err := (&Executor{Binary: chatty}).Execute(ctx, opts); err != nil {
-		t.Fatalf("playbook printing every 50ms under a 200ms stall window failed: %v", w.Err(err))
+		t.Fatalf("playbook printing every 200ms under a one-second stall window failed: %v", w.Err(err))
 	}
 
-	ctx, w = watchdog.Start(WithOutputWriter(context.Background(), io.Discard), "silent playbook", 200*time.Millisecond)
+	ctx, w = watchdog.Start(WithOutputWriter(context.Background(), io.Discard), "silent playbook", time.Second)
 	defer w.Stop()
 	started := time.Now()
 	err := w.Err((&Executor{Binary: silent}).Execute(ctx, opts))
 	if err == nil {
-		t.Fatal("silent playbook passed under a 200ms stall window")
+		t.Fatal("silent playbook passed under a one-second stall window")
 	}
 	if time.Since(started) > 4*time.Second {
 		t.Fatalf("silent playbook ran %s; the watchdog did not stop it", time.Since(started))

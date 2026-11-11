@@ -63,7 +63,7 @@ func TestClickHouseDemoSeedAndMeteringQueries(t *testing.T) {
 		t.Fatalf("execute active-viewer reservation query: %v\noutput: %s", err, out)
 	}
 	fields := strings.Split(strings.TrimSpace(out), "\t")
-	if len(fields) != 4 || fields[0] != tenantID || fields[1] != "serving-contract" {
+	if len(fields) != 5 || fields[0] != tenantID || fields[1] != "serving-contract" || fields[4] != "0" {
 		t.Fatalf("reservation row = %q, want tenant %s served by serving-contract", out, tenantID)
 	}
 
