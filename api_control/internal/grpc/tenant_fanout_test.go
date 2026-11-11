@@ -219,7 +219,8 @@ func TestTerminateTenantStreams_PartialResultsRemainPending(t *testing.T) {
 		resolvedAt: time.Now(),
 	})
 
-	ctx, cancel := context.WithTimeout(serviceCtx(), 150*time.Millisecond)
+	// Partial counts require the cold healthy connection to establish first.
+	ctx, cancel := context.WithTimeout(serviceCtx(), time.Second)
 	defer cancel()
 
 	_, err := server.TerminateTenantStreams(ctx, &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: "tenant-1", Reason: "suspended"})
@@ -370,9 +371,12 @@ func TestTenantStopUsesBothRecipientSourcesIndependently(t *testing.T) {
 				}
 				expect.WillReturnError(status.Error(codes.Unavailable, "inventory unavailable"))
 			} else {
-				server.controlRecipientLookup = func(ctx context.Context, _ *quartermasterpb.GetTenantControlRecipientsRequest) (*quartermasterpb.GetTenantControlRecipientsResponse, error) {
+				server.controlRecipientLookup = func(ctx context.Context, request *quartermasterpb.GetTenantControlRecipientsRequest) (*quartermasterpb.GetTenantControlRecipientsResponse, error) {
 					if source == "no entitlements" {
-						return &quartermasterpb.GetTenantControlRecipientsResponse{Complete: true}, nil
+						if len(request.GetHistoricalClusterIds()) != 1 || request.GetHistoricalClusterIds()[0] != "recorded" {
+							t.Errorf("historical cell was not sent to inventory owner: %v", request.GetHistoricalClusterIds())
+						}
+						return &quartermasterpb.GetTenantControlRecipientsResponse{Complete: true, Recipients: []*quartermasterpb.TenantControlRecipient{{CellId: "recorded", SourceClusterIds: []string{"recorded"}}}}, nil
 					}
 					if source == "route hangs" {
 						<-ctx.Done()

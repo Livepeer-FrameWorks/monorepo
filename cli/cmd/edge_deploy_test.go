@@ -169,7 +169,7 @@ func TestEnrollmentResumeUsesCommittedClusterInsteadOfCreatingAnother(t *testing
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(body.Query, "mutation CreateEdgeCluster") {
 			creates++
-			_, _ = w.Write([]byte(`{"data":{"createEdgeCluster":{"__typename":"CreateEdgeClusterResponse","clusterId":"committed-private","clusterName":"Test","bootstrapToken":"fake-once"}}}`))
+			_, _ = w.Write([]byte(`{"data":{"createEdgeCluster":{"__typename":"CreateEdgeClusterResponse","cluster":{"id":"cluster-1","clusterId":"committed-private","clusterName":"Test"},"bootstrapToken":{"id":"token-1","token":"fake-once"}}}}`))
 		} else {
 			tokens++
 			encoded, _ := json.Marshal(body.Variables)

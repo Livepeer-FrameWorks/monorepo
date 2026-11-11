@@ -79,6 +79,10 @@ export COMPOSE_FILE="$stack_repo_root/docker-compose.yml:$stack_repo_root/docker
 
 stack_compose() { docker compose --project-directory "$stack_repo_root" "$@"; }
 
+stack_generate_shared_secrets() {
+  (cd "$stack_repo_root/cli" && GOCACHE="${GOCACHE:-$PWD/.gocache}" go run . cluster secrets generate-shared --out "$1" >/dev/null)
+}
+
 # Slot ownership. The project name, subnet and edge image tag all derive from
 # the slot number alone, so two checkouts on one Docker engine cannot share a
 # slot: the second would recreate or tear down the first one's containers. A

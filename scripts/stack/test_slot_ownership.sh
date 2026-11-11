@@ -42,10 +42,15 @@ esac
 exit 0
 EOF
 chmod +x "$work/bin/docker"
+cat >"$work/bin/go" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$GOCACHE" >"$STACK_CACHE_CAPTURE"
+EOF
+chmod +x "$work/bin/go"
 export PATH="$work/bin:$PATH" FIXTURE_DIR="$work" FIXTURE_ENGINE="$engine" FIXTURE_SLOT="$slot" STACK_SLOT="$slot"
 
 checkout() { # checkout <name>: a checkout carrying this tree's stack scripts
-  mkdir -p "$work/$1/monorepo/scripts/stack"
+  mkdir -p "$work/$1/monorepo/scripts/stack" "$work/$1/monorepo/cli"
   cp "$here/common.sh" "$here/up.sh" "$here/down.sh" "$work/$1/monorepo/scripts/stack/"
   printf '%s\n' "$work/$1/monorepo"
 }
@@ -74,6 +79,17 @@ claims() { bash -c '. "$1/scripts/stack/common.sh" && stack_claim_slot' _ "$1" >
 project_of() { bash -c '. "$1/scripts/stack/common.sh" && echo "$COMPOSE_PROJECT_NAME"' _ "$1" 2>/dev/null; }
 same_project() { [ "$(project_of "$a")" = "fw-stack-$slot" ] && [ "$(project_of "$b")" = "fw-stack-$slot" ]; }
 expect "both checkouts map slot $slot to fw-stack-$slot" same_project
+
+uses_shared_cache() {
+  GOCACHE="$work/shared-cache" STACK_CACHE_CAPTURE="$work/cache" bash -c '. "$1/scripts/stack/common.sh" && stack_generate_shared_secrets "$2"' _ "$a" "$work/secrets" || return 1
+  [ "$(cat "$work/cache")" = "$work/shared-cache" ]
+}
+uses_local_fallback_cache() {
+  env -u GOCACHE STACK_CACHE_CAPTURE="$work/cache" bash -c '. "$1/scripts/stack/common.sh" && stack_generate_shared_secrets "$2"' _ "$a" "$work/secrets" || return 1
+  [ "$(cat "$work/cache")" = "$a/cli/.gocache" ]
+}
+expect "secret generation reuses the caller's shared Go cache" uses_shared_cache
+expect "secret generation has a checkout-local cache when none was provided" uses_local_fallback_cache
 
 # A is bringing its stack up: claimed, no container yet.
 bash -c '. "$1/scripts/stack/common.sh" && stack_claim_slot && exec sleep 300' _ "$a" >/dev/null 2>&1 &

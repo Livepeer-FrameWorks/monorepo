@@ -33,11 +33,11 @@ psql_db() { stack_compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$1" -d "$
 # service added to docker-compose.yml never joins the stack unnoticed; add a
 # service here when a scenario starts depending on it. Left out on purpose:
 # webapps and docs (chartroom, foredeck, logbook, nginx), support and AI
-# (skipper, deckhand, steward, listmonk, chatwoot, ollama), and incident
+# (deckhand, steward, listmonk, chatwoot, ollama), and incident
 # consumers no scenario asserts on (lookout).
 STACK_SERVICES=(
   postgres kafka kafka-init clickhouse
-  quartermaster quartermaster-2 commodore commodore-2 purser bridge bridge-2 decklog signalman bosun chandler
+  quartermaster quartermaster-2 commodore commodore-2 purser bridge bridge-2 decklog signalman bosun chandler skipper
   periscope-ingest periscope-query periscope-metering
   storage-init storage-init-b "s3-$STACK_S3" s3-proxy
   foghorn foghorn-2 foghorn-redis foghorn-b foghorn-b-2 foghorn-redis-b foghorn-tls-a-1 foghorn-tls-a-2
@@ -56,7 +56,7 @@ if [ ! -s "$ENV_FILE" ]; then
   log "generating the slot environment ($ENV_FILE)"
   secrets="$STACK_STATE_DIR/secrets.env"
   rm -f "$secrets"
-  (cd cli && GOCACHE="$PWD/.gocache" go run . cluster secrets generate-shared --out "$secrets" >/dev/null) ||
+  stack_generate_shared_secrets "$secrets" ||
     fail "could not generate platform secrets"
   # The dev Postgres init script creates every service role with
   # POSTGRES_PASSWORD, so the service DSN passwords must be that same value.
