@@ -5,16 +5,39 @@ class GatewayClient {
 
   var baseURL: String = ""
 
-  // Computed so the shared Keychain stays the single source of truth —
-  // caching would let CLI logout go unnoticed until the next refresh.
-  var accessToken: String? { KeychainHelper.load(key: "user_session") }
+  // Read the current tray credential after token rotation.
+  var accessToken: String? { boundCredential("user_session") }
+
+  func boundCredential(_ key: String) -> String? {
+    guard Self.sameBridge(credentialLoader("user_session_bridge") ?? "", baseURL) else { return nil }
+    return credentialLoader(key)
+  }
+
+  static func sameBridge(_ left: String, _ right: String) -> Bool {
+    guard let left = canonicalBridge(left), let right = canonicalBridge(right) else { return false }
+    return left == right
+  }
+
+  private static func canonicalBridge(_ value: String) -> String? {
+    guard var url = URLComponents(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
+      let scheme = url.scheme?.lowercased(), ["https", "http"].contains(scheme),
+      let host = url.host?.lowercased(), !host.isEmpty, url.user == nil, url.password == nil,
+      url.query == nil, url.fragment == nil
+    else { return nil }
+    url.scheme = scheme
+    url.host = host
+    if (scheme == "https" && url.port == 443) || (scheme == "http" && url.port == 80) { url.port = nil }
+    while url.percentEncodedPath.hasSuffix("/") { url.percentEncodedPath.removeLast() }
+    return url.string
+  }
 
   private let session: URLSession
+  private let credentialLoader: (String) -> String?
 
-  private init() {
-    let config = URLSessionConfiguration.default
-    config.timeoutIntervalForRequest = 15
-    session = URLSession(configuration: config)
+  init(configuration: URLSessionConfiguration = .default, credentialLoader: @escaping (String) -> String? = { KeychainHelper.load(key: $0) }) {
+    self.credentialLoader = credentialLoader
+    configuration.timeoutIntervalForRequest = 15
+    session = URLSession(configuration: configuration, delegate: GatewayRedirectPolicy(), delegateQueue: nil)
   }
 
   // MARK: - REST
@@ -104,6 +127,18 @@ class GatewayClient {
       throw GatewayError.noData
     }
     return result
+  }
+}
+
+// Gateway requests carry credentials in headers and token-grant bodies. The
+// configured Bridge is their destination even when it answers with a redirect.
+private final class GatewayRedirectPolicy: NSObject, URLSessionTaskDelegate {
+  func urlSession(
+    _ session: URLSession, task: URLSessionTask,
+    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+    completionHandler: @escaping (URLRequest?) -> Void
+  ) {
+    completionHandler(nil)
   }
 }
 

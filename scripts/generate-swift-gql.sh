@@ -15,6 +15,8 @@ export LC_ALL=C
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OPS_DIR="$REPO_ROOT/pkg/graphql/operations"
 OUT="$REPO_ROOT/app_mac/Sources/Gateway/GeneratedQueries.swift"
+temporary=$(mktemp "${OUT}.XXXXXX")
+trap 'rm -f "$temporary"' EXIT
 
 {
   echo "// AUTO-GENERATED from pkg/graphql/operations/ — do not edit"
@@ -43,6 +45,10 @@ OUT="$REPO_ROOT/app_mac/Sources/Gateway/GeneratedQueries.swift"
   done
 
   echo "}"
-} > "$OUT"
+} > "$temporary"
+
+# Xcode's app and test targets can read the constants during generation.
+chmod 644 "$temporary"
+mv "$temporary" "$OUT"
 
 echo "[generate-swift-gql] Wrote $(grep -c 'static let' "$OUT") constants to $OUT"

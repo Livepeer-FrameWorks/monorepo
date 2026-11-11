@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -15,6 +17,18 @@ import (
 func defaultStore() Store { return keychainStore{} }
 
 type keychainStore struct{}
+
+func (keychainStore) lockSession(ctx context.Context) (func(), error) {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return nil, err
+	}
+	dir = filepath.Join(dir, "frameworks")
+	if err = os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	return lockSessionFile(ctx, filepath.Join(dir, "cli-session.lock"))
+}
 
 func (keychainStore) Name() string { return "keychain" }
 

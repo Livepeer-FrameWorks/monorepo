@@ -67,9 +67,13 @@ struct SettingsView: View {
 
             Button("Log Out", role: .destructive) {
               Task {
-                await AuthService.shared.logout(appState: appState)
-                closePanel()
+                if await AuthService.shared.logout(appState: appState) {
+                  closePanel()
+                }
               }
+            }
+            if let error = appState.authError {
+              Text(error).foregroundStyle(.red)
             }
           }
         }

@@ -256,7 +256,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
   @objc private func logout() {
     Task {
-      await AuthService.shared.logout(appState: appState)
+      guard await AuthService.shared.logout(appState: appState) else {
+        await MainActor.run {
+          let alert = NSAlert()
+          alert.messageText = "Could not sign out"
+          alert.informativeText = appState.authError ?? "Please try again."
+          alert.runModal()
+        }
+        return
+      }
       await MainActor.run {
         edgePoller?.stop()
         edgePoller = nil
@@ -405,6 +413,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   private func clearAuthState() async {
     KeychainHelper.delete(key: "user_session")
     KeychainHelper.delete(key: "refresh_token")
+    KeychainHelper.delete(key: "user_session_bridge")
     await MainActor.run {
       appState.isAuthenticated = false
       appState.userEmail = nil

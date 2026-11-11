@@ -1,4 +1,4 @@
-// Package credentials stores human-facing secrets for the CLI and tray.
+// Package credentials stores human-facing secrets for the CLI.
 //
 // On macOS credentials live in the login Keychain under ServiceName; on
 // other platforms in $XDG_DATA_HOME/frameworks/credentials with mode
@@ -10,11 +10,9 @@ package credentials
 const ServiceName = "com.livepeer.frameworks"
 
 const (
-	AccountUserSession = "user_session"
-	// AccountUserRefresh is the tray's refresh token. The CLI never
-	// reads it, but logout must clear it so a tray refresh cycle can't
-	// silently repopulate user_session after the CLI logs out.
-	AccountUserRefresh = "refresh_token"
+	AccountUserSession = "cli_session"
+	AccountUserRefresh = "cli_refresh"
+	AccountUserBridge  = "cli_bridge_url"
 )
 
 const EnvUserToken = "FW_USER_TOKEN"
@@ -46,7 +44,10 @@ func resolveWith(store Store, env envGetter, account string) (string, error) {
 			return v, nil
 		}
 	}
-	return store.Get(account)
+	if account != AccountUserSession {
+		return store.Get(account)
+	}
+	return resolveSession(store)
 }
 
 func envNameFor(account string) string {

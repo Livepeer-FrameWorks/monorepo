@@ -46,8 +46,8 @@ func newLoginCmd() *cobra.Command {
 
 The CLI starts a device-code login, opens the FrameWorks webapp, and stores
 the resulting user session in the OS credential store (macOS Keychain, or an
-XDG data-dir file with mode 0600 on other platforms). The tray reads the same
-Keychain entry on macOS.
+XDG data-dir file with mode 0600 on other platforms). CLI credentials are
+separate from the Mac tray. Existing shared logins require a new CLI login.
 
 Use --token only for automation or recovery when you already have a
 FrameWorks API token or session token.
@@ -82,7 +82,7 @@ your manifest env_files (gitops). There is no 'login --service-account'.
 				if validateErr := validateLoginToken(cmd.Context(), bridgeURL, token); validateErr != nil {
 					return validateErr
 				}
-				return saveLoginTokens(cmd, store, token, "")
+				return saveLoginTokens(cmd, store, bridgeURL, token, "")
 			}
 
 			bridgeURL, err := resolveLoginBridgeURL(bridgeURLFlag)
@@ -135,23 +135,16 @@ func runDeviceLogin(ctx context.Context, cmd *cobra.Command, store credentials.S
 	if err != nil {
 		return err
 	}
-	return saveLoginTokens(cmd, store, tokens.AccessToken, tokens.RefreshToken)
+	return saveLoginTokens(cmd, store, bridgeURL, tokens.AccessToken, tokens.RefreshToken)
 }
 
-func saveLoginTokens(cmd *cobra.Command, store credentials.Store, accessToken, refreshToken string) error {
+func saveLoginTokens(cmd *cobra.Command, store credentials.Store, bridgeURL, accessToken, refreshToken string) error {
 	accessToken = strings.TrimSpace(accessToken)
 	if accessToken == "" {
 		return fmt.Errorf("no token provided")
 	}
-	if err := store.Set(credentials.AccountUserSession, accessToken); err != nil {
+	if err := credentials.SaveSession(cmd.Context(), store, bridgeURL, accessToken, strings.TrimSpace(refreshToken)); err != nil {
 		return fmt.Errorf("save credential (%s): %w", store.Name(), err)
-	}
-	if strings.TrimSpace(refreshToken) != "" {
-		if err := store.Set(credentials.AccountUserRefresh, strings.TrimSpace(refreshToken)); err != nil {
-			return fmt.Errorf("save refresh credential (%s): %w", store.Name(), err)
-		}
-	} else if err := store.Delete(credentials.AccountUserRefresh); err != nil {
-		return fmt.Errorf("clear stale refresh credential (%s): %w", store.Name(), err)
 	}
 
 	out := cmd.OutOrStdout()

@@ -2089,7 +2089,11 @@ verify-release-channels:
 verify-release-assets:
 	@cd scripts/release-assets && go test ./... -count=1
 
-verify-swift-gql:
+.PHONY: test-swift-gql-generation
+test-swift-gql-generation:
+	@bash scripts/test-swift-gql-generation.sh
+
+verify-swift-gql: test-swift-gql-generation
 	@./scripts/generate-swift-gql.sh
 	@git diff --exit-code -- app_mac/Sources/Gateway/GeneratedQueries.swift || { echo "GeneratedQueries.swift is stale: run make graphql-tray and commit the result"; exit 1; }
 
