@@ -58,6 +58,21 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND stream_internal_name = sqlc.arg(stream_internal_name)
   AND start_trigger_uuid = sqlc.arg(claim_token);
 
+-- name: IngestClaimOwnerState :one
+SELECT COALESCE(bool_or(ingest_cluster_id = sqlc.arg(ingest_cluster_id)::text AND ended_at IS NOT NULL)
+         AND NOT bool_or(ended_at IS NULL), false)::boolean AS ended,
+       COALESCE(bool_or(ended_at IS NULL AND projection_state = 'active'), false)::boolean AS active,
+       COALESCE(bool_or(ended_at IS NULL)
+         AND bool_and(ended_at IS NOT NULL OR (
+           ingest_cluster_id = sqlc.arg(ingest_cluster_id)::text AND node_id = sqlc.arg(node_id)::text
+           AND projection_state = 'pending'
+           AND started_at < NOW() - (sqlc.arg(admission_window_ms)::bigint * INTERVAL '1 millisecond')
+         )), false)::boolean AS lapsed
+FROM foghorn.ingest_sessions
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND stream_internal_name = sqlc.arg(stream_internal_name)
+  AND start_trigger_uuid = sqlc.arg(claim_token);
+
 -- name: EndLapsedPendingIngestSession :one
 UPDATE foghorn.ingest_sessions
 SET ended_at = NOW(), ended_at_unix_millis = (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint,

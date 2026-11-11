@@ -199,11 +199,11 @@ func TestIsManagedStreamEligibleNode_FiltersCapEdge(t *testing.T) {
 // that an empty source-cluster set yields no eligible nodes (bootstrap render
 // requires one entry; the runtime defends against the empty case).
 func TestEligibleNodesAcrossClusters_EmptyAllowedReturnsNil(t *testing.T) {
-	got := eligibleNodesAcrossClusters(nil)
+	got, _ := eligibleNodesAcrossClustersStatus(t.Context(), nil)
 	if got != nil {
 		t.Fatalf("want nil for empty allowed set, got %v", got)
 	}
-	got = eligibleNodesAcrossClusters([]string{})
+	got, _ = eligibleNodesAcrossClustersStatus(t.Context(), []string{})
 	if got != nil {
 		t.Fatalf("want nil for empty allowed set, got %v", got)
 	}
@@ -214,7 +214,13 @@ func TestEligibleNodesAcrossClusters_RedisErrorIsTransient(t *testing.T) {
 	setCommandRelay(t, buildRelay(t, store, "foghorn-a", "127.0.0.1:9000", nil))
 	mr.Close()
 
-	nodes, status := eligibleNodesAcrossClustersStatus([]string{"test-cluster"})
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	nodes, status := eligibleNodesAcrossClustersStatus(ctx, []string{"test-cluster"})
+	if time.Since(started) > time.Second {
+		t.Fatal("Redis outage outlived the placement caller's context")
+	}
 	if status != placementTransient {
 		t.Fatalf("want transient placement status, got %v", status)
 	}

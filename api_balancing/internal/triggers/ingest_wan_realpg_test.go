@@ -43,6 +43,7 @@ type wanAdmissionCommodore struct {
 	response *commodorepb.ValidateStreamKeyResponse
 	calls    atomic.Int32
 	leases   atomic.Int32
+	held     atomic.Pointer[string]
 }
 
 func (s *wanAdmissionCommodore) ValidateStreamKey(ctx context.Context, _ *commodorepb.ValidateStreamKeyRequest) (*commodorepb.ValidateStreamKeyResponse, error) {
@@ -66,14 +67,18 @@ func (s *wanAdmissionCommodore) AcquirePublisherLease(ctx context.Context, req *
 		return nil, ctx.Err()
 	case <-timer.C:
 	}
+	if held := s.held.Load(); held != nil {
+		return &commodorepb.PublisherLeaseResponse{Outcome: commodorepb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_HELD_BY_OTHER, HeldExecutionToken: *held}, nil
+	}
 	return &commodorepb.PublisherLeaseResponse{Outcome: commodorepb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_ACQUIRED}, nil
 }
 
 type countedWANConnector struct {
 	driver.Connector
-	queries atomic.Int32
-	mu      sync.Mutex
-	names   []string
+	queries    atomic.Int32
+	mu         sync.Mutex
+	names      []string
+	ownerDelay atomic.Int64
 }
 
 func (c *countedWANConnector) Connect(ctx context.Context) (driver.Conn, error) {
@@ -114,11 +119,25 @@ func (c *countedWANConn) QueryContext(ctx context.Context, query string, args []
 	c.parent.mu.Lock()
 	c.parent.names = append(c.parent.names, strings.SplitN(query, "\n", 2)[0])
 	c.parent.mu.Unlock()
+	if delay := time.Duration(c.parent.ownerDelay.Load()); delay > 0 && strings.Contains(query, "IngestClaimOwner") {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 	return c.Conn.(driver.QueryerContext).QueryContext(ctx, query, args)
 }
 
-func (s *wanAdmissionCommodore) SyncActiveIngestPlacement(context.Context, *commodorepb.SyncActiveIngestPlacementRequest) (*commodorepb.SyncActiveIngestPlacementResponse, error) {
-	return &commodorepb.SyncActiveIngestPlacementResponse{}, nil
+func (s *wanAdmissionCommodore) SyncActiveIngestPlacement(_ context.Context, request *commodorepb.SyncActiveIngestPlacementRequest) (*commodorepb.SyncActiveIngestPlacementResponse, error) {
+	for _, release := range request.GetRelease() {
+		if held := s.held.Load(); held != nil && release.GetClaimToken() == *held {
+			s.held.CompareAndSwap(held, nil)
+		}
+	}
+	return &commodorepb.SyncActiveIngestPlacementResponse{ExecutionFencesApplied: true}, nil
 }
 
 func (s *wanAdmissionCommodore) ReportMediaAuthorityUse(context.Context, *commodorepb.ReportMediaAuthorityUseRequest) (*emptypb.Empty, error) {
@@ -344,6 +363,32 @@ func testPublisherAdmissionWAN(t *testing.T, conn *sql.DB, dsn string) {
 	if err = conn.QueryRowContext(ctx, `SELECT count(*) FROM foghorn.ingest_sessions WHERE tenant_id=$1::uuid AND stream_internal_name=$2 AND ended_at IS NULL AND projection_state='active'`, tenantID, internalName).Scan(&active); err != nil || active != 1 {
 		t.Fatalf("active publisher count=%d error=%v", active, err)
 	}
+	t.Run("local recovery outlives a remote attempt", func(t *testing.T) {
+		var generation, held string
+		if err := conn.QueryRowContext(ctx, `SELECT id::text,start_trigger_uuid FROM foghorn.ingest_sessions WHERE tenant_id=$1::uuid AND stream_internal_name=$2 AND ended_at IS NULL`, tenantID, internalName).Scan(&generation, &held); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.ExecContext(ctx, `UPDATE foghorn.ingest_sessions SET ended_at=NOW(),ended_reason='node_lost' WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, generation); err != nil {
+			t.Fatal(err)
+		}
+		central.held.Store(&held)
+		counted.ownerDelay.Store(int64(1100 * time.Millisecond))
+		defer counted.ownerDelay.Store(0)
+		next := proto.CloneOf(publisherTemplate)
+		next.GetPushRewrite().TriggerUuid = "after-ended-owner"
+		next.GetPushRewrite().TriggerUnixMillis = time.Now().UnixMilli()
+		started := time.Now()
+		name, _, err := p.handlePushRewrite(next)
+		if err != nil || name != "live+"+internalName || central.held.Load() != nil {
+			t.Fatalf("local recovery inherited a remote attempt deadline: name=%s error=%v held=%v", name, err, central.held.Load())
+		}
+		if elapsed := time.Since(started); elapsed >= 4*time.Second {
+			t.Fatalf("recovery exceeded publisher lifetime: %s", elapsed)
+		}
+		if p.CommodoreOutageBackoff().InOutage() {
+			t.Fatal("healthy central service entered outage during local recovery")
+		}
+	})
 
 	// A configuration marker cannot turn an authoritative signed denial into
 	// a connected fallback, even while the connected stub still says allow.

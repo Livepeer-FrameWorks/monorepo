@@ -404,6 +404,7 @@ type Querier interface {
 	// for another connector must not retire an execution that this node accepted.
 	IngestAdmissionExecutionPIDMismatch(ctx context.Context, arg IngestAdmissionExecutionPIDMismatchParams) (bool, error)
 	IngestClaimOwnerEnded(ctx context.Context, arg IngestClaimOwnerEndedParams) (bool, error)
+	IngestClaimOwnerState(ctx context.Context, arg IngestClaimOwnerStateParams) (IngestClaimOwnerStateRow, error)
 	IngestCloseTombstoneExists(ctx context.Context, arg IngestCloseTombstoneExistsParams) (bool, error)
 	IngestGenerationEnded(ctx context.Context, arg IngestGenerationEndedParams) (bool, error)
 	IngestRegistrationCutoff(ctx context.Context) (time.Time, error)

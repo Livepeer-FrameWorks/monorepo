@@ -308,7 +308,7 @@ func reconcileClusterManagedStreamsWithContexts(ctx context.Context, log logging
 		// field remains an array for pull-stream symmetry, but bootstrap + DB
 		// validation reject multiple source clusters for mist_native because
 		// there is no cross-cluster source election authority.
-		eligible, clusterStatus := eligibleNodesAcrossClustersStatus(row.GetAllowedClusterIds())
+		eligible, clusterStatus := eligibleNodesAcrossClustersStatus(ctx, row.GetAllowedClusterIds())
 		if clusterStatus == placementOK {
 			eligible, clusterStatus = filterConfiguredManagedNodes(ctx, row, eligible)
 		}
@@ -935,12 +935,7 @@ const (
 //   - Redis NOT configured (single-Foghorn / dev): walk the local registry.
 //     Mixed-capability clusters aren't deployed in that topology, so the
 //     missing CapEdge filter is acceptable there.
-func eligibleNodesAcrossClusters(allowed []string) []eligibleNode {
-	nodes, _ := eligibleNodesAcrossClustersStatus(allowed)
-	return nodes
-}
-
-func eligibleNodesAcrossClustersStatus(allowed []string) ([]eligibleNode, placementStatus) {
+func eligibleNodesAcrossClustersStatus(ctx context.Context, allowed []string) ([]eligibleNode, placementStatus) {
 	if len(allowed) == 0 {
 		return nil, placementOK
 	}
@@ -949,7 +944,11 @@ func eligibleNodesAcrossClustersStatus(allowed []string) ([]eligibleNode, placem
 		allowedSet[c] = struct{}{}
 	}
 	if rs := GetRedisStore(); rs != nil {
-		nodes, err := rs.GetAllNodes()
+		// Inventory is a dependency read, not a whole reconciliation budget.
+		// A failed read preserves applied placement and is retried next tick.
+		inventoryCtx, cancelInventory := context.WithTimeout(ctx, 2*time.Second)
+		defer cancelInventory()
+		nodes, err := rs.GetAllNodesContext(inventoryCtx)
 		if err != nil {
 			// Authoritative store unreachable — skip this tick rather than
 			// recompute from partial local state. See authority model above.

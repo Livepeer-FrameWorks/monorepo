@@ -65,3 +65,27 @@ func TestFoghornBalancerBaseForNodeFailsClosedWithoutIdentityOrSecret(t *testing
 		t.Fatalf("base without cluster identity = %q, want empty", got)
 	}
 }
+
+func TestPrivateBalancerUsesControllerHostAndPrivateCapability(t *testing.T) {
+	settings := &appconfig.Foghorn{BalancerCapabilitySecret: "private-capability-secret"}
+	settings.BuildEnv = "production"
+	settings.ClusterID = "media-us-1"
+	settings.MediaAuthorityCellID = "media-us-1"
+	settings.PlatformRootDomain = "frameworks.network"
+	useFoghornConfig(t, settings)
+
+	for _, cell := range []string{"media-us-1", "media-eu-1"} {
+		settings.MediaAuthorityCellID = cell
+		got, err := url.Parse(FoghornBalancerSourceForNode("private-cluster", "private-node"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := "foghorn." + cell + ".frameworks.network"; got.Host != want {
+			t.Fatalf("private source lookup host = %q, want its controller pool %q", got.Host, want)
+		}
+		node, cluster, path, ok := VerifyBalancerCapabilityPath(got.EscapedPath(), time.Now())
+		if !ok || node != "private-node" || cluster != "private-cluster" || path != "/source/by-node/private-node" {
+			t.Fatalf("controller routing changed capability identity: node=%q cluster=%q path=%q valid=%v", node, cluster, path, ok)
+		}
+	}
+}

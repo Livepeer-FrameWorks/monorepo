@@ -33,6 +33,15 @@ type IngestClaimClient interface {
 	SyncActiveIngestPlacement(ctx context.Context, clusterID string, renew, release []*commodorepb.ActiveIngestStream) (*commodorepb.SyncActiveIngestPlacementResponse, error)
 }
 
+// IngestClaimRecoveryError preserves positive evidence of an existing owner
+// when recovery cannot establish or release its terminal state.
+type IngestClaimRecoveryError struct{ Cause error }
+
+func (e *IngestClaimRecoveryError) Error() string {
+	return "publisher ownership recovery incomplete: " + e.Cause.Error()
+}
+func (e *IngestClaimRecoveryError) Unwrap() error { return e.Cause }
+
 // ClaimIngestPlacement takes the stream's placement claim for one admission from nodeID.
 //
 // Ending a session (reconcile on re-register, node lost, claim lost) commits in this cell's database
@@ -55,23 +64,36 @@ func ClaimIngestPlacement(ctx context.Context, client IngestClaimClient, streamK
 		return resp, nil
 	}
 	fields := logging.Fields{"tenant_id": tenantID, "internal_name": internalName, "ingest_cluster_id": clusterID, "node_id": nodeID}
-	ended, err := IngestClaimOwnerEnded(ctx, tenantID, internalName, clusterID, heldToken)
+	if db == nil {
+		return resp, &IngestClaimRecoveryError{Cause: errors.New("ingest session database unavailable")}
+	}
+	owner, err := foghorndb.New(db).IngestClaimOwnerState(ctx, foghorndb.IngestClaimOwnerStateParams{
+		TenantID: tenantID, StreamInternalName: internalName, IngestClusterID: clusterID,
+		NodeID: nodeID, ClaimToken: heldToken, AdmissionWindowMs: IngestAdmissionWindow.Milliseconds(),
+	})
 	if err != nil {
 		logger.WithError(err).WithFields(fields).Warn("Duplicate ingest claim kept: cannot read whether the owning session has ended")
+		return resp, &IngestClaimRecoveryError{Cause: err}
+	}
+	if owner.Active || (!owner.Ended && !owner.Lapsed) {
 		return resp, nil
 	}
-	if !ended {
+	if !owner.Ended {
 		superseded, supErr := EndLapsedPendingIngestSession(ctx, tenantID, internalName, nodeID, heldToken, logger)
 		if supErr != nil {
 			logger.WithError(supErr).WithFields(fields).Warn("Duplicate ingest claim kept: cannot end the owning session's lapsed admission")
-			return resp, nil
+			return resp, &IngestClaimRecoveryError{Cause: supErr}
 		}
 		if !superseded {
 			logger.WithFields(fields).Info("Duplicate ingest claim kept: the owning session is live or still inside its admission window, or not one this cell holds for this node and cluster")
 			return resp, nil
 		}
-		if ended, err = IngestClaimOwnerEnded(ctx, tenantID, internalName, clusterID, heldToken); err != nil || !ended {
-			logger.WithError(err).WithFields(fields).Warn("Duplicate ingest claim kept: the lapsed owner is not an ended session of this cluster")
+		ended, readErr := IngestClaimOwnerEnded(ctx, tenantID, internalName, clusterID, heldToken)
+		if readErr != nil || !ended {
+			logger.WithError(readErr).WithFields(fields).Warn("Duplicate ingest claim kept: the lapsed owner is not an ended session of this cluster")
+			if readErr != nil {
+				return resp, &IngestClaimRecoveryError{Cause: readErr}
+			}
 			return resp, nil
 		}
 	}
@@ -79,7 +101,10 @@ func ClaimIngestPlacement(ctx context.Context, client IngestClaimClient, streamK
 	released, err := client.SyncActiveIngestPlacement(ctx, clusterID, nil, release)
 	if err != nil {
 		logger.WithError(err).WithFields(fields).Warn("Duplicate ingest claim kept: releasing the ended session's claim failed")
-		return resp, nil
+		return resp, &IngestClaimRecoveryError{Cause: err}
+	}
+	if released == nil || len(released.GetReleaseRefused()) > 0 {
+		return resp, &IngestClaimRecoveryError{Cause: errors.New("ended publisher claim release was not confirmed")}
 	}
 	fields["released"] = released.GetReleased()
 	logger.WithFields(fields).Info("Released the placement claim of an ended ingest session; claiming again")
@@ -104,7 +129,14 @@ func EndLapsedPendingIngestSession(ctx context.Context, tenantID, internalName, 
 		claims    []DVRStopClaim
 		sessionID string
 	)
-	playbackID := streamEventPlaybackID(ctx, internalName)
+	// The public playback ID is optional event enrichment; recovery must not
+	// issue an unrelated remote lookup before deciding whether an owner lapsed.
+	playbackID := ""
+	if registry := StreamRegistryInstance; registry != nil {
+		if entry, ok := registry.lookup(registry.byInt, internalName); ok && entry.TenantID == tenantID {
+			playbackID = entry.PlaybackID
+		}
+	}
 	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
 		claims, sessionID = nil, ""
 		qtx := foghorndb.New(tx)
