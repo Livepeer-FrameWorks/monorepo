@@ -3,6 +3,10 @@ SELECT tenant_id, user_id
 FROM commodore.wallet_identities
 WHERE chain_type = $1 AND wallet_address = $2;
 
+-- name: HasUserWallet :one
+SELECT EXISTS (SELECT 1 FROM commodore.wallet_identities
+WHERE tenant_id = $1 AND user_id = $2 AND chain_type = 'ethereum' AND wallet_address = $3);
+
 -- name: TouchWalletIdentityAuth :exec
 UPDATE commodore.wallet_identities
 SET last_auth_at = NOW()
@@ -116,7 +120,7 @@ WHERE id = $1;
 
 -- name: RevokeUserSessions :one
 UPDATE commodore.users
-SET sessions_revoked_at = NOW()
+SET sessions_revoked_at = GREATEST(sessions_revoked_at, clock_timestamp())
 WHERE id = $1 AND tenant_id = $2
 RETURNING sessions_revoked_at;
 

@@ -9,6 +9,25 @@ import (
 	"time"
 )
 
+type CommodoreAuthSession struct {
+	ID                string         `db:"id" json:"id"`
+	TenantID          string         `db:"tenant_id" json:"tenant_id"`
+	UserID            string         `db:"user_id" json:"user_id"`
+	AuthMethod        string         `db:"auth_method" json:"auth_method"`
+	ClientID          string         `db:"client_id" json:"client_id"`
+	DeviceLabel       string         `db:"device_label" json:"device_label"`
+	ClientVersion     string         `db:"client_version" json:"client_version"`
+	CreatedIp         string         `db:"created_ip" json:"created_ip"`
+	LastIp            string         `db:"last_ip" json:"last_ip"`
+	UserAgent         string         `db:"user_agent" json:"user_agent"`
+	CreatedAt         time.Time      `db:"created_at" json:"created_at"`
+	LastSeenAt        time.Time      `db:"last_seen_at" json:"last_seen_at"`
+	IdleExpiresAt     time.Time      `db:"idle_expires_at" json:"idle_expires_at"`
+	AbsoluteExpiresAt time.Time      `db:"absolute_expires_at" json:"absolute_expires_at"`
+	RevokedAt         sql.NullTime   `db:"revoked_at" json:"revoked_at"`
+	RevokeReason      sql.NullString `db:"revoke_reason" json:"revoke_reason"`
+}
+
 type CommodoreMediaPlacementChange struct {
 	TenantID              string    `db:"tenant_id" json:"tenant_id"`
 	ScopeKind             string    `db:"scope_kind" json:"scope_kind"`

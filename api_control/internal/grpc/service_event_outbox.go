@@ -134,6 +134,20 @@ func (s *CommodoreServer) revokeUserSessionsTx(ctx context.Context, tx *sql.Tx, 
 	if err != nil {
 		return fmt.Errorf("revoke sessions: %w", err)
 	}
+	rowReason := "logout"
+	switch reason {
+	case internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_PASSWORD_RESET:
+		rowReason = "password_reset"
+	case internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_OPERATOR_DEACTIVATION:
+		rowReason = "operator"
+	case internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE:
+		rowReason = "reuse_detected"
+	}
+	if _, err = commodoredb.New(tx).RevokeAllAuthSessions(ctx, commodoredb.RevokeAllAuthSessionsParams{
+		TenantID: tenantID, UserID: userID, RevokeReason: sql.NullString{String: rowReason, Valid: true},
+	}); err != nil {
+		return fmt.Errorf("revoke named sessions: %w", err)
+	}
 	if ctxkeys.IsDemoMode(ctx) {
 		return nil
 	}
@@ -142,6 +156,13 @@ func (s *CommodoreServer) revokeUserSessionsTx(ctx context.Context, tx *sql.Tx, 
 		msg:         &internalv1.UserSessionsRevoked{UserId: userID, RevokedAt: timestamppb.New(at), Reason: reason},
 		aggregateID: userID,
 	}, at)
+	return err
+}
+
+// A separate lock statement waits for an old issuer's rotation to commit.
+// The following DELETE or UPDATE then sees its successor in a fresh snapshot.
+func lockUserRefreshTokensTx(ctx context.Context, tx *sql.Tx, userID, tenantID string) error {
+	_, err := commodoredb.New(tx).LockUserRefreshTokensForRevocation(ctx, commodoredb.LockUserRefreshTokensForRevocationParams{TenantID: tenantID, UserID: userID})
 	return err
 }
 

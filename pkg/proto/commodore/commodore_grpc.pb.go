@@ -43,6 +43,7 @@ const (
 	InternalService_ResolveInternalName_FullMethodName                = "/commodore.InternalService/ResolveInternalName"
 	InternalService_ValidateAPIToken_FullMethodName                   = "/commodore.InternalService/ValidateAPIToken"
 	InternalService_ValidateSession_FullMethodName                    = "/commodore.InternalService/ValidateSession"
+	InternalService_VerifyWalletAuth_FullMethodName                   = "/commodore.InternalService/VerifyWalletAuth"
 	InternalService_ListRecentSessionRevocations_FullMethodName       = "/commodore.InternalService/ListRecentSessionRevocations"
 	InternalService_MintMistAdminSession_FullMethodName               = "/commodore.InternalService/MintMistAdminSession"
 	InternalService_ValidateMistAdminSession_FullMethodName           = "/commodore.InternalService/ValidateMistAdminSession"
@@ -207,6 +208,8 @@ type InternalServiceClient interface {
 	// access token and when it re-checks one, so a signed-out session's token
 	// stops holding realtime connections before it expires.
 	ValidateSession(ctx context.Context, in *ValidateSessionRequest, opts ...grpc.CallOption) (*ValidateSessionResponse, error)
+	// Verifies one wallet challenge and resolves its owner without issuing tokens.
+	VerifyWalletAuth(ctx context.Context, in *WalletLoginRequest, opts ...grpc.CallOption) (*WalletAuthResponse, error)
 	// Called by Gateway when its platform-wide stream of session revocations
 	// (re)subscribes: returns every user whose sessions were revoked after
 	// since, across tenants, so a replica that missed user.sessions_revoked
@@ -560,6 +563,16 @@ func (c *internalServiceClient) ValidateSession(ctx context.Context, in *Validat
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ValidateSessionResponse)
 	err := c.cc.Invoke(ctx, InternalService_ValidateSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) VerifyWalletAuth(ctx context.Context, in *WalletLoginRequest, opts ...grpc.CallOption) (*WalletAuthResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WalletAuthResponse)
+	err := c.cc.Invoke(ctx, InternalService_VerifyWalletAuth_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1133,6 +1146,8 @@ type InternalServiceServer interface {
 	// access token and when it re-checks one, so a signed-out session's token
 	// stops holding realtime connections before it expires.
 	ValidateSession(context.Context, *ValidateSessionRequest) (*ValidateSessionResponse, error)
+	// Verifies one wallet challenge and resolves its owner without issuing tokens.
+	VerifyWalletAuth(context.Context, *WalletLoginRequest) (*WalletAuthResponse, error)
 	// Called by Gateway when its platform-wide stream of session revocations
 	// (re)subscribes: returns every user whose sessions were revoked after
 	// since, across tenants, so a replica that missed user.sessions_revoked
@@ -1351,6 +1366,9 @@ func (UnimplementedInternalServiceServer) ValidateAPIToken(context.Context, *Val
 }
 func (UnimplementedInternalServiceServer) ValidateSession(context.Context, *ValidateSessionRequest) (*ValidateSessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ValidateSession not implemented")
+}
+func (UnimplementedInternalServiceServer) VerifyWalletAuth(context.Context, *WalletLoginRequest) (*WalletAuthResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method VerifyWalletAuth not implemented")
 }
 func (UnimplementedInternalServiceServer) ListRecentSessionRevocations(context.Context, *ListRecentSessionRevocationsRequest) (*ListRecentSessionRevocationsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListRecentSessionRevocations not implemented")
@@ -1864,6 +1882,24 @@ func _InternalService_ValidateSession_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InternalServiceServer).ValidateSession(ctx, req.(*ValidateSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_VerifyWalletAuth_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WalletLoginRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).VerifyWalletAuth(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_VerifyWalletAuth_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).VerifyWalletAuth(ctx, req.(*WalletLoginRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2766,6 +2802,10 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _InternalService_ValidateSession_Handler,
 		},
 		{
+			MethodName: "VerifyWalletAuth",
+			Handler:    _InternalService_VerifyWalletAuth_Handler,
+		},
+		{
 			MethodName: "ListRecentSessionRevocations",
 			Handler:    _InternalService_ListRecentSessionRevocations_Handler,
 		},
@@ -2956,6 +2996,10 @@ const (
 	UserService_Register_FullMethodName                   = "/commodore.UserService/Register"
 	UserService_Logout_FullMethodName                     = "/commodore.UserService/Logout"
 	UserService_RefreshToken_FullMethodName               = "/commodore.UserService/RefreshToken"
+	UserService_ListSessions_FullMethodName               = "/commodore.UserService/ListSessions"
+	UserService_RevokeSession_FullMethodName              = "/commodore.UserService/RevokeSession"
+	UserService_RevokeOtherSessions_FullMethodName        = "/commodore.UserService/RevokeOtherSessions"
+	UserService_RenameSession_FullMethodName              = "/commodore.UserService/RenameSession"
 	UserService_VerifyEmail_FullMethodName                = "/commodore.UserService/VerifyEmail"
 	UserService_ResendVerification_FullMethodName         = "/commodore.UserService/ResendVerification"
 	UserService_ForgotPassword_FullMethodName             = "/commodore.UserService/ForgotPassword"
@@ -2996,6 +3040,10 @@ type UserServiceClient interface {
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
 	Logout(ctx context.Context, in *LogoutRequest, opts ...grpc.CallOption) (*LogoutResponse, error)
 	RefreshToken(ctx context.Context, in *RefreshTokenRequest, opts ...grpc.CallOption) (*AuthResponse, error)
+	ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*ListSessionsResponse, error)
+	RevokeSession(ctx context.Context, in *RevokeSessionRequest, opts ...grpc.CallOption) (*RevokeSessionResponse, error)
+	RevokeOtherSessions(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*RevokeOtherSessionsResponse, error)
+	RenameSession(ctx context.Context, in *RenameSessionRequest, opts ...grpc.CallOption) (*AuthSession, error)
 	// Email verification
 	VerifyEmail(ctx context.Context, in *VerifyEmailRequest, opts ...grpc.CallOption) (*VerifyEmailResponse, error)
 	ResendVerification(ctx context.Context, in *ResendVerificationRequest, opts ...grpc.CallOption) (*ResendVerificationResponse, error)
@@ -3100,6 +3148,46 @@ func (c *userServiceClient) RefreshToken(ctx context.Context, in *RefreshTokenRe
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AuthResponse)
 	err := c.cc.Invoke(ctx, UserService_RefreshToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *userServiceClient) ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*ListSessionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSessionsResponse)
+	err := c.cc.Invoke(ctx, UserService_ListSessions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *userServiceClient) RevokeSession(ctx context.Context, in *RevokeSessionRequest, opts ...grpc.CallOption) (*RevokeSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RevokeSessionResponse)
+	err := c.cc.Invoke(ctx, UserService_RevokeSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *userServiceClient) RevokeOtherSessions(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*RevokeOtherSessionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RevokeOtherSessionsResponse)
+	err := c.cc.Invoke(ctx, UserService_RevokeOtherSessions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *userServiceClient) RenameSession(ctx context.Context, in *RenameSessionRequest, opts ...grpc.CallOption) (*AuthSession, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AuthSession)
+	err := c.cc.Invoke(ctx, UserService_RenameSession_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -3387,6 +3475,10 @@ type UserServiceServer interface {
 	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
 	Logout(context.Context, *LogoutRequest) (*LogoutResponse, error)
 	RefreshToken(context.Context, *RefreshTokenRequest) (*AuthResponse, error)
+	ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error)
+	RevokeSession(context.Context, *RevokeSessionRequest) (*RevokeSessionResponse, error)
+	RevokeOtherSessions(context.Context, *emptypb.Empty) (*RevokeOtherSessionsResponse, error)
+	RenameSession(context.Context, *RenameSessionRequest) (*AuthSession, error)
 	// Email verification
 	VerifyEmail(context.Context, *VerifyEmailRequest) (*VerifyEmailResponse, error)
 	ResendVerification(context.Context, *ResendVerificationRequest) (*ResendVerificationResponse, error)
@@ -3461,6 +3553,18 @@ func (UnimplementedUserServiceServer) Logout(context.Context, *LogoutRequest) (*
 }
 func (UnimplementedUserServiceServer) RefreshToken(context.Context, *RefreshTokenRequest) (*AuthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RefreshToken not implemented")
+}
+func (UnimplementedUserServiceServer) ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSessions not implemented")
+}
+func (UnimplementedUserServiceServer) RevokeSession(context.Context, *RevokeSessionRequest) (*RevokeSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RevokeSession not implemented")
+}
+func (UnimplementedUserServiceServer) RevokeOtherSessions(context.Context, *emptypb.Empty) (*RevokeOtherSessionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RevokeOtherSessions not implemented")
+}
+func (UnimplementedUserServiceServer) RenameSession(context.Context, *RenameSessionRequest) (*AuthSession, error) {
+	return nil, status.Error(codes.Unimplemented, "method RenameSession not implemented")
 }
 func (UnimplementedUserServiceServer) VerifyEmail(context.Context, *VerifyEmailRequest) (*VerifyEmailResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method VerifyEmail not implemented")
@@ -3650,6 +3754,78 @@ func _UserService_RefreshToken_Handler(srv interface{}, ctx context.Context, dec
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(UserServiceServer).RefreshToken(ctx, req.(*RefreshTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _UserService_ListSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSessionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).ListSessions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_ListSessions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).ListSessions(ctx, req.(*ListSessionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _UserService_RevokeSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).RevokeSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_RevokeSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).RevokeSession(ctx, req.(*RevokeSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _UserService_RevokeOtherSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).RevokeOtherSessions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_RevokeOtherSessions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).RevokeOtherSessions(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _UserService_RenameSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenameSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).RenameSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_RenameSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).RenameSession(ctx, req.(*RenameSessionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -4166,6 +4342,22 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RefreshToken",
 			Handler:    _UserService_RefreshToken_Handler,
+		},
+		{
+			MethodName: "ListSessions",
+			Handler:    _UserService_ListSessions_Handler,
+		},
+		{
+			MethodName: "RevokeSession",
+			Handler:    _UserService_RevokeSession_Handler,
+		},
+		{
+			MethodName: "RevokeOtherSessions",
+			Handler:    _UserService_RevokeOtherSessions_Handler,
+		},
+		{
+			MethodName: "RenameSession",
+			Handler:    _UserService_RenameSession_Handler,
 		},
 		{
 			MethodName: "VerifyEmail",

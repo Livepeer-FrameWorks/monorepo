@@ -1,0 +1,113 @@
+package datamigrations
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
+)
+
+const AuthSessionsID = "commodore_auth_sessions_v0_3_15"
+
+// AuthSessionsBatchSQL binds each live head and its predecessors to one owner.
+// A head written by an old issuer inherits any session already on its chain.
+// Hour intervals keep the maximum age fixed across timezone and DST changes.
+const AuthSessionsBatchSQL = `
+WITH RECURSIVE heads AS (
+    SELECT id, tenant_id, user_id, created_at, expires_at
+    FROM commodore.refresh_tokens
+    WHERE tenant_id = $1 AND session_id IS NULL
+      AND COALESCE(revoked, false) = false AND expires_at > NOW()
+    ORDER BY id LIMIT $2 FOR UPDATE SKIP LOCKED
+), chain AS (
+    SELECT h.id AS head_id, r.id AS token_id, r.tenant_id, r.user_id, r.created_at, r.session_id
+    FROM heads h JOIN commodore.refresh_tokens r
+      ON r.tenant_id = h.tenant_id AND r.user_id = h.user_id AND r.id = h.id
+    UNION
+    SELECT c.head_id, p.id, p.tenant_id, p.user_id, p.created_at, p.session_id
+    FROM chain c JOIN commodore.refresh_tokens p
+      ON p.tenant_id = c.tenant_id AND p.user_id = c.user_id AND p.replaced_by = c.token_id
+), owners AS (
+    SELECT head_id, COALESCE(MIN(session_id::text)::uuid, head_id) AS session_id,
+           MIN(COALESCE(created_at AT TIME ZONE 'UTC', NOW())) AS created_at
+    FROM chain GROUP BY head_id
+), inserted AS (
+    INSERT INTO commodore.auth_sessions (
+        id, tenant_id, user_id, auth_method, client_id, device_label,
+        created_at, last_seen_at, idle_expires_at, absolute_expires_at
+    )
+    SELECT o.session_id, h.tenant_id, h.user_id, 'unknown', 'unknown',
+           'Signed in before sessions were tracked', o.created_at,
+           COALESCE(h.created_at AT TIME ZONE 'UTC', NOW()),
+           LEAST(h.expires_at AT TIME ZONE 'UTC', o.created_at + INTERVAL '2160 hours'),
+           o.created_at + INTERVAL '2160 hours'
+    FROM owners o JOIN heads h ON h.id = o.head_id
+    ON CONFLICT (id) DO NOTHING RETURNING id, user_id
+), updated AS (
+    UPDATE commodore.refresh_tokens r SET session_id = o.session_id
+    FROM chain c JOIN owners o ON o.head_id = c.head_id
+    JOIN (SELECT id, user_id FROM inserted UNION ALL
+          SELECT id, user_id FROM commodore.auth_sessions WHERE tenant_id = $1) s
+      ON s.id = o.session_id AND s.user_id = c.user_id
+    WHERE r.tenant_id = $1 AND r.tenant_id = c.tenant_id AND r.user_id = c.user_id
+      AND r.id = c.token_id AND r.session_id IS NULL
+    RETURNING r.id
+)
+SELECT (SELECT COUNT(*) FROM heads), (SELECT COUNT(*) FROM updated)`
+
+func registerAuthSessions() {
+	datamigrate.Register(datamigrate.Migration{
+		ID: AuthSessionsID, Service: "commodore", IntroducedIn: "v0.3.15",
+		RequiredBeforePhase: "contract",
+		Description:         "attach legacy refresh-token chains to bounded auth sessions",
+		Run:                 runAuthSessions, Verify: verifyAuthSessions,
+	})
+}
+
+func runAuthSessions(ctx context.Context, db datamigrate.DB, opts datamigrate.RunOptions) (datamigrate.Progress, error) {
+	if !opts.Scope.IsZero() {
+		return datamigrate.Progress{}, fmt.Errorf("auth session backfill runs across all tenants in bounded tenant batches")
+	}
+	if opts.DryRun {
+		var remaining int64
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM commodore.refresh_tokens
+            WHERE session_id IS NULL AND COALESCE(revoked, false) = false AND expires_at > NOW()`).Scan(&remaining); err != nil {
+			return datamigrate.Progress{}, err
+		}
+		return datamigrate.Progress{Scanned: remaining, Done: true}, nil
+	}
+	// Only discovery spans tenants; every batch locks and mutates one tenant.
+	var tenantID string
+	err := db.QueryRowContext(ctx, `SELECT tenant_id FROM commodore.refresh_tokens
+        WHERE session_id IS NULL AND COALESCE(revoked, false) = false AND expires_at > NOW() LIMIT 1`).Scan(&tenantID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return datamigrate.Progress{Done: true}, nil
+	}
+	if err != nil {
+		return datamigrate.Progress{}, err
+	}
+	size := opts.BatchSize
+	if size <= 0 || size > 1000 {
+		size = 100
+	}
+	var scanned, changed int64
+	if err := db.QueryRowContext(ctx, AuthSessionsBatchSQL, tenantID, size).Scan(&scanned, &changed); err != nil {
+		return datamigrate.Progress{}, fmt.Errorf("backfill auth sessions: %w", err)
+	}
+	return datamigrate.Progress{Scanned: scanned, Changed: changed, Done: false}, nil
+}
+
+func verifyAuthSessions(ctx context.Context, db datamigrate.DB) error {
+	// Completion covers every tenant; no live head may be left unassigned.
+	var remaining int64
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM commodore.refresh_tokens
+        WHERE session_id IS NULL AND COALESCE(revoked, false) = false AND expires_at > NOW()`).Scan(&remaining); err != nil {
+		return err
+	}
+	if remaining != 0 {
+		return fmt.Errorf("auth sessions have %d live unassigned refresh tokens", remaining)
+	}
+	return nil
+}

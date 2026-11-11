@@ -70,6 +70,7 @@ var catalog = map[string]struct {
 	"billing.checkout_recovery_action": {},
 	"webhook.endpoint_auto_disabled":   {},
 	"user.sessions_revoked":            {},
+	"auth_session.revoked":             {},
 	"user.active_changed":              {},
 	"user.tenant_account_closed":       {},
 }

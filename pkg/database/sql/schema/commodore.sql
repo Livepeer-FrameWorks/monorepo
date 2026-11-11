@@ -62,12 +62,46 @@ CREATE TABLE IF NOT EXISTS commodore.users (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS commodore.auth_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    user_id UUID NOT NULL,
+    auth_method TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    device_label VARCHAR(200) NOT NULL DEFAULT '',
+    client_version VARCHAR(100) NOT NULL DEFAULT '',
+    created_ip VARCHAR(45) NOT NULL DEFAULT '',
+    last_ip VARCHAR(45) NOT NULL DEFAULT '',
+    user_agent VARCHAR(1024) NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    idle_expires_at TIMESTAMPTZ NOT NULL,
+    absolute_expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    revoke_reason TEXT,
+    CONSTRAINT auth_sessions_owner_identity UNIQUE (tenant_id, user_id, id),
+    CONSTRAINT auth_sessions_client_id_check CHECK (client_id IN ('web', 'cli', 'tray-mac', 'unknown')),
+    CONSTRAINT auth_sessions_auth_method_check CHECK (auth_method IN ('password', 'wallet', 'pkce', 'device_code', 'unknown')),
+    CONSTRAINT auth_sessions_expiry_check CHECK (idle_expires_at <= absolute_expires_at),
+    CONSTRAINT auth_sessions_revoke_reason_check CHECK (revoke_reason IN ('user', 'logout', 'password_change', 'password_reset', 'reuse_detected', 'operator', 'expired')),
+    CONSTRAINT auth_sessions_revocation_check CHECK ((revoked_at IS NULL) = (revoke_reason IS NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_owner_created
+    ON commodore.auth_sessions (tenant_id, user_id, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_idle_expires_range
+    ON commodore.auth_sessions (idle_expires_at ASC);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_absolute_expires_range
+    ON commodore.auth_sessions (absolute_expires_at ASC);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_revoked_range
+    ON commodore.auth_sessions (revoked_at ASC) WHERE revoked_at IS NOT NULL;
+
 -- Secure refresh tokens for session management
 CREATE TABLE IF NOT EXISTS commodore.refresh_tokens (
     -- ===== IDENTITY =====
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL,
     user_id UUID NOT NULL,
+    session_id UUID,
     token_hash VARCHAR(64) NOT NULL, -- SHA256 hash of the actual token
 
     -- ===== LIFECYCLE =====
@@ -75,9 +109,14 @@ CREATE TABLE IF NOT EXISTS commodore.refresh_tokens (
     created_at TIMESTAMP DEFAULT NOW(),
     rotated_at TIMESTAMP,
     revoked BOOLEAN DEFAULT FALSE,
-    replaced_by UUID -- successor issued by rotation; reuse with an unused successor = lost response, not theft
+    replaced_by UUID, -- successor issued by rotation; reuse with an unused successor = lost response, not theft
+    CONSTRAINT refresh_tokens_auth_session_owner_fk FOREIGN KEY (tenant_id, user_id, session_id)
+        REFERENCES commodore.auth_sessions (tenant_id, user_id, id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_predecessor ON commodore.refresh_tokens (tenant_id, user_id, replaced_by);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_session_owner ON commodore.refresh_tokens (tenant_id, user_id, session_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires_range ON commodore.refresh_tokens (expires_at ASC);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON commodore.refresh_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash ON commodore.refresh_tokens(token_hash);
 
@@ -125,6 +164,10 @@ CREATE TABLE IF NOT EXISTS commodore.auth_authorization_codes (
     tenant_id             UUID NOT NULL,
     user_id               UUID NOT NULL,
     client_id             VARCHAR(64) NOT NULL,
+    device_label          VARCHAR(200) NOT NULL DEFAULT '',
+    client_version        VARCHAR(100) NOT NULL DEFAULT '',
+    request_ip            VARCHAR(45) NOT NULL DEFAULT '',
+    user_agent            VARCHAR(1024) NOT NULL DEFAULT '',
     code_hash             VARCHAR(64) NOT NULL,  -- SHA-256 hex of raw code
     code_challenge        VARCHAR(128) NOT NULL,
     code_challenge_method VARCHAR(16) NOT NULL,
@@ -151,6 +194,10 @@ CREATE TABLE IF NOT EXISTS commodore.auth_device_codes (
     tenant_id             UUID,
     user_id               UUID,
     client_id             VARCHAR(64) NOT NULL,
+    device_label          VARCHAR(200) NOT NULL DEFAULT '',
+    client_version        VARCHAR(100) NOT NULL DEFAULT '',
+    request_ip            VARCHAR(45) NOT NULL DEFAULT '',
+    user_agent            VARCHAR(1024) NOT NULL DEFAULT '',
     device_code_hash      VARCHAR(64) NOT NULL,  -- SHA-256 hex of raw device_code
     user_code             VARCHAR(32) NOT NULL,
     scope                 VARCHAR(64) NOT NULL DEFAULT 'account',
@@ -173,6 +220,11 @@ CREATE INDEX IF NOT EXISTS idx_commodore_auth_device_codes_user
 CREATE INDEX IF NOT EXISTS idx_commodore_auth_device_codes_expires_range
     ON commodore.auth_device_codes(expires_at ASC)
     WHERE status = 'pending';
+
+CREATE INDEX IF NOT EXISTS idx_commodore_auth_authz_codes_cleanup_range
+    ON commodore.auth_authorization_codes (expires_at ASC);
+CREATE INDEX IF NOT EXISTS idx_commodore_auth_device_codes_cleanup_range
+    ON commodore.auth_device_codes (expires_at ASC);
 
 -- ============================================================================
 -- WALLET-BASED IDENTITY (Agent Access / x402)

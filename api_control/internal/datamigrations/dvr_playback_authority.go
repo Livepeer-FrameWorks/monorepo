@@ -60,6 +60,7 @@ func Register(fieldEncryption FieldEncryptionSettings) {
 	})
 	registerChapterPlaybackAuthority()
 	registerFieldEncryption(fieldEncryption)
+	registerAuthSessions()
 }
 
 func runDVRPlaybackAuthority(ctx context.Context, db datamigrate.DB, opts datamigrate.RunOptions) (datamigrate.Progress, error) {

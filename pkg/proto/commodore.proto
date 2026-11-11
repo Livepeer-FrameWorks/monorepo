@@ -154,6 +154,8 @@ service InternalService {
   // access token and when it re-checks one, so a signed-out session's token
   // stops holding realtime connections before it expires.
   rpc ValidateSession(ValidateSessionRequest) returns (ValidateSessionResponse);
+  // Verifies one wallet challenge and resolves its owner without issuing tokens.
+  rpc VerifyWalletAuth(WalletLoginRequest) returns (WalletAuthResponse);
 
   // Called by Gateway when its platform-wide stream of session revocations
   // (re)subscribes: returns every user whose sessions were revoked after
@@ -1050,11 +1052,12 @@ message ValidateSessionResponse {
 
 message ListRecentSessionRevocationsRequest {
   google.protobuf.Timestamp since = 1;
+  // Only callers that understand session_id may receive named revocations.
+  bool include_auth_sessions = 2;
 }
 
-// SessionRevocation is the latest revocation of one user's sessions: every
-// session token of the user issued in or before revoked_at's second is
-// revoked.
+// SessionRevocation revokes session_id, or all the user's tokens issued in or
+// before revoked_at's second when session_id is empty.
 message SessionRevocation {
   string tenant_id = 1;
   string user_id = 2;
@@ -1062,6 +1065,7 @@ message SessionRevocation {
   // account_deactivated is set when the user is deactivated, so the
   // revocation also covers the user's API token connections.
   bool account_deactivated = 4;
+  string session_id = 5;
 }
 
 message ListRecentSessionRevocationsResponse {
@@ -1536,6 +1540,11 @@ message GetOrCreateWalletUserResponse {
   string wallet_address = 5;            // Normalized checksum address
 }
 
+message WalletAuthResponse {
+  User user = 1;
+  string wallet_address = 2;
+}
+
 // ============================================================================
 // CROSS-SERVICE: BILLING DATA ACCESS MESSAGES
 // ============================================================================
@@ -1594,6 +1603,10 @@ service UserService {
   rpc Register(RegisterRequest) returns (RegisterResponse);
   rpc Logout(LogoutRequest) returns (LogoutResponse);
   rpc RefreshToken(RefreshTokenRequest) returns (AuthResponse);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc RevokeSession(RevokeSessionRequest) returns (RevokeSessionResponse);
+  rpc RevokeOtherSessions(google.protobuf.Empty) returns (RevokeOtherSessionsResponse);
+  rpc RenameSession(RenameSessionRequest) returns (AuthSession);
 
   // Email verification
   rpc VerifyEmail(VerifyEmailRequest) returns (VerifyEmailResponse);
@@ -1729,6 +1742,41 @@ message LogoutResponse {
 
 message RefreshTokenRequest {
   string refresh_token = 1;
+}
+
+message AuthSession {
+  string id = 1;
+  string client_id = 2;
+  string auth_method = 3;
+  string device_label = 4;
+  string client_version = 5;
+  string last_ip = 6;
+  string user_agent = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp last_seen_at = 9;
+  google.protobuf.Timestamp expires_at = 10;
+  bool current = 11;
+}
+
+message ListSessionsRequest {
+  // Forward pagination: first/after. Sessions are newest first.
+  common.CursorPaginationRequest pagination = 1;
+}
+
+message ListSessionsResponse {
+  repeated AuthSession sessions = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+message RevokeSessionRequest { string session_id = 1; }
+message RevokeSessionResponse {
+  bool success = 1;
+  bool current = 2;
+}
+message RevokeOtherSessionsResponse { int32 revoked_count = 1; }
+message RenameSessionRequest {
+  string session_id = 1;
+  string label = 2;
 }
 
 message VerifyEmailRequest {

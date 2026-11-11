@@ -23,6 +23,7 @@ const (
 	KeyUser         Key = "user"
 	KeyAuthType     Key = "auth_type"
 	KeySessionToken Key = "session_token"
+	KeySessionID    Key = "session_id"
 	KeyWalletAddr   Key = "wallet_address"
 	KeyPermissions  Key = "permissions"
 	// KeyDelegatedJWTs carries short-lived, audience-bound internal assertions
@@ -34,6 +35,15 @@ const (
 	// validated credential, never trusted across the service boundary.
 	KeyPlatformOperator Key = "platform_operator"
 )
+
+// GetSessionID identifies the presented interactive session, when its issuer
+// supports named sessions. Legacy credentials have no session ID.
+func GetSessionID(ctx context.Context) string {
+	if value, ok := ctx.Value(KeySessionID).(string); ok {
+		return value
+	}
+	return ""
+}
 
 // Payment context keys
 const KeyXPayment Key = "x_payment"

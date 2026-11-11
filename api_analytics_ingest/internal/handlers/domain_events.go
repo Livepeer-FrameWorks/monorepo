@@ -139,6 +139,7 @@ var auditedInternalTypes = map[string]bool{
 	"billing.checkout_recovery_action": true,
 	"webhook.endpoint_auto_disabled":   true,
 	"user.sessions_revoked":            true,
+	"auth_session.revoked":             true,
 	"user.active_changed":              true,
 	"user.tenant_account_closed":       true,
 }
