@@ -94,6 +94,10 @@ CREATE INDEX IF NOT EXISTS idx_auth_sessions_absolute_expires_range
     ON commodore.auth_sessions (absolute_expires_at ASC);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_revoked_range
     ON commodore.auth_sessions (revoked_at ASC) WHERE revoked_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_retention_idle
+    ON commodore.auth_sessions (idle_expires_at ASC, id ASC);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_retention_revoked
+    ON commodore.auth_sessions (revoked_at ASC, id ASC) WHERE revoked_at IS NOT NULL;
 
 -- Secure refresh tokens for session management
 CREATE TABLE IF NOT EXISTS commodore.refresh_tokens (
@@ -123,6 +127,13 @@ CREATE INDEX IF NOT EXISTS idx_refresh_tokens_pending_session_owner_range ON com
     WHERE session_id IS NULL AND COALESCE(revoked, false) = false;
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON commodore.refresh_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash ON commodore.refresh_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_retention_session
+    ON commodore.refresh_tokens (tenant_id, user_id, session_id, id ASC);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_retention_unassigned
+    ON commodore.refresh_tokens (expires_at ASC, id ASC) WHERE session_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_live_legacy_owner
+    ON commodore.refresh_tokens (tenant_id, user_id, expires_at ASC)
+    WHERE session_id IS NULL AND COALESCE(revoked, false) = false;
 
 -- API tokens for programmatic access
 CREATE TABLE IF NOT EXISTS commodore.api_tokens (
@@ -227,6 +238,8 @@ CREATE INDEX IF NOT EXISTS idx_commodore_auth_device_codes_expires_range
 
 CREATE INDEX IF NOT EXISTS idx_commodore_auth_authz_codes_cleanup_range
     ON commodore.auth_authorization_codes (expires_at ASC);
+CREATE INDEX IF NOT EXISTS idx_commodore_auth_authz_codes_consumed_range
+    ON commodore.auth_authorization_codes (consumed_at ASC) WHERE consumed_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_commodore_auth_device_codes_cleanup_range
     ON commodore.auth_device_codes (expires_at ASC);
 

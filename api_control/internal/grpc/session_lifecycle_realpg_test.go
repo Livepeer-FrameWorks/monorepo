@@ -195,6 +195,33 @@ SELECT $1,$2,'password','web','cap fixture',NOW()-INTERVAL '1 hour',NOW()-INTERV
 	if valid, err := s.ValidateSession(ctx, &commodorepb.ValidateSessionRequest{Token: issued.GetToken()}); err != nil || !valid.GetValid() {
 		t.Fatalf("cap evicted new session: %+v %v", valid, err)
 	}
+	concurrentResponses := make([]*commodorepb.AuthResponse, 4)
+	concurrentErrors := make([]error, len(concurrentResponses))
+	capStart := make(chan struct{})
+	var capIssuers sync.WaitGroup
+	for i := range concurrentResponses {
+		capIssuers.Go(func() {
+			<-capStart
+			concurrentErrors[i] = s.withEventTx(ctx, func(tx *sql.Tx) error {
+				var issueErr error
+				concurrentResponses[i], issueErr = s.issueUserSessionTx(ctx, tx, userID, tenantID, SessionContext{ClientID: "cli", AuthMethod: "device_code", DeviceLabel: "Concurrent CLI"})
+				return issueErr
+			})
+		})
+	}
+	close(capStart)
+	capIssuers.Wait()
+	for i, response := range concurrentResponses {
+		if concurrentErrors[i] != nil {
+			t.Fatalf("concurrent cap issuer %d: %v", i, concurrentErrors[i])
+		}
+		if valid, validateErr := s.ValidateSession(ctx, &commodorepb.ValidateSessionRequest{Token: response.GetToken()}); validateErr != nil || !valid.GetValid() {
+			t.Fatalf("concurrent cap evicted a new session: %+v %v", valid, validateErr)
+		}
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM commodore.auth_sessions WHERE tenant_id=$1 AND user_id=$2 AND revoked_at IS NULL AND idle_expires_at>NOW() AND absolute_expires_at>NOW()`, tenantID, userID).Scan(&active); err != nil || active != maxLiveAuthSessions {
+		t.Fatalf("concurrent issuance escaped cap: active=%d err=%v", active, err)
+	}
 	if _, err := db.ExecContext(ctx, `UPDATE commodore.users SET reset_token=$3,reset_token_expires=NOW()+INTERVAL '1 hour' WHERE tenant_id=$1 AND id=$2`, tenantID, userID, hashToken("lifecycle-reset")); err != nil {
 		t.Fatal(err)
 	}

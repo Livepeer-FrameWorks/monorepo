@@ -148,10 +148,6 @@ type WebsocketSessions struct {
 	// for a connection whose credential was checked before the revocation
 	// and that registers after it arrived.
 	revokedTokens map[websocketTokenKey]time.Time
-	// backfilling is set while a goroutine reads recent session
-	// revocations; backfillPending queues one more read.
-	backfilling     bool
-	backfillPending bool
 }
 
 type websocketTokenKey struct {

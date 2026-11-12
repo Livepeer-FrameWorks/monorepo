@@ -33,6 +33,7 @@ import (
 	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/sessionrevocations"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc"
@@ -250,6 +251,19 @@ func main() {
 		logger.WithField("addr", cfg.CommodoreGRPCAddr).Info("Connected to Commodore gRPC")
 	}
 
+	sessionFeed, closeSessionFeed, err := sessionrevocations.Connect(context.Background(), sessionrevocations.Config{
+		Secret: []byte(cfg.JWTSecret), List: commodoreClient.ListRecentSessionRevocations, Logger: logger,
+	}, sessionrevocations.Transport{
+		Address: cfg.SignalmanGRPCAddr, ServiceToken: cfg.ServiceToken,
+		AllowInsecure: cfg.AllowInsecure, CAPath: cfg.CAPath,
+		ServerName: cfg.SignalmanGRPCTLSServerName, Logger: logger,
+	})
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid session revocation feed configuration")
+	}
+	defer closeSessionFeed()
+	sessionFeed.Observe(metricsCollector)
+
 	// Initialize handlers used by the health poller.
 	handlers.Init(db, logger)
 
@@ -394,7 +408,7 @@ func main() {
 			DecklogClient:               decklogClient,
 			PurserClient:                purserClient,
 			MediaAuthorityRefreshClient: commodoreClient,
-			ValidateSession:             commodoreClient.CheckSession,
+			ValidateSession:             sessionFeed.CheckSession,
 			GeoIPReader:                 geoipReader,
 			Metrics:                     serverMetrics,
 			CertFile:                    cfg.CertPath,

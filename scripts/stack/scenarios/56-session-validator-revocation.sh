@@ -10,6 +10,7 @@ WORK=$(mktemp -d)
 chmod 700 "$WORK"
 tenant="" user="" revoked="" other="" extra=""
 descriptor=""
+FAULTS=()
 must_check() {
   local before=$FAIL
   check "$@"
@@ -18,6 +19,9 @@ must_check() {
 profile_matches() { jq -e --arg user "$user" '.id == $user' "$1" >/dev/null; }
 rpc_error() { sed -n '1,5p' "$1"; }
 cleanup() {
+  local fault
+  for fault in "${FAULTS[@]}"; do netfault_stop "$fault"; done
+  FAULTS=()
   if [ -n "$tenant" ] && [ -n "$revoked" ]; then
     pg_fixture commodore "DELETE FROM commodore.auth_sessions WHERE tenant_id='$tenant' AND user_id='$user' AND id IN ('$revoked','$other','$extra')" >/dev/null || fail 'session fixture cleanup'
   fi
@@ -134,12 +138,53 @@ done
 check 'named session opens Skipper MCP' [ "$(mcp_code "$WORK/revoked.jwt")" = 200 ] || finish
 check 'named operator session reaches network diagnostics' [ "$(http_code "$WORK/revoked.jwt" "$BRIDGE_URL/v1/network/livepeer/diagnostics")" = 200 ] || finish
 
+# Keep Commodore's loopback API and event relay available while every peer's
+# validation/backfill RPC is refused. Data requests must use local authority.
+for authority in commodore commodore-2; do
+  netfault_start "$authority" || finish
+  FAULTS+=("$authority")
+  authority_port=$(stack_exec "$authority" sh -c 'printf "%s" "$GRPC_PORT"')
+  case "$authority_port" in ''|*[!0-9]*) fail 'invalid Commodore gRPC port'; finish ;; esac
+  netfault "$authority" sh -c 'iptables -A FW_FAULT_IN ! -i lo -p tcp --dport "$1" -j REJECT --reject-with tcp-reset' sh "$authority_port" || {
+    fail "isolate $authority RPC ingress"; finish;
+  }
+  probe=commodore
+  [ "$authority" != commodore ] || probe=commodore-2
+  # commodore is a shared replica alias; it may resolve to the probing peer.
+  authority_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$(container_of "$authority")" | awk '{print $1}')
+  [ -n "$authority_ip" ] || { fail "resolve exact container IP of $authority"; finish; }
+  stack_exec "$probe" sh -c 'grpcurl -plaintext -max-time 2 "$1:$2" list' sh "$authority_ip" "$authority_port" >"$WORK/$authority.unreachable" 2>&1
+  must_check "$authority RPC is actually unreachable from peers" grep -Eq 'Failed to dial|failed to dial|connection refused|context deadline|Unavailable' "$WORK/$authority.unreachable" || {
+    rpc_error "$WORK/$authority.unreachable"; finish;
+  }
+done
+while IFS='|' read -r service address method body; do
+  ingress_rpc "$service" "$address" "$method" "$body" "$WORK/other.jwt" >"$WORK/$service.outage" 2>&1
+  outage_status=$?
+  must_check "valid session reaches $service while Commodore RPC is unreachable" [ "$outage_status" = 0 ] || { rpc_error "$WORK/$service.outage"; finish; }
+done < <(ingress_specs)
+for url in $FOGHORN_A_INTERNAL_URLS $FOGHORN_B_INTERNAL_URLS; do
+  check "valid operator reaches $url while Commodore RPC is unreachable" [ "$(http_code "$WORK/other.jwt" "$url/nodes/overview")" = 200 ] || finish
+done
+check 'valid session reaches Skipper MCP while Commodore RPC is unreachable' [ "$(mcp_code "$WORK/other.jwt")" = 200 ] || finish
+
 for attempt in 1 2; do
   session_rpc commodore "$WORK/other.jwt" commodore.UserService/RevokeSession \
     "$(jq -cn --arg id "$revoked" '{sessionId:$id}')" >"$WORK/revoke.json" 2>&1
   revoked_once() { jq -e '.success == true and (.current // false | not)' "$WORK/revoke.json" >/dev/null; }
   must_check "single-session revoke attempt $attempt succeeds idempotently" revoked_once || { rpc_error "$WORK/revoke.json"; finish; }
+  if [ "$attempt" = 1 ]; then revocation_started=$(monotonic_ms); fi
 done
+all_ingresses_reject() {
+  local service address method body
+  while IFS='|' read -r service address method body; do
+    ingress_rpc "$service" "$address" "$method" "$body" "$WORK/revoked.jwt" >"$WORK/$service.revoked" 2>&1
+    grep -q 'Code: Unauthenticated' "$WORK/$service.revoked" || return 1
+  done < <(ingress_specs)
+}
+eventually 5 'revocation event reaches every raw-JWT ingress while Commodore RPC is unreachable' all_ingresses_reject
+revocation_elapsed=$(($(monotonic_ms) - revocation_started))
+check "all six ingresses refuse the revoked sid within five seconds (${revocation_elapsed}ms)" [ "$revocation_elapsed" -le 5000 ]
 
 for service in commodore commodore-2; do
   { cat "$WORK/revoked.jwt"; echo; } | stack_exec "$service" sh -c '
@@ -166,7 +211,8 @@ for url in $FOGHORN_A_INTERNAL_URLS $FOGHORN_B_INTERNAL_URLS; do
   check "revoked session refused by $url" [ "$(http_code "$WORK/revoked.jwt" "$url/nodes/overview")" = 403 ]
   check "other device still reaches $url" [ "$(http_code "$WORK/other.jwt" "$url/nodes/overview")" = 200 ]
 done
-check 'revoked session refused by Skipper MCP' [ "$(mcp_code "$WORK/revoked.jwt")" = 401 ]
+skipper_refuses_revoked() { [ "$(mcp_code "$WORK/revoked.jwt")" = 401 ]; }
+eventually 5 'revoked session refused by Skipper MCP' skipper_refuses_revoked
 check 'other device still reaches Skipper MCP' [ "$(mcp_code "$WORK/other.jwt")" = 200 ]
 
 diagnostics_revoked() { [ "$(http_code "$WORK/revoked.jwt" "$BRIDGE_URL/v1/network/livepeer/diagnostics")" = 401 ]; }
@@ -174,8 +220,12 @@ eventually 2 'named revocation event refuses network diagnostics on Bridge' diag
 session_rpc commodore "$WORK/other.jwt" commodore.UserService/RevokeOtherSessions '{}' >"$WORK/others.json" 2>&1
 others_revoked() { jq -e '(.revokedCount | tonumber) >= 1' "$WORK/others.json" >/dev/null; }
 must_check 'sign out other sessions preserves the presented device' others_revoked || { rpc_error "$WORK/others.json"; finish; }
-check 'third device is refused after sign out others' [ "$(mcp_code "$WORK/extra.jwt")" = 401 ]
+skipper_refuses_extra() { [ "$(mcp_code "$WORK/extra.jwt")" = 401 ]; }
+eventually 5 'third device is refused after sign out others' skipper_refuses_extra
 check 'current device survives sign out others' [ "$(mcp_code "$WORK/other.jwt")" = 200 ]
+
+for authority in "${FAULTS[@]}"; do netfault_stop "$authority"; done
+FAULTS=()
 
 # A fresh replica must also recover the named revocation from durable state.
 stack_ctl restart bridge bridge-2 || { fail 'restart Bridge replicas'; finish; }

@@ -64,6 +64,19 @@
           "description": "Private key for GRPC_TLS_CERT_PATH."
         },
         {
+          "key": "SIGNALMAN_GRPC_ADDR",
+          "type": "string",
+          "default": "signalman:19005",
+          "introduced": "v0.3.15",
+          "description": "Signalman address for background interactive-session revocation events."
+        },
+        {
+          "key": "SIGNALMAN_GRPC_TLS_SERVER_NAME",
+          "type": "string",
+          "introduced": "v0.3.15",
+          "description": "TLS server name override for the Signalman revocation feed."
+        },
+        {
           "key": "DATABASE_URL",
           "type": "string",
           "required": true,
@@ -88,13 +101,13 @@
           "type": "string",
           "default": "commodore:19001",
           "introduced": "v0.3.15",
-          "description": "Commodore gRPC address used to validate interactive user sessions."
+          "description": "Commodore gRPC address for background session-revocation snapshots."
         },
         {
           "key": "COMMODORE_GRPC_TLS_SERVER_NAME",
           "type": "string",
           "introduced": "v0.3.15",
-          "description": "TLS server name override for the Commodore session-validation connection."
+          "description": "TLS server name override for the Commodore revocation snapshot connection."
         },
         {
           "key": "EMAIL_LOGO_URL",
@@ -1473,6 +1486,19 @@
           "description": "Private key for GRPC_TLS_CERT_PATH."
         },
         {
+          "key": "SIGNALMAN_GRPC_ADDR",
+          "type": "string",
+          "default": "signalman:19005",
+          "introduced": "v0.3.15",
+          "description": "Signalman address for background interactive-session revocation events."
+        },
+        {
+          "key": "SIGNALMAN_GRPC_TLS_SERVER_NAME",
+          "type": "string",
+          "introduced": "v0.3.15",
+          "description": "TLS server name override for the Signalman revocation feed."
+        },
+        {
           "key": "DATABASE_URL",
           "type": "string",
           "required": true,
@@ -2266,6 +2292,13 @@
           "description": "Private key for GRPC_TLS_CERT_PATH."
         },
         {
+          "key": "SIGNALMAN_GRPC_ADDR",
+          "type": "string",
+          "default": "signalman:19005",
+          "introduced": "v0.3.15",
+          "description": "Signalman address for background interactive-session revocation events."
+        },
+        {
           "key": "DATABASE_URL",
           "type": "string",
           "required": true,
@@ -2830,13 +2863,13 @@
           "type": "string",
           "default": "commodore:19001",
           "introduced": "v0.3.15",
-          "description": "Commodore gRPC address used to validate interactive user sessions."
+          "description": "Commodore gRPC address for background session-revocation snapshots."
         },
         {
           "key": "COMMODORE_GRPC_TLS_SERVER_NAME",
           "type": "string",
           "introduced": "v0.3.15",
-          "description": "TLS server name override for the Commodore session-validation connection."
+          "description": "TLS server name override for the Commodore revocation snapshot connection."
         },
         {
           "key": "KAFKA_BROKERS",
@@ -3711,6 +3744,19 @@
           "description": "Private key for GRPC_TLS_CERT_PATH."
         },
         {
+          "key": "SIGNALMAN_GRPC_ADDR",
+          "type": "string",
+          "default": "signalman:19005",
+          "introduced": "v0.3.15",
+          "description": "Signalman address for background interactive-session revocation events."
+        },
+        {
+          "key": "SIGNALMAN_GRPC_TLS_SERVER_NAME",
+          "type": "string",
+          "introduced": "v0.3.15",
+          "description": "TLS server name override for the Signalman revocation feed."
+        },
+        {
           "key": "DATABASE_URL",
           "type": "string",
           "required": true,
@@ -3764,13 +3810,13 @@
           "type": "string",
           "default": "commodore:19001",
           "introduced": "v0.3.15",
-          "description": "Commodore gRPC address used to validate interactive user sessions."
+          "description": "Commodore gRPC address for background session-revocation snapshots."
         },
         {
           "key": "COMMODORE_GRPC_TLS_SERVER_NAME",
           "type": "string",
           "introduced": "v0.3.15",
-          "description": "TLS server name override for the Commodore session-validation connection."
+          "description": "TLS server name override for the Commodore revocation snapshot connection."
         },
         {
           "key": "QUARTERMASTER_GRPC_ADDR",
@@ -4031,6 +4077,19 @@
           "type": "string",
           "introduced": "v0.3.0",
           "description": "Private key for GRPC_TLS_CERT_PATH."
+        },
+        {
+          "key": "SIGNALMAN_GRPC_ADDR",
+          "type": "string",
+          "default": "signalman:19005",
+          "introduced": "v0.3.15",
+          "description": "Signalman address for background interactive-session revocation events."
+        },
+        {
+          "key": "SIGNALMAN_GRPC_TLS_SERVER_NAME",
+          "type": "string",
+          "introduced": "v0.3.15",
+          "description": "TLS server name override for the Signalman revocation feed."
         },
         {
           "key": "DATABASE_URL",
@@ -5212,6 +5271,19 @@
           "description": "Private key for GRPC_TLS_CERT_PATH."
         },
         {
+          "key": "SIGNALMAN_GRPC_ADDR",
+          "type": "string",
+          "default": "signalman:19005",
+          "introduced": "v0.3.15",
+          "description": "Signalman address for background interactive-session revocation events."
+        },
+        {
+          "key": "SIGNALMAN_GRPC_TLS_SERVER_NAME",
+          "type": "string",
+          "introduced": "v0.3.15",
+          "description": "TLS server name override for the Signalman revocation feed."
+        },
+        {
           "key": "DATABASE_URL",
           "type": "string",
           "required": true,
@@ -5236,13 +5308,13 @@
           "type": "string",
           "default": "commodore:19001",
           "introduced": "v0.3.15",
-          "description": "Commodore gRPC address used to validate interactive user sessions."
+          "description": "Commodore gRPC address for background session-revocation snapshots."
         },
         {
           "key": "COMMODORE_GRPC_TLS_SERVER_NAME",
           "type": "string",
           "introduced": "v0.3.15",
-          "description": "TLS server name override for the Commodore session-validation connection."
+          "description": "TLS server name override for the Commodore revocation snapshot connection."
         },
         {
           "key": "EMAIL_LOGO_URL",
@@ -6412,6 +6484,19 @@
           "type": "string",
           "introduced": "v0.3.0",
           "description": "Private key for GRPC_TLS_CERT_PATH."
+        },
+        {
+          "key": "SIGNALMAN_GRPC_ADDR",
+          "type": "string",
+          "default": "signalman:19005",
+          "introduced": "v0.3.15",
+          "description": "Signalman address for background interactive-session revocation events."
+        },
+        {
+          "key": "SIGNALMAN_GRPC_TLS_SERVER_NAME",
+          "type": "string",
+          "introduced": "v0.3.15",
+          "description": "TLS server name override for the Signalman revocation feed."
         },
         {
           "key": "DATABASE_URL",

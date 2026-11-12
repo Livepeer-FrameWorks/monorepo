@@ -29,6 +29,7 @@ import (
 	lookoutpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/lookout"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/sessionrevocations"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
@@ -74,6 +75,18 @@ func main() {
 		logger.WithError(err).Fatal("Failed to create Commodore session-validation client")
 	}
 	defer func() { _ = commodoreClient.Close() }()
+	sessionFeed, closeSessionFeed, err := sessionrevocations.Connect(context.Background(), sessionrevocations.Config{
+		Secret: []byte(cfg.JWTSecret), List: commodoreClient.ListRecentSessionRevocations, Logger: logger,
+	}, sessionrevocations.Transport{
+		Address: cfg.SignalmanGRPCAddr, ServiceToken: cfg.ServiceToken,
+		AllowInsecure: cfg.AllowInsecure, CAPath: cfg.CAPath,
+		ServerName: cfg.SignalmanGRPCTLSServerName, Logger: logger,
+	})
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid session revocation feed configuration")
+	}
+	defer closeSessionFeed()
+
 	// The Alertmanager token and the notification settings are read through
 	// liveConfig on every use, so they follow a SIGHUP env-file reload.
 	liveConfig := config.NewLive(cfg, configOptions)
@@ -87,6 +100,7 @@ func main() {
 
 	healthChecker := monitoring.NewHealthChecker("lookout", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("lookout", version.Version, version.GitCommit)
+	sessionFeed.Observe(metricsCollector)
 	grpcRequests := metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"})
 	grpcDuration := metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil)
 	domainMetrics := incidents.NewMetrics(metricsCollector)
@@ -240,7 +254,7 @@ func main() {
 		// the Alertmanager webhook serve while the TLS files are still being
 		// synced.
 		GRPC: []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCPort, Build: func(buildCtx context.Context) (*grpc.Server, error) {
-			return newGRPCServer(buildCtx, cfg, logger, incidentServer, grpcRequests, grpcDuration, commodoreClient.CheckSession)
+			return newGRPCServer(buildCtx, cfg, logger, incidentServer, grpcRequests, grpcDuration, sessionFeed.CheckSession)
 		}}},
 		// Only settings read through liveConfig follow a reload; everything
 		// else keeps its startup value.

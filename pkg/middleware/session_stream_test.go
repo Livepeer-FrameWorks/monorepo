@@ -71,3 +71,46 @@ func TestInteractiveStreamStaysRevocable(t *testing.T) {
 		})
 	}
 }
+
+func TestLocalStreamAuthoritySurvivesOutageAndRejectsRevocation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		secret := []byte("local-stream")
+		token, err := auth.GenerateJWT("user", "tenant", "user@example.test", "member", secret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cache := auth.NewSessionRevocations()
+		ctx, cancel := context.WithCancel(metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+token)))
+		defer cancel()
+		cfg := GRPCAuthConfig{JWTSecret: secret, SessionRevocations: cache, ValidateSession: func(context.Context, string) error {
+			t.Error("local stream invoked remote validation")
+			return status.Error(codes.Unavailable, "Commodore down")
+		}}
+		result := make(chan error, 1)
+		go func() {
+			result <- GRPCStreamAuthInterceptor(cfg)(nil, &fakeServerStream{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: "/test/Stream"}, func(_ any, stream grpc.ServerStream) error {
+				<-stream.Context().Done()
+				return stream.Context().Err()
+			})
+		}()
+		synctest.Wait()
+		time.Sleep(61 * time.Second)
+		synctest.Wait()
+		select {
+		case err := <-result:
+			t.Fatalf("outage ended local stream: %v", err)
+		default:
+		}
+		cache.Record("tenant", "user", time.Now())
+		time.Sleep(30 * time.Second)
+		synctest.Wait()
+		select {
+		case err := <-result:
+			if status.Code(err) != codes.Unauthenticated {
+				t.Fatalf("revocation returned %v", err)
+			}
+		default:
+			t.Fatal("known revoked stream survived a recheck")
+		}
+	})
+}
