@@ -88,18 +88,6 @@ mutation AssignIncident(
   }
 }
 
-mutation BootstrapEdge(
-  $input: BootstrapEdgeInput!
-) {
-  bootstrapEdge(input: $input) {
-    __typename
-    ...BootstrapEdgeResponseDefaultFields
-    ...BootstrapEdgePendingDefaultFields
-    ...ValidationErrorDefaultFields
-    ...AuthErrorDefaultFields
-  }
-}
-
 mutation ChangeBillingTier(
   $tierId: ID!
 ) {

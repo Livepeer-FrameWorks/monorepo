@@ -252,10 +252,10 @@
       "name": "BootstrapEdge",
       "kind": "mutation",
       "target": "mutation.bootstrapEdge",
-      "since": "v0.3.15",
-      "hash": "sha256:f5661abac450eb1e3c6dba861b62d94404befc4ebdc9ed1dc582996b99201d59",
-      "identity": "sha256:78d13f87f6d3272cc9ea47e2033655580545d169f09e4374d282968be72f9a1f",
-      "document": "mutation BootstrapEdge ($input: BootstrapEdgeInput!) {\n  bootstrapEdge(input: $input) {\n    __typename\n    ... BootstrapEdgeResponseDefaultFields\n    ... BootstrapEdgePendingDefaultFields\n    ... ValidationErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment BootstrapEdgePendingDefaultFields on BootstrapEdgePending {\n  clusterId\n  phase\n  retryAfterSeconds\n}\nfragment BootstrapEdgeResponseDefaultFields on BootstrapEdgeResponse {\n  nodeId\n  edgeDomain\n  poolDomain\n  clusterSlug\n  clusterId\n  foghornGrpcAddr\n  certPem\n  keyPem\n  internalCaBundle\n  telemetry {\n    enabled\n    writeUrl\n    bearerToken\n  }\n}\nfragment ValidationErrorDefaultFields on ValidationError {\n  message\n  code\n  field\n  constraint\n}\n",
+      "since": "v0.3.11",
+      "hash": "sha256:f8148258035f8b18bc2777f03eb9f9de0d1b50c9eb5e08f586d23ec81d933f16",
+      "identity": "sha256:ef0a94d7dbbf2f88791eefdab2efaca3a1cb8d4b6d935e830993a5e259a7e350",
+      "document": "mutation BootstrapEdge ($input: BootstrapEdgeInput!) {\n  bootstrapEdge(input: $input) {\n    __typename\n    ... BootstrapEdgeResponseDefaultFields\n    ... ValidationErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment BootstrapEdgeResponseDefaultFields on BootstrapEdgeResponse {\n  nodeId\n  edgeDomain\n  poolDomain\n  clusterSlug\n  clusterId\n  foghornGrpcAddr\n  certPem\n  keyPem\n  internalCaBundle\n  telemetry {\n    enabled\n    writeUrl\n    bearerToken\n  }\n}\nfragment ValidationErrorDefaultFields on ValidationError {\n  message\n  code\n  field\n  constraint\n}\n",
       "variables": [
         {
           "name": "input",
