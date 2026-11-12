@@ -49,6 +49,7 @@ export class FakeTrack {
   }
   stop() {}
   addEventListener() {}
+  removeEventListener() {}
   getSettings() {
     return { deviceId: this.kind };
   }
@@ -158,6 +159,7 @@ export function installStudioBrowser(options: StudioBrowserOptions = {}) {
 
   const mediaDevices: Record<string, unknown> = {
     addEventListener() {},
+    removeEventListener() {},
     enumerateDevices: async () => [],
   };
   if (camera) {

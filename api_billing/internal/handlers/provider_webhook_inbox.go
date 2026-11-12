@@ -133,16 +133,19 @@ func (s *providerWebhookInboxStore) RecordFailureToken(ctx context.Context, id s
 
 func (s *providerWebhookInboxStore) fail(ctx context.Context, id string, cause error, backoff time.Duration, leaseToken string) error {
 	message := "provider webhook reconciliation failed"
+	errorCode := ""
 	if cause != nil {
 		message = cause.Error()
 	}
 	switch {
-	case errors.Is(cause, fx.ErrUnsupportedCurrency):
-		message = "provider settlement blocked: unsupported_currency"
-	case errors.Is(cause, fx.ErrUnavailable):
-		message = "provider settlement waiting: fx_unavailable"
+	case errors.Is(cause, errProviderSettlementPersistence):
+		errorCode, message = "settlement_persistence_failed", "provider settlement persistence failed"
 	case errors.Is(cause, errProviderSettlementEvidenceConflict):
-		message = "provider settlement blocked: evidence_conflict"
+		errorCode, message = "evidence_conflict", "provider settlement blocked: evidence_conflict"
+	case errors.Is(cause, fx.ErrUnsupportedCurrency):
+		errorCode, message = "unsupported_currency", "provider settlement blocked: unsupported_currency"
+	case errors.Is(cause, fx.ErrUnavailable):
+		errorCode, message = "fx_unavailable", "provider settlement waiting: fx_unavailable"
 	}
 	inboxID, err := uuid.Parse(id)
 	if err != nil {
@@ -151,6 +154,7 @@ func (s *providerWebhookInboxStore) fail(ctx context.Context, id string, cause e
 	result, err := purserdb.New(s.db).FailProviderWebhook(ctx, purserdb.FailProviderWebhookParams{
 		BackoffMilliseconds: backoff.Milliseconds(),
 		LastError:           message,
+		ErrorCode:           errorCode,
 		ID:                  inboxID,
 		LeaseToken:          leaseToken,
 		Waiting:             settlementOutcome(cause) == "waiting" || errors.Is(cause, billingmollie.ErrPaymentSettling),

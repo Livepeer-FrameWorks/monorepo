@@ -33,14 +33,6 @@ CREATE TRIGGER trg_provider_settlement_identity_valuation
 BEFORE INSERT OR UPDATE ON purser.provider_settlements
 FOR EACH ROW EXECUTE FUNCTION purser.ensure_provider_settlement_identity_valuation();
 
-UPDATE purser.provider_settlements
-SET settled_eur_cents = settled_amount_cents, fee_eur_cents = fee_cents, net_eur_cents = net_cents,
-    valuation_units_per_eur = 1, valuation_reference_date = (settled_at AT TIME ZONE 'UTC')::date,
-    valuation_source = 'identity'
-WHERE status = 'settled' AND settlement_currency = 'EUR'
-  AND settled_eur_cents IS NULL AND fee_eur_cents IS NULL AND net_eur_cents IS NULL
-  AND valuation_units_per_eur IS NULL AND valuation_reference_date IS NULL AND valuation_source IS NULL;
-
 ALTER TABLE purser.provider_settlements DROP CONSTRAINT IF EXISTS chk_provider_settlements_state;
 ALTER TABLE purser.provider_settlements ADD
     CONSTRAINT chk_provider_settlements_state CHECK (

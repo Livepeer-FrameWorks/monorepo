@@ -20,8 +20,8 @@ tests:
           - exp_labels:
               severity: warning
             exp_annotations:
-              summary: Provider activation, tier upgrade or checkout recovery needs attention
-              description: Purser is retrying provider activation, a paid tier upgrade, a scheduled downgrade's provider price, suspended-stream stop, tenant billing closure or expired-checkout compensation, or cannot read that recovery queue. Run frameworks admin billing recovery list to inspect retry status and errors. Normal provider settlement waits are not failures; waits over fourteen days need investigation. Missing metering holds activation or an upgrade at its recorded billing boundary.
+              summary: Provider activation, settlement or billing recovery needs attention
+              description: Purser has blocked provider settlement work, repeatedly failed provider activation, a paid tier upgrade, a scheduled downgrade's provider price, suspended-stream stop, tenant billing closure or expired-checkout compensation, or cannot read that recovery queue. Run frameworks admin billing recovery list to inspect retry status and errors. Normal provider settlement waits are not failures; waits over fourteen days need investigation. Missing metering holds activation or an upgrade at its recorded billing boundary.
       - eval_time: 10m
         groupname: frameworks.rules
         alertname: PurserProviderWebhookInboxStuck
@@ -40,8 +40,8 @@ tests:
           - exp_labels:
               severity: warning
             exp_annotations:
-              summary: Provider activation, tier upgrade or checkout recovery needs attention
-              description: Purser is retrying provider activation, a paid tier upgrade, a scheduled downgrade's provider price, suspended-stream stop, tenant billing closure or expired-checkout compensation, or cannot read that recovery queue. Run frameworks admin billing recovery list to inspect retry status and errors. Normal provider settlement waits are not failures; waits over fourteen days need investigation. Missing metering holds activation or an upgrade at its recorded billing boundary.
+              summary: Provider activation, settlement or billing recovery needs attention
+              description: Purser has blocked provider settlement work, repeatedly failed provider activation, a paid tier upgrade, a scheduled downgrade's provider price, suspended-stream stop, tenant billing closure or expired-checkout compensation, or cannot read that recovery queue. Run frameworks admin billing recovery list to inspect retry status and errors. Normal provider settlement waits are not failures; waits over fourteen days need investigation. Missing metering holds activation or an upgrade at its recorded billing boundary.
       - eval_time: 12m
         groupname: frameworks.rules
         alertname: PurserProviderWebhookInboxStuck

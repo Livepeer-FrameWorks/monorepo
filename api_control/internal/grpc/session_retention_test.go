@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 )
 
 func TestSessionRetentionPreservesLiveLegacyAgeAnchor(t *testing.T) {
@@ -25,6 +26,41 @@ func TestSessionRetentionPreservesLiveLegacyAgeAnchor(t *testing.T) {
 	deleted, tokens, err := s.retainEndedSession(context.Background(), key, 2)
 	if err != nil || deleted != 0 || tokens != 0 {
 		t.Fatalf("live legacy chain lost its age anchor: deleted=%d tokens=%d err=%v", deleted, tokens, err)
+	}
+	if err = mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionRetentionReplayCountsOnlyCommittedWrites(t *testing.T) {
+	s, mock, done := newMockServer(t)
+	defer done()
+	key := sessionRetentionKey{ID: authSessionTestID, TenantID: testTenantID, UserID: sessionTestUserID}
+	for attempt := range 2 {
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT id FROM commodore.auth_sessions`).WithArgs(key.TenantID, key.UserID, key.ID).
+			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(key.ID))
+		tokens := sqlmock.NewRows([]string{"id"}).AddRow("first")
+		if attempt == 1 {
+			tokens.AddRow("second")
+		}
+		mock.ExpectQuery(`SELECT id FROM commodore.refresh_tokens`).WithArgs(key.TenantID, key.UserID, key.ID, int32(2)).WillReturnRows(tokens)
+		mock.ExpectQuery(`SELECT EXISTS`).WithArgs(key.TenantID, key.UserID).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+		mock.ExpectExec(`DELETE FROM commodore.refresh_tokens`).WithArgs(key.TenantID, key.UserID, key.ID, "first").WillReturnResult(sqlmock.NewResult(0, 1))
+		if attempt == 0 {
+			mock.ExpectExec(`DELETE FROM commodore.auth_sessions`).WithArgs(key.TenantID, key.UserID, key.ID).
+				WillReturnError(&pq.Error{Code: "40001", Message: "restart read required"})
+			mock.ExpectRollback()
+		} else {
+			mock.ExpectExec(`DELETE FROM commodore.refresh_tokens`).WithArgs(key.TenantID, key.UserID, key.ID, "second").WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec(`DELETE FROM commodore.auth_sessions`).WithArgs(key.TenantID, key.UserID, key.ID).WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectCommit()
+		}
+	}
+	deleted, tokens, err := s.retainEndedSession(context.Background(), key, 2)
+	if err != nil || deleted != 3 || tokens != 2 {
+		t.Fatalf("replay consumed budget for rolled-back writes: deleted=%d tokens=%d err=%v", deleted, tokens, err)
 	}
 	if err = mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -84,6 +120,8 @@ func TestSessionRetentionAdvancesPastProtectedOwner(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "user_id", "ended_at"}))
 	mock.ExpectQuery(`FROM commodore.refresh_tokens\s+WHERE session_id IS NULL`).WithArgs(zeroAt, zeroID, sessionRetentionBatch).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "user_id", "ended_at"}))
+	mock.ExpectQuery(`FROM commodore.refresh_tokens\s+WHERE session_id IS NOT NULL`).WithArgs(zeroAt, zeroID, sessionRetentionBatch).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "user_id", "session_id", "ended_at"}))
 	if _, err := s.sweepSessionRetention(context.Background(), &progress); err != nil {
 		t.Fatal(err)
 	}

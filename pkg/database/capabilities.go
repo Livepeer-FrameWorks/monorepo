@@ -109,8 +109,12 @@ var capabilityCatalog = map[string][]Capability{
 	"purser": {
 		{Name: "dimensioned usage", Engine: EnginePostgres, Probe: "SELECT tenant_id, source_id, usage_type, usage_value, dimensions, dimension_key FROM purser.usage_records LIMIT 0"},
 		{Name: "provider webhook leasing", Engine: EnginePostgres, Probe: "SELECT provider, event_key, status, claimed_at, lease_token FROM purser.provider_webhook_inbox LIMIT 0"},
+		{Name: "native settlement valuation", Engine: EnginePostgres, Probe: "SELECT tenant_id, settlement_currency, settled_amount_cents, settled_eur_cents, fee_eur_cents, net_eur_cents, valuation_units_per_eur, valuation_reference_date, valuation_source, last_error_code FROM purser.provider_settlements LIMIT 0", IntroducedIn: "v0.3.15"},
+		{Name: "billing recovery inventory", Engine: EnginePostgres, Probe: "SELECT id, tenant_id FROM purser.billing_recovery_failures LIMIT 0", IntroducedIn: "v0.3.15"},
+		{Name: "payment-owned webhook recovery", Engine: EnginePostgres, Probe: "SELECT tenant_id, provider_payment_id, last_error_code FROM purser.provider_webhook_inbox LIMIT 0", IntroducedIn: "v0.3.15"},
 	},
 	"quartermaster": {
+		{Name: "manifest registry ownership", Engine: EnginePostgres, Probe: "SELECT registration_source, registry_owner FROM quartermaster.service_instances LIMIT 0", IntroducedIn: "v0.3.15"},
 		{Name: "media capacity consent", Engine: EnginePostgres, Probe: "SELECT media_consent_revision, media_allow_ingest, media_allow_serve, media_allow_external_source FROM quartermaster.infrastructure_clusters LIMIT 0"},
 		{Name: "media capacity consent receipts", Engine: EnginePostgres, Probe: "SELECT tenant_id, cluster_record_id, cluster_id, revision, request_sha256, review_digest FROM quartermaster.media_capacity_consent_changes LIMIT 0"},
 		{Name: "service cluster assignments", Engine: EnginePostgres, Probe: "SELECT service_instance_id, cluster_id, source, is_active FROM quartermaster.service_cluster_assignments LIMIT 0"},
