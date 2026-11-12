@@ -292,16 +292,20 @@
 
 - name: Preview Nginx permissions with an absent reader group
   hosts: all
-  become: true
-  gather_facts: true
-  check_mode: true
-  vars:
-    nginx_ingress_reader_group: frameworks-ingress-preview
+  become: false
+  gather_facts: false
   tasks:
-    - name: Preview ingress permission and proxy convergence
-      ansible.builtin.include_role:
-        name: frameworks.infra.nginx
-        tasks_from: configure
+    - name: Exercise the release preview through the actual check-mode CLI
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python | dirname }}/ansible-playbook"
+          - --check
+          - --inventory
+          - "{{ ansible_inventory_sources | first }}"
+          - "{{ playbook_dir }}/preview_ingress.yml"
+      delegate_to: localhost
+      run_once: true
+      changed_when: false
 
 - name: Verify Nginx preview made no changes
   hosts: all
