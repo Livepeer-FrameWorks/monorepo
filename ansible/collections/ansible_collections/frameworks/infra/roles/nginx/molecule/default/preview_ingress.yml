@@ -1,0 +1,12 @@
+---
+- name: Preview Nginx ingress permissions before reader-group creation
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    nginx_ingress_reader_group: frameworks-ingress-preview
+  tasks:
+    - name: Include the normal release permission tasks
+      ansible.builtin.include_role:
+        name: frameworks.infra.nginx
+        tasks_from: configure

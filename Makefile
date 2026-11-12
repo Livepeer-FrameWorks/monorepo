@@ -1697,6 +1697,11 @@ verify-publisher-recovery:
 	@$(CONTRACT_GO_TEST) api_balancing postgres/publisher-recovery-plan -tags schema_verify -run '^TestPublisherRecoverySelectionSkipsActiveSessions_RealPG$$' -count=1 -timeout 180s ./internal/database/foghorndb/
 	@$(YUGABYTE_FIXTURE) $(CONTRACT_GO_TEST) api_balancing yugabyte/publisher-recovery-plan -tags schema_verify -run '^TestPublisherRecoverySelectionSkipsActiveSessions_RealYugabyte$$' -count=1 -timeout 300s ./internal/database/foghorndb/
 
+.PHONY: verify-publisher-push-target-confirmation
+verify-publisher-push-target-confirmation:
+	@$(CONTRACT_GO_TEST) api_balancing postgres/publisher-push-target-confirmation -tags schema_verify -run '^TestPublisherAdmissionOperations_RealPG$$/push-target_confirmation_and_replay$$' -v -count=1 -timeout 180s ./internal/control/
+	@$(YUGABYTE_FIXTURE) $(CONTRACT_GO_TEST) api_balancing yugabyte/publisher-push-target-confirmation -tags schema_verify -run '^TestPublisherAdmissionOperations_RealYugabyte$$/push-target_confirmation_and_replay$$' -v -count=1 -timeout 300s ./internal/control/
+
 verify-publisher-admission:
 	@$(CONTRACT_GO_TEST) api_control postgres/publisher-lease -tags schema_verify -run '^TestPublisherLease_RealPG$$' -count=1 -timeout 180s ./internal/grpc/
 	@$(YUGABYTE_FIXTURE) $(CONTRACT_GO_TEST) api_control yugabyte/publisher-lease -tags schema_verify -run '^TestPublisherLease_RealYugabyte$$' -count=1 -timeout 300s ./internal/grpc/
