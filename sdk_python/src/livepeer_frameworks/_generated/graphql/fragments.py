@@ -2224,14 +2224,6 @@ class BillingTierDefaultEntitlements(BaseModel):
     value: str
 
 
-class BootstrapEdgePendingDefault(BaseModel):
-    """Enrollment is accepted for retry while the public identity converges."""
-
-    cluster_id: str = Field(alias="clusterId")
-    phase: str
-    retry_after_seconds: int = Field(alias="retryAfterSeconds")
-
-
 class BootstrapEdgeResponseDefault(BaseModel):
     """Result of a successful bootstrapEdge call. Carries everything the edge
     needs to come online: its identity, its assigned Foghorn for runtime
@@ -19499,7 +19491,6 @@ BillingDetailsDefault.model_rebuild()
 BillingLifecycleDefault.model_rebuild()
 BillingStatusDefault.model_rebuild()
 BillingTierDefault.model_rebuild()
-BootstrapEdgePendingDefault.model_rebuild()
 BootstrapEdgeResponseDefault.model_rebuild()
 BufferEventDefault.model_rebuild()
 BufferEventInNodeDefault.model_rebuild()

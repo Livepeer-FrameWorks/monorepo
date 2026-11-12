@@ -1805,8 +1805,6 @@ dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | nul
 /** A node-copy listing plus whether it was capped at the per-request limit. When `truncated` is true, `copies` is not exhaustive — present the count as a lower bound (e.g. "500+") or a "results truncated" note, never as an exact total. */
 export type AssetNodeCopiesDefaultFieldsFragment = { truncated: boolean, copies: Array<{ nodeId: string, nodeName: string | null, clusterId: string | null, region: string | null, latitude: number | null, longitude: number | null, role: string, isComplete: boolean, sizeBytes: number | null, updatedAt: string | null }> };
 
-export type AuthErrorDefaultFieldsFragment = { message: string, code: string | null };
-
 /** One of the signed-in user's own interactive sessions. */
 export type AuthSessionDefaultFieldsFragment = { id: string, clientKind: AuthClientKind, clientId: string, authMethod: AuthMethod, label: string, clientVersion: string | null, /** Masked source IP; full addresses are never returned. */
 ipAddress: string | null, /** City and country when a local GeoIP database is configured. */
@@ -1968,12 +1966,6 @@ sla: boolean, /** Whether the tenant may override the tier's processing profiles
 processingCustomizable: boolean }, /** Priced behaviors per meter (rating engine input). */
 pricingRules: Array<{ meter: string, model: string, currency: string, includedQuantity: string, unitPrice: string, configJson: string }>, /** Non-billing grants (e.g. recording_retention_days). Values are JSON-encoded strings. */
 entitlements: Array<{ key: string, value: string }> };
-
-/** Enrollment is accepted for retry while the public identity converges. */
-export type BootstrapEdgePendingDefaultFieldsFragment = { clusterId: string, phase: string, retryAfterSeconds: number };
-
-/** Result of a successful bootstrapEdge call. Carries everything the edge needs to come online: its identity, its assigned Foghorn for runtime traffic, and (if the cluster issues per-node certs) its initial TLS material plus the cluster's internal CA bundle. */
-export type BootstrapEdgeResponseDefaultFieldsFragment = { nodeId: string, edgeDomain: string, poolDomain: string | null, clusterSlug: string, clusterId: string, foghornGrpcAddr: string, certPem: string | null, keyPem: string | null, internalCaBundle: string | null, telemetry: { enabled: boolean, writeUrl: string | null, bearerToken: string | null } | null };
 
 export type BufferEventDefaultFieldsFragment = { id: string, eventId: string, timestamp: string, nodeId: string | null, bufferState: BufferState, eventData: string | null, payload: unknown };
 
@@ -4100,8 +4092,6 @@ thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, tracks: Array<{ trackName: string, trackType: string, codec: string | null, bitrateKbps: number | null, bitrateBps: number | null, buffer: number | null, jitter: number | null, width: number | null, height: number | null, fps: number | null, resolution: string | null, hasBFrames: boolean | null, channels: number | null, sampleRate: number | null }> | null };
 
-export type ValidationErrorDefaultFieldsFragment = { message: string, code: string | null, field: string | null, constraint: string | null };
-
 export type ViewerCountBucketDefaultFieldsFragment = { timestamp: string, viewerCount: number, streamId: string | null, stream: { /** Global unique identifier for Relay compatibility. */
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
@@ -4730,20 +4720,6 @@ tenantId: string | null, clusterId: string | null, region: string | null, alertn
 resolution: IncidentResolution | null, title: string, summary: string | null, /** Alerts of this incident that are still firing. */
 firingAlertCount: number, startedAt: string, lastAlertAt: string, acknowledgedAt: string | null, acknowledgedBy: string | null, assignedTo: string | null, resolvedAt: string | null, resolvedBy: string | null, createdAt: string, updatedAt: string }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
-    | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
-   };
-
-export type BootstrapEdgeMutationVariables = Exact<{
-  input: BootstrapEdgeInput;
-}>;
-
-
-/** Bootstrap a new edge using only an opaque bootstrap token. Public — the bootstrap token is itself the credential. Bridge resolves the token's cluster via Quartermaster, finds the cluster's assigned Foghorn, and proxies a PreRegisterEdge call so the operator never has to know cluster topology. */
-export type BootstrapEdgeMutation = { /** Bootstrap a new edge using only an opaque bootstrap token. Public — the bootstrap token is itself the credential. Bridge resolves the token's cluster via Quartermaster, finds the cluster's assigned Foghorn, and proxies a PreRegisterEdge call so the operator never has to know cluster topology. */
-bootstrapEdge:
-    | { __typename: 'AuthError', message: string, code: string | null }
-    | { __typename: 'BootstrapEdgePending', clusterId: string, phase: string, retryAfterSeconds: number }
-    | { __typename: 'BootstrapEdgeResponse', nodeId: string, edgeDomain: string, poolDomain: string | null, clusterSlug: string, clusterId: string, foghornGrpcAddr: string, certPem: string | null, keyPem: string | null, internalCaBundle: string | null, telemetry: { enabled: boolean, writeUrl: string | null, bearerToken: string | null } | null }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
@@ -9255,6 +9231,27 @@ resolvedInternalName: string | null }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
+export type BootstrapEdgeMutationVariables = Exact<{
+  input: BootstrapEdgeInput;
+}>;
+
+
+/** Bootstrap a new edge using only an opaque bootstrap token. Public — the bootstrap token is itself the credential. Bridge resolves the token's cluster via Quartermaster, finds the cluster's assigned Foghorn, and proxies a PreRegisterEdge call so the operator never has to know cluster topology. */
+export type BootstrapEdgeMutation = { /** Bootstrap a new edge using only an opaque bootstrap token. Public — the bootstrap token is itself the credential. Bridge resolves the token's cluster via Quartermaster, finds the cluster's assigned Foghorn, and proxies a PreRegisterEdge call so the operator never has to know cluster topology. */
+bootstrapEdge:
+    | { __typename: 'AuthError', message: string, code: string | null }
+    | { __typename: 'BootstrapEdgePending' }
+    | { __typename: 'BootstrapEdgeResponse', nodeId: string, edgeDomain: string, poolDomain: string | null, clusterSlug: string, clusterId: string, foghornGrpcAddr: string, certPem: string | null, keyPem: string | null, internalCaBundle: string | null, telemetry: { enabled: boolean, writeUrl: string | null, bearerToken: string | null } | null }
+    | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
+   };
+
+export type ValidationErrorDefaultFieldsFragment = { message: string, code: string | null, field: string | null, constraint: string | null };
+
+export type AuthErrorDefaultFieldsFragment = { message: string, code: string | null };
+
+/** Result of a successful bootstrapEdge call. Carries everything the edge needs to come online: its identity, its assigned Foghorn for runtime traffic, and (if the cluster issues per-node certs) its initial TLS material plus the cluster's internal CA bundle. */
+export type BootstrapEdgeResponseDefaultFieldsFragment = { nodeId: string, edgeDomain: string, poolDomain: string | null, clusterSlug: string, clusterId: string, foghornGrpcAddr: string, certPem: string | null, keyPem: string | null, internalCaBundle: string | null, telemetry: { enabled: boolean, writeUrl: string | null, bearerToken: string | null } | null };
+
 export type CreateClipMutationVariables = Exact<{
   input: CreateClipInput;
 }>;
@@ -10936,12 +10933,6 @@ export const AssetNodeCopiesDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDo
   truncated
 }
     `, {"fragmentName":"AssetNodeCopiesDefaultFields"}) as unknown as TypedDocumentString<AssetNodeCopiesDefaultFieldsFragment, unknown>;
-export const AuthErrorDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-    `, {"fragmentName":"AuthErrorDefaultFields"}) as unknown as TypedDocumentString<AuthErrorDefaultFieldsFragment, unknown>;
 /** One of the signed-in user's own interactive sessions. */
 export const AuthSessionDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment AuthSessionDefaultFields on AuthSession {
@@ -11297,33 +11288,6 @@ export const BillingTierDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocume
   isEnterprise
 }
     `, {"fragmentName":"BillingTierDefaultFields"}) as unknown as TypedDocumentString<BillingTierDefaultFieldsFragment, unknown>;
-/** Enrollment is accepted for retry while the public identity converges. */
-export const BootstrapEdgePendingDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
-    fragment BootstrapEdgePendingDefaultFields on BootstrapEdgePending {
-  clusterId
-  phase
-  retryAfterSeconds
-}
-    `, {"fragmentName":"BootstrapEdgePendingDefaultFields"}) as unknown as TypedDocumentString<BootstrapEdgePendingDefaultFieldsFragment, unknown>;
-/** Result of a successful bootstrapEdge call. Carries everything the edge needs to come online: its identity, its assigned Foghorn for runtime traffic, and (if the cluster issues per-node certs) its initial TLS material plus the cluster's internal CA bundle. */
-export const BootstrapEdgeResponseDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
-    fragment BootstrapEdgeResponseDefaultFields on BootstrapEdgeResponse {
-  nodeId
-  edgeDomain
-  poolDomain
-  clusterSlug
-  clusterId
-  foghornGrpcAddr
-  certPem
-  keyPem
-  internalCaBundle
-  telemetry {
-    enabled
-    writeUrl
-    bearerToken
-  }
-}
-    `, {"fragmentName":"BootstrapEdgeResponseDefaultFields"}) as unknown as TypedDocumentString<BootstrapEdgeResponseDefaultFieldsFragment, unknown>;
 export const BufferEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment BufferEventDefaultFields on BufferEvent {
   id
@@ -16324,14 +16288,6 @@ export const TrackListUpdateDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDo
   primaryAudioSampleRate
 }
     `, {"fragmentName":"TrackListUpdateDefaultFields"}) as unknown as TypedDocumentString<TrackListUpdateDefaultFieldsFragment, unknown>;
-export const ValidationErrorDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
-    fragment ValidationErrorDefaultFields on ValidationError {
-  message
-  code
-  field
-  constraint
-}
-    `, {"fragmentName":"ValidationErrorDefaultFields"}) as unknown as TypedDocumentString<ValidationErrorDefaultFieldsFragment, unknown>;
 export const ViewerCountBucketDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment ViewerCountBucketDefaultFields on ViewerCountBucket {
   timestamp
@@ -17311,6 +17267,39 @@ export const X402PaymentResultDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typed
   message
 }
     `, {"fragmentName":"X402PaymentResultDefaultFields"}) as unknown as TypedDocumentString<X402PaymentResultDefaultFieldsFragment, unknown>;
+export const ValidationErrorDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
+    fragment ValidationErrorDefaultFields on ValidationError {
+  message
+  code
+  field
+  constraint
+}
+    `, {"fragmentName":"ValidationErrorDefaultFields"}) as unknown as TypedDocumentString<ValidationErrorDefaultFieldsFragment, unknown>;
+export const AuthErrorDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
+    fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
+}
+    `, {"fragmentName":"AuthErrorDefaultFields"}) as unknown as TypedDocumentString<AuthErrorDefaultFieldsFragment, unknown>;
+/** Result of a successful bootstrapEdge call. Carries everything the edge needs to come online: its identity, its assigned Foghorn for runtime traffic, and (if the cluster issues per-node certs) its initial TLS material plus the cluster's internal CA bundle. */
+export const BootstrapEdgeResponseDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
+    fragment BootstrapEdgeResponseDefaultFields on BootstrapEdgeResponse {
+  nodeId
+  edgeDomain
+  poolDomain
+  clusterSlug
+  clusterId
+  foghornGrpcAddr
+  certPem
+  keyPem
+  internalCaBundle
+  telemetry {
+    enabled
+    writeUrl
+    bearerToken
+  }
+}
+    `, {"fragmentName":"BootstrapEdgeResponseDefaultFields"}) as unknown as TypedDocumentString<BootstrapEdgeResponseDefaultFieldsFragment, unknown>;
 /** Accept a cluster invite. */
 export const AcceptClusterInviteDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation AcceptClusterInvite($inviteToken: String!) {
@@ -17322,11 +17311,7 @@ export const AcceptClusterInviteDocument = /*#__PURE__*/ new TypedDocumentString
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment ClusterSubscriptionDefaultFields on ClusterSubscription {
+    fragment ClusterSubscriptionDefaultFields on ClusterSubscription {
   id
   tenantId
   clusterId
@@ -17354,6 +17339,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<AcceptClusterInviteMutation, AcceptClusterInviteMutationVariables>;
 /** Acknowledge an incident. The incident stays open until its alerts resolve or someone resolves it. */
 export const AcknowledgeIncidentDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -17366,11 +17355,7 @@ export const AcknowledgeIncidentDocument = /*#__PURE__*/ new TypedDocumentString
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment IncidentDefaultFields on Incident {
+    fragment IncidentDefaultFields on Incident {
   id
   scope
   tenantId
@@ -17404,6 +17389,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<AcknowledgeIncidentMutation, AcknowledgeIncidentMutationVariables>;
 /** Add a note to an incident's timeline. */
 export const AddIncidentNoteDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -17416,11 +17405,7 @@ export const AddIncidentNoteDocument = /*#__PURE__*/ new TypedDocumentString(`
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment IncidentDefaultFields on Incident {
+    fragment IncidentDefaultFields on Incident {
   id
   scope
   tenantId
@@ -17454,6 +17439,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<AddIncidentNoteMutation, AddIncidentNoteMutationVariables>;
 export const ApplyClusterMediaConsentChangeDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation ApplyClusterMediaConsentChange($input: ApplyMediaCapacityConsentInput!) {
@@ -17465,11 +17454,7 @@ export const ApplyClusterMediaConsentChangeDocument = /*#__PURE__*/ new TypedDoc
     ...NotFoundErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment MediaCapacityConsentChangeDefaultFields on MediaCapacityConsentChange {
+    fragment MediaCapacityConsentChangeDefaultFields on MediaCapacityConsentChange {
   clusterId
   idempotencyKey
   revision
@@ -17507,6 +17492,10 @@ fragment NotFoundErrorDefaultFields on NotFoundError {
   code
   resourceType
   resourceId
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<ApplyClusterMediaConsentChangeMutation, ApplyClusterMediaConsentChangeMutationVariables>;
 /** Atomically saves the requested verbs. Saved does not mean effective on every cell. */
 export const ApplyMediaPlacementChangeDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -17519,11 +17508,7 @@ export const ApplyMediaPlacementChangeDocument = /*#__PURE__*/ new TypedDocument
     ...NotFoundErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment MediaPlacementChangeDefaultFields on MediaPlacementChange {
+    fragment MediaPlacementChangeDefaultFields on MediaPlacementChange {
   scope {
     kind
     streamId
@@ -17565,6 +17550,10 @@ fragment NotFoundErrorDefaultFields on NotFoundError {
   code
   resourceType
   resourceId
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<ApplyMediaPlacementChangeMutation, ApplyMediaPlacementChangeMutationVariables>;
 /** Approve a pending cluster subscription request. */
 export const ApproveClusterSubscriptionDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -17577,11 +17566,7 @@ export const ApproveClusterSubscriptionDocument = /*#__PURE__*/ new TypedDocumen
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment ClusterSubscriptionDefaultFields on ClusterSubscription {
+    fragment ClusterSubscriptionDefaultFields on ClusterSubscription {
   id
   tenantId
   clusterId
@@ -17609,6 +17594,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<ApproveClusterSubscriptionMutation, ApproveClusterSubscriptionMutationVariables>;
 /** Assign an incident to a user of the incident's tenant. A null assignee clears the assignment. */
 export const AssignIncidentDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -17621,11 +17610,7 @@ export const AssignIncidentDocument = /*#__PURE__*/ new TypedDocumentString(`
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment IncidentDefaultFields on Incident {
+    fragment IncidentDefaultFields on Incident {
   id
   scope
   tenantId
@@ -17659,49 +17644,11 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<AssignIncidentMutation, AssignIncidentMutationVariables>;
-/** Bootstrap a new edge using only an opaque bootstrap token. Public — the bootstrap token is itself the credential. Bridge resolves the token's cluster via Quartermaster, finds the cluster's assigned Foghorn, and proxies a PreRegisterEdge call so the operator never has to know cluster topology. */
-export const BootstrapEdgeDocument = /*#__PURE__*/ new TypedDocumentString(`
-    mutation BootstrapEdge($input: BootstrapEdgeInput!) {
-  bootstrapEdge(input: $input) {
-    __typename
-    ...BootstrapEdgeResponseDefaultFields
-    ...BootstrapEdgePendingDefaultFields
-    ...ValidationErrorDefaultFields
-    ...AuthErrorDefaultFields
-  }
-}
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment BootstrapEdgePendingDefaultFields on BootstrapEdgePending {
-  clusterId
-  phase
-  retryAfterSeconds
-}
-fragment BootstrapEdgeResponseDefaultFields on BootstrapEdgeResponse {
-  nodeId
-  edgeDomain
-  poolDomain
-  clusterSlug
-  clusterId
-  foghornGrpcAddr
-  certPem
-  keyPem
-  internalCaBundle
-  telemetry {
-    enabled
-    writeUrl
-    bearerToken
-  }
-}
-fragment ValidationErrorDefaultFields on ValidationError {
-  message
-  code
-  field
-  constraint
-}`) as unknown as TypedDocumentString<BootstrapEdgeMutation, BootstrapEdgeMutationVariables>;
 /** Change the postpaid billing tier. Upgrades start a fresh month and offset the replacement fee with the unused retained paid old fee, capped at the replacement price, without cash refund or spendable balance. Provider or metering reconciliation can leave them pending. Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement. Downgrades take effect at the end of the current billing period. A Stripe or Mollie subscription is repriced to the lower tier before it renews; a move to Free cancels it instead, at billingLifecycle.freeMoveFinalAt. Choosing the current tier cancels a downgrade while billingLifecycle.pendingTierState is SCHEDULED; it needs no billing profile or collection setup. A refusal returns ValidationError whose code is one of PENDING_CHECKOUT, PENDING_FREE_FALLBACK, PENDING_UPGRADE, OUTSTANDING_GRANT, ACCOUNT_CLOSED, DOWNGRADE_HELD, PAID_TERM_ENDING, PROVIDER_SUBSCRIPTION_LIVE, TIER_NOT_SELF_SERVICE, INVOICES_OUTSTANDING, COLLECTION_SETUP_REQUIRED or BILLING_PROFILE_REQUIRED, with a message to show the customer. */
 export const ChangeBillingTierDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation ChangeBillingTier($tierId: ID!) {
@@ -17712,11 +17659,7 @@ export const ChangeBillingTierDocument = /*#__PURE__*/ new TypedDocumentString(`
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment ChangeBillingTierPayloadDefaultFields on ChangeBillingTierPayload {
+    fragment ChangeBillingTierPayloadDefaultFields on ChangeBillingTierPayload {
   success
   message
   appliedTier {
@@ -17788,6 +17731,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<ChangeBillingTierMutation, ChangeBillingTierMutationVariables>;
 /** Change the password and sign out other sessions, retaining this session. */
 export const ChangePasswordDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -17799,11 +17746,7 @@ export const ChangePasswordDocument = /*#__PURE__*/ new TypedDocumentString(`
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment ChangePasswordPayloadDefaultFields on ChangePasswordPayload {
+    fragment ChangePasswordPayloadDefaultFields on ChangePasswordPayload {
   success
   revokedCount
 }
@@ -17812,6 +17755,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<ChangePasswordMutation, ChangePasswordMutationVariables>;
 /** Create a card checkout session for prepaid balance top-up. Returns a URL to redirect the user to Stripe/Mollie checkout. After successful payment, balance is credited automatically via webhook. */
 export const CreateCardTopupDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -17846,11 +17793,7 @@ export const CreateClusterInviteDocument = /*#__PURE__*/ new TypedDocumentString
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment ClusterInviteDefaultFields on ClusterInvite {
+    fragment ClusterInviteDefaultFields on ClusterInvite {
   id
   clusterId
   invitedTenantId
@@ -17876,6 +17819,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<CreateClusterInviteMutation, CreateClusterInviteMutationVariables>;
 /** Create a new support conversation. Optionally include an initial message. */
 export const CreateConversationDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -17887,11 +17834,7 @@ export const CreateConversationDocument = /*#__PURE__*/ new TypedDocumentString(
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment ConversationDefaultFields on Conversation {
+    fragment ConversationDefaultFields on Conversation {
   id
   subject
   status
@@ -17911,6 +17854,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<CreateConversationMutation, CreateConversationMutationVariables>;
 /** Create a crypto deposit address for prepaid balance top-up. Returns an HD-derived address for the agent to send crypto. This is the agent-friendly payment method - no human-in-the-loop required. */
 export const CreateCryptoTopupDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -17951,11 +17898,7 @@ export const CreateEdgeClusterDocument = /*#__PURE__*/ new TypedDocumentString(`
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment CreateEdgeClusterResponseDefaultFields on CreateEdgeClusterResponse {
+    fragment CreateEdgeClusterResponseDefaultFields on CreateEdgeClusterResponse {
   cluster {
     id
     clusterId
@@ -18006,6 +17949,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<CreateEdgeClusterMutation, CreateEdgeClusterMutationVariables>;
 /** Create an enrollment token for an existing cluster. Requires active subscription to the cluster. */
 export const CreateEnrollmentTokenDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18017,11 +17964,7 @@ export const CreateEnrollmentTokenDocument = /*#__PURE__*/ new TypedDocumentStri
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment CreateEnrollmentTokenResponseDefaultFields on CreateEnrollmentTokenResponse {
+    fragment CreateEnrollmentTokenResponseDefaultFields on CreateEnrollmentTokenResponse {
   bootstrapToken {
     id
     name
@@ -18043,6 +17986,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<CreateEnrollmentTokenMutation, CreateEnrollmentTokenMutationVariables>;
 /** Create a Mollie first payment to establish a mandate. For iDEAL: User pays via bank → SEPA Direct Debit mandate is created. For card: User enters card → card mandate is created. Requires an active, non-Enterprise postpaid tier with tier_level >= 1. Existing native subscriptions use changeBillingTier. A same-tier advance collection switch preserves the paid term. After successful payment, call createMollieSubscription to start recurring billing. */
 export const CreateMollieFirstPaymentDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18059,11 +18006,7 @@ export const CreateMollieFirstPaymentDocument = /*#__PURE__*/ new TypedDocumentS
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment MollieFirstPaymentDefaultFields on MollieFirstPayment {
+    fragment MollieFirstPaymentDefaultFields on MollieFirstPayment {
   paymentId
   customerId
   paymentUrl
@@ -18079,6 +18022,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<CreateMollieFirstPaymentMutation, CreateMollieFirstPaymentMutationVariables>;
 /** Create a Mollie subscription after mandate is valid. Call this after the first payment webhook confirms mandate creation. */
 export const CreateMollieSubscriptionDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18095,11 +18042,7 @@ export const CreateMollieSubscriptionDocument = /*#__PURE__*/ new TypedDocumentS
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment MollieSubscriptionDefaultFields on MollieSubscription {
+    fragment MollieSubscriptionDefaultFields on MollieSubscription {
   subscriptionId
   status
   nextPaymentDate
@@ -18115,6 +18058,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<CreateMollieSubscriptionMutation, CreateMollieSubscriptionMutationVariables>;
 /** Create a payment for subscription or usage. */
 export const CreatePaymentDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18126,11 +18073,7 @@ export const CreatePaymentDocument = /*#__PURE__*/ new TypedDocumentString(`
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment PaymentDefaultFields on Payment {
+    fragment PaymentDefaultFields on Payment {
   id
   paymentUrl
   walletAddress
@@ -18162,6 +18105,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<CreatePaymentMutation, CreatePaymentMutationVariables>;
 /** Create a Stripe Billing Portal session. Returns a URL to redirect the user to manage their subscription. */
 export const CreateStripeBillingPortalDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18174,11 +18121,7 @@ export const CreateStripeBillingPortalDocument = /*#__PURE__*/ new TypedDocument
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment NotFoundErrorDefaultFields on NotFoundError {
+    fragment NotFoundErrorDefaultFields on NotFoundError {
   message
   code
   resourceType
@@ -18192,6 +18135,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<CreateStripeBillingPortalMutation, CreateStripeBillingPortalMutationVariables>;
 /** Create a Stripe Checkout Session for subscription setup. Returns a URL to redirect the user to Stripe's hosted checkout page. After successful payment, user is redirected to successUrl. */
 export const CreateStripeCheckoutDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18209,11 +18156,7 @@ export const CreateStripeCheckoutDocument = /*#__PURE__*/ new TypedDocumentStrin
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment NotFoundErrorDefaultFields on NotFoundError {
+    fragment NotFoundErrorDefaultFields on NotFoundError {
   message
   code
   resourceType
@@ -18228,6 +18171,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<CreateStripeCheckoutMutation, CreateStripeCheckoutMutationVariables>;
 /** Create an outbound webhook endpoint. The response carries the signing secret once; it is never returned again. A tenant can have at most 10 endpoints. */
 export const CreateWebhookEndpointDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18239,17 +18186,7 @@ export const CreateWebhookEndpointDocument = /*#__PURE__*/ new TypedDocumentStri
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment ValidationErrorDefaultFields on ValidationError {
-  message
-  code
-  field
-  constraint
-}
-fragment WebhookEndpointSecretDefaultFields on WebhookEndpointSecret {
+    fragment WebhookEndpointSecretDefaultFields on WebhookEndpointSecret {
   endpoint {
     id
     url
@@ -18268,6 +18205,16 @@ fragment WebhookEndpointSecretDefaultFields on WebhookEndpointSecret {
     updatedAt
   }
   secret
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+  message
+  code
+  field
+  constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<CreateWebhookEndpointMutation, CreateWebhookEndpointMutationVariables>;
 /** Check the status of a crypto top-up (for polling). Returns current status, confirmations, and credited amount when complete. */
 export const CryptoTopupStatusMutationDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18317,11 +18264,7 @@ export const DeleteWebhookEndpointDocument = /*#__PURE__*/ new TypedDocumentStri
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment DeleteSuccessDefaultFields on DeleteSuccess {
+    fragment DeleteSuccessDefaultFields on DeleteSuccess {
   success
   deletedId
   pending
@@ -18331,6 +18274,10 @@ fragment NotFoundErrorDefaultFields on NotFoundError {
   code
   resourceType
   resourceId
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<DeleteWebhookEndpointMutation, DeleteWebhookEndpointMutationVariables>;
 /** Disable an endpoint. Its pending deliveries are skipped. */
 export const DisableWebhookEndpointDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18342,11 +18289,7 @@ export const DisableWebhookEndpointDocument = /*#__PURE__*/ new TypedDocumentStr
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment NotFoundErrorDefaultFields on NotFoundError {
+    fragment NotFoundErrorDefaultFields on NotFoundError {
   message
   code
   resourceType
@@ -18368,6 +18311,10 @@ fragment WebhookEndpointDefaultFields on WebhookEndpoint {
   previousSecretExpiresAt
   createdAt
   updatedAt
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<DisableWebhookEndpointMutation, DisableWebhookEndpointMutationVariables>;
 /** Enable a disabled endpoint. Deliveries skipped while it was disabled are not sent again; replay them with replayWebhookDeliveries. */
 export const EnableWebhookEndpointDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18379,11 +18326,7 @@ export const EnableWebhookEndpointDocument = /*#__PURE__*/ new TypedDocumentStri
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment NotFoundErrorDefaultFields on NotFoundError {
+    fragment NotFoundErrorDefaultFields on NotFoundError {
   message
   code
   resourceType
@@ -18405,6 +18348,10 @@ fragment WebhookEndpointDefaultFields on WebhookEndpoint {
   previousSecretExpiresAt
   createdAt
   updatedAt
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<EnableWebhookEndpointMutation, EnableWebhookEndpointMutationVariables>;
 /** Link an email to a wallet-only account. This enables the upgrade path from prepaid to postpaid billing. A verification email will be sent to confirm the address. */
 export const LinkEmailDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18416,11 +18363,7 @@ export const LinkEmailDocument = /*#__PURE__*/ new TypedDocumentString(`
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment LinkEmailPayloadDefaultFields on LinkEmailPayload {
+    fragment LinkEmailPayloadDefaultFields on LinkEmailPayload {
   success
   message
   verificationSent
@@ -18430,6 +18373,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<LinkEmailMutation, LinkEmailMutationVariables>;
 /** Link an additional wallet to the current user's account. Requires an existing authenticated session. */
 export const LinkWalletDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18441,9 +18388,11 @@ export const LinkWalletDocument = /*#__PURE__*/ new TypedDocumentString(`
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
+    fragment WalletIdentityDefaultFields on WalletIdentity {
+  id
+  address
+  createdAt
+  lastAuthAt
 }
 fragment ValidationErrorDefaultFields on ValidationError {
   message
@@ -18451,11 +18400,9 @@ fragment ValidationErrorDefaultFields on ValidationError {
   field
   constraint
 }
-fragment WalletIdentityDefaultFields on WalletIdentity {
-  id
-  address
-  createdAt
-  lastAuthAt
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<LinkWalletMutation, LinkWalletMutationVariables>;
 /** Mark Skipper investigation reports as read. Pass specific IDs, or omit to mark all as read. Returns the number of reports marked. */
 export const MarkSkipperReportsReadDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18474,11 +18421,7 @@ export const OpenMistAdminSessionDocument = /*#__PURE__*/ new TypedDocumentStrin
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment MistAdminSessionDefaultFields on MistAdminSession {
+    fragment MistAdminSessionDefaultFields on MistAdminSession {
   postUrl
   sessionToken
   expiresAt
@@ -18494,6 +18437,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<OpenMistAdminSessionMutation, OpenMistAdminSessionMutationVariables>;
 /** Switch from prepaid to a selected postpaid tier. A verified email is always required. Free needs no billing profile or payment provider; paid tiers require confirmed provider collection. Existing prepaid balance is carried forward as account credit. */
 export const PromoteToPaidDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18505,11 +18452,7 @@ export const PromoteToPaidDocument = /*#__PURE__*/ new TypedDocumentString(`
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment PromoteToPaidPayloadDefaultFields on PromoteToPaidPayload {
+    fragment PromoteToPaidPayloadDefaultFields on PromoteToPaidPayload {
   success
   message
   newBillingModel
@@ -18521,6 +18464,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<PromoteToPaidMutation, PromoteToPaidMutationVariables>;
 /** Reject a pending cluster subscription request. */
 export const RejectClusterSubscriptionDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18533,11 +18480,7 @@ export const RejectClusterSubscriptionDocument = /*#__PURE__*/ new TypedDocument
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment ClusterSubscriptionDefaultFields on ClusterSubscription {
+    fragment ClusterSubscriptionDefaultFields on ClusterSubscription {
   id
   tenantId
   clusterId
@@ -18565,6 +18508,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<RejectClusterSubscriptionMutation, RejectClusterSubscriptionMutationVariables>;
 /** Rename one of the signed-in user’s own sessions. */
 export const RenameAuthSessionDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18577,11 +18524,7 @@ export const RenameAuthSessionDocument = /*#__PURE__*/ new TypedDocumentString(`
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment AuthSessionDefaultFields on AuthSession {
+    fragment AuthSessionDefaultFields on AuthSession {
   id
   clientKind
   clientId
@@ -18606,6 +18549,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<RenameAuthSessionMutation, RenameAuthSessionMutationVariables>;
 /** Send again the failed and skipped deliveries of one endpoint created in [createdAfter, createdBefore), oldest first, at most 1000 per call. Call again while hasMore is true. */
 export const ReplayWebhookDeliveriesDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18622,15 +18569,15 @@ export const ReplayWebhookDeliveriesDocument = /*#__PURE__*/ new TypedDocumentSt
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment NotFoundErrorDefaultFields on NotFoundError {
+    fragment NotFoundErrorDefaultFields on NotFoundError {
   message
   code
   resourceType
   resourceId
+}
+fragment WebhookReplayResultDefaultFields on WebhookReplayResult {
+  replayedCount
+  hasMore
 }
 fragment ValidationErrorDefaultFields on ValidationError {
   message
@@ -18638,9 +18585,9 @@ fragment ValidationErrorDefaultFields on ValidationError {
   field
   constraint
 }
-fragment WebhookReplayResultDefaultFields on WebhookReplayResult {
-  replayedCount
-  hasMore
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<ReplayWebhookDeliveriesMutation, ReplayWebhookDeliveriesMutationVariables>;
 /** Send a finished delivery again under the same ID, so the receiver sees the same webhook-id. The endpoint must be enabled. */
 export const ReplayWebhookDeliveryDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18653,21 +18600,11 @@ export const ReplayWebhookDeliveryDocument = /*#__PURE__*/ new TypedDocumentStri
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment NotFoundErrorDefaultFields on NotFoundError {
+    fragment NotFoundErrorDefaultFields on NotFoundError {
   message
   code
   resourceType
   resourceId
-}
-fragment ValidationErrorDefaultFields on ValidationError {
-  message
-  code
-  field
-  constraint
 }
 fragment WebhookDeliveryDefaultFields on WebhookDelivery {
   id
@@ -18694,6 +18631,16 @@ fragment WebhookDeliveryDefaultFields on WebhookDelivery {
     responseExcerpt
     attemptedAt
   }
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+  message
+  code
+  field
+  constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<ReplayWebhookDeliveryMutation, ReplayWebhookDeliveryMutationVariables>;
 /** Request to subscribe to a cluster. */
 export const RequestClusterSubscriptionDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18706,11 +18653,7 @@ export const RequestClusterSubscriptionDocument = /*#__PURE__*/ new TypedDocumen
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment ClusterSubscriptionDefaultFields on ClusterSubscription {
+    fragment ClusterSubscriptionDefaultFields on ClusterSubscription {
   id
   tenantId
   clusterId
@@ -18738,6 +18681,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<RequestClusterSubscriptionMutation, RequestClusterSubscriptionMutationVariables>;
 /** Clear a per-asset retention override and recompute the horizon from the tenant default (or tier entitlement when no tenant default is set). */
 export const ResetMediaRetentionOverrideDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18750,11 +18697,7 @@ export const ResetMediaRetentionOverrideDocument = /*#__PURE__*/ new TypedDocume
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment EffectiveRetentionDefaultFields on EffectiveRetention {
+    fragment EffectiveRetentionDefaultFields on EffectiveRetention {
   retentionDays
   retentionUntil
   source
@@ -18770,6 +18713,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<ResetMediaRetentionOverrideMutation, ResetMediaRetentionOverrideMutationVariables>;
 /** Resolve an incident manually. Repeats of the same firing alerts do not reopen it; a new alert opens a new incident. */
 export const ResolveIncidentDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18782,11 +18729,7 @@ export const ResolveIncidentDocument = /*#__PURE__*/ new TypedDocumentString(`
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment IncidentDefaultFields on Incident {
+    fragment IncidentDefaultFields on Incident {
   id
   scope
   tenantId
@@ -18820,6 +18763,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<ResolveIncidentMutation, ResolveIncidentMutationVariables>;
 /** Sign out one of the signed-in user’s own sessions. Idempotent; current=true means this caller was signed out. */
 export const RevokeAuthSessionDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18832,11 +18779,7 @@ export const RevokeAuthSessionDocument = /*#__PURE__*/ new TypedDocumentString(`
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment NotFoundErrorDefaultFields on NotFoundError {
+    fragment NotFoundErrorDefaultFields on NotFoundError {
   message
   code
   resourceType
@@ -18851,6 +18794,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<RevokeAuthSessionMutation, RevokeAuthSessionMutationVariables>;
 /** Revoke a cluster invite. */
 export const RevokeClusterInviteDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18862,11 +18809,7 @@ export const RevokeClusterInviteDocument = /*#__PURE__*/ new TypedDocumentString
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment DeleteSuccessDefaultFields on DeleteSuccess {
+    fragment DeleteSuccessDefaultFields on DeleteSuccess {
   success
   deletedId
   pending
@@ -18876,6 +18819,10 @@ fragment NotFoundErrorDefaultFields on NotFoundError {
   code
   resourceType
   resourceId
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<RevokeClusterInviteMutation, RevokeClusterInviteMutationVariables>;
 /** Sign out every other session while retaining the presented named session. */
 export const RevokeOtherAuthSessionsDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18887,11 +18834,7 @@ export const RevokeOtherAuthSessionsDocument = /*#__PURE__*/ new TypedDocumentSt
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment RevokeOtherAuthSessionsPayloadDefaultFields on RevokeOtherAuthSessionsPayload {
+    fragment RevokeOtherAuthSessionsPayloadDefaultFields on RevokeOtherAuthSessionsPayload {
   revokedCount
 }
 fragment ValidationErrorDefaultFields on ValidationError {
@@ -18899,6 +18842,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<RevokeOtherAuthSessionsMutation, RevokeOtherAuthSessionsMutationVariables>;
 /** Replace an endpoint's signing secret and return the new one once. The previous secret keeps signing alongside it for 24 hours, unless revokePrevious is true. */
 export const RotateWebhookEndpointSecretDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18910,11 +18857,7 @@ export const RotateWebhookEndpointSecretDocument = /*#__PURE__*/ new TypedDocume
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment NotFoundErrorDefaultFields on NotFoundError {
+    fragment NotFoundErrorDefaultFields on NotFoundError {
   message
   code
   resourceType
@@ -18939,6 +18882,10 @@ fragment WebhookEndpointSecretDefaultFields on WebhookEndpointSecret {
     updatedAt
   }
   secret
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<RotateWebhookEndpointSecretMutation, RotateWebhookEndpointSecretMutationVariables>;
 /** Send a message in an existing conversation. Messages are delivered to support agents in real-time. */
 export const SendMessageDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18951,11 +18898,7 @@ export const SendMessageDocument = /*#__PURE__*/ new TypedDocumentString(`
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment MessageDefaultFields on Message {
+    fragment MessageDefaultFields on Message {
   id
   conversationId
   content
@@ -18973,6 +18916,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<SendMessageMutation, SendMessageMutationVariables>;
 /** Set the tenant per-class retention default. `targetType` picks the asset class (VOD, DVR, or CLIP). `days` is in [0, tier cap] where 0 means "keep forever" — only honored on uncapped (paid) tiers; Free clamps to its cap at write time. `clear: true` NULLs the column so the tenant inherits the per-class system default (VOD: keep forever; DVR/clip: 30d). The tier cap is exposed via `mediaRetentionPolicy.bounds.maxRecordingRetentionDays`. */
 export const SetMediaRetentionPolicyDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -18984,11 +18931,7 @@ export const SetMediaRetentionPolicyDocument = /*#__PURE__*/ new TypedDocumentSt
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment MediaRetentionPolicyDefaultFields on MediaRetentionPolicy {
+    fragment MediaRetentionPolicyDefaultFields on MediaRetentionPolicy {
   bounds {
     maxRecordingRetentionDays
   }
@@ -19006,6 +18949,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<SetMediaRetentionPolicyMutation, SetMediaRetentionPolicyMutationVariables>;
 /** Set a node's operational mode. Drains/maintenance bleed traffic away from the node; restoring with NORMAL re-admits it to routing. Reason is recorded in Foghorn's audit trail. */
 export const SetNodeModeDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -19018,11 +18965,7 @@ export const SetNodeModeDocument = /*#__PURE__*/ new TypedDocumentString(`
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment InfrastructureNodeDefaultFields on InfrastructureNode {
+    fragment InfrastructureNodeDefaultFields on InfrastructureNode {
   id
   nodeId
   clusterId
@@ -19079,6 +19022,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<SetNodeModeMutation, SetNodeModeMutationVariables>;
 /** Set the tenant's preferred cluster. Must be a subscribed cluster. Used by routing services when choosing tenant-preferred infrastructure. */
 export const SetPreferredClusterDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -19091,11 +19038,7 @@ export const SetPreferredClusterDocument = /*#__PURE__*/ new TypedDocumentString
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment ClusterDefaultFields on Cluster {
+    fragment ClusterDefaultFields on Cluster {
   id
   clusterId
   clusterName
@@ -19134,6 +19077,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<SetPreferredClusterMutation, SetPreferredClusterMutationVariables>;
 /** Write per-stream retention overrides for DVR and clip artifacts created on this stream. Unspecified input fields are left alone; passing -1 on a field clears the override (falls back to the tenant default). Values exceeding the tier cap are clamped at write time. */
 export const SetStreamRetentionOverridesDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -19146,11 +19093,7 @@ export const SetStreamRetentionOverridesDocument = /*#__PURE__*/ new TypedDocume
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment NotFoundErrorDefaultFields on NotFoundError {
+    fragment NotFoundErrorDefaultFields on NotFoundError {
   message
   code
   resourceType
@@ -19166,6 +19109,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<SetStreamRetentionOverridesMutation, SetStreamRetentionOverridesMutationVariables>;
 /** Submit an x402 payment payload to settle a 402 response or top up balance. Authenticated members may settle viewer resources; direct top-ups and non-viewer resources require billing management authority on the target tenant. */
 export const SubmitX402PaymentDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -19178,21 +19125,11 @@ export const SubmitX402PaymentDocument = /*#__PURE__*/ new TypedDocumentString(`
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment NotFoundErrorDefaultFields on NotFoundError {
+    fragment NotFoundErrorDefaultFields on NotFoundError {
   message
   code
   resourceType
   resourceId
-}
-fragment ValidationErrorDefaultFields on ValidationError {
-  message
-  code
-  field
-  constraint
 }
 fragment X402PaymentResultDefaultFields on X402PaymentResult {
   success
@@ -19203,6 +19140,16 @@ fragment X402PaymentResultDefaultFields on X402PaymentResult {
   newBalanceCents
   txHash
   message
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+  message
+  code
+  field
+  constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<SubmitX402PaymentMutation, SubmitX402PaymentMutationVariables>;
 /** Subscribe to a cluster for streaming access. */
 export const SubscribeToClusterDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -19221,11 +19168,7 @@ export const TestWebhookEndpointDocument = /*#__PURE__*/ new TypedDocumentString
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment NotFoundErrorDefaultFields on NotFoundError {
+    fragment NotFoundErrorDefaultFields on NotFoundError {
   message
   code
   resourceType
@@ -19272,6 +19215,10 @@ fragment WebhookTestResultDefaultFields on WebhookTestResult {
     responseExcerpt
     attemptedAt
   }
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<TestWebhookEndpointMutation, TestWebhookEndpointMutationVariables>;
 /** Unlink a wallet from the current user's account. Cannot unlink the last wallet if user has no email. */
 export const UnlinkWalletDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -19283,11 +19230,7 @@ export const UnlinkWalletDocument = /*#__PURE__*/ new TypedDocumentString(`
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment DeleteSuccessDefaultFields on DeleteSuccess {
+    fragment DeleteSuccessDefaultFields on DeleteSuccess {
   success
   deletedId
   pending
@@ -19297,6 +19240,10 @@ fragment NotFoundErrorDefaultFields on NotFoundError {
   code
   resourceType
   resourceId
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<UnlinkWalletMutation, UnlinkWalletMutationVariables>;
 /** Unsubscribe from a cluster. */
 export const UnsubscribeFromClusterDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -19340,11 +19287,7 @@ export const UpdateClusterMarketplaceDocument = /*#__PURE__*/ new TypedDocumentS
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment ClusterDefaultFields on Cluster {
+    fragment ClusterDefaultFields on Cluster {
   id
   clusterId
   clusterName
@@ -19383,6 +19326,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<UpdateClusterMarketplaceMutation, UpdateClusterMarketplaceMutationVariables>;
 /** Apply a per-asset retention override on a finalized DVR recording, clip, or VOD asset (set targetType accordingly). Override beats tenant default beats tier entitlement. Active assets are rejected — retention applies post-finalize. */
 export const UpdateMediaRetentionDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -19395,11 +19342,7 @@ export const UpdateMediaRetentionDocument = /*#__PURE__*/ new TypedDocumentStrin
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment EffectiveRetentionDefaultFields on EffectiveRetention {
+    fragment EffectiveRetentionDefaultFields on EffectiveRetention {
   retentionDays
   retentionUntil
   source
@@ -19415,6 +19358,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<UpdateMediaRetentionMutation, UpdateMediaRetentionMutationVariables>;
 /** Update the title of a Skipper conversation. */
 export const UpdateSkipperConversationDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -19439,11 +19386,7 @@ export const UpdateTenantDocument = /*#__PURE__*/ new TypedDocumentString(`
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment TenantDefaultFields on Tenant {
+    fragment TenantDefaultFields on Tenant {
   id
   name
   subdomain
@@ -19467,6 +19410,10 @@ fragment ValidationErrorDefaultFields on ValidationError {
   code
   field
   constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<UpdateTenantMutation, UpdateTenantMutationVariables>;
 /** Change an endpoint's URL, description, or event types. Omitted fields keep their value. */
 export const UpdateWebhookEndpointDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -19479,21 +19426,11 @@ export const UpdateWebhookEndpointDocument = /*#__PURE__*/ new TypedDocumentStri
     ...AuthErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment NotFoundErrorDefaultFields on NotFoundError {
+    fragment NotFoundErrorDefaultFields on NotFoundError {
   message
   code
   resourceType
   resourceId
-}
-fragment ValidationErrorDefaultFields on ValidationError {
-  message
-  code
-  field
-  constraint
 }
 fragment WebhookEndpointDefaultFields on WebhookEndpoint {
   id
@@ -19511,6 +19448,16 @@ fragment WebhookEndpointDefaultFields on WebhookEndpoint {
   previousSecretExpiresAt
   createdAt
   updatedAt
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+  message
+  code
+  field
+  constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<UpdateWebhookEndpointMutation, UpdateWebhookEndpointMutationVariables>;
 /** Authenticate using a signed message from an Ethereum wallet. Returns a JWT token for API access. Creates a new account if the wallet has not been seen before (auto-provisioning). */
 export const WalletLoginDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -19521,13 +19468,7 @@ export const WalletLoginDocument = /*#__PURE__*/ new TypedDocumentString(`
     ...ValidationErrorDefaultFields
   }
 }
-    fragment ValidationErrorDefaultFields on ValidationError {
-  message
-  code
-  field
-  constraint
-}
-fragment WalletLoginPayloadDefaultFields on WalletLoginPayload {
+    fragment WalletLoginPayloadDefaultFields on WalletLoginPayload {
   token
   user {
     id
@@ -19544,6 +19485,12 @@ fragment WalletLoginPayloadDefaultFields on WalletLoginPayload {
   }
   expiresAt
   isNewAccount
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+  message
+  code
+  field
+  constraint
 }`) as unknown as TypedDocumentString<WalletLoginMutation, WalletLoginMutationVariables>;
 export const GetAnalyticsInfraServiceInstancesHealthDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetAnalyticsInfraServiceInstancesHealth($serviceId: String) {
@@ -20647,11 +20594,7 @@ export const GetClusterMediaConsentDocument = /*#__PURE__*/ new TypedDocumentStr
     ...NotFoundErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment MediaCapacityConsentDefaultFields on MediaCapacityConsent {
+    fragment MediaCapacityConsentDefaultFields on MediaCapacityConsent {
   clusterId
   revision
   allowIngest
@@ -20690,6 +20633,10 @@ fragment NotFoundErrorDefaultFields on NotFoundError {
   code
   resourceType
   resourceId
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<GetClusterMediaConsentQuery, GetClusterMediaConsentQueryVariables>;
 export const GetClusterMediaConsentChangeDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetClusterMediaConsentChange($clusterId: ID!, $idempotencyKey: String!) {
@@ -20704,11 +20651,7 @@ export const GetClusterMediaConsentChangeDocument = /*#__PURE__*/ new TypedDocum
     ...NotFoundErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment MediaCapacityConsentChangeDefaultFields on MediaCapacityConsentChange {
+    fragment MediaCapacityConsentChangeDefaultFields on MediaCapacityConsentChange {
   clusterId
   idempotencyKey
   revision
@@ -20746,6 +20689,10 @@ fragment NotFoundErrorDefaultFields on NotFoundError {
   code
   resourceType
   resourceId
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<GetClusterMediaConsentChangeQuery, GetClusterMediaConsentChangeQueryVariables>;
 /** Paginated list of nodes in this cluster. */
 export const GetClusterNodesConnectionDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -21833,11 +21780,7 @@ export const GetMediaPlacementChangeDocument = /*#__PURE__*/ new TypedDocumentSt
     ...NotFoundErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment MediaPlacementChangeDefaultFields on MediaPlacementChange {
+    fragment MediaPlacementChangeDefaultFields on MediaPlacementChange {
   scope {
     kind
     streamId
@@ -21879,6 +21822,10 @@ fragment NotFoundErrorDefaultFields on NotFoundError {
   code
   resourceType
   resourceId
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<GetMediaPlacementChangeQuery, GetMediaPlacementChangeQueryVariables>;
 export const GetMediaPlacementOptionsDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetMediaPlacementOptions($scope: MediaPlacementScopeInput!, $filter: MediaPlacementOptionsFilter, $after: String, $first: Int = 50) {
@@ -21895,11 +21842,7 @@ export const GetMediaPlacementOptionsDocument = /*#__PURE__*/ new TypedDocumentS
     ...NotFoundErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment MediaPlacementErrorInMediaPlacementOptionsResultDefaultFields on MediaPlacementError {
+    fragment MediaPlacementErrorInMediaPlacementOptionsResultDefaultFields on MediaPlacementError {
   mediaPlacementErrorCode: code
   message
   fields {
@@ -21935,6 +21878,10 @@ fragment NotFoundErrorDefaultFields on NotFoundError {
   code
   resourceType
   resourceId
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<GetMediaPlacementOptionsQuery, GetMediaPlacementOptionsQueryVariables>;
 /** Tenant-bound placement intent and actual enforcement progress. */
 export const GetMediaPlacementPolicyDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -21947,11 +21894,7 @@ export const GetMediaPlacementPolicyDocument = /*#__PURE__*/ new TypedDocumentSt
     ...NotFoundErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment MediaPlacementErrorInMediaPlacementPolicyResultDefaultFields on MediaPlacementError {
+    fragment MediaPlacementErrorInMediaPlacementPolicyResultDefaultFields on MediaPlacementError {
   mediaPlacementErrorCode: code
   message
   fields {
@@ -22017,6 +21960,10 @@ fragment NotFoundErrorDefaultFields on NotFoundError {
   code
   resourceType
   resourceId
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<GetMediaPlacementPolicyQuery, GetMediaPlacementPolicyQueryVariables>;
 /** Tenant-default retention policy + entitlement bounds + the value the cascade (per-asset override → tenant default → tier entitlement) would resolve to today. Used by the webapp's "Storage retention defaults" panel to size sliders and explain the allowed range. */
 export const GetMediaRetentionPolicyDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -24784,11 +24731,7 @@ export const GetPreviewMediaPlacementDocument = /*#__PURE__*/ new TypedDocumentS
     ...NotFoundErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment MediaPlacementErrorInMediaPlacementPreviewResultDefaultFields on MediaPlacementError {
+    fragment MediaPlacementErrorInMediaPlacementPreviewResultDefaultFields on MediaPlacementError {
   mediaPlacementErrorCode: code
   message
   fields {
@@ -24859,6 +24802,10 @@ fragment NotFoundErrorDefaultFields on NotFoundError {
   code
   resourceType
   resourceId
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<GetPreviewMediaPlacementQuery, GetPreviewMediaPlacementQueryVariables>;
 export const GetProcessingUsageConnectionDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetProcessingUsageConnection($page: ConnectionInput, $streamId: ID, $processType: String, $timeRange: TimeRangeInput, $noCache: Boolean = false) {
@@ -25336,11 +25283,7 @@ export const GetReviewClusterMediaConsentChangeDocument = /*#__PURE__*/ new Type
     ...NotFoundErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment MediaPlacementErrorInMediaPlacementReviewResultDefaultFields on MediaPlacementError {
+    fragment MediaPlacementErrorInMediaPlacementReviewResultDefaultFields on MediaPlacementError {
   mediaPlacementErrorCode: code
   message
   fields {
@@ -25380,6 +25323,10 @@ fragment NotFoundErrorDefaultFields on NotFoundError {
   code
   resourceType
   resourceId
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<GetReviewClusterMediaConsentChangeQuery, GetReviewClusterMediaConsentChangeQueryVariables>;
 export const GetReviewMediaPlacementChangeDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetReviewMediaPlacementChange($input: ReviewMediaPlacementChangeInput!) {
@@ -25391,11 +25338,7 @@ export const GetReviewMediaPlacementChangeDocument = /*#__PURE__*/ new TypedDocu
     ...NotFoundErrorDefaultFields
   }
 }
-    fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-fragment MediaPlacementErrorInMediaPlacementReviewResultDefaultFields on MediaPlacementError {
+    fragment MediaPlacementErrorInMediaPlacementReviewResultDefaultFields on MediaPlacementError {
   mediaPlacementErrorCode: code
   message
   fields {
@@ -25435,6 +25378,10 @@ fragment NotFoundErrorDefaultFields on NotFoundError {
   code
   resourceType
   resourceId
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
 }`) as unknown as TypedDocumentString<GetReviewMediaPlacementChangeQuery, GetReviewMediaPlacementChangeQueryVariables>;
 /** Pre-aggregated routing efficiency summary for dashboard views. Replaces client-side aggregation of raw routingEventsConnection data. */
 export const GetRoutingEfficiencyDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -29480,6 +29427,42 @@ fragment NotFoundErrorFields on NotFoundError {
   resourceType
   resourceId
 }`) as unknown as TypedDocumentString<TestPlaybackAccessMutation, TestPlaybackAccessMutationVariables>;
+/** Bootstrap a new edge using only an opaque bootstrap token. Public — the bootstrap token is itself the credential. Bridge resolves the token's cluster via Quartermaster, finds the cluster's assigned Foghorn, and proxies a PreRegisterEdge call so the operator never has to know cluster topology. */
+export const BootstrapEdgeDocument = /*#__PURE__*/ new TypedDocumentString(`
+    mutation BootstrapEdge($input: BootstrapEdgeInput!) {
+  bootstrapEdge(input: $input) {
+    __typename
+    ...BootstrapEdgeResponseDefaultFields
+    ...ValidationErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+    fragment ValidationErrorDefaultFields on ValidationError {
+  message
+  code
+  field
+  constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
+}
+fragment BootstrapEdgeResponseDefaultFields on BootstrapEdgeResponse {
+  nodeId
+  edgeDomain
+  poolDomain
+  clusterSlug
+  clusterId
+  foghornGrpcAddr
+  certPem
+  keyPem
+  internalCaBundle
+  telemetry {
+    enabled
+    writeUrl
+    bearerToken
+  }
+}`) as unknown as TypedDocumentString<BootstrapEdgeMutation, BootstrapEdgeMutationVariables>;
 /** Create a clip from a live or recorded stream. Clips are short video segments extracted from a stream. */
 export const CreateClipDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation CreateClip($input: CreateClipInput!) {

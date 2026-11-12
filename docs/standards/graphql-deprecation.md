@@ -77,6 +77,11 @@ query ListPushTargets($streamId: ID!) {
 }
 ```
 
+An override can keep a default fragment's name to preserve the generated SDK types. When a handwritten fragment
+shares a generated name, its type and selection must match exactly; the generator reuses the handwritten
+definition and rejects conflicting selections. `BootstrapEdge` uses this to keep its released selection valid
+on v0.3.11 while the CLI selects the newer pending-enrollment response explicitly.
+
 Without the annotation, the target is the operation's single root field, followed down while the selection below the
 current field holds exactly one field with a selection of its own (`stream(id:) { pushTargets { ... } }` targets
 `query.stream.pushTargets`; adding `id` beside `pushTargets` would make it `query.stream`). A path is
