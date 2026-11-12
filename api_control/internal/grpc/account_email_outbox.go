@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -51,6 +52,7 @@ type accountEmailOutboxRow struct {
 	purpose    string
 	attempts   int
 	leaseToken string
+	payload    json.RawMessage
 }
 
 // enqueueAccountEmailTx records a pending account email in the caller's transaction, so the email obligation
@@ -198,6 +200,9 @@ func (d *accountEmailOutboxDispatcher) Dispatch(ctx context.Context, row account
 // send: its hash replaces the stored one first, so the emailed link is always the valid one. A user verified or
 // deleted in the meantime has nothing left to deliver.
 func (s *CommodoreServer) deliverAccountEmail(ctx context.Context, row accountEmailOutboxRow) error {
+	if strings.HasPrefix(row.purpose, "security_") {
+		return s.deliverSessionSecurityEmail(ctx, row)
+	}
 	if row.purpose != accountEmailPurposeVerification {
 		return fmt.Errorf("unsupported account email purpose %q", row.purpose)
 	}
@@ -272,7 +277,7 @@ func (s *CommodoreServer) claimAccountEmailOutboxBatch(ctx context.Context) ([]a
 				return fmt.Errorf("lease account email %s: database returned NULL lease token", row.UserID)
 			}
 			batch = append(batch, accountEmailOutboxRow{
-				userID: row.UserID, tenantID: row.TenantID, purpose: row.Purpose, attempts: int(row.Attempts), leaseToken: leaseToken.String,
+				userID: row.UserID, tenantID: row.TenantID, purpose: row.Purpose, attempts: int(row.Attempts), leaseToken: leaseToken.String, payload: row.Payload,
 			})
 		}
 		out = batch

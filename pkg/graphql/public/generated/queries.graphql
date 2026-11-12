@@ -1294,6 +1294,24 @@ query GetRoutingEventsConnection(
   }
 }
 
+query GetSecurityActivityConnection(
+  $first: Int
+  $after: String
+) {
+  securityActivityConnection(first: $first, after: $after) {
+    edges {
+      cursor
+      node {
+        ...SecurityActivityEventDefaultFields
+      }
+    }
+    pageInfo {
+      ...PageInfoDefaultFields
+    }
+    totalCount
+  }
+}
+
 query GetServiceInstancesConnection(
   $page: ConnectionInput
   $clusterId: String

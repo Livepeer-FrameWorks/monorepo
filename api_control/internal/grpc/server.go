@@ -43,6 +43,7 @@ import (
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
@@ -285,6 +286,8 @@ type CommodoreServer struct {
 	// verificationEmailSendFn is a test seam for SMTP delivery of a verification link. Production leaves it nil
 	// and the account email outbox sends through sendVerificationEmail.
 	verificationEmailSendFn func(email, token string) error
+	securityEmailSendFn     func(context.Context, emailpkg.Message) error
+	sessionGeoIP            *geoip.Reader
 	// accountEmailKickFn replaces the immediate post-commit outbox drain in handler tests that run on a scripted
 	// sqlmock, where a background claim would race the script. Production leaves it nil.
 	accountEmailKickFn func()
@@ -858,6 +861,7 @@ func (u commodoreUserRecord) toProtoUser(userID, tenantID string) *commodorepb.U
 
 // CommodoreServerConfig contains all dependencies for CommodoreServer
 type CommodoreServerConfig struct {
+	SessionGeoIP        *geoip.Reader
 	DB                  *sql.DB
 	Logger              logging.Logger
 	FoghornPool         *foghornclient.FoghornPool
@@ -973,6 +977,7 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 
 	srv := &CommodoreServer{
 		db:                       cfg.DB,
+		sessionGeoIP:             cfg.SessionGeoIP,
 		logger:                   cfg.Logger,
 		foghornPool:              cfg.FoghornPool,
 		quartermasterClient:      cfg.QuartermasterClient,
@@ -10151,6 +10156,7 @@ func NewGRPCServer(ctx context.Context, cfg CommodoreServerConfig) (*grpc.Server
 	// attempted once and lost.
 	go commodoreServer.runAccountEmailOutboxWorker(context.Background())
 	go commodoreServer.runAuthCodeRetention(context.Background())
+	go commodoreServer.runSessionSecurityRetention(context.Background())
 	go commodoreServer.runSessionRetention(context.Background())
 
 	// Drain commodore.service_event_outbox to Decklog: a Decklog outage degrades to
@@ -10254,6 +10260,10 @@ func (s *CommodoreServer) sendVerificationEmail(email, token string) error {
 // sendMail delivers one message through the configured SMTP server. Load
 // applies the SMTP_PORT and FROM_EMAIL defaults.
 func (r RuntimeSettings) sendMail(message emailpkg.Message) error {
+	return r.sendMailContext(context.Background(), message)
+}
+
+func (r RuntimeSettings) sendMailContext(ctx context.Context, message emailpkg.Message) error {
 	fromName := strings.TrimSpace(r.FromName)
 	if fromName == "" {
 		fromName = "FrameWorks"
@@ -10267,7 +10277,7 @@ func (r RuntimeSettings) sendMail(message emailpkg.Message) error {
 		FromName:      fromName,
 		AllowInsecure: r.SMTPAllowInsecure,
 	})
-	return sender.Send(context.Background(), message)
+	return sender.Send(ctx, message)
 }
 
 // sendPasswordResetEmail sends a password reset link

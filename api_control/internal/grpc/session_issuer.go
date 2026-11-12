@@ -62,7 +62,7 @@ func sessionContextFromRequest(ctx context.Context, method, client string) Sessi
 		case "tray-mac":
 			label = "FrameWorks for Mac"
 		default:
-			label = "Browser"
+			label = browserSessionLabel(first("x-client-user-agent-bin"))
 		}
 	}
 	return SessionContext{AuthMethod: method, ClientID: client, DeviceLabel: label,
@@ -161,9 +161,13 @@ func (s *CommodoreServer) issueUserSessionTx(ctx context.Context, tx *sql.Tx, us
 		TenantID: tenantID, UserID: userID, AuthMethod: info.AuthMethod, ClientID: info.ClientID,
 		DeviceLabel: boundedSessionText(info.DeviceLabel, 200), ClientVersion: boundedSessionText(info.ClientVersion, 100),
 		CreatedIp: info.IP, UserAgent: boundedSessionText(info.UserAgent, 1024),
+		DeviceKey:     sessionDeviceKey(info.ClientID, boundedSessionText(info.DeviceLabel, 200)),
 		IdleExpiresAt: now.Add(30 * 24 * time.Hour), AbsoluteExpiresAt: now.Add(lifetime),
 	})
 	if err != nil {
+		return nil, err
+	}
+	if err = s.recordSessionDeviceTx(ctx, tx, row, user.Email); err != nil {
 		return nil, err
 	}
 	refresh, err := generateRandomString(40)
@@ -284,6 +288,11 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.Ref
 		}
 		if queryErr != nil {
 			return queryErr
+		}
+		if row.DeviceKey != "" {
+			if queryErr = queries.RememberSessionDevice(ctx, commodoredb.RememberSessionDeviceParams{TenantID: row.TenantID, UserID: row.UserID, DeviceKey: row.DeviceKey}); queryErr != nil {
+				return queryErr
+			}
 		}
 		refresh, issueErr := generateRandomString(40)
 		if issueErr != nil {

@@ -1,8 +1,8 @@
 -- name: InsertAuthSession :one
 INSERT INTO commodore.auth_sessions (
     tenant_id, user_id, auth_method, client_id, device_label, client_version,
-    created_ip, last_ip, user_agent, idle_expires_at, absolute_expires_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8,
+    created_ip, last_ip, user_agent, device_key, idle_expires_at, absolute_expires_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, sqlc.arg(device_key),
     LEAST(sqlc.arg(idle_expires_at)::timestamptz, sqlc.arg(absolute_expires_at)::timestamptz,
           NOW() + INTERVAL '720 hours',
           NOW() + CASE WHEN $4 IN ('cli', 'tray-mac') THEN INTERVAL '4320 hours' ELSE INTERVAL '2160 hours' END),

@@ -1,0 +1,12 @@
+query GetSecurityActivity($first: Int, $after: String) {
+  securityActivityConnection(first: $first, after: $after) {
+    nodes {
+      ...SecurityActivityFields
+    }
+    totalCount
+    pageInfo {
+      endCursor
+      hasNextPage
+    }
+  }
+}

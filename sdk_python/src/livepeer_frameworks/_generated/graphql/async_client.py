@@ -143,6 +143,7 @@ from .get_review_cluster_media_consent_change import GetReviewClusterMediaConsen
 from .get_review_media_placement_change import GetReviewMediaPlacementChange
 from .get_routing_efficiency import GetRoutingEfficiency
 from .get_routing_events_connection import GetRoutingEventsConnection
+from .get_security_activity_connection import GetSecurityActivityConnection
 from .get_service_instances_connection import GetServiceInstancesConnection
 from .get_service_instances_health import GetServiceInstancesHealth
 from .get_session_qoe_summary import GetSessionQoeSummary
@@ -11309,6 +11310,55 @@ class AsyncGraphQLClient(AsyncBaseClient):
         )
         data = self.get_data(response)
         return GetRoutingEventsConnection.model_validate(data)
+
+    async def get_security_activity_connection(
+        self,
+        first: Union[Optional[int], UnsetType] = UNSET,
+        after: Union[Optional[str], UnsetType] = UNSET,
+        **kwargs: Any,
+    ) -> GetSecurityActivityConnection:
+        """Your own security activity from the past 90 days."""
+        query = gql("""
+            query GetSecurityActivityConnection($first: Int, $after: String) {
+              securityActivityConnection(first: $first, after: $after) {
+                edges {
+                  cursor
+                  node {
+                    ...SecurityActivityEventDefaultFields
+                  }
+                }
+                pageInfo {
+                  ...PageInfoDefaultFields
+                }
+                totalCount
+              }
+            }
+
+            fragment PageInfoDefaultFields on PageInfo {
+              startCursor
+              endCursor
+              hasNextPage
+              hasPreviousPage
+            }
+
+            fragment SecurityActivityEventDefaultFields on SecurityActivityEvent {
+              id
+              kind
+              timestamp
+              authMethod
+              sessionId
+              reason
+            }
+            """)
+        variables: dict[str, object] = {"first": first, "after": after}
+        response = await self.execute(
+            query=query,
+            operation_name="GetSecurityActivityConnection",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return GetSecurityActivityConnection.model_validate(data)
 
     async def get_service_instances_connection(
         self,

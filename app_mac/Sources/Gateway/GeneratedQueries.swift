@@ -659,6 +659,17 @@ enum GQL {
   }
   """
 
+  static let SecurityActivityFields = """
+  fragment SecurityActivityFields on SecurityActivityEvent {
+    id
+    kind
+    timestamp
+    authMethod
+    sessionId
+    reason
+  }
+  """
+
   static let SigningKeyFields = """
   fragment SigningKeyFields on SigningKey {
     id
@@ -3328,6 +3339,21 @@ enum GQL {
           }
           totalCount
         }
+      }
+    }
+  }
+  """
+
+  static let GetSecurityActivity = """
+  query GetSecurityActivity($first: Int, $after: String) {
+    securityActivityConnection(first: $first, after: $after) {
+      nodes {
+        ...SecurityActivityFields
+      }
+      totalCount
+      pageInfo {
+        endCursor
+        hasNextPage
       }
     }
   }

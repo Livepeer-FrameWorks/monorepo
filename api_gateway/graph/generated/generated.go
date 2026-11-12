@@ -2753,6 +2753,7 @@ type ComplexityRoot struct {
 		ResolveViewerEndpoint           func(childComplexity int, contentID string, protocol *model.MediaViewerProtocol) int
 		ReviewClusterMediaConsentChange func(childComplexity int, input model.ReviewMediaCapacityConsentInput) int
 		ReviewMediaPlacementChange      func(childComplexity int, input model.ReviewMediaPlacementChangeInput) int
+		SecurityActivityConnection      func(childComplexity int, first *int, after *string) int
 		ServerInfo                      func(childComplexity int) int
 		ServiceInstancesHealth          func(childComplexity int, serviceID *string) int
 		SigningKey                      func(childComplexity int, id string) int
@@ -2910,6 +2911,27 @@ type ComplexityRoot struct {
 	RoutingImpactPreview struct {
 		ActiveStreams func(childComplexity int) int
 		ActiveViewers func(childComplexity int) int
+	}
+
+	SecurityActivityConnection struct {
+		Edges      func(childComplexity int) int
+		Nodes      func(childComplexity int) int
+		PageInfo   func(childComplexity int) int
+		TotalCount func(childComplexity int) int
+	}
+
+	SecurityActivityEdge struct {
+		Cursor func(childComplexity int) int
+		Node   func(childComplexity int) int
+	}
+
+	SecurityActivityEvent struct {
+		AuthMethod func(childComplexity int) int
+		ID         func(childComplexity int) int
+		Kind       func(childComplexity int) int
+		Reason     func(childComplexity int) int
+		SessionID  func(childComplexity int) int
+		Timestamp  func(childComplexity int) int
 	}
 
 	ServerInfo struct {
@@ -5100,6 +5122,7 @@ type QualityTierSummaryResolver interface {
 }
 type QueryResolver interface {
 	AuthSessionsConnection(ctx context.Context, first *int, after *string) (*model.AuthSessionConnection, error)
+	SecurityActivityConnection(ctx context.Context, first *int, after *string) (*model.SecurityActivityConnection, error)
 	Analytics(ctx context.Context) (*markers.Analytics, error)
 	Platform(ctx context.Context) (*markers.Platform, error)
 	IncidentsConnection(ctx context.Context, page *model.ConnectionInput, filter *model.IncidentFilterInput) (*model.IncidentsConnection, error)
@@ -17803,6 +17826,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.ReviewMediaPlacementChange(childComplexity, args["input"].(model.ReviewMediaPlacementChangeInput)), true
+	case "Query.securityActivityConnection":
+		if e.ComplexityRoot.Query.SecurityActivityConnection == nil {
+			break
+		}
+
+		args, err := ec.field_Query_securityActivityConnection_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.SecurityActivityConnection(childComplexity, args["first"].(*int), args["after"].(*string)), true
 	case "Query.serverInfo":
 		if e.ComplexityRoot.Query.ServerInfo == nil {
 			break
@@ -18544,6 +18578,81 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.RoutingImpactPreview.ActiveViewers(childComplexity), true
+
+	case "SecurityActivityConnection.edges":
+		if e.ComplexityRoot.SecurityActivityConnection.Edges == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SecurityActivityConnection.Edges(childComplexity), true
+	case "SecurityActivityConnection.nodes":
+		if e.ComplexityRoot.SecurityActivityConnection.Nodes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SecurityActivityConnection.Nodes(childComplexity), true
+	case "SecurityActivityConnection.pageInfo":
+		if e.ComplexityRoot.SecurityActivityConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SecurityActivityConnection.PageInfo(childComplexity), true
+	case "SecurityActivityConnection.totalCount":
+		if e.ComplexityRoot.SecurityActivityConnection.TotalCount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SecurityActivityConnection.TotalCount(childComplexity), true
+
+	case "SecurityActivityEdge.cursor":
+		if e.ComplexityRoot.SecurityActivityEdge.Cursor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SecurityActivityEdge.Cursor(childComplexity), true
+	case "SecurityActivityEdge.node":
+		if e.ComplexityRoot.SecurityActivityEdge.Node == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SecurityActivityEdge.Node(childComplexity), true
+
+	case "SecurityActivityEvent.authMethod":
+		if e.ComplexityRoot.SecurityActivityEvent.AuthMethod == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SecurityActivityEvent.AuthMethod(childComplexity), true
+	case "SecurityActivityEvent.id":
+		if e.ComplexityRoot.SecurityActivityEvent.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SecurityActivityEvent.ID(childComplexity), true
+	case "SecurityActivityEvent.kind":
+		if e.ComplexityRoot.SecurityActivityEvent.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SecurityActivityEvent.Kind(childComplexity), true
+	case "SecurityActivityEvent.reason":
+		if e.ComplexityRoot.SecurityActivityEvent.Reason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SecurityActivityEvent.Reason(childComplexity), true
+	case "SecurityActivityEvent.sessionId":
+		if e.ComplexityRoot.SecurityActivityEvent.SessionID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SecurityActivityEvent.SessionID(childComplexity), true
+	case "SecurityActivityEvent.timestamp":
+		if e.ComplexityRoot.SecurityActivityEvent.Timestamp == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SecurityActivityEvent.Timestamp(childComplexity), true
 
 	case "ServerInfo.features":
 		if e.ComplexityRoot.ServerInfo.Features == nil {
@@ -25155,6 +25264,8 @@ Most connection fields are non-null, but some may be nullable when upstream data
 type Query {
   "The signed-in user’s own interactive sessions, newest first. Supports first=1..100."
   authSessionsConnection(first: Int, after: String): AuthSessionConnection!
+  "Your own security activity from the past 90 days."
+  securityActivityConnection(first: Int, after: String): SecurityActivityConnection!
 
   """
   Unified analytics surface providing access to all platform metrics.
@@ -34874,6 +34985,39 @@ union RevokeAuthSessionResult =
 union RevokeOtherAuthSessionsResult = RevokeOtherAuthSessionsPayload | ValidationError | AuthError
 union RenameAuthSessionResult = AuthSession | ValidationError | NotFoundError | AuthError
 union ChangePasswordResult = ChangePasswordPayload | ValidationError | AuthError
+
+enum SecurityActivityKind {
+  SIGN_IN_SUCCEEDED
+  SIGN_IN_FAILED
+  SESSION_REVOKED
+  SESSIONS_REVOKED
+  PASSWORD_CHANGED
+  PASSWORD_RESET
+  WALLET_LINKED
+  WALLET_UNLINKED
+}
+
+"A security event concerning only the signed-in user."
+type SecurityActivityEvent {
+  id: ID!
+  kind: SecurityActivityKind!
+  timestamp: Time!
+  authMethod: AuthMethod!
+  sessionId: ID
+  reason: String
+}
+
+type SecurityActivityEdge {
+  cursor: String!
+  node: SecurityActivityEvent!
+}
+
+type SecurityActivityConnection {
+  edges: [SecurityActivityEdge!]!
+  nodes: [SecurityActivityEvent!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
 `, BuiltIn: false},
 }
 var parsedSchema = gqlparser.MustLoadSchema(sources...)
@@ -37793,6 +37937,22 @@ func (ec *executionContext) field_Query_reviewMediaPlacementChange_args(ctx cont
 		return nil, err
 	}
 	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_securityActivityConnection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "first", ec.unmarshalOInt2ᚖint)
+	if err != nil {
+		return nil, err
+	}
+	args["first"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "after", ec.unmarshalOString2ᚖstring)
+	if err != nil {
+		return nil, err
+	}
+	args["after"] = arg1
 	return args, nil
 }
 
@@ -97478,6 +97638,57 @@ func (ec *executionContext) fieldContext_Query_authSessionsConnection(ctx contex
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_securityActivityConnection(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_securityActivityConnection,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().SecurityActivityConnection(ctx, fc.Args["first"].(*int), fc.Args["after"].(*string))
+		},
+		nil,
+		ec.marshalNSecurityActivityConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSecurityActivityConnection,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_securityActivityConnection(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "edges":
+				return ec.fieldContext_SecurityActivityConnection_edges(ctx, field)
+			case "nodes":
+				return ec.fieldContext_SecurityActivityConnection_nodes(ctx, field)
+			case "pageInfo":
+				return ec.fieldContext_SecurityActivityConnection_pageInfo(ctx, field)
+			case "totalCount":
+				return ec.fieldContext_SecurityActivityConnection_totalCount(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type SecurityActivityConnection", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_securityActivityConnection_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query_analytics(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -104945,6 +105156,398 @@ func (ec *executionContext) fieldContext_RoutingImpactPreview_activeViewers(_ co
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SecurityActivityConnection_edges(ctx context.Context, field graphql.CollectedField, obj *model.SecurityActivityConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SecurityActivityConnection_edges,
+		func(ctx context.Context) (any, error) {
+			return obj.Edges, nil
+		},
+		nil,
+		ec.marshalNSecurityActivityEdge2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSecurityActivityEdgeᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SecurityActivityConnection_edges(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SecurityActivityConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "cursor":
+				return ec.fieldContext_SecurityActivityEdge_cursor(ctx, field)
+			case "node":
+				return ec.fieldContext_SecurityActivityEdge_node(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type SecurityActivityEdge", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SecurityActivityConnection_nodes(ctx context.Context, field graphql.CollectedField, obj *model.SecurityActivityConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SecurityActivityConnection_nodes,
+		func(ctx context.Context) (any, error) {
+			return obj.Nodes, nil
+		},
+		nil,
+		ec.marshalNSecurityActivityEvent2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSecurityActivityEventᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SecurityActivityConnection_nodes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SecurityActivityConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_SecurityActivityEvent_id(ctx, field)
+			case "kind":
+				return ec.fieldContext_SecurityActivityEvent_kind(ctx, field)
+			case "timestamp":
+				return ec.fieldContext_SecurityActivityEvent_timestamp(ctx, field)
+			case "authMethod":
+				return ec.fieldContext_SecurityActivityEvent_authMethod(ctx, field)
+			case "sessionId":
+				return ec.fieldContext_SecurityActivityEvent_sessionId(ctx, field)
+			case "reason":
+				return ec.fieldContext_SecurityActivityEvent_reason(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type SecurityActivityEvent", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SecurityActivityConnection_pageInfo(ctx context.Context, field graphql.CollectedField, obj *model.SecurityActivityConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SecurityActivityConnection_pageInfo,
+		func(ctx context.Context) (any, error) {
+			return obj.PageInfo, nil
+		},
+		nil,
+		ec.marshalNPageInfo2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPageInfo,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SecurityActivityConnection_pageInfo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SecurityActivityConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "startCursor":
+				return ec.fieldContext_PageInfo_startCursor(ctx, field)
+			case "endCursor":
+				return ec.fieldContext_PageInfo_endCursor(ctx, field)
+			case "hasNextPage":
+				return ec.fieldContext_PageInfo_hasNextPage(ctx, field)
+			case "hasPreviousPage":
+				return ec.fieldContext_PageInfo_hasPreviousPage(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type PageInfo", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SecurityActivityConnection_totalCount(ctx context.Context, field graphql.CollectedField, obj *model.SecurityActivityConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SecurityActivityConnection_totalCount,
+		func(ctx context.Context) (any, error) {
+			return obj.TotalCount, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SecurityActivityConnection_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SecurityActivityConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SecurityActivityEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.SecurityActivityEdge) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SecurityActivityEdge_cursor,
+		func(ctx context.Context) (any, error) {
+			return obj.Cursor, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SecurityActivityEdge_cursor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SecurityActivityEdge",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SecurityActivityEdge_node(ctx context.Context, field graphql.CollectedField, obj *model.SecurityActivityEdge) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SecurityActivityEdge_node,
+		func(ctx context.Context) (any, error) {
+			return obj.Node, nil
+		},
+		nil,
+		ec.marshalNSecurityActivityEvent2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSecurityActivityEvent,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SecurityActivityEdge_node(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SecurityActivityEdge",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_SecurityActivityEvent_id(ctx, field)
+			case "kind":
+				return ec.fieldContext_SecurityActivityEvent_kind(ctx, field)
+			case "timestamp":
+				return ec.fieldContext_SecurityActivityEvent_timestamp(ctx, field)
+			case "authMethod":
+				return ec.fieldContext_SecurityActivityEvent_authMethod(ctx, field)
+			case "sessionId":
+				return ec.fieldContext_SecurityActivityEvent_sessionId(ctx, field)
+			case "reason":
+				return ec.fieldContext_SecurityActivityEvent_reason(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type SecurityActivityEvent", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SecurityActivityEvent_id(ctx context.Context, field graphql.CollectedField, obj *model.SecurityActivityEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SecurityActivityEvent_id,
+		func(ctx context.Context) (any, error) {
+			return obj.ID, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SecurityActivityEvent_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SecurityActivityEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SecurityActivityEvent_kind(ctx context.Context, field graphql.CollectedField, obj *model.SecurityActivityEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SecurityActivityEvent_kind,
+		func(ctx context.Context) (any, error) {
+			return obj.Kind, nil
+		},
+		nil,
+		ec.marshalNSecurityActivityKind2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSecurityActivityKind,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SecurityActivityEvent_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SecurityActivityEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type SecurityActivityKind does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SecurityActivityEvent_timestamp(ctx context.Context, field graphql.CollectedField, obj *model.SecurityActivityEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SecurityActivityEvent_timestamp,
+		func(ctx context.Context) (any, error) {
+			return obj.Timestamp, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SecurityActivityEvent_timestamp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SecurityActivityEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SecurityActivityEvent_authMethod(ctx context.Context, field graphql.CollectedField, obj *model.SecurityActivityEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SecurityActivityEvent_authMethod,
+		func(ctx context.Context) (any, error) {
+			return obj.AuthMethod, nil
+		},
+		nil,
+		ec.marshalNAuthMethod2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐAuthMethod,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SecurityActivityEvent_authMethod(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SecurityActivityEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type AuthMethod does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SecurityActivityEvent_sessionId(ctx context.Context, field graphql.CollectedField, obj *model.SecurityActivityEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SecurityActivityEvent_sessionId,
+		func(ctx context.Context) (any, error) {
+			return obj.SessionID, nil
+		},
+		nil,
+		ec.marshalOID2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_SecurityActivityEvent_sessionId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SecurityActivityEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SecurityActivityEvent_reason(ctx context.Context, field graphql.CollectedField, obj *model.SecurityActivityEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SecurityActivityEvent_reason,
+		func(ctx context.Context) (any, error) {
+			return obj.Reason, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_SecurityActivityEvent_reason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SecurityActivityEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -176154,6 +176757,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "securityActivityConnection":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_securityActivityConnection(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "analytics":
 			field := field
 
@@ -179222,6 +179847,162 @@ func (ec *executionContext) _RoutingImpactPreview(ctx context.Context, sel ast.S
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var securityActivityConnectionImplementors = []string{"SecurityActivityConnection"}
+
+func (ec *executionContext) _SecurityActivityConnection(ctx context.Context, sel ast.SelectionSet, obj *model.SecurityActivityConnection) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, securityActivityConnectionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SecurityActivityConnection")
+		case "edges":
+			out.Values[i] = ec._SecurityActivityConnection_edges(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "nodes":
+			out.Values[i] = ec._SecurityActivityConnection_nodes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "pageInfo":
+			out.Values[i] = ec._SecurityActivityConnection_pageInfo(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "totalCount":
+			out.Values[i] = ec._SecurityActivityConnection_totalCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var securityActivityEdgeImplementors = []string{"SecurityActivityEdge"}
+
+func (ec *executionContext) _SecurityActivityEdge(ctx context.Context, sel ast.SelectionSet, obj *model.SecurityActivityEdge) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, securityActivityEdgeImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SecurityActivityEdge")
+		case "cursor":
+			out.Values[i] = ec._SecurityActivityEdge_cursor(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "node":
+			out.Values[i] = ec._SecurityActivityEdge_node(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var securityActivityEventImplementors = []string{"SecurityActivityEvent"}
+
+func (ec *executionContext) _SecurityActivityEvent(ctx context.Context, sel ast.SelectionSet, obj *model.SecurityActivityEvent) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, securityActivityEventImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SecurityActivityEvent")
+		case "id":
+			out.Values[i] = ec._SecurityActivityEvent_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "kind":
+			out.Values[i] = ec._SecurityActivityEvent_kind(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "timestamp":
+			out.Values[i] = ec._SecurityActivityEvent_timestamp(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "authMethod":
+			out.Values[i] = ec._SecurityActivityEvent_authMethod(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sessionId":
+			out.Values[i] = ec._SecurityActivityEvent_sessionId(ctx, field, obj)
+		case "reason":
+			out.Values[i] = ec._SecurityActivityEvent_reason(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -201901,6 +202682,82 @@ func (ec *executionContext) marshalNRoutingImpactPreview2ᚖframeworksᚋapi_gat
 		return graphql.Null
 	}
 	return ec._RoutingImpactPreview(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNSecurityActivityConnection2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSecurityActivityConnection(ctx context.Context, sel ast.SelectionSet, v model.SecurityActivityConnection) graphql.Marshaler {
+	return ec._SecurityActivityConnection(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNSecurityActivityConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSecurityActivityConnection(ctx context.Context, sel ast.SelectionSet, v *model.SecurityActivityConnection) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._SecurityActivityConnection(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNSecurityActivityEdge2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSecurityActivityEdgeᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.SecurityActivityEdge) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNSecurityActivityEdge2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSecurityActivityEdge(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNSecurityActivityEdge2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSecurityActivityEdge(ctx context.Context, sel ast.SelectionSet, v *model.SecurityActivityEdge) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._SecurityActivityEdge(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNSecurityActivityEvent2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSecurityActivityEventᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.SecurityActivityEvent) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNSecurityActivityEvent2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSecurityActivityEvent(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNSecurityActivityEvent2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSecurityActivityEvent(ctx context.Context, sel ast.SelectionSet, v *model.SecurityActivityEvent) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._SecurityActivityEvent(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNSecurityActivityKind2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSecurityActivityKind(ctx context.Context, v any) (model.SecurityActivityKind, error) {
+	var res model.SecurityActivityKind
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNSecurityActivityKind2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSecurityActivityKind(ctx context.Context, sel ast.SelectionSet, v model.SecurityActivityKind) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) unmarshalNSendMessageInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSendMessageInput(ctx context.Context, v any) (model.SendMessageInput, error) {

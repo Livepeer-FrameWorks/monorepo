@@ -52,6 +52,8 @@ autobind:
 models:
   AuthSession:
     forceGenerate: true
+  SecurityActivityEvent:
+    forceGenerate: true
   # JSON fields are real JSON values on the wire. Without this explicit mapping,
   # gqlgen treats the custom scalar as a quoted string; using Any preserves both
   # object-valued fields such as invoice dimensions and array-valued fields.

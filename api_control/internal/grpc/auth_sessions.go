@@ -134,6 +134,11 @@ func (s *CommodoreServer) finishAuthSessionRevocationTx(ctx context.Context, tx 
 	}); err != nil {
 		return err
 	}
+	if reason == internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE {
+		if err := enqueueSessionSecurityEmailTx(ctx, tx, row, "reuse"); err != nil {
+			return err
+		}
+	}
 	_, err := s.enqueueDomainEventTx(ctx, tx, row.TenantID, &domainEvent{
 		msg:         &internalv1.AuthSessionRevoked{UserId: row.UserID, SessionId: row.ID, RevokedAt: timestamppb.New(row.RevokedAt.Time), Reason: reason},
 		aggregateID: row.ID,
@@ -150,7 +155,8 @@ func (s *CommodoreServer) revokeSession(ctx context.Context, req *commodorepb.Re
 	if err != nil {
 		return nil, err
 	}
-	if _, idErr := uuid.Parse(req.GetSessionId()); idErr != nil {
+	sessionID, idErr := uuid.Parse(req.GetSessionId())
+	if idErr != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid session ID")
 	}
 	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
@@ -158,7 +164,7 @@ func (s *CommodoreServer) revokeSession(ctx context.Context, req *commodorepb.Re
 		if _, lockErr := queries.LockAuthSessionUser(ctx, commodoredb.LockAuthSessionUserParams{TenantID: tenantID, ID: userID}); lockErr != nil {
 			return lockErr
 		}
-		row, queryErr := queries.LockAuthSession(ctx, commodoredb.LockAuthSessionParams{TenantID: tenantID, UserID: userID, ID: req.GetSessionId()})
+		row, queryErr := queries.LockAuthSession(ctx, commodoredb.LockAuthSessionParams{TenantID: tenantID, UserID: userID, ID: sessionID.String()})
 		if errors.Is(queryErr, sql.ErrNoRows) {
 			return status.Error(codes.NotFound, "session not found")
 		}
@@ -179,7 +185,8 @@ func (s *CommodoreServer) revokeSession(ctx context.Context, req *commodorepb.Re
 		}
 		return nil, status.Error(codes.Unavailable, "session revocation unavailable")
 	}
-	return &commodorepb.RevokeSessionResponse{Success: true, Current: req.GetSessionId() == ctxkeys.GetSessionID(ctx)}, nil
+	currentID, currentErr := uuid.Parse(ctxkeys.GetSessionID(ctx))
+	return &commodorepb.RevokeSessionResponse{Success: true, Current: currentErr == nil && sessionID == currentID}, nil
 }
 
 func (s *CommodoreServer) RevokeOtherSessions(ctx context.Context, _ *emptypb.Empty) (*commodorepb.RevokeOtherSessionsResponse, error) {

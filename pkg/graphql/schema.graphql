@@ -106,6 +106,8 @@ Most connection fields are non-null, but some may be nullable when upstream data
 type Query {
   "The signed-in user’s own interactive sessions, newest first. Supports first=1..100."
   authSessionsConnection(first: Int, after: String): AuthSessionConnection!
+  "Your own security activity from the past 90 days."
+  securityActivityConnection(first: Int, after: String): SecurityActivityConnection!
 
   """
   Unified analytics surface providing access to all platform metrics.
@@ -9825,3 +9827,36 @@ union RevokeAuthSessionResult =
 union RevokeOtherAuthSessionsResult = RevokeOtherAuthSessionsPayload | ValidationError | AuthError
 union RenameAuthSessionResult = AuthSession | ValidationError | NotFoundError | AuthError
 union ChangePasswordResult = ChangePasswordPayload | ValidationError | AuthError
+
+enum SecurityActivityKind {
+  SIGN_IN_SUCCEEDED
+  SIGN_IN_FAILED
+  SESSION_REVOKED
+  SESSIONS_REVOKED
+  PASSWORD_CHANGED
+  PASSWORD_RESET
+  WALLET_LINKED
+  WALLET_UNLINKED
+}
+
+"A security event concerning only the signed-in user."
+type SecurityActivityEvent {
+  id: ID!
+  kind: SecurityActivityKind!
+  timestamp: Time!
+  authMethod: AuthMethod!
+  sessionId: ID
+  reason: String
+}
+
+type SecurityActivityEdge {
+  cursor: String!
+  node: SecurityActivityEvent!
+}
+
+type SecurityActivityConnection {
+  edges: [SecurityActivityEdge!]!
+  nodes: [SecurityActivityEvent!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}

@@ -6539,6 +6539,10 @@ type Query {
   """
   authSessionsConnection(first: Int, after: String): AuthSessionConnection!
   """
+  Your own security activity from the past 90 days.
+  """
+  securityActivityConnection(first: Int, after: String): SecurityActivityConnection!
+  """
   Unified analytics surface providing access to all platform metrics.
   Combines data from Periscope (historical) and Signalman (real-time).
   """
@@ -7495,6 +7499,41 @@ Snapshot of how much traffic a node is currently serving.
 type RoutingImpactPreview {
   activeStreams: Int!
   activeViewers: Int!
+}
+
+type SecurityActivityConnection {
+  edges: [SecurityActivityEdge!]!
+  nodes: [SecurityActivityEvent!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type SecurityActivityEdge {
+  cursor: String!
+  node: SecurityActivityEvent!
+}
+
+"""
+A security event concerning only the signed-in user.
+"""
+type SecurityActivityEvent {
+  id: ID!
+  kind: SecurityActivityKind!
+  timestamp: Time!
+  authMethod: AuthMethod!
+  sessionId: ID
+  reason: String
+}
+
+enum SecurityActivityKind {
+  SIGN_IN_SUCCEEDED
+  SIGN_IN_FAILED
+  SESSION_REVOKED
+  SESSIONS_REVOKED
+  PASSWORD_CHANGED
+  PASSWORD_RESET
+  WALLET_LINKED
+  WALLET_UNLINKED
 }
 
 """

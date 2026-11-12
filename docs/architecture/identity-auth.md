@@ -178,6 +178,14 @@ stored CLI session, even when that invocation has a borrowed environment token.
 Failures retain credentials for retry; `logout --local` explicitly clears only
 local storage.
 
+`auth status` authenticates with Bridge before displaying identity and session
+expiry. `auth sessions list`, `revoke` and `revoke-others` use the shared GraphQL
+operations and manage only the caller's sessions. Stored credentials use their
+login Bridge; borrowed environment credentials use the active context without
+reading storage or renewing. Requests refuse redirects. Own-session revocation
+clears credentials under the renewal lock only if both the Bridge and stable
+session ID still match, preserving a concurrent replacement login.
+
 The tray binds its stored access and refresh credentials to its login Bridge.
 Requests and child CLI handoffs cannot use them after a context switch to a
 different Bridge. Credentials saved without an origin require a fresh sign-in.
@@ -201,6 +209,43 @@ HTTP 400 `invalid request` PKCE validation response. Invalid grants, unsupported
 grants, outages and redirects never select that path. Credentials without a
 named session use local sign-out against old platforms, avoiding their global
 logout semantics.
+
+## Personal security activity
+
+`securityActivityConnection` reads 90 days of sign-in, session-revocation,
+password and wallet-link events through Periscope. Its RPC accepts pagination
+only; tenant and user come from the interactive credential. API tokens, wallet
+header delegations and service credentials cannot read this surface. Owner,
+event-type and time predicates run before mirror deduplication in `api_events`.
+The subject is the payload's `user_id`, independently of the audit actor, so
+anonymous sign-in events and operator-initiated revocations remain attributed
+to their affected user. The API exposes typed event metadata and omits raw
+payloads, internal errors and token identifiers.
+
+## Security email
+
+Interactive issuance records unfamiliar-device alerts in `account_email_outbox`
+in the session transaction. Familiarity uses the original `(client_id,
+device_label)` as a hashed key scoped to the tenant and user, retained for
+90 days and touched by successful refreshes. Renaming the displayed session
+label does not change that identity. Browser defaults describe browser and OS
+without version numbers. Refresh-token theft queues a separate alert when the
+affected session is revoked; `(kind, session ID)` deduplicates each obligation.
+Neither alert has an opt-out.
+
+Security rows use `security_pending`, which older verification-only workers
+cannot claim or abandon. The upgraded worker leases both kinds with the same
+fenced settlement and retry policy. Verification retains its 24-hour window;
+security alerts retry through SMTP outages without that deadline. Missing SMTP
+configuration leaves the alert pending. Delivery waits for a linked address to
+be verified; wallet accounts without an address cannot receive email.
+
+Alerts contain device, client, originating IP, UTC time and an Account → Security
+link, with optional local MMDB location and provider attribution. They contain
+no access or refresh credential. Missing GeoIP data does not block delivery.
+History cleanup discovers at most 100 expired device keys and 100 terminal
+email keys per sweep, then rechecks each owner's key. Familiarity expires after
+2160 hours and terminal email metadata after 720 hours; pending alerts remain.
 
 ## Retention
 

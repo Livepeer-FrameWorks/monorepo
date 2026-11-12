@@ -90,6 +90,7 @@ func TestEveryRPCQuerySiteExecutesAgainstCurrentClickHouse(t *testing.T) {
 		verifyNetworkWorkCreditVariety(t, ctx, db, server)
 		verifyOrchestratorPerformanceParity(t, ctx, db, server)
 	})
+	t.Run("OwnSecurityActivity", func(t *testing.T) { verifySecurityActivityProjection(t, ctx, db, server) })
 	if scanErrors := trace.Errors(); len(scanErrors) > 0 {
 		t.Fatalf("real RPC pack observed result-shape scan failures: %v", scanErrors)
 	}
@@ -213,7 +214,7 @@ func assertEveryQuerySiteReached(t *testing.T, traced map[string]int) {
 		}
 	}
 	var missing []string
-	for _, filename := range []string{"server.go", "orchestrators.go", "network_observations.go", "network_delivery.go"} {
+	for _, filename := range []string{"server.go", "orchestrators.go", "network_observations.go", "network_delivery.go", "security_activity.go"} {
 		set := token.NewFileSet()
 		file, err := parser.ParseFile(set, filename, nil, 0)
 		if err != nil {

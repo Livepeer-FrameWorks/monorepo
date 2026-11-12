@@ -134,6 +134,7 @@ type Querier interface {
 	DeleteDVRChapterPlaybackByArtifact(ctx context.Context, arg DeleteDVRChapterPlaybackByArtifactParams) error
 	DeleteDeviceAuthorization(ctx context.Context, id string) error
 	DeleteExpiredMediaAuthorityDeliveries(ctx context.Context, arg DeleteExpiredMediaAuthorityDeliveriesParams) (int64, error)
+	DeleteExpiredSessionDevice(ctx context.Context, arg DeleteExpiredSessionDeviceParams) (int64, error)
 	DeleteOrphanedMediaAuthorityVersions(ctx context.Context, arg DeleteOrphanedMediaAuthorityVersionsParams) (int64, error)
 	DeleteOtherLegacyRefreshTokens(ctx context.Context, arg DeleteOtherLegacyRefreshTokensParams) error
 	DeletePushTarget(ctx context.Context, arg DeletePushTargetParams) (string, error)
@@ -146,6 +147,7 @@ type Querier interface {
 	DeleteRetiredMediaAuthorityTargets(ctx context.Context, arg DeleteRetiredMediaAuthorityTargetsParams) (int64, error)
 	DeleteStreamKeysForDeletion(ctx context.Context, arg DeleteStreamKeysForDeletionParams) error
 	DeleteTenantWalletIdentities(ctx context.Context, tenantID string) error
+	DeleteTerminalAccountEmail(ctx context.Context, arg DeleteTerminalAccountEmailParams) (int64, error)
 	DeleteUserWallet(ctx context.Context, arg DeleteUserWalletParams) (string, error)
 	EnableCreatedStreamRecording(ctx context.Context, id string) error
 	// A new request restarts delivery: attempts and the 24h window reset, so a
@@ -168,6 +170,7 @@ type Querier interface {
 	// target of the tenant. A target key is media_object:<kind>:<id>, and its kind
 	// names the target kind.
 	EnqueueMediaObjectBulkRefreshes(ctx context.Context, arg EnqueueMediaObjectBulkRefreshesParams) (int64, error)
+	EnqueueSecurityEmail(ctx context.Context, arg EnqueueSecurityEmailParams) error
 	EnqueueServiceEvent(ctx context.Context, arg EnqueueServiceEventParams) (string, error)
 	EnqueueStreamCleanup(ctx context.Context, arg EnqueueStreamCleanupParams) (string, error)
 	// A stream's playback policy is copied onto its recordings and their chapters,
@@ -344,6 +347,7 @@ type Querier interface {
 	InsertWalletUser(ctx context.Context, arg InsertWalletUserParams) error
 	IsDVRChapterPlaybackTarget(ctx context.Context, arg IsDVRChapterPlaybackTargetParams) (bool, error)
 	IsTenantAccountClosed(ctx context.Context, tenantID string) (bool, error)
+	KnownSessionDevice(ctx context.Context, arg KnownSessionDeviceParams) (bool, error)
 	LeaseAccountEmail(ctx context.Context, arg LeaseAccountEmailParams) (sql.NullString, error)
 	LeaseInvalidation(ctx context.Context, arg LeaseInvalidationParams) error
 	LeaseStreamCleanup(ctx context.Context, arg LeaseStreamCleanupParams) (sql.NullString, error)
@@ -399,6 +403,8 @@ type Querier interface {
 	ListExpiredAuthorizationCodeKeys(ctx context.Context, batchSize int32) ([]ListExpiredAuthorizationCodeKeysRow, error)
 	// NULL tenant_id identifies a device code not yet approved by a user.
 	ListExpiredDeviceCodeKeys(ctx context.Context, batchSize int32) ([]ListExpiredDeviceCodeKeysRow, error)
+	// Platform-wide discovery only; deletion rechecks the full owner and expiry.
+	ListExpiredSessionDeviceKeys(ctx context.Context, limit int32) ([]ListExpiredSessionDeviceKeysRow, error)
 	// Global indexed metadata discovery; mutations use the returned full owner.
 	ListExpiredSessionRetentionKeys(ctx context.Context, arg ListExpiredSessionRetentionKeysParams) ([]ListExpiredSessionRetentionKeysRow, error)
 	// Authorities still being renewed whose bound version has run out: renewal did
@@ -492,6 +498,8 @@ type Querier interface {
 	// current version is oldest, so a caller looking for any unconverged object
 	// usually stops at the first row.
 	ListTenantPlacementDependents(ctx context.Context, tenantID string) ([]ListTenantPlacementDependentsRow, error)
+	// Platform-wide discovery only; settlement metadata is retained for 30 days.
+	ListTerminalAccountEmailKeys(ctx context.Context, limit int32) ([]ListTerminalAccountEmailKeysRow, error)
 	ListUnassignedRefreshRetentionKeys(ctx context.Context, arg ListUnassignedRefreshRetentionKeysParams) ([]ListUnassignedRefreshRetentionKeysRow, error)
 	ListUserLiveStreamAuthorityTargets(ctx context.Context, arg ListUserLiveStreamAuthorityTargetsParams) ([]string, error)
 	ListUserWallets(ctx context.Context, userID string) ([]ListUserWalletsRow, error)
@@ -614,6 +622,7 @@ type Querier interface {
 	// row is processing again under its token, and that lease belongs to it.
 	ReleaseSupersededMediaAuthorityObligation(ctx context.Context, arg ReleaseSupersededMediaAuthorityObligationParams) (int64, error)
 	RelinkRefreshToken(ctx context.Context, arg RelinkRefreshTokenParams) error
+	RememberSessionDevice(ctx context.Context, arg RememberSessionDeviceParams) error
 	RenameAuthSession(ctx context.Context, arg RenameAuthSessionParams) (int64, error)
 	// A compile in flight extends its lease on the obligation and on the target's
 	// claim row, so the lease stays short and a worker that stopped without

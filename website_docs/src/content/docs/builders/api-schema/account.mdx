@@ -37,6 +37,30 @@ authSessionsConnection(
 | --- | --- | --- | --- |
 | GetAuthSessionsConnection | `GetAuthSessionsConnectionDocument` | `GetAuthSessionsConnection` | `get_auth_sessions_connection` |
 
+### Query.securityActivityConnection
+
+Your own security activity from the past 90 days.
+
+```graphql
+securityActivityConnection(
+  first: Int
+  after: String
+): SecurityActivityConnection!
+```
+
+**Returns:** `SecurityActivityConnection!` ([SecurityActivityConnection](/builders/api-schema/account/#securityactivityconnection))
+
+**Arguments**
+
+- `first`: `Int`
+- `after`: `String`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetSecurityActivityConnection | `GetSecurityActivityConnectionDocument` | `GetSecurityActivityConnection` | `get_security_activity_connection` |
+
 ### Query.tenant
 
 Get the current tenant&#39;s profile and settings.
@@ -414,6 +438,48 @@ Successful email link response.
 - Member: [RevokeOtherAuthSessionsPayload](/builders/api-schema/account/#revokeotherauthsessionspayload)
 - Member: [ValidationError](/builders/api-schema/shared/#validationerror)
 - Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### SecurityActivityConnection
+
+**object**
+
+- **edges**: `[SecurityActivityEdge!]!` ([SecurityActivityEdge](/builders/api-schema/account/#securityactivityedge))
+- **nodes**: `[SecurityActivityEvent!]!` ([SecurityActivityEvent](/builders/api-schema/account/#securityactivityevent))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+### SecurityActivityEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `SecurityActivityEvent!` ([SecurityActivityEvent](/builders/api-schema/account/#securityactivityevent))
+
+### SecurityActivityEvent
+
+**object**
+
+A security event concerning only the signed-in user.
+
+- **id**: `ID!`
+- **kind**: `SecurityActivityKind!` ([SecurityActivityKind](/builders/api-schema/account/#securityactivitykind))
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **authMethod**: `AuthMethod!` ([AuthMethod](/builders/api-schema/account/#authmethod))
+- **sessionId**: `ID`
+- **reason**: `String`
+
+### SecurityActivityKind
+
+**enum**
+
+- `SIGN_IN_SUCCEEDED`
+- `SIGN_IN_FAILED`
+- `SESSION_REVOKED`
+- `SESSIONS_REVOKED`
+- `PASSWORD_CHANGED`
+- `PASSWORD_RESET`
+- `WALLET_LINKED`
+- `WALLET_UNLINKED`
 
 ### Tenant
 

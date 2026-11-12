@@ -25,6 +25,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	eventoutbox "github.com/Livepeer-FrameWorks/monorepo/pkg/events/outbox"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
@@ -91,6 +92,18 @@ func main() {
 		logger.WithError(err).Fatal("Invalid configuration")
 	}
 	cfg.ApplyLogLevel(logger)
+	sessionGeoIP, geoErr := geoip.Open(cfg.MMDBPath)
+	if geoErr != nil {
+		logger.WithError(geoErr).Warn("Security email GeoIP unavailable")
+	}
+	if sessionGeoIP != nil {
+		defer func() {
+			if closeErr := sessionGeoIP.Close(); closeErr != nil {
+				logger.WithError(closeErr).Warn("Security email GeoIP close failed")
+			}
+		}()
+	}
+
 	metadataPolicy, err := middleware.ParseMetadataPolicy(cfg.MetadataPolicy)
 	if err != nil {
 		logger.WithError(err).Fatal("Invalid configuration")
@@ -402,6 +415,7 @@ func main() {
 	buildGRPCServer := func(ctx context.Context) (*grpc.Server, error) {
 		return commodoregrpc.NewGRPCServer(ctx, commodoregrpc.CommodoreServerConfig{
 			DB:                              db,
+			SessionGeoIP:                    sessionGeoIP,
 			Logger:                          logger,
 			FoghornPool:                     foghornPool,
 			QuartermasterClient:             quartermasterGRPCClient,

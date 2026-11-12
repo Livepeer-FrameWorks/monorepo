@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS commodore.auth_sessions (
     absolute_expires_at TIMESTAMPTZ NOT NULL,
     revoked_at TIMESTAMPTZ,
     revoke_reason TEXT,
+    device_key TEXT NOT NULL DEFAULT '',
     CONSTRAINT auth_sessions_owner_identity UNIQUE (tenant_id, user_id, id),
     CONSTRAINT auth_sessions_client_id_check CHECK (client_id IN ('web', 'cli', 'tray-mac', 'unknown')),
     CONSTRAINT auth_sessions_auth_method_check CHECK (auth_method IN ('password', 'wallet', 'pkce', 'device_code', 'unknown')),
@@ -98,6 +99,17 @@ CREATE INDEX IF NOT EXISTS idx_auth_sessions_retention_idle
     ON commodore.auth_sessions (idle_expires_at ASC, id ASC);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_retention_revoked
     ON commodore.auth_sessions (revoked_at ASC, id ASC) WHERE revoked_at IS NOT NULL;
+
+-- Device familiarity survives ended-session retention and display-label edits.
+CREATE TABLE IF NOT EXISTS commodore.auth_session_devices (
+    tenant_id UUID NOT NULL,
+    user_id UUID NOT NULL,
+    device_key TEXT NOT NULL,
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, user_id, device_key)
+);
+CREATE INDEX IF NOT EXISTS idx_auth_session_devices_retention
+    ON commodore.auth_session_devices (last_seen_at ASC, tenant_id ASC, user_id ASC, device_key ASC);
 
 -- Secure refresh tokens for session management
 CREATE TABLE IF NOT EXISTS commodore.refresh_tokens (
@@ -1427,15 +1439,14 @@ CREATE INDEX IF NOT EXISTS idx_commodore_stream_cleanup_outbox_pending_range
     ON commodore.stream_cleanup_outbox(next_attempt_at ASC)
     WHERE status = 'pending';
 
--- Durable delivery of account emails (email verification). Register and resend write one row in the same
--- transaction as the user/token change; a worker mints the link token at send time (the raw token is never stored)
--- and retries with backoff, so an SMTP outage no longer strands an account without its verification email. Rows
--- still pending when the 24h verification window closes are abandoned; the user can request a new link.
+-- Account emails commit with their identity/session change. Verification rows
+-- expire after 24 hours; mandatory security alerts retry without that deadline.
+-- security_pending keeps alerts invisible to older verification-only workers.
 CREATE TABLE IF NOT EXISTS commodore.account_email_outbox (
     user_id         UUID NOT NULL,
     tenant_id       UUID NOT NULL,
-    purpose         TEXT NOT NULL,                          -- 'verification'
-    status          TEXT NOT NULL DEFAULT 'pending',        -- 'pending' | 'completed' | 'abandoned'
+    purpose         TEXT NOT NULL,                          -- verification or security kind + session ID
+    status          TEXT NOT NULL DEFAULT 'pending',        -- verification pending, security_pending, or terminal
     attempts        INT NOT NULL DEFAULT 0,
     next_attempt_at TIMESTAMP NOT NULL DEFAULT NOW(),
     last_error      TEXT,
@@ -1443,13 +1454,21 @@ CREATE TABLE IF NOT EXISTS commodore.account_email_outbox (
     created_at      TIMESTAMP NOT NULL DEFAULT NOW(),       -- start of the delivery window; reset by resend
     updated_at      TIMESTAMP NOT NULL DEFAULT NOW(),
     completed_at    TIMESTAMP,
+    payload         JSONB,
     PRIMARY KEY (user_id, purpose),
-    CONSTRAINT chk_commodore_account_email_outbox_purpose CHECK (purpose IN ('verification')),
-    CONSTRAINT chk_commodore_account_email_outbox_status CHECK (status IN ('pending', 'completed', 'abandoned'))
+    CONSTRAINT chk_commodore_account_email_outbox_purpose CHECK (purpose = 'verification' OR purpose ~ '^security_(sign_in|reuse):[0-9a-f-]{36}$'),
+    CONSTRAINT chk_commodore_account_email_outbox_status CHECK (status IN ('pending', 'security_pending', 'completed', 'abandoned')),
+    CONSTRAINT chk_commodore_account_email_outbox_security CHECK (
+        (purpose = 'verification' AND status <> 'security_pending') OR
+        (purpose <> 'verification' AND status <> 'pending' AND payload IS NOT NULL AND jsonb_typeof(payload) = 'object'))
 );
 CREATE INDEX IF NOT EXISTS idx_commodore_account_email_outbox_pending_range
     ON commodore.account_email_outbox(next_attempt_at ASC)
     WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_account_email_outbox_due
+    ON commodore.account_email_outbox (next_attempt_at ASC) WHERE status IN ('pending', 'security_pending');
+CREATE INDEX IF NOT EXISTS idx_account_email_outbox_terminal
+    ON commodore.account_email_outbox (updated_at ASC, tenant_id ASC, user_id ASC, purpose ASC) WHERE status IN ('completed', 'abandoned');
 
 -- ============================================================================
 -- SIGNING-KEY AUDIT LOG

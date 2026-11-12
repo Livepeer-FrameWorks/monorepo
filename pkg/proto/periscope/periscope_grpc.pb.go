@@ -1198,6 +1198,7 @@ var FederationAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	PlatformAnalyticsService_GetSecurityActivity_FullMethodName = "/periscope.PlatformAnalyticsService/GetSecurityActivity"
 	PlatformAnalyticsService_GetPlatformOverview_FullMethodName = "/periscope.PlatformAnalyticsService/GetPlatformOverview"
 	PlatformAnalyticsService_ListTenantActivity_FullMethodName  = "/periscope.PlatformAnalyticsService/ListTenantActivity"
 	PlatformAnalyticsService_GetNetworkLiveStats_FullMethodName = "/periscope.PlatformAnalyticsService/GetNetworkLiveStats"
@@ -1207,6 +1208,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type PlatformAnalyticsServiceClient interface {
+	GetSecurityActivity(ctx context.Context, in *GetSecurityActivityRequest, opts ...grpc.CallOption) (*GetSecurityActivityResponse, error)
 	GetPlatformOverview(ctx context.Context, in *GetPlatformOverviewRequest, opts ...grpc.CallOption) (*GetPlatformOverviewResponse, error)
 	ListTenantActivity(ctx context.Context, in *ListTenantActivityRequest, opts ...grpc.CallOption) (*ListTenantActivityResponse, error)
 	GetNetworkLiveStats(ctx context.Context, in *GetNetworkLiveStatsRequest, opts ...grpc.CallOption) (*GetNetworkLiveStatsResponse, error)
@@ -1218,6 +1220,16 @@ type platformAnalyticsServiceClient struct {
 
 func NewPlatformAnalyticsServiceClient(cc grpc.ClientConnInterface) PlatformAnalyticsServiceClient {
 	return &platformAnalyticsServiceClient{cc}
+}
+
+func (c *platformAnalyticsServiceClient) GetSecurityActivity(ctx context.Context, in *GetSecurityActivityRequest, opts ...grpc.CallOption) (*GetSecurityActivityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSecurityActivityResponse)
+	err := c.cc.Invoke(ctx, PlatformAnalyticsService_GetSecurityActivity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *platformAnalyticsServiceClient) GetPlatformOverview(ctx context.Context, in *GetPlatformOverviewRequest, opts ...grpc.CallOption) (*GetPlatformOverviewResponse, error) {
@@ -1254,6 +1266,7 @@ func (c *platformAnalyticsServiceClient) GetNetworkLiveStats(ctx context.Context
 // All implementations must embed UnimplementedPlatformAnalyticsServiceServer
 // for forward compatibility.
 type PlatformAnalyticsServiceServer interface {
+	GetSecurityActivity(context.Context, *GetSecurityActivityRequest) (*GetSecurityActivityResponse, error)
 	GetPlatformOverview(context.Context, *GetPlatformOverviewRequest) (*GetPlatformOverviewResponse, error)
 	ListTenantActivity(context.Context, *ListTenantActivityRequest) (*ListTenantActivityResponse, error)
 	GetNetworkLiveStats(context.Context, *GetNetworkLiveStatsRequest) (*GetNetworkLiveStatsResponse, error)
@@ -1267,6 +1280,9 @@ type PlatformAnalyticsServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedPlatformAnalyticsServiceServer struct{}
 
+func (UnimplementedPlatformAnalyticsServiceServer) GetSecurityActivity(context.Context, *GetSecurityActivityRequest) (*GetSecurityActivityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSecurityActivity not implemented")
+}
 func (UnimplementedPlatformAnalyticsServiceServer) GetPlatformOverview(context.Context, *GetPlatformOverviewRequest) (*GetPlatformOverviewResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPlatformOverview not implemented")
 }
@@ -1296,6 +1312,24 @@ func RegisterPlatformAnalyticsServiceServer(s grpc.ServiceRegistrar, srv Platfor
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&PlatformAnalyticsService_ServiceDesc, srv)
+}
+
+func _PlatformAnalyticsService_GetSecurityActivity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSecurityActivityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PlatformAnalyticsServiceServer).GetSecurityActivity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PlatformAnalyticsService_GetSecurityActivity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PlatformAnalyticsServiceServer).GetSecurityActivity(ctx, req.(*GetSecurityActivityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _PlatformAnalyticsService_GetPlatformOverview_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -1359,6 +1393,10 @@ var PlatformAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "periscope.PlatformAnalyticsService",
 	HandlerType: (*PlatformAnalyticsServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetSecurityActivity",
+			Handler:    _PlatformAnalyticsService_GetSecurityActivity_Handler,
+		},
 		{
 			MethodName: "GetPlatformOverview",
 			Handler:    _PlatformAnalyticsService_GetPlatformOverview_Handler,

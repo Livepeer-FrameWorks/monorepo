@@ -380,6 +380,9 @@ var operationCalls = map[string]operationCall{
 	"GetRoutingEventsConnection": {GetRoutingEventsConnection_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return GetRoutingEventsConnection(ctx, c, arg[*ConnectionInput](v, "page"), arg[*string](v, "streamId"), arg[*TimeRangeInput](v, "timeRange"), arg[*string](v, "subjectTenantId"), arg[*string](v, "clusterId"), arg[*bool](v, "noCache"))
 	}},
+	"GetSecurityActivityConnection": {GetSecurityActivityConnection_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return GetSecurityActivityConnection(ctx, c, arg[*int](v, "first"), arg[*string](v, "after"))
+	}},
 	"GetServiceInstancesConnection": {GetServiceInstancesConnection_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return GetServiceInstancesConnection(ctx, c, arg[*ConnectionInput](v, "page"), arg[*string](v, "clusterId"), arg[*string](v, "nodeId"), arg[*InstanceStatus](v, "status"))
 	}},

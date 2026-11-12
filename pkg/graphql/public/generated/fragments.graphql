@@ -3370,6 +3370,15 @@ fragment RoutingEventDefaultFields on RoutingEvent {
   originClusterId
 }
 
+fragment SecurityActivityEventDefaultFields on SecurityActivityEvent {
+  id
+  kind
+  timestamp
+  authMethod
+  sessionId
+  reason
+}
+
 fragment ServiceInstanceDefaultFields on ServiceInstance {
   id
   instanceId

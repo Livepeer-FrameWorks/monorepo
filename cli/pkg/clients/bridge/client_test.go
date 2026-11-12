@@ -71,3 +71,24 @@ func TestDoDoesNotRefreshPublicOrForbiddenRequest(t *testing.T) {
 		server.Close()
 	}
 }
+
+func TestDoNeverForwardsCredentialsThroughRedirect(t *testing.T) {
+	for _, status := range []int{http.StatusFound, http.StatusTemporaryRedirect} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var redirected bool
+			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				redirected = true
+				_, _ = w.Write([]byte(`{"data":{"ok":true}}`))
+			}))
+			defer target.Close()
+			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, target.URL, status)
+			}))
+			defer origin.Close()
+			err := New(origin.URL).Do(t.Context(), `{ok}`, "private-session", nil, nil)
+			if err == nil || redirected {
+				t.Fatalf("Bridge redirect forwarded credentials: redirected=%t err=%v", redirected, err)
+			}
+		})
+	}
+}

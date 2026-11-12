@@ -124,6 +124,7 @@
     "GetReviewMediaPlacementChange": "query.reviewMediaPlacementChange",
     "GetRoutingEfficiency": "query.analytics.infra.routingEfficiency",
     "GetRoutingEventsConnection": "query.analytics.infra.routingEventsConnection",
+    "GetSecurityActivityConnection": "query.securityActivityConnection",
     "GetServiceInstancesConnection": "query.analytics.infra.serviceInstancesConnection",
     "GetServiceInstancesHealth": "query.serviceInstancesHealth",
     "GetSessionQoeSummary": "query.analytics.health.sessionQoeSummary",

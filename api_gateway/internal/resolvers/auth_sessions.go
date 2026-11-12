@@ -61,17 +61,8 @@ func (r *Resolver) authSessionModel(row *commodorepb.AuthSession) *model.AuthSes
 	case "tray-mac":
 		client = model.AuthClientKindDesktop
 	}
-	method := model.AuthMethodUnknown
-	switch row.GetAuthMethod() {
-	case "password":
-		method = model.AuthMethodPassword
-	case "wallet":
-		method = model.AuthMethodWallet
-	case "pkce":
-		method = model.AuthMethodBrowserHandoff
-	case "device_code":
-		method = model.AuthMethodDeviceCode
-	}
+	method := authMethodModel(row.GetAuthMethod())
+
 	session := &model.AuthSession{ID: row.GetId(), ClientKind: client, ClientID: row.GetClientId(), AuthMethod: method, Label: row.GetDeviceLabel(), IPAddress: maskedAuthSessionIP(row.GetLastIp()), CreatedAt: row.GetCreatedAt().AsTime(), LastActiveAt: row.GetLastSeenAt().AsTime(), ExpiresAt: row.GetExpiresAt().AsTime(), Current: row.GetCurrent()}
 	if version := row.GetClientVersion(); version != "" {
 		session.ClientVersion = &version
@@ -179,4 +170,19 @@ func (r *Resolver) DoChangePassword(ctx context.Context, currentPassword, newPas
 
 func securitySessionRefreshRequired() *model.ValidationError {
 	return &model.ValidationError{Message: "Renew this session before changing account security", Code: strPtr("SESSION_REFRESH_REQUIRED")}
+}
+
+func authMethodModel(value string) model.AuthMethod {
+	method := model.AuthMethodUnknown
+	switch value {
+	case "password":
+		method = model.AuthMethodPassword
+	case "wallet":
+		method = model.AuthMethodWallet
+	case "pkce":
+		method = model.AuthMethodBrowserHandoff
+	case "device_code":
+		method = model.AuthMethodDeviceCode
+	}
+	return method
 }

@@ -40,6 +40,7 @@ type Commodore struct {
 	config.Registration
 	config.BuildEnvironment
 	config.SystemTenant
+	config.GeoIP
 	config.EmailBranding
 	config.DomainEventActor
 	FieldEncryptionRotation

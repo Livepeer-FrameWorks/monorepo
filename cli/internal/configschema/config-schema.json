@@ -929,6 +929,12 @@
           "description": "UUID of the Quartermaster-owned system tenant. Empty uses the reserved ID 00000000-0000-0000-0000-000000000001; a value that is not a UUID fails startup."
         },
         {
+          "key": "GEOIP_MMDB_PATH",
+          "type": "string",
+          "introduced": "v0.3.0",
+          "description": "Path to an MMDB city database used for IP geolocation. Empty disables GeoIP lookups; a set path that cannot be opened logs a warning and disables lookups."
+        },
+        {
           "key": "EMAIL_LOGO_URL",
           "type": "string",
           "introduced": "v0.3.10",

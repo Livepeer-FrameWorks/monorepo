@@ -46,6 +46,10 @@ func (c Class) UnfundedAllowed() bool {
 }
 
 var graphqlMutationClasses = map[string]Class{
+	"changePassword":                 Control,
+	"renameAuthSession":              Control,
+	"revokeAuthSession":              Control,
+	"revokeOtherAuthSessions":        Control,
 	"createStream":                   Control,
 	"updateStream":                   Control,
 	"deleteStream":                   Control,
