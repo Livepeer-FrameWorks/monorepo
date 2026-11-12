@@ -2361,6 +2361,8 @@ CREATE INDEX IF NOT EXISTS idx_webhook_events_provider_object
 CREATE TABLE IF NOT EXISTS purser.provider_webhook_inbox (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     provider VARCHAR(50) NOT NULL,
+    tenant_id UUID,
+    provider_payment_id TEXT,
     event_key VARCHAR(320) NOT NULL,
     headers JSONB NOT NULL DEFAULT '{}',
     raw_payload BYTEA NOT NULL,
@@ -2378,7 +2380,7 @@ CREATE TABLE IF NOT EXISTS purser.provider_webhook_inbox (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(provider, event_key),
     CONSTRAINT chk_provider_webhook_inbox_status
-        CHECK (status IN ('pending', 'processing', 'failed', 'processed'))
+        CHECK (status IN ('pending', 'processing', 'failed', 'processed', 'blocked'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_provider_webhook_inbox_pending_range
@@ -2786,10 +2788,8 @@ ALTER TABLE purser.billing_invoices
     DROP CONSTRAINT IF EXISTS chk_billing_invoices_ledger_currency,
     ADD CONSTRAINT chk_billing_invoices_ledger_currency CHECK (currency = 'EUR');
 
--- What a card provider actually settled for a charge: the charge amount and
--- currency, the EUR amount credited to the platform balance, the provider fee,
--- the net, the provider's exchange rate, and the provider balance transaction.
--- A pending row has no settlement figures yet.
+-- Native provider evidence is immutable once recorded. EUR reference valuation
+-- is separate from provider conversion and can wait for an available FX rate.
 CREATE TABLE IF NOT EXISTS purser.provider_settlements (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL,
@@ -2805,6 +2805,14 @@ CREATE TABLE IF NOT EXISTS purser.provider_settlements (
     net_cents BIGINT,
     settlement_currency CHAR(3),
     exchange_rate NUMERIC(20, 10),
+    settled_eur_cents BIGINT,
+    fee_eur_cents BIGINT,
+    net_eur_cents BIGINT,
+    valuation_units_per_eur NUMERIC(20, 10),
+    valuation_reference_date DATE,
+    valuation_source VARCHAR(16),
+    last_error_code VARCHAR(64),
+    last_error TEXT,
     status VARCHAR(16) NOT NULL DEFAULT 'pending',
     settled_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -2815,19 +2823,64 @@ CREATE TABLE IF NOT EXISTS purser.provider_settlements (
         charge_amount_cents > 0 AND charge_currency IN ('EUR', 'USD', 'GBP')
     ),
     CONSTRAINT chk_provider_settlements_state CHECK (
-        (status = 'pending'
-            AND provider_balance_transaction_id IS NULL AND settled_amount_cents IS NULL
+        status IN ('pending', 'recorded', 'blocked', 'settled')
+        AND CASE WHEN status = 'pending' THEN
+            provider_balance_transaction_id IS NULL AND settled_amount_cents IS NULL
             AND fee_cents IS NULL AND net_cents IS NULL AND settlement_currency IS NULL
-            AND exchange_rate IS NULL AND settled_at IS NULL)
-        OR (status = 'settled'
-            AND provider_balance_transaction_id IS NOT NULL AND settled_amount_cents IS NOT NULL
-            AND fee_cents IS NOT NULL AND fee_cents >= 0
+            AND exchange_rate IS NULL AND settled_at IS NULL
+        ELSE
+            provider_balance_transaction_id IS NOT NULL AND btrim(provider_balance_transaction_id) <> ''
+            AND settled_amount_cents IS NOT NULL AND fee_cents IS NOT NULL AND fee_cents >= 0
             AND net_cents IS NOT NULL AND net_cents = settled_amount_cents - fee_cents
-            AND settlement_currency IS NOT NULL AND settlement_currency = 'EUR' AND settled_at IS NOT NULL
+            AND settlement_currency IS NOT NULL AND settlement_currency ~ '^[A-Z]{3}$'
+            AND settled_at IS NOT NULL
             AND ((exchange_rate IS NOT NULL AND exchange_rate > 0)
-                 OR (exchange_rate IS NULL AND charge_currency = 'EUR')))
+                 OR (exchange_rate IS NULL AND charge_currency = settlement_currency))
+        END
+        AND CASE WHEN status = 'settled' THEN
+            settled_eur_cents IS NOT NULL AND fee_eur_cents IS NOT NULL AND fee_eur_cents >= 0
+            AND net_eur_cents IS NOT NULL AND net_eur_cents = settled_eur_cents - fee_eur_cents
+            AND valuation_units_per_eur IS NOT NULL AND valuation_units_per_eur > 0
+            AND valuation_reference_date IS NOT NULL AND valuation_source IS NOT NULL
+            AND valuation_reference_date <= (settled_at AT TIME ZONE 'UTC')::date
+            AND valuation_reference_date >= (settled_at AT TIME ZONE 'UTC')::date - 5
+            AND ((settlement_currency = 'EUR' AND valuation_source = 'identity'
+                  AND valuation_units_per_eur = 1 AND settled_eur_cents = settled_amount_cents
+                  AND fee_eur_cents = fee_cents AND net_eur_cents = net_cents)
+                 OR (settlement_currency IN ('USD', 'GBP') AND valuation_source = 'ecb'))
+            AND last_error_code IS NULL AND last_error IS NULL
+        ELSE
+            settled_eur_cents IS NULL AND fee_eur_cents IS NULL AND net_eur_cents IS NULL
+            AND valuation_units_per_eur IS NULL AND valuation_reference_date IS NULL AND valuation_source IS NULL
+        END
+        AND (status <> 'blocked' OR COALESCE(last_error_code, '') <> '')
     )
 );
+
+
+-- An EUR provider settlement already is its EUR valuation. Populate the full
+-- identity record atomically for writers that supply only native EUR fields.
+CREATE OR REPLACE FUNCTION purser.ensure_provider_settlement_identity_valuation()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.status = 'settled' AND NEW.settlement_currency = 'EUR'
+       AND NEW.settled_eur_cents IS NULL AND NEW.fee_eur_cents IS NULL AND NEW.net_eur_cents IS NULL
+       AND NEW.valuation_units_per_eur IS NULL AND NEW.valuation_reference_date IS NULL AND NEW.valuation_source IS NULL THEN
+        NEW.settled_eur_cents := NEW.settled_amount_cents;
+        NEW.fee_eur_cents := NEW.fee_cents;
+        NEW.net_eur_cents := NEW.net_cents;
+        NEW.valuation_units_per_eur := 1;
+        NEW.valuation_reference_date := (NEW.settled_at AT TIME ZONE 'UTC')::date;
+        NEW.valuation_source := 'identity';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_provider_settlement_identity_valuation ON purser.provider_settlements;
+CREATE TRIGGER trg_provider_settlement_identity_valuation
+BEFORE INSERT OR UPDATE ON purser.provider_settlements
+FOR EACH ROW EXECUTE FUNCTION purser.ensure_provider_settlement_identity_valuation();
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_settlements_balance_transaction
     ON purser.provider_settlements(provider, provider_balance_transaction_id)
@@ -4330,3 +4383,51 @@ ALTER TABLE purser.tenant_subscriptions
     ADD COLUMN IF NOT EXISTS tax_assessed_since TIMESTAMPTZ;
 ALTER TABLE purser.tenant_subscriptions
     ALTER COLUMN tax_assessed_since SET DEFAULT NOW();
+
+
+CREATE INDEX IF NOT EXISTS idx_provider_inbox_blocked
+    ON purser.provider_webhook_inbox(id ASC) WHERE status = 'blocked';
+CREATE INDEX IF NOT EXISTS idx_provider_inbox_bound_recovery_tenant
+    ON purser.provider_webhook_inbox((COALESCE(tenant_id::text, headers->>'tenant_id')) ASC, created_at ASC, id ASC)
+    WHERE status <> 'processed';
+CREATE INDEX IF NOT EXISTS idx_provider_settlements_valuation_queue
+    ON purser.provider_settlements(updated_at ASC, id ASC) WHERE status = 'recorded';
+CREATE INDEX IF NOT EXISTS idx_provider_settlements_supported_queue
+    ON purser.provider_settlements(settlement_currency ASC, updated_at ASC, id ASC)
+    WHERE status = 'blocked' AND last_error_code = 'unsupported_currency';
+
+CREATE INDEX IF NOT EXISTS idx_provider_inbox_blocked_payment
+ ON purser.provider_webhook_inbox(provider ASC, tenant_id ASC, provider_payment_id ASC) WHERE status='blocked';
+
+
+-- Service and operator diagnostics share the same failure and ownership rules.
+CREATE OR REPLACE VIEW purser.provider_webhook_failures AS
+SELECT id, COALESCE(tenant_id::text, NULLIF(headers->>'tenant_id', ''), 'unbound') AS tenant_id
+FROM (
+ SELECT id, tenant_id, headers FROM purser.provider_webhook_inbox
+ WHERE status IN ('pending', 'failed', 'processing') AND attempts > 1
+ UNION
+ SELECT id, tenant_id, headers FROM purser.provider_webhook_inbox
+ WHERE status IN ('pending', 'failed', 'processing') AND unresolved_since < NOW() - INTERVAL '14 days'
+ UNION
+ SELECT id, tenant_id, headers FROM purser.provider_webhook_inbox WHERE status='blocked'
+) failures;
+
+
+CREATE INDEX IF NOT EXISTS idx_provider_settlements_recovery_listing
+ ON purser.provider_settlements(created_at ASC,id ASC) WHERE status IN ('recorded','blocked');
+CREATE INDEX IF NOT EXISTS idx_provider_settlements_recovery_tenant
+ ON purser.provider_settlements(tenant_id ASC,created_at ASC,id ASC) WHERE status IN ('recorded','blocked');
+CREATE INDEX IF NOT EXISTS idx_provider_settlements_recovery_state
+ ON purser.provider_settlements(status ASC,settled_at ASC,id ASC) WHERE status IN ('recorded','blocked');
+
+CREATE OR REPLACE VIEW purser.provider_settlement_failures AS
+ SELECT id,tenant_id::text AS tenant_id FROM purser.provider_settlements WHERE status='blocked'
+ UNION
+ SELECT id,tenant_id::text AS tenant_id FROM purser.provider_settlements
+ WHERE status='recorded' AND settled_at < NOW()-INTERVAL '14 days';
+
+CREATE OR REPLACE VIEW purser.billing_recovery_failures AS
+ SELECT 'webhook:'||id::text AS id,tenant_id FROM purser.provider_webhook_failures
+ UNION ALL
+ SELECT 'settlement:'||id::text AS id,tenant_id FROM purser.provider_settlement_failures;

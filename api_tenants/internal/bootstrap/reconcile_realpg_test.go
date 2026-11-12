@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -138,6 +139,13 @@ func reconcileQuartermasterInTransaction(t *testing.T, ctx context.Context, db *
 
 func startQuartermasterBootstrapRealPG(t *testing.T) *sql.DB {
 	t.Helper()
+	if strings.Contains(t.Name(), "_RealYugabyte") {
+		db, ok := dockerpg.OpenSharedYugabyteBaseline(t, "manifest_registry", "quartermaster")
+		if !ok {
+			t.Skip("requires the shared Yugabyte fixture")
+		}
+		return db
+	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not available")
 	}
@@ -170,4 +178,95 @@ func startQuartermasterBootstrapRealPG(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	return db
+}
+
+func TestManifestRegistryRetiresOnlyOwnedScope_RealPG(t *testing.T) {
+	db := startQuartermasterBootstrapRealPG(t)
+	desired := QuartermasterSection{
+		SystemTenant:    &Tenant{Alias: SystemTenantAlias, Name: "FrameWorks"},
+		Clusters:        []Cluster{{ID: "registry-test", Name: "Registry", Type: "central", BaseURL: "https://registry.example.com", OwnerTenant: TenantRef{Ref: "quartermaster.system_tenant"}, Mesh: ClusterMesh{CIDR: "10.89.0.0/24", ListenPort: 51820}, Cell: "registry-test", Class: "platform_official", ControlCell: "registry-test", EligibleServingCells: []string{"registry-test"}}},
+		Nodes:           []Node{{ID: "registry-node", ClusterID: "registry-test", Type: "core", ExternalIP: "203.0.113.10", WireGuard: NodeWireGuard{IP: "10.89.0.10", PublicKey: "registry-key", Port: 51820}}},
+		RegistryScope:   &ServiceRegistryScope{Owner: "production-registry", Clusters: []string{"registry-test"}, Complete: true},
+		ServiceRegistry: []ServiceRegistryEntry{{ServiceName: "registry-service", Type: "control", Protocol: "http", ClusterID: "registry-test", NodeID: "registry-node", Port: 8080}},
+	}
+	originalEntries := append([]ServiceRegistryEntry(nil), desired.ServiceRegistry...)
+	reconcileQuartermasterInTransaction(t, t.Context(), db, desired)
+	if _, err := db.ExecContext(t.Context(), `INSERT INTO quartermaster.service_instances(instance_id,service_id,cluster_id,node_id,protocol,port,status,health_status) VALUES('runtime-instance','registry-service','registry-test','registry-node','http',8081,'running','unknown')`); err != nil {
+		t.Fatal(err)
+	}
+	desired.ServiceRegistry = nil
+	reconcileQuartermasterInTransaction(t, t.Context(), db, desired)
+	var managed, runtime string
+	if err := db.QueryRowContext(t.Context(), `SELECT status FROM quartermaster.service_instances WHERE cluster_id='registry-test' AND instance_id='inst-registry-service-registry-node-http-8080'`).Scan(&managed); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(t.Context(), `SELECT status FROM quartermaster.service_instances WHERE cluster_id='registry-test' AND instance_id='runtime-instance'`).Scan(&runtime); err != nil {
+		t.Fatal(err)
+	}
+	if managed != "stopped" || runtime != "running" {
+		t.Fatalf("removed manifest registration=%s, independent runtime=%s", managed, runtime)
+	}
+	// A partial upload cannot retire existing inventory, and restoring a desired
+	// tuple revives its historical row rather than creating another registration.
+	desired.ServiceRegistry = originalEntries
+	reconcileQuartermasterInTransaction(t, t.Context(), db, desired)
+	desired.ServiceRegistry = nil
+	desired.RegistryScope.Complete = false
+	reconcileQuartermasterInTransaction(t, t.Context(), db, desired)
+	if err := db.QueryRowContext(t.Context(), `SELECT status FROM quartermaster.service_instances WHERE cluster_id='registry-test' AND port=8080`).Scan(&managed); err != nil || managed != "running" {
+		t.Fatalf("partial upload retired an owned row: %s %v", managed, err)
+	}
+	desired.RegistryScope.Complete = true
+
+	// A known runtime registrar is never adopted by a matching manifest tuple.
+	desired.ServiceRegistry = append([]ServiceRegistryEntry(nil), originalEntries...)
+	desired.ServiceRegistry[0].Port = 8081
+	tx, err := db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Reconcile(t.Context(), tx, desired); err == nil {
+		t.Error("manifest took over runtime registration")
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	desired.ServiceRegistry = nil
+
+	// Legacy IDs are opaque: adoption verifies all inventory evidence, not a
+	// string format. A wrong tuple aborts the whole bootstrap transaction.
+	if _, err := db.ExecContext(t.Context(), `INSERT INTO quartermaster.service_instances(instance_id,service_id,cluster_id,node_id,protocol,port,status,health_status,registration_source) VALUES('inst-a88f18a7','registry-service','registry-test','registry-node','http',8082,'running','unknown','legacy')`); err != nil {
+		t.Fatal(err)
+	}
+	desired.RegistryScope.Adopt = []ServiceRegistryAdoption{{InstanceID: "inst-a88f18a7", ServiceName: "registry-service", ClusterID: "registry-test", NodeID: "registry-node", Protocol: "http", Port: 8083}}
+	tx, err = db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Reconcile(t.Context(), tx, desired); err == nil {
+		t.Error("adoption accepted mismatched historical inventory")
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	desired.RegistryScope.Adopt[0].Port = 8082
+	result := reconcileQuartermasterInTransaction(t, t.Context(), db, desired)
+	if len(result.ServiceRegistry.Stopped) != 2 {
+		t.Fatalf("reviewed retired inventory: %+v", result.ServiceRegistry)
+	}
+	var owner, source string
+	if err := db.QueryRowContext(t.Context(), `SELECT status,registry_owner,registration_source FROM quartermaster.service_instances WHERE instance_id='inst-a88f18a7' AND cluster_id='registry-test'`).Scan(&managed, &owner, &source); err != nil {
+		t.Fatal(err)
+	}
+	if managed != "stopped" || owner != "production-registry" || source != "manifest" {
+		t.Fatalf("legacy provenance/status=%s/%s/%s", managed, owner, source)
+	}
+	if replay := reconcileQuartermasterInTransaction(t, t.Context(), db, desired); len(replay.ServiceRegistry.Stopped) != 0 {
+		t.Fatalf("retirement was not idempotent: %+v", replay.ServiceRegistry)
+	}
+
+}
+
+func TestManifestRegistryRetiresOnlyOwnedScope_RealYugabyte(t *testing.T) {
+	TestManifestRegistryRetiresOnlyOwnedScope_RealPG(t)
 }

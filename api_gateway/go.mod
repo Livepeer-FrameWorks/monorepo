@@ -15,6 +15,7 @@ require (
 	github.com/prometheus/client_model v0.6.2
 	github.com/sirupsen/logrus v1.9.4
 	github.com/vektah/gqlparser/v2 v2.5.32
+	go.uber.org/goleak v1.3.0
 	golang.org/x/sync v0.23.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478
 	google.golang.org/grpc v1.80.0

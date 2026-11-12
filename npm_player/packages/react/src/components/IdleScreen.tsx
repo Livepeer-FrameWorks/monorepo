@@ -27,15 +27,16 @@ const AnimatedBubble: React.FC<AnimatedBubbleProps> = ({ index }) => {
     setPosition(getRandomPosition());
     setSize(getRandomSize());
 
+    let timeout: ReturnType<typeof setTimeout>;
     const animationCycle = () => {
       setOpacity(0.15);
-      setTimeout(
+      timeout = setTimeout(
         () => {
           setOpacity(0);
-          setTimeout(() => {
+          timeout = setTimeout(() => {
             setPosition(getRandomPosition());
             setSize(getRandomSize());
-            setTimeout(() => {
+            timeout = setTimeout(() => {
               animationCycle();
             }, 200);
           }, 1500);
@@ -44,7 +45,7 @@ const AnimatedBubble: React.FC<AnimatedBubbleProps> = ({ index }) => {
       );
     };
 
-    const timeout = setTimeout(animationCycle, index * 500);
+    timeout = setTimeout(animationCycle, index * 500);
     return () => clearTimeout(timeout);
   }, [index]);
 

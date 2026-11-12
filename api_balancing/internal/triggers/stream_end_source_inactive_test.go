@@ -374,7 +374,7 @@ func TestOwnerVanishRunsStreamEndFinalization(t *testing.T) {
 	// The stream was admitted under a resolvable owner; seed the resolver so owner-vanish finalization runs with
 	// the AUTHORITATIVE tenant. (An UNRESOLVED node-asserted tenant is deliberately NOT trusted for the
 	// tenant-scoped effects — see TestOwnerVanishUnresolvedTenantSkipsTenantScopedFinalization.)
-	p.streamCache.Set(tenantID+":"+internal, streamContext{TenantID: tenantID, StreamID: streamID}, time.Minute)
+	p.streamCache.Set(streamContextCacheKey("live+"+internal), streamContext{TenantID: tenantID, StreamID: streamID}, time.Minute)
 	_, _, err := p.handleStreamLifecycleUpdate(&ipcpb.MistTrigger{
 		TriggerType:       "STREAM_LIFECYCLE_UPDATE",
 		TriggerUnixMillis: time.Now().UnixMilli(),

@@ -222,22 +222,70 @@ ON CONFLICT (provider, provider_payment_id) DO NOTHING;
 -- name: SettleProviderSettlement :execrows
 UPDATE purser.provider_settlements
 SET status = 'settled',
-    provider_balance_transaction_id = sqlc.arg(balance_transaction_id),
+    settled_eur_cents = sqlc.arg(settled_eur_cents)::bigint,
+    fee_eur_cents = sqlc.arg(fee_eur_cents)::bigint,
+    net_eur_cents = sqlc.arg(settled_eur_cents)::bigint - sqlc.arg(fee_eur_cents)::bigint,
+    valuation_units_per_eur = sqlc.arg(valuation_units_per_eur)::text::numeric,
+    valuation_reference_date = sqlc.arg(valuation_reference_date)::date,
+    valuation_source = sqlc.arg(valuation_source)::text,
+    last_error_code = NULL, last_error = NULL,
+    updated_at = NOW()
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND provider = sqlc.arg(provider)
+  AND provider_payment_id = sqlc.arg(provider_payment_id)
+  AND status IN ('recorded', 'blocked');
+
+-- name: RecordNativeProviderSettlement :execrows
+UPDATE purser.provider_settlements
+SET status = 'recorded',
+    provider_balance_transaction_id = sqlc.arg(balance_transaction_id)::text,
     settled_amount_cents = sqlc.arg(settled_amount_cents)::bigint,
     fee_cents = sqlc.arg(fee_cents)::bigint,
     net_cents = sqlc.arg(net_cents)::bigint,
     settlement_currency = sqlc.arg(settlement_currency)::text,
     exchange_rate = sqlc.narg(exchange_rate)::text::numeric,
     settled_at = sqlc.arg(settled_at)::timestamptz,
-    updated_at = NOW()
-WHERE provider = sqlc.arg(provider)
-  AND provider_payment_id = sqlc.arg(provider_payment_id)
+    last_error_code = NULL, last_error = NULL, updated_at = NOW()
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND provider = sqlc.arg(provider) AND provider_payment_id = sqlc.arg(provider_payment_id)
   AND status = 'pending';
+
+-- name: RecordProviderValuationFailure :exec
+UPDATE purser.provider_settlements
+SET status = CASE WHEN sqlc.arg(blocked)::boolean THEN 'blocked' ELSE 'recorded' END,
+    last_error_code = sqlc.arg(error_code)::text,
+    last_error = sqlc.arg(error_message)::text, updated_at = NOW()
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND provider = sqlc.arg(provider) AND provider_payment_id = sqlc.arg(provider_payment_id)
+  AND status IN ('recorded', 'blocked');
+
+-- name: ListRecordedProviderSettlements :many
+-- Unsupported evidence remains visible but makes no provider calls. A newly
+-- supported currency can resume from the same immutable native evidence.
+-- Service-owned queue deliberately spans tenant IDs; mutations remain tenant fenced.
+SELECT provider, provider_payment_id, tenant_id::text AS tenant_id FROM (
+    (SELECT id, provider, provider_payment_id, tenant_id, updated_at FROM purser.provider_settlements
+     WHERE status = 'recorded' AND updated_at <= sqlc.arg(updated_before)::timestamptz
+     ORDER BY updated_at, id LIMIT 100)
+    UNION ALL
+    (SELECT candidate.* FROM unnest(sqlc.arg(supported_currencies)::text[]) AS currency(code)
+     CROSS JOIN LATERAL (
+       SELECT id, provider, provider_payment_id, tenant_id, updated_at FROM purser.provider_settlements
+       WHERE status = 'blocked' AND last_error_code = 'unsupported_currency'
+         AND settlement_currency = currency.code::character(3)
+         AND updated_at <= sqlc.arg(updated_before)::timestamptz
+       ORDER BY updated_at, id LIMIT 100
+     ) candidate
+     ORDER BY candidate.updated_at, candidate.id LIMIT 100)
+) candidates
+ORDER BY updated_at, id LIMIT 100;
 
 -- name: GetProviderSettlement :one
 SELECT tenant_id::text AS tenant_id, status, charge_amount_cents, charge_currency::text AS charge_currency,
        COALESCE(provider_balance_transaction_id, '')::text AS provider_balance_transaction_id,
-       settled_amount_cents, fee_cents, net_cents, COALESCE(exchange_rate::text, '')::text AS exchange_rate
+       settled_amount_cents, fee_cents, net_cents, COALESCE(exchange_rate::text, '')::text AS exchange_rate,
+       COALESCE(settlement_currency::text, '')::text AS settlement_currency, settled_at,
+       COALESCE(last_error_code, '')::text AS last_error_code
 FROM purser.provider_settlements
 WHERE provider = sqlc.arg(provider) AND provider_payment_id = sqlc.arg(provider_payment_id);
 

@@ -5651,6 +5651,8 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 		// Origin is resource identity, not connection identity. Nodes cannot assert it;
 		// the trigger processor restores it only from server-owned stream/artifact state.
 		trigger.OriginClusterId = nil
+		// The authenticated node owner is not the owner of shared-edge content.
+		trigger.TenantId = nil
 		syncMistTriggerPlacement(trigger, cid, controlCellID)
 	}
 

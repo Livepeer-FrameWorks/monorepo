@@ -13,8 +13,8 @@ import (
 )
 
 // TestGetClusterPeers_CacheHitMissAndValidation pins the demand-driven peer
-// discovery lookup contract: peers are keyed by "tenant:internal", a hit
-// returns exactly the cached ClusterPeers slice, a miss (and any
+// discovery lookup contract: a canonical resource hit checks its owner and
+// returns exactly the cached ClusterPeers slice; a miss (and any
 // empty-identifier input) returns nil so the caller falls through to a fresh
 // resolve rather than peering against a stale/foreign tenant's clusters.
 func TestGetClusterPeers_CacheHitMissAndValidation(t *testing.T) {
@@ -25,7 +25,7 @@ func TestGetClusterPeers_CacheHitMissAndValidation(t *testing.T) {
 		{ClusterId: "media-eu-1"},
 		{ClusterId: "media-us-1"},
 	}
-	p.streamCache.Set(tenantID+":"+internalName, streamContext{
+	p.streamCache.Set(streamContextCacheKey("live+"+internalName), streamContext{
 		TenantID:     tenantID,
 		ClusterPeers: peers,
 	}, time.Minute)
@@ -42,7 +42,7 @@ func TestGetClusterPeers_CacheHitMissAndValidation(t *testing.T) {
 	}
 
 	// Tenant-isolation: the same internalName under a different tenant must
-	// not surface another tenant's peers (separate cache key).
+	// not surface another tenant's peers (verified cached owner).
 	if got := p.GetClusterPeers(internalName, "tenant-2"); got != nil {
 		t.Fatalf("cross-tenant lookup leaked peers: %#v", got)
 	}
@@ -64,13 +64,13 @@ func TestGetClusterPeers_CacheHitMissAndValidation(t *testing.T) {
 func TestStreamContextCacheSnapshot_ReflectsCachedEntries(t *testing.T) {
 	p := newTestProcessor(t)
 
-	p.streamCache.Set("tenant-a:stream-1", streamContext{
+	p.streamCache.Set("source:stream-1", streamContext{
 		TenantID: "tenant-a",
 		UserID:   "user-a",
 		StreamID: "uuid-1",
 		Source:   "commodore",
 	}, time.Minute)
-	p.streamCache.Set("tenant-b:stream-2", streamContext{
+	p.streamCache.Set("source:stream-2", streamContext{
 		TenantID: "tenant-b",
 		StreamID: "uuid-2",
 	}, time.Minute)
@@ -89,7 +89,7 @@ func TestStreamContextCacheSnapshot_ReflectsCachedEntries(t *testing.T) {
 	for _, e := range snap.Entries {
 		byKey[e.Key] = e
 	}
-	a, ok := byKey["tenant-a:stream-1"]
+	a, ok := byKey["source:stream-1"]
 	if !ok {
 		t.Fatal("missing entry for tenant-a:stream-1")
 	}

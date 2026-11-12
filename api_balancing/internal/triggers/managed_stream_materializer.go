@@ -114,7 +114,7 @@ func (m *ManagedStreamMaterializer) PopulateStreamContext(streamCtx *commodorepb
 	if info.BillingModel == "prepaid" {
 		cacheTTL = 1 * time.Minute
 	}
-	m.p.streamCache.Set(tenantID+":"+internalName, info, cacheTTL)
+	m.p.streamCache.Set(streamContextCacheKey("live+"+internalName), info, cacheTTL)
 	if info.ProcessesJSON != "" {
 		candidates := []string{
 			streamCtx.GetOriginClusterId(),

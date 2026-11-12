@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
+	"frameworks/api_billing/internal/fx"
 	billingmollie "frameworks/api_billing/internal/mollie"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
@@ -17,6 +18,8 @@ import (
 )
 
 type providerWebhookPayload struct {
+	InboxID    uuid.UUID
+	LeaseToken string
 	Provider   string
 	EventKey   string
 	ReceivedAt time.Time
@@ -90,7 +93,7 @@ func (s *providerWebhookInboxStore) ClaimBatch(ctx context.Context, batchSize in
 			}
 			claims = append(claims, outbox.Claim[providerWebhookPayload]{
 				ID: webhookInboxClaimID(item.ID.String()), Attempts: int(item.Attempts), LeaseToken: leaseToken,
-				Payload: providerWebhookPayload{Provider: item.Provider, EventKey: item.EventKey, ReceivedAt: item.CreatedAt, Headers: headers, Body: item.RawPayload},
+				Payload: providerWebhookPayload{InboxID: item.ID, LeaseToken: leaseToken, Provider: item.Provider, EventKey: item.EventKey, ReceivedAt: item.CreatedAt, Headers: headers, Body: item.RawPayload},
 			})
 		}
 		return nil
@@ -133,6 +136,14 @@ func (s *providerWebhookInboxStore) fail(ctx context.Context, id string, cause e
 	if cause != nil {
 		message = cause.Error()
 	}
+	switch {
+	case errors.Is(cause, fx.ErrUnsupportedCurrency):
+		message = "provider settlement blocked: unsupported_currency"
+	case errors.Is(cause, fx.ErrUnavailable):
+		message = "provider settlement waiting: fx_unavailable"
+	case errors.Is(cause, errProviderSettlementEvidenceConflict):
+		message = "provider settlement blocked: evidence_conflict"
+	}
 	inboxID, err := uuid.Parse(id)
 	if err != nil {
 		return fmt.Errorf("fail provider webhook: invalid id %q: %w", id, err)
@@ -142,7 +153,8 @@ func (s *providerWebhookInboxStore) fail(ctx context.Context, id string, cause e
 		LastError:           message,
 		ID:                  inboxID,
 		LeaseToken:          leaseToken,
-		Waiting:             errors.Is(cause, ErrAwaitingProviderSettlement) || errors.Is(cause, billingmollie.ErrPaymentSettling),
+		Waiting:             settlementOutcome(cause) == "waiting" || errors.Is(cause, billingmollie.ErrPaymentSettling),
+		Blocked:             settlementOutcome(cause) == "blocked",
 	})
 	return requireWebhookInboxUpdate(result, err)
 }
@@ -272,15 +284,17 @@ func (d *providerWebhookDispatcher) Dispatch(ctx context.Context, payload provid
 	}
 
 	ctx = context.WithValue(ctx, providerReceiptTimeKey{}, payload.ReceivedAt)
+	ctx = context.WithValue(ctx, providerInboxOwnerKey{}, payload)
 	var ok bool
 	var message string
+	var processingErr error
 	switch payload.Provider {
 	case "stripe":
 		var event StripeWebhookPayload
 		if err := json.Unmarshal(payload.Body, &event); err != nil {
 			return []string{"reconciliation"}, fmt.Errorf("decode verified Stripe webhook: %w", err)
 		}
-		ok, message, _ = d.service.processStripeWebhookPayload(ctx, event, headerValue(payload.Headers, "Stripe-Signature"), payload.Body)
+		ok, message, _, processingErr = d.service.processStripeWebhookDetailed(ctx, event, headerValue(payload.Headers, "Stripe-Signature"), payload.Body)
 	case "mollie":
 		paymentID, err := parseMollieWebhookID(payload.Body, headerValue(payload.Headers, "Content-Type"))
 		if err != nil {
@@ -289,14 +303,39 @@ func (d *providerWebhookDispatcher) Dispatch(ctx context.Context, payload provid
 		if paymentID == "" {
 			return []string{"reconciliation"}, errors.New("accepted Mollie webhook has no payment id")
 		}
-		ok, message, _ = d.service.processMollieWebhookPayload(ctx, paymentID, payload.Body)
+		ok, message, _, processingErr = d.service.processMollieWebhookDetailed(ctx, paymentID, payload.Body)
 	default:
 		return []string{"reconciliation"}, fmt.Errorf("unsupported provider %q", payload.Provider)
 	}
 	if !ok {
+		if processingErr != nil {
+			return []string{"reconciliation"}, processingErr
+		}
 		return []string{"reconciliation"}, errors.New(message)
 	}
 	return nil, nil
+}
+
+type providerInboxOwnerKey struct{}
+
+// Only a recorded provider payment binds a callback; request headers and charge
+// IDs cannot establish tenant ownership of a PaymentIntent settlement.
+func (s *Service) bindSettlementWebhookOwner(ctx context.Context, provider, paymentID string) error {
+	payload, ok := ctx.Value(providerInboxOwnerKey{}).(providerWebhookPayload)
+	if !ok || payload.InboxID == uuid.Nil {
+		return nil
+	}
+	row, err := purserdb.New(s.db).GetProviderSettlement(ctx, purserdb.GetProviderSettlementParams{Provider: provider, ProviderPaymentID: paymentID})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	result, err := purserdb.New(s.db).BindProviderWebhookPaymentOwner(ctx, purserdb.BindProviderWebhookPaymentOwnerParams{
+		ID: payload.InboxID, LeaseToken: payload.LeaseToken, TenantID: row.TenantID, Provider: provider, ProviderPaymentID: paymentID,
+	})
+	return requireWebhookInboxUpdate(result, err)
 }
 
 func (jm *JobManager) runProviderWebhookInbox(ctx context.Context) {

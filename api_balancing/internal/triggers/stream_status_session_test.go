@@ -23,7 +23,7 @@ func TestLifecycleStatusAndStartFollowIngestSession(t *testing.T) {
 	resetStateTrigHandlers(t)
 	registry := installRegistryTrigHandlers(t)
 	p := minimalProcessorTrigHandlers(t)
-	p.streamCache.Set(tenantID+":"+internal, streamContext{TenantID: tenantID, StreamID: streamID}, time.Minute)
+	p.streamCache.Set(streamContextCacheKey("live+"+internal), streamContext{TenantID: tenantID, StreamID: streamID}, time.Minute)
 	report := func() *ipcpb.MistTrigger {
 		return &ipcpb.MistTrigger{
 			TriggerType: "STREAM_LIFECYCLE_UPDATE", NodeId: nodeID,

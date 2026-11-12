@@ -1679,6 +1679,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     this.persistentOverlays.clear();
 
     // Clear output
+    this.outputStream?.getTracks().forEach((track) => track.stop());
     this.outputStream = null;
     this.outputCanvas = null;
     this.frameCallback = null;
