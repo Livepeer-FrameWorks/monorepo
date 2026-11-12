@@ -102,7 +102,8 @@ compose profile `selfhosted`).
   The pinned archive may lag the Mist version under test; always record the Mist commit for a
   release candidate run.
 - `STACK_KEEP=1` leaves the slot running for inspection; `STACK_REUSE=1` runs scenarios against a
-  slot that is already up. `make stack-down` removes it.
+  slot that is already up. `make stack-down` removes its containers, volumes and slot-owned build
+  images; an edge image still referenced by a container is retained.
 - `STACK_SLOT=N` runs independent slots side by side on the same host. A slot number belongs to
   one workspace at a time on the host's Docker engine: `make verify-stack`, `make stack-up`, and
   `make stack-down` from another workspace refuse a slot that is up or coming up elsewhere and name

@@ -38,6 +38,11 @@ compose)
   echo "$COMPOSE_PROJECT_NAME $PWD ${*:2}" >>"$FIXTURE_DIR/calls"
   exit 0
   ;;
+image)
+  echo "$COMPOSE_PROJECT_NAME $PWD $*" >>"$FIXTURE_DIR/calls"
+  if [ "$2" = rm ] && [ "${FIXTURE_IMAGE_BUSY:-0}" = 1 ]; then exit 1; fi
+  exit 0
+  ;;
 esac
 exit 0
 EOF
@@ -111,6 +116,17 @@ expect "B's up.sh refuses a slot A's stack runs in" refused_naming_a "$b" up
 expect "B's down.sh leaves A's project alone" refused_naming_a "$b" down
 expect "A's own up claims its running slot" claims "$a"
 expect "A's down.sh removes A's project" proceeds "$a" down
+removes_slot_images() {
+  run "$a" down &&
+    grep -qF 'down -v --remove-orphans --rmi local' "$work/calls" &&
+    grep -qF "image rm --no-prune frameworks-edge:stack-$slot" "$work/calls" &&
+    ! grep -Eq 'image rm .*--force|image rm .* -f' "$work/calls"
+}
+preserves_busy_image() {
+  FIXTURE_IMAGE_BUSY=1 run "$a" down && grep -qF 'retained' "$work/out"
+}
+expect "owned teardown removes local service images and its edge tag without force" removes_slot_images
+expect "teardown retains an edge image Docker refuses to remove" preserves_busy_image
 
 # A's stack is gone and its claim's process exited: the slot is free.
 : >"$work/containers"

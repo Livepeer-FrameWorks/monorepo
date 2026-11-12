@@ -859,9 +859,12 @@ stack-up:
 stack-down:
 	@bash $(CURDIR)/scripts/stack/down.sh
 
-.PHONY: test-remote-dev-job
-test-remote-dev-job:
+.PHONY: test-remote-dev-job test-stack-slot-ownership
+test-remote-dev-job: test-stack-slot-ownership
 	@bash $(CURDIR)/scripts/test-remote-dev-job.sh
+
+test-stack-slot-ownership:
+	@bash $(CURDIR)/scripts/stack/test_slot_ownership.sh
 
 test-topology:
 	@echo "Running infrastructure topology contract tests..."
