@@ -1,0 +1,12 @@
+---
+- name: Preview Privateer ingress permissions before reader-group creation
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    privateer_ingress_reader_group: frameworks-ingress-preview
+  tasks:
+    - name: Include the normal release permission tasks
+      ansible.builtin.include_role:
+        name: frameworks.infra.privateer
+        tasks_from: ingress_permissions

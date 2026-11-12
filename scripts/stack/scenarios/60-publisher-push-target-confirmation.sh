@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # stack-scenario: default
 # staging: unsafe, uses the isolated stack's internal RTMP addresses
-# A real restream target must not turn otherwise valid ingest into a denied push.
+# One stream key must publish with its RTMP target disabled, enabled and disabled again.
 . "$(dirname "$0")/../lib.sh"
 
 need ffmpeg jq curl timeout || finish
@@ -37,7 +37,7 @@ target_authority_version() {
 before=$(target_authority_version)
 [ -n "$before" ] || { fail "source authority version is missing"; finish; }
 target=$(gql 'mutation($id:ID!,$input:CreatePushTargetInput!){createPushTarget(streamId:$id,input:$input){id}}' \
-  "$(jq -cn --arg id "$source_id" --arg uri "rtmp://edge:1935/live/$destination_key" '{id:$id,input:{name:"stack60",platform:"custom",targetUri:$uri,videoChoice:"SOURCE_VIDEO"}}')")
+  "$(jq -cn --arg id "$source_id" --arg uri "rtmp://edge:1935/live/$destination_key" '{id:$id,input:{name:"stack60",platform:"custom",targetUri:$uri,videoChoice:"AUTO"}}')")
 check "create cross-cell restream target" json_has "$target" '.data.createPushTarget.id != null'
 target_authority_ready() {
   local current
@@ -47,6 +47,36 @@ target_authority_ready() {
 }
 eventually 90 "cell B holds the changed target authority" target_authority_ready || finish
 
+target_id=$(echo "$target" | jq -r '.data.createPushTarget.id // empty')
+[ -n "$target_id" ] || { fail "target identity is missing"; finish; }
+set_target_enabled() {
+  local enabled=$1 response
+  before=$(target_authority_version)
+  response=$(gql 'mutation($id:ID!,$input:UpdatePushTargetInput!){updatePushTarget(id:$id,input:$input){id isEnabled}}' \
+    "$(jq -cn --arg id "$target_id" --argjson enabled "$enabled" '{id:$id,input:{isEnabled:$enabled}}')")
+  json_has "$response" ".data.updatePushTarget.id != null and .data.updatePushTarget.isEnabled == $enabled" || return 1
+  eventually 90 "cell B holds target enabled=$enabled authority" target_authority_ready
+}
+confirmed_without_target() {
+  generation=$(pg "$FOGHORN_B_DB" "SELECT session.id FROM foghorn.ingest_sessions session WHERE session.tenant_id='$STACK_TENANT_ID' AND session.stream_internal_name IN ('$internal','live+$internal') AND session.ended_at IS NULL AND session.projection_state='active' AND session.publisher_admission_version=1 AND NOT EXISTS (SELECT 1 FROM foghorn.admission_push_target_revisions targets WHERE targets.tenant_id=session.tenant_id AND targets.source_generation=session.id)")
+  [ -n "$generation" ]
+}
+publish_with_disabled_target() {
+  local label=$1
+  publisher=$(publish "$EDGE_B_RTMP" "$source_key" 320x180 10 90)
+  eventually 15 "$label: same key confirms admission without a target revision" confirmed_without_target || return 1
+  check "$label: encoder remains connected" kill -0 "$publisher"
+}
+stop_source() {
+  kill "$publisher" 2>/dev/null; publisher=""
+  eventually 45 "source publisher ended before the next target state" released
+}
+set_target_enabled false || { fail "disable target before publishing"; finish; }
+publish_with_disabled_target "initially disabled target" || finish
+first_generation=$generation
+stop_source || finish
+set_target_enabled true || { fail "enable the ordinary RTMP target"; finish; }
+
 # Admission under test uses one encoder invocation, with no retry helper.
 publisher=$(publish "$EDGE_B_RTMP" "$source_key" 320x180 10 90)
 confirmed_with_target() {
@@ -54,6 +84,7 @@ confirmed_with_target() {
   [ -n "$generation" ]
 }
 eventually 15 "one encoder confirms v1 admission with a target revision" confirmed_with_target || finish
+check "enabled target uses a fresh publisher generation" [ "$generation" != "$first_generation" ]
 read -r -a a_bases <<< "$FOGHORN_A_URLS"
 target_confirmed_in_a() {
   [ "$(pg "$FOGHORN_A_DB" "SELECT count(*) FROM foghorn.ingest_sessions WHERE tenant_id='$STACK_TENANT_ID' AND stream_internal_name IN ('$destination_internal','live+$destination_internal') AND ended_at IS NULL AND projection_state='active'")" = 1 ]
@@ -68,4 +99,14 @@ decode_target() {
 check "cross-cell target decodes a video frame" decode_target
 check "exactly one source effect exists" [ "$(pg "$FOGHORN_B_DB" "SELECT count(*) FROM foghorn.ingest_admission_effects WHERE tenant_id='$STACK_TENANT_ID' AND source_generation='$generation'")" = 1 ]
 check "exactly one target-revision identity exists" [ "$(pg "$FOGHORN_B_DB" "SELECT count(*) FROM foghorn.admission_push_target_revisions WHERE tenant_id='$STACK_TENANT_ID' AND source_generation='$generation'")" = 1 ]
+enabled_generation=$generation
+stop_source || finish
+destination_released() {
+  [ "$(pg "$FOGHORN_A_DB" "SELECT count(*) FROM foghorn.ingest_sessions WHERE tenant_id='$STACK_TENANT_ID' AND stream_internal_name IN ('$destination_internal','live+$destination_internal') AND ended_at IS NULL")" = 0 ]
+}
+eventually 45 "RTMP destination ended after the source disconnected" destination_released || finish
+set_target_enabled false || { fail "disable target after the enabled publish"; finish; }
+publish_with_disabled_target "disabled again" || finish
+check "disabled-again publisher has a fresh generation" [ "$generation" != "$enabled_generation" ]
+check "disabled target did not open a destination publisher" destination_released
 finish
