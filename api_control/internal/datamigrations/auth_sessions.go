@@ -20,7 +20,7 @@ WITH RECURSIVE heads AS (
     FROM commodore.refresh_tokens
     WHERE tenant_id = $1 AND session_id IS NULL
       AND COALESCE(revoked, false) = false AND expires_at > NOW()
-    ORDER BY id LIMIT $2 FOR UPDATE SKIP LOCKED
+    ORDER BY expires_at, id LIMIT $2 FOR UPDATE SKIP LOCKED
 ), chain AS (
     SELECT h.id AS head_id, r.id AS token_id, r.tenant_id, r.user_id, r.created_at, r.session_id
     FROM heads h JOIN commodore.refresh_tokens r
@@ -49,7 +49,11 @@ WITH RECURSIVE heads AS (
     UPDATE commodore.refresh_tokens r SET session_id = o.session_id
     FROM chain c JOIN owners o ON o.head_id = c.head_id
     JOIN (SELECT id, user_id FROM inserted UNION ALL
-          SELECT id, user_id FROM commodore.auth_sessions WHERE tenant_id = $1) s
+          SELECT existing.id, existing.user_id
+          FROM owners owned JOIN heads head ON head.id = owned.head_id
+          JOIN commodore.auth_sessions existing
+            ON existing.tenant_id = head.tenant_id AND existing.user_id = head.user_id
+           AND existing.id = owned.session_id) s
       ON s.id = o.session_id AND s.user_id = c.user_id
     WHERE r.tenant_id = $1 AND r.tenant_id = c.tenant_id AND r.user_id = c.user_id
       AND r.id = c.token_id AND r.session_id IS NULL
@@ -70,27 +74,42 @@ func runAuthSessions(ctx context.Context, db datamigrate.DB, opts datamigrate.Ru
 	if !opts.Scope.IsZero() {
 		return datamigrate.Progress{}, fmt.Errorf("auth session backfill runs across all tenants in bounded tenant batches")
 	}
+	size := opts.BatchSize
+	if size <= 0 || size > 1000 {
+		size = 100
+	}
 	if opts.DryRun {
-		var remaining int64
-		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM commodore.refresh_tokens
-            WHERE session_id IS NULL AND COALESCE(revoked, false) = false AND expires_at > NOW()`).Scan(&remaining); err != nil {
+		rows, err := db.QueryContext(ctx, `SELECT id FROM commodore.refresh_tokens
+            WHERE session_id IS NULL AND COALESCE(revoked, false) = false AND expires_at > NOW()
+            ORDER BY expires_at, tenant_id, id LIMIT $1`, size)
+		if err != nil {
 			return datamigrate.Progress{}, err
 		}
-		return datamigrate.Progress{Scanned: remaining, Done: true}, nil
+		defer rows.Close()
+		var scanned int64
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return datamigrate.Progress{}, err
+			}
+			scanned++
+		}
+		if err := rows.Err(); err != nil {
+			return datamigrate.Progress{}, err
+		}
+		return datamigrate.Progress{Scanned: scanned, Done: scanned < int64(size),
+			Summary: []string{fmt.Sprintf("sampled at most %d pending refresh heads; a full batch does not establish completion", size)}}, nil
 	}
-	// Only discovery spans tenants; every batch locks and mutates one tenant.
+	// Discovery is read-only across tenants; each mutation locks one tenant.
 	var tenantID string
 	err := db.QueryRowContext(ctx, `SELECT tenant_id FROM commodore.refresh_tokens
-        WHERE session_id IS NULL AND COALESCE(revoked, false) = false AND expires_at > NOW() LIMIT 1`).Scan(&tenantID)
+		WHERE session_id IS NULL AND COALESCE(revoked, false) = false AND expires_at > NOW()
+        ORDER BY expires_at, tenant_id, id LIMIT 1`).Scan(&tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return datamigrate.Progress{Done: true}, nil
 	}
 	if err != nil {
 		return datamigrate.Progress{}, err
-	}
-	size := opts.BatchSize
-	if size <= 0 || size > 1000 {
-		size = 100
 	}
 	var scanned, changed int64
 	if err := db.QueryRowContext(ctx, AuthSessionsBatchSQL, tenantID, size).Scan(&scanned, &changed); err != nil {
@@ -101,13 +120,14 @@ func runAuthSessions(ctx context.Context, db datamigrate.DB, opts datamigrate.Ru
 
 func verifyAuthSessions(ctx context.Context, db datamigrate.DB) error {
 	// Completion covers every tenant; no live head may be left unassigned.
-	var remaining int64
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM commodore.refresh_tokens
-        WHERE session_id IS NULL AND COALESCE(revoked, false) = false AND expires_at > NOW()`).Scan(&remaining); err != nil {
+	var remaining bool
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM commodore.refresh_tokens
+        WHERE session_id IS NULL AND COALESCE(revoked, false) = false AND expires_at > NOW()
+        ORDER BY expires_at, tenant_id, id LIMIT 1)`).Scan(&remaining); err != nil {
 		return err
 	}
-	if remaining != 0 {
-		return fmt.Errorf("auth sessions have %d live unassigned refresh tokens", remaining)
+	if remaining {
+		return fmt.Errorf("auth sessions still have live unassigned refresh tokens")
 	}
 	return nil
 }

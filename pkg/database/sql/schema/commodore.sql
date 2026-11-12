@@ -117,6 +117,10 @@ CREATE TABLE IF NOT EXISTS commodore.refresh_tokens (
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_predecessor ON commodore.refresh_tokens (tenant_id, user_id, replaced_by);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_session_owner ON commodore.refresh_tokens (tenant_id, user_id, session_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires_range ON commodore.refresh_tokens (expires_at ASC);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_pending_session_range ON commodore.refresh_tokens (expires_at ASC, tenant_id ASC, id ASC)
+    WHERE session_id IS NULL AND COALESCE(revoked, false) = false;
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_pending_session_owner_range ON commodore.refresh_tokens (tenant_id, expires_at ASC, id ASC)
+    WHERE session_id IS NULL AND COALESCE(revoked, false) = false;
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON commodore.refresh_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash ON commodore.refresh_tokens(token_hash);
 
