@@ -139,7 +139,10 @@ for the transaction's UTC date (maximum reference age five days). They do not
 assert that the provider converted cash into EUR. Gross and fee are rounded once;
 EUR net is their difference. EUR settlements use an identity valuation. A
 compatibility trigger supplies that complete identity record for older EUR
-writers during rollout.
+writers during rollout. Historical EUR rows are filled by the tenant-scoped,
+bounded `purser_settlement_identity_backfill_v0_3_15` data migration; expand
+performs no bulk rewrite. The release catalog requires that migration to finish
+before postdeploy validates the settlement constraint.
 
 States distinguish `pending` provider evidence, `recorded` native evidence awaiting
 valuation, `blocked` unsupported valuation policy, and `settled` complete evidence
@@ -147,7 +150,10 @@ and valuation. Missing reference rates retain native facts and retry valuation
 without calling the provider again. Unsupported currency stops provider polling
 and stays in operator recovery inventory. Adding support lets the ordinary
 valuation job resume from the same facts. Valuation and waking a bound blocked
-callback commit together; neither duplicates payment, customer credit, invoice
+callback for an unsupported currency commit together. A callback blocked for
+conflicting native evidence stays blocked even when that payment is valued;
+its structured cause controls recovery independently of its display text.
+Blocked inventory has no automatic next-attempt time. Neither path duplicates payment, customer credit, invoice
 activation or provider charges.
 
 Verified callbacks bind to a tenant through the recorded provider payment. Stripe

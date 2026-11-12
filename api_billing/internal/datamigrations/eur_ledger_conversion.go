@@ -46,6 +46,7 @@ type Settings struct {
 func Register(settings Settings) {
 	datamigrate.Register(EURLedgerConversion(settings))
 	datamigrate.Register(PaymentTenantBackfill())
+	datamigrate.Register(ProviderSettlementIdentityBackfill())
 }
 
 // EURLedgerConversion converts every non-EUR prepaid balance row into the

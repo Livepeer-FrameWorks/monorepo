@@ -131,6 +131,8 @@ CREATE INDEX IF NOT EXISTS idx_refresh_tokens_retention_session
     ON commodore.refresh_tokens (tenant_id, user_id, session_id, id ASC);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_retention_unassigned
     ON commodore.refresh_tokens (expires_at ASC, id ASC) WHERE session_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_retention_assigned
+    ON commodore.refresh_tokens (expires_at ASC, id ASC) WHERE session_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_live_legacy_owner
     ON commodore.refresh_tokens (tenant_id, user_id, expires_at ASC)
     WHERE session_id IS NULL AND COALESCE(revoked, false) = false;

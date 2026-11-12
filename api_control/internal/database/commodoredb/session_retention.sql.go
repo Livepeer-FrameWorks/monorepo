@@ -147,6 +147,58 @@ func (q *Queries) ListExpiredSessionRetentionKeys(ctx context.Context, arg ListE
 	return items, nil
 }
 
+const listNamedRefreshRetentionKeys = `-- name: ListNamedRefreshRetentionKeys :many
+SELECT id, tenant_id, user_id, session_id::uuid, expires_at AS ended_at
+FROM commodore.refresh_tokens
+WHERE session_id IS NOT NULL
+  AND expires_at < (NOW() AT TIME ZONE 'UTC') - INTERVAL '720 hours'
+  AND (expires_at, id) > ($1::timestamp, $2::uuid)
+ORDER BY expires_at, id LIMIT $3
+`
+
+type ListNamedRefreshRetentionKeysParams struct {
+	AfterAt   time.Time `db:"after_at" json:"after_at"`
+	AfterID   string    `db:"after_id" json:"after_id"`
+	BatchSize int32     `db:"batch_size" json:"batch_size"`
+}
+
+type ListNamedRefreshRetentionKeysRow struct {
+	ID        string    `db:"id" json:"id"`
+	TenantID  string    `db:"tenant_id" json:"tenant_id"`
+	UserID    string    `db:"user_id" json:"user_id"`
+	SessionID string    `db:"session_id" json:"session_id"`
+	EndedAt   time.Time `db:"ended_at" json:"ended_at"`
+}
+
+func (q *Queries) ListNamedRefreshRetentionKeys(ctx context.Context, arg ListNamedRefreshRetentionKeysParams) ([]ListNamedRefreshRetentionKeysRow, error) {
+	rows, err := q.db.QueryContext(ctx, listNamedRefreshRetentionKeys, arg.AfterAt, arg.AfterID, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListNamedRefreshRetentionKeysRow{}
+	for rows.Next() {
+		var i ListNamedRefreshRetentionKeysRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.UserID,
+			&i.SessionID,
+			&i.EndedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRevokedSessionRetentionKeys = `-- name: ListRevokedSessionRetentionKeys :many
 SELECT id, tenant_id, user_id, revoked_at::timestamptz AS ended_at
 FROM commodore.auth_sessions
@@ -261,6 +313,32 @@ type LockRetainedAuthSessionParams struct {
 
 func (q *Queries) LockRetainedAuthSession(ctx context.Context, arg LockRetainedAuthSessionParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, lockRetainedAuthSession, arg.TenantID, arg.UserID, arg.ID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
+const lockRetainedNamedToken = `-- name: LockRetainedNamedToken :one
+SELECT id FROM commodore.refresh_tokens
+WHERE tenant_id = $1 AND user_id = $2 AND session_id = $3 AND id = $4
+  AND expires_at < (NOW() AT TIME ZONE 'UTC') - INTERVAL '720 hours'
+FOR UPDATE SKIP LOCKED
+`
+
+type LockRetainedNamedTokenParams struct {
+	TenantID  string         `db:"tenant_id" json:"tenant_id"`
+	UserID    string         `db:"user_id" json:"user_id"`
+	SessionID sql.NullString `db:"session_id" json:"session_id"`
+	ID        string         `db:"id" json:"id"`
+}
+
+func (q *Queries) LockRetainedNamedToken(ctx context.Context, arg LockRetainedNamedTokenParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, lockRetainedNamedToken,
+		arg.TenantID,
+		arg.UserID,
+		arg.SessionID,
+		arg.ID,
+	)
 	var id string
 	err := row.Scan(&id)
 	return id, err

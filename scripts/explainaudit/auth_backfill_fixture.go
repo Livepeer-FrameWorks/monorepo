@@ -29,13 +29,13 @@ func (f *authBackfillFixture) setup(ctx context.Context, conn *sql.Conn) error {
 	for _, id := range f.heads {
 		if _, err := conn.ExecContext(ctx, `INSERT INTO commodore.refresh_tokens
             (id,tenant_id,user_id,token_hash,created_at,expires_at,revoked)
-            VALUES ($1,$2,$3,$1::text,NOW()-INTERVAL '1 day',NOW()+INTERVAL '10 days',false)`, id, f.tenant, f.user); err != nil {
+            VALUES ($1::uuid,$2::uuid,$3::uuid,$1::uuid::text,NOW()-INTERVAL '1 day',NOW()+INTERVAL '10 days',false)`, id, f.tenant, f.user); err != nil {
 			return err
 		}
 	}
 	_, err := conn.ExecContext(ctx, `INSERT INTO commodore.refresh_tokens
         (id,tenant_id,user_id,token_hash,created_at,expires_at,revoked,replaced_by)
-        VALUES ($1,$2,$3,$1::text,NOW()-INTERVAL '2 days',NOW()+INTERVAL '9 days',true,$4)`, f.root, f.tenant, f.user, f.heads[0])
+        VALUES ($1::uuid,$2::uuid,$3::uuid,$1::uuid::text,NOW()-INTERVAL '2 days',NOW()+INTERVAL '9 days',true,$4::uuid)`, f.root, f.tenant, f.user, f.heads[0])
 	return err
 }
 

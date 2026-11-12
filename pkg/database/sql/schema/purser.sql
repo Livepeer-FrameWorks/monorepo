@@ -2375,6 +2375,7 @@ CREATE TABLE IF NOT EXISTS purser.provider_webhook_inbox (
     lease_token UUID,
     wake_requested BOOLEAN NOT NULL DEFAULT FALSE,
     last_error TEXT,
+    last_error_code VARCHAR(64),
     processed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -4431,3 +4432,7 @@ CREATE OR REPLACE VIEW purser.billing_recovery_failures AS
  SELECT 'webhook:'||id::text AS id,tenant_id FROM purser.provider_webhook_failures
  UNION ALL
  SELECT 'settlement:'||id::text AS id,tenant_id FROM purser.provider_settlement_failures;
+
+CREATE INDEX IF NOT EXISTS idx_provider_settlements_identity_backfill
+ ON purser.provider_settlements(tenant_id ASC, id ASC)
+ WHERE status='settled' AND settlement_currency='EUR' AND settled_eur_cents IS NULL;

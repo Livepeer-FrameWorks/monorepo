@@ -1483,12 +1483,16 @@ func (p *Processor) processingBillingContext(ctx context.Context, trigger *ipcpb
 	if parsed.Concrete == "" {
 		return streamContext{}, errStreamIdentifierNotFound
 	}
-	if !parsed.IsArtifact() {
-		local, found, localErr := p.readReadyLocalPlayback(ctx, mist.ExtractInternalName(sourceName), false)
-		if localErr == nil && found && local.object.Authority.GetLiveStream() != nil && local.object.Authority.GetTenantId() != "" {
-			object := local.object.Authority
+	var sourceIdentityErr error
+	if !parsed.IsArtifact() && p.mediaAuthorityStore != nil {
+		pair, readErr := p.mediaAuthorityStore.ReadPairByInternalName(ctx, mist.ExtractInternalName(sourceName))
+		if readErr == nil && pair.Object.Authority.GetLiveStream() != nil && pair.Object.Authority.GetTenantId() != "" {
+			object := pair.Object.Authority
 			info := streamContext{TenantID: object.GetTenantId(), UserID: object.GetUserId(), StreamID: object.GetLiveStream().GetStreamId(), OriginClusterID: object.GetOriginClusterId(), Source: "local_accounting_identity"}
 			return p.applyResolvedStreamContext(trigger, sourceName, info), nil
+		}
+		if readErr != nil && !errors.Is(readErr, sql.ErrNoRows) {
+			sourceIdentityErr = readErr
 		}
 	}
 	var artifactErr error
@@ -1503,6 +1507,9 @@ func (p *Processor) processingBillingContext(ctx context.Context, trigger *ipcpb
 		}
 	}
 	info, err := p.applyStreamContextWithContextError(ctx, trigger, sourceName)
+	if info.TenantID == "" && sourceIdentityErr != nil {
+		return info, sourceIdentityErr
+	}
 	if info.TenantID == "" && errors.Is(artifactErr, identity.ErrUnavailable) {
 		return info, artifactErr
 	}

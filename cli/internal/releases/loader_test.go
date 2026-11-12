@@ -308,3 +308,15 @@ func TestPaymentTenantBackfillGatesExistingReleasePostdeploy(t *testing.T) {
 		t.Fatal("payment ownership backfill does not gate same-release postdeploy validation")
 	}
 }
+
+func TestSettlementIdentityBackfillGatesReleasePostdeploy(t *testing.T) {
+	release := Lookup("v0.3.15")
+	if release == nil {
+		t.Fatal("pending release is missing")
+	}
+	if !slices.ContainsFunc(release.RequiredDataMigrations, func(m DataMigrationRequirement) bool {
+		return m.ID == "purser_settlement_identity_backfill_v0_3_15" && m.Service == "purser" && m.IntroducedIn == "v0.3.15" && m.RequiredBeforePhase == "postdeploy"
+	}) {
+		t.Fatal("historical settlement valuation does not gate postdeploy validation")
+	}
+}

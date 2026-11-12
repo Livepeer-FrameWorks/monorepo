@@ -21,6 +21,20 @@ WHERE session_id IS NULL
   AND (expires_at, id) > (sqlc.arg(after_at)::timestamp, sqlc.arg(after_id)::uuid)
 ORDER BY expires_at, id LIMIT sqlc.arg(batch_size);
 
+-- name: ListNamedRefreshRetentionKeys :many
+SELECT id, tenant_id, user_id, session_id::uuid, expires_at AS ended_at
+FROM commodore.refresh_tokens
+WHERE session_id IS NOT NULL
+  AND expires_at < (NOW() AT TIME ZONE 'UTC') - INTERVAL '720 hours'
+  AND (expires_at, id) > (sqlc.arg(after_at)::timestamp, sqlc.arg(after_id)::uuid)
+ORDER BY expires_at, id LIMIT sqlc.arg(batch_size);
+
+-- name: LockRetainedNamedToken :one
+SELECT id FROM commodore.refresh_tokens
+WHERE tenant_id = $1 AND user_id = $2 AND session_id = $3 AND id = $4
+  AND expires_at < (NOW() AT TIME ZONE 'UTC') - INTERVAL '720 hours'
+FOR UPDATE SKIP LOCKED;
+
 -- name: LockRetainedAuthSession :one
 SELECT id FROM commodore.auth_sessions
 WHERE tenant_id = $1 AND user_id = $2 AND id = $3

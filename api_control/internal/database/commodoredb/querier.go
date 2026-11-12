@@ -442,6 +442,7 @@ type Querier interface {
 	// A cell with no row has attested nothing.
 	ListMediaCellAuthorityFeatures(ctx context.Context, cellIds []string) ([]ListMediaCellAuthorityFeaturesRow, error)
 	ListMediaCellPlacementCapabilities(ctx context.Context, cellIds []string) ([]ListMediaCellPlacementCapabilitiesRow, error)
+	ListNamedRefreshRetentionKeys(ctx context.Context, arg ListNamedRefreshRetentionKeysParams) ([]ListNamedRefreshRetentionKeysRow, error)
 	ListOldestAuthSessions(ctx context.Context, arg ListOldestAuthSessionsParams) ([]CommodoreAuthSession, error)
 	// Private operator read, fenced by tenant and ordered through the tenant-time index.
 	ListOperatorAccountAudit(ctx context.Context, arg ListOperatorAccountAuditParams) ([]ListOperatorAccountAuditRow, error)
@@ -531,6 +532,7 @@ type Querier interface {
 	LockPushTargetStatus(ctx context.Context, arg LockPushTargetStatusParams) (sql.NullString, error)
 	LockRefreshTokenByHash(ctx context.Context, tokenHash string) (LockRefreshTokenByHashRow, error)
 	LockRetainedAuthSession(ctx context.Context, arg LockRetainedAuthSessionParams) (string, error)
+	LockRetainedNamedToken(ctx context.Context, arg LockRetainedNamedTokenParams) (string, error)
 	LockRetainedSessionTokenKeys(ctx context.Context, arg LockRetainedSessionTokenKeysParams) ([]string, error)
 	LockRetainedUnassignedToken(ctx context.Context, arg LockRetainedUnassignedTokenParams) (string, error)
 	LockSigningKeyTenant(ctx context.Context, tenantID string) error
