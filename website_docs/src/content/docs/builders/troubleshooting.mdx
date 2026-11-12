@@ -176,8 +176,11 @@ The token is invalid, expired, or revoked, or the request carried a payment head
 
 **For session tokens (dashboard access):**
 
-1. Your browser session may have expired. The webapp should catch this on a page refresh.
-2. Clear cookies for the app domain and re-authenticate
+1. Access tokens last up to 15 minutes. Supported browser, CLI and macOS tray clients renew them automatically.
+2. Sign in again after 30 days without a successful refresh, or after the hard maximum of 90 days for browsers and 180 days for CLI and tray sessions.
+3. A revoked session cannot be renewed. Check your remaining sign-ins with `frameworks auth sessions list` from a trusted device.
+
+See [Account Security](/builders/account-security) for session management and lost-device recovery.
 
 Make sure the header is `Authorization: Bearer YOUR_TOKEN` (not just the token).
 

@@ -2828,6 +2828,12 @@ message LookupDeviceAuthorizationResponse {
   string client_id = 1;
   string scope = 2;
   google.protobuf.Timestamp expires_at = 3;
+  string device_label = 4;
+  string client_version = 5;
+  string request_ip = 6;
+  string user_agent = 7;
+  google.protobuf.Timestamp requested_at = 8;
+  string location = 9;
 }
 
 // ApproveDeviceAuthorization: called by the gateway on behalf of the webapp

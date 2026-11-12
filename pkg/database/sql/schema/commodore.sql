@@ -62,6 +62,9 @@ CREATE TABLE IF NOT EXISTS commodore.users (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
+CREATE INDEX IF NOT EXISTS idx_users_session_cap_cursor
+    ON commodore.users (id ASC) INCLUDE (tenant_id);
+
 CREATE TABLE IF NOT EXISTS commodore.auth_sessions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL,
@@ -99,6 +102,11 @@ CREATE INDEX IF NOT EXISTS idx_auth_sessions_retention_idle
     ON commodore.auth_sessions (idle_expires_at ASC, id ASC);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_retention_revoked
     ON commodore.auth_sessions (revoked_at ASC, id ASC) WHERE revoked_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_owner_active
+    ON commodore.auth_sessions (tenant_id, user_id, idle_expires_at ASC, id ASC) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_owner_oldest
+    ON commodore.auth_sessions (tenant_id, user_id, last_seen_at ASC, created_at ASC, id ASC) WHERE revoked_at IS NULL;
 
 -- Device familiarity survives ended-session retention and display-label edits.
 CREATE TABLE IF NOT EXISTS commodore.auth_session_devices (

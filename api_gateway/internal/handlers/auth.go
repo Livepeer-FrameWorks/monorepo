@@ -892,14 +892,20 @@ func (h *AuthHandlers) DeviceLookup() gin.HandlerFunc {
 			return
 		}
 
-		var expiresAt any
+		var expiresAt, requestedAt any
 		if resp.ExpiresAt != nil {
 			expiresAt = resp.ExpiresAt.AsTime()
 		}
+		if resp.GetRequestedAt() != nil {
+			requestedAt = resp.GetRequestedAt().AsTime()
+		}
 		c.JSON(http.StatusOK, gin.H{
-			"client_id":  resp.ClientId,
-			"scope":      resp.Scope,
-			"expires_at": expiresAt,
+			"client_id":    resp.ClientId,
+			"scope":        resp.Scope,
+			"expires_at":   expiresAt,
+			"device_label": resp.GetDeviceLabel(), "client_version": resp.GetClientVersion(),
+			"request_ip": resp.GetRequestIp(), "user_agent": resp.GetUserAgent(), "location": resp.GetLocation(),
+			"requested_at": requestedAt,
 		})
 	}
 }

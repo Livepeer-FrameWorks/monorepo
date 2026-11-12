@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"strings"
 	"testing"
 
 	"frameworks/cli/internal/credentials"
@@ -17,6 +19,12 @@ func TestStartDeviceAuthorizationPostsClientAndScope(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/auth/device/start" {
 			t.Fatalf("path = %q, want /auth/device/start", r.URL.Path)
+		}
+		if r.Header.Get("X-Device-Label") == "" || r.Header.Get("X-Client-Version") == "" {
+			t.Errorf("device login omitted original device label/version headers: %v", r.Header)
+		}
+		if !strings.Contains(r.Header.Get("X-Client-Version"), runtime.GOOS+"/"+runtime.GOARCH) {
+			t.Errorf("device version omits operating system: %s", r.Header.Get("X-Client-Version"))
 		}
 		var body map[string]string
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

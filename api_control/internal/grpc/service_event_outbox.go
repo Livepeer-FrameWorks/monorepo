@@ -196,9 +196,21 @@ func (s *CommodoreServer) withEventTx(ctx context.Context, fn func(tx *sql.Tx) e
 	if s.db == nil {
 		return errors.New("database not configured")
 	}
-	if err := database.WithRetryablePostgresTx(ctx, s.db, nil, fn); err != nil {
-		return err
+	for {
+		err := database.WithRetryablePostgresTx(ctx, s.db, nil, fn)
+		recovered, recoveryErr := s.recoverSessionCap(ctx, err)
+		if recoveryErr != nil {
+			return recoveryErr
+		}
+		if recovered {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		break
 	}
+
 	s.domainEventsCommittedNotify()
 	return nil
 }
