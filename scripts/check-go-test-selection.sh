@@ -14,8 +14,8 @@ source_build_tag=${5:-}
 build_tags=${FRAMEWORKS_TEST_SELECTION_TAGS:-schema_verify}
 actual_file=$(mktemp)
 selected_file=$(mktemp)
-# Per user: a shared /tmp cache is unwritable for everyone but its creator.
-selection_cache=${FRAMEWORKS_TEST_SELECTION_GOCACHE:-${TMPDIR:-/tmp}/frameworks-go-test-selection-cache-$(id -u)}
+# Reuse the configured user cache; standalone fallback paths remain UID-scoped.
+selection_cache=${FRAMEWORKS_TEST_SELECTION_GOCACHE:-${GOCACHE:-${TMPDIR:-/tmp}/frameworks-go-test-selection-cache-$(id -u)}}
 mkdir -p "$selection_cache"
 trap 'rm -f "$actual_file" "$selected_file"' EXIT
 

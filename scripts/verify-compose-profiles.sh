@@ -15,7 +15,7 @@ env_file="$work/dev.env"
 dev_compose="$repo_root/docker-compose.yml"
 stack_compose="$repo_root/docker-compose.stack.yml"
 
-(cd "$repo_root/scripts/env" && GOCACHE="$repo_root/scripts/env/.gocache" go run . \
+(cd "$repo_root/scripts/env" && GOCACHE="${GOCACHE:-$repo_root/scripts/env/.gocache}" go run . \
   --secrets "$repo_root/config/env/secrets.env.example" --output "$env_file" >/dev/null)
 
 presets=()

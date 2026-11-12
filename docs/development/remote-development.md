@@ -28,9 +28,17 @@ HEAD, and then mirrors tracked and untracked working-tree changes. Repository ig
 local dependencies and secrets out of the transfer. Shared Go, pnpm, and Cargo caches live outside
 the slots.
 
-Two simultaneous `run` jobs are the enforced limit. A third exits with status 75 so an agent can
+Three simultaneous `run` jobs are the enforced limit. A fourth exits with status 75 so an agent can
 retry later. Interactive shells are not counted; do not use them to bypass the limit for heavy
 work. Prefer the smallest Make target that exercises the change.
+
+Each `run` owns a private temporary directory under the developer cache and sets `TMPDIR` and
+`GOTMPDIR` to it. Completion, failure, and forwarded SSH hangup/termination stop the command's
+process group before deleting its temporary files. Background children belong to that job and
+stop when it ends. Keep durable diagnostics in the slot's `.stack` directory. Do not override
+temporary paths with persistent ad hoc cache directories; Go, pnpm, and Cargo caches already
+persist separately. Environment generation, compose verification and test selection honor the
+configured shared Go cache. An uncatchable host/process kill can still require orphan cleanup.
 
 ## Common commands
 
