@@ -6,7 +6,6 @@ from ..._forward import OpenUnion, UnknownMember
 from .base_model import BaseModel
 from .fragments import (
     AuthErrorDefault,
-    BootstrapEdgePendingDefault,
     BootstrapEdgeResponseDefault,
     BootstrapEdgeResponseDefaultTelemetry,  # noqa: F401
     ValidationErrorDefault,
@@ -39,7 +38,7 @@ class BootstrapEdgeBootstrapEdgeBootstrapEdgeResponse(BootstrapEdgeResponseDefau
     typename__: Literal["BootstrapEdgeResponse"] = Field(alias="__typename")
 
 
-class BootstrapEdgeBootstrapEdgeBootstrapEdgePending(BootstrapEdgePendingDefault):
+class BootstrapEdgeBootstrapEdgeBootstrapEdgePending(BaseModel):
     typename__: Literal["BootstrapEdgePending"] = Field(alias="__typename")
 
 

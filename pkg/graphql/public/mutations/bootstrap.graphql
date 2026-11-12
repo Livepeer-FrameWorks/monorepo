@@ -1,0 +1,39 @@
+# Keep the stable SDK operation valid from v0.3.11. Pending enrollment details
+# are selected explicitly by the CLI or through a custom document.
+mutation BootstrapEdge($input: BootstrapEdgeInput!) {
+  bootstrapEdge(input: $input) {
+    __typename
+    ...BootstrapEdgeResponseDefaultFields
+    ...ValidationErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+
+fragment ValidationErrorDefaultFields on ValidationError {
+  message
+  code
+  field
+  constraint
+}
+
+fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
+}
+
+fragment BootstrapEdgeResponseDefaultFields on BootstrapEdgeResponse {
+  nodeId
+  edgeDomain
+  poolDomain
+  clusterSlug
+  clusterId
+  foghornGrpcAddr
+  certPem
+  keyPem
+  internalCaBundle
+  telemetry {
+    enabled
+    writeUrl
+    bearerToken
+  }
+}

@@ -38270,25 +38270,68 @@ Tenants with the explicit `custom_subdomain_enabled` billing entitlement get a p
 | `edge-ingest.{tenant}.cdn.{base}`                                         | Tenant ingest (RTMP/SRT/WHIP)                                         |
 | `edge-egress.{tenant}.cdn.{base}`                                         | Tenant egress                                                         |
 | `edge-storage.{tenant}.cdn.{base}`, `edge-processing.{tenant}.cdn.{base}` | Tenant storage / processing                                           |
-| `chandler.{tenant}.cdn.{base}`, `livepeer.{tenant}.cdn.{base}`            | Tenant control helpers                                                |
 
 A single per-tenant wildcard cert (`*.{tenant}.cdn.{base}` plus the
-apex) covers every service. The cert is distributed via ConfigSeed
-to every edge in clusters the tenant subscribes to — regardless of
-cluster kind (platform-official, tenant-private, third-party
-marketplace). Caddy SNI on each edge presents the right cert per
-Host header. On Foghorn hosts (which serve
-`foghorn.{tenant}.cdn.{base}` playback), Privateer materializes the
-same tenant bundles under
-`/etc/frameworks/ingress/tls/tenant-alias/{tenant}/` and nginx
-resolves the cert per handshake from `$ssl_server_name`, proxying to
-the local Foghorn — one static catch-all vhost serves every alias
-tenant. Bunny smart records under `cdn.{base}` resolve to the
-union of edges across the tenant's subscribed clusters.
+apex) covers the public media service labels. ConfigSeed distributes the bundle
+to eligible edges, where Caddy selects it using TLS SNI.
+
+On hosted Foghorn nodes, Privateer discovers the media clusters served by each
+local Foghorn instance and materializes the same tenant bundles as immutable
+certificate/key generations under
+`/etc/frameworks/ingress/tls/tenant-alias/revisions/`. Its automatically managed
+`nginx.map` selects a generation for each playback hostname. One generic Nginx
+server serves every alias tenant and proxies to the local Foghorn. Creating,
+renaming or renewing a tenant alias does not require an operator to edit Nginx.
+The `frameworks-ingress` reader group grants workers access to these public TLS
+keys without exposing Privateer's mesh credentials or internal service keys.
+
+Both root media names and tenant aliases publish validated node coordinates in
+Bunny geographic records. Alias membership follows authorized, healthy serving
+capacity; an EU primary-cluster setting does not restrict an entitled Canadian
+client to EU. Unknown coordinates retain the same fallback behavior as root
+publication.
 
 This is the marketplace-spanning feature: one URL that geo-balances
 across whatever capacity the tenant has subscribed to while keeping
 service identity and certificate distribution tenant-scoped.
+
+#### Converging hosted playback ingress after an upgrade
+
+Use the updated release CLI when provisioning hosted proxies. A manifest service
+named `foghorn-eu` or `foghorn-us` with `deploy: foghorn` must produce the same
+generic alias configuration as a service named `foghorn`.
+
+An application-only release apply skips provision-only Nginx. When upgrading a
+host that predates automatic alias ingress, preview and then provision the
+Privateer and Nginx services through the supported CLI. Do Privateer first so its
+dedicated reader group, service permissions and certificate inventory are in
+place before the proxy consumes that inventory:
+
+```bash
+frameworks --context production cluster provision --gitops-dir ../gitops --cluster production --only-services privateer --dry-run
+frameworks --context production cluster provision --gitops-dir ../gitops --cluster production --only-services privateer
+frameworks --context production cluster provision --gitops-dir ../gitops --cluster production --only-services nginx --dry-run
+frameworks --context production cluster provision --gitops-dir ../gitops --cluster production --only-services nginx
+```
+
+Adapt the context and manifest selection to the target deployment. Review the
+preview, use the CLI and artifacts for the release being deployed, and retain
+normal migration and validation gates. No new secret, provider credential or
+per-tenant Nginx input is required. Existing non-geographic alias records are
+repaired by Navigator's ordinary reconciliation.
+
+Privateer's `public_ingress` health detail remains degraded until the root-owned
+reload bridge acknowledges the current inventory digest. Its mesh liveness and
+internal PKI checks remain separate. The bridge supports both native and Docker
+Nginx; Privateer receives neither root privileges nor Docker socket access.
+
+After convergence, verify trusted TLS for the alias against **every** advertised
+IP using SNI and the normal system roots. Verify an external-origin HLS browser
+through Foghorn's redirect to manifests and decoded media. A certificate issued
+in Navigator or a passing `nginx -t` does not prove a variable certificate is
+servable by the worker. The alias's current `dns_ready` flag covers applied edge
+DNS membership, not hosted playback TLS; allow for initial reconciliation and
+check the actual listener before declaring playback ready.
 
 #### Tenant alias lifecycle
 

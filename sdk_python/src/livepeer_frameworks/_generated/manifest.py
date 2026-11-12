@@ -22,7 +22,7 @@ OPERATIONS: Final[dict[str, OperationInfo]] = {
     "ApplyMediaPlacementChange": {"kind": "mutation", "since": "v0.3.11", "identity": "sha256:3918c58c69312edd4bdcdbb6c52f9bea15e4d61271f4af4b535a9de5fef29e9d"},
     "ApproveClusterSubscription": {"kind": "mutation", "since": "v0.3.11", "identity": "sha256:a3153758e147a66bb1f30d6475599da9365fb0985ff2a4e1bff597234eb131d9"},
     "AssignIncident": {"kind": "mutation", "since": "v0.3.11", "identity": "sha256:6103c7df6130cff43ec301aa75b1b617b92cc117b4e4e38ab6bdd723c09d5bac"},
-    "BootstrapEdge": {"kind": "mutation", "since": "v0.3.15", "identity": "sha256:78d13f87f6d3272cc9ea47e2033655580545d169f09e4374d282968be72f9a1f"},
+    "BootstrapEdge": {"kind": "mutation", "since": "v0.3.11", "identity": "sha256:ef0a94d7dbbf2f88791eefdab2efaca3a1cb8d4b6d935e830993a5e259a7e350"},
     "ChangeBillingTier": {"kind": "mutation", "since": "v0.3.11", "identity": "sha256:dda4fae04ac27cf15f0b88a9da73c1b4beca3a99fd3d1b08fec2f6d57088047a"},
     "ChangePassword": {"kind": "mutation", "since": "v0.3.15", "identity": "sha256:f6271e5751a39741a5ccc6a3b84703953b36bac3b1d254f049a354e5ededfbea"},
     "CompleteVodUpload": {"kind": "mutation", "since": "v0.3.11", "identity": "sha256:c6c87a8e558ca7dee39bc22a6b2fe67a0874ff1661e6e914d90ff40f4cd745f2"},

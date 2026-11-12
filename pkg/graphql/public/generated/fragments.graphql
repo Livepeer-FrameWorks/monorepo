@@ -341,11 +341,6 @@ fragment AssetNodeCopiesDefaultFields on AssetNodeCopies {
   truncated
 }
 
-fragment AuthErrorDefaultFields on AuthError {
-  message
-  code
-}
-
 fragment AuthSessionDefaultFields on AuthSession {
   id
   clientKind
@@ -687,29 +682,6 @@ fragment BillingTierDefaultFields on BillingTier {
   slaLevel
   meteringEnabled
   isEnterprise
-}
-
-fragment BootstrapEdgePendingDefaultFields on BootstrapEdgePending {
-  clusterId
-  phase
-  retryAfterSeconds
-}
-
-fragment BootstrapEdgeResponseDefaultFields on BootstrapEdgeResponse {
-  nodeId
-  edgeDomain
-  poolDomain
-  clusterSlug
-  clusterId
-  foghornGrpcAddr
-  certPem
-  keyPem
-  internalCaBundle
-  telemetry {
-    enabled
-    writeUrl
-    bearerToken
-  }
 }
 
 fragment BufferEventDefaultFields on BufferEvent {
@@ -5532,13 +5504,6 @@ fragment TrackListUpdateDefaultFields on TrackListUpdate {
   primaryAudioCodec
   primaryAudioChannels
   primaryAudioSampleRate
-}
-
-fragment ValidationErrorDefaultFields on ValidationError {
-  message
-  code
-  field
-  constraint
 }
 
 fragment ViewerCountBucketDefaultFields on ViewerCountBucket {

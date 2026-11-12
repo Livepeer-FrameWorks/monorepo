@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/formatter"
+	"github.com/vektah/gqlparser/v2/parser"
 )
 
 // Default operations give every SDK a typed method for every part of the
@@ -58,6 +60,9 @@ import (
 // mutations,subscriptions} replaces the default operation of the target it
 // addresses (resolveTarget: its @target annotation, else the path
 // operationTarget infers); the generator emits nothing for that target.
+// It may retain a generated fragment name to preserve SDK type names. A shared
+// handwritten fragment must exactly match the generated selection; it is emitted
+// only at the handwritten source, while conflicting definitions are rejected.
 //
 // Names. Query operations are Get<Field>, mutations and subscriptions
 // <Field>, in PascalCase. A nested query target is Get<Field> when no other
@@ -619,8 +624,16 @@ func opNames(schema *ast.Schema, targets []opTarget) map[string]string {
 // every target that no hand-written operation replaces, keyed by output path.
 func generateDefaultOps(schema *ast.Schema, handWritten []operation) (map[string]string, []defaultOp, error) {
 	overridden := map[string]string{}
+	handFragments := map[string]*ast.FragmentDefinition{}
 	for _, op := range handWritten {
 		overridden[op.Target] = op.Name
+		doc, err := parser.ParseQuery(&ast.Source{Name: op.File, Input: op.Document})
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, fragment := range doc.Fragments {
+			handFragments[fragment.Name] = fragment
+		}
 	}
 	targets, _ := opTargets(schema)
 	names := opNames(schema, targets)
@@ -660,10 +673,22 @@ func generateDefaultOps(schema *ast.Schema, handWritten []operation) (map[string
 	}
 	var frags strings.Builder
 	for _, name := range sortedKeys(b.fragments) {
+		var definition strings.Builder
+		fmt.Fprintf(&definition, "fragment %s on %s {\n", name, b.fragType[name])
+		printSelection(&definition, b.fragments[name], 1)
+		definition.WriteString("}\n")
+		if hand := handFragments[name]; hand != nil {
+			generated, err := parser.ParseQuery(&ast.Source{Input: definition.String()})
+			if err != nil {
+				return nil, nil, err
+			}
+			if canonicalFragment(hand) != canonicalFragment(generated.Fragments[0]) {
+				return nil, nil, fmt.Errorf("handwritten fragment %s conflicts with its generated selection", name)
+			}
+			continue
+		}
 		frags.WriteString("\n")
-		fmt.Fprintf(&frags, "fragment %s on %s {\n", name, b.fragType[name])
-		printSelection(&frags, b.fragments[name], 1)
-		frags.WriteString("}\n")
+		frags.WriteString(definition.String())
 	}
 	files := map[string]string{
 		generatedOpsDir + "/queries.graphql":       generatedOpsHeader + byKind[ast.Query].String(),
@@ -672,6 +697,14 @@ func generateDefaultOps(schema *ast.Schema, handWritten []operation) (map[string
 		generatedOpsDir + "/fragments.graphql":     generatedOpsHeader + frags.String(),
 	}
 	return files, ops, nil
+}
+
+func canonicalFragment(fragment *ast.FragmentDefinition) string {
+	var text strings.Builder
+	formatter.NewFormatter(&text, formatter.WithIndent("  "), formatter.WithoutDescription()).FormatQueryDocument(
+		&ast.QueryDocument{Fragments: ast.FragmentDefinitionList{fragment}},
+	)
+	return text.String()
 }
 
 func printOperation(w *strings.Builder, op defaultOp) {

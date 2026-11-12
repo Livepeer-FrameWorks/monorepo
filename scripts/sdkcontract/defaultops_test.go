@@ -78,6 +78,46 @@ func opNamed(t *testing.T, ops []operation, name string) operation {
 	return operation{}
 }
 
+func TestDefaultOperationsReuseIdenticalHandwrittenFragments(t *testing.T) {
+	schema := mustSchema(t, strings.Replace(defaultOpsSchema, "ping: Boolean!", "ping: Boolean! createOther: StreamResult!", 1))
+	hand := []*ast.Source{{Name: "hand.graphql", Input: `
+mutation CreateStream($name: String!) {
+  createStream(name: $name) {
+    __typename
+    ...ValidationErrorDefaultFields
+  }
+}
+fragment ValidationErrorDefaultFields on ValidationError { message code field }
+`}}
+	ops, err := parseOperations(schema, hand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, _, err := generateDefaultOps(schema, ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, err := parseOperations(schema, append(hand, generatedSources(files)...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if problems := lintOperations(schema, all); len(problems) > 0 {
+		t.Fatal(strings.Join(problems, "\n"))
+	}
+	if !strings.Contains(opNamed(t, all, "CreateOther").Document, "... ValidationErrorDefaultFields") {
+		t.Fatal("the generated operation lost the shared fragment")
+	}
+
+	hand[0].Input = strings.Replace(hand[0].Input, "message code field", "message", 1)
+	ops, err = parseOperations(schema, hand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := generateDefaultOps(schema, ops); err == nil || !strings.Contains(err.Error(), "conflicts with its generated selection") {
+		t.Fatalf("a conflicting shared fragment must fail: %v", err)
+	}
+}
+
 func TestDefaultOperationsCoverRootsAndArgumentFields(t *testing.T) {
 	_, ops := generateFixture(t, `query Placeholder { summary { views } }`)
 	got := map[string]string{}

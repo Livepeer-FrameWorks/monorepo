@@ -769,66 +769,6 @@ class GraphQLClient(BaseClient):
         data = self.get_data(response)
         return AssignIncident.model_validate(data)
 
-    def bootstrap_edge(self, input: BootstrapEdgeInput, **kwargs: Any) -> BootstrapEdge:
-        """Bootstrap a new edge using only an opaque bootstrap token.
-
-        Public — the bootstrap token is itself the credential. Bridge resolves
-        the token's cluster via Quartermaster, finds the cluster's assigned
-        Foghorn, and proxies a PreRegisterEdge call so the operator never has
-        to know cluster topology."""
-        query = gql("""
-            mutation BootstrapEdge($input: BootstrapEdgeInput!) {
-              bootstrapEdge(input: $input) {
-                __typename
-                ...BootstrapEdgeResponseDefaultFields
-                ...BootstrapEdgePendingDefaultFields
-                ...ValidationErrorDefaultFields
-                ...AuthErrorDefaultFields
-              }
-            }
-
-            fragment AuthErrorDefaultFields on AuthError {
-              message
-              code
-            }
-
-            fragment BootstrapEdgePendingDefaultFields on BootstrapEdgePending {
-              clusterId
-              phase
-              retryAfterSeconds
-            }
-
-            fragment BootstrapEdgeResponseDefaultFields on BootstrapEdgeResponse {
-              nodeId
-              edgeDomain
-              poolDomain
-              clusterSlug
-              clusterId
-              foghornGrpcAddr
-              certPem
-              keyPem
-              internalCaBundle
-              telemetry {
-                enabled
-                writeUrl
-                bearerToken
-              }
-            }
-
-            fragment ValidationErrorDefaultFields on ValidationError {
-              message
-              code
-              field
-              constraint
-            }
-            """)
-        variables: dict[str, object] = {"input": input}
-        response = self.execute(
-            query=query, operation_name="BootstrapEdge", variables=variables, **kwargs
-        )
-        data = self.get_data(response)
-        return BootstrapEdge.model_validate(data)
-
     def change_billing_tier(self, tier_id: str, **kwargs: Any) -> ChangeBillingTier:
         """Change the postpaid billing tier. Upgrades start a fresh month and offset the
         replacement fee with the unused retained paid old fee, capped at the replacement
@@ -14813,6 +14753,59 @@ class GraphQLClient(BaseClient):
         )
         data = self.get_data(response)
         return TestPlaybackAccess.model_validate(data)
+
+    def bootstrap_edge(self, input: BootstrapEdgeInput, **kwargs: Any) -> BootstrapEdge:
+        """Bootstrap a new edge using only an opaque bootstrap token.
+
+        Public — the bootstrap token is itself the credential. Bridge resolves
+        the token's cluster via Quartermaster, finds the cluster's assigned
+        Foghorn, and proxies a PreRegisterEdge call so the operator never has
+        to know cluster topology."""
+        query = gql("""
+            mutation BootstrapEdge($input: BootstrapEdgeInput!) {
+              bootstrapEdge(input: $input) {
+                __typename
+                ...BootstrapEdgeResponseDefaultFields
+                ...ValidationErrorDefaultFields
+                ...AuthErrorDefaultFields
+              }
+            }
+
+            fragment AuthErrorDefaultFields on AuthError {
+              message
+              code
+            }
+
+            fragment BootstrapEdgeResponseDefaultFields on BootstrapEdgeResponse {
+              nodeId
+              edgeDomain
+              poolDomain
+              clusterSlug
+              clusterId
+              foghornGrpcAddr
+              certPem
+              keyPem
+              internalCaBundle
+              telemetry {
+                enabled
+                writeUrl
+                bearerToken
+              }
+            }
+
+            fragment ValidationErrorDefaultFields on ValidationError {
+              message
+              code
+              field
+              constraint
+            }
+            """)
+        variables: dict[str, object] = {"input": input}
+        response = self.execute(
+            query=query, operation_name="BootstrapEdge", variables=variables, **kwargs
+        )
+        data = self.get_data(response)
+        return BootstrapEdge.model_validate(data)
 
     def create_clip(self, input: CreateClipInput, **kwargs: Any) -> CreateClip:
         """Create a clip from a live or recorded stream.
