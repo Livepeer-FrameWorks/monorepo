@@ -84,6 +84,19 @@
           "description": "Node the instance registers under in Quartermaster."
         },
         {
+          "key": "COMMODORE_GRPC_ADDR",
+          "type": "string",
+          "default": "commodore:19001",
+          "introduced": "v0.3.15",
+          "description": "Commodore gRPC address used to validate interactive user sessions."
+        },
+        {
+          "key": "COMMODORE_GRPC_TLS_SERVER_NAME",
+          "type": "string",
+          "introduced": "v0.3.15",
+          "description": "TLS server name override for the Commodore session-validation connection."
+        },
+        {
           "key": "EMAIL_LOGO_URL",
           "type": "string",
           "introduced": "v0.3.10",
@@ -2813,6 +2826,19 @@
           "description": "Node the instance registers under in Quartermaster."
         },
         {
+          "key": "COMMODORE_GRPC_ADDR",
+          "type": "string",
+          "default": "commodore:19001",
+          "introduced": "v0.3.15",
+          "description": "Commodore gRPC address used to validate interactive user sessions."
+        },
+        {
+          "key": "COMMODORE_GRPC_TLS_SERVER_NAME",
+          "type": "string",
+          "introduced": "v0.3.15",
+          "description": "TLS server name override for the Commodore session-validation connection."
+        },
+        {
           "key": "KAFKA_BROKERS",
           "type": "list",
           "required": true,
@@ -3732,6 +3758,19 @@
           "type": "string",
           "introduced": "v0.3.0",
           "description": "Node the instance registers under in Quartermaster."
+        },
+        {
+          "key": "COMMODORE_GRPC_ADDR",
+          "type": "string",
+          "default": "commodore:19001",
+          "introduced": "v0.3.15",
+          "description": "Commodore gRPC address used to validate interactive user sessions."
+        },
+        {
+          "key": "COMMODORE_GRPC_TLS_SERVER_NAME",
+          "type": "string",
+          "introduced": "v0.3.15",
+          "description": "TLS server name override for the Commodore session-validation connection."
         },
         {
           "key": "QUARTERMASTER_GRPC_ADDR",
@@ -5191,6 +5230,19 @@
           "type": "string",
           "introduced": "v0.3.0",
           "description": "Node the instance registers under in Quartermaster."
+        },
+        {
+          "key": "COMMODORE_GRPC_ADDR",
+          "type": "string",
+          "default": "commodore:19001",
+          "introduced": "v0.3.15",
+          "description": "Commodore gRPC address used to validate interactive user sessions."
+        },
+        {
+          "key": "COMMODORE_GRPC_TLS_SERVER_NAME",
+          "type": "string",
+          "introduced": "v0.3.15",
+          "description": "TLS server name override for the Commodore session-validation connection."
         },
         {
           "key": "EMAIL_LOGO_URL",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -31,6 +32,9 @@ type GRPCAuthConfig struct {
 	// ValidateSession checks authoritative state for interactive JWTs. Service
 	// credentials and audience-bound programmatic assertions bypass this check.
 	ValidateSession func(context.Context, string) error
+	// RequireSessionValidation rejects interactive JWTs when no authoritative
+	// validator is configured, while service and delegated credentials bypass it.
+	RequireSessionValidation bool
 	// Logger for auth events
 	Logger logging.Logger
 	// SkipMethods is a list of method names to skip auth (e.g., health checks)
@@ -127,10 +131,8 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 				if serviceOnlyMap[info.FullMethod] {
 					return nil, status.Error(codes.PermissionDenied, "method requires service authentication")
 				}
-				if claims.AuthType == "" && cfg.ValidateSession != nil {
-					if err := cfg.ValidateSession(ctx, token); err != nil {
-						return nil, err
-					}
+				if err := checkInteractiveSession(ctx, token, claims, cfg); err != nil {
+					return nil, err
 				}
 				// JWT is valid - add claims to context
 				ctx = context.WithValue(ctx, ctxkeys.KeyUserID, claims.UserID)
@@ -251,10 +253,8 @@ func GRPCStreamAuthInterceptor(cfg GRPCAuthConfig) grpc.StreamServerInterceptor 
 				if serviceOnlyMap[info.FullMethod] {
 					return status.Error(codes.PermissionDenied, "method requires service authentication")
 				}
-				if claims.AuthType == "" && cfg.ValidateSession != nil {
-					if err := cfg.ValidateSession(ctx, token); err != nil {
-						return err
-					}
+				if err := checkInteractiveSession(ctx, token, claims, cfg); err != nil {
+					return err
 				}
 				ctx = context.WithValue(ctx, ctxkeys.KeyUserID, claims.UserID)
 				ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, claims.TenantID)
@@ -292,12 +292,68 @@ func GRPCStreamAuthInterceptor(cfg GRPCAuthConfig) grpc.StreamServerInterceptor 
 					}).Debug("gRPC auth: JWT validated")
 				}
 
+				if claims.AuthType == "" {
+					return runInteractiveStream(ctx, token, claims, cfg, srv, stream, handler)
+				}
 				return handler(srv, &wrappedServerStream{ServerStream: stream, ctx: ctx})
 			}
 		}
 
 		return status.Error(codes.Unauthenticated, "invalid token")
 	}
+}
+
+func checkInteractiveSession(ctx context.Context, token string, claims *auth.Claims, cfg GRPCAuthConfig) error {
+	if claims.AuthType != "" {
+		return nil
+	}
+	if cfg.ValidateSession == nil {
+		if cfg.RequireSessionValidation {
+			return status.Error(codes.Unavailable, "session state unavailable")
+		}
+		return nil
+	}
+	return cfg.ValidateSession(ctx, token)
+}
+
+// Interactive streams keep the credential's deadline and recheck authoritative
+// state, including when the peer sends no further messages.
+func runInteractiveStream(ctx context.Context, token string, claims *auth.Claims, cfg GRPCAuthConfig, srv any, stream grpc.ServerStream, handler grpc.StreamHandler) error {
+	if claims.ExpiresAt == nil || !time.Now().Before(claims.ExpiresAt.Time) {
+		return status.Error(codes.Unauthenticated, "session expired")
+	}
+	deadlineCtx, stopDeadline := context.WithDeadlineCause(ctx, claims.ExpiresAt.Time, status.Error(codes.Unauthenticated, "session expired"))
+	defer stopDeadline()
+	streamCtx, cancel := context.WithCancelCause(deadlineCtx)
+	defer cancel(nil)
+	if cfg.ValidateSession != nil {
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-streamCtx.Done():
+					return
+				case <-ticker.C:
+					checkCtx, stopCheck := context.WithTimeout(streamCtx, 5*time.Second)
+					err := cfg.ValidateSession(checkCtx, token)
+					stopCheck()
+					if err != nil {
+						cancel(err)
+						return
+					}
+				}
+			}
+		}()
+	}
+	err := handler(srv, &wrappedServerStream{ServerStream: stream, ctx: streamCtx})
+	if cause := context.Cause(streamCtx); cause != nil {
+		if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
+			return status.FromContextError(cause).Err()
+		}
+		return cause
+	}
+	return err
 }
 
 type delegatedJWTReplayGuard struct {

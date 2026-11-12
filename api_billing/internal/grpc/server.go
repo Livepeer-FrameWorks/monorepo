@@ -4542,6 +4542,7 @@ type GRPCServerConfig struct {
 	Logger              logging.Logger
 	ServiceToken        string
 	JWTSecret           []byte
+	ValidateSession     func(context.Context, string) error
 	MetadataPolicy      middleware.ServiceTokenMetadataPolicy
 	GeoIPReader         *geoip.Reader
 	Metrics             *ServerMetrics
@@ -4572,11 +4573,13 @@ func purserServiceOnlyMethods() []string {
 
 func purserAuthConfig(cfg GRPCServerConfig) middleware.GRPCAuthConfig {
 	return middleware.GRPCAuthConfig{
-		ServiceToken:         cfg.ServiceToken,
-		JWTSecret:            cfg.JWTSecret,
-		DelegatedJWTAudience: "purser",
-		MetadataPolicy:       cfg.MetadataPolicy,
-		Logger:               cfg.Logger,
+		ServiceToken:             cfg.ServiceToken,
+		JWTSecret:                cfg.JWTSecret,
+		ValidateSession:          cfg.ValidateSession,
+		RequireSessionValidation: true,
+		DelegatedJWTAudience:     "purser",
+		MetadataPolicy:           cfg.MetadataPolicy,
+		Logger:                   cfg.Logger,
 		SkipMethods: []string{
 			"/grpc.health.v1.Health/Check",
 			"/grpc.health.v1.Health/Watch",

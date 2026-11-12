@@ -10908,6 +10908,7 @@ type GRPCServerConfig struct {
 	Logger                      logging.Logger
 	ServiceToken                string
 	JWTSecret                   []byte
+	ValidateSession             func(context.Context, string) error
 	MetadataPolicy              middleware.ServiceTokenMetadataPolicy
 	NavigatorClient             *navigator.Client
 	DecklogClient               *decklogclient.BatchedClient
@@ -10964,11 +10965,13 @@ type ServerMetrics struct {
 func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, error) {
 	// Chain auth interceptor with logging interceptor
 	grpcAuthCfg := middleware.GRPCAuthConfig{
-		ServiceToken:         cfg.ServiceToken,
-		JWTSecret:            cfg.JWTSecret,
-		Logger:               cfg.Logger,
-		MetadataPolicy:       cfg.MetadataPolicy,
-		DelegatedJWTAudience: "quartermaster",
+		ServiceToken:             cfg.ServiceToken,
+		JWTSecret:                cfg.JWTSecret,
+		ValidateSession:          cfg.ValidateSession,
+		RequireSessionValidation: true,
+		Logger:                   cfg.Logger,
+		MetadataPolicy:           cfg.MetadataPolicy,
+		DelegatedJWTAudience:     "quartermaster",
 		ServiceOnlyMethods: []string{
 			quartermasterpb.TenantService_ResolveTenant_FullMethodName,
 			quartermasterpb.TenantService_ResolveTenantAliases_FullMethodName,

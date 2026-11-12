@@ -33,11 +33,10 @@ psql_db() { stack_compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$1" -d "$
 # service added to docker-compose.yml never joins the stack unnoticed; add a
 # service here when a scenario starts depending on it. Left out on purpose:
 # webapps and docs (chartroom, foredeck, logbook, nginx), support and AI
-# (deckhand, steward, listmonk, chatwoot, ollama), and incident
-# consumers no scenario asserts on (lookout).
+# (deckhand, steward, listmonk, chatwoot, ollama).
 STACK_SERVICES=(
   postgres kafka kafka-init clickhouse
-  quartermaster quartermaster-2 commodore commodore-2 purser bridge bridge-2 decklog signalman bosun chandler skipper
+  quartermaster quartermaster-2 commodore commodore-2 purser bridge bridge-2 decklog signalman bosun lookout chandler skipper
   periscope-ingest periscope-query periscope-metering
   storage-init storage-init-b "s3-$STACK_S3" s3-proxy
   foghorn foghorn-2 foghorn-redis foghorn-b foghorn-b-2 foghorn-redis-b foghorn-tls-a-1 foghorn-tls-a-2

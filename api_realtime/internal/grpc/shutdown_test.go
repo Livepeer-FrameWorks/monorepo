@@ -66,3 +66,25 @@ func TestSubscribeAfterShutdownIsUnavailable(t *testing.T) {
 		t.Fatal("Subscribe after Shutdown did not return")
 	}
 }
+
+func TestSubscribeContextCancellationEndsIdleStream(t *testing.T) {
+	server := NewSignalmanServer(logging.NewLoggerWithService("signalman-test"), nil)
+	defer server.Shutdown()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := newFakeSignalmanStream(ctx)
+	defer close(stream.recvCh)
+	result := make(chan error, 1)
+	go func() { result <- server.Subscribe(stream) }()
+	waitForClients(t, server.hub, 1)
+	cancel()
+	select {
+	case err := <-result:
+		if status.Code(err) != codes.Canceled {
+			t.Fatalf("cancelled idle stream ended with %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("idle Subscribe ignored its cancelled authentication context")
+	}
+	waitForClients(t, server.hub, 0)
+}

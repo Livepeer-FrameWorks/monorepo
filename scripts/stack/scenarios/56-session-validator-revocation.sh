@@ -23,7 +23,7 @@ cleanup() {
   fi
   if [ -n "$descriptor" ]; then
     for service in commodore commodore-2; do
-      stack_exec "$service" rm -f "$descriptor" >/dev/null 2>&1 || fail "descriptor cleanup on $service"
+      stack_exec "$service" sh -c 'rm -f "$1" "$1"-*' sh "$descriptor" >/dev/null 2>&1 || fail "descriptor cleanup on $service"
     done
   fi
   rm -rf "$WORK"
@@ -76,6 +76,35 @@ for service in commodore commodore-2; do
   must_check "RPC schema is retained on $service" stack_exec "$service" test -s "$descriptor" || finish
 done
 
+ingress_specs() {
+  printf '%s\n' \
+    "quartermaster|$STACK_QUARTERMASTER_GRPC_ADDR|quartermaster.TenantService/GetTenant|{\"tenantId\":\"$tenant\"}" \
+    "purser|$STACK_PURSER_GRPC_ADDR|purser.PaymentService/GetBillingStatus|{\"tenantId\":\"$tenant\"}" \
+    "periscope|$STACK_PERISCOPE_GRPC_ADDR|periscope.PlatformAnalyticsService/GetNetworkLiveStats|{}" \
+    "signalman|$STACK_SIGNALMAN_GRPC_ADDR|signalman.SignalmanService/GetHubStats|{}" \
+    "bosun|$STACK_BOSUN_GRPC_ADDR|bosun.BosunService/ListWebhookEndpoints|{}" \
+    "lookout|$STACK_LOOKOUT_GRPC_ADDR|lookout.LookoutService/ListIncidents|{\"scope\":\"INCIDENT_SCOPE_PLATFORM\"}"
+}
+ingress_rpc() {
+  local service=$1 address=$2 method=$3 body=$4 credential=$5
+  { cat "$credential"; echo; } | stack_exec commodore sh -c '
+    read -r token
+    grpcurl -plaintext -max-time 10 -protoset "$1" -H "authorization: Bearer $token" \
+      -d "$4" "$2" "$3"
+  ' sh "$descriptor-$service" "$address" "$method" "$body"
+}
+while IFS='|' read -r service address method body; do
+  { cat "$WORK/revoked.jwt"; echo; } | stack_exec commodore sh -c '
+    read -r token
+    grpcurl -plaintext -max-time 10 -protoset-out "$1" -H "authorization: Bearer $token" \
+      "$2" describe "$3" >/dev/null
+  ' sh "$descriptor-$service" "$address" "${method%/*}" >"$WORK/$service.schema" 2>&1
+  must_check "retain $service schema before revocation" stack_exec commodore test -s "$descriptor-$service" || { rpc_error "$WORK/$service.schema"; finish; }
+  ingress_rpc "$service" "$address" "$method" "$body" "$WORK/revoked.jwt" >"$WORK/$service.initial" 2>&1
+  initial_status=$?
+  must_check "live named session reaches $service directly" [ "$initial_status" = 0 ] || { rpc_error "$WORK/$service.initial"; finish; }
+done < <(ingress_specs)
+
 session_rpc() {
   local service=$1 credential=$2 method=$3 body=$4
   { cat "$credential"; echo; } | stack_exec "$service" sh -c '
@@ -126,6 +155,13 @@ for service in commodore commodore-2; do
   ' sh "$descriptor" >"$WORK/$service.other" 2>&1
   must_check "other device still authenticates to $service" profile_matches "$WORK/$service.other" || rpc_error "$WORK/$service.other"
 done
+while IFS='|' read -r service address method body; do
+  ingress_rpc "$service" "$address" "$method" "$body" "$WORK/revoked.jwt" >"$WORK/$service.revoked" 2>&1
+  must_check "revoked session refused by $service raw-JWT ingress" grep -q 'Code: Unauthenticated' "$WORK/$service.revoked" || rpc_error "$WORK/$service.revoked"
+  ingress_rpc "$service" "$address" "$method" "$body" "$WORK/other.jwt" >"$WORK/$service.other" 2>&1
+  other_status=$?
+  must_check "other device still authenticates directly to $service" [ "$other_status" = 0 ] || rpc_error "$WORK/$service.other"
+done < <(ingress_specs)
 for url in $FOGHORN_A_INTERNAL_URLS $FOGHORN_B_INTERNAL_URLS; do
   check "revoked session refused by $url" [ "$(http_code "$WORK/revoked.jwt" "$url/nodes/overview")" = 403 ]
   check "other device still reaches $url" [ "$(http_code "$WORK/other.jwt" "$url/nodes/overview")" = 200 ]

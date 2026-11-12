@@ -172,6 +172,7 @@ func TestSetClusterPricingAuthorizationOverWire(t *testing.T) {
 	}}
 	cfg := GRPCServerConfig{
 		Logger: logging.NewLogger(), JWTSecret: secret, ServiceToken: "service-secret", AllowInsecure: true,
+		ValidateSession: func(context.Context, string) error { return nil },
 	}
 	server := grpcpkg.NewServer(grpcpkg.ChainUnaryInterceptor(purserUnaryInterceptors(cfg)...))
 	stub := &clusterPricingAuthorizationStub{server: authority}

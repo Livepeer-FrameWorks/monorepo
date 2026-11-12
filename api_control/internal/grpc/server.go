@@ -3408,7 +3408,7 @@ func (s *CommodoreServer) ValidateSession(ctx context.Context, req *commodorepb.
 		if err != nil {
 			return nil, status.Error(codes.Internal, "wallet state unavailable")
 		}
-		return &commodorepb.ValidateSessionResponse{Valid: linked}, nil
+		return &commodorepb.ValidateSessionResponse{Valid: linked, SessionStateChecked: true}, nil
 	}
 	if claims.SessionID != "" {
 		if _, err := uuid.Parse(claims.SessionID); err != nil {
@@ -3429,7 +3429,7 @@ func (s *CommodoreServer) ValidateSession(ctx context.Context, req *commodorepb.
 			return &commodorepb.ValidateSessionResponse{Valid: false}, nil
 		}
 	}
-	return &commodorepb.ValidateSessionResponse{Valid: true}, nil
+	return &commodorepb.ValidateSessionResponse{Valid: true, SessionStateChecked: true}, nil
 }
 
 func (s *CommodoreServer) checkSession(ctx context.Context, token string) error {

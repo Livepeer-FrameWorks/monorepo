@@ -698,12 +698,16 @@ func (c *GRPCClient) ValidateAPIToken(ctx context.Context, token string) (*commo
 	})
 }
 
-// ValidateSession reports whether a session access token may still hold
-// realtime connections: valid=false once the user's sessions were revoked.
+// ValidateSession confirms the authority checked current session state, rather
+// than only the user-wide cutoff implemented by older servers.
 func (c *GRPCClient) ValidateSession(ctx context.Context, token string) (*commodorepb.ValidateSessionResponse, error) {
-	return c.internal.ValidateSession(withServiceAuth(ctx), &commodorepb.ValidateSessionRequest{
+	response, err := c.internal.ValidateSession(withServiceAuth(ctx), &commodorepb.ValidateSessionRequest{
 		Token: token,
 	})
+	if err == nil && response.GetValid() && !response.GetSessionStateChecked() {
+		return nil, status.Error(codes.Unavailable, "session authority must support named-session validation")
+	}
+	return response, err
 }
 
 // CheckSession fails closed when the owning service cannot confirm that an

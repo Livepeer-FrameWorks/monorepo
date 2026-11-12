@@ -47,7 +47,7 @@ func (s *switchableInternalService) set(resp *commodorepb.ValidateAPITokenRespon
 
 func (s *switchableInternalService) setSession(valid bool, err error) {
 	s.mu.Lock()
-	s.session, s.sessionErr = &commodorepb.ValidateSessionResponse{Valid: valid}, err
+	s.session, s.sessionErr = &commodorepb.ValidateSessionResponse{Valid: valid, SessionStateChecked: true}, err
 	s.mu.Unlock()
 }
 

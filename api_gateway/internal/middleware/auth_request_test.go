@@ -295,7 +295,7 @@ func (f *fakeCommodoreService) VerifyWalletAuth(_ context.Context, req *commodor
 }
 
 func (f *fakeCommodoreService) ValidateSession(context.Context, *commodorepb.ValidateSessionRequest) (*commodorepb.ValidateSessionResponse, error) {
-	return &commodorepb.ValidateSessionResponse{Valid: f.walletValid.Load()}, nil
+	return &commodorepb.ValidateSessionResponse{Valid: f.walletValid.Load(), SessionStateChecked: true}, nil
 }
 
 func TestWalletHeaderBearerHandoffCreatesNoInteractiveSession(t *testing.T) {

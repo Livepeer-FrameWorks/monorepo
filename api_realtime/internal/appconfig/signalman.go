@@ -25,6 +25,9 @@ type Signalman struct {
 	config.GRPCTLS
 	config.Registration
 
+	CommodoreGRPCAddr          string `env:"COMMODORE_GRPC_ADDR" default:"commodore:@port(commodore.grpc)" desc:"Commodore gRPC address used to validate interactive user sessions." introduced:"v0.3.15"`
+	CommodoreGRPCTLSServerName string `env:"COMMODORE_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Commodore session-validation connection." introduced:"v0.3.15"`
+
 	KafkaBrokers            []string `env:"KAFKA_BROKERS" required:"true" desc:"Comma-separated Kafka bootstrap brokers for the event consumer and the DLQ producer." introduced:"v0.3.0"`
 	KafkaClusterID          string   `env:"KAFKA_CLUSTER_ID" required:"true" desc:"Kafka cluster identifier attached to the consumer and DLQ producer clients." introduced:"v0.3.0"`
 	KafkaGroupID            string   `env:"KAFKA_GROUP_ID" default:"signalman-group" desc:"Kafka consumer group. Each replica needs its own group so every replica receives every event for fan-out." introduced:"v0.3.0"`

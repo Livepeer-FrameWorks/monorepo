@@ -103,8 +103,18 @@ ID, and close only matching WebSockets for named revocation.
 
 State validation is wired into Bridge authentication and network diagnostics,
 Commodore unary/stream authentication, Foghorn internal HTTP, and Skipper's
-gRPC, REST and notification MCP requests. Coverage of other raw-JWT consumers
-and ongoing stream revalidation is tracked in the account-security RFC.
+gRPC, REST and notification MCP requests. Quartermaster, Purser, Periscope,
+Signalman, Bosun and Lookout validate raw interactive gRPC JWTs with Commodore
+on every call and reject them when session state is unavailable. Service tokens
+and audience-bound delegated assertions retain their separate authentication.
+Interactive gRPC streams end at JWT expiry and recheck session state every
+30 seconds with a five-second validation timeout. Revocation ends them with
+Unauthenticated; a validation outage ends them with Unavailable. Signalman's
+idle Subscribe handler observes cancellation without waiting for a message.
+`ValidateSession` marks successful checks with `session_state_checked`. New
+callers refuse an older authority's unmarked success as Unavailable, preserving
+named revocation during mixed-version rollout. Upgrade Commodore before the
+consumers of this contract; older consumers ignore the additive response field.
 
 ## Native credential ownership and compatibility
 

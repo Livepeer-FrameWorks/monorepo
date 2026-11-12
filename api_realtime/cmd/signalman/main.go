@@ -12,6 +12,7 @@ import (
 	"frameworks/api_realtime/internal/appconfig"
 	signalmangrpc "frameworks/api_realtime/internal/grpc"
 	"frameworks/api_realtime/internal/metrics"
+	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
@@ -54,6 +55,15 @@ func main() {
 		logger.WithError(err).Fatal("Invalid configuration")
 	}
 	cfg.ApplyLogLevel(logger)
+	commodoreClient, err := commodoreclient.NewGRPCClient(commodoreclient.GRPCConfig{
+		GRPCAddr: cfg.CommodoreGRPCAddr, Timeout: 5 * time.Second, Logger: logger,
+		ServiceToken: cfg.ServiceToken, AllowInsecure: cfg.AllowInsecure,
+		CACertFile: cfg.CAPath, ServerName: cfg.CommodoreGRPCTLSServerName,
+	})
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to create Commodore session-validation client")
+	}
+	defer func() { _ = commodoreClient.Close() }()
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("signalman", version.Version)
@@ -346,7 +356,7 @@ func main() {
 		// The gRPC server is built after the port is bound, so HTTP health
 		// serves while the TLS files are still being synced.
 		GRPC: []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCListen.Port, Build: func(ctx context.Context) (*grpc.Server, error) {
-			return newGRPCServer(ctx, cfg, logger, signalmanServer)
+			return newGRPCServer(ctx, cfg, logger, signalmanServer, commodoreClient.CheckSession)
 		}}},
 		OnDrain: []func(context.Context){closeStreamsHook(signalmanServer)},
 		OnShutdown: []func(context.Context){func(context.Context) {
@@ -385,16 +395,18 @@ func closeStreamsHook(streams streamCloser) func(context.Context) {
 
 // newGRPCServer builds the Signalman gRPC server. It waits up to two minutes
 // for the TLS files, and stops waiting when ctx ends.
-func newGRPCServer(ctx context.Context, cfg *appconfig.Signalman, logger logging.Logger, signalmanServer *signalmangrpc.SignalmanServer) (*grpc.Server, error) {
+func newGRPCServer(ctx context.Context, cfg *appconfig.Signalman, logger logging.Logger, signalmanServer *signalmangrpc.SignalmanServer, validateSession func(context.Context, string) error) (*grpc.Server, error) {
 	metadataPolicy, policyErr := middleware.ParseMetadataPolicy(cfg.MetadataPolicy)
 	if policyErr != nil {
 		return nil, policyErr
 	}
 	authConfig := middleware.GRPCAuthConfig{
-		ServiceToken:   cfg.ServiceToken,
-		JWTSecret:      []byte(cfg.JWTSecret),
-		MetadataPolicy: metadataPolicy,
-		Logger:         logger,
+		ServiceToken:             cfg.ServiceToken,
+		JWTSecret:                []byte(cfg.JWTSecret),
+		ValidateSession:          validateSession,
+		RequireSessionValidation: true,
+		MetadataPolicy:           metadataPolicy,
+		Logger:                   logger,
 		SkipMethods: []string{
 			"/grpc.health.v1.Health/Check",
 			"/grpc.health.v1.Health/Watch",

@@ -50,7 +50,7 @@ type ingestCommodoreFake struct {
 }
 
 func (f *ingestCommodoreFake) ValidateSession(context.Context, *commodorepb.ValidateSessionRequest) (*commodorepb.ValidateSessionResponse, error) {
-	return &commodorepb.ValidateSessionResponse{Valid: f.sessionValid}, f.sessionErr
+	return &commodorepb.ValidateSessionResponse{Valid: f.sessionValid, SessionStateChecked: true}, f.sessionErr
 }
 
 func (f *ingestCommodoreFake) ResolveStreamContext(ctx context.Context, req *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {

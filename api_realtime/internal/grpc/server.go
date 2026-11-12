@@ -430,6 +430,8 @@ func (s *SignalmanServer) Subscribe(stream signalmanpb.SignalmanService_Subscrib
 	for {
 		var received clientRecv
 		select {
+		case <-ctx.Done():
+			return status.FromContextError(ctx.Err()).Err()
 		case <-s.shutdown:
 			return status.Error(codes.Unavailable, "signalman is shutting down")
 		case received = <-recvCh:
