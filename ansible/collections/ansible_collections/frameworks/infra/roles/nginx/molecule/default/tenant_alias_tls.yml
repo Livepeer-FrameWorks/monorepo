@@ -90,6 +90,64 @@
       delay: 1
       changed_when: false
 
+    - name: Wait for the first root-owned application receipt
+      ansible.builtin.wait_for:
+        path: /run/frameworks-nginx/tenant-alias.applied
+        timeout: 15
+
+    - name: Record the accepted inventory before a failed reload
+      ansible.builtin.slurp:
+        src: /run/frameworks-nginx/tenant-alias.applied
+      register: alias_before_failed_reload
+
+    - name: Publish an invalid inventory to exercise failed validation
+      ansible.builtin.copy:
+        dest: "{{ alias_tls_root }}/nginx.map"
+        content: "invalid;\n"
+        owner: privateer
+        group: frameworks-ingress
+        mode: "0640"
+
+    - name: Request application of the invalid inventory
+      ansible.builtin.command: touch /etc/frameworks/ingress/reload.trigger
+      become_user: privateer
+      changed_when: true
+
+    - name: Observe the root reload service refusing the invalid inventory
+      ansible.builtin.command: systemctl show --property=Result --value frameworks-nginx-reload.service
+      register: alias_failed_reload
+      until: alias_failed_reload.stdout == 'exit-code'
+      retries: 15
+      delay: 1
+      changed_when: false
+
+    - name: Read the receipt after failed validation
+      ansible.builtin.slurp:
+        src: /run/frameworks-nginx/tenant-alias.applied
+      register: alias_after_failed_reload
+
+    - name: Assert failed validation never acknowledges the invalid inventory
+      ansible.builtin.assert:
+        that:
+          - alias_before_failed_reload.content == alias_after_failed_reload.content
+
+    - name: Verify the running worker retains its last accepted certificate
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --silent
+          - --show-error
+          - --max-time
+          - "5"
+          - --cacert
+          - "{{ alias_tls_root }}/revisions/acme/v1/tls.crt"
+          - --resolve
+          - "{{ alias_tls_host }}:443:127.0.0.1"
+          - -o
+          - /dev/null
+          - "https://{{ alias_tls_host }}/play/probe/hls/index.m3u8"
+      changed_when: false
+
     - name: Rotate one key and add a second tenant through the automatic inventory
       ansible.builtin.copy:
         dest: "{{ alias_tls_root }}/nginx.map"
@@ -129,6 +187,63 @@
       delay: 1
       changed_when: false
 
+    - name: Withdraw one tenant from the automatic inventory
+      ansible.builtin.copy:
+        dest: "{{ alias_tls_root }}/nginx.map"
+        content: "foghorn.globex.cdn.frameworks.test revisions/globex/v1;\n"
+        owner: privateer
+        group: frameworks-ingress
+        mode: "0640"
+
+    - name: Apply the tenant withdrawal through the normal path unit
+      ansible.builtin.command: touch /etc/frameworks/ingress/reload.trigger
+      become_user: privateer
+      changed_when: true
+
+    - name: Verify the withdrawn hostname no longer serves its tenant certificate
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --silent
+          - --show-error
+          - --max-time
+          - "5"
+          - --cacert
+          - "{{ alias_tls_root }}/revisions/acme/v2/tls.crt"
+          - --resolve
+          - "{{ alias_tls_host }}:443:127.0.0.1"
+          - -o
+          - /dev/null
+          - "https://{{ alias_tls_host }}/play/probe/hls/index.m3u8"
+      register: alias_withdrawn_handshake
+      until: alias_withdrawn_handshake.rc in [35, 60]
+      retries: 15
+      delay: 1
+      failed_when: alias_withdrawn_handshake.rc not in [0, 35, 60]
+      changed_when: false
+
+    - name: Assert the withdrawn hostname was refused at TLS
+      ansible.builtin.assert:
+        that:
+          - alias_withdrawn_handshake.rc in [35, 60]
+
+    - name: Verify the other tenant still passes ordinary certificate validation
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --silent
+          - --show-error
+          - --max-time
+          - "5"
+          - --cacert
+          - "{{ alias_tls_root }}/revisions/globex/v1/tls.crt"
+          - --resolve
+          - "foghorn.globex.cdn.frameworks.test:443:127.0.0.1"
+          - -o
+          - /dev/null
+          - "https://foghorn.globex.cdn.frameworks.test/play/probe/hls/index.m3u8"
+      changed_when: false
+
     - name: Check the worker can read a private key without root
       ansible.builtin.command:
         argv:
@@ -160,21 +275,6 @@
           - "'privateer' not in alias_worker_groups.stdout.split()"
           - "'frameworks' not in alias_worker_groups.stdout.split()"
 
-    - name: Preview ingress permission changes before the new reader group exists
-      ansible.builtin.include_role:
-        name: frameworks.infra.nginx
-        tasks_from: configure
-        apply:
-          check_mode: true
-      vars:
-        nginx_ingress_reader_group: frameworks-ingress-preview
-
-    - name: Confirm the preview did not create the reader group
-      ansible.builtin.command: getent group frameworks-ingress-preview
-      register: alias_preview_group
-      failed_when: alias_preview_group.rc != 2
-      changed_when: false
-
     - name: Read the hosted ingress apply receipt
       ansible.builtin.slurp:
         src: /run/frameworks-nginx/tenant-alias.applied
@@ -189,3 +289,27 @@
       ansible.builtin.assert:
         that:
           - (alias_apply_receipt.content | b64decode | trim) == alias_inventory_digest.stdout.split()[0]
+
+- name: Preview Nginx permissions with an absent reader group
+  hosts: all
+  become: true
+  gather_facts: true
+  check_mode: true
+  vars:
+    nginx_ingress_reader_group: frameworks-ingress-preview
+  tasks:
+    - name: Preview ingress permission and proxy convergence
+      ansible.builtin.include_role:
+        name: frameworks.infra.nginx
+        tasks_from: configure
+
+- name: Verify Nginx preview made no changes
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Confirm the preview did not create the reader group
+      ansible.builtin.command: getent group frameworks-ingress-preview
+      register: alias_preview_group
+      failed_when: alias_preview_group.rc != 2
+      changed_when: false
