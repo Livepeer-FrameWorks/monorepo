@@ -1,14 +1,15 @@
 -- name: InsertAuthorizationCode :exec
 INSERT INTO commodore.auth_authorization_codes (
     tenant_id, user_id, client_id, code_hash, code_challenge,
-    code_challenge_method, redirect_uri, scope, state, expires_at
+    code_challenge_method, redirect_uri, scope, state, expires_at,
+    device_label, client_version, request_ip, user_agent
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
 
 -- name: LockAuthorizationCode :one
 SELECT
     id, user_id, tenant_id, code_challenge, code_challenge_method,
-    client_id, redirect_uri, consumed_at
+    client_id, redirect_uri, consumed_at, device_label, client_version, request_ip, user_agent
 FROM commodore.auth_authorization_codes
 WHERE code_hash = $1 AND expires_at > NOW()
 FOR UPDATE;

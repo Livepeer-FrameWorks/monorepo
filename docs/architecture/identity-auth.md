@@ -35,7 +35,8 @@ account state, enforces the 100-live-session limit and writes the session,
 refresh hash and sign-in event in one transaction. At the limit it revokes the
 oldest idle session. Password login also rechecks the verified password hash
 under that lock so a concurrent reset cannot turn an old proof into a new
-session.
+session. Wallet issuance resolves the verified address to its owned identity
+under the same lock; an unlinked wallet cannot finish a stale sign-in proof.
 
 `auth_sessions` is scoped by `(tenant_id, user_id, id)`. It records the client,
 authentication method, device label, client version, IP and user agent, original
@@ -72,6 +73,23 @@ returns that original metadata and its creation/expiry times for consent.
 Redemption inherits the stored values; later polls and browser approval do not
 replace them. Older pending grants without metadata keep generic client labels
 and unknown addresses rather than attributing the polling request.
+
+Before opening browser approval, a current tray calls Bridge's anonymous
+`/auth/authorize/start`. Bridge signs its observed native address, user agent,
+device label and version together with the exact client, loopback redirect,
+S256 challenge, scope and state. The two-part context expires after five minutes;
+it carries no user identity, cannot authenticate an API request and creates no
+session or refresh rows. HMAC domain separation keeps it distinct from JWTs and
+other proofs signed with Bridge's existing signing secret.
+
+Authenticated `/auth/authorize/lookup` verifies that context for consent display.
+Completion refuses changed bindings or an expired context and forwards the
+original native metadata while retaining the browser JWT's user and tenant.
+Commodore stores approved metadata on the authorization code and inherits it on
+exchange, so redemption cannot replace what was approved. Older trays retain
+legacy PKCE approval without verified native provenance; a current tray falls
+back to that flow only when the Bridge lacks the start endpoint (404/405/501).
+Rejections, redirects, malformed success and outages do not select fallback.
 
 Bridge captures request IP using its trusted-proxy configuration. Client labels,
 versions and user agents are bounded display hints and grant no authority.
@@ -249,7 +267,11 @@ event-type and time predicates run before mirror deduplication in `api_events`.
 The subject is the payload's `user_id`, independently of the audit actor, so
 anonymous sign-in events and operator-initiated revocations remain attributed
 to their affected user. The API exposes typed event metadata and omits raw
-payloads, internal errors and token identifiers.
+payloads, internal errors and token identifiers. Successful wallet sign-ins
+record the verified wallet identity ID in the committed auth event. Auth events
+store source IPs as IPv4 /24 or IPv6 /48 buckets, with invalid or absent addresses
+left empty. Native sign-in events use the source metadata saved with the approved
+grant rather than the later polling or code-redemption request.
 
 ## Security email
 
@@ -305,6 +327,31 @@ and are validated after deployment. The service-owned
 `commodore_auth_sessions_v0_3_15` data migration must finish before contract.
 No session-ownership `NOT NULL` contract ships in the foundation migration.
 
-The self-service UI, security email, activity reader, password-change UI and
-authorization consent metadata remain tracked in
-[the account-security RFC](../rfcs/RFC_account_security_sessions.md).
+Session management is self-service across the dashboard, CLI and GraphQL API.
+The Security page, mandatory alerts, personal activity reader and native
+approval details use the contracts described here. Team-member session
+administration belongs to the separate team-role model.
+
+## Dashboard controls
+
+`/account/security` presents personal sessions, password controls, linked wallets
+and 90-day security activity. Session, identity and activity reads have separate
+loading/error state; an analytics failure does not hide session controls.
+Session and wallet removals use confirmation dialogs. A failed mutation retains
+its rows and credentials; only acknowledged current-session revocation clears
+local state. The browser's existing logout path handles an explicitly selected
+current session. An explicit `SESSION_REFRESH_REQUIRED` pre-execution refusal can
+renew and retry once; other mutation errors are not automatically replayed.
+
+Sign-in methods load from `GET /auth/me/wallets` through the existing interactive
+JWT boundary, independently of cached profile snapshots. The owning service
+filters by both user and tenant. Read failures remain errors instead of becoming
+empty wallet lists. The server's owner lock and verified-password check still
+protect final-wallet removal; the UI adds confirmation and the same conservative
+availability hint. Settings links here instead of duplicating identity controls.
+
+Device and PKCE consent show original request details, explicit expiry and the
+warning to approve only a user-initiated sign-in. Device lookup responses are
+bound to the submitted code so late responses cannot label a different code.
+An invalid signed PKCE context never falls back to unverified URL metadata.
+Legacy approval displays unknown provenance instead of inventing device details.

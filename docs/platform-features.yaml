@@ -2601,9 +2601,8 @@ features:
     name: Account security
     area: account
     description: Personal browser, CLI and macOS tray sessions with named revocation, automatic refresh, password controls and mandatory security alerts.
-    status: partial
-    gap_reason: Self-service GraphQL and CLI controls, security activity and mandatory email are implemented. The Account Security dashboard and expanded device/authorize consent pages remain pending.
-    note: Session controls are available through the CLI and API. The dashboard security page is still being built.
+    status: shipped
+    note: Manage your own sessions, password and linked wallets in Account Security or through the CLI and API. Team-member session administration is separate.
     required_surfaces:
       graphql: { required: true }
       cli: { required: true }
@@ -2617,7 +2616,16 @@ features:
     surfaces:
       graphql:
         queries: [authSessionsConnection, securityActivityConnection]
-        mutations: [revokeAuthSession, revokeOtherAuthSessions, renameAuthSession, changePassword]
+        mutations:
+          [
+            revokeAuthSession,
+            revokeOtherAuthSessions,
+            renameAuthSession,
+            changePassword,
+            linkEmail,
+            linkWallet,
+            unlinkWallet,
+          ]
       cli:
         commands:
           [
@@ -2628,6 +2636,8 @@ features:
             "login",
             "logout",
           ]
+      webapp:
+        routes: ["/account/security", "/device", "/authorize"]
       docs:
         pages: [builders/account-security.mdx, operators/cli-reference.mdx]
 

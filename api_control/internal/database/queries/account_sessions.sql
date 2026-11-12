@@ -3,6 +3,10 @@ SELECT tenant_id, user_id
 FROM commodore.wallet_identities
 WHERE chain_type = $1 AND wallet_address = $2;
 
+-- name: GetAuthSessionWalletID :one
+SELECT id FROM commodore.wallet_identities
+WHERE tenant_id = $1 AND user_id = $2 AND chain_type = 'ethereum' AND wallet_address = $3;
+
 -- name: HasUserWallet :one
 SELECT EXISTS (SELECT 1 FROM commodore.wallet_identities
 WHERE tenant_id = $1 AND user_id = $2 AND chain_type = 'ethereum' AND wallet_address = $3);
@@ -94,7 +98,7 @@ WHERE id = $1 AND tenant_id = $2;
 -- name: ListUserWallets :many
 SELECT id, wallet_address, created_at, last_auth_at
 FROM commodore.wallet_identities
-WHERE user_id = $1
+WHERE user_id = $1 AND tenant_id = $2
 ORDER BY created_at DESC;
 
 -- name: DeleteRefreshTokensForUser :exec

@@ -27,11 +27,11 @@ WHERE tenant_id = $1 AND user_id = $2 AND device_key = $3
 
 -- name: ListTerminalAccountEmailKeys :many
 -- Platform-wide discovery only; settlement metadata is retained for 30 days.
-SELECT tenant_id::text AS tenant_id, user_id::text AS user_id, purpose FROM commodore.account_email_outbox
-WHERE status IN ('completed', 'abandoned') AND updated_at < NOW() - INTERVAL '720 hours'
-ORDER BY updated_at, tenant_id, user_id, purpose LIMIT $1;
+SELECT e.tenant_id::text AS tenant_id, e.user_id::text AS user_id, e.purpose FROM commodore.account_email_outbox AS e
+WHERE e.status IN ('completed', 'abandoned') AND e.updated_at < (NOW() - INTERVAL '720 hours')::timestamp
+ORDER BY e.updated_at, e.tenant_id, e.user_id, e.purpose LIMIT $1;
 
 -- name: DeleteTerminalAccountEmail :execrows
 DELETE FROM commodore.account_email_outbox
 WHERE tenant_id = $1 AND user_id = $2 AND purpose = $3
-  AND status IN ('completed', 'abandoned') AND updated_at < NOW() - INTERVAL '720 hours';
+  AND status IN ('completed', 'abandoned') AND updated_at < (NOW() - INTERVAL '720 hours')::timestamp;

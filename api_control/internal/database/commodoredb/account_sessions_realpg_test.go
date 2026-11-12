@@ -79,7 +79,7 @@ func TestAccountSessionRepository_RealPG(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	wallets, err := q.ListUserWallets(ctx, walletUserID)
+	wallets, err := q.ListUserWallets(ctx, ListUserWalletsParams{UserID: walletUserID, TenantID: tenantID})
 	if err != nil || len(wallets) != 1 || !wallets[0].CreatedAt.Valid || !wallets[0].LastAuthAt.Valid {
 		t.Fatalf("wallet list=%#v err=%v", wallets, err)
 	}

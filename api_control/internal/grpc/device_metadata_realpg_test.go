@@ -79,4 +79,8 @@ func testDeviceRequestMetadata(t *testing.T, db *sql.DB) {
 	if label != "Original workstation" || version != "v0.3.15-rc1 / linux arm64" || ip != "203.0.113.14" || agent != "FrameWorks-CLI/test" {
 		t.Errorf("poll replaced approved device metadata: label=%q version=%q ip=%q agent=%q", label, version, ip, agent)
 	}
+	if bucket := readSignInAudit(t, ctx, db, tenant, user).GetAuthEvent().GetIpBucket(); bucket != "203.0.113.0/24" {
+		t.Errorf("sign-in audit replaced approved native origin with redemption metadata: bucket=%q", bucket)
+	}
+
 }

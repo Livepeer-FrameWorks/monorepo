@@ -63,9 +63,10 @@ func (q *Queries) ExpireDeviceAuthorization(ctx context.Context, id string) erro
 const insertAuthorizationCode = `-- name: InsertAuthorizationCode :exec
 INSERT INTO commodore.auth_authorization_codes (
     tenant_id, user_id, client_id, code_hash, code_challenge,
-    code_challenge_method, redirect_uri, scope, state, expires_at
+    code_challenge_method, redirect_uri, scope, state, expires_at,
+    device_label, client_version, request_ip, user_agent
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 `
 
 type InsertAuthorizationCodeParams struct {
@@ -79,6 +80,10 @@ type InsertAuthorizationCodeParams struct {
 	Scope               string         `db:"scope" json:"scope"`
 	State               sql.NullString `db:"state" json:"state"`
 	ExpiresAt           time.Time      `db:"expires_at" json:"expires_at"`
+	DeviceLabel         string         `db:"device_label" json:"device_label"`
+	ClientVersion       string         `db:"client_version" json:"client_version"`
+	RequestIp           string         `db:"request_ip" json:"request_ip"`
+	UserAgent           string         `db:"user_agent" json:"user_agent"`
 }
 
 func (q *Queries) InsertAuthorizationCode(ctx context.Context, arg InsertAuthorizationCodeParams) error {
@@ -93,6 +98,10 @@ func (q *Queries) InsertAuthorizationCode(ctx context.Context, arg InsertAuthori
 		arg.Scope,
 		arg.State,
 		arg.ExpiresAt,
+		arg.DeviceLabel,
+		arg.ClientVersion,
+		arg.RequestIp,
+		arg.UserAgent,
 	)
 	return err
 }
@@ -137,7 +146,7 @@ func (q *Queries) InsertDeviceAuthorization(ctx context.Context, arg InsertDevic
 const lockAuthorizationCode = `-- name: LockAuthorizationCode :one
 SELECT
     id, user_id, tenant_id, code_challenge, code_challenge_method,
-    client_id, redirect_uri, consumed_at
+    client_id, redirect_uri, consumed_at, device_label, client_version, request_ip, user_agent
 FROM commodore.auth_authorization_codes
 WHERE code_hash = $1 AND expires_at > NOW()
 FOR UPDATE
@@ -152,6 +161,10 @@ type LockAuthorizationCodeRow struct {
 	ClientID            string       `db:"client_id" json:"client_id"`
 	RedirectUri         string       `db:"redirect_uri" json:"redirect_uri"`
 	ConsumedAt          sql.NullTime `db:"consumed_at" json:"consumed_at"`
+	DeviceLabel         string       `db:"device_label" json:"device_label"`
+	ClientVersion       string       `db:"client_version" json:"client_version"`
+	RequestIp           string       `db:"request_ip" json:"request_ip"`
+	UserAgent           string       `db:"user_agent" json:"user_agent"`
 }
 
 func (q *Queries) LockAuthorizationCode(ctx context.Context, codeHash string) (LockAuthorizationCodeRow, error) {
@@ -166,6 +179,10 @@ func (q *Queries) LockAuthorizationCode(ctx context.Context, codeHash string) (L
 		&i.ClientID,
 		&i.RedirectUri,
 		&i.ConsumedAt,
+		&i.DeviceLabel,
+		&i.ClientVersion,
+		&i.RequestIp,
+		&i.UserAgent,
 	)
 	return i, err
 }

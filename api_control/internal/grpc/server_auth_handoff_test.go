@@ -164,10 +164,10 @@ func TestExchangeAuthorizationCode_VerifierMismatch(t *testing.T) {
 		WithArgs(codeHash).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "user_id", "tenant_id", "code_challenge", "code_challenge_method",
-			"client_id", "redirect_uri", "consumed_at",
+			"client_id", "redirect_uri", "consumed_at", "device_label", "client_version", "request_ip", "user_agent",
 		}).AddRow(
 			"authz-1", "user-1", "tenant-1", storedChallenge, "S256",
-			"tray-mac", "http://127.0.0.1:54321/callback", nil,
+			"tray-mac", "http://127.0.0.1:54321/callback", nil, "", "", "", "",
 		))
 	mock.ExpectRollback()
 
@@ -210,10 +210,10 @@ func TestExchangeAuthorizationCode_AlreadyConsumed(t *testing.T) {
 		WithArgs(codeHash).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "user_id", "tenant_id", "code_challenge", "code_challenge_method",
-			"client_id", "redirect_uri", "consumed_at",
+			"client_id", "redirect_uri", "consumed_at", "device_label", "client_version", "request_ip", "user_agent",
 		}).AddRow(
 			"authz-1", "user-1", "tenant-1", "any-challenge", "S256",
-			"tray-mac", "http://127.0.0.1:54321/callback", consumedAt,
+			"tray-mac", "http://127.0.0.1:54321/callback", consumedAt, "", "", "", "",
 		))
 	mock.ExpectRollback()
 

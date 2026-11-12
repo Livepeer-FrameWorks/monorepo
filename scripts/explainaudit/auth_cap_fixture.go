@@ -39,7 +39,7 @@ func (f *authCapFixture) parameter(typ string) string {
 }
 
 func (f *authCapFixture) setup(ctx context.Context, conn *sql.Conn) error {
-	if _, err := conn.ExecContext(ctx, `INSERT INTO commodore.users(id,tenant_id,email,is_active,verified) VALUES($1,$1,$1::text||'@cap-audit.test',true,true)`, f.owner); err != nil {
+	if _, err := conn.ExecContext(ctx, `INSERT INTO commodore.users(id,tenant_id,email,is_active,verified) VALUES($1,$2,$3,true,true)`, f.owner, f.owner, f.owner+"@cap-audit.test"); err != nil {
 		return err
 	}
 	for _, fixture := range []struct {

@@ -54,7 +54,7 @@ func TestGetMe_MapsInlineUserAndWalletRows(t *testing.T) {
 		))
 
 	mock.ExpectQuery("FROM commodore.wallet_identities").
-		WithArgs("user-1").
+		WithArgs("user-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "wallet_address", "created_at", "last_auth_at",
 		}).AddRow(

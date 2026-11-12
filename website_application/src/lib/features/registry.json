@@ -4646,10 +4646,9 @@
       "kind": "product",
       "audience": "product",
       "description": "Personal browser, CLI and macOS tray sessions with named revocation, automatic refresh, password controls and mandatory security alerts.",
-      "status": "partial",
-      "gap_reason": "Self-service GraphQL and CLI controls, security activity and mandatory email are implemented. The Account Security dashboard and expanded device/authorize consent pages remain pending.",
+      "status": "shipped",
       "horizon": "now",
-      "note": "Session controls are available through the CLI and API. The dashboard security page is still being built.",
+      "note": "Manage your own sessions, password and linked wallets in Account Security or through the CLI and API. Team-member session administration is separate.",
       "required_surfaces": {
         "cli": {
           "required": true
@@ -4674,7 +4673,10 @@
             "revokeAuthSession",
             "revokeOtherAuthSessions",
             "renameAuthSession",
-            "changePassword"
+            "changePassword",
+            "linkEmail",
+            "linkWallet",
+            "unlinkWallet"
           ],
           "queries": [
             "authSessionsConnection",
@@ -4692,7 +4694,13 @@
             "logout"
           ]
         },
-        "webapp": {},
+        "webapp": {
+          "routes": [
+            "/account/security",
+            "/device",
+            "/authorize"
+          ]
+        },
         "docs": {
           "pages": [
             "builders/account-security.mdx",
@@ -4705,7 +4713,7 @@
         "docs": true,
         "graphql": true,
         "mcp": false,
-        "webapp": false
+        "webapp": true
       }
     },
     {

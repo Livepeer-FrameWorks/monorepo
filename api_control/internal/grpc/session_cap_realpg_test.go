@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,10 +143,14 @@ CREATE TRIGGER observe_cap_eviction AFTER UPDATE ON commodore.auth_sessions FOR 
 SELECT $1,$2,'unknown','unknown',NOW()-INTERVAL '3 hours',NOW()-INTERVAL '3 hours',NOW()+INTERVAL '1 day',NOW()+INTERVAL '2 days' FROM generate_series(1,151)`, tenant, user); err != nil {
 			t.Fatal(err)
 		}
+		walletAddress := "0x" + strings.ReplaceAll(user, "-", "") + "00000000"
+		if _, err = db.ExecContext(ctx, `INSERT INTO commodore.wallet_identities(user_id,tenant_id,wallet_address,chain_type) VALUES($1,$2,$3,'ethereum')`, user, tenant, walletAddress); err != nil {
+			t.Fatal(err)
+		}
 		var walletSession *commodorepb.AuthResponse
 		err = server.withEventTx(ctx, func(tx *sql.Tx) error {
 			var issueErr error
-			walletSession, issueErr = server.issueUserSessionTx(ctx, tx, user, tenant, SessionContext{AuthMethod: "wallet", ClientID: "web", DeviceLabel: "Wallet browser"})
+			walletSession, issueErr = server.issueUserSessionTx(ctx, tx, user, tenant, SessionContext{AuthMethod: "wallet", walletAddress: walletAddress, ClientID: "web", DeviceLabel: "Wallet browser"})
 			return issueErr
 		})
 		if err != nil || walletSession == nil || active(user) != 100 || active(other) != 5 {

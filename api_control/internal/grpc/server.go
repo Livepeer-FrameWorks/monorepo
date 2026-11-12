@@ -5143,7 +5143,7 @@ func (s *CommodoreServer) GetMe(ctx context.Context, req *commodorepb.GetMeReque
 	result := user.toProtoUser("", "")
 
 	// Fetch linked wallets
-	walletRows, err := queries.ListUserWallets(ctx, userID)
+	walletRows, err := queries.ListUserWallets(ctx, commodoredb.ListUserWalletsParams{UserID: userID, TenantID: tenantID})
 	if err != nil {
 		s.logger.WithError(err).Warn("Failed to fetch user wallets")
 		// Don't fail the whole request - just return user without wallets
@@ -5260,6 +5260,7 @@ func (s *CommodoreServer) CompleteAuthorization(ctx context.Context, req *commod
 		state = sql.NullString{String: reqState, Valid: true}
 	}
 
+	requestInfo := sessionContextFromRequest(ctx, "pkce", req.GetClientId())
 	err = commodoredb.New(s.db).InsertAuthorizationCode(ctx, commodoredb.InsertAuthorizationCodeParams{
 		TenantID:            tenantID,
 		UserID:              userID,
@@ -5271,6 +5272,8 @@ func (s *CommodoreServer) CompleteAuthorization(ctx context.Context, req *commod
 		Scope:               scope,
 		State:               state,
 		ExpiresAt:           expiresAt,
+		DeviceLabel:         requestInfo.DeviceLabel, ClientVersion: requestInfo.ClientVersion,
+		RequestIp: requestInfo.IP, UserAgent: requestInfo.UserAgent,
 	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to persist authorization code")
@@ -5334,7 +5337,7 @@ func (s *CommodoreServer) ExchangeAuthorizationCode(ctx context.Context, req *co
 			}
 
 			userID, tenantID = authorizationRow.UserID, authorizationRow.TenantID
-			resp, err = s.issueUserSessionTx(ctx, tx, userID, tenantID, sessionContextFromRequest(ctx, "pkce", authorizationRow.ClientID))
+			resp, err = s.issueUserSessionTx(ctx, tx, userID, tenantID, sessionContextFromClientMetadata("pkce", authorizationRow.ClientID, ctxkeys.AuthClientMetadata{DeviceLabel: authorizationRow.DeviceLabel, Version: authorizationRow.ClientVersion, IP: authorizationRow.RequestIp, UserAgent: authorizationRow.UserAgent}))
 			return err
 		})
 	if txErr != nil {
@@ -6360,7 +6363,9 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.Wall
 	var response *commodorepb.AuthResponse
 	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
 		var issueErr error
-		response, issueErr = s.issueUserSessionTx(ctx, tx, userID, tenantID, sessionContextFromRequest(ctx, "wallet", "web"))
+		info := sessionContextFromRequest(ctx, "wallet", "web")
+		info.walletAddress = normalizedAddr
+		response, issueErr = s.issueUserSessionTx(ctx, tx, userID, tenantID, info)
 		return issueErr
 	})
 	if err != nil {
@@ -6517,12 +6522,12 @@ func (s *CommodoreServer) UnlinkWallet(ctx context.Context, req *commodorepb.Unl
 
 // ListWallets returns all wallets linked to the authenticated user
 func (s *CommodoreServer) ListWallets(ctx context.Context, req *commodorepb.ListWalletsRequest) (*commodorepb.ListWalletsResponse, error) {
-	userID, _, err := extractUserContext(ctx)
+	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	rows, err := commodoredb.New(s.db).ListUserWallets(ctx, userID)
+	rows, err := commodoredb.New(s.db).ListUserWallets(ctx, commodoredb.ListUserWalletsParams{UserID: userID, TenantID: tenantID})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list wallets: %v", err)
 	}
@@ -8530,7 +8535,7 @@ func (s *CommodoreServer) CreateAPIToken(ctx context.Context, req *commodorepb.C
 		}); insertErr != nil {
 			return insertErr
 		}
-		return s.enqueueEventTx(ctx, tx, s.buildAuthEvent(eventTokenCreated, userID, tenantID, "api_token", "", tokenID, ""),
+		return s.enqueueEventTx(ctx, tx, s.buildAuthEvent(ctx, eventTokenCreated, userID, tenantID, "api_token", "", tokenID, ""),
 			&domainEvent{msg: created, aggregateID: tokenID})
 	})
 	if err != nil {
@@ -8707,7 +8712,7 @@ func (s *CommodoreServer) RevokeAPIToken(ctx context.Context, req *commodorepb.R
 		if !revoked.WasActive.Bool {
 			return nil
 		}
-		return s.enqueueEventTx(ctx, tx, s.buildAuthEvent(eventTokenRevoked, userID, tenantID, "api_token", "", req.GetTokenId(), ""),
+		return s.enqueueEventTx(ctx, tx, s.buildAuthEvent(ctx, eventTokenRevoked, userID, tenantID, "api_token", "", req.GetTokenId(), ""),
 			&domainEvent{msg: &publicv1.ApiTokenRevoked{TokenId: req.GetTokenId()}, aggregateID: req.GetTokenId()})
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -8753,12 +8758,13 @@ const (
 	eventPlaybackPolicyChanged  = "playback_policy_changed"
 )
 
-func (s *CommodoreServer) buildAuthEvent(eventType, userID, tenantID, authType, walletID, tokenID, errMsg string) *ipcpb.ServiceEvent {
+func (s *CommodoreServer) buildAuthEvent(ctx context.Context, eventType, userID, tenantID, authType, walletID, tokenID, errMsg string) *ipcpb.ServiceEvent {
 	payload := &ipcpb.AuthEvent{
 		UserId:   userID,
 		TenantId: tenantID,
 		AuthType: authType,
 		WalletId: walletID,
+		IpBucket: authIPBucket(sessionContextFromRequest(ctx, "", "").IP),
 		TokenId:  tokenID,
 		Error:    errMsg,
 	}
@@ -8777,14 +8783,14 @@ func (s *CommodoreServer) buildAuthEvent(eventType, userID, tenantID, authType, 
 // enqueueAuthEventTx records an authentication event in the transaction that
 // commits the session, credential, or identity change it describes.
 func (s *CommodoreServer) enqueueAuthEventTx(ctx context.Context, exec commodoredb.DBTX, eventType, userID, tenantID, authType, walletID string) error {
-	return s.enqueueEventTx(ctx, exec, s.buildAuthEvent(eventType, userID, tenantID, authType, walletID, "", ""), nil)
+	return s.enqueueEventTx(ctx, exec, s.buildAuthEvent(ctx, eventType, userID, tenantID, authType, walletID, "", ""), nil)
 }
 
 // recordLoginFailed records a rejected sign-in. The event is the rejection's
 // only durable effect, so it commits in its own transaction and a failure to
 // record it fails the sign-in.
 func (s *CommodoreServer) recordLoginFailed(ctx context.Context, userID, tenantID, authType, reason string) error {
-	if err := s.enqueueEventOwnTx(ctx, s.buildAuthEvent(eventAuthLoginFailed, userID, tenantID, authType, "", "", reason), nil); err != nil {
+	if err := s.enqueueEventOwnTx(ctx, s.buildAuthEvent(ctx, eventAuthLoginFailed, userID, tenantID, authType, "", "", reason), nil); err != nil {
 		s.logger.WithError(err).WithField("user_id", userID).Error("Failed to record rejected sign-in")
 		return status.Error(codes.Internal, "failed to record sign-in attempt")
 	}

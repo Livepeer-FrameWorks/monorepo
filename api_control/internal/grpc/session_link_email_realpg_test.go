@@ -5,6 +5,7 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +43,10 @@ func testLinkEmailPreservesCurrentSession(t *testing.T, db *sql.DB) {
 VALUES($1,$2,true,false,'outstanding-reset',NOW()+INTERVAL '1 hour')`, owner, tenant); err != nil {
 					t.Fatal(err)
 				}
+				walletAddress := "0x" + strings.ReplaceAll(owner, "-", "") + "00000000"
+				if _, err := db.ExecContext(ctx, `INSERT INTO commodore.wallet_identities(user_id,tenant_id,wallet_address,chain_type) VALUES($1,$2,$3,'ethereum')`, owner, tenant, walletAddress); err != nil {
+					t.Fatal(err)
+				}
 			}
 			s := &CommodoreServer{db: db, logger: logrus.New(), tokenHasher: testTokenHasher(t), runtimeSettings: refreshTokenTestSettings, accountEmailKickFn: func() {}}
 			issue := func(owner string) *commodorepb.AuthResponse {
@@ -49,7 +54,7 @@ VALUES($1,$2,true,false,'outstanding-reset',NOW()+INTERVAL '1 hour')`, owner, te
 				var response *commodorepb.AuthResponse
 				err := s.withEventTx(ctx, func(tx *sql.Tx) error {
 					var err error
-					response, err = s.issueUserSessionTx(ctx, tx, owner, tenant, SessionContext{AuthMethod: "wallet", ClientID: "web", DeviceLabel: "Wallet browser"})
+					response, err = s.issueUserSessionTx(ctx, tx, owner, tenant, SessionContext{AuthMethod: "wallet", walletAddress: "0x" + strings.ReplaceAll(owner, "-", "") + "00000000", ClientID: "web", DeviceLabel: "Wallet browser"})
 					return err
 				})
 				if err != nil {

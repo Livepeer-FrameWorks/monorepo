@@ -9,6 +9,7 @@ import (
 	"frameworks/api_gateway/internal/attribution"
 	gatewayerrors "frameworks/api_gateway/internal/errors"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
@@ -93,11 +94,13 @@ type AuthHandlers struct {
 	commodore    commodore.Interface
 	logger       logging.Logger
 	cookieDomain string
+	sessionGeoIP *geoip.Reader
 	runtime      func() AuthRuntime
 }
 
 // AuthConfig configures AuthHandlers.
 type AuthConfig struct {
+	SessionGeoIP *geoip.Reader
 	// CookieDomain is the Domain attribute on auth cookies. Empty scopes them
 	// to the request host; ".example.com" shares them across subdomains. A
 	// leading dot is ignored.
@@ -108,6 +111,7 @@ type AuthConfig struct {
 
 // AuthRuntime holds the auth settings read on each request.
 type AuthRuntime struct {
+	JWTSecret []byte
 	// SecureCookies sets the Secure attribute on auth cookies. It is false in
 	// development, where the web app is served over plain HTTP.
 	SecureCookies bool
@@ -121,6 +125,7 @@ func NewAuthHandlers(commodoreClient commodore.Interface, logger logging.Logger,
 	return &AuthHandlers{
 		commodore:    commodoreClient,
 		logger:       logger,
+		sessionGeoIP: cfg.SessionGeoIP,
 		cookieDomain: strings.TrimPrefix(strings.TrimSpace(cfg.CookieDomain), "."),
 		runtime:      cfg.Runtime,
 	}
@@ -636,20 +641,17 @@ func (h *AuthHandlers) WebappURL() gin.HandlerFunc {
 // the client cannot supply them.
 func (h *AuthHandlers) AuthorizeComplete() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var req struct {
-			ClientID            string `json:"client_id" binding:"required"`
-			RedirectURI         string `json:"redirect_uri" binding:"required"`
-			CodeChallenge       string `json:"code_challenge" binding:"required"`
-			CodeChallengeMethod string `json:"code_challenge_method" binding:"required"`
-			Scope               string `json:"scope"`
-			State               string `json:"state"`
-		}
+		var req authorizationInput
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
 			return
 		}
 
-		resp, err := h.commodore.CompleteAuthorization(c.Request.Context(), &commodorepb.CompleteAuthorizationRequest{
+		ctx, valid := h.authorizationContext(c, req)
+		if !valid {
+			return
+		}
+		resp, err := h.commodore.CompleteAuthorization(ctx, &commodorepb.CompleteAuthorizationRequest{
 			ClientId:            req.ClientID,
 			RedirectUri:         req.RedirectURI,
 			CodeChallenge:       req.CodeChallenge,

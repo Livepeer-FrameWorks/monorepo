@@ -2243,6 +2243,106 @@ The [media placement guide](/builders/media-placement) covers writing, reviewing
 
 
 ---
+# Account Security
+https://logbook.frameworks.network/builders/account-security
+
+## Signed-in sessions
+
+Open **Account → Security** to see your browser, CLI and macOS tray sign-ins.
+Each session shows its name, sign-in method, creation time, last refresh,
+expiry and, when available, approximate location and masked IP address.
+**This session** identifies the browser you are using. Last active records a
+credential refresh; it is not a record of every request.
+
+Rename a session to make it recognisable. **Sign out** ends that session and
+its refresh credentials. **Sign out all other sessions** keeps your current
+session and ends your other interactive sign-ins. Signing out from the top
+bar ends only the current browser session. CLI and tray credentials are stored
+separately, so signing out of one does not sign out the other.
+
+Session management is personal. Tenant owners and administrators do not get
+access to members' sessions through this page or its API.
+
+## Session lifetimes
+
+| Credential                        | Lifetime                                    |
+| --------------------------------- | ------------------------------------------- |
+| Access token                      | Up to 15 minutes, bounded by session expiry |
+| Refresh inactivity limit          | 30 days since the last successful refresh   |
+| Browser session maximum           | 90 days from the original sign-in           |
+| CLI or macOS tray session maximum | 180 days from the original sign-in          |
+
+Supported clients refresh access credentials automatically. Refreshing retains
+the original sign-in time and cannot extend the maximum age. After the
+inactivity limit or maximum age, sign in again. A session ended from Security
+cannot be restored by refreshing an old token.
+
+A wallet proof in request headers can return a short-lived MCP bearer for later
+requests. It lasts at most 15 minutes, cannot be refreshed, and does not create
+an entry in the session list. Explicit wallet login creates a refreshable
+interactive session. API tokens are managed separately under
+**Developer → Credentials**.
+
+## Sign in from the CLI or tray
+
+Run `frameworks login` and approve the displayed device code in your browser.
+Use `--no-browser` to open the approval URL yourself. The macOS tray uses a
+browser approval with a local callback. Check the requesting client, device,
+time and address on the approval page. Only approve a sign-in you started.
+
+The CLI keeps its login bound to the Bridge used during sign-in. It renews
+before access expires and retries a rejected access token once after renewal.
+A token passed through `FW_USER_TOKEN`, including a tray token handed to a child
+CLI process, remains owned by its caller and is not refreshed or overwritten.
+
+```bash
+frameworks auth status
+frameworks auth sessions list
+frameworks auth sessions revoke SESSION_ID
+frameworks auth sessions revoke-others
+frameworks logout
+```
+
+`auth status` shows the signed-in identity and session. The session table supports `--first` and `--after` for pagination.
+Add `--output json` to include the sign-in method, creation time and available
+location/address metadata. `logout` ends the CLI's server session
+before clearing its local credentials. If the server cannot confirm sign-out,
+credentials remain available so the operation can be retried.
+
+## Password and sign-in methods
+
+Change your password in **Account → Security** using your current password.
+A successful change keeps this session and ends the others. A password reset
+ends every session, including the one used to request it.
+
+Wallet-only accounts can link an email and set a password here. Linking an
+email preserves the current session and ends the other sign-ins. Verify the
+email before using password sign-in. Linked wallets can be managed in
+**Sign-in methods**, with confirmation before unlinking.
+
+## Security alerts and activity
+
+The **Recent security activity** list covers your own security events from the
+last 90 days. It includes sign-in attempts, ended sessions, password changes
+and resets, and wallet linking or unlinking. Events can take a short time to
+appear while the audit pipeline catches up.
+
+Security emails are always enabled. An unfamiliar device triggers an email
+when its client and original device label have not been used in 90 days.
+Renaming a session does not change that identity. Detected refresh-token theft
+also triggers an email and ends the affected session; other sessions stay
+signed in. A verified linked email address is needed for delivery.
+
+## Lost device or unfamiliar sign-in
+
+From a device you trust, open **Account → Security** and sign out the missing
+or unfamiliar session. Use **Sign out all other sessions** if you cannot identify
+it. Change your password if someone may know it. If you cannot sign in, use
+password reset, which ends every session. If API tokens were stored on the
+missing device, revoke those separately under **Developer → Credentials**.
+
+
+---
 # Analytics API
 https://logbook.frameworks.network/builders/analytics-api
 
@@ -2689,9 +2789,10 @@ few seconds of its API token being revoked, or of its user signing out, resettin
 or having their sessions ended for a reused refresh token, whichever gateway instance holds the
 connection; and within a minute of the credential otherwise ceasing to authenticate. No event is
 delivered on the connection once the gateway has learned of the revocation, including the
-`api_token.revoked` event of the connection's own token. Signing out ends every session of the
-user, so connections opened with a session token issued before the sign-out close, and a session
-started afterwards is unaffected. A client reconnects with a current token; reconnecting with the
+`api_token.revoked` event of the connection's own token. Signing out ends the current
+session; revoking a device ends that device's session. Connections using that session close,
+while other sessions remain signed in. Password reset and account deactivation end every
+session. See [Account Security](/builders/account-security) for lifetimes and recovery. A client reconnects with a current token; reconnecting with the
 revoked, signed-out, or expired one is refused before acknowledgement as above. Over HTTP, every
 gateway instance answers a request with a signed-out session token with `401` within a few
 seconds of the sign-out.
@@ -3714,11 +3815,59 @@ https://logbook.frameworks.network/builders/api-schema/account
 
 [GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/)
 
-The tenant, wallet and email identities.
+The tenant, wallet and email identities, and self-service sign-in security.
 
 Types used by more than one domain are on [Shared types](/builders/api-schema/shared/).
 
 ## Queries
+
+### Query.authSessionsConnection
+
+The signed-in user’s own interactive sessions, newest first. Supports first=1..100.
+
+```graphql
+authSessionsConnection(
+  first: Int
+  after: String
+): AuthSessionConnection!
+```
+
+**Returns:** `AuthSessionConnection!` ([AuthSessionConnection](/builders/api-schema/account/#authsessionconnection))
+
+**Arguments**
+
+- `first`: `Int`
+- `after`: `String`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetAuthSessionsConnection | `GetAuthSessionsConnectionDocument` | `GetAuthSessionsConnection` | `get_auth_sessions_connection` |
+
+### Query.securityActivityConnection
+
+Your own security activity from the past 90 days.
+
+```graphql
+securityActivityConnection(
+  first: Int
+  after: String
+): SecurityActivityConnection!
+```
+
+**Returns:** `SecurityActivityConnection!` ([SecurityActivityConnection](/builders/api-schema/account/#securityactivityconnection))
+
+**Arguments**
+
+- `first`: `Int`
+- `after`: `String`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetSecurityActivityConnection | `GetSecurityActivityConnectionDocument` | `GetSecurityActivityConnection` | `get_security_activity_connection` |
 
 ### Query.tenant
 
@@ -3737,6 +3886,30 @@ tenant: Tenant
 | GetTenant | `GetTenantDocument` | `GetTenant` | `get_tenant` |
 
 ## Mutations
+
+### Mutation.changePassword
+
+Change the password and sign out other sessions, retaining this session.
+
+```graphql
+changePassword(
+  currentPassword: String!
+  newPassword: String!
+): ChangePasswordResult!
+```
+
+**Returns:** `ChangePasswordResult!` ([ChangePasswordResult](/builders/api-schema/account/#changepasswordresult))
+
+**Arguments**
+
+- `currentPassword`: `String!`
+- `newPassword`: `String!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ChangePassword | `ChangePasswordDocument` | `ChangePassword` | `change_password` |
 
 ### Mutation.linkEmail
 
@@ -3781,6 +3954,68 @@ linkWallet(
 | Operation | TypeScript | Go | Python |
 | --- | --- | --- | --- |
 | LinkWallet | `LinkWalletDocument` | `LinkWallet` | `link_wallet` |
+
+### Mutation.renameAuthSession
+
+Rename one of the signed-in user’s own sessions.
+
+```graphql
+renameAuthSession(
+  id: ID!
+  label: String!
+): RenameAuthSessionResult!
+```
+
+**Returns:** `RenameAuthSessionResult!` ([RenameAuthSessionResult](/builders/api-schema/account/#renameauthsessionresult))
+
+**Arguments**
+
+- `id`: `ID!`
+- `label`: `String!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| RenameAuthSession | `RenameAuthSessionDocument` | `RenameAuthSession` | `rename_auth_session` |
+
+### Mutation.revokeAuthSession
+
+Sign out one of the signed-in user’s own sessions. Idempotent; current=true means this caller was signed out.
+
+```graphql
+revokeAuthSession(
+  id: ID!
+): RevokeAuthSessionResult!
+```
+
+**Returns:** `RevokeAuthSessionResult!` ([RevokeAuthSessionResult](/builders/api-schema/account/#revokeauthsessionresult))
+
+**Arguments**
+
+- `id`: `ID!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| RevokeAuthSession | `RevokeAuthSessionDocument` | `RevokeAuthSession` | `revoke_auth_session` |
+
+### Mutation.revokeOtherAuthSessions
+
+Sign out every other session while retaining the presented named session.
+
+```graphql
+revokeOtherAuthSessions: RevokeOtherAuthSessionsResult!
+```
+
+**Returns:** `RevokeOtherAuthSessionsResult!` ([RevokeOtherAuthSessionsResult](/builders/api-schema/account/#revokeotherauthsessionsresult))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| RevokeOtherAuthSessions | `RevokeOtherAuthSessionsDocument` | `RevokeOtherAuthSessions` | `revoke_other_auth_sessions` |
 
 ### Mutation.unlinkWallet
 
@@ -3850,6 +4085,79 @@ walletLogin(
 
 ## Types
 
+### AuthClientKind
+
+**enum**
+
+The interactive client that created a sign-in session.
+
+- `BROWSER`
+- `CLI`
+- `DESKTOP`
+- `UNKNOWN`
+
+### AuthMethod
+
+**enum**
+
+The proof used to create a sign-in session.
+
+- `PASSWORD`
+- `WALLET`
+- `BROWSER_HANDOFF`
+- `DEVICE_CODE`
+- `UNKNOWN`
+
+### AuthSession
+
+**object**
+
+One of the signed-in user&#39;s own interactive sessions.
+
+- **id**: `ID!`
+- **clientKind**: `AuthClientKind!` ([AuthClientKind](/builders/api-schema/account/#authclientkind))
+- **clientId**: `String!`
+- **authMethod**: `AuthMethod!` ([AuthMethod](/builders/api-schema/account/#authmethod))
+- **label**: `String!`
+- **clientVersion**: `String`
+- **ipAddress**: `String` — Masked source IP; full addresses are never returned.
+- **location**: `String` — City and country when a local GeoIP database is configured.
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **lastActiveAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **expiresAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **current**: `Boolean!`
+
+### AuthSessionConnection
+
+**object**
+
+- **edges**: `[AuthSessionEdge!]!` ([AuthSessionEdge](/builders/api-schema/account/#authsessionedge))
+- **nodes**: `[AuthSession!]!` ([AuthSession](/builders/api-schema/account/#authsession))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+### AuthSessionEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `AuthSession!` ([AuthSession](/builders/api-schema/account/#authsession))
+
+### ChangePasswordPayload
+
+**object**
+
+- **success**: `Boolean!`
+- **revokedCount**: `Int!`
+
+### ChangePasswordResult
+
+**union**
+
+- Member: [ChangePasswordPayload](/builders/api-schema/account/#changepasswordpayload)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
 ### CustomDomainStatus
 
 **object**
@@ -3899,6 +4207,87 @@ Successful email link response.
 - Member: [WalletIdentity](/builders/api-schema/account/#walletidentity)
 - Member: [ValidationError](/builders/api-schema/shared/#validationerror)
 - Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### RenameAuthSessionResult
+
+**union**
+
+- Member: [AuthSession](/builders/api-schema/account/#authsession)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### RevokeAuthSessionPayload
+
+**object**
+
+- **success**: `Boolean!`
+- **current**: `Boolean!` — True when the presented session was signed out.
+
+### RevokeAuthSessionResult
+
+**union**
+
+- Member: [RevokeAuthSessionPayload](/builders/api-schema/account/#revokeauthsessionpayload)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### RevokeOtherAuthSessionsPayload
+
+**object**
+
+- **revokedCount**: `Int!`
+
+### RevokeOtherAuthSessionsResult
+
+**union**
+
+- Member: [RevokeOtherAuthSessionsPayload](/builders/api-schema/account/#revokeotherauthsessionspayload)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### SecurityActivityConnection
+
+**object**
+
+- **edges**: `[SecurityActivityEdge!]!` ([SecurityActivityEdge](/builders/api-schema/account/#securityactivityedge))
+- **nodes**: `[SecurityActivityEvent!]!` ([SecurityActivityEvent](/builders/api-schema/account/#securityactivityevent))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+### SecurityActivityEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `SecurityActivityEvent!` ([SecurityActivityEvent](/builders/api-schema/account/#securityactivityevent))
+
+### SecurityActivityEvent
+
+**object**
+
+A security event concerning only the signed-in user.
+
+- **id**: `ID!`
+- **kind**: `SecurityActivityKind!` ([SecurityActivityKind](/builders/api-schema/account/#securityactivitykind))
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **authMethod**: `AuthMethod!` ([AuthMethod](/builders/api-schema/account/#authmethod))
+- **sessionId**: `ID`
+- **reason**: `String`
+
+### SecurityActivityKind
+
+**enum**
+
+- `SIGN_IN_SUCCEEDED`
+- `SIGN_IN_FAILED`
+- `SESSION_REVOKED`
+- `SESSIONS_REVOKED`
+- `PASSWORD_CHANGED`
+- `PASSWORD_RESET`
+- `WALLET_LINKED`
+- `WALLET_UNLINKED`
 
 ### Tenant
 
@@ -5817,12 +6206,14 @@ A billing arrangement FrameWorks set up for an account. Only the terms the accou
 
 Billing details for a tenant. These are optional for Free and small simplified top-ups, and required when paid postpaid collection or a full invoice needs them.
 
+- **customerType**: `String!` — Personal or business billing; unspecified for an unclassified historical profile.
 - **email**: `String` — Billing contact email.
 - **name**: `String` — Customer legal or person name shown on full invoices.
 - **company**: `String` — Company name for invoices.
 - **vatNumber**: `String` — VAT number (EU format: XX123456789).
 - **address**: `BillingAddress` ([BillingAddress](/builders/api-schema/billing-types/#billingaddress)) — Structured billing address.
 - **isComplete**: `Boolean!` — True if all full-invoice fields are present (legal name + email + address).
+- **taxReviewRequired**: `Boolean!` — True while recurring invoices use domestic VAT because saved billing details require review.
 - **updatedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When billing details were last updated.
 - **presentmentCurrency**: `Currency` ([Currency](/builders/api-schema/billing-types/#currency)) — Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing address country. It cannot change while a provider subscription, an open invoice, or a card first payment started in the last day exists.
 
@@ -6522,6 +6913,7 @@ Stripe Checkout Session - redirect URL for hosted checkout.
 
 Input for updating billing details.
 
+- **customerType**: `String` — consumer or business. Omitted preserves the saved classification.
 - **email**: `String` — Billing contact email.
 - **name**: `String` — Customer legal or person name shown on full invoices.
 - **company**: `String` — Company name for invoices.
@@ -7219,6 +7611,16 @@ https://logbook.frameworks.network/builders/api-schema/clusters-types
 - **externalIp**: `String` — External IP of the edge being bootstrapped (helps Foghorn assign a domain).
 - **preferredNodeId**: `String` — Caller-supplied node id hint; Foghorn may ignore.
 
+## BootstrapEdgePending
+
+**object**
+
+Enrollment is accepted for retry while the public identity converges.
+
+- **clusterId**: `String!`
+- **phase**: `String!`
+- **retryAfterSeconds**: `Int!`
+
 ## BootstrapEdgeResponse
 
 **object**
@@ -7241,6 +7643,7 @@ Result of a successful bootstrapEdge call. Carries everything the edge needs to 
 **union**
 
 - Member: [BootstrapEdgeResponse](/builders/api-schema/clusters-types/#bootstrapedgeresponse)
+- Member: [BootstrapEdgePending](/builders/api-schema/clusters-types/#bootstrapedgepending)
 - Member: [ValidationError](/builders/api-schema/shared/#validationerror)
 - Member: [AuthError](/builders/api-schema/shared/#autherror)
 
@@ -8794,7 +9197,7 @@ updateClusterMarketplace(
 
 ## Types
 
-- [Clusters and infrastructure types](/builders/api-schema/clusters-types/): [AvailableCluster](/builders/api-schema/clusters-types/#availablecluster), [AvailableClusterConnection](/builders/api-schema/clusters-types/#availableclusterconnection), [AvailableClusterEdge](/builders/api-schema/clusters-types/#availableclusteredge), [BootstrapEdgeInput](/builders/api-schema/clusters-types/#bootstrapedgeinput), [BootstrapEdgeResponse](/builders/api-schema/clusters-types/#bootstrapedgeresponse), [BootstrapEdgeResult](/builders/api-schema/clusters-types/#bootstrapedgeresult), [BootstrapToken](/builders/api-schema/clusters-types/#bootstraptoken), [Cluster](/builders/api-schema/clusters-types/#cluster), [ClusterAccess](/builders/api-schema/clusters-types/#clusteraccess), [ClusterAccessConnection](/builders/api-schema/clusters-types/#clusteraccessconnection), [ClusterAccessEdge](/builders/api-schema/clusters-types/#clusteraccessedge), [ClusterEdge](/builders/api-schema/clusters-types/#clusteredge), [ClusterInvite](/builders/api-schema/clusters-types/#clusterinvite), [ClusterInviteConnection](/builders/api-schema/clusters-types/#clusterinviteconnection), [ClusterInviteEdge](/builders/api-schema/clusters-types/#clusterinviteedge), [ClusterPricingModel](/builders/api-schema/clusters-types/#clusterpricingmodel), [ClusterSubscription](/builders/api-schema/clusters-types/#clustersubscription), [ClusterSubscriptionConnection](/builders/api-schema/clusters-types/#clustersubscriptionconnection), [ClusterSubscriptionEdge](/builders/api-schema/clusters-types/#clustersubscriptionedge), [ClusterSubscriptionResult](/builders/api-schema/clusters-types/#clustersubscriptionresult), [ClusterSubscriptionStatus](/builders/api-schema/clusters-types/#clustersubscriptionstatus), [ClusterVisibility](/builders/api-schema/clusters-types/#clustervisibility), [ClustersConnection](/builders/api-schema/clusters-types/#clustersconnection), [CreateClusterInviteInput](/builders/api-schema/clusters-types/#createclusterinviteinput), [CreateClusterInviteResult](/builders/api-schema/clusters-types/#createclusterinviteresult), [CreateEdgeClusterInput](/builders/api-schema/clusters-types/#createedgeclusterinput), [CreateEdgeClusterResponse](/builders/api-schema/clusters-types/#createedgeclusterresponse), [CreateEdgeClusterResult](/builders/api-schema/clusters-types/#createedgeclusterresult), [CreateEnrollmentTokenResponse](/builders/api-schema/clusters-types/#createenrollmenttokenresponse), [CreateEnrollmentTokenResult](/builders/api-schema/clusters-types/#createenrollmenttokenresult), [EdgeTelemetrySetup](/builders/api-schema/clusters-types/#edgetelemetrysetup), [InfrastructureNode](/builders/api-schema/clusters-types/#infrastructurenode), [LiveNode](/builders/api-schema/clusters-types/#livenode), [MarketplaceCluster](/builders/api-schema/clusters-types/#marketplacecluster), [MarketplaceClusterConnection](/builders/api-schema/clusters-types/#marketplaceclusterconnection), [MarketplaceClusterEdge](/builders/api-schema/clusters-types/#marketplaceclusteredge), [MistAdminSession](/builders/api-schema/clusters-types/#mistadminsession), [MySubscriptionEdge](/builders/api-schema/clusters-types/#mysubscriptionedge), [MySubscriptionsConnection](/builders/api-schema/clusters-types/#mysubscriptionsconnection), [NodeEdge](/builders/api-schema/clusters-types/#nodeedge), [NodeOperationalMode](/builders/api-schema/clusters-types/#nodeoperationalmode), [NodesConnection](/builders/api-schema/clusters-types/#nodesconnection), [OpenMistAdminSessionInput](/builders/api-schema/clusters-types/#openmistadminsessioninput), [OpenMistAdminSessionResult](/builders/api-schema/clusters-types/#openmistadminsessionresult), [Orchestrator](/builders/api-schema/clusters-types/#orchestrator), [OrchestratorCapabilityPrice](/builders/api-schema/clusters-types/#orchestratorcapabilityprice), [OrchestratorInstance](/builders/api-schema/clusters-types/#orchestratorinstance), [OrchestratorPerformancePoint](/builders/api-schema/clusters-types/#orchestratorperformancepoint), [OrchestratorVantage](/builders/api-schema/clusters-types/#orchestratorvantage), [OrchestratorWithDetails](/builders/api-schema/clusters-types/#orchestratorwithdetails), [OrchestratorsConnection](/builders/api-schema/clusters-types/#orchestratorsconnection), [RevokeClusterInviteResult](/builders/api-schema/clusters-types/#revokeclusterinviteresult), [RoutingImpactPreview](/builders/api-schema/clusters-types/#routingimpactpreview), [SetNodeModeInput](/builders/api-schema/clusters-types/#setnodemodeinput), [SetNodeModeResult](/builders/api-schema/clusters-types/#setnodemoderesult), [SetPreferredClusterResult](/builders/api-schema/clusters-types/#setpreferredclusterresult), [UpdateClusterMarketplaceInput](/builders/api-schema/clusters-types/#updateclustermarketplaceinput), [UpdateClusterResult](/builders/api-schema/clusters-types/#updateclusterresult)
+- [Clusters and infrastructure types](/builders/api-schema/clusters-types/): [AvailableCluster](/builders/api-schema/clusters-types/#availablecluster), [AvailableClusterConnection](/builders/api-schema/clusters-types/#availableclusterconnection), [AvailableClusterEdge](/builders/api-schema/clusters-types/#availableclusteredge), [BootstrapEdgeInput](/builders/api-schema/clusters-types/#bootstrapedgeinput), [BootstrapEdgePending](/builders/api-schema/clusters-types/#bootstrapedgepending), [BootstrapEdgeResponse](/builders/api-schema/clusters-types/#bootstrapedgeresponse), [BootstrapEdgeResult](/builders/api-schema/clusters-types/#bootstrapedgeresult), [BootstrapToken](/builders/api-schema/clusters-types/#bootstraptoken), [Cluster](/builders/api-schema/clusters-types/#cluster), [ClusterAccess](/builders/api-schema/clusters-types/#clusteraccess), [ClusterAccessConnection](/builders/api-schema/clusters-types/#clusteraccessconnection), [ClusterAccessEdge](/builders/api-schema/clusters-types/#clusteraccessedge), [ClusterEdge](/builders/api-schema/clusters-types/#clusteredge), [ClusterInvite](/builders/api-schema/clusters-types/#clusterinvite), [ClusterInviteConnection](/builders/api-schema/clusters-types/#clusterinviteconnection), [ClusterInviteEdge](/builders/api-schema/clusters-types/#clusterinviteedge), [ClusterPricingModel](/builders/api-schema/clusters-types/#clusterpricingmodel), [ClusterSubscription](/builders/api-schema/clusters-types/#clustersubscription), [ClusterSubscriptionConnection](/builders/api-schema/clusters-types/#clustersubscriptionconnection), [ClusterSubscriptionEdge](/builders/api-schema/clusters-types/#clustersubscriptionedge), [ClusterSubscriptionResult](/builders/api-schema/clusters-types/#clustersubscriptionresult), [ClusterSubscriptionStatus](/builders/api-schema/clusters-types/#clustersubscriptionstatus), [ClusterVisibility](/builders/api-schema/clusters-types/#clustervisibility), [ClustersConnection](/builders/api-schema/clusters-types/#clustersconnection), [CreateClusterInviteInput](/builders/api-schema/clusters-types/#createclusterinviteinput), [CreateClusterInviteResult](/builders/api-schema/clusters-types/#createclusterinviteresult), [CreateEdgeClusterInput](/builders/api-schema/clusters-types/#createedgeclusterinput), [CreateEdgeClusterResponse](/builders/api-schema/clusters-types/#createedgeclusterresponse), [CreateEdgeClusterResult](/builders/api-schema/clusters-types/#createedgeclusterresult), [CreateEnrollmentTokenResponse](/builders/api-schema/clusters-types/#createenrollmenttokenresponse), [CreateEnrollmentTokenResult](/builders/api-schema/clusters-types/#createenrollmenttokenresult), [EdgeTelemetrySetup](/builders/api-schema/clusters-types/#edgetelemetrysetup), [InfrastructureNode](/builders/api-schema/clusters-types/#infrastructurenode), [LiveNode](/builders/api-schema/clusters-types/#livenode), [MarketplaceCluster](/builders/api-schema/clusters-types/#marketplacecluster), [MarketplaceClusterConnection](/builders/api-schema/clusters-types/#marketplaceclusterconnection), [MarketplaceClusterEdge](/builders/api-schema/clusters-types/#marketplaceclusteredge), [MistAdminSession](/builders/api-schema/clusters-types/#mistadminsession), [MySubscriptionEdge](/builders/api-schema/clusters-types/#mysubscriptionedge), [MySubscriptionsConnection](/builders/api-schema/clusters-types/#mysubscriptionsconnection), [NodeEdge](/builders/api-schema/clusters-types/#nodeedge), [NodeOperationalMode](/builders/api-schema/clusters-types/#nodeoperationalmode), [NodesConnection](/builders/api-schema/clusters-types/#nodesconnection), [OpenMistAdminSessionInput](/builders/api-schema/clusters-types/#openmistadminsessioninput), [OpenMistAdminSessionResult](/builders/api-schema/clusters-types/#openmistadminsessionresult), [Orchestrator](/builders/api-schema/clusters-types/#orchestrator), [OrchestratorCapabilityPrice](/builders/api-schema/clusters-types/#orchestratorcapabilityprice), [OrchestratorInstance](/builders/api-schema/clusters-types/#orchestratorinstance), [OrchestratorPerformancePoint](/builders/api-schema/clusters-types/#orchestratorperformancepoint), [OrchestratorVantage](/builders/api-schema/clusters-types/#orchestratorvantage), [OrchestratorWithDetails](/builders/api-schema/clusters-types/#orchestratorwithdetails), [OrchestratorsConnection](/builders/api-schema/clusters-types/#orchestratorsconnection), [RevokeClusterInviteResult](/builders/api-schema/clusters-types/#revokeclusterinviteresult), [RoutingImpactPreview](/builders/api-schema/clusters-types/#routingimpactpreview), [SetNodeModeInput](/builders/api-schema/clusters-types/#setnodemodeinput), [SetNodeModeResult](/builders/api-schema/clusters-types/#setnodemoderesult), [SetPreferredClusterResult](/builders/api-schema/clusters-types/#setpreferredclusterresult), [UpdateClusterMarketplaceInput](/builders/api-schema/clusters-types/#updateclustermarketplaceinput), [UpdateClusterResult](/builders/api-schema/clusters-types/#updateclusterresult)
 
 
 ---
@@ -9020,9 +9423,9 @@ Generated from the public schema [`pkg/graphql/public/schema.public.graphql`](ht
 | [Analytics](/builders/api-schema/analytics/) | 1 | 0 | 0 | 122 |
 | [Webhooks](/builders/api-schema/webhooks/) | 5 | 9 | 0 | 24 |
 | [Incidents](/builders/api-schema/incidents/) | 2 | 3 | 0 | 7 |
-| [Account and tenant](/builders/api-schema/account/) | 1 | 5 | 0 | 14 |
+| [Account and tenant](/builders/api-schema/account/) | 3 | 9 | 0 | 30 |
 | [Billing and usage](/builders/api-schema/billing/) | 14 | 12 | 0 | 68 |
-| [Clusters and infrastructure](/builders/api-schema/clusters/) | 25 | 16 | 0 | 58 |
+| [Clusters and infrastructure](/builders/api-schema/clusters/) | 25 | 16 | 0 | 59 |
 | [Platform](/builders/api-schema/platform/) | 4 | 0 | 0 | 11 |
 | [Skipper](/builders/api-schema/skipper/) | 5 | 3 | 0 | 6 |
 | [Support conversations](/builders/api-schema/support/) | 3 | 2 | 0 | 8 |
@@ -14929,6 +15332,13 @@ account settings before starting a paid provider setup. The identifier is stored
 as customer-supplied billing data; format checking is not tax-authority
 validation and does not, by itself, establish reverse-charge eligibility. Leave
 the identifier blank when the customer is not VAT registered.
+
+A subscription you started before VAT handling was introduced keeps its existing
+tax treatment: renewals and invoices are charged as before, with no VAT added.
+It moves to the current VAT treatment when you save a complete billing profile
+(name, email, street, city, postal code and country), start a new checkout or
+upgrade your plan. Customers outside the EU then see invoices stating that Dutch
+VAT is outside scope, at 0%.
 
 <Aside type="caution">
   FrameWorks renders immutable numbered invoices, confirmed-payment receipts, simplified invoices,
@@ -22801,9 +23211,9 @@ Other languages use the [GraphQL API](/builders/api-reference) directly and a
 
 ## Generated operations
 
-Each operation is a typed document in TypeScript (`GetStreamDocument`, passed to
-`client.request`), a function in Go (`frameworks.GetStream(ctx, client, id)`), and a method on the
-client in Python (`client.get_stream(id=...)`). The operations come from two sources:
+TypeScript provides named methods through `getSdk(client)` from
+`@livepeer-frameworks/api/operations` (`sdk.getStream({ id })`), as well as typed documents
+(`GetStreamDocument`, passed to `client.request`). Go exposes a function per operation (`frameworks.GetStream(ctx, client, id)`), and Python exposes a method on its client (`client.get_stream(id=...)`). The operations come from two sources:
 
 - **Default operations.** One per public root field and one per field that takes arguments on a
   type reached from `Query` through single (non-list) objects. A nested operation selects the
@@ -22814,7 +23224,7 @@ client in Python (`client.get_stream(id=...)`). The operations come from two sou
   implements `Node`: `InfrastructureNode.metricsConnection` is
   `GetInfrastructureNodeMetricsConnection(id, page, timeRange)`, which selects
   `node(id:) { ... on InfrastructureNode { metricsConnection } }`.
-- **Hand-written operations.** 44 documents with a curated selection (for example `CreateStream`,
+- **Hand-written operations.** Documents with a curated selection (for example `CreateStream`,
   `ListStreams`, `ListPushTargets`). A hand-written operation replaces the default operation of
   the field it addresses.
 
@@ -23003,8 +23413,9 @@ Every generated operation has a default selection. For fields beyond it:
   and mutations and returns untyped dictionaries with undecoded scalars, so send your own document
   through `execute` (or `execute_ws` on the async client for subscriptions).
 
-Give a custom operation a name of your own: the server check looks up an SDK operation's release by
-its name.
+Custom operation names are yours to choose. Operation-specific version checks apply only when
+the selected document matches a packaged operation's canonical identity; changing its selection,
+arguments, or defaults makes it a custom document. The SDK still checks its minimum server version.
 
 <Code code={tsSelect} lang="ts" title="select.ts" />
 
@@ -23014,11 +23425,10 @@ The SDKs are 0.x until the platform reaches 1.0, and the three languages always 
 Under 0.x each minor version is a line: 0.1, 0.2, and so on. A line names the oldest FrameWorks
 release it supports and supports every stable release from there on.
 
-| SDK line | Oldest supported FrameWorks release | Operations                                       |
-| -------- | ----------------------------------- | ------------------------------------------------ |
-| 0.3      | v0.3.11                             | 182 default and 45 hand-written operations (227) |
-
-Lines 0.1 and 0.2 (the 44 hand-written operations) are retired; use 0.3.
+The current package version is **{sdkCatalog.version}**, on SDK line **{sdkCatalog.line}**.
+It supports FrameWorks **{sdkCatalog.minServer}** and later and includes
+**{sdkCatalog.operations.length}** operation documents. Lines 0.1 and 0.2 are retired.
+The operation-method entry is optional: importing the main client does not load the method table.
 
 Within a line, operations are only added; a breaking change starts a new minor line. The public
 schema follows the same rule from FrameWorks v0.3.11 on: a field, argument, enum value, or union
@@ -23852,8 +24262,11 @@ The token is invalid, expired, or revoked, or the request carried a payment head
 
 **For session tokens (dashboard access):**
 
-1. Your browser session may have expired. The webapp should catch this on a page refresh.
-2. Clear cookies for the app domain and re-authenticate
+1. Access tokens last up to 15 minutes. Supported browser, CLI and macOS tray clients renew them automatically.
+2. Sign in again after 30 days without a successful refresh, or after the hard maximum of 90 days for browsers and 180 days for CLI and tray sessions.
+3. A revoked session cannot be renewed. Check your remaining sign-ins with `frameworks auth sessions list` from a trusted device.
+
+See [Account Security](/builders/account-security) for session management and lost-device recovery.
 
 Make sure the header is `Authorization: Bearer YOUR_TOKEN` (not just the token).
 
@@ -29971,6 +30384,142 @@ fresh restore can be attempted.
 
 
 ---
+# Billing financial evidence
+https://logbook.frameworks.network/operators/billing-financials
+
+Purser issues documents for the configured seller. DDVTech B.V.'s hosted-service
+documents are DDVTech's sales records. Stripe and Mollie collect payments; their
+payouts transfer money from provider balances to the bank.
+
+## Download the evidence
+
+Use a platform-operator login and matching CLI/Purser versions:
+
+```bash
+frameworks admin billing finance audit --from inception --through now \
+  --provider stripe --output ./ddvtech-financial-audit.zip
+```
+
+This reads Purser records for tenants enumerated through Quartermaster and the
+configured Stripe account. It performs no collections, refunds, payouts, invoice
+corrections or database writes. Service and provider reads are paginated. A failed
+page or non-advancing cursor prevents publication; existing output files are not
+overwritten. The completed ZIP has private filesystem permissions.
+
+The archive contains:
+
+- `manifest.json`: interval, tenant scope, source counts, capture timestamps,
+  hashes and `posting_ready: false`.
+- `evidence/*.jsonl`: Purser documents, payments, balances, reviews and accepted
+  provider tax profiles; optional Stripe account, balance, invoice, charge,
+  balance-transaction and payout evidence.
+- `exceptions.csv`: grouped warnings and required actions.
+- `exception_records.csv`: individual source identities behind those warnings.
+
+`--from` accepts `inception`, a UTC date or RFC3339 timestamp. `--through` accepts
+`now` or RFC3339 and is exclusive. Purser resolves `now` once for every page;
+future cutoffs are rejected. Undated rows remain included and flagged for period
+review. Use `--provider none` to omit provider evidence explicitly.
+
+Archive schema version is 2. Statuses are observed at capture; backdated records
+and later changes prevent it being a frozen close. Stripe account/balance
+snapshots are current at retrieval, including for historical intervals. Tenants
+absent from Quartermaster enumeration remain a coverage exception. Original PDF
+references/hashes are included, but this command does not download PDF files.
+Customers download retained originals through their billing-document list.
+
+## Inspect and acknowledge tax reviews
+
+List a tenant's open reviews:
+
+```bash
+frameworks admin billing finance reviews list --tenant-id <customer-uuid>
+```
+
+The list includes retained evidence and its hash. Optional `--provider`,
+`--category` and `--status open|resolved|all` filters narrow it. After inspecting
+the actual evidence, record a decision:
+
+```bash
+frameworks admin billing finance reviews acknowledge \
+  --tenant-id <customer-uuid> --review-id <review-uuid> \
+  --evidence-sha256 <inspected-hash> --reason "<review decision>"
+```
+
+Acknowledgment retains the operator identity and reason. It does not change an
+invoice, validate a VAT number, move money or dismiss funds/scanner failures.
+The same evidence does not reopen a resolved review; new facts can. An older
+review's acknowledgment does not resolve a later invoice's separate review.
+
+## Customer tax and invoices
+
+Prices exclude VAT. With the Dutch supplier service policy, Dutch customers and
+EU consumers pay Dutch VAT, currently 21%. A qualifying business elsewhere in
+the EU receives reverse charge after validation. Non-EU services state that
+Dutch VAT is outside scope. Customers save their location and choose Personal
+or Business; they do not select a rate or exemption.
+
+A subscription that existed before tax assessment shipped keeps its earlier
+treatment until the customer saves a complete billing profile, starts a new
+checkout or upgrades the plan. Until then Purser does not change its Stripe or
+Mollie customer, tax IDs, subscription tax rates or collection amount, and its
+recurring Purser invoices are issued for the net amount without a VAT line or a
+tax review hold. Those invoices, and the Stripe invoices and credit notes issued
+for the subscription in that time, remain marked `legacy_unknown` in the finance
+export and do not create an operator review. The `tenant_subscriptions.tax_assessed_since` timestamp records when a
+customer moved to assessed handling.
+
+New purchases require relevant billing details and claim validation. Once a
+subscription uses assessed handling, recurring Stripe/Mollie collections use
+Dutch VAT while details are incomplete or a new/changed EU VAT claim cannot be
+established. The Billing page shows a notice, and each affected invoice gets its
+own operator review. Temporary database failures leave provider settings
+unchanged for retry. Corrected details affect future collections.
+
+Purser invoices freeze parties, tax point, net/VAT/gross and accepted evidence.
+Stripe subscription supplies retain Stripe's original number and PDF without a
+duplicate Purser supply. Mollie payments use accepted collection terms for a
+Purser invoice. Confirmed payments with insufficient legal evidence remain
+recorded for review without an invented tax invoice.
+
+Prepaid purchases collect gross cash and grant net service credit. EUR 121 at
+21% VAT grants EUR 100 credit. Consuming it carries its original tax and does not
+charge VAT again. Refunds retain original tax treatment. Previously paid
+customers are not charged again to recover historical VAT.
+
+## VIES and original evidence
+
+VIES proof is retained with accepted assessments. During a transient outage, a
+positive result can remain usable for seven days after its 24-hour cache expires.
+A newer negative response or permanent fault prevents this. Provisional proof
+creates revalidation work and a separate document review. An unchanged,
+previously established reverse-charge setup keeps its actual provider terms
+during a transient outage and retries verification. New or changed unproven
+claims use Dutch VAT and review. Reconciliation compares the complete legal
+profile and retained setup, rather than assuming that any old VAT number proves
+an unchanged claim.
+
+Issued documents are checked against evidence valid at their tax point. Today's
+profile, supplier configuration and VIES response do not rewrite their money,
+parties, number or PDF. Redelivery does not automatically promote an already
+retained unknown document to verified. Keep corrections linked to their original
+issuer and supporting evidence.
+
+## Hand off to bookkeeping
+
+Give the archive and original invoices/credit notes to the person preparing the
+accounts. Match payments against provider activity, then reconcile fees, refunds,
+disputes, reserves, currency conversion and payouts to bank receipts. Provider
+fee invoices are separate purchase evidence. A payout is not another sale;
+receipts and prepaid statements must not duplicate invoice revenue.
+
+Resolve missing-tax, missing-document and coverage exceptions explicitly. The
+archive supplies no `journal.csv`, balanced journal, reconciled prepaid schedule,
+bank match or close approval. Moving money from Stripe does not remove the need
+to account for the associated sales, tax and fees.
+
+
+---
 # Chatwoot Setup
 https://logbook.frameworks.network/operators/chatwoot-setup
 
@@ -31305,6 +31854,16 @@ or dial the control plane. `cluster release apply --dry-run` is the live preflig
 runs database, artifact, required operator input, host convergence, health, and reconciliation
 checks against the cluster.
 
+For v0.3.14, the live dry-run also runs Purser's target artifact in isolation to
+preview constraint violations, the first due free-fallback batch, provider tier
+sync discovery, and payment intents receiving or retaining an unknown submission
+state. It prints tenant IDs, row IDs, totals, and up to 100 rows per check. The
+preview uses a read-only transaction and starts no application workers. Native
+hosts use a checksum-verified temporary binary; Docker hosts use the pinned
+image with the running service's environment and network. Nothing is installed
+or restarted. An unavailable artifact or check fails the dry-run explicitly.
+This report does not add gates to a real apply.
+
 A reconciliation transition is a constrained **Check → Apply → Verify** node registered by
 a compiled handler id (never a shell command); an unknown handler or an outdated CLI fails
 the release closed. Each converges a declared invariant against natural authoritative
@@ -31613,6 +32172,40 @@ The host-level diagnostics (`network`, `resources`, `ports`, `crashes`, and
 manifest: `--edge-manifest <path>`, or `edge.yaml` beside the cluster manifest.
 An edge manifest that cannot be loaded is reported and the cluster hosts are
 still probed. Each exits non-zero when any finding is a failure.
+
+### Service diagnostics
+
+These commands require a platform-operator login. They use the owning service's
+RPCs, and append an access attempt to the operator account's private history
+before reading diagnostic data. A history-write failure stops the command.
+
+```bash
+frameworks cluster diagnose billing --tenant-id <uuid>
+frameworks cluster diagnose webhooks --tenant-id <uuid>
+frameworks cluster diagnose stream <stream-or-playback-id>
+frameworks cluster diagnose node <node-id>
+```
+
+Each supports `--output json`. Stream and node diagnosis select the manifest's
+Foghorn entry from the recorded cluster/cell; `--service foghorn-us` selects one
+explicitly. Unreachable cells retain the available results and return a nonzero
+exit status. Older servers that lack a diagnostic RPC return an error.
+
+Billing shows the subscription, provider identifiers, pending tier/fallback state,
+latest 20 payment intents and invoices, balances, and unresolved provider work.
+The Stripe price shown is the catalog tier's monthly price, not a live provider
+observation. Webhooks shows endpoint disable reasons and up to 20 recent
+deliveries per endpoint, including failures and next retries. Counts identify
+truncated lists. Neither command triggers recovery, synchronization, or delivery.
+
+Stream diagnosis shows claim timestamps, authority targets/acknowledgments, held
+cell versions and current lifecycle/billing decisions, push-target metadata, and recent ingest sessions. A delivery
+acknowledgment is distinct from application on an edge. Historical placement
+reasons are unavailable when they were not recorded. Node diagnosis combines
+Quartermaster enrollment/fingerprint-binding metadata with Foghorn's heartbeat,
+capabilities, session counts, components, and reported config digests; per-node
+authority versions are unavailable in the current node reports. Secrets, full
+edge configurations, raw fingerprints, and webhook payloads are omitted.
 
 ### frameworks cluster diagnose network
 
@@ -32396,6 +32989,74 @@ frameworks admin billing set-cluster-pricing \
 ```
 
 ---
+
+### frameworks admin billing finance
+
+Operator financial evidence collection and retained tax reviews. Requires a platform-operator
+login. See [Billing financial evidence](/operators/billing-financials/) for the
+archive contents and accounting limitations.
+
+#### frameworks admin billing finance audit
+
+```bash
+frameworks admin billing finance audit --from inception --through now \
+  --provider stripe --output ./billing-audit.zip
+```
+
+- `--output` (required) - New private ZIP file; an existing file is never overwritten.
+- `--from` - `inception` (default), a UTC date, or an RFC3339 occurrence start.
+- `--through` - `now` (default) or an exclusive RFC3339 occurrence cutoff.
+- `--provider` - `stripe` (default) or `none`; omitted provider evidence is recorded.
+
+The archive contains paginated Purser/Stripe source records, hashes, capture
+timestamps, grouped `exceptions.csv` and per-record `exception_records.csv`
+(schema version 2). Purser resolves `--through now` once for all pages. It performs no collections, refunds,
+payouts or corrections, supplies no journal import and remains
+`posting_ready: false`. Current status/balance observations are not reconstructed
+historical accounting snapshots.
+
+#### frameworks admin billing finance reviews
+
+Inspect retained tax reviews and acknowledge exactly the evidence reviewed.
+Acknowledgment records an operator decision; it does not verify a payment,
+change an issued document, collect money or dismiss funds/scanner failures.
+
+##### frameworks admin billing finance reviews list
+
+```bash
+frameworks admin billing finance reviews list --tenant-id <customer-uuid>
+```
+
+**Flags:**
+
+- `--tenant-id` (required) - Customer tenant UUID.
+- `--provider` - Exact retained provider or network; omit to include all providers.
+- `--category` - Exact retained tax-review kind; omit to include every tax category.
+- `--status` - `open` (default), `resolved` or `all`.
+
+The paginated listing includes original evidence, its `evidence_sha256`, and
+retained acknowledgments. Inspect those facts before recording a decision.
+
+##### frameworks admin billing finance reviews acknowledge
+
+```bash
+frameworks admin billing finance reviews acknowledge \
+  --tenant-id <customer-uuid> --review-id <review-uuid> \
+  --evidence-sha256 <inspected-hash> --reason "Reviewed the retained invoice evidence"
+```
+
+**Flags:**
+
+- `--tenant-id` (required) - Customer tenant UUID.
+- `--review-id` (required) - Retained review UUID.
+- `--evidence-sha256` (required) - Hash from the inspected review record.
+- `--reason` (required) - Operator decision retained with the actor identity.
+
+The server refuses stale evidence hashes. Repeating acknowledgment of the same
+facts does not reopen the review; changed facts can reopen it. Acknowledging one
+document does not resolve a later invoice's separate review. See
+[Billing financial evidence](/operators/billing-financials/) for the workflow and
+accounting limitations.
 
 ### frameworks admin billing credit
 
@@ -33764,31 +34425,96 @@ frameworks context check
 
 ### frameworks login
 
-Authenticate with the FrameWorks platform using your user session token
-(the same credential the macOS tray uses).
+Sign in through your browser using a device code. The CLI opens the webapp,
+shows a code to approve, and saves its own access and refresh tokens.
 
 ```bash
 frameworks login
+frameworks login --no-browser --bridge-url https://bridge.example.com --timeout 10m
 ```
 
-**Token storage.** The session is written to the platform-native credential store and never appears in shell history:
+Use `--no-browser` to print the approval URL without opening it. `--bridge-url`
+overrides the active context's Bridge endpoint (the hosted Bridge is the fallback).
+`--timeout` limits the approval wait and defaults to five minutes. `--token`
+stores an existing API or session token instead of starting device authorization;
+a token imported this way has no refresh credential.
 
-- **macOS:** Keychain service `com.livepeer.frameworks`, account `user_session`.
+**Token storage.** Credentials are written to the platform-native store:
+
+- **macOS:** Keychain service `com.livepeer.frameworks`, accounts `cli_session`
+  and `cli_refresh`, with the issuing Bridge saved as `cli_bridge_url`.
 - **Other platforms:** `$XDG_DATA_HOME/frameworks/credentials` with mode `0600`.
 
-For CI/automation, set `FW_USER_TOKEN` in the environment — it overrides whatever the store holds. Run `frameworks config path --kind credentials` to print the active backend (e.g. `keychain:com.livepeer.frameworks` on macOS).
+The CLI renews stored session tokens when resolving credentials within one minute
+of expiry. Bridge GraphQL requests retry once after a 401 using the stored refresh
+credential. Refresh goes only to the Bridge used for login. Temporary refresh
+failures retain stored credentials for a later retry. A Bridge that returns the
+older HTTP 400 `invalid request` response uses the legacy refresh-cookie endpoint
+on that same Bridge. Token rejections, unsupported grants and outages never
+trigger this fallback.
 
-The platform `SERVICE_TOKEN` is **not** a user credential. It is loaded from your manifest `env_files` (gitops) during `cluster provision` and admin commands. There is no `login --service-account`.
+CLI and Mac tray credentials are independent. If you previously used their shared
+keychain entry, run `frameworks login` again to establish a separate CLI login.
+The tray keeps its existing login.
+
+For CI/automation, set `FW_USER_TOKEN` in the environment — it overrides the store
+and the CLI does not refresh or modify it. The tray uses this override for child
+CLI processes. Run `frameworks config path --kind credentials` to print the active
+backend (e.g. `keychain:com.livepeer.frameworks` on macOS).
+
+The platform `SERVICE_TOKEN` is **not** a user credential. It is loaded from your
+manifest `env_files` (gitops) during `cluster provision` and admin commands. There
+is no `login --service-account`.
 
 ### frameworks logout
 
-Clear the stored user session.
+Revoke the stored CLI session, then clear its local credentials.
 
 ```bash
 frameworks logout
 ```
 
-Deletes both `user_session` and `refresh_token` so a running tray can't silently repopulate them. The gitops-sourced `SERVICE_TOKEN` is unaffected — logout does not touch platform configuration.
+This revokes the stored CLI session on the Bridge used at login, then clears its
+local credentials. It leaves the Mac tray's credentials, `FW_USER_TOKEN` and the
+gitops-sourced `SERVICE_TOKEN` unchanged. A network failure retains credentials
+so you can retry server revocation.
+
+`frameworks logout --local` clears credentials without contacting Bridge. Older
+platforms without named sessions support local sign-out only; their server
+session remains valid until it expires or is revoked.
+
+### frameworks auth status
+
+Show the authenticated user, tenant, current session label and expiry. This
+checks the credential with Bridge before displaying its identity.
+
+```bash
+frameworks auth status
+frameworks auth status --output json
+```
+
+### frameworks auth sessions
+
+List your signed-in browsers, CLI and desktop sessions, or sign out a lost device.
+These commands require platform v0.3.15 or newer and manage only your own sessions.
+
+```bash
+frameworks auth sessions list
+frameworks auth sessions list --first 25 --after '<cursor>' --output json
+frameworks auth sessions revoke '<session-id>'
+frameworks auth sessions revoke-others
+```
+
+`list` defaults to 100 sessions per page; use the returned cursor for the next
+page. `revoke-others` keeps the credential running the command. Revoking the
+current stored CLI session also clears its local credentials, while preserving
+any replacement login that completed during the request.
+
+Stored credentials use the Bridge saved at login, even after a context switch.
+When `FW_USER_TOKEN` is set, these commands use the active context's Bridge and
+act as that credential's user and session. They never refresh it or access the
+CLI credential store. For example, a tray-launched CLI keeps the tray session
+when running `revoke-others`.
 
 ---
 
@@ -35243,9 +35969,13 @@ Read by `api_webhooks/cmd/bosun`.
 | `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
 | `GRPC_TLS_CERT_PATH` | string |  |  | v0.3.0 | Certificate presented by this service's gRPC listener. |
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
+| `SIGNALMAN_GRPC_ADDR` | string | `signalman:19005` |  | v0.3.15 | Signalman address for background interactive-session revocation events. |
+| `SIGNALMAN_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Signalman revocation feed. |
 | `DATABASE_URL` | string |  | required, secret | v0.3.0 | Connection URL for this service's PostgreSQL or YugabyteDB database. |
 | `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
+| `COMMODORE_GRPC_ADDR` | string | `commodore:19001` |  | v0.3.15 | Commodore gRPC address for background session-revocation snapshots. |
+| `COMMODORE_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Commodore revocation snapshot connection. |
 | `EMAIL_LOGO_URL` | string |  |  | v0.3.10 | Absolute URL of the logo image in outgoing emails. Empty uses the light logomark served under WEBAPP_PUBLIC_URL. |
 | `WEBAPP_PUBLIC_URL` | string |  |  | v0.3.0 | Public base URL of the web application. Links in outgoing emails and notifications and redirects back to the web application are built from it, and it serves the default email logo when EMAIL_LOGO_URL is empty. |
 | `SUPPORT_EMAIL` | string |  |  | v0.3.10 | Support mailbox shown in the footer of outgoing emails and set as Reply-To on the emails that carry one. Empty uses support@frameworks.network. |
@@ -35294,6 +36024,7 @@ Read by `api_gateway/cmd/bridge`.
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
+| `GEOIP_MMDB_PATH` | string |  |  | v0.3.0 | Path to an MMDB city database used for IP geolocation. Empty disables GeoIP lookups; a set path that cannot be opened logs a warning and disables lookups. |
 | `SERVICE_TOKEN` | string |  | required, secret | v0.3.0 | Shared service-to-service bearer token for internal gRPC and HTTP calls. |
 | `JWT_SECRET` | string |  | required, secret | v0.3.0 | HMAC secret that signs and verifies user session JWTs. |
 | `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |
@@ -35340,7 +36071,6 @@ Read by `api_gateway/cmd/bridge`.
 | `PERISCOPE_CACHE_LOAD_TIMEOUT_SECONDS` | integer | `30` |  | v0.3.0 | Seconds a shared Periscope cache load may run before it is abandoned. |
 | `COOKIE_DOMAIN` | string |  |  | v0.3.0 | Domain attribute for auth cookies, leading dot ignored. Empty scopes cookies to the Bridge host; set a parent domain to share them across subdomains. |
 | `WEBAPP_PUBLIC_URL` | string |  |  | v0.3.0 | Public web application URL returned by /auth/webapp-url for native client browser handoff. Re-read after an env-file reload. |
-| `GATEWAY_PUBLIC_URL` | string |  |  | v0.3.0 | Public Bridge URL. The MCP schema tools introspect its /graphql/ endpoint; empty uses http://localhost:8080/graphql/. |
 | `DOCS_PUBLIC_URL` | string |  |  | v0.3.0 | Public documentation URL linked from rate-limit responses. Empty omits the link. Re-read after an env-file reload. |
 | `PUBLIC_RATE_LIMIT_PER_MINUTE` | integer | `60` |  | v0.3.0 | Requests per minute allowed per client IP for unauthenticated callers. Values below 1 use 60. Re-read after an env-file reload. |
 | `PUBLIC_RATE_LIMIT_BURST` | integer | `30` |  | v0.3.0 | Burst allowance per client IP for unauthenticated callers. Values below 1 use 30. Re-read after an env-file reload. |
@@ -35382,6 +36112,7 @@ Read by `api_control/cmd/commodore`.
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
 | `BUILD_ENV` | string |  |  | v0.3.0 | Runtime environment selector. Empty, dev, or development enables development-only behavior; production or prod marks a production process. |
 | `SYSTEM_TENANT_ID` | string |  |  | v0.3.0 | UUID of the Quartermaster-owned system tenant. Empty uses the reserved ID 00000000-0000-0000-0000-000000000001; a value that is not a UUID fails startup. |
+| `GEOIP_MMDB_PATH` | string |  |  | v0.3.0 | Path to an MMDB city database used for IP geolocation. Empty disables GeoIP lookups; a set path that cannot be opened logs a warning and disables lookups. |
 | `EMAIL_LOGO_URL` | string |  |  | v0.3.10 | Absolute URL of the logo image in outgoing emails. Empty uses the light logomark served under WEBAPP_PUBLIC_URL. |
 | `WEBAPP_PUBLIC_URL` | string |  |  | v0.3.0 | Public base URL of the web application. Links in outgoing emails and notifications and redirects back to the web application are built from it, and it serves the default email logo when EMAIL_LOGO_URL is empty. |
 | `SUPPORT_EMAIL` | string |  |  | v0.3.10 | Support mailbox shown in the footer of outgoing emails and set as Reply-To on the emails that carry one. Empty uses support@frameworks.network. |
@@ -35485,6 +36216,8 @@ Read by `api_billing/cmd/purser`.
 | `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
 | `GRPC_TLS_CERT_PATH` | string |  |  | v0.3.0 | Certificate presented by this service's gRPC listener. |
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
+| `SIGNALMAN_GRPC_ADDR` | string | `signalman:19005` |  | v0.3.15 | Signalman address for background interactive-session revocation events. |
+| `SIGNALMAN_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Signalman revocation feed. |
 | `DATABASE_URL` | string |  | required, secret | v0.3.0 | Connection URL for this service's PostgreSQL or YugabyteDB database. |
 | `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
@@ -35547,7 +36280,7 @@ Read by `api_billing/cmd/purser`.
 | `LIVEPEER_TOPUP_AMOUNT` | string | `0.2` |  | v0.3.0 | ETH amount the Livepeer deposit monitor sends per TicketBroker funding. An unparsable value logs a warning and uses 0.2. |
 | `LIVEPEER_FUNDING_DAILY_CAP` | string | `1` |  | v0.3.0 | Maximum ETH the Livepeer deposit monitor spends on TicketBroker funding per day. An unparsable or non-positive value logs a warning and uses 1. |
 | `CRYPTO_SWEEP_ETH_DUST_WEI` | string | `100000000000000` |  | v0.3.0 | Wei left in each ETH source address when a custody sweep is planned. An unparsable or negative value uses 100000000000000. Re-read after an env-file reload. |
-| `SMTP_HOST` | string |  |  | v0.3.0 | SMTP server for billing notification emails. Emails are sent only when SMTP_HOST, SMTP_USER, SMTP_PASSWORD, and FROM_EMAIL are set. |
+| `SMTP_HOST` | string |  |  | v0.3.0 | SMTP server for billing notifications. SMTP_HOST and FROM_EMAIL are required. Set both SMTP_USER and SMTP_PASSWORD, or leave both empty with SMTP_ALLOW_INSECURE=true for an isolated relay. |
 | `SMTP_PORT` | integer | `587` |  | v0.3.0 | SMTP server port for billing notification emails. 0 uses 587. |
 | `SMTP_USER` | string |  |  | v0.3.0 | SMTP user for billing notification emails. |
 | `SMTP_PASSWORD` | string |  | secret | v0.3.0 | Password for SMTP_USER. |
@@ -35606,6 +36339,14 @@ Read by `api_billing/cmd/purser`.
 | --- | --- | --- | --- | --- | --- |
 | `DATABASE_URL` | string |  | required, secret | v0.3.0 | Connection URL for this service's PostgreSQL or YugabyteDB database. |
 
+### financial-audit subcommand
+
+Read by `api_billing/cmd/purser`.
+
+| Variable | Type | Default | Notes | Since | Description |
+| --- | --- | --- | --- | --- | --- |
+| `STRIPE_SECRET_KEY` | string |  | secret | v0.3.14 | Stripe key used for GET-only financial evidence reads. |
+
 ## quartermaster
 
 Read by `api_tenants/cmd/quartermaster`.
@@ -35626,6 +36367,7 @@ Read by `api_tenants/cmd/quartermaster`.
 | `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
 | `GRPC_TLS_CERT_PATH` | string |  |  | v0.3.0 | Certificate presented by this service's gRPC listener. |
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
+| `SIGNALMAN_GRPC_ADDR` | string | `signalman:19005` |  | v0.3.15 | Signalman address for background interactive-session revocation events. |
 | `DATABASE_URL` | string |  | required, secret | v0.3.0 | Connection URL for this service's PostgreSQL or YugabyteDB database. |
 | `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
@@ -35729,6 +36471,8 @@ Read by `api_realtime/cmd/signalman`.
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
 | `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
+| `COMMODORE_GRPC_ADDR` | string | `commodore:19001` |  | v0.3.15 | Commodore gRPC address for background session-revocation snapshots. |
+| `COMMODORE_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Commodore revocation snapshot connection. |
 | `KAFKA_BROKERS` | list |  | required | v0.3.0 | Comma-separated Kafka bootstrap brokers for the event consumer and the DLQ producer. |
 | `KAFKA_CLUSTER_ID` | string |  | required | v0.3.0 | Kafka cluster identifier attached to the consumer and DLQ producer clients. |
 | `KAFKA_GROUP_ID` | string | `signalman-group` |  | v0.3.0 | Kafka consumer group. Each replica needs its own group so every replica receives every event for fan-out. |
@@ -35887,6 +36631,8 @@ Read by `api_analytics_query/cmd/periscope`.
 | `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
 | `GRPC_TLS_CERT_PATH` | string |  |  | v0.3.0 | Certificate presented by this service's gRPC listener. |
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
+| `SIGNALMAN_GRPC_ADDR` | string | `signalman:19005` |  | v0.3.15 | Signalman address for background interactive-session revocation events. |
+| `SIGNALMAN_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Signalman revocation feed. |
 | `DATABASE_URL` | string |  | required, secret | v0.3.0 | Connection URL for this service's PostgreSQL or YugabyteDB database. |
 | `CLICKHOUSE_ADDR` | list |  | required | v0.3.0 | Comma-separated ClickHouse native protocol host:port addresses. |
 | `CLICKHOUSE_DB` | string |  | required | v0.3.0 | ClickHouse database that holds the analytics tables. |
@@ -35894,6 +36640,8 @@ Read by `api_analytics_query/cmd/periscope`.
 | `CLICKHOUSE_PASSWORD` | string |  | required, secret | v0.3.0 | Password for CLICKHOUSE_USER. |
 | `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
+| `COMMODORE_GRPC_ADDR` | string | `commodore:19001` |  | v0.3.15 | Commodore gRPC address for background session-revocation snapshots. |
+| `COMMODORE_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Commodore revocation snapshot connection. |
 | `QUARTERMASTER_GRPC_ADDR` | string | `quartermaster:19002` |  | v0.3.0 | Quartermaster gRPC address used for service registration. |
 | `QUARTERMASTER_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.0 | TLS server name override for the Quartermaster connection. Empty uses the canonical internal name. |
 | `PERISCOPE_QUERY_HOST` | string | `periscope-query` |  | v0.3.0 | Host name this instance advertises when it registers with Quartermaster. |
@@ -35946,6 +36694,8 @@ Read by `api_balancing/cmd/foghorn`.
 | `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
 | `GRPC_TLS_CERT_PATH` | string |  |  | v0.3.0 | Certificate presented by this service's gRPC listener. |
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
+| `SIGNALMAN_GRPC_ADDR` | string | `signalman:19005` |  | v0.3.15 | Signalman address for background interactive-session revocation events. |
+| `SIGNALMAN_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Signalman revocation feed. |
 | `DATABASE_URL` | string |  | required, secret | v0.3.0 | Connection URL for this service's PostgreSQL or YugabyteDB database. |
 | `BUILD_ENV` | string |  |  | v0.3.0 | Runtime environment selector. Empty, dev, or development enables development-only behavior; production or prod marks a production process. |
 | `REDIS_URL` | string |  | secret | v0.3.0 | Redis URL for state shared between Foghorn replicas. Used when REDIS_MODE is empty; empty with no REDIS_MODE runs without shared state. |
@@ -36149,9 +36899,13 @@ Read by `api_incidents/cmd/lookout`.
 | `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
 | `GRPC_TLS_CERT_PATH` | string |  |  | v0.3.0 | Certificate presented by this service's gRPC listener. |
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
+| `SIGNALMAN_GRPC_ADDR` | string | `signalman:19005` |  | v0.3.15 | Signalman address for background interactive-session revocation events. |
+| `SIGNALMAN_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Signalman revocation feed. |
 | `DATABASE_URL` | string |  | required, secret | v0.3.0 | Connection URL for this service's PostgreSQL or YugabyteDB database. |
 | `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
+| `COMMODORE_GRPC_ADDR` | string | `commodore:19001` |  | v0.3.15 | Commodore gRPC address for background session-revocation snapshots. |
+| `COMMODORE_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Commodore revocation snapshot connection. |
 | `EMAIL_LOGO_URL` | string |  |  | v0.3.10 | Absolute URL of the logo image in outgoing emails. Empty uses the light logomark served under WEBAPP_PUBLIC_URL. |
 | `WEBAPP_PUBLIC_URL` | string |  |  | v0.3.0 | Public base URL of the web application. Links in outgoing emails and notifications and redirects back to the web application are built from it, and it serves the default email logo when EMAIL_LOGO_URL is empty. |
 | `SUPPORT_EMAIL` | string |  |  | v0.3.10 | Support mailbox shown in the footer of outgoing emails and set as Reply-To on the emails that carry one. Empty uses support@frameworks.network. |
@@ -36353,6 +37107,8 @@ Read by `api_consultant/cmd/skipper`.
 | `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
 | `GRPC_TLS_CERT_PATH` | string |  |  | v0.3.0 | Certificate presented by this service's gRPC listener. |
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
+| `SIGNALMAN_GRPC_ADDR` | string | `signalman:19005` |  | v0.3.15 | Signalman address for background interactive-session revocation events. |
+| `SIGNALMAN_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Signalman revocation feed. |
 | `DATABASE_URL` | string |  | required, secret | v0.3.0 | Connection URL for this service's PostgreSQL or YugabyteDB database. |
 | `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
@@ -36549,10 +37305,35 @@ Authenticated document downloads are available through
 confirmed-payment receipt, and credit note, renders only persisted evidence, and
 returns an integrity hash. Database deletion guards retain these source records
 for at least ten years. Confirmed top-up is the VAT tax point; each document
-records the `vat-at-confirmed-topup-v1` policy, effective rate source, customer
-country fields, and any VIES result used for reverse charge. Anonymous
-simplified top-ups use supplier-country VAT; GeoIP is audit metadata and does
-not hold the document.
+records the effective rate source and customer location. New instructions retain
+an immutable `exclusive-crypto-advance-v3` assessment with the supplier/customer
+identity, accepted treatment, location evidence, and the VIES proof actually
+used. Gross payment and net service credit are distinct; a EUR 100 net advance
+with 21% VAT collects EUR 121. Effective rates are retained at the tax point.
+Changing a billing profile, supplier configuration or
+VIES availability cannot erase an already-received payment's document.
+
+New instructions require a billing country and a personal/business
+classification (a submitted VAT claim also identifies a business claim). Personal
+profiles need no company name or VAT number. Business profiles and payments over
+EUR 100 require a full invoice identity. Older quotes settle under their
+versioned legacy rules; non-EU legacy treatment is explicitly marked for review,
+not reused to authorize new quotes.
+
+Late receipts retain their accepted payment and tax evidence; missing or
+unusable proof is retained for review rather than silently changing the claim.
+Expired or revoked evidence is marked
+`CRYPTO_TAX_REVIEW_REQUIRED` in the financial audit. The original quote assessment
+and confirmation evidence remain available for correction review.
+
+The Dutch supplier service policy charges Dutch VAT to Dutch customers and EU
+consumers. EU business reverse charge requires validated VAT evidence. Non-EU
+services state that Dutch VAT is outside scope. National numbers and Greek
+GR/EL prefixes are normalized before validation. Invalid claims or unavailable
+verification are returned before a new purchase is accepted. The recurring
+collection fallback and operator review workflow are described in
+[Billing financial evidence](/operators/billing-financials/). These checks
+supplement the global crypto readiness report.
 
 ## Custody and sweeping
 
@@ -38288,8 +39069,9 @@ sending a partial summary.
 - Stripe account and secret key (`STRIPE_SECRET_KEY`)
 - Stripe webhook signing secret (`STRIPE_WEBHOOK_SECRET`)
 - (Optional) Mollie API key (`MOLLIE_API_KEY`)
-- Public application URL (`WEBAPP_PUBLIC_URL`); Mollie also requires
-  `GATEWAY_PUBLIC_URL` so it can send authoritative payment callbacks
+- Public application URL (`WEBAPP_PUBLIC_URL`) and gateway URL (`GATEWAY_PUBLIC_URL`).
+  Purser uses the gateway URL to check Stripe's webhook endpoint; Mollie also uses
+  it to send authoritative payment callbacks.
 - `PAYMENT_CARD_PROVIDER=stripe|mollie` when both providers are configured
 
 **What's Automated:**
@@ -38314,13 +39096,20 @@ sending a partial summary.
      - `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
        `checkout.session.async_payment_failed`, `checkout.session.expired`
      - `customer.subscription.created`, `.updated`, `.deleted`, `.paused`, `.resumed`
-     - `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`
+     - `invoice.finalized`, `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`
+     - `credit_note.created`, `credit_note.updated`, `credit_note.voided`
      - `payment_intent.succeeded`, `payment_intent.payment_failed`
      - `charge.refunded`, `charge.updated`, `charge.dispute.created`, `.closed`, `.funds_withdrawn`, `.funds_reinstated`
    - Reveal the endpoint **Signing secret** (`whsec_…`)
    - `charge.updated` delivers the balance transaction Purser records as the settled EUR
      amount, fee, and exchange rate of each card payment; pending settlements are also
      re-read every 10 minutes.
+   - Purser checks the enabled endpoint and its required event subscriptions on startup
+     using read-only Stripe requests. `frameworks cluster doctor` also checks each
+     Purser's `/health/billing-webhooks` endpoint and fails if the configuration cannot
+     be verified or any required event is missing. The diagnostic is separate from
+     service liveness and readiness. A missing endpoint or event produces a startup warning;
+     update the endpoint in Stripe and run `frameworks cluster doctor` to verify it.
 4. (Optional) If using Mollie, configure: `https://yourdomain.com/webhooks/billing/mollie`
 5. Enable payment methods (**Settings → Payment methods**). The hosted Checkout pins an
    explicit, currency-aware allowlist in code: `card` always, plus `sepa_debit`, `ideal`, and
@@ -40939,7 +41728,9 @@ plan` and `release apply --dry-run` list every step and, per host, the role task
    [post-expand report](#post-expand-report) follows.
 3. **Service upgrades and reconciliations.** Platform services upgrade in dependency order, with
    any reconciliation transitions the release declares run at their declared points. A platform
-   service the manifest adds or moves to a new host is installed there. Once the services are
+   service the manifest adds or moves to a new host is installed there. Foghorn cells roll one
+   at a time: the next waits until the previous cell has no permissive schema-1 tenant authority.
+   Explicit signed billing denials do not block; unreadable authority still does. Once the services are
    upgraded, the Quartermaster bootstrap runs with this release's rendered desired state, as
    `cluster provision` runs it: the service registry, including each instance's health endpoint,
    the service catalog, and clusters. The desired state renders before the first mutation, so a
@@ -41451,6 +42242,31 @@ Tenant, stream, cluster, node, hostname, fingerprint, and token values belong on
 - **Enrollment:** reissue and consume a scoped token; never mutate fingerprint keys directly.
 - **Purser:** replay the authoritative entitlement reconciliation with a fresh observation; never infer current access from a tier-name allowlist.
 - **Navigator:** leave failed outbox rows pending and restore idempotent delivery; never manually publish DNS that contradicts Quartermaster desired state.
+
+## Recovering enrollment while public identity converges
+
+With CLI v0.3.15, edge deployment waits through typed bootstrap pending responses
+while the private DNS/certificate becomes usable. Each attempt is bounded and the
+operation stops after two minutes or caller cancellation. The token is not
+consumed by preregistration.
+
+After cluster creation, the CLI retains its exact ID and writes a private,
+nonsecret progress receipt under the platform user cache's
+`frameworks/edge-deploy` directory. It records enrollment, preregistration,
+installation and HTTPS verification as those phases complete. A failed later
+phase does not report an already created cluster as absent.
+
+Resume the reported cluster through the supported enrollment flow:
+
+```sh
+frameworks edge deploy --cluster-id <reported-cluster-id> --ssh <host> --mode native --email <operator-email>
+```
+
+Use the same customer identity/context. Ownership is checked by the server when
+it issues the replacement enrollment token. The receipt contains no bootstrap
+credential; resuming issues a fresh token after ownership verification.
+The edge's runtime control hostname remains private-cluster scoped so its
+controller can move between cells.
 
 
 ---
@@ -43127,6 +43943,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#commerce--bill
 | Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Billing & prepaid balance** | Available | API, Agents (MCP), CLI, Dashboard, Docs | Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance. |
+| ↳ VAT assessment and original tax documents | Available | API, Dashboard, Docs | Shared personal/business tax assessment, exclusive VAT, frozen invoice evidence, original Stripe documents, and tax-aware Mollie and prepaid billing. |
 | ↳ Usage caps, alerts, retention cost preview | Expanding | — | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. *Storage cost previews per asset ship. Caps and alerts you set per meter are not there yet.* |
 | ↳ Plan changes, payment grace, and Free fallback | Available | API, Agents (MCP), Dashboard, Docs | Self-serve upgrades start a fresh month and offset the unused part of the old fee; downgrades and cancellations keep the paid plan to the end of the period, then move the account to Free. A failed payment keeps the plan for 14 days with email notices, then moves the account to Free with a final invoice for usage up to the move. *Plan changes, the 14-day payment grace, and the move to Free run today. The billing page shows each of them, and agents change or keep the plan with the change_billing_tier MCP tool.* |
 | ↳ Operator trials and account closure | Expanding | API, CLI, Dashboard, Docs | Platform operators give a tenant a time-boxed billing arrangement — a different base fee, waived usage, or manual invoicing — for trials and custom deals, expiring back to the tenant's fallback plan, and close tenant accounts permanently. Every change is audited. *Trials and custom arrangements are set up by our team. The billing page shows the arrangement, when it ends, and the plan you return to, and we email you a week before it ends.* |
@@ -43166,7 +43983,8 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#account--apps)
 
 | Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
-| **Tenant settings** | Expanding | API, Agents (MCP), Dashboard, Docs | Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle. *Teams, notification preferences, custom domains, and account security controls are not there yet.* |
+| **Account security** | Available | API, CLI, Dashboard, Docs | Personal browser, CLI and macOS tray sessions with named revocation, automatic refresh, password controls and mandatory security alerts. *Manage your own sessions, password and linked wallets in Account Security or through the CLI and API. Team-member session administration is separate.* |
+| **Tenant settings** | Expanding | API, Agents (MCP), Dashboard, Docs | Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle. *Teams, notification preferences and custom domains are not there yet. Personal session controls are tracked under account security.* |
 | ↳ Teams & RBAC | [Planned](/roadmap#team-accounts-and-permissions) | — | Multi-user tenants with role-based access control. |
 | **Companion apps** | Expanding | — | Desktop and mobile companions to the dashboard and CLI. *A macOS menu-bar app ships with the CLI installer and is still early. Mobile apps are not there yet.* |
 | ↳ Desktop companion (macOS tray) | Expanding | — | Menu-bar app bundled with the CLI in the macOS installer for local edge and stream control. *Ships in the macOS installer and is still early. There is no Windows or Linux version yet.* |
@@ -43276,6 +44094,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | **Internal CA and certificate sync** *(foundation)* *(platform)* | Available | — | Two-tier internal PKI — 72-hour service leaves issued by Navigator's internal CA via node- and cluster-bound cert_sync tokens, distributed by Privateer; public ACME (DNS-01) covers external listeners. |
 | **WireGuard mesh and internal DNS** *(foundation)* *(platform)* | Available | CLI, Docs | Self-managed encrypted service mesh with no external dependency — three-layer peer configuration (gitops seed, last-known, managed), dependency-derived topology, and a loopback .internal resolver per node. |
 | **Cluster rollout orchestrator** *(foundation)* *(platform)* | Available | CLI, Docs | Manifest-driven convergence — dependency-ordered phases, canary and region-staggered waves with health gates, content-addressed release pinning, and automatic rollback on failed health validation. |
+| **Cluster diagnostics** *(foundation)* *(platform)* | Available | CLI, Docs | Read-only operator diagnostics trace streams, nodes, billing and webhooks alongside cluster service, media-authority, network and resource checks. |
 | **Cluster backup and restore** *(platform)* | Available | CLI, Docs | CLI backups of every authoritative store — per-database PostgreSQL/YugabyteDB dumps and the ClickHouse billing facts — to a local directory or S3, with a manifest of file hashes, row counts and migration-ledger digests. Restores go through a verified shadow and a reversible swap; contract and irreversible data migrations require a backup under an hour old that still matches the live ledgers. |
 | **Livepeer transaction signer** *(foundation)* *(platform)* | Available | — | Keystore-backed remote ETH transaction signer so the Livepeer gateway never holds key custody on media nodes. |
 
@@ -43284,6 +44103,8 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | Capability | Availability | Surfaces | Description |
 | --- | --- | --- | --- |
 | **Billing & prepaid balance** | Available | API, Agents (MCP), CLI, Dashboard, Docs | Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance. |
+| ↳ VAT assessment and original tax documents | Available | API, Dashboard, Docs | Shared personal/business tax assessment, exclusive VAT, frozen invoice evidence, original Stripe documents, and tax-aware Mollie and prepaid billing. |
+| ↳ Financial evidence archive and tax review *(foundation)* *(platform)* | Available | CLI, Docs | Paginated read-only Purser and Stripe evidence with hashes and exceptions, plus audited acknowledgment of exact retained tax-review evidence. The archive is not a reconciled close or journal export. |
 | ↳ Usage caps, alerts, retention cost preview | Expanding | — | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. *Storage cost previews per asset ship. Caps and alerts you set per meter are not there yet.* |
 | ↳ Plan changes, payment grace, and Free fallback | Available | API, Agents (MCP), Dashboard, Docs | Self-serve upgrades start a fresh month and offset the unused part of the old fee; downgrades and cancellations keep the paid plan to the end of the period, then move the account to Free. A failed payment keeps the plan for 14 days with email notices, then moves the account to Free with a final invoice for usage up to the move. *Plan changes, the 14-day payment grace, and the move to Free run today. The billing page shows each of them, and agents change or keep the plan with the change_billing_tier MCP tool.* |
 | ↳ Operator trials and account closure | Expanding | API, CLI, Dashboard, Docs | Platform operators give a tenant a time-boxed billing arrangement — a different base fee, waived usage, or manual invoicing — for trials and custom deals, expiring back to the tenant's fallback plan, and close tenant accounts permanently. Every change is audited. *Trials and custom arrangements are set up by our team. The billing page shows the arrangement, when it ends, and the plan you return to, and we email you a week before it ends.* |
@@ -43318,7 +44139,8 @@ This broader inventory includes the [product capability matrix](/platform/featur
 
 | Capability | Availability | Surfaces | Description |
 | --- | --- | --- | --- |
-| **Tenant settings** | Expanding | API, Agents (MCP), Dashboard, Docs | Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle. *Teams, notification preferences, custom domains, and account security controls are not there yet.* |
+| **Account security** | Available | API, CLI, Dashboard, Docs | Personal browser, CLI and macOS tray sessions with named revocation, automatic refresh, password controls and mandatory security alerts. *Manage your own sessions, password and linked wallets in Account Security or through the CLI and API. Team-member session administration is separate.* |
+| **Tenant settings** | Expanding | API, Agents (MCP), Dashboard, Docs | Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle. *Teams, notification preferences and custom domains are not there yet. Personal session controls are tracked under account security.* |
 | ↳ Teams & RBAC | [Planned](/roadmap#team-accounts-and-permissions) | — | Multi-user tenants with role-based access control. |
 | **Companion apps** | Expanding | — | Desktop and mobile companions to the dashboard and CLI. *A macOS menu-bar app ships with the CLI installer and is still early. Mobile apps are not there yet.* |
 | ↳ Desktop companion (macOS tray) | Expanding | — | Menu-bar app bundled with the CLI in the macOS installer for local edge and stream control. *Ships in the macOS installer and is still early. There is no Windows or Linux version yet.* |

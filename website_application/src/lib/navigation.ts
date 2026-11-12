@@ -375,6 +375,13 @@ export const navigationConfig: Record<string, NavigationItem> = {
         active: true,
         description: "Manage profile and notifications",
       },
+      security: {
+        name: "Security",
+        href: "/account/security",
+        icon: "ShieldCheck",
+        active: true,
+        description: "Manage your sign-ins, password and linked wallets",
+      },
       billing: {
         name: "Billing & Plans",
         href: "/account/billing",

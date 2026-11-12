@@ -261,7 +261,7 @@ func (s *CommodoreServer) claimAccountEmailOutboxBatch(ctx context.Context) ([]a
 		if abandoned > 0 {
 			s.logger.WithField("count", abandoned).Warn("Abandoned undelivered verification emails past the link window")
 		}
-		claimed, err := queries.ClaimAccountEmailBatch(ctx, int32(accountEmailOutboxBatchSize))
+		claimed, err := queries.ClaimAccountEmailBatch(ctx)
 		if err != nil {
 			return err
 		}
