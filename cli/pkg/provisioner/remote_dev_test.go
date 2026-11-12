@@ -28,7 +28,7 @@ func TestRemoteDevRunPreservesRemoteEnvironmentAndArguments(t *testing.T) {
 	for _, want := range []string{
 		`export PATH="$PNPM_HOME/bin:$PNPM_HOME:$HOME/go/bin:$CARGO_HOME/bin:$PATH"`,
 		`mkdir -p "$GOCACHE" "$GOMODCACHE" "$PNPM_HOME/bin" "$PNPM_STORE_DIR" "$CARGO_HOME"`,
-		`exec printf a\ b\;\$HOME`,
+		`exec bash scripts/remote-dev-job.sh /srv/frameworks-dev/cache/tester/job-tmp printf a\ b\;\$HOME`,
 		`flock -n "$lock_fd"`,
 	} {
 		if !strings.Contains(string(out), want) {
