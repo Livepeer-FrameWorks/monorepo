@@ -26,6 +26,7 @@ type CommodoreAuthSession struct {
 	AbsoluteExpiresAt time.Time      `db:"absolute_expires_at" json:"absolute_expires_at"`
 	RevokedAt         sql.NullTime   `db:"revoked_at" json:"revoked_at"`
 	RevokeReason      sql.NullString `db:"revoke_reason" json:"revoke_reason"`
+	DeviceKey         string         `db:"device_key" json:"device_key"`
 }
 
 type CommodoreMediaPlacementChange struct {

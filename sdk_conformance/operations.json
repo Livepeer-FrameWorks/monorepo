@@ -6011,6 +6011,39 @@
       }
     },
     {
+      "name": "GetSecurityActivityConnection",
+      "document": "query GetSecurityActivityConnection ($first: Int, $after: String) {\n  securityActivityConnection(first: $first, after: $after) {\n    edges {\n      cursor\n      node {\n        ... SecurityActivityEventDefaultFields\n      }\n    }\n    pageInfo {\n      ... PageInfoDefaultFields\n    }\n    totalCount\n  }\n}\nfragment PageInfoDefaultFields on PageInfo {\n  startCursor\n  endCursor\n  hasNextPage\n  hasPreviousPage\n}\nfragment SecurityActivityEventDefaultFields on SecurityActivityEvent {\n  id\n  kind\n  timestamp\n  authMethod\n  sessionId\n  reason\n}\n",
+      "identity": "sha256:484970447feb659e7fa56d020ebcdc08d4102f888f49f865dc2881e4213eae2e",
+      "kind": "query",
+      "variables": {},
+      "response": {
+        "data": {
+          "securityActivityConnection": {
+            "edges": [
+              {
+                "cursor": "text",
+                "node": {
+                  "authMethod": "PASSWORD",
+                  "id": "id-1",
+                  "kind": "SIGN_IN_SUCCEEDED",
+                  "reason": "text",
+                  "sessionId": "id-1",
+                  "timestamp": "2026-09-19T14:03:27Z"
+                }
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "text",
+              "hasNextPage": true,
+              "hasPreviousPage": true,
+              "startCursor": "text"
+            },
+            "totalCount": 1
+          }
+        }
+      }
+    },
+    {
       "name": "GetServiceInstancesConnection",
       "document": "query GetServiceInstancesConnection ($page: ConnectionInput, $clusterId: String, $nodeId: String, $status: InstanceStatus) {\n  analytics {\n    infra {\n      serviceInstancesConnection(page: $page, clusterId: $clusterId, nodeId: $nodeId, status: $status) {\n        edges {\n          cursor\n          node {\n            ... ServiceInstanceDefaultFields\n          }\n        }\n        pageInfo {\n          ... PageInfoDefaultFields\n        }\n        totalCount\n      }\n    }\n  }\n}\nfragment PageInfoDefaultFields on PageInfo {\n  startCursor\n  endCursor\n  hasNextPage\n  hasPreviousPage\n}\nfragment ServiceInstanceDefaultFields on ServiceInstance {\n  id\n  instanceId\n  clusterId\n  nodeId\n  serviceId\n  version\n  port\n  processId\n  containerId\n  status\n  healthStatus\n  startedAt\n  stoppedAt\n  lastHealthCheck\n}\n",
       "identity": "sha256:bb3177d01c24074039fd99f31eaa5c64247e106652fac6532d0943579ba086f0",

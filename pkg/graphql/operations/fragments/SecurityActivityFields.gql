@@ -1,0 +1,8 @@
+fragment SecurityActivityFields on SecurityActivityEvent {
+  id
+  kind
+  timestamp
+  authMethod
+  sessionId
+  reason
+}

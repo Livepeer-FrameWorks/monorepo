@@ -37,6 +37,7 @@ distributed_tables:
   - commodore.delegated_jwt_replays
   - commodore.refresh_tokens
   - commodore.auth_sessions
+  - commodore.auth_session_devices
   - commodore.auth_authorization_codes
   - commodore.auth_device_codes
   - commodore.wallet_auth_challenges

@@ -4303,6 +4303,8 @@ export interface QualityTierSummary {
 export interface Query {
     /** The signed-in user’s own interactive sessions, newest first. Supports first=1..100. */
     authSessionsConnection: AuthSessionConnection
+    /** Your own security activity from the past 90 days. */
+    securityActivityConnection: SecurityActivityConnection
     /**
      * Unified analytics surface providing access to all platform metrics.
      * Combines data from Periscope (historical) and Signalman (real-time).
@@ -4820,6 +4822,34 @@ export interface RoutingImpactPreview {
     activeViewers: Scalars['Int']
     __typename: 'RoutingImpactPreview'
 }
+
+export interface SecurityActivityConnection {
+    edges: SecurityActivityEdge[]
+    nodes: SecurityActivityEvent[]
+    pageInfo: PageInfo
+    totalCount: Scalars['Int']
+    __typename: 'SecurityActivityConnection'
+}
+
+export interface SecurityActivityEdge {
+    cursor: Scalars['String']
+    node: SecurityActivityEvent
+    __typename: 'SecurityActivityEdge'
+}
+
+
+/** A security event concerning only the signed-in user. */
+export interface SecurityActivityEvent {
+    id: Scalars['ID']
+    kind: SecurityActivityKind
+    timestamp: Scalars['Time']
+    authMethod: AuthMethod
+    sessionId: (Scalars['ID'] | null)
+    reason: (Scalars['String'] | null)
+    __typename: 'SecurityActivityEvent'
+}
+
+export type SecurityActivityKind = 'SIGN_IN_SUCCEEDED' | 'SIGN_IN_FAILED' | 'SESSION_REVOKED' | 'SESSIONS_REVOKED' | 'PASSWORD_CHANGED' | 'PASSWORD_RESET' | 'WALLET_LINKED' | 'WALLET_UNLINKED'
 
 export type SendMessageResult = (Message | ValidationError | NotFoundError | AuthError) & { __isUnion?: true }
 
@@ -12171,6 +12201,8 @@ export interface QualityTierSummaryGenqlSelection{
 export interface QueryGenqlSelection{
     /** The signed-in user’s own interactive sessions, newest first. Supports first=1..100. */
     authSessionsConnection?: (AuthSessionConnectionGenqlSelection & { __args?: {first?: (Scalars['Int'] | null), after?: (Scalars['String'] | null)} })
+    /** Your own security activity from the past 90 days. */
+    securityActivityConnection?: (SecurityActivityConnectionGenqlSelection & { __args?: {first?: (Scalars['Int'] | null), after?: (Scalars['String'] | null)} })
     /**
      * Unified analytics surface providing access to all platform metrics.
      * Combines data from Periscope (historical) and Signalman (real-time).
@@ -12904,6 +12936,35 @@ export interface RoutingEventsConnectionGenqlSelection{
 export interface RoutingImpactPreviewGenqlSelection{
     activeStreams?: boolean | number
     activeViewers?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+export interface SecurityActivityConnectionGenqlSelection{
+    edges?: SecurityActivityEdgeGenqlSelection
+    nodes?: SecurityActivityEventGenqlSelection
+    pageInfo?: PageInfoGenqlSelection
+    totalCount?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+export interface SecurityActivityEdgeGenqlSelection{
+    cursor?: boolean | number
+    node?: SecurityActivityEventGenqlSelection
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+
+/** A security event concerning only the signed-in user. */
+export interface SecurityActivityEventGenqlSelection{
+    id?: boolean | number
+    kind?: boolean | number
+    timestamp?: boolean | number
+    authMethod?: boolean | number
+    sessionId?: boolean | number
+    reason?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -18069,6 +18130,30 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
+    const SecurityActivityConnection_possibleTypes: string[] = ['SecurityActivityConnection']
+    export const isSecurityActivityConnection = (obj?: { __typename?: any } | null): obj is SecurityActivityConnection => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isSecurityActivityConnection"')
+      return SecurityActivityConnection_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const SecurityActivityEdge_possibleTypes: string[] = ['SecurityActivityEdge']
+    export const isSecurityActivityEdge = (obj?: { __typename?: any } | null): obj is SecurityActivityEdge => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isSecurityActivityEdge"')
+      return SecurityActivityEdge_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const SecurityActivityEvent_possibleTypes: string[] = ['SecurityActivityEvent']
+    export const isSecurityActivityEvent = (obj?: { __typename?: any } | null): obj is SecurityActivityEvent => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isSecurityActivityEvent"')
+      return SecurityActivityEvent_possibleTypes.includes(obj.__typename)
+    }
+
+
+
     const SendMessageResult_possibleTypes: string[] = ['Message','ValidationError','NotFoundError','AuthError']
     export const isSendMessageResult = (obj?: { __typename?: any } | null): obj is SendMessageResult => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isSendMessageResult"')
@@ -19849,6 +19934,17 @@ export const enumRetentionSource = {
    PER_STREAM_OVERRIDE: 'PER_STREAM_OVERRIDE' as const,
    PER_ASSET_OVERRIDE: 'PER_ASSET_OVERRIDE' as const,
    TIER_ENTITLEMENT: 'TIER_ENTITLEMENT' as const
+}
+
+export const enumSecurityActivityKind = {
+   SIGN_IN_SUCCEEDED: 'SIGN_IN_SUCCEEDED' as const,
+   SIGN_IN_FAILED: 'SIGN_IN_FAILED' as const,
+   SESSION_REVOKED: 'SESSION_REVOKED' as const,
+   SESSIONS_REVOKED: 'SESSIONS_REVOKED' as const,
+   PASSWORD_CHANGED: 'PASSWORD_CHANGED' as const,
+   PASSWORD_RESET: 'PASSWORD_RESET' as const,
+   WALLET_LINKED: 'WALLET_LINKED' as const,
+   WALLET_UNLINKED: 'WALLET_UNLINKED' as const
 }
 
 export const enumSigningKeyAlgorithm = {

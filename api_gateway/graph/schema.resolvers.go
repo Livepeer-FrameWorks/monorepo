@@ -3496,6 +3496,11 @@ func (r *queryResolver) AuthSessionsConnection(ctx context.Context, first *int, 
 	return r.DoAuthSessionsConnection(ctx, first, after)
 }
 
+// SecurityActivityConnection is the resolver for the securityActivityConnection field.
+func (r *queryResolver) SecurityActivityConnection(ctx context.Context, first *int, after *string) (*model.SecurityActivityConnection, error) {
+	return r.DoSecurityActivityConnection(ctx, first, after)
+}
+
 // Analytics is the resolver for the analytics field.
 func (r *queryResolver) Analytics(ctx context.Context) (*markers.Analytics, error) {
 	return &markers.Analytics{}, nil

@@ -43,6 +43,7 @@ from .enums import (
     PendingTierState,
     PlaybackPolicyType,
     RetentionSource,
+    SecurityActivityKind,
     SigningKeyAlgorithm,
     SigningKeyStatus,
     SourceLocationMode,
@@ -9806,6 +9807,17 @@ class RoutingEventDefaultClientBucket(BaseModel):
 class RoutingEventDefaultNodeBucket(BaseModel):
     h_3_index: str = Field(alias="h3Index")
     resolution: int
+
+
+class SecurityActivityEventDefault(BaseModel):
+    """A security event concerning only the signed-in user."""
+
+    id: str
+    kind: SecurityActivityKind
+    timestamp: datetime
+    auth_method: AuthMethod = Field(alias="authMethod")
+    session_id: Optional[str] = Field(alias="sessionId")
+    reason: Optional[str]
 
 
 class ServiceInstanceDefault(BaseModel):
@@ -19592,6 +19604,7 @@ RevokeAuthSessionPayloadDefault.model_rebuild()
 RevokeOtherAuthSessionsPayloadDefault.model_rebuild()
 RoutingEfficiencyDefault.model_rebuild()
 RoutingEventDefault.model_rebuild()
+SecurityActivityEventDefault.model_rebuild()
 ServiceInstanceDefault.model_rebuild()
 ServiceInstanceHealthDefault.model_rebuild()
 SessionQoeSummaryDefault.model_rebuild()

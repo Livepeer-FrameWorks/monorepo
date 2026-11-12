@@ -828,6 +828,45 @@ func TestEvaluateAccessBillingStatusOutageOnlyBlocksRatedWork(t *testing.T) {
 	}
 }
 
+func TestEvaluateAccountSecurityAdmission(t *testing.T) {
+	rl := NewRateLimiter(RateLimitConfig{})
+	defer rl.Stop()
+	for _, billing := range []fakeBillingChecker{
+		{billingModel: "prepaid", isBalanceNegative: true},
+		{billingModel: "prepaid", isBalanceNegative: true, isSuspended: true},
+		{err: context.DeadlineExceeded},
+	} {
+		for _, operation := range []string{"authSessionsConnection", "securityActivityConnection", "renameAuthSession", "revokeAuthSession", "revokeOtherAuthSessions", "changePassword"} {
+			kind := "mutation"
+			if operation == "authSessionsConnection" || operation == "securityActivityConnection" {
+				kind = "query"
+			}
+			decision := EvaluateAccess(context.Background(), AccessRequest{
+				TenantID: "tenant-1", ClientIP: "10.0.0.1", Path: "/graphql",
+				OperationNames: []string{operation}, OperationType: kind,
+			}, rl, func(string) (int, int) { return 100, 100 }, billing, nil, nil, nil, nil)
+			if !decision.Allowed {
+				t.Errorf("account security %s unavailable for billing state %+v: status=%d body=%+v", operation, billing, decision.Status, decision.Body)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		kind  string
+		names []string
+	}{
+		{"mutation", []string{"revokeAuthSession", "createClip"}},
+		{"query", []string{"authSessionsConnection", "streamsConnection"}},
+	} {
+		decision := EvaluateAccess(context.Background(), AccessRequest{
+			TenantID: "tenant-1", ClientIP: "10.0.0.1", Path: "/graphql",
+			OperationNames: tc.names, OperationType: tc.kind,
+		}, rl, func(string) (int, int) { return 100, 100 }, fakeBillingChecker{billingModel: "prepaid", isBalanceNegative: true, isSuspended: true}, nil, nil, nil, nil)
+		if decision.Allowed {
+			t.Fatalf("security batch bypassed suspension for unrelated work: %+v", tc.names)
+		}
+	}
+}
+
 func TestEvaluateAccessDistinguishesFreeFromPaidPostpaid(t *testing.T) {
 	rl := NewRateLimiter(RateLimitConfig{})
 	defer rl.Stop()

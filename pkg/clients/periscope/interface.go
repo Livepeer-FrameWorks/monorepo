@@ -2,6 +2,7 @@ package periscope
 
 import (
 	"context"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 )
 
@@ -9,6 +10,7 @@ import (
 // that api_gateway can inject fakes for resolver real-path tests. The concrete
 // client satisfies it (asserted below).
 type Interface interface {
+	GetSecurityActivity(context.Context, *commonpb.CursorPaginationRequest) (*periscopepb.GetSecurityActivityResponse, error)
 	Close() error
 	GetStreamAnalyticsSummary(ctx context.Context, tenantID string, streamID string, timeRange *TimeRangeOpts) (*periscopepb.GetStreamAnalyticsSummaryResponse, error)
 	GetLiveUsageSummary(ctx context.Context, tenantID string, timeRange *TimeRangeOpts) (*periscopepb.GetLiveUsageSummaryResponse, error)

@@ -24,9 +24,10 @@ WHERE status = 'pending'
 SELECT user_id::text AS user_id,
        tenant_id::text AS tenant_id,
        purpose,
-       attempts
+       attempts,
+       payload
 FROM commodore.account_email_outbox
-WHERE status = 'pending'
+WHERE status IN ('pending', 'security_pending')
   AND next_attempt_at <= NOW()
 ORDER BY next_attempt_at
 FOR UPDATE SKIP LOCKED
@@ -40,7 +41,7 @@ SET next_attempt_at = NOW() + (sqlc.arg(lease_ms)::bigint * INTERVAL '1 millisec
 WHERE user_id = sqlc.arg(user_id)::uuid
   AND purpose = sqlc.arg(purpose)::text
   AND tenant_id = sqlc.arg(tenant_id)::uuid
-  AND status = 'pending'
+  AND status IN ('pending', 'security_pending')
 RETURNING lease_token;
 
 -- name: CompleteAccountEmail :exec
@@ -49,7 +50,7 @@ SET status = 'completed', completed_at = NOW(), updated_at = NOW(), last_error =
 WHERE user_id = sqlc.arg(user_id)::uuid
   AND purpose = sqlc.arg(purpose)::text
   AND tenant_id = sqlc.arg(tenant_id)::uuid
-  AND status = 'pending'
+  AND status IN ('pending', 'security_pending')
   AND (sqlc.arg(lease_token)::text = '' OR lease_token = sqlc.arg(lease_token)::text);
 
 -- name: FailAccountEmail :exec
@@ -61,7 +62,7 @@ SET attempts = sqlc.arg(attempts),
 WHERE user_id = sqlc.arg(user_id)::uuid
   AND purpose = sqlc.arg(purpose)::text
   AND tenant_id = sqlc.arg(tenant_id)::uuid
-  AND status = 'pending'
+  AND status IN ('pending', 'security_pending')
   AND (sqlc.arg(lease_token)::text = '' OR lease_token = sqlc.arg(lease_token)::text);
 
 -- name: AbandonRejectedAccountEmail :exec
@@ -76,7 +77,7 @@ SET status = 'abandoned',
 WHERE user_id = sqlc.arg(user_id)::uuid
   AND purpose = sqlc.arg(purpose)::text
   AND tenant_id = sqlc.arg(tenant_id)::uuid
-  AND status = 'pending'
+  AND status IN ('pending', 'security_pending')
   AND (sqlc.arg(lease_token)::text = '' OR lease_token = sqlc.arg(lease_token)::text);
 
 -- name: GetAccountEmailRecipient :one

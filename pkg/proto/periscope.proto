@@ -921,7 +921,27 @@ service FederationAnalyticsService {
   rpc GetFederationSummary(GetFederationSummaryRequest) returns (GetFederationSummaryResponse);
 }
 
+message SecurityActivityEvent {
+  string id = 1;
+  string event_type = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  string auth_method = 4;
+  string session_id = 5;
+  string reason = 6;
+}
+
+// Scope comes exclusively from the interactive credential, never request IDs.
+message GetSecurityActivityRequest {
+  common.CursorPaginationRequest pagination = 1;
+}
+
+message GetSecurityActivityResponse {
+  repeated SecurityActivityEvent events = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
 service PlatformAnalyticsService {
+  rpc GetSecurityActivity(GetSecurityActivityRequest) returns (GetSecurityActivityResponse);
   rpc GetPlatformOverview(GetPlatformOverviewRequest) returns (GetPlatformOverviewResponse);
   rpc ListTenantActivity(ListTenantActivityRequest) returns (ListTenantActivityResponse);
   rpc GetNetworkLiveStats(GetNetworkLiveStatsRequest) returns (GetNetworkLiveStatsResponse);

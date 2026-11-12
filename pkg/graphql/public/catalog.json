@@ -4400,6 +4400,40 @@
       }
     },
     {
+      "name": "GetSecurityActivityConnection",
+      "kind": "query",
+      "target": "query.securityActivityConnection",
+      "since": "v0.3.15",
+      "hash": "sha256:966ece22207a6b13c418209562ae76170aa068eb59870966bad33eace3cd5131",
+      "identity": "sha256:484970447feb659e7fa56d020ebcdc08d4102f888f49f865dc2881e4213eae2e",
+      "document": "query GetSecurityActivityConnection ($first: Int, $after: String) {\n  securityActivityConnection(first: $first, after: $after) {\n    edges {\n      cursor\n      node {\n        ... SecurityActivityEventDefaultFields\n      }\n    }\n    pageInfo {\n      ... PageInfoDefaultFields\n    }\n    totalCount\n  }\n}\nfragment PageInfoDefaultFields on PageInfo {\n  startCursor\n  endCursor\n  hasNextPage\n  hasPreviousPage\n}\nfragment SecurityActivityEventDefaultFields on SecurityActivityEvent {\n  id\n  kind\n  timestamp\n  authMethod\n  sessionId\n  reason\n}\n",
+      "variables": [
+        {
+          "name": "first",
+          "type": {
+            "name": "Int"
+          },
+          "typeString": "Int",
+          "required": false,
+          "hasDefault": false
+        },
+        {
+          "name": "after",
+          "type": {
+            "name": "String"
+          },
+          "typeString": "String",
+          "required": false,
+          "hasDefault": false
+        }
+      ],
+      "result": {
+        "field": "securityActivityConnection",
+        "responseKey": "securityActivityConnection",
+        "type": "SecurityActivityConnection!"
+      }
+    },
+    {
       "name": "GetServiceInstancesConnection",
       "kind": "query",
       "target": "query.analytics.infra.serviceInstancesConnection",
