@@ -24,15 +24,16 @@ func TestAuthSessionBackfillCompletesAnEmptyInstall(t *testing.T) {
 	}
 }
 
-func TestAuthSessionBackfillDryRunOnlyCounts(t *testing.T) {
+func TestAuthSessionBackfillDryRunReadsOnlyOneBatch(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	mock.ExpectQuery("SELECT count").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(12))
-	progress, err := runAuthSessions(context.Background(), db, datamigrate.RunOptions{DryRun: true})
-	if err != nil || !progress.Done || progress.Scanned != 12 || progress.Changed != 0 {
+	mock.ExpectQuery("SELECT id FROM commodore.refresh_tokens").WithArgs(2).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("first").AddRow("second"))
+	progress, err := runAuthSessions(context.Background(), db, datamigrate.RunOptions{DryRun: true, BatchSize: 2})
+	if err != nil || progress.Done || progress.Scanned != 2 || progress.Changed != 0 {
 		t.Fatalf("dry run: progress=%+v err=%v", progress, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

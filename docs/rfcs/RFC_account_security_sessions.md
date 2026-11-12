@@ -366,6 +366,10 @@ postdeploy, alongside validation of the refresh-token/session ownership FK.
 
 The service-owned `commodore_auth_sessions_v0_3_15` data migration backfills
 legacy chains in bounded tenant batches and is required before contract.
+Pending-head discovery and tenant batches use partial indexes over unassigned,
+unrevoked refresh tokens in expiry order. Dry-run samples at most one batch;
+it does not count the entire refresh-token table. Verification stops at the
+first remaining live unassigned head.
 Backfilled `unknown` sessions use the conservative 90-day lifetime from the
 oldest available token in the chain. A head written by an old issuer inherits
 an existing session from its predecessors. No bulk data rewrite runs in expand.
