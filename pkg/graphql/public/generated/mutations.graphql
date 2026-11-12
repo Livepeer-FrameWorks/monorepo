@@ -111,6 +111,18 @@ mutation ChangeBillingTier(
   }
 }
 
+mutation ChangePassword(
+  $currentPassword: String!
+  $newPassword: String!
+) {
+  changePassword(currentPassword: $currentPassword, newPassword: $newPassword) {
+    __typename
+    ...ChangePasswordPayloadDefaultFields
+    ...ValidationErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+
 mutation CreateCardTopup(
   $input: CreateCardTopupInput!
 ) {
@@ -362,6 +374,19 @@ mutation RejectClusterSubscription(
   }
 }
 
+mutation RenameAuthSession(
+  $id: ID!
+  $label: String!
+) {
+  renameAuthSession(id: $id, label: $label) {
+    __typename
+    ...AuthSessionDefaultFields
+    ...ValidationErrorDefaultFields
+    ...NotFoundErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+
 mutation ReplayWebhookDeliveries(
   $endpointId: ID!
   $createdAfter: Time!
@@ -425,6 +450,18 @@ mutation ResolveIncident(
   }
 }
 
+mutation RevokeAuthSession(
+  $id: ID!
+) {
+  revokeAuthSession(id: $id) {
+    __typename
+    ...RevokeAuthSessionPayloadDefaultFields
+    ...ValidationErrorDefaultFields
+    ...NotFoundErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+
 mutation RevokeClusterInvite(
   $inviteId: ID!
 ) {
@@ -432,6 +469,15 @@ mutation RevokeClusterInvite(
     __typename
     ...DeleteSuccessDefaultFields
     ...NotFoundErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+
+mutation RevokeOtherAuthSessions {
+  revokeOtherAuthSessions {
+    __typename
+    ...RevokeOtherAuthSessionsPayloadDefaultFields
+    ...ValidationErrorDefaultFields
     ...AuthErrorDefaultFields
   }
 }

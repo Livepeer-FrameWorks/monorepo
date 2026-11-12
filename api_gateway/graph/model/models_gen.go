@@ -30,6 +30,10 @@ type ChangeBillingTierResult interface {
 	IsChangeBillingTierResult()
 }
 
+type ChangePasswordResult interface {
+	IsChangePasswordResult()
+}
+
 type ClusterSubscriptionResult interface {
 	IsClusterSubscriptionResult()
 }
@@ -180,12 +184,20 @@ type PromoteToPaidResult interface {
 	IsPromoteToPaidResult()
 }
 
+type RenameAuthSessionResult interface {
+	IsRenameAuthSessionResult()
+}
+
 type ReplayWebhookDeliveriesResult interface {
 	IsReplayWebhookDeliveriesResult()
 }
 
 type ReplayWebhookDeliveryResult interface {
 	IsReplayWebhookDeliveryResult()
+}
+
+type RevokeAuthSessionResult interface {
+	IsRevokeAuthSessionResult()
 }
 
 type RevokeBootstrapTokenResult interface {
@@ -198,6 +210,10 @@ type RevokeClusterInviteResult interface {
 
 type RevokeDeveloperTokenResult interface {
 	IsRevokeDeveloperTokenResult()
+}
+
+type RevokeOtherAuthSessionsResult interface {
+	IsRevokeOtherAuthSessionsResult()
 }
 
 type RevokeSigningKeyResult interface {
@@ -535,6 +551,46 @@ func (AuthError) IsMediaCapacityConsentResult() {}
 
 func (AuthError) IsMediaCapacityConsentChangeResult() {}
 
+func (AuthError) IsRevokeAuthSessionResult() {}
+
+func (AuthError) IsRevokeOtherAuthSessionsResult() {}
+
+func (AuthError) IsRenameAuthSessionResult() {}
+
+func (AuthError) IsChangePasswordResult() {}
+
+// One of the signed-in user's own interactive sessions.
+type AuthSession struct {
+	ID            string         `json:"id"`
+	ClientKind    AuthClientKind `json:"clientKind"`
+	ClientID      string         `json:"clientId"`
+	AuthMethod    AuthMethod     `json:"authMethod"`
+	Label         string         `json:"label"`
+	ClientVersion *string        `json:"clientVersion,omitempty"`
+	// Masked source IP; full addresses are never returned.
+	IPAddress *string `json:"ipAddress,omitempty"`
+	// City and country when a local GeoIP database is configured.
+	Location     *string   `json:"location,omitempty"`
+	CreatedAt    time.Time `json:"createdAt"`
+	LastActiveAt time.Time `json:"lastActiveAt"`
+	ExpiresAt    time.Time `json:"expiresAt"`
+	Current      bool      `json:"current"`
+}
+
+func (AuthSession) IsRenameAuthSessionResult() {}
+
+type AuthSessionConnection struct {
+	Edges      []*AuthSessionEdge `json:"edges"`
+	Nodes      []*AuthSession     `json:"nodes"`
+	PageInfo   *PageInfo          `json:"pageInfo"`
+	TotalCount int                `json:"totalCount"`
+}
+
+type AuthSessionEdge struct {
+	Cursor string       `json:"cursor"`
+	Node   *AuthSession `json:"node"`
+}
+
 type AvailableCluster struct {
 	ClusterID   string   `json:"clusterId"`
 	ClusterName string   `json:"clusterName"`
@@ -694,6 +750,13 @@ type ChangeBillingTierPayload struct {
 }
 
 func (ChangeBillingTierPayload) IsChangeBillingTierResult() {}
+
+type ChangePasswordPayload struct {
+	Success      bool `json:"success"`
+	RevokedCount int  `json:"revokedCount"`
+}
+
+func (ChangePasswordPayload) IsChangePasswordResult() {}
 
 type ClientMetrics5mConnection struct {
 	Edges      []*ClientMetrics5mEdge         `json:"edges"`
@@ -2170,6 +2233,10 @@ func (NotFoundError) IsMediaCapacityConsentResult() {}
 
 func (NotFoundError) IsMediaCapacityConsentChangeResult() {}
 
+func (NotFoundError) IsRevokeAuthSessionResult() {}
+
+func (NotFoundError) IsRenameAuthSessionResult() {}
+
 type OpenMistAdminSessionInput struct {
 	// Node identifier — accepts the InfrastructureNode.id (Relay global) or nodeId (raw UUID).
 	NodeID string `json:"nodeId"`
@@ -2438,6 +2505,20 @@ type ReviewMediaPlacementChangeInput struct {
 	ExpectedParentRevision string                           `json:"expectedParentRevision"`
 	Updates                []*MediaPlacementVerbUpdateInput `json:"updates"`
 }
+
+type RevokeAuthSessionPayload struct {
+	Success bool `json:"success"`
+	// True when the presented session was signed out.
+	Current bool `json:"current"`
+}
+
+func (RevokeAuthSessionPayload) IsRevokeAuthSessionResult() {}
+
+type RevokeOtherAuthSessionsPayload struct {
+	RevokedCount int `json:"revokedCount"`
+}
+
+func (RevokeOtherAuthSessionsPayload) IsRevokeOtherAuthSessionsResult() {}
 
 type RoutingEventEdge struct {
 	Cursor string                    `json:"cursor"`
@@ -3202,6 +3283,14 @@ func (ValidationError) IsSendMessageResult() {}
 
 func (ValidationError) IsIncidentMutationResult() {}
 
+func (ValidationError) IsRevokeAuthSessionResult() {}
+
+func (ValidationError) IsRevokeOtherAuthSessionsResult() {}
+
+func (ValidationError) IsRenameAuthSessionResult() {}
+
+func (ValidationError) IsChangePasswordResult() {}
+
 type ViewerCountBucketEdge struct {
 	Cursor string                         `json:"cursor"`
 	Node   *periscopepb.ViewerCountBucket `json:"node"`
@@ -3567,6 +3656,128 @@ type X402PaymentResult struct {
 }
 
 func (X402PaymentResult) IsSubmitX402PaymentResult() {}
+
+// The interactive client that created a sign-in session.
+type AuthClientKind string
+
+const (
+	AuthClientKindBrowser AuthClientKind = "BROWSER"
+	AuthClientKindCli     AuthClientKind = "CLI"
+	AuthClientKindDesktop AuthClientKind = "DESKTOP"
+	AuthClientKindUnknown AuthClientKind = "UNKNOWN"
+)
+
+var AllAuthClientKind = []AuthClientKind{
+	AuthClientKindBrowser,
+	AuthClientKindCli,
+	AuthClientKindDesktop,
+	AuthClientKindUnknown,
+}
+
+func (e AuthClientKind) IsValid() bool {
+	switch e {
+	case AuthClientKindBrowser, AuthClientKindCli, AuthClientKindDesktop, AuthClientKindUnknown:
+		return true
+	}
+	return false
+}
+
+func (e AuthClientKind) String() string {
+	return string(e)
+}
+
+func (e *AuthClientKind) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = AuthClientKind(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid AuthClientKind", str)
+	}
+	return nil
+}
+
+func (e AuthClientKind) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *AuthClientKind) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e AuthClientKind) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// The proof used to create a sign-in session.
+type AuthMethod string
+
+const (
+	AuthMethodPassword       AuthMethod = "PASSWORD"
+	AuthMethodWallet         AuthMethod = "WALLET"
+	AuthMethodBrowserHandoff AuthMethod = "BROWSER_HANDOFF"
+	AuthMethodDeviceCode     AuthMethod = "DEVICE_CODE"
+	AuthMethodUnknown        AuthMethod = "UNKNOWN"
+)
+
+var AllAuthMethod = []AuthMethod{
+	AuthMethodPassword,
+	AuthMethodWallet,
+	AuthMethodBrowserHandoff,
+	AuthMethodDeviceCode,
+	AuthMethodUnknown,
+}
+
+func (e AuthMethod) IsValid() bool {
+	switch e {
+	case AuthMethodPassword, AuthMethodWallet, AuthMethodBrowserHandoff, AuthMethodDeviceCode, AuthMethodUnknown:
+		return true
+	}
+	return false
+}
+
+func (e AuthMethod) String() string {
+	return string(e)
+}
+
+func (e *AuthMethod) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = AuthMethod(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid AuthMethod", str)
+	}
+	return nil
+}
+
+func (e AuthMethod) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *AuthMethod) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e AuthMethod) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
 
 type BootstrapTokenType string
 

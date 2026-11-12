@@ -1,0 +1,21 @@
+mutation RevokeAuthSession($id: ID!) {
+  revokeAuthSession(id: $id) {
+    __typename
+    ... on RevokeAuthSessionPayload {
+      success
+      current
+    }
+    ... on ValidationError {
+      message
+      field
+      code
+    }
+    ... on AuthError {
+      ...AuthErrorFields
+    }
+    ... on NotFoundError {
+      message
+      code
+    }
+  }
+}

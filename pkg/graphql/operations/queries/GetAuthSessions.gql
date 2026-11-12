@@ -1,0 +1,14 @@
+query GetAuthSessions($first: Int, $after: String) {
+  authSessionsConnection(first: $first, after: $after) {
+    nodes {
+      ...AuthSessionFields
+    }
+    pageInfo {
+      startCursor
+      endCursor
+      hasNextPage
+      hasPreviousPage
+    }
+    totalCount
+  }
+}

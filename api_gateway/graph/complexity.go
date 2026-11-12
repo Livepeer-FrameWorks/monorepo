@@ -77,6 +77,9 @@ func connectionComplexity(childComplexity int, page *model.ConnectionInput) int 
 //
 // See: https://shopify.engineering/rate-limiting-graphql-apis-calculating-query-complexity
 func SetupComplexity(c *generated.ComplexityRoot) {
+	c.Query.AuthSessionsConnection = func(childComplexity int, first *int, _ *string) int {
+		return connectionComplexity(childComplexity, &model.ConnectionInput{First: first})
+	}
 	// APIUsage connections
 	c.APIUsage.APIUsageConnection = func(childComplexity int, page *model.ConnectionInput, _ *string, _ *string, _ *model.TimeRangeInput, _ *bool) int {
 		return connectionComplexity(childComplexity, page)

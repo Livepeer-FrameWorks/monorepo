@@ -1,0 +1,20 @@
+mutation RenameAuthSession($id: ID!, $label: String!) {
+  renameAuthSession(id: $id, label: $label) {
+    __typename
+    ... on AuthSession {
+      ...AuthSessionFields
+    }
+    ... on ValidationError {
+      message
+      field
+      code
+    }
+    ... on AuthError {
+      ...AuthErrorFields
+    }
+    ... on NotFoundError {
+      message
+      code
+    }
+  }
+}

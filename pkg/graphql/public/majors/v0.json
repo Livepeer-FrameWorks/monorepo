@@ -3910,6 +3910,13 @@
           "document": "mutation ChangeBillingTier ($tierId: ID!) {\n  changeBillingTier(tierId: $tierId) {\n    __typename\n    ... ChangeBillingTierPayloadDefaultFields\n    ... ValidationErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment ChangeBillingTierPayloadDefaultFields on ChangeBillingTierPayload {\n  success\n  message\n  appliedTier {\n    id\n    tierName\n    tierLevel\n    displayName\n    description\n    basePrice\n    currency\n    billingPeriod\n    features {\n      supportLevel\n      sla\n      processingCustomizable\n    }\n    pricingRules {\n      meter\n      model\n      currency\n      includedQuantity\n      unitPrice\n      configJson\n    }\n    entitlements {\n      key\n      value\n    }\n    supportLevel\n    slaLevel\n    meteringEnabled\n    isEnterprise\n  }\n  pendingTier {\n    id\n    tierName\n    tierLevel\n    displayName\n    description\n    basePrice\n    currency\n    billingPeriod\n    features {\n      supportLevel\n      sla\n      processingCustomizable\n    }\n    pricingRules {\n      meter\n      model\n      currency\n      includedQuantity\n      unitPrice\n      configJson\n    }\n    entitlements {\n      key\n      value\n    }\n    supportLevel\n    slaLevel\n    meteringEnabled\n    isEnterprise\n  }\n  effectiveAt\n}\nfragment ValidationErrorDefaultFields on ValidationError {\n  message\n  code\n  field\n  constraint\n}\n"
         },
         {
+          "name": "ChangePassword",
+          "kind": "mutation",
+          "since": "v0.3.15",
+          "hash": "sha256:e9a0e4c5e78a32e0b70769929a62c087d1839cdc77b621ac8861d19157a4715f",
+          "document": "mutation ChangePassword ($currentPassword: String!, $newPassword: String!) {\n  changePassword(currentPassword: $currentPassword, newPassword: $newPassword) {\n    __typename\n    ... ChangePasswordPayloadDefaultFields\n    ... ValidationErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment ChangePasswordPayloadDefaultFields on ChangePasswordPayload {\n  success\n  revokedCount\n}\nfragment ValidationErrorDefaultFields on ValidationError {\n  message\n  code\n  field\n  constraint\n}\n"
+        },
+        {
           "name": "CompleteVodUpload",
           "kind": "mutation",
           "since": "v0.3.11",
@@ -4160,6 +4167,13 @@
           "since": "v0.3.11",
           "hash": "sha256:27a3031ce62afda7c75340978148c87246b1ed2d787664283b5b25605d8f28e5",
           "document": "query GetArtifactStatesConnection ($page: ConnectionInput, $streamId: ID, $contentType: String, $stage: String) {\n  analytics {\n    lifecycle {\n      artifactStatesConnection(page: $page, streamId: $streamId, contentType: $contentType, stage: $stage) {\n        edges {\n          cursor\n          node {\n            ... ArtifactStateDefaultFields\n          }\n        }\n        pageInfo {\n          ... PageInfoDefaultFields\n        }\n        totalCount\n      }\n    }\n  }\n}\nfragment ArtifactStateDefaultFields on ArtifactState {\n  streamId\n  stream {\n    id\n    streamId\n    name\n    description\n    streamKey\n    playbackId\n    record\n    liveVideoAbr\n    ingestMode\n    pullSource {\n      sourceUriRedacted\n      enabled\n      class\n    }\n    managedSource {\n      sourceKind\n      alwaysOn\n      placementCount\n    }\n    sourceLocation {\n      mode\n      avoidNodeIds\n    }\n    createdAt\n    updatedAt\n    metrics {\n      status\n      isLive\n      currentViewers\n      startedAt\n      updatedAt\n      nodeId\n      trackCount\n      totalInputs\n      uploadedBytes\n      downloadedBytes\n      viewerSeconds\n      packetsSent\n      packetsLost\n      packetsRetransmitted\n      bufferState\n      qualityTier\n      primaryWidth\n      primaryHeight\n      primaryFps\n      primaryCodec\n      primaryBitrate\n      hasIssues\n      issuesDescription\n    }\n    pushTargets {\n      id\n      streamId\n      platform\n      name\n      videoChoice\n      targetUri\n      isEnabled\n      status\n      lastError\n      reasonCode\n      lastPushedAt\n      createdAt\n    }\n    playbackPolicy {\n      type\n      allowedOrigins\n    }\n    dvrChapterMode\n    dvrChapterIntervalSeconds\n    monitoring\n    thumbnailAssets {\n      posterUrl\n      spriteVttUrl\n      spriteJpgUrl\n      assetKey\n    }\n    retentionOverrides {\n      streamId\n      dvrRetentionDaysOverride\n      clipRetentionDaysOverride\n    }\n  }\n  playbackId\n  contentType\n  stage\n  progressPercent\n  errorMessage\n  requestedAt\n  startedAt\n  completedAt\n  clipStartUnix\n  clipStopUnix\n  segmentCount\n  manifestPath\n  filePath\n  s3Url\n  sizeBytes\n  processingNodeId\n  expiresAt\n}\nfragment PageInfoDefaultFields on PageInfo {\n  startCursor\n  endCursor\n  hasNextPage\n  hasPreviousPage\n}\n"
+        },
+        {
+          "name": "GetAuthSessionsConnection",
+          "kind": "query",
+          "since": "v0.3.15",
+          "hash": "sha256:18810b1760988594b6ddfc0a60c1c8742e5cef19a9d0512bb4f436dce8c32118",
+          "document": "query GetAuthSessionsConnection ($first: Int, $after: String) {\n  authSessionsConnection(first: $first, after: $after) {\n    edges {\n      cursor\n      node {\n        ... AuthSessionDefaultFields\n      }\n    }\n    pageInfo {\n      ... PageInfoDefaultFields\n    }\n    totalCount\n  }\n}\nfragment AuthSessionDefaultFields on AuthSession {\n  id\n  clientKind\n  clientId\n  authMethod\n  label\n  clientVersion\n  ipAddress\n  location\n  createdAt\n  lastActiveAt\n  expiresAt\n  current\n}\nfragment PageInfoDefaultFields on PageInfo {\n  startCursor\n  endCursor\n  hasNextPage\n  hasPreviousPage\n}\n"
         },
         {
           "name": "GetBalanceTransactionsConnection",
@@ -5198,6 +5212,13 @@
           "document": "mutation RejectClusterSubscription ($subscriptionId: ID!, $reason: String) {\n  rejectClusterSubscription(subscriptionId: $subscriptionId, reason: $reason) {\n    __typename\n    ... ClusterSubscriptionDefaultFields\n    ... ValidationErrorDefaultFields\n    ... NotFoundErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment ClusterSubscriptionDefaultFields on ClusterSubscription {\n  id\n  tenantId\n  clusterId\n  accessLevel\n  subscriptionStatus\n  resourceLimits\n  requestedAt\n  approvedAt\n  approvedBy\n  rejectionReason\n  expiresAt\n  createdAt\n  updatedAt\n  clusterName\n  tenantName\n}\nfragment NotFoundErrorDefaultFields on NotFoundError {\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment ValidationErrorDefaultFields on ValidationError {\n  message\n  code\n  field\n  constraint\n}\n"
         },
         {
+          "name": "RenameAuthSession",
+          "kind": "mutation",
+          "since": "v0.3.15",
+          "hash": "sha256:3830ebb9431933765ed3639568f96452a4ffe76574b9c21d8358b5ede8c499b8",
+          "document": "mutation RenameAuthSession ($id: ID!, $label: String!) {\n  renameAuthSession(id: $id, label: $label) {\n    __typename\n    ... AuthSessionDefaultFields\n    ... ValidationErrorDefaultFields\n    ... NotFoundErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment AuthSessionDefaultFields on AuthSession {\n  id\n  clientKind\n  clientId\n  authMethod\n  label\n  clientVersion\n  ipAddress\n  location\n  createdAt\n  lastActiveAt\n  expiresAt\n  current\n}\nfragment NotFoundErrorDefaultFields on NotFoundError {\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment ValidationErrorDefaultFields on ValidationError {\n  message\n  code\n  field\n  constraint\n}\n"
+        },
+        {
           "name": "ReplayWebhookDeliveries",
           "kind": "mutation",
           "since": "v0.3.11",
@@ -5247,6 +5268,13 @@
           "document": "query ResolveViewerEndpoint ($contentId: String!, $protocol: MediaViewerProtocol) {\n  resolveViewerEndpoint(contentId: $contentId, protocol: $protocol) {\n    primary {\n      ... ViewerEndpointFields\n    }\n    fallbacks {\n      ... ViewerEndpointFields\n    }\n    metadata {\n      contentType\n      contentId\n      title\n      description\n      durationSeconds\n      status\n      isLive\n      viewers\n      recordingSizeBytes\n      clipSource\n      createdAt\n      telemetryToken\n      thumbnailAssets {\n        ... ThumbnailAssetsFields\n      }\n    }\n  }\n}\nfragment ThumbnailAssetsFields on ThumbnailAssets {\n  posterUrl\n  spriteVttUrl\n  spriteJpgUrl\n  assetKey\n}\nfragment ViewerEndpointFields on ViewerEndpoint {\n  nodeId\n  baseUrl\n  protocol\n  url\n  geoDistance\n  loadScore\n  outputs\n}\n"
         },
         {
+          "name": "RevokeAuthSession",
+          "kind": "mutation",
+          "since": "v0.3.15",
+          "hash": "sha256:8aff383e3e4057279a638e03529a0dcef5d4c35e9604375b74cd7b6d42625dcf",
+          "document": "mutation RevokeAuthSession ($id: ID!) {\n  revokeAuthSession(id: $id) {\n    __typename\n    ... RevokeAuthSessionPayloadDefaultFields\n    ... ValidationErrorDefaultFields\n    ... NotFoundErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment NotFoundErrorDefaultFields on NotFoundError {\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment RevokeAuthSessionPayloadDefaultFields on RevokeAuthSessionPayload {\n  success\n  current\n}\nfragment ValidationErrorDefaultFields on ValidationError {\n  message\n  code\n  field\n  constraint\n}\n"
+        },
+        {
           "name": "RevokeClusterInvite",
           "kind": "mutation",
           "since": "v0.3.11",
@@ -5259,6 +5287,13 @@
           "since": "v0.3.11",
           "hash": "sha256:d32ec205a5ae70b5130d151bab4e3e4140ca4b6f683fa61a7473358a03efe1f7",
           "document": "mutation RevokeDeveloperToken ($id: ID!) {\n  revokeDeveloperToken(id: $id) {\n    __typename\n    ... DeleteSuccessFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment DeleteSuccessFields on DeleteSuccess {\n  __typename\n  success\n  deletedId\n  pending\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\n"
+        },
+        {
+          "name": "RevokeOtherAuthSessions",
+          "kind": "mutation",
+          "since": "v0.3.15",
+          "hash": "sha256:3c0a5a26e4d5d6d006ec7c7ed45b30c0f1b3d1350e56972bf7fddc98d4dd692a",
+          "document": "mutation RevokeOtherAuthSessions {\n  revokeOtherAuthSessions {\n    __typename\n    ... RevokeOtherAuthSessionsPayloadDefaultFields\n    ... ValidationErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment RevokeOtherAuthSessionsPayloadDefaultFields on RevokeOtherAuthSessionsPayload {\n  revokedCount\n}\nfragment ValidationErrorDefaultFields on ValidationError {\n  message\n  code\n  field\n  constraint\n}\n"
         },
         {
           "name": "RevokeSigningKey",
