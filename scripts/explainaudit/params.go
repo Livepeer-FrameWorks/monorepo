@@ -176,6 +176,11 @@ func (b *binder) bind(text string, names []string, types []string) []paramBindin
 	for i, typ := range types {
 		n := i + 1
 		pb := paramBinding{Index: n, Type: typ}
+		if fixture := authBackfillFixtureFor(b.queryID); fixture != nil {
+			pb.Source, pb.Value = "live auth backfill fixture", fixture.parameter(typ)
+			out[i] = pb
+			continue
+		}
 		if fixture := purserFixtureFor(b.queryID, b.now); fixture != nil {
 			if value, ok := fixture.parameter(nameAt(names, i)); ok {
 				pb.Source, pb.Value = "purser payment fixture", value
