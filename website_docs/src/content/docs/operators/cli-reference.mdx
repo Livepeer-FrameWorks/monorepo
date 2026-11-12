@@ -3863,6 +3863,39 @@ so you can retry server revocation.
 platforms without named sessions support local sign-out only; their server
 session remains valid until it expires or is revoked.
 
+### frameworks auth status
+
+Show the authenticated user, tenant, current session label and expiry. This
+checks the credential with Bridge before displaying its identity.
+
+```bash
+frameworks auth status
+frameworks auth status --output json
+```
+
+### frameworks auth sessions
+
+List your signed-in browsers, CLI and desktop sessions, or sign out a lost device.
+These commands require platform v0.3.15 or newer and manage only your own sessions.
+
+```bash
+frameworks auth sessions list
+frameworks auth sessions list --first 25 --after '<cursor>' --output json
+frameworks auth sessions revoke '<session-id>'
+frameworks auth sessions revoke-others
+```
+
+`list` defaults to 100 sessions per page; use the returned cursor for the next
+page. `revoke-others` keeps the credential running the command. Revoking the
+current stored CLI session also clears its local credentials, while preserving
+any replacement login that completed during the request.
+
+Stored credentials use the Bridge saved at login, even after a context switch.
+When `FW_USER_TOKEN` is set, these commands use the active context's Bridge and
+act as that credential's user and session. They never refresh it or access the
+CLI credential store. For example, a tray-launched CLI keeps the tray session
+when running `revoke-others`.
+
 ---
 
 ## Utility Commands

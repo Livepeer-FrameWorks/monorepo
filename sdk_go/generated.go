@@ -59415,6 +59415,230 @@ func (v *GetRoutingEventsConnectionResponse) GetAnalytics() GetRoutingEventsConn
 	return v.Analytics
 }
 
+// GetSecurityActivityConnectionResponse is returned by GetSecurityActivityConnection on success.
+type GetSecurityActivityConnectionResponse struct {
+	// Your own security activity from the past 90 days.
+	SecurityActivityConnection GetSecurityActivityConnectionSecurityActivityConnection `json:"securityActivityConnection"`
+}
+
+// GetSecurityActivityConnection returns GetSecurityActivityConnectionResponse.SecurityActivityConnection, and is useful for accessing the field via an interface.
+func (v *GetSecurityActivityConnectionResponse) GetSecurityActivityConnection() GetSecurityActivityConnectionSecurityActivityConnection {
+	return v.SecurityActivityConnection
+}
+
+// GetSecurityActivityConnectionSecurityActivityConnection includes the requested fields of the GraphQL type SecurityActivityConnection.
+type GetSecurityActivityConnectionSecurityActivityConnection struct {
+	Edges      []GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdge `json:"edges"`
+	PageInfo   GetSecurityActivityConnectionSecurityActivityConnectionPageInfo                    `json:"pageInfo"`
+	TotalCount int                                                                                `json:"totalCount"`
+}
+
+// GetEdges returns GetSecurityActivityConnectionSecurityActivityConnection.Edges, and is useful for accessing the field via an interface.
+func (v *GetSecurityActivityConnectionSecurityActivityConnection) GetEdges() []GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdge {
+	return v.Edges
+}
+
+// GetPageInfo returns GetSecurityActivityConnectionSecurityActivityConnection.PageInfo, and is useful for accessing the field via an interface.
+func (v *GetSecurityActivityConnectionSecurityActivityConnection) GetPageInfo() GetSecurityActivityConnectionSecurityActivityConnectionPageInfo {
+	return v.PageInfo
+}
+
+// GetTotalCount returns GetSecurityActivityConnectionSecurityActivityConnection.TotalCount, and is useful for accessing the field via an interface.
+func (v *GetSecurityActivityConnectionSecurityActivityConnection) GetTotalCount() int {
+	return v.TotalCount
+}
+
+// GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdge includes the requested fields of the GraphQL type SecurityActivityEdge.
+type GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdge struct {
+	Cursor string                                                                                                    `json:"cursor"`
+	Node   GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent `json:"node"`
+}
+
+// GetCursor returns GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdge.Cursor, and is useful for accessing the field via an interface.
+func (v *GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdge) GetCursor() string {
+	return v.Cursor
+}
+
+// GetNode returns GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdge.Node, and is useful for accessing the field via an interface.
+func (v *GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdge) GetNode() GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent {
+	return v.Node
+}
+
+// GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent includes the requested fields of the GraphQL type SecurityActivityEvent.
+// The GraphQL type's documentation follows.
+//
+// A security event concerning only the signed-in user.
+type GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent struct {
+	SecurityActivityEventDefaultFields `json:"-"`
+}
+
+// GetId returns GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent.Id, and is useful for accessing the field via an interface.
+func (v *GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent) GetId() string {
+	return v.SecurityActivityEventDefaultFields.Id
+}
+
+// GetKind returns GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent.Kind, and is useful for accessing the field via an interface.
+func (v *GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent) GetKind() SecurityActivityKind {
+	return v.SecurityActivityEventDefaultFields.Kind
+}
+
+// GetTimestamp returns GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent.Timestamp, and is useful for accessing the field via an interface.
+func (v *GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent) GetTimestamp() time.Time {
+	return v.SecurityActivityEventDefaultFields.Timestamp
+}
+
+// GetAuthMethod returns GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent.AuthMethod, and is useful for accessing the field via an interface.
+func (v *GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent) GetAuthMethod() AuthMethod {
+	return v.SecurityActivityEventDefaultFields.AuthMethod
+}
+
+// GetSessionId returns GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent.SessionId, and is useful for accessing the field via an interface.
+func (v *GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent) GetSessionId() *string {
+	return v.SecurityActivityEventDefaultFields.SessionId
+}
+
+// GetReason returns GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent.Reason, and is useful for accessing the field via an interface.
+func (v *GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent) GetReason() *string {
+	return v.SecurityActivityEventDefaultFields.Reason
+}
+
+func (v *GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.SecurityActivityEventDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalGetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent struct {
+	Id string `json:"id"`
+
+	Kind SecurityActivityKind `json:"kind"`
+
+	Timestamp time.Time `json:"timestamp"`
+
+	AuthMethod AuthMethod `json:"authMethod"`
+
+	SessionId *string `json:"sessionId"`
+
+	Reason *string `json:"reason"`
+}
+
+func (v *GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *GetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent) __premarshalJSON() (*__premarshalGetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent, error) {
+	var retval __premarshalGetSecurityActivityConnectionSecurityActivityConnectionEdgesSecurityActivityEdgeNodeSecurityActivityEvent
+
+	retval.Id = v.SecurityActivityEventDefaultFields.Id
+	retval.Kind = v.SecurityActivityEventDefaultFields.Kind
+	retval.Timestamp = v.SecurityActivityEventDefaultFields.Timestamp
+	retval.AuthMethod = v.SecurityActivityEventDefaultFields.AuthMethod
+	retval.SessionId = v.SecurityActivityEventDefaultFields.SessionId
+	retval.Reason = v.SecurityActivityEventDefaultFields.Reason
+	return &retval, nil
+}
+
+// GetSecurityActivityConnectionSecurityActivityConnectionPageInfo includes the requested fields of the GraphQL type PageInfo.
+type GetSecurityActivityConnectionSecurityActivityConnectionPageInfo struct {
+	PageInfoDefaultFields `json:"-"`
+}
+
+// GetStartCursor returns GetSecurityActivityConnectionSecurityActivityConnectionPageInfo.StartCursor, and is useful for accessing the field via an interface.
+func (v *GetSecurityActivityConnectionSecurityActivityConnectionPageInfo) GetStartCursor() *string {
+	return v.PageInfoDefaultFields.StartCursor
+}
+
+// GetEndCursor returns GetSecurityActivityConnectionSecurityActivityConnectionPageInfo.EndCursor, and is useful for accessing the field via an interface.
+func (v *GetSecurityActivityConnectionSecurityActivityConnectionPageInfo) GetEndCursor() *string {
+	return v.PageInfoDefaultFields.EndCursor
+}
+
+// GetHasNextPage returns GetSecurityActivityConnectionSecurityActivityConnectionPageInfo.HasNextPage, and is useful for accessing the field via an interface.
+func (v *GetSecurityActivityConnectionSecurityActivityConnectionPageInfo) GetHasNextPage() bool {
+	return v.PageInfoDefaultFields.HasNextPage
+}
+
+// GetHasPreviousPage returns GetSecurityActivityConnectionSecurityActivityConnectionPageInfo.HasPreviousPage, and is useful for accessing the field via an interface.
+func (v *GetSecurityActivityConnectionSecurityActivityConnectionPageInfo) GetHasPreviousPage() bool {
+	return v.PageInfoDefaultFields.HasPreviousPage
+}
+
+func (v *GetSecurityActivityConnectionSecurityActivityConnectionPageInfo) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*GetSecurityActivityConnectionSecurityActivityConnectionPageInfo
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.GetSecurityActivityConnectionSecurityActivityConnectionPageInfo = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.PageInfoDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalGetSecurityActivityConnectionSecurityActivityConnectionPageInfo struct {
+	StartCursor *string `json:"startCursor"`
+
+	EndCursor *string `json:"endCursor"`
+
+	HasNextPage bool `json:"hasNextPage"`
+
+	HasPreviousPage bool `json:"hasPreviousPage"`
+}
+
+func (v *GetSecurityActivityConnectionSecurityActivityConnectionPageInfo) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *GetSecurityActivityConnectionSecurityActivityConnectionPageInfo) __premarshalJSON() (*__premarshalGetSecurityActivityConnectionSecurityActivityConnectionPageInfo, error) {
+	var retval __premarshalGetSecurityActivityConnectionSecurityActivityConnectionPageInfo
+
+	retval.StartCursor = v.PageInfoDefaultFields.StartCursor
+	retval.EndCursor = v.PageInfoDefaultFields.EndCursor
+	retval.HasNextPage = v.PageInfoDefaultFields.HasNextPage
+	retval.HasPreviousPage = v.PageInfoDefaultFields.HasPreviousPage
+	return &retval, nil
+}
+
 // GetServiceInstancesConnectionAnalytics includes the requested fields of the GraphQL type Analytics.
 // The GraphQL type's documentation follows.
 //
@@ -93292,6 +93516,61 @@ func (v *RoutingEventDefaultFieldsStreamThumbnailAssets) GetSpriteJpgUrl() strin
 // GetAssetKey returns RoutingEventDefaultFieldsStreamThumbnailAssets.AssetKey, and is useful for accessing the field via an interface.
 func (v *RoutingEventDefaultFieldsStreamThumbnailAssets) GetAssetKey() string { return v.AssetKey }
 
+// SecurityActivityEventDefaultFields includes the GraphQL fields of SecurityActivityEvent requested by the fragment SecurityActivityEventDefaultFields.
+// The GraphQL type's documentation follows.
+//
+// A security event concerning only the signed-in user.
+type SecurityActivityEventDefaultFields struct {
+	Id         string               `json:"id"`
+	Kind       SecurityActivityKind `json:"kind"`
+	Timestamp  time.Time            `json:"timestamp"`
+	AuthMethod AuthMethod           `json:"authMethod"`
+	SessionId  *string              `json:"sessionId"`
+	Reason     *string              `json:"reason"`
+}
+
+// GetId returns SecurityActivityEventDefaultFields.Id, and is useful for accessing the field via an interface.
+func (v *SecurityActivityEventDefaultFields) GetId() string { return v.Id }
+
+// GetKind returns SecurityActivityEventDefaultFields.Kind, and is useful for accessing the field via an interface.
+func (v *SecurityActivityEventDefaultFields) GetKind() SecurityActivityKind { return v.Kind }
+
+// GetTimestamp returns SecurityActivityEventDefaultFields.Timestamp, and is useful for accessing the field via an interface.
+func (v *SecurityActivityEventDefaultFields) GetTimestamp() time.Time { return v.Timestamp }
+
+// GetAuthMethod returns SecurityActivityEventDefaultFields.AuthMethod, and is useful for accessing the field via an interface.
+func (v *SecurityActivityEventDefaultFields) GetAuthMethod() AuthMethod { return v.AuthMethod }
+
+// GetSessionId returns SecurityActivityEventDefaultFields.SessionId, and is useful for accessing the field via an interface.
+func (v *SecurityActivityEventDefaultFields) GetSessionId() *string { return v.SessionId }
+
+// GetReason returns SecurityActivityEventDefaultFields.Reason, and is useful for accessing the field via an interface.
+func (v *SecurityActivityEventDefaultFields) GetReason() *string { return v.Reason }
+
+type SecurityActivityKind string
+
+const (
+	SecurityActivityKindSignInSucceeded SecurityActivityKind = "SIGN_IN_SUCCEEDED"
+	SecurityActivityKindSignInFailed    SecurityActivityKind = "SIGN_IN_FAILED"
+	SecurityActivityKindSessionRevoked  SecurityActivityKind = "SESSION_REVOKED"
+	SecurityActivityKindSessionsRevoked SecurityActivityKind = "SESSIONS_REVOKED"
+	SecurityActivityKindPasswordChanged SecurityActivityKind = "PASSWORD_CHANGED"
+	SecurityActivityKindPasswordReset   SecurityActivityKind = "PASSWORD_RESET"
+	SecurityActivityKindWalletLinked    SecurityActivityKind = "WALLET_LINKED"
+	SecurityActivityKindWalletUnlinked  SecurityActivityKind = "WALLET_UNLINKED"
+)
+
+var AllSecurityActivityKind = []SecurityActivityKind{
+	SecurityActivityKindSignInSucceeded,
+	SecurityActivityKindSignInFailed,
+	SecurityActivityKindSessionRevoked,
+	SecurityActivityKindSessionsRevoked,
+	SecurityActivityKindPasswordChanged,
+	SecurityActivityKindPasswordReset,
+	SecurityActivityKindWalletLinked,
+	SecurityActivityKindWalletUnlinked,
+}
+
 // Input for sending a message.
 type SendMessageInput struct {
 	// The conversation ID to send the message to.
@@ -127038,6 +127317,18 @@ func (v *__GetRoutingEventsConnectionInput) GetClusterId() *string { return v.Cl
 // GetNoCache returns __GetRoutingEventsConnectionInput.NoCache, and is useful for accessing the field via an interface.
 func (v *__GetRoutingEventsConnectionInput) GetNoCache() *bool { return v.NoCache }
 
+// __GetSecurityActivityConnectionInput is used internally by genqlient
+type __GetSecurityActivityConnectionInput struct {
+	First *int    `json:"first"`
+	After *string `json:"after"`
+}
+
+// GetFirst returns __GetSecurityActivityConnectionInput.First, and is useful for accessing the field via an interface.
+func (v *__GetSecurityActivityConnectionInput) GetFirst() *int { return v.First }
+
+// GetAfter returns __GetSecurityActivityConnectionInput.After, and is useful for accessing the field via an interface.
+func (v *__GetSecurityActivityConnectionInput) GetAfter() *string { return v.After }
+
 // __GetServiceInstancesConnectionInput is used internally by genqlient
 type __GetServiceInstancesConnectionInput struct {
 	Page      *ConnectionInput `json:"page"`
@@ -139923,6 +140214,68 @@ func GetRoutingEventsConnection(
 	}
 
 	data_ = &GetRoutingEventsConnectionResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The query executed by GetSecurityActivityConnection.
+const GetSecurityActivityConnection_Operation = `
+query GetSecurityActivityConnection ($first: Int, $after: String) {
+	securityActivityConnection(first: $first, after: $after) {
+		edges {
+			cursor
+			node {
+				... SecurityActivityEventDefaultFields
+			}
+		}
+		pageInfo {
+			... PageInfoDefaultFields
+		}
+		totalCount
+	}
+}
+fragment SecurityActivityEventDefaultFields on SecurityActivityEvent {
+	id
+	kind
+	timestamp
+	authMethod
+	sessionId
+	reason
+}
+fragment PageInfoDefaultFields on PageInfo {
+	startCursor
+	endCursor
+	hasNextPage
+	hasPreviousPage
+}
+`
+
+// GetSecurityActivityConnection executes the corresponding GraphQL operation.
+//
+// Your own security activity from the past 90 days.
+func GetSecurityActivityConnection(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	first *int,
+	after *string,
+) (data_ *GetSecurityActivityConnectionResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "GetSecurityActivityConnection",
+		Query:  GetSecurityActivityConnection_Operation,
+		Variables: &__GetSecurityActivityConnectionInput{
+			First: first,
+			After: after,
+		},
+	}
+
+	data_ = &GetSecurityActivityConnectionResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(

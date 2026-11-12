@@ -53,6 +53,22 @@ check "browser renames its other native session through GraphQL" jq -e --arg sid
   '(.errors // [] | length) == 0 and .data.renameAuthSession.__typename == "AuthSession" and .data.renameAuthSession.id == $sid and .data.renameAuthSession.label == "Native stack CLI" and (.data.renameAuthSession.current | not)' \
   "$WORK/security-rename.json" >/dev/null || finish
 
+activity_ready=false
+signed_in_at=$(jq -r '.auth_time' "$WORK/initial-claims.json")
+for attempt in $(seq 1 20); do
+  code=$(curl -s -m 10 -o "$WORK/security-activity.json" -w '%{http_code}' \
+    -H 'Content-Type: application/json' -H "Authorization: Bearer $native_access" \
+    --data '{"query":"{ securityActivityConnection(first:100) { nodes { id kind timestamp authMethod } totalCount } }"}' "$BRIDGE_URL/graphql")
+  if [ "$code" = 200 ] && jq -e --argjson since "$signed_in_at" \
+    '(.errors // [] | length) == 0 and any(.data.securityActivityConnection.nodes[]; .kind == "SIGN_IN_SUCCEEDED" and .authMethod == "DEVICE_CODE" and ((.timestamp | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) >= $since))' \
+    "$WORK/security-activity.json" >/dev/null 2>&1; then
+    activity_ready=true
+    break
+  fi
+  sleep 2
+done
+check "native sign-in reaches its own 90-day security activity through Periscope" [ "$activity_ready" = true ] || finish
+
 for rotation in 1 2; do
   jq '{grant_type:"refresh_token",refresh_token}' "$WORK/pair.json" | curl -s -m 30 \
     -D "$WORK/headers" -o "$WORK/rotated.json" -w '%{http_code}' \

@@ -49,6 +49,8 @@ var capabilityCatalog = map[string][]Capability{
 		{Name: "domain event outbox", Engine: EnginePostgres, Probe: "SELECT event_id, event_type, tenant_id, lease_token, completed_at FROM bosun.domain_event_outbox LIMIT 0", IntroducedIn: "v0.3.11"},
 	},
 	"commodore": {
+		{Name: "account security sessions", Engine: EnginePostgres, Probe: "SELECT s.tenant_id, s.user_id, s.device_key, d.last_seen_at FROM commodore.auth_sessions s LEFT JOIN commodore.auth_session_devices d ON d.tenant_id=s.tenant_id AND d.user_id=s.user_id AND d.device_key=s.device_key LIMIT 0", IntroducedIn: "v0.3.15"},
+		{Name: "security email outbox", Engine: EnginePostgres, Probe: "SELECT tenant_id, user_id, purpose, status, payload FROM commodore.account_email_outbox LIMIT 0", IntroducedIn: "v0.3.15"},
 		{Name: "publisher lease execution fencing", Engine: EnginePostgres, Probe: "SELECT s.tenant_id, s.active_ingest_node_id, s.active_ingest_control_cell_id, a.execution_token FROM commodore.streams s LEFT JOIN commodore.publisher_lease_abandonments a ON false LIMIT 0", IntroducedIn: "v0.3.14"},
 		{Name: "media cell activation edge", Engine: EnginePostgres, Probe: "SELECT cell_id, activation_schema_version FROM commodore.media_cell_placement_capabilities LIMIT 0", IntroducedIn: "v0.3.11"},
 		{Name: "media authority target retirement", Engine: EnginePostgres, Probe: "SELECT correction_until FROM commodore.media_authority_targets LIMIT 0", IntroducedIn: "v0.3.11"},

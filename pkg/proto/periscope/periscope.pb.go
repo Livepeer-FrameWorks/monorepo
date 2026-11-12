@@ -7226,6 +7226,187 @@ func (x *GetNetworkLiveStatsResponse) GetClusters() []*NetworkClusterLiveStats {
 	return nil
 }
 
+type SecurityActivityEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	EventType     string                 `protobuf:"bytes,2,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"`
+	Timestamp     *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	AuthMethod    string                 `protobuf:"bytes,4,opt,name=auth_method,json=authMethod,proto3" json:"auth_method,omitempty"`
+	SessionId     string                 `protobuf:"bytes,5,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Reason        string                 `protobuf:"bytes,6,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SecurityActivityEvent) Reset() {
+	*x = SecurityActivityEvent{}
+	mi := &file_periscope_proto_msgTypes[79]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SecurityActivityEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SecurityActivityEvent) ProtoMessage() {}
+
+func (x *SecurityActivityEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_periscope_proto_msgTypes[79]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SecurityActivityEvent.ProtoReflect.Descriptor instead.
+func (*SecurityActivityEvent) Descriptor() ([]byte, []int) {
+	return file_periscope_proto_rawDescGZIP(), []int{79}
+}
+
+func (x *SecurityActivityEvent) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *SecurityActivityEvent) GetEventType() string {
+	if x != nil {
+		return x.EventType
+	}
+	return ""
+}
+
+func (x *SecurityActivityEvent) GetTimestamp() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Timestamp
+	}
+	return nil
+}
+
+func (x *SecurityActivityEvent) GetAuthMethod() string {
+	if x != nil {
+		return x.AuthMethod
+	}
+	return ""
+}
+
+func (x *SecurityActivityEvent) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *SecurityActivityEvent) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+// Scope comes exclusively from the interactive credential, never request IDs.
+type GetSecurityActivityRequest struct {
+	state         protoimpl.MessageState          `protogen:"open.v1"`
+	Pagination    *common.CursorPaginationRequest `protobuf:"bytes,1,opt,name=pagination,proto3" json:"pagination,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSecurityActivityRequest) Reset() {
+	*x = GetSecurityActivityRequest{}
+	mi := &file_periscope_proto_msgTypes[80]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSecurityActivityRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSecurityActivityRequest) ProtoMessage() {}
+
+func (x *GetSecurityActivityRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_periscope_proto_msgTypes[80]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSecurityActivityRequest.ProtoReflect.Descriptor instead.
+func (*GetSecurityActivityRequest) Descriptor() ([]byte, []int) {
+	return file_periscope_proto_rawDescGZIP(), []int{80}
+}
+
+func (x *GetSecurityActivityRequest) GetPagination() *common.CursorPaginationRequest {
+	if x != nil {
+		return x.Pagination
+	}
+	return nil
+}
+
+type GetSecurityActivityResponse struct {
+	state         protoimpl.MessageState           `protogen:"open.v1"`
+	Events        []*SecurityActivityEvent         `protobuf:"bytes,1,rep,name=events,proto3" json:"events,omitempty"`
+	Pagination    *common.CursorPaginationResponse `protobuf:"bytes,2,opt,name=pagination,proto3" json:"pagination,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSecurityActivityResponse) Reset() {
+	*x = GetSecurityActivityResponse{}
+	mi := &file_periscope_proto_msgTypes[81]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSecurityActivityResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSecurityActivityResponse) ProtoMessage() {}
+
+func (x *GetSecurityActivityResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_periscope_proto_msgTypes[81]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSecurityActivityResponse.ProtoReflect.Descriptor instead.
+func (*GetSecurityActivityResponse) Descriptor() ([]byte, []int) {
+	return file_periscope_proto_rawDescGZIP(), []int{81}
+}
+
+func (x *GetSecurityActivityResponse) GetEvents() []*SecurityActivityEvent {
+	if x != nil {
+		return x.Events
+	}
+	return nil
+}
+
+func (x *GetSecurityActivityResponse) GetPagination() *common.CursorPaginationResponse {
+	if x != nil {
+		return x.Pagination
+	}
+	return nil
+}
+
 // Stream connection hourly aggregates (from stream_connection_hourly MV)
 type StreamConnectionHourly struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -7242,7 +7423,7 @@ type StreamConnectionHourly struct {
 
 func (x *StreamConnectionHourly) Reset() {
 	*x = StreamConnectionHourly{}
-	mi := &file_periscope_proto_msgTypes[79]
+	mi := &file_periscope_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7254,7 +7435,7 @@ func (x *StreamConnectionHourly) String() string {
 func (*StreamConnectionHourly) ProtoMessage() {}
 
 func (x *StreamConnectionHourly) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[79]
+	mi := &file_periscope_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7267,7 +7448,7 @@ func (x *StreamConnectionHourly) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamConnectionHourly.ProtoReflect.Descriptor instead.
 func (*StreamConnectionHourly) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{79}
+	return file_periscope_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *StreamConnectionHourly) GetId() string {
@@ -7331,7 +7512,7 @@ type GetStreamConnectionHourlyRequest struct {
 
 func (x *GetStreamConnectionHourlyRequest) Reset() {
 	*x = GetStreamConnectionHourlyRequest{}
-	mi := &file_periscope_proto_msgTypes[80]
+	mi := &file_periscope_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7343,7 +7524,7 @@ func (x *GetStreamConnectionHourlyRequest) String() string {
 func (*GetStreamConnectionHourlyRequest) ProtoMessage() {}
 
 func (x *GetStreamConnectionHourlyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[80]
+	mi := &file_periscope_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7356,7 +7537,7 @@ func (x *GetStreamConnectionHourlyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStreamConnectionHourlyRequest.ProtoReflect.Descriptor instead.
 func (*GetStreamConnectionHourlyRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{80}
+	return file_periscope_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *GetStreamConnectionHourlyRequest) GetTenantId() string {
@@ -7397,7 +7578,7 @@ type GetStreamConnectionHourlyResponse struct {
 
 func (x *GetStreamConnectionHourlyResponse) Reset() {
 	*x = GetStreamConnectionHourlyResponse{}
-	mi := &file_periscope_proto_msgTypes[81]
+	mi := &file_periscope_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7409,7 +7590,7 @@ func (x *GetStreamConnectionHourlyResponse) String() string {
 func (*GetStreamConnectionHourlyResponse) ProtoMessage() {}
 
 func (x *GetStreamConnectionHourlyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[81]
+	mi := &file_periscope_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7422,7 +7603,7 @@ func (x *GetStreamConnectionHourlyResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use GetStreamConnectionHourlyResponse.ProtoReflect.Descriptor instead.
 func (*GetStreamConnectionHourlyResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{81}
+	return file_periscope_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *GetStreamConnectionHourlyResponse) GetPagination() *common.CursorPaginationResponse {
@@ -7458,7 +7639,7 @@ type ClientMetrics5M struct {
 
 func (x *ClientMetrics5M) Reset() {
 	*x = ClientMetrics5M{}
-	mi := &file_periscope_proto_msgTypes[82]
+	mi := &file_periscope_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7470,7 +7651,7 @@ func (x *ClientMetrics5M) String() string {
 func (*ClientMetrics5M) ProtoMessage() {}
 
 func (x *ClientMetrics5M) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[82]
+	mi := &file_periscope_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7483,7 +7664,7 @@ func (x *ClientMetrics5M) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientMetrics5M.ProtoReflect.Descriptor instead.
 func (*ClientMetrics5M) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{82}
+	return file_periscope_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *ClientMetrics5M) GetId() string {
@@ -7569,7 +7750,7 @@ type GetClientMetrics5MRequest struct {
 
 func (x *GetClientMetrics5MRequest) Reset() {
 	*x = GetClientMetrics5MRequest{}
-	mi := &file_periscope_proto_msgTypes[83]
+	mi := &file_periscope_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7581,7 +7762,7 @@ func (x *GetClientMetrics5MRequest) String() string {
 func (*GetClientMetrics5MRequest) ProtoMessage() {}
 
 func (x *GetClientMetrics5MRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[83]
+	mi := &file_periscope_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7594,7 +7775,7 @@ func (x *GetClientMetrics5MRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClientMetrics5MRequest.ProtoReflect.Descriptor instead.
 func (*GetClientMetrics5MRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{83}
+	return file_periscope_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *GetClientMetrics5MRequest) GetTenantId() string {
@@ -7642,7 +7823,7 @@ type GetClientMetrics5MResponse struct {
 
 func (x *GetClientMetrics5MResponse) Reset() {
 	*x = GetClientMetrics5MResponse{}
-	mi := &file_periscope_proto_msgTypes[84]
+	mi := &file_periscope_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7654,7 +7835,7 @@ func (x *GetClientMetrics5MResponse) String() string {
 func (*GetClientMetrics5MResponse) ProtoMessage() {}
 
 func (x *GetClientMetrics5MResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[84]
+	mi := &file_periscope_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7667,7 +7848,7 @@ func (x *GetClientMetrics5MResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClientMetrics5MResponse.ProtoReflect.Descriptor instead.
 func (*GetClientMetrics5MResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{84}
+	return file_periscope_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *GetClientMetrics5MResponse) GetPagination() *common.CursorPaginationResponse {
@@ -7710,7 +7891,7 @@ type QualityTierDaily struct {
 
 func (x *QualityTierDaily) Reset() {
 	*x = QualityTierDaily{}
-	mi := &file_periscope_proto_msgTypes[85]
+	mi := &file_periscope_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7722,7 +7903,7 @@ func (x *QualityTierDaily) String() string {
 func (*QualityTierDaily) ProtoMessage() {}
 
 func (x *QualityTierDaily) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[85]
+	mi := &file_periscope_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7735,7 +7916,7 @@ func (x *QualityTierDaily) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QualityTierDaily.ProtoReflect.Descriptor instead.
 func (*QualityTierDaily) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{85}
+	return file_periscope_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *QualityTierDaily) GetId() string {
@@ -7869,7 +8050,7 @@ type GetQualityTierDailyRequest struct {
 
 func (x *GetQualityTierDailyRequest) Reset() {
 	*x = GetQualityTierDailyRequest{}
-	mi := &file_periscope_proto_msgTypes[86]
+	mi := &file_periscope_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7881,7 +8062,7 @@ func (x *GetQualityTierDailyRequest) String() string {
 func (*GetQualityTierDailyRequest) ProtoMessage() {}
 
 func (x *GetQualityTierDailyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[86]
+	mi := &file_periscope_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7894,7 +8075,7 @@ func (x *GetQualityTierDailyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetQualityTierDailyRequest.ProtoReflect.Descriptor instead.
 func (*GetQualityTierDailyRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{86}
+	return file_periscope_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *GetQualityTierDailyRequest) GetTenantId() string {
@@ -7935,7 +8116,7 @@ type GetQualityTierDailyResponse struct {
 
 func (x *GetQualityTierDailyResponse) Reset() {
 	*x = GetQualityTierDailyResponse{}
-	mi := &file_periscope_proto_msgTypes[87]
+	mi := &file_periscope_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7947,7 +8128,7 @@ func (x *GetQualityTierDailyResponse) String() string {
 func (*GetQualityTierDailyResponse) ProtoMessage() {}
 
 func (x *GetQualityTierDailyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[87]
+	mi := &file_periscope_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7960,7 +8141,7 @@ func (x *GetQualityTierDailyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetQualityTierDailyResponse.ProtoReflect.Descriptor instead.
 func (*GetQualityTierDailyResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{87}
+	return file_periscope_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *GetQualityTierDailyResponse) GetPagination() *common.CursorPaginationResponse {
@@ -8001,7 +8182,7 @@ type StorageUsageRecord struct {
 
 func (x *StorageUsageRecord) Reset() {
 	*x = StorageUsageRecord{}
-	mi := &file_periscope_proto_msgTypes[88]
+	mi := &file_periscope_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8013,7 +8194,7 @@ func (x *StorageUsageRecord) String() string {
 func (*StorageUsageRecord) ProtoMessage() {}
 
 func (x *StorageUsageRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[88]
+	mi := &file_periscope_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8026,7 +8207,7 @@ func (x *StorageUsageRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StorageUsageRecord.ProtoReflect.Descriptor instead.
 func (*StorageUsageRecord) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{88}
+	return file_periscope_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *StorageUsageRecord) GetId() string {
@@ -8146,7 +8327,7 @@ type StorageEvent struct {
 
 func (x *StorageEvent) Reset() {
 	*x = StorageEvent{}
-	mi := &file_periscope_proto_msgTypes[89]
+	mi := &file_periscope_proto_msgTypes[92]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8158,7 +8339,7 @@ func (x *StorageEvent) String() string {
 func (*StorageEvent) ProtoMessage() {}
 
 func (x *StorageEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[89]
+	mi := &file_periscope_proto_msgTypes[92]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8171,7 +8352,7 @@ func (x *StorageEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StorageEvent.ProtoReflect.Descriptor instead.
 func (*StorageEvent) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{89}
+	return file_periscope_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *StorageEvent) GetId() string {
@@ -8306,7 +8487,7 @@ type GetStorageEventsRequest struct {
 
 func (x *GetStorageEventsRequest) Reset() {
 	*x = GetStorageEventsRequest{}
-	mi := &file_periscope_proto_msgTypes[90]
+	mi := &file_periscope_proto_msgTypes[93]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8318,7 +8499,7 @@ func (x *GetStorageEventsRequest) String() string {
 func (*GetStorageEventsRequest) ProtoMessage() {}
 
 func (x *GetStorageEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[90]
+	mi := &file_periscope_proto_msgTypes[93]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8331,7 +8512,7 @@ func (x *GetStorageEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStorageEventsRequest.ProtoReflect.Descriptor instead.
 func (*GetStorageEventsRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{90}
+	return file_periscope_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *GetStorageEventsRequest) GetTenantId() string {
@@ -8379,7 +8560,7 @@ type GetStorageEventsResponse struct {
 
 func (x *GetStorageEventsResponse) Reset() {
 	*x = GetStorageEventsResponse{}
-	mi := &file_periscope_proto_msgTypes[91]
+	mi := &file_periscope_proto_msgTypes[94]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8391,7 +8572,7 @@ func (x *GetStorageEventsResponse) String() string {
 func (*GetStorageEventsResponse) ProtoMessage() {}
 
 func (x *GetStorageEventsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[91]
+	mi := &file_periscope_proto_msgTypes[94]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8404,7 +8585,7 @@ func (x *GetStorageEventsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStorageEventsResponse.ProtoReflect.Descriptor instead.
 func (*GetStorageEventsResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{91}
+	return file_periscope_proto_rawDescGZIP(), []int{94}
 }
 
 func (x *GetStorageEventsResponse) GetPagination() *common.CursorPaginationResponse {
@@ -8434,7 +8615,7 @@ type GetStorageUsageRequest struct {
 
 func (x *GetStorageUsageRequest) Reset() {
 	*x = GetStorageUsageRequest{}
-	mi := &file_periscope_proto_msgTypes[92]
+	mi := &file_periscope_proto_msgTypes[95]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8446,7 +8627,7 @@ func (x *GetStorageUsageRequest) String() string {
 func (*GetStorageUsageRequest) ProtoMessage() {}
 
 func (x *GetStorageUsageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[92]
+	mi := &file_periscope_proto_msgTypes[95]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8459,7 +8640,7 @@ func (x *GetStorageUsageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStorageUsageRequest.ProtoReflect.Descriptor instead.
 func (*GetStorageUsageRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{92}
+	return file_periscope_proto_rawDescGZIP(), []int{95}
 }
 
 func (x *GetStorageUsageRequest) GetTenantId() string {
@@ -8507,7 +8688,7 @@ type GetStorageUsageResponse struct {
 
 func (x *GetStorageUsageResponse) Reset() {
 	*x = GetStorageUsageResponse{}
-	mi := &file_periscope_proto_msgTypes[93]
+	mi := &file_periscope_proto_msgTypes[96]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8519,7 +8700,7 @@ func (x *GetStorageUsageResponse) String() string {
 func (*GetStorageUsageResponse) ProtoMessage() {}
 
 func (x *GetStorageUsageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[93]
+	mi := &file_periscope_proto_msgTypes[96]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8532,7 +8713,7 @@ func (x *GetStorageUsageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStorageUsageResponse.ProtoReflect.Descriptor instead.
 func (*GetStorageUsageResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{93}
+	return file_periscope_proto_rawDescGZIP(), []int{96}
 }
 
 func (x *GetStorageUsageResponse) GetPagination() *common.CursorPaginationResponse {
@@ -8560,7 +8741,7 @@ type GetLiveUsageSummaryRequest struct {
 
 func (x *GetLiveUsageSummaryRequest) Reset() {
 	*x = GetLiveUsageSummaryRequest{}
-	mi := &file_periscope_proto_msgTypes[94]
+	mi := &file_periscope_proto_msgTypes[97]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8572,7 +8753,7 @@ func (x *GetLiveUsageSummaryRequest) String() string {
 func (*GetLiveUsageSummaryRequest) ProtoMessage() {}
 
 func (x *GetLiveUsageSummaryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[94]
+	mi := &file_periscope_proto_msgTypes[97]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8585,7 +8766,7 @@ func (x *GetLiveUsageSummaryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetLiveUsageSummaryRequest.ProtoReflect.Descriptor instead.
 func (*GetLiveUsageSummaryRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{94}
+	return file_periscope_proto_rawDescGZIP(), []int{97}
 }
 
 func (x *GetLiveUsageSummaryRequest) GetTenantId() string {
@@ -8664,7 +8845,7 @@ type LiveUsageSummary struct {
 
 func (x *LiveUsageSummary) Reset() {
 	*x = LiveUsageSummary{}
-	mi := &file_periscope_proto_msgTypes[95]
+	mi := &file_periscope_proto_msgTypes[98]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8676,7 +8857,7 @@ func (x *LiveUsageSummary) String() string {
 func (*LiveUsageSummary) ProtoMessage() {}
 
 func (x *LiveUsageSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[95]
+	mi := &file_periscope_proto_msgTypes[98]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8689,7 +8870,7 @@ func (x *LiveUsageSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LiveUsageSummary.ProtoReflect.Descriptor instead.
 func (*LiveUsageSummary) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{95}
+	return file_periscope_proto_rawDescGZIP(), []int{98}
 }
 
 func (x *LiveUsageSummary) GetTenantId() string {
@@ -9002,7 +9183,7 @@ type GetLiveUsageSummaryResponse struct {
 
 func (x *GetLiveUsageSummaryResponse) Reset() {
 	*x = GetLiveUsageSummaryResponse{}
-	mi := &file_periscope_proto_msgTypes[96]
+	mi := &file_periscope_proto_msgTypes[99]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9014,7 +9195,7 @@ func (x *GetLiveUsageSummaryResponse) String() string {
 func (*GetLiveUsageSummaryResponse) ProtoMessage() {}
 
 func (x *GetLiveUsageSummaryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[96]
+	mi := &file_periscope_proto_msgTypes[99]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9027,7 +9208,7 @@ func (x *GetLiveUsageSummaryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetLiveUsageSummaryResponse.ProtoReflect.Descriptor instead.
 func (*GetLiveUsageSummaryResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{96}
+	return file_periscope_proto_rawDescGZIP(), []int{99}
 }
 
 func (x *GetLiveUsageSummaryResponse) GetSummary() *LiveUsageSummary {
@@ -9047,7 +9228,7 @@ type GetNetworkUsageRequest struct {
 
 func (x *GetNetworkUsageRequest) Reset() {
 	*x = GetNetworkUsageRequest{}
-	mi := &file_periscope_proto_msgTypes[97]
+	mi := &file_periscope_proto_msgTypes[100]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9059,7 +9240,7 @@ func (x *GetNetworkUsageRequest) String() string {
 func (*GetNetworkUsageRequest) ProtoMessage() {}
 
 func (x *GetNetworkUsageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[97]
+	mi := &file_periscope_proto_msgTypes[100]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9072,7 +9253,7 @@ func (x *GetNetworkUsageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNetworkUsageRequest.ProtoReflect.Descriptor instead.
 func (*GetNetworkUsageRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{97}
+	return file_periscope_proto_rawDescGZIP(), []int{100}
 }
 
 func (x *GetNetworkUsageRequest) GetTimeRange() *common.TimeRange {
@@ -9106,7 +9287,7 @@ type NetworkUsageRecord struct {
 
 func (x *NetworkUsageRecord) Reset() {
 	*x = NetworkUsageRecord{}
-	mi := &file_periscope_proto_msgTypes[98]
+	mi := &file_periscope_proto_msgTypes[101]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9118,7 +9299,7 @@ func (x *NetworkUsageRecord) String() string {
 func (*NetworkUsageRecord) ProtoMessage() {}
 
 func (x *NetworkUsageRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[98]
+	mi := &file_periscope_proto_msgTypes[101]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9131,7 +9312,7 @@ func (x *NetworkUsageRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkUsageRecord.ProtoReflect.Descriptor instead.
 func (*NetworkUsageRecord) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{98}
+	return file_periscope_proto_rawDescGZIP(), []int{101}
 }
 
 func (x *NetworkUsageRecord) GetPeriodStart() *timestamppb.Timestamp {
@@ -9206,7 +9387,7 @@ type GetNetworkUsageResponse struct {
 
 func (x *GetNetworkUsageResponse) Reset() {
 	*x = GetNetworkUsageResponse{}
-	mi := &file_periscope_proto_msgTypes[99]
+	mi := &file_periscope_proto_msgTypes[102]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9218,7 +9399,7 @@ func (x *GetNetworkUsageResponse) String() string {
 func (*GetNetworkUsageResponse) ProtoMessage() {}
 
 func (x *GetNetworkUsageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[99]
+	mi := &file_periscope_proto_msgTypes[102]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9231,7 +9412,7 @@ func (x *GetNetworkUsageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNetworkUsageResponse.ProtoReflect.Descriptor instead.
 func (*GetNetworkUsageResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{99}
+	return file_periscope_proto_rawDescGZIP(), []int{102}
 }
 
 func (x *GetNetworkUsageResponse) GetRecords() []*NetworkUsageRecord {
@@ -9250,7 +9431,7 @@ type GetAcquisitionFunnelRequest struct {
 
 func (x *GetAcquisitionFunnelRequest) Reset() {
 	*x = GetAcquisitionFunnelRequest{}
-	mi := &file_periscope_proto_msgTypes[100]
+	mi := &file_periscope_proto_msgTypes[103]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9262,7 +9443,7 @@ func (x *GetAcquisitionFunnelRequest) String() string {
 func (*GetAcquisitionFunnelRequest) ProtoMessage() {}
 
 func (x *GetAcquisitionFunnelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[100]
+	mi := &file_periscope_proto_msgTypes[103]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9275,7 +9456,7 @@ func (x *GetAcquisitionFunnelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAcquisitionFunnelRequest.ProtoReflect.Descriptor instead.
 func (*GetAcquisitionFunnelRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{100}
+	return file_periscope_proto_rawDescGZIP(), []int{103}
 }
 
 func (x *GetAcquisitionFunnelRequest) GetTimeRange() *common.TimeRange {
@@ -9301,7 +9482,7 @@ type AcquisitionFunnelEntry struct {
 
 func (x *AcquisitionFunnelEntry) Reset() {
 	*x = AcquisitionFunnelEntry{}
-	mi := &file_periscope_proto_msgTypes[101]
+	mi := &file_periscope_proto_msgTypes[104]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9313,7 +9494,7 @@ func (x *AcquisitionFunnelEntry) String() string {
 func (*AcquisitionFunnelEntry) ProtoMessage() {}
 
 func (x *AcquisitionFunnelEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[101]
+	mi := &file_periscope_proto_msgTypes[104]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9326,7 +9507,7 @@ func (x *AcquisitionFunnelEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcquisitionFunnelEntry.ProtoReflect.Descriptor instead.
 func (*AcquisitionFunnelEntry) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{101}
+	return file_periscope_proto_rawDescGZIP(), []int{104}
 }
 
 func (x *AcquisitionFunnelEntry) GetSignupChannel() string {
@@ -9394,7 +9575,7 @@ type GetAcquisitionFunnelResponse struct {
 
 func (x *GetAcquisitionFunnelResponse) Reset() {
 	*x = GetAcquisitionFunnelResponse{}
-	mi := &file_periscope_proto_msgTypes[102]
+	mi := &file_periscope_proto_msgTypes[105]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9406,7 +9587,7 @@ func (x *GetAcquisitionFunnelResponse) String() string {
 func (*GetAcquisitionFunnelResponse) ProtoMessage() {}
 
 func (x *GetAcquisitionFunnelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[102]
+	mi := &file_periscope_proto_msgTypes[105]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9419,7 +9600,7 @@ func (x *GetAcquisitionFunnelResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAcquisitionFunnelResponse.ProtoReflect.Descriptor instead.
 func (*GetAcquisitionFunnelResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{102}
+	return file_periscope_proto_rawDescGZIP(), []int{105}
 }
 
 func (x *GetAcquisitionFunnelResponse) GetEntries() []*AcquisitionFunnelEntry {
@@ -9440,7 +9621,7 @@ type GetAcquisitionCohortUsageRequest struct {
 
 func (x *GetAcquisitionCohortUsageRequest) Reset() {
 	*x = GetAcquisitionCohortUsageRequest{}
-	mi := &file_periscope_proto_msgTypes[103]
+	mi := &file_periscope_proto_msgTypes[106]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9452,7 +9633,7 @@ func (x *GetAcquisitionCohortUsageRequest) String() string {
 func (*GetAcquisitionCohortUsageRequest) ProtoMessage() {}
 
 func (x *GetAcquisitionCohortUsageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[103]
+	mi := &file_periscope_proto_msgTypes[106]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9465,7 +9646,7 @@ func (x *GetAcquisitionCohortUsageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAcquisitionCohortUsageRequest.ProtoReflect.Descriptor instead.
 func (*GetAcquisitionCohortUsageRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{103}
+	return file_periscope_proto_rawDescGZIP(), []int{106}
 }
 
 func (x *GetAcquisitionCohortUsageRequest) GetTimeRange() *common.TimeRange {
@@ -9503,7 +9684,7 @@ type AcquisitionCohortUsageRecord struct {
 
 func (x *AcquisitionCohortUsageRecord) Reset() {
 	*x = AcquisitionCohortUsageRecord{}
-	mi := &file_periscope_proto_msgTypes[104]
+	mi := &file_periscope_proto_msgTypes[107]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9515,7 +9696,7 @@ func (x *AcquisitionCohortUsageRecord) String() string {
 func (*AcquisitionCohortUsageRecord) ProtoMessage() {}
 
 func (x *AcquisitionCohortUsageRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[104]
+	mi := &file_periscope_proto_msgTypes[107]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9528,7 +9709,7 @@ func (x *AcquisitionCohortUsageRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcquisitionCohortUsageRecord.ProtoReflect.Descriptor instead.
 func (*AcquisitionCohortUsageRecord) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{104}
+	return file_periscope_proto_rawDescGZIP(), []int{107}
 }
 
 func (x *AcquisitionCohortUsageRecord) GetDay() *timestamppb.Timestamp {
@@ -9582,7 +9763,7 @@ type GetAcquisitionCohortUsageResponse struct {
 
 func (x *GetAcquisitionCohortUsageResponse) Reset() {
 	*x = GetAcquisitionCohortUsageResponse{}
-	mi := &file_periscope_proto_msgTypes[105]
+	mi := &file_periscope_proto_msgTypes[108]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9594,7 +9775,7 @@ func (x *GetAcquisitionCohortUsageResponse) String() string {
 func (*GetAcquisitionCohortUsageResponse) ProtoMessage() {}
 
 func (x *GetAcquisitionCohortUsageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[105]
+	mi := &file_periscope_proto_msgTypes[108]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9607,7 +9788,7 @@ func (x *GetAcquisitionCohortUsageResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use GetAcquisitionCohortUsageResponse.ProtoReflect.Descriptor instead.
 func (*GetAcquisitionCohortUsageResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{105}
+	return file_periscope_proto_rawDescGZIP(), []int{108}
 }
 
 func (x *GetAcquisitionCohortUsageResponse) GetRecords() []*AcquisitionCohortUsageRecord {
@@ -9640,7 +9821,7 @@ type StreamHealth5M struct {
 
 func (x *StreamHealth5M) Reset() {
 	*x = StreamHealth5M{}
-	mi := &file_periscope_proto_msgTypes[106]
+	mi := &file_periscope_proto_msgTypes[109]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9652,7 +9833,7 @@ func (x *StreamHealth5M) String() string {
 func (*StreamHealth5M) ProtoMessage() {}
 
 func (x *StreamHealth5M) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[106]
+	mi := &file_periscope_proto_msgTypes[109]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9665,7 +9846,7 @@ func (x *StreamHealth5M) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamHealth5M.ProtoReflect.Descriptor instead.
 func (*StreamHealth5M) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{106}
+	return file_periscope_proto_rawDescGZIP(), []int{109}
 }
 
 func (x *StreamHealth5M) GetId() string {
@@ -9785,7 +9966,7 @@ type GetStreamHealth5MRequest struct {
 
 func (x *GetStreamHealth5MRequest) Reset() {
 	*x = GetStreamHealth5MRequest{}
-	mi := &file_periscope_proto_msgTypes[107]
+	mi := &file_periscope_proto_msgTypes[110]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9797,7 +9978,7 @@ func (x *GetStreamHealth5MRequest) String() string {
 func (*GetStreamHealth5MRequest) ProtoMessage() {}
 
 func (x *GetStreamHealth5MRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[107]
+	mi := &file_periscope_proto_msgTypes[110]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9810,7 +9991,7 @@ func (x *GetStreamHealth5MRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStreamHealth5MRequest.ProtoReflect.Descriptor instead.
 func (*GetStreamHealth5MRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{107}
+	return file_periscope_proto_rawDescGZIP(), []int{110}
 }
 
 func (x *GetStreamHealth5MRequest) GetTenantId() string {
@@ -9851,7 +10032,7 @@ type GetStreamHealth5MResponse struct {
 
 func (x *GetStreamHealth5MResponse) Reset() {
 	*x = GetStreamHealth5MResponse{}
-	mi := &file_periscope_proto_msgTypes[108]
+	mi := &file_periscope_proto_msgTypes[111]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9863,7 +10044,7 @@ func (x *GetStreamHealth5MResponse) String() string {
 func (*GetStreamHealth5MResponse) ProtoMessage() {}
 
 func (x *GetStreamHealth5MResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[108]
+	mi := &file_periscope_proto_msgTypes[111]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9876,7 +10057,7 @@ func (x *GetStreamHealth5MResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStreamHealth5MResponse.ProtoReflect.Descriptor instead.
 func (*GetStreamHealth5MResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{108}
+	return file_periscope_proto_rawDescGZIP(), []int{111}
 }
 
 func (x *GetStreamHealth5MResponse) GetPagination() *common.CursorPaginationResponse {
@@ -9911,7 +10092,7 @@ type NodePerformance5M struct {
 
 func (x *NodePerformance5M) Reset() {
 	*x = NodePerformance5M{}
-	mi := &file_periscope_proto_msgTypes[109]
+	mi := &file_periscope_proto_msgTypes[112]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9923,7 +10104,7 @@ func (x *NodePerformance5M) String() string {
 func (*NodePerformance5M) ProtoMessage() {}
 
 func (x *NodePerformance5M) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[109]
+	mi := &file_periscope_proto_msgTypes[112]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9936,7 +10117,7 @@ func (x *NodePerformance5M) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodePerformance5M.ProtoReflect.Descriptor instead.
 func (*NodePerformance5M) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{109}
+	return file_periscope_proto_rawDescGZIP(), []int{112}
 }
 
 func (x *NodePerformance5M) GetId() string {
@@ -10021,7 +10202,7 @@ type GetNodePerformance5MRequest struct {
 
 func (x *GetNodePerformance5MRequest) Reset() {
 	*x = GetNodePerformance5MRequest{}
-	mi := &file_periscope_proto_msgTypes[110]
+	mi := &file_periscope_proto_msgTypes[113]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10033,7 +10214,7 @@ func (x *GetNodePerformance5MRequest) String() string {
 func (*GetNodePerformance5MRequest) ProtoMessage() {}
 
 func (x *GetNodePerformance5MRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[110]
+	mi := &file_periscope_proto_msgTypes[113]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10046,7 +10227,7 @@ func (x *GetNodePerformance5MRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNodePerformance5MRequest.ProtoReflect.Descriptor instead.
 func (*GetNodePerformance5MRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{110}
+	return file_periscope_proto_rawDescGZIP(), []int{113}
 }
 
 func (x *GetNodePerformance5MRequest) GetTenantId() string {
@@ -10087,7 +10268,7 @@ type GetNodePerformance5MResponse struct {
 
 func (x *GetNodePerformance5MResponse) Reset() {
 	*x = GetNodePerformance5MResponse{}
-	mi := &file_periscope_proto_msgTypes[111]
+	mi := &file_periscope_proto_msgTypes[114]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10099,7 +10280,7 @@ func (x *GetNodePerformance5MResponse) String() string {
 func (*GetNodePerformance5MResponse) ProtoMessage() {}
 
 func (x *GetNodePerformance5MResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[111]
+	mi := &file_periscope_proto_msgTypes[114]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10112,7 +10293,7 @@ func (x *GetNodePerformance5MResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNodePerformance5MResponse.ProtoReflect.Descriptor instead.
 func (*GetNodePerformance5MResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{111}
+	return file_periscope_proto_rawDescGZIP(), []int{114}
 }
 
 func (x *GetNodePerformance5MResponse) GetPagination() *common.CursorPaginationResponse {
@@ -10146,7 +10327,7 @@ type ViewerHoursHourly struct {
 
 func (x *ViewerHoursHourly) Reset() {
 	*x = ViewerHoursHourly{}
-	mi := &file_periscope_proto_msgTypes[112]
+	mi := &file_periscope_proto_msgTypes[115]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10158,7 +10339,7 @@ func (x *ViewerHoursHourly) String() string {
 func (*ViewerHoursHourly) ProtoMessage() {}
 
 func (x *ViewerHoursHourly) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[112]
+	mi := &file_periscope_proto_msgTypes[115]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10171,7 +10352,7 @@ func (x *ViewerHoursHourly) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ViewerHoursHourly.ProtoReflect.Descriptor instead.
 func (*ViewerHoursHourly) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{112}
+	return file_periscope_proto_rawDescGZIP(), []int{115}
 }
 
 func (x *ViewerHoursHourly) GetId() string {
@@ -10249,7 +10430,7 @@ type GetViewerHoursHourlyRequest struct {
 
 func (x *GetViewerHoursHourlyRequest) Reset() {
 	*x = GetViewerHoursHourlyRequest{}
-	mi := &file_periscope_proto_msgTypes[113]
+	mi := &file_periscope_proto_msgTypes[116]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10261,7 +10442,7 @@ func (x *GetViewerHoursHourlyRequest) String() string {
 func (*GetViewerHoursHourlyRequest) ProtoMessage() {}
 
 func (x *GetViewerHoursHourlyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[113]
+	mi := &file_periscope_proto_msgTypes[116]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10274,7 +10455,7 @@ func (x *GetViewerHoursHourlyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetViewerHoursHourlyRequest.ProtoReflect.Descriptor instead.
 func (*GetViewerHoursHourlyRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{113}
+	return file_periscope_proto_rawDescGZIP(), []int{116}
 }
 
 func (x *GetViewerHoursHourlyRequest) GetTenantId() string {
@@ -10315,7 +10496,7 @@ type GetViewerHoursHourlyResponse struct {
 
 func (x *GetViewerHoursHourlyResponse) Reset() {
 	*x = GetViewerHoursHourlyResponse{}
-	mi := &file_periscope_proto_msgTypes[114]
+	mi := &file_periscope_proto_msgTypes[117]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10327,7 +10508,7 @@ func (x *GetViewerHoursHourlyResponse) String() string {
 func (*GetViewerHoursHourlyResponse) ProtoMessage() {}
 
 func (x *GetViewerHoursHourlyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[114]
+	mi := &file_periscope_proto_msgTypes[117]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10340,7 +10521,7 @@ func (x *GetViewerHoursHourlyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetViewerHoursHourlyResponse.ProtoReflect.Descriptor instead.
 func (*GetViewerHoursHourlyResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{114}
+	return file_periscope_proto_rawDescGZIP(), []int{117}
 }
 
 func (x *GetViewerHoursHourlyResponse) GetPagination() *common.CursorPaginationResponse {
@@ -10372,7 +10553,7 @@ type ViewerGeoHourly struct {
 
 func (x *ViewerGeoHourly) Reset() {
 	*x = ViewerGeoHourly{}
-	mi := &file_periscope_proto_msgTypes[115]
+	mi := &file_periscope_proto_msgTypes[118]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10384,7 +10565,7 @@ func (x *ViewerGeoHourly) String() string {
 func (*ViewerGeoHourly) ProtoMessage() {}
 
 func (x *ViewerGeoHourly) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[115]
+	mi := &file_periscope_proto_msgTypes[118]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10397,7 +10578,7 @@ func (x *ViewerGeoHourly) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ViewerGeoHourly.ProtoReflect.Descriptor instead.
 func (*ViewerGeoHourly) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{115}
+	return file_periscope_proto_rawDescGZIP(), []int{118}
 }
 
 func (x *ViewerGeoHourly) GetId() string {
@@ -10461,7 +10642,7 @@ type GetViewerGeoHourlyRequest struct {
 
 func (x *GetViewerGeoHourlyRequest) Reset() {
 	*x = GetViewerGeoHourlyRequest{}
-	mi := &file_periscope_proto_msgTypes[116]
+	mi := &file_periscope_proto_msgTypes[119]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10473,7 +10654,7 @@ func (x *GetViewerGeoHourlyRequest) String() string {
 func (*GetViewerGeoHourlyRequest) ProtoMessage() {}
 
 func (x *GetViewerGeoHourlyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[116]
+	mi := &file_periscope_proto_msgTypes[119]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10486,7 +10667,7 @@ func (x *GetViewerGeoHourlyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetViewerGeoHourlyRequest.ProtoReflect.Descriptor instead.
 func (*GetViewerGeoHourlyRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{116}
+	return file_periscope_proto_rawDescGZIP(), []int{119}
 }
 
 func (x *GetViewerGeoHourlyRequest) GetTenantId() string {
@@ -10527,7 +10708,7 @@ type GetViewerGeoHourlyResponse struct {
 
 func (x *GetViewerGeoHourlyResponse) Reset() {
 	*x = GetViewerGeoHourlyResponse{}
-	mi := &file_periscope_proto_msgTypes[117]
+	mi := &file_periscope_proto_msgTypes[120]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10539,7 +10720,7 @@ func (x *GetViewerGeoHourlyResponse) String() string {
 func (*GetViewerGeoHourlyResponse) ProtoMessage() {}
 
 func (x *GetViewerGeoHourlyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[117]
+	mi := &file_periscope_proto_msgTypes[120]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10552,7 +10733,7 @@ func (x *GetViewerGeoHourlyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetViewerGeoHourlyResponse.ProtoReflect.Descriptor instead.
 func (*GetViewerGeoHourlyResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{117}
+	return file_periscope_proto_rawDescGZIP(), []int{120}
 }
 
 func (x *GetViewerGeoHourlyResponse) GetPagination() *common.CursorPaginationResponse {
@@ -10585,7 +10766,7 @@ type TenantDailyStat struct {
 
 func (x *TenantDailyStat) Reset() {
 	*x = TenantDailyStat{}
-	mi := &file_periscope_proto_msgTypes[118]
+	mi := &file_periscope_proto_msgTypes[121]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10597,7 +10778,7 @@ func (x *TenantDailyStat) String() string {
 func (*TenantDailyStat) ProtoMessage() {}
 
 func (x *TenantDailyStat) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[118]
+	mi := &file_periscope_proto_msgTypes[121]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10610,7 +10791,7 @@ func (x *TenantDailyStat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TenantDailyStat.ProtoReflect.Descriptor instead.
 func (*TenantDailyStat) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{118}
+	return file_periscope_proto_rawDescGZIP(), []int{121}
 }
 
 func (x *TenantDailyStat) GetId() string {
@@ -10679,7 +10860,7 @@ type GetTenantDailyStatsRequest struct {
 
 func (x *GetTenantDailyStatsRequest) Reset() {
 	*x = GetTenantDailyStatsRequest{}
-	mi := &file_periscope_proto_msgTypes[119]
+	mi := &file_periscope_proto_msgTypes[122]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10691,7 +10872,7 @@ func (x *GetTenantDailyStatsRequest) String() string {
 func (*GetTenantDailyStatsRequest) ProtoMessage() {}
 
 func (x *GetTenantDailyStatsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[119]
+	mi := &file_periscope_proto_msgTypes[122]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10704,7 +10885,7 @@ func (x *GetTenantDailyStatsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantDailyStatsRequest.ProtoReflect.Descriptor instead.
 func (*GetTenantDailyStatsRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{119}
+	return file_periscope_proto_rawDescGZIP(), []int{122}
 }
 
 func (x *GetTenantDailyStatsRequest) GetTenantId() string {
@@ -10730,7 +10911,7 @@ type GetTenantDailyStatsResponse struct {
 
 func (x *GetTenantDailyStatsResponse) Reset() {
 	*x = GetTenantDailyStatsResponse{}
-	mi := &file_periscope_proto_msgTypes[120]
+	mi := &file_periscope_proto_msgTypes[123]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10742,7 +10923,7 @@ func (x *GetTenantDailyStatsResponse) String() string {
 func (*GetTenantDailyStatsResponse) ProtoMessage() {}
 
 func (x *GetTenantDailyStatsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[120]
+	mi := &file_periscope_proto_msgTypes[123]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10755,7 +10936,7 @@ func (x *GetTenantDailyStatsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantDailyStatsResponse.ProtoReflect.Descriptor instead.
 func (*GetTenantDailyStatsResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{120}
+	return file_periscope_proto_rawDescGZIP(), []int{123}
 }
 
 func (x *GetTenantDailyStatsResponse) GetStats() []*TenantDailyStat {
@@ -10834,7 +11015,7 @@ type ProcessingUsageRecord struct {
 
 func (x *ProcessingUsageRecord) Reset() {
 	*x = ProcessingUsageRecord{}
-	mi := &file_periscope_proto_msgTypes[121]
+	mi := &file_periscope_proto_msgTypes[124]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10846,7 +11027,7 @@ func (x *ProcessingUsageRecord) String() string {
 func (*ProcessingUsageRecord) ProtoMessage() {}
 
 func (x *ProcessingUsageRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[121]
+	mi := &file_periscope_proto_msgTypes[124]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10859,7 +11040,7 @@ func (x *ProcessingUsageRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessingUsageRecord.ProtoReflect.Descriptor instead.
 func (*ProcessingUsageRecord) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{121}
+	return file_periscope_proto_rawDescGZIP(), []int{124}
 }
 
 func (x *ProcessingUsageRecord) GetId() string {
@@ -11267,7 +11448,7 @@ type ProcessingUsageSummary struct {
 
 func (x *ProcessingUsageSummary) Reset() {
 	*x = ProcessingUsageSummary{}
-	mi := &file_periscope_proto_msgTypes[122]
+	mi := &file_periscope_proto_msgTypes[125]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11279,7 +11460,7 @@ func (x *ProcessingUsageSummary) String() string {
 func (*ProcessingUsageSummary) ProtoMessage() {}
 
 func (x *ProcessingUsageSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[122]
+	mi := &file_periscope_proto_msgTypes[125]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11292,7 +11473,7 @@ func (x *ProcessingUsageSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessingUsageSummary.ProtoReflect.Descriptor instead.
 func (*ProcessingUsageSummary) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{122}
+	return file_periscope_proto_rawDescGZIP(), []int{125}
 }
 
 func (x *ProcessingUsageSummary) GetDate() *timestamppb.Timestamp {
@@ -11449,7 +11630,7 @@ type GetProcessingUsageRequest struct {
 
 func (x *GetProcessingUsageRequest) Reset() {
 	*x = GetProcessingUsageRequest{}
-	mi := &file_periscope_proto_msgTypes[123]
+	mi := &file_periscope_proto_msgTypes[126]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11461,7 +11642,7 @@ func (x *GetProcessingUsageRequest) String() string {
 func (*GetProcessingUsageRequest) ProtoMessage() {}
 
 func (x *GetProcessingUsageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[123]
+	mi := &file_periscope_proto_msgTypes[126]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11474,7 +11655,7 @@ func (x *GetProcessingUsageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetProcessingUsageRequest.ProtoReflect.Descriptor instead.
 func (*GetProcessingUsageRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{123}
+	return file_periscope_proto_rawDescGZIP(), []int{126}
 }
 
 func (x *GetProcessingUsageRequest) GetTenantId() string {
@@ -11530,7 +11711,7 @@ type GetProcessingUsageResponse struct {
 
 func (x *GetProcessingUsageResponse) Reset() {
 	*x = GetProcessingUsageResponse{}
-	mi := &file_periscope_proto_msgTypes[124]
+	mi := &file_periscope_proto_msgTypes[127]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11542,7 +11723,7 @@ func (x *GetProcessingUsageResponse) String() string {
 func (*GetProcessingUsageResponse) ProtoMessage() {}
 
 func (x *GetProcessingUsageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[124]
+	mi := &file_periscope_proto_msgTypes[127]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11555,7 +11736,7 @@ func (x *GetProcessingUsageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetProcessingUsageResponse.ProtoReflect.Descriptor instead.
 func (*GetProcessingUsageResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{124}
+	return file_periscope_proto_rawDescGZIP(), []int{127}
 }
 
 func (x *GetProcessingUsageResponse) GetPagination() *common.CursorPaginationResponse {
@@ -11597,7 +11778,7 @@ type RebufferingEvent struct {
 
 func (x *RebufferingEvent) Reset() {
 	*x = RebufferingEvent{}
-	mi := &file_periscope_proto_msgTypes[125]
+	mi := &file_periscope_proto_msgTypes[128]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11609,7 +11790,7 @@ func (x *RebufferingEvent) String() string {
 func (*RebufferingEvent) ProtoMessage() {}
 
 func (x *RebufferingEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[125]
+	mi := &file_periscope_proto_msgTypes[128]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11622,7 +11803,7 @@ func (x *RebufferingEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RebufferingEvent.ProtoReflect.Descriptor instead.
 func (*RebufferingEvent) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{125}
+	return file_periscope_proto_rawDescGZIP(), []int{128}
 }
 
 func (x *RebufferingEvent) GetId() string {
@@ -11701,7 +11882,7 @@ type GetRebufferingEventsRequest struct {
 
 func (x *GetRebufferingEventsRequest) Reset() {
 	*x = GetRebufferingEventsRequest{}
-	mi := &file_periscope_proto_msgTypes[126]
+	mi := &file_periscope_proto_msgTypes[129]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11713,7 +11894,7 @@ func (x *GetRebufferingEventsRequest) String() string {
 func (*GetRebufferingEventsRequest) ProtoMessage() {}
 
 func (x *GetRebufferingEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[126]
+	mi := &file_periscope_proto_msgTypes[129]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11726,7 +11907,7 @@ func (x *GetRebufferingEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRebufferingEventsRequest.ProtoReflect.Descriptor instead.
 func (*GetRebufferingEventsRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{126}
+	return file_periscope_proto_rawDescGZIP(), []int{129}
 }
 
 func (x *GetRebufferingEventsRequest) GetTenantId() string {
@@ -11774,7 +11955,7 @@ type GetRebufferingEventsResponse struct {
 
 func (x *GetRebufferingEventsResponse) Reset() {
 	*x = GetRebufferingEventsResponse{}
-	mi := &file_periscope_proto_msgTypes[127]
+	mi := &file_periscope_proto_msgTypes[130]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11786,7 +11967,7 @@ func (x *GetRebufferingEventsResponse) String() string {
 func (*GetRebufferingEventsResponse) ProtoMessage() {}
 
 func (x *GetRebufferingEventsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[127]
+	mi := &file_periscope_proto_msgTypes[130]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11799,7 +11980,7 @@ func (x *GetRebufferingEventsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRebufferingEventsResponse.ProtoReflect.Descriptor instead.
 func (*GetRebufferingEventsResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{127}
+	return file_periscope_proto_rawDescGZIP(), []int{130}
 }
 
 func (x *GetRebufferingEventsResponse) GetPagination() *common.CursorPaginationResponse {
@@ -11832,7 +12013,7 @@ type TenantAnalyticsDaily struct {
 
 func (x *TenantAnalyticsDaily) Reset() {
 	*x = TenantAnalyticsDaily{}
-	mi := &file_periscope_proto_msgTypes[128]
+	mi := &file_periscope_proto_msgTypes[131]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11844,7 +12025,7 @@ func (x *TenantAnalyticsDaily) String() string {
 func (*TenantAnalyticsDaily) ProtoMessage() {}
 
 func (x *TenantAnalyticsDaily) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[128]
+	mi := &file_periscope_proto_msgTypes[131]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11857,7 +12038,7 @@ func (x *TenantAnalyticsDaily) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TenantAnalyticsDaily.ProtoReflect.Descriptor instead.
 func (*TenantAnalyticsDaily) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{128}
+	return file_periscope_proto_rawDescGZIP(), []int{131}
 }
 
 func (x *TenantAnalyticsDaily) GetId() string {
@@ -11920,7 +12101,7 @@ type GetTenantAnalyticsDailyRequest struct {
 
 func (x *GetTenantAnalyticsDailyRequest) Reset() {
 	*x = GetTenantAnalyticsDailyRequest{}
-	mi := &file_periscope_proto_msgTypes[129]
+	mi := &file_periscope_proto_msgTypes[132]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11932,7 +12113,7 @@ func (x *GetTenantAnalyticsDailyRequest) String() string {
 func (*GetTenantAnalyticsDailyRequest) ProtoMessage() {}
 
 func (x *GetTenantAnalyticsDailyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[129]
+	mi := &file_periscope_proto_msgTypes[132]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11945,7 +12126,7 @@ func (x *GetTenantAnalyticsDailyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantAnalyticsDailyRequest.ProtoReflect.Descriptor instead.
 func (*GetTenantAnalyticsDailyRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{129}
+	return file_periscope_proto_rawDescGZIP(), []int{132}
 }
 
 func (x *GetTenantAnalyticsDailyRequest) GetTenantId() string {
@@ -11979,7 +12160,7 @@ type GetTenantAnalyticsDailyResponse struct {
 
 func (x *GetTenantAnalyticsDailyResponse) Reset() {
 	*x = GetTenantAnalyticsDailyResponse{}
-	mi := &file_periscope_proto_msgTypes[130]
+	mi := &file_periscope_proto_msgTypes[133]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11991,7 +12172,7 @@ func (x *GetTenantAnalyticsDailyResponse) String() string {
 func (*GetTenantAnalyticsDailyResponse) ProtoMessage() {}
 
 func (x *GetTenantAnalyticsDailyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[130]
+	mi := &file_periscope_proto_msgTypes[133]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12004,7 +12185,7 @@ func (x *GetTenantAnalyticsDailyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantAnalyticsDailyResponse.ProtoReflect.Descriptor instead.
 func (*GetTenantAnalyticsDailyResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{130}
+	return file_periscope_proto_rawDescGZIP(), []int{133}
 }
 
 func (x *GetTenantAnalyticsDailyResponse) GetPagination() *common.CursorPaginationResponse {
@@ -12039,7 +12220,7 @@ type StreamAnalyticsDaily struct {
 
 func (x *StreamAnalyticsDaily) Reset() {
 	*x = StreamAnalyticsDaily{}
-	mi := &file_periscope_proto_msgTypes[131]
+	mi := &file_periscope_proto_msgTypes[134]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12051,7 +12232,7 @@ func (x *StreamAnalyticsDaily) String() string {
 func (*StreamAnalyticsDaily) ProtoMessage() {}
 
 func (x *StreamAnalyticsDaily) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[131]
+	mi := &file_periscope_proto_msgTypes[134]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12064,7 +12245,7 @@ func (x *StreamAnalyticsDaily) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamAnalyticsDaily.ProtoReflect.Descriptor instead.
 func (*StreamAnalyticsDaily) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{131}
+	return file_periscope_proto_rawDescGZIP(), []int{134}
 }
 
 func (x *StreamAnalyticsDaily) GetId() string {
@@ -12142,7 +12323,7 @@ type GetStreamAnalyticsDailyRequest struct {
 
 func (x *GetStreamAnalyticsDailyRequest) Reset() {
 	*x = GetStreamAnalyticsDailyRequest{}
-	mi := &file_periscope_proto_msgTypes[132]
+	mi := &file_periscope_proto_msgTypes[135]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12154,7 +12335,7 @@ func (x *GetStreamAnalyticsDailyRequest) String() string {
 func (*GetStreamAnalyticsDailyRequest) ProtoMessage() {}
 
 func (x *GetStreamAnalyticsDailyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[132]
+	mi := &file_periscope_proto_msgTypes[135]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12167,7 +12348,7 @@ func (x *GetStreamAnalyticsDailyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStreamAnalyticsDailyRequest.ProtoReflect.Descriptor instead.
 func (*GetStreamAnalyticsDailyRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{132}
+	return file_periscope_proto_rawDescGZIP(), []int{135}
 }
 
 func (x *GetStreamAnalyticsDailyRequest) GetTenantId() string {
@@ -12208,7 +12389,7 @@ type GetStreamAnalyticsDailyResponse struct {
 
 func (x *GetStreamAnalyticsDailyResponse) Reset() {
 	*x = GetStreamAnalyticsDailyResponse{}
-	mi := &file_periscope_proto_msgTypes[133]
+	mi := &file_periscope_proto_msgTypes[136]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12220,7 +12401,7 @@ func (x *GetStreamAnalyticsDailyResponse) String() string {
 func (*GetStreamAnalyticsDailyResponse) ProtoMessage() {}
 
 func (x *GetStreamAnalyticsDailyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[133]
+	mi := &file_periscope_proto_msgTypes[136]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12233,7 +12414,7 @@ func (x *GetStreamAnalyticsDailyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStreamAnalyticsDailyResponse.ProtoReflect.Descriptor instead.
 func (*GetStreamAnalyticsDailyResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{133}
+	return file_periscope_proto_rawDescGZIP(), []int{136}
 }
 
 func (x *GetStreamAnalyticsDailyResponse) GetPagination() *common.CursorPaginationResponse {
@@ -12268,7 +12449,7 @@ type QualityTierSummary struct {
 
 func (x *QualityTierSummary) Reset() {
 	*x = QualityTierSummary{}
-	mi := &file_periscope_proto_msgTypes[134]
+	mi := &file_periscope_proto_msgTypes[137]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12280,7 +12461,7 @@ func (x *QualityTierSummary) String() string {
 func (*QualityTierSummary) ProtoMessage() {}
 
 func (x *QualityTierSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[134]
+	mi := &file_periscope_proto_msgTypes[137]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12293,7 +12474,7 @@ func (x *QualityTierSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QualityTierSummary.ProtoReflect.Descriptor instead.
 func (*QualityTierSummary) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{134}
+	return file_periscope_proto_rawDescGZIP(), []int{137}
 }
 
 func (x *QualityTierSummary) GetTier_2160PMinutes() uint32 {
@@ -12403,7 +12584,7 @@ type StreamAnalyticsSummary struct {
 
 func (x *StreamAnalyticsSummary) Reset() {
 	*x = StreamAnalyticsSummary{}
-	mi := &file_periscope_proto_msgTypes[135]
+	mi := &file_periscope_proto_msgTypes[138]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12415,7 +12596,7 @@ func (x *StreamAnalyticsSummary) String() string {
 func (*StreamAnalyticsSummary) ProtoMessage() {}
 
 func (x *StreamAnalyticsSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[135]
+	mi := &file_periscope_proto_msgTypes[138]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12428,7 +12609,7 @@ func (x *StreamAnalyticsSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamAnalyticsSummary.ProtoReflect.Descriptor instead.
 func (*StreamAnalyticsSummary) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{135}
+	return file_periscope_proto_rawDescGZIP(), []int{138}
 }
 
 func (x *StreamAnalyticsSummary) GetTenantId() string {
@@ -12631,7 +12812,7 @@ type GetStreamAnalyticsSummaryRequest struct {
 
 func (x *GetStreamAnalyticsSummaryRequest) Reset() {
 	*x = GetStreamAnalyticsSummaryRequest{}
-	mi := &file_periscope_proto_msgTypes[136]
+	mi := &file_periscope_proto_msgTypes[139]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12643,7 +12824,7 @@ func (x *GetStreamAnalyticsSummaryRequest) String() string {
 func (*GetStreamAnalyticsSummaryRequest) ProtoMessage() {}
 
 func (x *GetStreamAnalyticsSummaryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[136]
+	mi := &file_periscope_proto_msgTypes[139]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12656,7 +12837,7 @@ func (x *GetStreamAnalyticsSummaryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStreamAnalyticsSummaryRequest.ProtoReflect.Descriptor instead.
 func (*GetStreamAnalyticsSummaryRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{136}
+	return file_periscope_proto_rawDescGZIP(), []int{139}
 }
 
 func (x *GetStreamAnalyticsSummaryRequest) GetTenantId() string {
@@ -12689,7 +12870,7 @@ type GetStreamAnalyticsSummaryResponse struct {
 
 func (x *GetStreamAnalyticsSummaryResponse) Reset() {
 	*x = GetStreamAnalyticsSummaryResponse{}
-	mi := &file_periscope_proto_msgTypes[137]
+	mi := &file_periscope_proto_msgTypes[140]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12701,7 +12882,7 @@ func (x *GetStreamAnalyticsSummaryResponse) String() string {
 func (*GetStreamAnalyticsSummaryResponse) ProtoMessage() {}
 
 func (x *GetStreamAnalyticsSummaryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[137]
+	mi := &file_periscope_proto_msgTypes[140]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12714,7 +12895,7 @@ func (x *GetStreamAnalyticsSummaryResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use GetStreamAnalyticsSummaryResponse.ProtoReflect.Descriptor instead.
 func (*GetStreamAnalyticsSummaryResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{137}
+	return file_periscope_proto_rawDescGZIP(), []int{140}
 }
 
 func (x *GetStreamAnalyticsSummaryResponse) GetSummary() *StreamAnalyticsSummary {
@@ -12738,7 +12919,7 @@ type GetStreamAnalyticsSummariesRequest struct {
 
 func (x *GetStreamAnalyticsSummariesRequest) Reset() {
 	*x = GetStreamAnalyticsSummariesRequest{}
-	mi := &file_periscope_proto_msgTypes[138]
+	mi := &file_periscope_proto_msgTypes[141]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12750,7 +12931,7 @@ func (x *GetStreamAnalyticsSummariesRequest) String() string {
 func (*GetStreamAnalyticsSummariesRequest) ProtoMessage() {}
 
 func (x *GetStreamAnalyticsSummariesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[138]
+	mi := &file_periscope_proto_msgTypes[141]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12763,7 +12944,7 @@ func (x *GetStreamAnalyticsSummariesRequest) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use GetStreamAnalyticsSummariesRequest.ProtoReflect.Descriptor instead.
 func (*GetStreamAnalyticsSummariesRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{138}
+	return file_periscope_proto_rawDescGZIP(), []int{141}
 }
 
 func (x *GetStreamAnalyticsSummariesRequest) GetTenantId() string {
@@ -12813,7 +12994,7 @@ type GetStreamAnalyticsSummariesResponse struct {
 
 func (x *GetStreamAnalyticsSummariesResponse) Reset() {
 	*x = GetStreamAnalyticsSummariesResponse{}
-	mi := &file_periscope_proto_msgTypes[139]
+	mi := &file_periscope_proto_msgTypes[142]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12825,7 +13006,7 @@ func (x *GetStreamAnalyticsSummariesResponse) String() string {
 func (*GetStreamAnalyticsSummariesResponse) ProtoMessage() {}
 
 func (x *GetStreamAnalyticsSummariesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[139]
+	mi := &file_periscope_proto_msgTypes[142]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12838,7 +13019,7 @@ func (x *GetStreamAnalyticsSummariesResponse) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use GetStreamAnalyticsSummariesResponse.ProtoReflect.Descriptor instead.
 func (*GetStreamAnalyticsSummariesResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{139}
+	return file_periscope_proto_rawDescGZIP(), []int{142}
 }
 
 func (x *GetStreamAnalyticsSummariesResponse) GetPagination() *common.CursorPaginationResponse {
@@ -12883,7 +13064,7 @@ type APIUsageRecord struct {
 
 func (x *APIUsageRecord) Reset() {
 	*x = APIUsageRecord{}
-	mi := &file_periscope_proto_msgTypes[140]
+	mi := &file_periscope_proto_msgTypes[143]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12895,7 +13076,7 @@ func (x *APIUsageRecord) String() string {
 func (*APIUsageRecord) ProtoMessage() {}
 
 func (x *APIUsageRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[140]
+	mi := &file_periscope_proto_msgTypes[143]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12908,7 +13089,7 @@ func (x *APIUsageRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use APIUsageRecord.ProtoReflect.Descriptor instead.
 func (*APIUsageRecord) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{140}
+	return file_periscope_proto_rawDescGZIP(), []int{143}
 }
 
 func (x *APIUsageRecord) GetId() string {
@@ -13013,7 +13194,7 @@ type APIUsageSummary struct {
 
 func (x *APIUsageSummary) Reset() {
 	*x = APIUsageSummary{}
-	mi := &file_periscope_proto_msgTypes[141]
+	mi := &file_periscope_proto_msgTypes[144]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13025,7 +13206,7 @@ func (x *APIUsageSummary) String() string {
 func (*APIUsageSummary) ProtoMessage() {}
 
 func (x *APIUsageSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[141]
+	mi := &file_periscope_proto_msgTypes[144]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13038,7 +13219,7 @@ func (x *APIUsageSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use APIUsageSummary.ProtoReflect.Descriptor instead.
 func (*APIUsageSummary) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{141}
+	return file_periscope_proto_rawDescGZIP(), []int{144}
 }
 
 func (x *APIUsageSummary) GetDate() *timestamppb.Timestamp {
@@ -13119,7 +13300,7 @@ type APIUsageOperationSummary struct {
 
 func (x *APIUsageOperationSummary) Reset() {
 	*x = APIUsageOperationSummary{}
-	mi := &file_periscope_proto_msgTypes[142]
+	mi := &file_periscope_proto_msgTypes[145]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13131,7 +13312,7 @@ func (x *APIUsageOperationSummary) String() string {
 func (*APIUsageOperationSummary) ProtoMessage() {}
 
 func (x *APIUsageOperationSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[142]
+	mi := &file_periscope_proto_msgTypes[145]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13144,7 +13325,7 @@ func (x *APIUsageOperationSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use APIUsageOperationSummary.ProtoReflect.Descriptor instead.
 func (*APIUsageOperationSummary) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{142}
+	return file_periscope_proto_rawDescGZIP(), []int{145}
 }
 
 func (x *APIUsageOperationSummary) GetOperationType() string {
@@ -13204,7 +13385,7 @@ type GetAPIUsageRequest struct {
 
 func (x *GetAPIUsageRequest) Reset() {
 	*x = GetAPIUsageRequest{}
-	mi := &file_periscope_proto_msgTypes[143]
+	mi := &file_periscope_proto_msgTypes[146]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13216,7 +13397,7 @@ func (x *GetAPIUsageRequest) String() string {
 func (*GetAPIUsageRequest) ProtoMessage() {}
 
 func (x *GetAPIUsageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[143]
+	mi := &file_periscope_proto_msgTypes[146]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13229,7 +13410,7 @@ func (x *GetAPIUsageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAPIUsageRequest.ProtoReflect.Descriptor instead.
 func (*GetAPIUsageRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{143}
+	return file_periscope_proto_rawDescGZIP(), []int{146}
 }
 
 func (x *GetAPIUsageRequest) GetTenantId() string {
@@ -13293,7 +13474,7 @@ type GetAPIUsageResponse struct {
 
 func (x *GetAPIUsageResponse) Reset() {
 	*x = GetAPIUsageResponse{}
-	mi := &file_periscope_proto_msgTypes[144]
+	mi := &file_periscope_proto_msgTypes[147]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13305,7 +13486,7 @@ func (x *GetAPIUsageResponse) String() string {
 func (*GetAPIUsageResponse) ProtoMessage() {}
 
 func (x *GetAPIUsageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[144]
+	mi := &file_periscope_proto_msgTypes[147]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13318,7 +13499,7 @@ func (x *GetAPIUsageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAPIUsageResponse.ProtoReflect.Descriptor instead.
 func (*GetAPIUsageResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{144}
+	return file_periscope_proto_rawDescGZIP(), []int{147}
 }
 
 func (x *GetAPIUsageResponse) GetPagination() *common.CursorPaginationResponse {
@@ -13364,7 +13545,7 @@ type RoutingEfficiencySummary struct {
 
 func (x *RoutingEfficiencySummary) Reset() {
 	*x = RoutingEfficiencySummary{}
-	mi := &file_periscope_proto_msgTypes[145]
+	mi := &file_periscope_proto_msgTypes[148]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13376,7 +13557,7 @@ func (x *RoutingEfficiencySummary) String() string {
 func (*RoutingEfficiencySummary) ProtoMessage() {}
 
 func (x *RoutingEfficiencySummary) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[145]
+	mi := &file_periscope_proto_msgTypes[148]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13389,7 +13570,7 @@ func (x *RoutingEfficiencySummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RoutingEfficiencySummary.ProtoReflect.Descriptor instead.
 func (*RoutingEfficiencySummary) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{145}
+	return file_periscope_proto_rawDescGZIP(), []int{148}
 }
 
 func (x *RoutingEfficiencySummary) GetTotalDecisions() int64 {
@@ -13444,7 +13625,7 @@ type RoutingCountryStat struct {
 
 func (x *RoutingCountryStat) Reset() {
 	*x = RoutingCountryStat{}
-	mi := &file_periscope_proto_msgTypes[146]
+	mi := &file_periscope_proto_msgTypes[149]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13456,7 +13637,7 @@ func (x *RoutingCountryStat) String() string {
 func (*RoutingCountryStat) ProtoMessage() {}
 
 func (x *RoutingCountryStat) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[146]
+	mi := &file_periscope_proto_msgTypes[149]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13469,7 +13650,7 @@ func (x *RoutingCountryStat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RoutingCountryStat.ProtoReflect.Descriptor instead.
 func (*RoutingCountryStat) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{146}
+	return file_periscope_proto_rawDescGZIP(), []int{149}
 }
 
 func (x *RoutingCountryStat) GetCountryCode() string {
@@ -13497,7 +13678,7 @@ type GetRoutingEfficiencyRequest struct {
 
 func (x *GetRoutingEfficiencyRequest) Reset() {
 	*x = GetRoutingEfficiencyRequest{}
-	mi := &file_periscope_proto_msgTypes[147]
+	mi := &file_periscope_proto_msgTypes[150]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13509,7 +13690,7 @@ func (x *GetRoutingEfficiencyRequest) String() string {
 func (*GetRoutingEfficiencyRequest) ProtoMessage() {}
 
 func (x *GetRoutingEfficiencyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[147]
+	mi := &file_periscope_proto_msgTypes[150]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13522,7 +13703,7 @@ func (x *GetRoutingEfficiencyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRoutingEfficiencyRequest.ProtoReflect.Descriptor instead.
 func (*GetRoutingEfficiencyRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{147}
+	return file_periscope_proto_rawDescGZIP(), []int{150}
 }
 
 func (x *GetRoutingEfficiencyRequest) GetTenantId() string {
@@ -13555,7 +13736,7 @@ type GetRoutingEfficiencyResponse struct {
 
 func (x *GetRoutingEfficiencyResponse) Reset() {
 	*x = GetRoutingEfficiencyResponse{}
-	mi := &file_periscope_proto_msgTypes[148]
+	mi := &file_periscope_proto_msgTypes[151]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13567,7 +13748,7 @@ func (x *GetRoutingEfficiencyResponse) String() string {
 func (*GetRoutingEfficiencyResponse) ProtoMessage() {}
 
 func (x *GetRoutingEfficiencyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[148]
+	mi := &file_periscope_proto_msgTypes[151]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13580,7 +13761,7 @@ func (x *GetRoutingEfficiencyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRoutingEfficiencyResponse.ProtoReflect.Descriptor instead.
 func (*GetRoutingEfficiencyResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{148}
+	return file_periscope_proto_rawDescGZIP(), []int{151}
 }
 
 func (x *GetRoutingEfficiencyResponse) GetSummary() *RoutingEfficiencySummary {
@@ -13612,7 +13793,7 @@ type ClusterPairTraffic struct {
 
 func (x *ClusterPairTraffic) Reset() {
 	*x = ClusterPairTraffic{}
-	mi := &file_periscope_proto_msgTypes[149]
+	mi := &file_periscope_proto_msgTypes[152]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13624,7 +13805,7 @@ func (x *ClusterPairTraffic) String() string {
 func (*ClusterPairTraffic) ProtoMessage() {}
 
 func (x *ClusterPairTraffic) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[149]
+	mi := &file_periscope_proto_msgTypes[152]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13637,7 +13818,7 @@ func (x *ClusterPairTraffic) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterPairTraffic.ProtoReflect.Descriptor instead.
 func (*ClusterPairTraffic) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{149}
+	return file_periscope_proto_rawDescGZIP(), []int{152}
 }
 
 func (x *ClusterPairTraffic) GetClusterId() string {
@@ -13741,7 +13922,7 @@ type GetClusterTrafficMatrixRequest struct {
 
 func (x *GetClusterTrafficMatrixRequest) Reset() {
 	*x = GetClusterTrafficMatrixRequest{}
-	mi := &file_periscope_proto_msgTypes[150]
+	mi := &file_periscope_proto_msgTypes[153]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13753,7 +13934,7 @@ func (x *GetClusterTrafficMatrixRequest) String() string {
 func (*GetClusterTrafficMatrixRequest) ProtoMessage() {}
 
 func (x *GetClusterTrafficMatrixRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[150]
+	mi := &file_periscope_proto_msgTypes[153]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13766,7 +13947,7 @@ func (x *GetClusterTrafficMatrixRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClusterTrafficMatrixRequest.ProtoReflect.Descriptor instead.
 func (*GetClusterTrafficMatrixRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{150}
+	return file_periscope_proto_rawDescGZIP(), []int{153}
 }
 
 func (x *GetClusterTrafficMatrixRequest) GetTenantId() string {
@@ -13792,7 +13973,7 @@ type GetClusterTrafficMatrixResponse struct {
 
 func (x *GetClusterTrafficMatrixResponse) Reset() {
 	*x = GetClusterTrafficMatrixResponse{}
-	mi := &file_periscope_proto_msgTypes[151]
+	mi := &file_periscope_proto_msgTypes[154]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13804,7 +13985,7 @@ func (x *GetClusterTrafficMatrixResponse) String() string {
 func (*GetClusterTrafficMatrixResponse) ProtoMessage() {}
 
 func (x *GetClusterTrafficMatrixResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[151]
+	mi := &file_periscope_proto_msgTypes[154]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13817,7 +13998,7 @@ func (x *GetClusterTrafficMatrixResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClusterTrafficMatrixResponse.ProtoReflect.Descriptor instead.
 func (*GetClusterTrafficMatrixResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{151}
+	return file_periscope_proto_rawDescGZIP(), []int{154}
 }
 
 func (x *GetClusterTrafficMatrixResponse) GetPairs() []*ClusterPairTraffic {
@@ -13862,7 +14043,7 @@ type FederationEvent struct {
 
 func (x *FederationEvent) Reset() {
 	*x = FederationEvent{}
-	mi := &file_periscope_proto_msgTypes[152]
+	mi := &file_periscope_proto_msgTypes[155]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13874,7 +14055,7 @@ func (x *FederationEvent) String() string {
 func (*FederationEvent) ProtoMessage() {}
 
 func (x *FederationEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[152]
+	mi := &file_periscope_proto_msgTypes[155]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13887,7 +14068,7 @@ func (x *FederationEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FederationEvent.ProtoReflect.Descriptor instead.
 func (*FederationEvent) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{152}
+	return file_periscope_proto_rawDescGZIP(), []int{155}
 }
 
 func (x *FederationEvent) GetTimestamp() *timestamppb.Timestamp {
@@ -14084,7 +14265,7 @@ type GetFederationEventsRequest struct {
 
 func (x *GetFederationEventsRequest) Reset() {
 	*x = GetFederationEventsRequest{}
-	mi := &file_periscope_proto_msgTypes[153]
+	mi := &file_periscope_proto_msgTypes[156]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14096,7 +14277,7 @@ func (x *GetFederationEventsRequest) String() string {
 func (*GetFederationEventsRequest) ProtoMessage() {}
 
 func (x *GetFederationEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[153]
+	mi := &file_periscope_proto_msgTypes[156]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14109,7 +14290,7 @@ func (x *GetFederationEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetFederationEventsRequest.ProtoReflect.Descriptor instead.
 func (*GetFederationEventsRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{153}
+	return file_periscope_proto_rawDescGZIP(), []int{156}
 }
 
 func (x *GetFederationEventsRequest) GetTenantId() string {
@@ -14150,7 +14331,7 @@ type GetFederationEventsResponse struct {
 
 func (x *GetFederationEventsResponse) Reset() {
 	*x = GetFederationEventsResponse{}
-	mi := &file_periscope_proto_msgTypes[154]
+	mi := &file_periscope_proto_msgTypes[157]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14162,7 +14343,7 @@ func (x *GetFederationEventsResponse) String() string {
 func (*GetFederationEventsResponse) ProtoMessage() {}
 
 func (x *GetFederationEventsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[154]
+	mi := &file_periscope_proto_msgTypes[157]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14175,7 +14356,7 @@ func (x *GetFederationEventsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetFederationEventsResponse.ProtoReflect.Descriptor instead.
 func (*GetFederationEventsResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{154}
+	return file_periscope_proto_rawDescGZIP(), []int{157}
 }
 
 func (x *GetFederationEventsResponse) GetEvents() []*FederationEvent {
@@ -14205,7 +14386,7 @@ type FederationEventCount struct {
 
 func (x *FederationEventCount) Reset() {
 	*x = FederationEventCount{}
-	mi := &file_periscope_proto_msgTypes[155]
+	mi := &file_periscope_proto_msgTypes[158]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14217,7 +14398,7 @@ func (x *FederationEventCount) String() string {
 func (*FederationEventCount) ProtoMessage() {}
 
 func (x *FederationEventCount) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[155]
+	mi := &file_periscope_proto_msgTypes[158]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14230,7 +14411,7 @@ func (x *FederationEventCount) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FederationEventCount.ProtoReflect.Descriptor instead.
 func (*FederationEventCount) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{155}
+	return file_periscope_proto_rawDescGZIP(), []int{158}
 }
 
 func (x *FederationEventCount) GetEventType() string {
@@ -14273,7 +14454,7 @@ type FederationSummary struct {
 
 func (x *FederationSummary) Reset() {
 	*x = FederationSummary{}
-	mi := &file_periscope_proto_msgTypes[156]
+	mi := &file_periscope_proto_msgTypes[159]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14285,7 +14466,7 @@ func (x *FederationSummary) String() string {
 func (*FederationSummary) ProtoMessage() {}
 
 func (x *FederationSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[156]
+	mi := &file_periscope_proto_msgTypes[159]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14298,7 +14479,7 @@ func (x *FederationSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FederationSummary.ProtoReflect.Descriptor instead.
 func (*FederationSummary) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{156}
+	return file_periscope_proto_rawDescGZIP(), []int{159}
 }
 
 func (x *FederationSummary) GetEventCounts() []*FederationEventCount {
@@ -14339,7 +14520,7 @@ type GetFederationSummaryRequest struct {
 
 func (x *GetFederationSummaryRequest) Reset() {
 	*x = GetFederationSummaryRequest{}
-	mi := &file_periscope_proto_msgTypes[157]
+	mi := &file_periscope_proto_msgTypes[160]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14351,7 +14532,7 @@ func (x *GetFederationSummaryRequest) String() string {
 func (*GetFederationSummaryRequest) ProtoMessage() {}
 
 func (x *GetFederationSummaryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[157]
+	mi := &file_periscope_proto_msgTypes[160]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14364,7 +14545,7 @@ func (x *GetFederationSummaryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetFederationSummaryRequest.ProtoReflect.Descriptor instead.
 func (*GetFederationSummaryRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{157}
+	return file_periscope_proto_rawDescGZIP(), []int{160}
 }
 
 func (x *GetFederationSummaryRequest) GetTenantId() string {
@@ -14390,7 +14571,7 @@ type GetFederationSummaryResponse struct {
 
 func (x *GetFederationSummaryResponse) Reset() {
 	*x = GetFederationSummaryResponse{}
-	mi := &file_periscope_proto_msgTypes[158]
+	mi := &file_periscope_proto_msgTypes[161]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14402,7 +14583,7 @@ func (x *GetFederationSummaryResponse) String() string {
 func (*GetFederationSummaryResponse) ProtoMessage() {}
 
 func (x *GetFederationSummaryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[158]
+	mi := &file_periscope_proto_msgTypes[161]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14415,7 +14596,7 @@ func (x *GetFederationSummaryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetFederationSummaryResponse.ProtoReflect.Descriptor instead.
 func (*GetFederationSummaryResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{158}
+	return file_periscope_proto_rawDescGZIP(), []int{161}
 }
 
 func (x *GetFederationSummaryResponse) GetSummary() *FederationSummary {
@@ -14442,7 +14623,7 @@ type StreamHealthSummary struct {
 
 func (x *StreamHealthSummary) Reset() {
 	*x = StreamHealthSummary{}
-	mi := &file_periscope_proto_msgTypes[159]
+	mi := &file_periscope_proto_msgTypes[162]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14454,7 +14635,7 @@ func (x *StreamHealthSummary) String() string {
 func (*StreamHealthSummary) ProtoMessage() {}
 
 func (x *StreamHealthSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[159]
+	mi := &file_periscope_proto_msgTypes[162]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14467,7 +14648,7 @@ func (x *StreamHealthSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamHealthSummary.ProtoReflect.Descriptor instead.
 func (*StreamHealthSummary) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{159}
+	return file_periscope_proto_rawDescGZIP(), []int{162}
 }
 
 func (x *StreamHealthSummary) GetAvgBitrate() float64 {
@@ -14537,7 +14718,7 @@ type GetStreamHealthSummaryRequest struct {
 
 func (x *GetStreamHealthSummaryRequest) Reset() {
 	*x = GetStreamHealthSummaryRequest{}
-	mi := &file_periscope_proto_msgTypes[160]
+	mi := &file_periscope_proto_msgTypes[163]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14549,7 +14730,7 @@ func (x *GetStreamHealthSummaryRequest) String() string {
 func (*GetStreamHealthSummaryRequest) ProtoMessage() {}
 
 func (x *GetStreamHealthSummaryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[160]
+	mi := &file_periscope_proto_msgTypes[163]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14562,7 +14743,7 @@ func (x *GetStreamHealthSummaryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStreamHealthSummaryRequest.ProtoReflect.Descriptor instead.
 func (*GetStreamHealthSummaryRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{160}
+	return file_periscope_proto_rawDescGZIP(), []int{163}
 }
 
 func (x *GetStreamHealthSummaryRequest) GetTenantId() string {
@@ -14595,7 +14776,7 @@ type GetStreamHealthSummaryResponse struct {
 
 func (x *GetStreamHealthSummaryResponse) Reset() {
 	*x = GetStreamHealthSummaryResponse{}
-	mi := &file_periscope_proto_msgTypes[161]
+	mi := &file_periscope_proto_msgTypes[164]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14607,7 +14788,7 @@ func (x *GetStreamHealthSummaryResponse) String() string {
 func (*GetStreamHealthSummaryResponse) ProtoMessage() {}
 
 func (x *GetStreamHealthSummaryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[161]
+	mi := &file_periscope_proto_msgTypes[164]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14620,7 +14801,7 @@ func (x *GetStreamHealthSummaryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStreamHealthSummaryResponse.ProtoReflect.Descriptor instead.
 func (*GetStreamHealthSummaryResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{161}
+	return file_periscope_proto_rawDescGZIP(), []int{164}
 }
 
 func (x *GetStreamHealthSummaryResponse) GetSummary() *StreamHealthSummary {
@@ -14645,7 +14826,7 @@ type ClientQoeSummary struct {
 
 func (x *ClientQoeSummary) Reset() {
 	*x = ClientQoeSummary{}
-	mi := &file_periscope_proto_msgTypes[162]
+	mi := &file_periscope_proto_msgTypes[165]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14657,7 +14838,7 @@ func (x *ClientQoeSummary) String() string {
 func (*ClientQoeSummary) ProtoMessage() {}
 
 func (x *ClientQoeSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[162]
+	mi := &file_periscope_proto_msgTypes[165]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14670,7 +14851,7 @@ func (x *ClientQoeSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientQoeSummary.ProtoReflect.Descriptor instead.
 func (*ClientQoeSummary) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{162}
+	return file_periscope_proto_rawDescGZIP(), []int{165}
 }
 
 func (x *ClientQoeSummary) GetAvgPacketLossRate() float64 {
@@ -14726,7 +14907,7 @@ type GetClientQoeSummaryRequest struct {
 
 func (x *GetClientQoeSummaryRequest) Reset() {
 	*x = GetClientQoeSummaryRequest{}
-	mi := &file_periscope_proto_msgTypes[163]
+	mi := &file_periscope_proto_msgTypes[166]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14738,7 +14919,7 @@ func (x *GetClientQoeSummaryRequest) String() string {
 func (*GetClientQoeSummaryRequest) ProtoMessage() {}
 
 func (x *GetClientQoeSummaryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[163]
+	mi := &file_periscope_proto_msgTypes[166]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14751,7 +14932,7 @@ func (x *GetClientQoeSummaryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClientQoeSummaryRequest.ProtoReflect.Descriptor instead.
 func (*GetClientQoeSummaryRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{163}
+	return file_periscope_proto_rawDescGZIP(), []int{166}
 }
 
 func (x *GetClientQoeSummaryRequest) GetTenantId() string {
@@ -14784,7 +14965,7 @@ type GetClientQoeSummaryResponse struct {
 
 func (x *GetClientQoeSummaryResponse) Reset() {
 	*x = GetClientQoeSummaryResponse{}
-	mi := &file_periscope_proto_msgTypes[164]
+	mi := &file_periscope_proto_msgTypes[167]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14796,7 +14977,7 @@ func (x *GetClientQoeSummaryResponse) String() string {
 func (*GetClientQoeSummaryResponse) ProtoMessage() {}
 
 func (x *GetClientQoeSummaryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[164]
+	mi := &file_periscope_proto_msgTypes[167]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14809,7 +14990,7 @@ func (x *GetClientQoeSummaryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClientQoeSummaryResponse.ProtoReflect.Descriptor instead.
 func (*GetClientQoeSummaryResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{164}
+	return file_periscope_proto_rawDescGZIP(), []int{167}
 }
 
 func (x *GetClientQoeSummaryResponse) GetSummary() *ClientQoeSummary {
@@ -14843,7 +15024,7 @@ type PlayerBootSummary struct {
 
 func (x *PlayerBootSummary) Reset() {
 	*x = PlayerBootSummary{}
-	mi := &file_periscope_proto_msgTypes[165]
+	mi := &file_periscope_proto_msgTypes[168]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14855,7 +15036,7 @@ func (x *PlayerBootSummary) String() string {
 func (*PlayerBootSummary) ProtoMessage() {}
 
 func (x *PlayerBootSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[165]
+	mi := &file_periscope_proto_msgTypes[168]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14868,7 +15049,7 @@ func (x *PlayerBootSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlayerBootSummary.ProtoReflect.Descriptor instead.
 func (*PlayerBootSummary) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{165}
+	return file_periscope_proto_rawDescGZIP(), []int{168}
 }
 
 func (x *PlayerBootSummary) GetBootCount() int64 {
@@ -14960,7 +15141,7 @@ type GetPlayerBootSummaryRequest struct {
 
 func (x *GetPlayerBootSummaryRequest) Reset() {
 	*x = GetPlayerBootSummaryRequest{}
-	mi := &file_periscope_proto_msgTypes[166]
+	mi := &file_periscope_proto_msgTypes[169]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14972,7 +15153,7 @@ func (x *GetPlayerBootSummaryRequest) String() string {
 func (*GetPlayerBootSummaryRequest) ProtoMessage() {}
 
 func (x *GetPlayerBootSummaryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[166]
+	mi := &file_periscope_proto_msgTypes[169]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14985,7 +15166,7 @@ func (x *GetPlayerBootSummaryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPlayerBootSummaryRequest.ProtoReflect.Descriptor instead.
 func (*GetPlayerBootSummaryRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{166}
+	return file_periscope_proto_rawDescGZIP(), []int{169}
 }
 
 func (x *GetPlayerBootSummaryRequest) GetTenantId() string {
@@ -15025,7 +15206,7 @@ type GetPlayerBootSummaryResponse struct {
 
 func (x *GetPlayerBootSummaryResponse) Reset() {
 	*x = GetPlayerBootSummaryResponse{}
-	mi := &file_periscope_proto_msgTypes[167]
+	mi := &file_periscope_proto_msgTypes[170]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -15037,7 +15218,7 @@ func (x *GetPlayerBootSummaryResponse) String() string {
 func (*GetPlayerBootSummaryResponse) ProtoMessage() {}
 
 func (x *GetPlayerBootSummaryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[167]
+	mi := &file_periscope_proto_msgTypes[170]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15050,7 +15231,7 @@ func (x *GetPlayerBootSummaryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPlayerBootSummaryResponse.ProtoReflect.Descriptor instead.
 func (*GetPlayerBootSummaryResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{167}
+	return file_periscope_proto_rawDescGZIP(), []int{170}
 }
 
 func (x *GetPlayerBootSummaryResponse) GetSummary() *PlayerBootSummary {
@@ -15077,7 +15258,7 @@ type PlayerBootTimeSeriesBucket struct {
 
 func (x *PlayerBootTimeSeriesBucket) Reset() {
 	*x = PlayerBootTimeSeriesBucket{}
-	mi := &file_periscope_proto_msgTypes[168]
+	mi := &file_periscope_proto_msgTypes[171]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -15089,7 +15270,7 @@ func (x *PlayerBootTimeSeriesBucket) String() string {
 func (*PlayerBootTimeSeriesBucket) ProtoMessage() {}
 
 func (x *PlayerBootTimeSeriesBucket) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[168]
+	mi := &file_periscope_proto_msgTypes[171]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15102,7 +15283,7 @@ func (x *PlayerBootTimeSeriesBucket) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlayerBootTimeSeriesBucket.ProtoReflect.Descriptor instead.
 func (*PlayerBootTimeSeriesBucket) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{168}
+	return file_periscope_proto_rawDescGZIP(), []int{171}
 }
 
 func (x *PlayerBootTimeSeriesBucket) GetTimestamp() *timestamppb.Timestamp {
@@ -15153,7 +15334,7 @@ type GetPlayerBootTimeSeriesRequest struct {
 
 func (x *GetPlayerBootTimeSeriesRequest) Reset() {
 	*x = GetPlayerBootTimeSeriesRequest{}
-	mi := &file_periscope_proto_msgTypes[169]
+	mi := &file_periscope_proto_msgTypes[172]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -15165,7 +15346,7 @@ func (x *GetPlayerBootTimeSeriesRequest) String() string {
 func (*GetPlayerBootTimeSeriesRequest) ProtoMessage() {}
 
 func (x *GetPlayerBootTimeSeriesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[169]
+	mi := &file_periscope_proto_msgTypes[172]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15178,7 +15359,7 @@ func (x *GetPlayerBootTimeSeriesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPlayerBootTimeSeriesRequest.ProtoReflect.Descriptor instead.
 func (*GetPlayerBootTimeSeriesRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{169}
+	return file_periscope_proto_rawDescGZIP(), []int{172}
 }
 
 func (x *GetPlayerBootTimeSeriesRequest) GetTenantId() string {
@@ -15225,7 +15406,7 @@ type GetPlayerBootTimeSeriesResponse struct {
 
 func (x *GetPlayerBootTimeSeriesResponse) Reset() {
 	*x = GetPlayerBootTimeSeriesResponse{}
-	mi := &file_periscope_proto_msgTypes[170]
+	mi := &file_periscope_proto_msgTypes[173]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -15237,7 +15418,7 @@ func (x *GetPlayerBootTimeSeriesResponse) String() string {
 func (*GetPlayerBootTimeSeriesResponse) ProtoMessage() {}
 
 func (x *GetPlayerBootTimeSeriesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[170]
+	mi := &file_periscope_proto_msgTypes[173]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15250,7 +15431,7 @@ func (x *GetPlayerBootTimeSeriesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPlayerBootTimeSeriesResponse.ProtoReflect.Descriptor instead.
 func (*GetPlayerBootTimeSeriesResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{170}
+	return file_periscope_proto_rawDescGZIP(), []int{173}
 }
 
 func (x *GetPlayerBootTimeSeriesResponse) GetBuckets() []*PlayerBootTimeSeriesBucket {
@@ -15278,7 +15459,7 @@ type ClusterBootOps struct {
 
 func (x *ClusterBootOps) Reset() {
 	*x = ClusterBootOps{}
-	mi := &file_periscope_proto_msgTypes[171]
+	mi := &file_periscope_proto_msgTypes[174]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -15290,7 +15471,7 @@ func (x *ClusterBootOps) String() string {
 func (*ClusterBootOps) ProtoMessage() {}
 
 func (x *ClusterBootOps) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[171]
+	mi := &file_periscope_proto_msgTypes[174]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15303,7 +15484,7 @@ func (x *ClusterBootOps) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterBootOps.ProtoReflect.Descriptor instead.
 func (*ClusterBootOps) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{171}
+	return file_periscope_proto_rawDescGZIP(), []int{174}
 }
 
 func (x *ClusterBootOps) GetServingClusterId() string {
@@ -15366,7 +15547,7 @@ type GetClusterBootOpsRequest struct {
 
 func (x *GetClusterBootOpsRequest) Reset() {
 	*x = GetClusterBootOpsRequest{}
-	mi := &file_periscope_proto_msgTypes[172]
+	mi := &file_periscope_proto_msgTypes[175]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -15378,7 +15559,7 @@ func (x *GetClusterBootOpsRequest) String() string {
 func (*GetClusterBootOpsRequest) ProtoMessage() {}
 
 func (x *GetClusterBootOpsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[172]
+	mi := &file_periscope_proto_msgTypes[175]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15391,7 +15572,7 @@ func (x *GetClusterBootOpsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClusterBootOpsRequest.ProtoReflect.Descriptor instead.
 func (*GetClusterBootOpsRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{172}
+	return file_periscope_proto_rawDescGZIP(), []int{175}
 }
 
 func (x *GetClusterBootOpsRequest) GetTenantId() string {
@@ -15424,7 +15605,7 @@ type GetClusterBootOpsResponse struct {
 
 func (x *GetClusterBootOpsResponse) Reset() {
 	*x = GetClusterBootOpsResponse{}
-	mi := &file_periscope_proto_msgTypes[173]
+	mi := &file_periscope_proto_msgTypes[176]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -15436,7 +15617,7 @@ func (x *GetClusterBootOpsResponse) String() string {
 func (*GetClusterBootOpsResponse) ProtoMessage() {}
 
 func (x *GetClusterBootOpsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[173]
+	mi := &file_periscope_proto_msgTypes[176]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15449,7 +15630,7 @@ func (x *GetClusterBootOpsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClusterBootOpsResponse.ProtoReflect.Descriptor instead.
 func (*GetClusterBootOpsResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{173}
+	return file_periscope_proto_rawDescGZIP(), []int{176}
 }
 
 func (x *GetClusterBootOpsResponse) GetRows() []*ClusterBootOps {
@@ -15482,7 +15663,7 @@ type SessionQoeSummary struct {
 
 func (x *SessionQoeSummary) Reset() {
 	*x = SessionQoeSummary{}
-	mi := &file_periscope_proto_msgTypes[174]
+	mi := &file_periscope_proto_msgTypes[177]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -15494,7 +15675,7 @@ func (x *SessionQoeSummary) String() string {
 func (*SessionQoeSummary) ProtoMessage() {}
 
 func (x *SessionQoeSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[174]
+	mi := &file_periscope_proto_msgTypes[177]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15507,7 +15688,7 @@ func (x *SessionQoeSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionQoeSummary.ProtoReflect.Descriptor instead.
 func (*SessionQoeSummary) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{174}
+	return file_periscope_proto_rawDescGZIP(), []int{177}
 }
 
 func (x *SessionQoeSummary) GetSessionCount() int64 {
@@ -15599,7 +15780,7 @@ type GetSessionQoeSummaryRequest struct {
 
 func (x *GetSessionQoeSummaryRequest) Reset() {
 	*x = GetSessionQoeSummaryRequest{}
-	mi := &file_periscope_proto_msgTypes[175]
+	mi := &file_periscope_proto_msgTypes[178]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -15611,7 +15792,7 @@ func (x *GetSessionQoeSummaryRequest) String() string {
 func (*GetSessionQoeSummaryRequest) ProtoMessage() {}
 
 func (x *GetSessionQoeSummaryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[175]
+	mi := &file_periscope_proto_msgTypes[178]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15624,7 +15805,7 @@ func (x *GetSessionQoeSummaryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionQoeSummaryRequest.ProtoReflect.Descriptor instead.
 func (*GetSessionQoeSummaryRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{175}
+	return file_periscope_proto_rawDescGZIP(), []int{178}
 }
 
 func (x *GetSessionQoeSummaryRequest) GetTenantId() string {
@@ -15664,7 +15845,7 @@ type GetSessionQoeSummaryResponse struct {
 
 func (x *GetSessionQoeSummaryResponse) Reset() {
 	*x = GetSessionQoeSummaryResponse{}
-	mi := &file_periscope_proto_msgTypes[176]
+	mi := &file_periscope_proto_msgTypes[179]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -15676,7 +15857,7 @@ func (x *GetSessionQoeSummaryResponse) String() string {
 func (*GetSessionQoeSummaryResponse) ProtoMessage() {}
 
 func (x *GetSessionQoeSummaryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[176]
+	mi := &file_periscope_proto_msgTypes[179]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15689,7 +15870,7 @@ func (x *GetSessionQoeSummaryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionQoeSummaryResponse.ProtoReflect.Descriptor instead.
 func (*GetSessionQoeSummaryResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{176}
+	return file_periscope_proto_rawDescGZIP(), []int{179}
 }
 
 func (x *GetSessionQoeSummaryResponse) GetSummary() *SessionQoeSummary {
@@ -15745,7 +15926,7 @@ type SessionQoeDetail struct {
 
 func (x *SessionQoeDetail) Reset() {
 	*x = SessionQoeDetail{}
-	mi := &file_periscope_proto_msgTypes[177]
+	mi := &file_periscope_proto_msgTypes[180]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -15757,7 +15938,7 @@ func (x *SessionQoeDetail) String() string {
 func (*SessionQoeDetail) ProtoMessage() {}
 
 func (x *SessionQoeDetail) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[177]
+	mi := &file_periscope_proto_msgTypes[180]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15770,7 +15951,7 @@ func (x *SessionQoeDetail) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionQoeDetail.ProtoReflect.Descriptor instead.
 func (*SessionQoeDetail) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{177}
+	return file_periscope_proto_rawDescGZIP(), []int{180}
 }
 
 func (x *SessionQoeDetail) GetClientSessionId() string {
@@ -16030,7 +16211,7 @@ type GetSessionQoeDetailRequest struct {
 
 func (x *GetSessionQoeDetailRequest) Reset() {
 	*x = GetSessionQoeDetailRequest{}
-	mi := &file_periscope_proto_msgTypes[178]
+	mi := &file_periscope_proto_msgTypes[181]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16042,7 +16223,7 @@ func (x *GetSessionQoeDetailRequest) String() string {
 func (*GetSessionQoeDetailRequest) ProtoMessage() {}
 
 func (x *GetSessionQoeDetailRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[178]
+	mi := &file_periscope_proto_msgTypes[181]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16055,7 +16236,7 @@ func (x *GetSessionQoeDetailRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionQoeDetailRequest.ProtoReflect.Descriptor instead.
 func (*GetSessionQoeDetailRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{178}
+	return file_periscope_proto_rawDescGZIP(), []int{181}
 }
 
 func (x *GetSessionQoeDetailRequest) GetTenantId() string {
@@ -16096,7 +16277,7 @@ type GetSessionQoeDetailResponse struct {
 
 func (x *GetSessionQoeDetailResponse) Reset() {
 	*x = GetSessionQoeDetailResponse{}
-	mi := &file_periscope_proto_msgTypes[179]
+	mi := &file_periscope_proto_msgTypes[182]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16108,7 +16289,7 @@ func (x *GetSessionQoeDetailResponse) String() string {
 func (*GetSessionQoeDetailResponse) ProtoMessage() {}
 
 func (x *GetSessionQoeDetailResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[179]
+	mi := &file_periscope_proto_msgTypes[182]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16121,7 +16302,7 @@ func (x *GetSessionQoeDetailResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionQoeDetailResponse.ProtoReflect.Descriptor instead.
 func (*GetSessionQoeDetailResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{179}
+	return file_periscope_proto_rawDescGZIP(), []int{182}
 }
 
 func (x *GetSessionQoeDetailResponse) GetSessions() []*SessionQoeDetail {
@@ -16157,7 +16338,7 @@ type SessionQoeTimeSeriesBucket struct {
 
 func (x *SessionQoeTimeSeriesBucket) Reset() {
 	*x = SessionQoeTimeSeriesBucket{}
-	mi := &file_periscope_proto_msgTypes[180]
+	mi := &file_periscope_proto_msgTypes[183]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16169,7 +16350,7 @@ func (x *SessionQoeTimeSeriesBucket) String() string {
 func (*SessionQoeTimeSeriesBucket) ProtoMessage() {}
 
 func (x *SessionQoeTimeSeriesBucket) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[180]
+	mi := &file_periscope_proto_msgTypes[183]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16182,7 +16363,7 @@ func (x *SessionQoeTimeSeriesBucket) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionQoeTimeSeriesBucket.ProtoReflect.Descriptor instead.
 func (*SessionQoeTimeSeriesBucket) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{180}
+	return file_periscope_proto_rawDescGZIP(), []int{183}
 }
 
 func (x *SessionQoeTimeSeriesBucket) GetTimestamp() *timestamppb.Timestamp {
@@ -16240,7 +16421,7 @@ type GetSessionQoeTimeSeriesRequest struct {
 
 func (x *GetSessionQoeTimeSeriesRequest) Reset() {
 	*x = GetSessionQoeTimeSeriesRequest{}
-	mi := &file_periscope_proto_msgTypes[181]
+	mi := &file_periscope_proto_msgTypes[184]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16252,7 +16433,7 @@ func (x *GetSessionQoeTimeSeriesRequest) String() string {
 func (*GetSessionQoeTimeSeriesRequest) ProtoMessage() {}
 
 func (x *GetSessionQoeTimeSeriesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[181]
+	mi := &file_periscope_proto_msgTypes[184]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16265,7 +16446,7 @@ func (x *GetSessionQoeTimeSeriesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionQoeTimeSeriesRequest.ProtoReflect.Descriptor instead.
 func (*GetSessionQoeTimeSeriesRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{181}
+	return file_periscope_proto_rawDescGZIP(), []int{184}
 }
 
 func (x *GetSessionQoeTimeSeriesRequest) GetTenantId() string {
@@ -16312,7 +16493,7 @@ type GetSessionQoeTimeSeriesResponse struct {
 
 func (x *GetSessionQoeTimeSeriesResponse) Reset() {
 	*x = GetSessionQoeTimeSeriesResponse{}
-	mi := &file_periscope_proto_msgTypes[182]
+	mi := &file_periscope_proto_msgTypes[185]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16324,7 +16505,7 @@ func (x *GetSessionQoeTimeSeriesResponse) String() string {
 func (*GetSessionQoeTimeSeriesResponse) ProtoMessage() {}
 
 func (x *GetSessionQoeTimeSeriesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[182]
+	mi := &file_periscope_proto_msgTypes[185]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16337,7 +16518,7 @@ func (x *GetSessionQoeTimeSeriesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionQoeTimeSeriesResponse.ProtoReflect.Descriptor instead.
 func (*GetSessionQoeTimeSeriesResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{182}
+	return file_periscope_proto_rawDescGZIP(), []int{185}
 }
 
 func (x *GetSessionQoeTimeSeriesResponse) GetBuckets() []*SessionQoeTimeSeriesBucket {
@@ -16364,7 +16545,7 @@ type ClusterQoeOps struct {
 
 func (x *ClusterQoeOps) Reset() {
 	*x = ClusterQoeOps{}
-	mi := &file_periscope_proto_msgTypes[183]
+	mi := &file_periscope_proto_msgTypes[186]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16376,7 +16557,7 @@ func (x *ClusterQoeOps) String() string {
 func (*ClusterQoeOps) ProtoMessage() {}
 
 func (x *ClusterQoeOps) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[183]
+	mi := &file_periscope_proto_msgTypes[186]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16389,7 +16570,7 @@ func (x *ClusterQoeOps) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterQoeOps.ProtoReflect.Descriptor instead.
 func (*ClusterQoeOps) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{183}
+	return file_periscope_proto_rawDescGZIP(), []int{186}
 }
 
 func (x *ClusterQoeOps) GetServingClusterId() string {
@@ -16452,7 +16633,7 @@ type GetClusterQoeOpsRequest struct {
 
 func (x *GetClusterQoeOpsRequest) Reset() {
 	*x = GetClusterQoeOpsRequest{}
-	mi := &file_periscope_proto_msgTypes[184]
+	mi := &file_periscope_proto_msgTypes[187]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16464,7 +16645,7 @@ func (x *GetClusterQoeOpsRequest) String() string {
 func (*GetClusterQoeOpsRequest) ProtoMessage() {}
 
 func (x *GetClusterQoeOpsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[184]
+	mi := &file_periscope_proto_msgTypes[187]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16477,7 +16658,7 @@ func (x *GetClusterQoeOpsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClusterQoeOpsRequest.ProtoReflect.Descriptor instead.
 func (*GetClusterQoeOpsRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{184}
+	return file_periscope_proto_rawDescGZIP(), []int{187}
 }
 
 func (x *GetClusterQoeOpsRequest) GetTenantId() string {
@@ -16510,7 +16691,7 @@ type GetClusterQoeOpsResponse struct {
 
 func (x *GetClusterQoeOpsResponse) Reset() {
 	*x = GetClusterQoeOpsResponse{}
-	mi := &file_periscope_proto_msgTypes[185]
+	mi := &file_periscope_proto_msgTypes[188]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16522,7 +16703,7 @@ func (x *GetClusterQoeOpsResponse) String() string {
 func (*GetClusterQoeOpsResponse) ProtoMessage() {}
 
 func (x *GetClusterQoeOpsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[185]
+	mi := &file_periscope_proto_msgTypes[188]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16535,7 +16716,7 @@ func (x *GetClusterQoeOpsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClusterQoeOpsResponse.ProtoReflect.Descriptor instead.
 func (*GetClusterQoeOpsResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{185}
+	return file_periscope_proto_rawDescGZIP(), []int{188}
 }
 
 func (x *GetClusterQoeOpsResponse) GetRows() []*ClusterQoeOps {
@@ -16566,7 +16747,7 @@ type ClusterWorkload struct {
 
 func (x *ClusterWorkload) Reset() {
 	*x = ClusterWorkload{}
-	mi := &file_periscope_proto_msgTypes[186]
+	mi := &file_periscope_proto_msgTypes[189]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16578,7 +16759,7 @@ func (x *ClusterWorkload) String() string {
 func (*ClusterWorkload) ProtoMessage() {}
 
 func (x *ClusterWorkload) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[186]
+	mi := &file_periscope_proto_msgTypes[189]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16591,7 +16772,7 @@ func (x *ClusterWorkload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterWorkload.ProtoReflect.Descriptor instead.
 func (*ClusterWorkload) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{186}
+	return file_periscope_proto_rawDescGZIP(), []int{189}
 }
 
 func (x *ClusterWorkload) GetClusterId() string {
@@ -16682,7 +16863,7 @@ type GetClusterWorkloadRequest struct {
 
 func (x *GetClusterWorkloadRequest) Reset() {
 	*x = GetClusterWorkloadRequest{}
-	mi := &file_periscope_proto_msgTypes[187]
+	mi := &file_periscope_proto_msgTypes[190]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16694,7 +16875,7 @@ func (x *GetClusterWorkloadRequest) String() string {
 func (*GetClusterWorkloadRequest) ProtoMessage() {}
 
 func (x *GetClusterWorkloadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[187]
+	mi := &file_periscope_proto_msgTypes[190]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16707,7 +16888,7 @@ func (x *GetClusterWorkloadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClusterWorkloadRequest.ProtoReflect.Descriptor instead.
 func (*GetClusterWorkloadRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{187}
+	return file_periscope_proto_rawDescGZIP(), []int{190}
 }
 
 func (x *GetClusterWorkloadRequest) GetTenantId() string {
@@ -16740,7 +16921,7 @@ type GetClusterWorkloadResponse struct {
 
 func (x *GetClusterWorkloadResponse) Reset() {
 	*x = GetClusterWorkloadResponse{}
-	mi := &file_periscope_proto_msgTypes[188]
+	mi := &file_periscope_proto_msgTypes[191]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16752,7 +16933,7 @@ func (x *GetClusterWorkloadResponse) String() string {
 func (*GetClusterWorkloadResponse) ProtoMessage() {}
 
 func (x *GetClusterWorkloadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[188]
+	mi := &file_periscope_proto_msgTypes[191]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16765,7 +16946,7 @@ func (x *GetClusterWorkloadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClusterWorkloadResponse.ProtoReflect.Descriptor instead.
 func (*GetClusterWorkloadResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{188}
+	return file_periscope_proto_rawDescGZIP(), []int{191}
 }
 
 func (x *GetClusterWorkloadResponse) GetRows() []*ClusterWorkload {
@@ -16792,7 +16973,7 @@ type VodRetentionPoint struct {
 
 func (x *VodRetentionPoint) Reset() {
 	*x = VodRetentionPoint{}
-	mi := &file_periscope_proto_msgTypes[189]
+	mi := &file_periscope_proto_msgTypes[192]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16804,7 +16985,7 @@ func (x *VodRetentionPoint) String() string {
 func (*VodRetentionPoint) ProtoMessage() {}
 
 func (x *VodRetentionPoint) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[189]
+	mi := &file_periscope_proto_msgTypes[192]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16817,7 +16998,7 @@ func (x *VodRetentionPoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VodRetentionPoint.ProtoReflect.Descriptor instead.
 func (*VodRetentionPoint) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{189}
+	return file_periscope_proto_rawDescGZIP(), []int{192}
 }
 
 func (x *VodRetentionPoint) GetBucketIndex() int64 {
@@ -16853,7 +17034,7 @@ type VodRetention struct {
 
 func (x *VodRetention) Reset() {
 	*x = VodRetention{}
-	mi := &file_periscope_proto_msgTypes[190]
+	mi := &file_periscope_proto_msgTypes[193]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16865,7 +17046,7 @@ func (x *VodRetention) String() string {
 func (*VodRetention) ProtoMessage() {}
 
 func (x *VodRetention) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[190]
+	mi := &file_periscope_proto_msgTypes[193]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16878,7 +17059,7 @@ func (x *VodRetention) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VodRetention.ProtoReflect.Descriptor instead.
 func (*VodRetention) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{190}
+	return file_periscope_proto_rawDescGZIP(), []int{193}
 }
 
 func (x *VodRetention) GetBucketWidthS() int64 {
@@ -16920,7 +17101,7 @@ type GetVodRetentionRequest struct {
 
 func (x *GetVodRetentionRequest) Reset() {
 	*x = GetVodRetentionRequest{}
-	mi := &file_periscope_proto_msgTypes[191]
+	mi := &file_periscope_proto_msgTypes[194]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16932,7 +17113,7 @@ func (x *GetVodRetentionRequest) String() string {
 func (*GetVodRetentionRequest) ProtoMessage() {}
 
 func (x *GetVodRetentionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[191]
+	mi := &file_periscope_proto_msgTypes[194]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16945,7 +17126,7 @@ func (x *GetVodRetentionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetVodRetentionRequest.ProtoReflect.Descriptor instead.
 func (*GetVodRetentionRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{191}
+	return file_periscope_proto_rawDescGZIP(), []int{194}
 }
 
 func (x *GetVodRetentionRequest) GetTenantId() string {
@@ -16978,7 +17159,7 @@ type GetVodRetentionResponse struct {
 
 func (x *GetVodRetentionResponse) Reset() {
 	*x = GetVodRetentionResponse{}
-	mi := &file_periscope_proto_msgTypes[192]
+	mi := &file_periscope_proto_msgTypes[195]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -16990,7 +17171,7 @@ func (x *GetVodRetentionResponse) String() string {
 func (*GetVodRetentionResponse) ProtoMessage() {}
 
 func (x *GetVodRetentionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[192]
+	mi := &file_periscope_proto_msgTypes[195]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17003,7 +17184,7 @@ func (x *GetVodRetentionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetVodRetentionResponse.ProtoReflect.Descriptor instead.
 func (*GetVodRetentionResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{192}
+	return file_periscope_proto_rawDescGZIP(), []int{195}
 }
 
 func (x *GetVodRetentionResponse) GetRetention() *VodRetention {
@@ -17029,7 +17210,7 @@ type VodRetentionAsset struct {
 
 func (x *VodRetentionAsset) Reset() {
 	*x = VodRetentionAsset{}
-	mi := &file_periscope_proto_msgTypes[193]
+	mi := &file_periscope_proto_msgTypes[196]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17041,7 +17222,7 @@ func (x *VodRetentionAsset) String() string {
 func (*VodRetentionAsset) ProtoMessage() {}
 
 func (x *VodRetentionAsset) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[193]
+	mi := &file_periscope_proto_msgTypes[196]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17054,7 +17235,7 @@ func (x *VodRetentionAsset) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VodRetentionAsset.ProtoReflect.Descriptor instead.
 func (*VodRetentionAsset) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{193}
+	return file_periscope_proto_rawDescGZIP(), []int{196}
 }
 
 func (x *VodRetentionAsset) GetArtifactHash() string {
@@ -17096,7 +17277,7 @@ type ListVodRetentionAssetsRequest struct {
 
 func (x *ListVodRetentionAssetsRequest) Reset() {
 	*x = ListVodRetentionAssetsRequest{}
-	mi := &file_periscope_proto_msgTypes[194]
+	mi := &file_periscope_proto_msgTypes[197]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17108,7 +17289,7 @@ func (x *ListVodRetentionAssetsRequest) String() string {
 func (*ListVodRetentionAssetsRequest) ProtoMessage() {}
 
 func (x *ListVodRetentionAssetsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[194]
+	mi := &file_periscope_proto_msgTypes[197]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17121,7 +17302,7 @@ func (x *ListVodRetentionAssetsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListVodRetentionAssetsRequest.ProtoReflect.Descriptor instead.
 func (*ListVodRetentionAssetsRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{194}
+	return file_periscope_proto_rawDescGZIP(), []int{197}
 }
 
 func (x *ListVodRetentionAssetsRequest) GetTenantId() string {
@@ -17155,7 +17336,7 @@ type ListVodRetentionAssetsResponse struct {
 
 func (x *ListVodRetentionAssetsResponse) Reset() {
 	*x = ListVodRetentionAssetsResponse{}
-	mi := &file_periscope_proto_msgTypes[195]
+	mi := &file_periscope_proto_msgTypes[198]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17167,7 +17348,7 @@ func (x *ListVodRetentionAssetsResponse) String() string {
 func (*ListVodRetentionAssetsResponse) ProtoMessage() {}
 
 func (x *ListVodRetentionAssetsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[195]
+	mi := &file_periscope_proto_msgTypes[198]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17180,7 +17361,7 @@ func (x *ListVodRetentionAssetsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListVodRetentionAssetsResponse.ProtoReflect.Descriptor instead.
 func (*ListVodRetentionAssetsResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{195}
+	return file_periscope_proto_rawDescGZIP(), []int{198}
 }
 
 func (x *ListVodRetentionAssetsResponse) GetPagination() *common.CursorPaginationResponse {
@@ -17212,7 +17393,7 @@ type TopAsset struct {
 
 func (x *TopAsset) Reset() {
 	*x = TopAsset{}
-	mi := &file_periscope_proto_msgTypes[196]
+	mi := &file_periscope_proto_msgTypes[199]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17224,7 +17405,7 @@ func (x *TopAsset) String() string {
 func (*TopAsset) ProtoMessage() {}
 
 func (x *TopAsset) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[196]
+	mi := &file_periscope_proto_msgTypes[199]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17237,7 +17418,7 @@ func (x *TopAsset) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TopAsset.ProtoReflect.Descriptor instead.
 func (*TopAsset) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{196}
+	return file_periscope_proto_rawDescGZIP(), []int{199}
 }
 
 func (x *TopAsset) GetArtifactHash() string {
@@ -17286,7 +17467,7 @@ type ListTopAssetsRequest struct {
 
 func (x *ListTopAssetsRequest) Reset() {
 	*x = ListTopAssetsRequest{}
-	mi := &file_periscope_proto_msgTypes[197]
+	mi := &file_periscope_proto_msgTypes[200]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17298,7 +17479,7 @@ func (x *ListTopAssetsRequest) String() string {
 func (*ListTopAssetsRequest) ProtoMessage() {}
 
 func (x *ListTopAssetsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[197]
+	mi := &file_periscope_proto_msgTypes[200]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17311,7 +17492,7 @@ func (x *ListTopAssetsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTopAssetsRequest.ProtoReflect.Descriptor instead.
 func (*ListTopAssetsRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{197}
+	return file_periscope_proto_rawDescGZIP(), []int{200}
 }
 
 func (x *ListTopAssetsRequest) GetTenantId() string {
@@ -17344,7 +17525,7 @@ type ListTopAssetsResponse struct {
 
 func (x *ListTopAssetsResponse) Reset() {
 	*x = ListTopAssetsResponse{}
-	mi := &file_periscope_proto_msgTypes[198]
+	mi := &file_periscope_proto_msgTypes[201]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17356,7 +17537,7 @@ func (x *ListTopAssetsResponse) String() string {
 func (*ListTopAssetsResponse) ProtoMessage() {}
 
 func (x *ListTopAssetsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[198]
+	mi := &file_periscope_proto_msgTypes[201]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17369,7 +17550,7 @@ func (x *ListTopAssetsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTopAssetsResponse.ProtoReflect.Descriptor instead.
 func (*ListTopAssetsResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{198}
+	return file_periscope_proto_rawDescGZIP(), []int{201}
 }
 
 func (x *ListTopAssetsResponse) GetAssets() []*TopAsset {
@@ -17395,7 +17576,7 @@ type Orchestrator struct {
 
 func (x *Orchestrator) Reset() {
 	*x = Orchestrator{}
-	mi := &file_periscope_proto_msgTypes[199]
+	mi := &file_periscope_proto_msgTypes[202]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17407,7 +17588,7 @@ func (x *Orchestrator) String() string {
 func (*Orchestrator) ProtoMessage() {}
 
 func (x *Orchestrator) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[199]
+	mi := &file_periscope_proto_msgTypes[202]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17420,7 +17601,7 @@ func (x *Orchestrator) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Orchestrator.ProtoReflect.Descriptor instead.
 func (*Orchestrator) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{199}
+	return file_periscope_proto_rawDescGZIP(), []int{202}
 }
 
 func (x *Orchestrator) GetTenantId() string {
@@ -17475,7 +17656,7 @@ type OrchestratorInstance struct {
 
 func (x *OrchestratorInstance) Reset() {
 	*x = OrchestratorInstance{}
-	mi := &file_periscope_proto_msgTypes[200]
+	mi := &file_periscope_proto_msgTypes[203]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17487,7 +17668,7 @@ func (x *OrchestratorInstance) String() string {
 func (*OrchestratorInstance) ProtoMessage() {}
 
 func (x *OrchestratorInstance) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[200]
+	mi := &file_periscope_proto_msgTypes[203]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17500,7 +17681,7 @@ func (x *OrchestratorInstance) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestratorInstance.ProtoReflect.Descriptor instead.
 func (*OrchestratorInstance) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{200}
+	return file_periscope_proto_rawDescGZIP(), []int{203}
 }
 
 func (x *OrchestratorInstance) GetTenantId() string {
@@ -17606,7 +17787,7 @@ type OrchestratorCapabilityPrice struct {
 
 func (x *OrchestratorCapabilityPrice) Reset() {
 	*x = OrchestratorCapabilityPrice{}
-	mi := &file_periscope_proto_msgTypes[201]
+	mi := &file_periscope_proto_msgTypes[204]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17618,7 +17799,7 @@ func (x *OrchestratorCapabilityPrice) String() string {
 func (*OrchestratorCapabilityPrice) ProtoMessage() {}
 
 func (x *OrchestratorCapabilityPrice) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[201]
+	mi := &file_periscope_proto_msgTypes[204]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17631,7 +17812,7 @@ func (x *OrchestratorCapabilityPrice) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestratorCapabilityPrice.ProtoReflect.Descriptor instead.
 func (*OrchestratorCapabilityPrice) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{201}
+	return file_periscope_proto_rawDescGZIP(), []int{204}
 }
 
 func (x *OrchestratorCapabilityPrice) GetCapability() string {
@@ -17685,7 +17866,7 @@ type OrchestratorVantage struct {
 
 func (x *OrchestratorVantage) Reset() {
 	*x = OrchestratorVantage{}
-	mi := &file_periscope_proto_msgTypes[202]
+	mi := &file_periscope_proto_msgTypes[205]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17697,7 +17878,7 @@ func (x *OrchestratorVantage) String() string {
 func (*OrchestratorVantage) ProtoMessage() {}
 
 func (x *OrchestratorVantage) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[202]
+	mi := &file_periscope_proto_msgTypes[205]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17710,7 +17891,7 @@ func (x *OrchestratorVantage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestratorVantage.ProtoReflect.Descriptor instead.
 func (*OrchestratorVantage) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{202}
+	return file_periscope_proto_rawDescGZIP(), []int{205}
 }
 
 func (x *OrchestratorVantage) GetTenantId() string {
@@ -17848,7 +18029,7 @@ type OrchestratorPerformancePoint struct {
 
 func (x *OrchestratorPerformancePoint) Reset() {
 	*x = OrchestratorPerformancePoint{}
-	mi := &file_periscope_proto_msgTypes[203]
+	mi := &file_periscope_proto_msgTypes[206]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17860,7 +18041,7 @@ func (x *OrchestratorPerformancePoint) String() string {
 func (*OrchestratorPerformancePoint) ProtoMessage() {}
 
 func (x *OrchestratorPerformancePoint) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[203]
+	mi := &file_periscope_proto_msgTypes[206]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17873,7 +18054,7 @@ func (x *OrchestratorPerformancePoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestratorPerformancePoint.ProtoReflect.Descriptor instead.
 func (*OrchestratorPerformancePoint) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{203}
+	return file_periscope_proto_rawDescGZIP(), []int{206}
 }
 
 func (x *OrchestratorPerformancePoint) GetTimestamp() *timestamppb.Timestamp {
@@ -18029,7 +18210,7 @@ type ListOrchestratorsRequest struct {
 
 func (x *ListOrchestratorsRequest) Reset() {
 	*x = ListOrchestratorsRequest{}
-	mi := &file_periscope_proto_msgTypes[204]
+	mi := &file_periscope_proto_msgTypes[207]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18041,7 +18222,7 @@ func (x *ListOrchestratorsRequest) String() string {
 func (*ListOrchestratorsRequest) ProtoMessage() {}
 
 func (x *ListOrchestratorsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[204]
+	mi := &file_periscope_proto_msgTypes[207]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18054,7 +18235,7 @@ func (x *ListOrchestratorsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOrchestratorsRequest.ProtoReflect.Descriptor instead.
 func (*ListOrchestratorsRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{204}
+	return file_periscope_proto_rawDescGZIP(), []int{207}
 }
 
 func (x *ListOrchestratorsRequest) GetTenantId() string {
@@ -18088,7 +18269,7 @@ type ListOrchestratorsResponse struct {
 
 func (x *ListOrchestratorsResponse) Reset() {
 	*x = ListOrchestratorsResponse{}
-	mi := &file_periscope_proto_msgTypes[205]
+	mi := &file_periscope_proto_msgTypes[208]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18100,7 +18281,7 @@ func (x *ListOrchestratorsResponse) String() string {
 func (*ListOrchestratorsResponse) ProtoMessage() {}
 
 func (x *ListOrchestratorsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[205]
+	mi := &file_periscope_proto_msgTypes[208]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18113,7 +18294,7 @@ func (x *ListOrchestratorsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOrchestratorsResponse.ProtoReflect.Descriptor instead.
 func (*ListOrchestratorsResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{205}
+	return file_periscope_proto_rawDescGZIP(), []int{208}
 }
 
 func (x *ListOrchestratorsResponse) GetPagination() *common.CursorPaginationResponse {
@@ -18140,7 +18321,7 @@ type GetOrchestratorRequest struct {
 
 func (x *GetOrchestratorRequest) Reset() {
 	*x = GetOrchestratorRequest{}
-	mi := &file_periscope_proto_msgTypes[206]
+	mi := &file_periscope_proto_msgTypes[209]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18152,7 +18333,7 @@ func (x *GetOrchestratorRequest) String() string {
 func (*GetOrchestratorRequest) ProtoMessage() {}
 
 func (x *GetOrchestratorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[206]
+	mi := &file_periscope_proto_msgTypes[209]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18165,7 +18346,7 @@ func (x *GetOrchestratorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOrchestratorRequest.ProtoReflect.Descriptor instead.
 func (*GetOrchestratorRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{206}
+	return file_periscope_proto_rawDescGZIP(), []int{209}
 }
 
 func (x *GetOrchestratorRequest) GetTenantId() string {
@@ -18199,7 +18380,7 @@ type GetOrchestratorResponse struct {
 
 func (x *GetOrchestratorResponse) Reset() {
 	*x = GetOrchestratorResponse{}
-	mi := &file_periscope_proto_msgTypes[207]
+	mi := &file_periscope_proto_msgTypes[210]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18211,7 +18392,7 @@ func (x *GetOrchestratorResponse) String() string {
 func (*GetOrchestratorResponse) ProtoMessage() {}
 
 func (x *GetOrchestratorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[207]
+	mi := &file_periscope_proto_msgTypes[210]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18224,7 +18405,7 @@ func (x *GetOrchestratorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOrchestratorResponse.ProtoReflect.Descriptor instead.
 func (*GetOrchestratorResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{207}
+	return file_periscope_proto_rawDescGZIP(), []int{210}
 }
 
 func (x *GetOrchestratorResponse) GetOrchestrator() *Orchestrator {
@@ -18259,7 +18440,7 @@ type ListOrchestratorInstancesRequest struct {
 
 func (x *ListOrchestratorInstancesRequest) Reset() {
 	*x = ListOrchestratorInstancesRequest{}
-	mi := &file_periscope_proto_msgTypes[208]
+	mi := &file_periscope_proto_msgTypes[211]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18271,7 +18452,7 @@ func (x *ListOrchestratorInstancesRequest) String() string {
 func (*ListOrchestratorInstancesRequest) ProtoMessage() {}
 
 func (x *ListOrchestratorInstancesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[208]
+	mi := &file_periscope_proto_msgTypes[211]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18284,7 +18465,7 @@ func (x *ListOrchestratorInstancesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOrchestratorInstancesRequest.ProtoReflect.Descriptor instead.
 func (*ListOrchestratorInstancesRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{208}
+	return file_periscope_proto_rawDescGZIP(), []int{211}
 }
 
 func (x *ListOrchestratorInstancesRequest) GetTenantId() string {
@@ -18310,7 +18491,7 @@ type ListOrchestratorInstancesResponse struct {
 
 func (x *ListOrchestratorInstancesResponse) Reset() {
 	*x = ListOrchestratorInstancesResponse{}
-	mi := &file_periscope_proto_msgTypes[209]
+	mi := &file_periscope_proto_msgTypes[212]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18322,7 +18503,7 @@ func (x *ListOrchestratorInstancesResponse) String() string {
 func (*ListOrchestratorInstancesResponse) ProtoMessage() {}
 
 func (x *ListOrchestratorInstancesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[209]
+	mi := &file_periscope_proto_msgTypes[212]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18335,7 +18516,7 @@ func (x *ListOrchestratorInstancesResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use ListOrchestratorInstancesResponse.ProtoReflect.Descriptor instead.
 func (*ListOrchestratorInstancesResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{209}
+	return file_periscope_proto_rawDescGZIP(), []int{212}
 }
 
 func (x *ListOrchestratorInstancesResponse) GetInstances() []*OrchestratorInstance {
@@ -18358,7 +18539,7 @@ type ListOrchestratorVantagesRequest struct {
 
 func (x *ListOrchestratorVantagesRequest) Reset() {
 	*x = ListOrchestratorVantagesRequest{}
-	mi := &file_periscope_proto_msgTypes[210]
+	mi := &file_periscope_proto_msgTypes[213]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18370,7 +18551,7 @@ func (x *ListOrchestratorVantagesRequest) String() string {
 func (*ListOrchestratorVantagesRequest) ProtoMessage() {}
 
 func (x *ListOrchestratorVantagesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[210]
+	mi := &file_periscope_proto_msgTypes[213]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18383,7 +18564,7 @@ func (x *ListOrchestratorVantagesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOrchestratorVantagesRequest.ProtoReflect.Descriptor instead.
 func (*ListOrchestratorVantagesRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{210}
+	return file_periscope_proto_rawDescGZIP(), []int{213}
 }
 
 func (x *ListOrchestratorVantagesRequest) GetTenantId() string {
@@ -18409,7 +18590,7 @@ type ListOrchestratorVantagesResponse struct {
 
 func (x *ListOrchestratorVantagesResponse) Reset() {
 	*x = ListOrchestratorVantagesResponse{}
-	mi := &file_periscope_proto_msgTypes[211]
+	mi := &file_periscope_proto_msgTypes[214]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18421,7 +18602,7 @@ func (x *ListOrchestratorVantagesResponse) String() string {
 func (*ListOrchestratorVantagesResponse) ProtoMessage() {}
 
 func (x *ListOrchestratorVantagesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[211]
+	mi := &file_periscope_proto_msgTypes[214]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18434,7 +18615,7 @@ func (x *ListOrchestratorVantagesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOrchestratorVantagesResponse.ProtoReflect.Descriptor instead.
 func (*ListOrchestratorVantagesResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{211}
+	return file_periscope_proto_rawDescGZIP(), []int{214}
 }
 
 func (x *ListOrchestratorVantagesResponse) GetVantages() []*OrchestratorVantage {
@@ -18460,7 +18641,7 @@ type GetOrchestratorPerformanceSeriesRequest struct {
 
 func (x *GetOrchestratorPerformanceSeriesRequest) Reset() {
 	*x = GetOrchestratorPerformanceSeriesRequest{}
-	mi := &file_periscope_proto_msgTypes[212]
+	mi := &file_periscope_proto_msgTypes[215]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18472,7 +18653,7 @@ func (x *GetOrchestratorPerformanceSeriesRequest) String() string {
 func (*GetOrchestratorPerformanceSeriesRequest) ProtoMessage() {}
 
 func (x *GetOrchestratorPerformanceSeriesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[212]
+	mi := &file_periscope_proto_msgTypes[215]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18485,7 +18666,7 @@ func (x *GetOrchestratorPerformanceSeriesRequest) ProtoReflect() protoreflect.Me
 
 // Deprecated: Use GetOrchestratorPerformanceSeriesRequest.ProtoReflect.Descriptor instead.
 func (*GetOrchestratorPerformanceSeriesRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{212}
+	return file_periscope_proto_rawDescGZIP(), []int{215}
 }
 
 func (x *GetOrchestratorPerformanceSeriesRequest) GetTenantId() string {
@@ -18539,7 +18720,7 @@ type GetOrchestratorPerformanceSeriesResponse struct {
 
 func (x *GetOrchestratorPerformanceSeriesResponse) Reset() {
 	*x = GetOrchestratorPerformanceSeriesResponse{}
-	mi := &file_periscope_proto_msgTypes[213]
+	mi := &file_periscope_proto_msgTypes[216]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18551,7 +18732,7 @@ func (x *GetOrchestratorPerformanceSeriesResponse) String() string {
 func (*GetOrchestratorPerformanceSeriesResponse) ProtoMessage() {}
 
 func (x *GetOrchestratorPerformanceSeriesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[213]
+	mi := &file_periscope_proto_msgTypes[216]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18564,7 +18745,7 @@ func (x *GetOrchestratorPerformanceSeriesResponse) ProtoReflect() protoreflect.M
 
 // Deprecated: Use GetOrchestratorPerformanceSeriesResponse.ProtoReflect.Descriptor instead.
 func (*GetOrchestratorPerformanceSeriesResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{213}
+	return file_periscope_proto_rawDescGZIP(), []int{216}
 }
 
 func (x *GetOrchestratorPerformanceSeriesResponse) GetPoints() []*OrchestratorPerformancePoint {
@@ -18593,7 +18774,7 @@ type NetworkObservationsRequest struct {
 
 func (x *NetworkObservationsRequest) Reset() {
 	*x = NetworkObservationsRequest{}
-	mi := &file_periscope_proto_msgTypes[214]
+	mi := &file_periscope_proto_msgTypes[217]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18605,7 +18786,7 @@ func (x *NetworkObservationsRequest) String() string {
 func (*NetworkObservationsRequest) ProtoMessage() {}
 
 func (x *NetworkObservationsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[214]
+	mi := &file_periscope_proto_msgTypes[217]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18618,7 +18799,7 @@ func (x *NetworkObservationsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkObservationsRequest.ProtoReflect.Descriptor instead.
 func (*NetworkObservationsRequest) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{214}
+	return file_periscope_proto_rawDescGZIP(), []int{217}
 }
 
 func (x *NetworkObservationsRequest) GetTenantIds() []string {
@@ -18708,7 +18889,7 @@ type NetworkObservationsResponse struct {
 
 func (x *NetworkObservationsResponse) Reset() {
 	*x = NetworkObservationsResponse{}
-	mi := &file_periscope_proto_msgTypes[215]
+	mi := &file_periscope_proto_msgTypes[218]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -18720,7 +18901,7 @@ func (x *NetworkObservationsResponse) String() string {
 func (*NetworkObservationsResponse) ProtoMessage() {}
 
 func (x *NetworkObservationsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_periscope_proto_msgTypes[215]
+	mi := &file_periscope_proto_msgTypes[218]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18733,7 +18914,7 @@ func (x *NetworkObservationsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkObservationsResponse.ProtoReflect.Descriptor instead.
 func (*NetworkObservationsResponse) Descriptor() ([]byte, []int) {
-	return file_periscope_proto_rawDescGZIP(), []int{215}
+	return file_periscope_proto_rawDescGZIP(), []int{218}
 }
 
 func (x *NetworkObservationsResponse) GetJson() []byte {
@@ -19674,7 +19855,26 @@ const file_periscope_proto_rawDesc = "" +
 	"\x13egress_capacity_bps\x18\a \x01(\x04R\x11egressCapacityBps\"\x1c\n" +
 	"\x1aGetNetworkLiveStatsRequest\"]\n" +
 	"\x1bGetNetworkLiveStatsResponse\x12>\n" +
-	"\bclusters\x18\x01 \x03(\v2\".periscope.NetworkClusterLiveStatsR\bclusters\"\x81\x02\n" +
+	"\bclusters\x18\x01 \x03(\v2\".periscope.NetworkClusterLiveStatsR\bclusters\"\xd8\x01\n" +
+	"\x15SecurityActivityEvent\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
+	"\n" +
+	"event_type\x18\x02 \x01(\tR\teventType\x128\n" +
+	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x1f\n" +
+	"\vauth_method\x18\x04 \x01(\tR\n" +
+	"authMethod\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x05 \x01(\tR\tsessionId\x12\x16\n" +
+	"\x06reason\x18\x06 \x01(\tR\x06reason\"]\n" +
+	"\x1aGetSecurityActivityRequest\x12?\n" +
+	"\n" +
+	"pagination\x18\x01 \x01(\v2\x1f.common.CursorPaginationRequestR\n" +
+	"pagination\"\x99\x01\n" +
+	"\x1bGetSecurityActivityResponse\x128\n" +
+	"\x06events\x18\x01 \x03(\v2 .periscope.SecurityActivityEventR\x06events\x12@\n" +
+	"\n" +
+	"pagination\x18\x02 \x01(\v2 .common.CursorPaginationResponseR\n" +
+	"pagination\"\x81\x02\n" +
 	"\x16StreamConnectionHourly\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12.\n" +
 	"\x04hour\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x04hour\x12\x1b\n" +
@@ -21052,8 +21252,9 @@ const file_periscope_proto_rawDesc = "" +
 	"\x17GetClusterTrafficMatrix\x12).periscope.GetClusterTrafficMatrixRequest\x1a*.periscope.GetClusterTrafficMatrixResponse2\xeb\x01\n" +
 	"\x1aFederationAnalyticsService\x12d\n" +
 	"\x13GetFederationEvents\x12%.periscope.GetFederationEventsRequest\x1a&.periscope.GetFederationEventsResponse\x12g\n" +
-	"\x14GetFederationSummary\x12&.periscope.GetFederationSummaryRequest\x1a'.periscope.GetFederationSummaryResponse2\xc9\x02\n" +
+	"\x14GetFederationSummary\x12&.periscope.GetFederationSummaryRequest\x1a'.periscope.GetFederationSummaryResponse2\xaf\x03\n" +
 	"\x18PlatformAnalyticsService\x12d\n" +
+	"\x13GetSecurityActivity\x12%.periscope.GetSecurityActivityRequest\x1a&.periscope.GetSecurityActivityResponse\x12d\n" +
 	"\x13GetPlatformOverview\x12%.periscope.GetPlatformOverviewRequest\x1a&.periscope.GetPlatformOverviewResponse\x12a\n" +
 	"\x12ListTenantActivity\x12$.periscope.ListTenantActivityRequest\x1a%.periscope.ListTenantActivityResponse\x12d\n" +
 	"\x13GetNetworkLiveStats\x12%.periscope.GetNetworkLiveStatsRequest\x1a&.periscope.GetNetworkLiveStatsResponse2\x93\x03\n" +
@@ -21119,7 +21320,7 @@ func file_periscope_proto_rawDescGZIP() []byte {
 }
 
 var file_periscope_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_periscope_proto_msgTypes = make([]protoimpl.MessageInfo, 218)
+var file_periscope_proto_msgTypes = make([]protoimpl.MessageInfo, 221)
 var file_periscope_proto_goTypes = []any{
 	(NetworkUsageGroupBy)(0),                         // 0: periscope.NetworkUsageGroupBy
 	(StreamSummarySortField)(0),                      // 1: periscope.StreamSummarySortField
@@ -21202,580 +21403,589 @@ var file_periscope_proto_goTypes = []any{
 	(*NetworkClusterLiveStats)(nil),                  // 78: periscope.NetworkClusterLiveStats
 	(*GetNetworkLiveStatsRequest)(nil),               // 79: periscope.GetNetworkLiveStatsRequest
 	(*GetNetworkLiveStatsResponse)(nil),              // 80: periscope.GetNetworkLiveStatsResponse
-	(*StreamConnectionHourly)(nil),                   // 81: periscope.StreamConnectionHourly
-	(*GetStreamConnectionHourlyRequest)(nil),         // 82: periscope.GetStreamConnectionHourlyRequest
-	(*GetStreamConnectionHourlyResponse)(nil),        // 83: periscope.GetStreamConnectionHourlyResponse
-	(*ClientMetrics5M)(nil),                          // 84: periscope.ClientMetrics5m
-	(*GetClientMetrics5MRequest)(nil),                // 85: periscope.GetClientMetrics5mRequest
-	(*GetClientMetrics5MResponse)(nil),               // 86: periscope.GetClientMetrics5mResponse
-	(*QualityTierDaily)(nil),                         // 87: periscope.QualityTierDaily
-	(*GetQualityTierDailyRequest)(nil),               // 88: periscope.GetQualityTierDailyRequest
-	(*GetQualityTierDailyResponse)(nil),              // 89: periscope.GetQualityTierDailyResponse
-	(*StorageUsageRecord)(nil),                       // 90: periscope.StorageUsageRecord
-	(*StorageEvent)(nil),                             // 91: periscope.StorageEvent
-	(*GetStorageEventsRequest)(nil),                  // 92: periscope.GetStorageEventsRequest
-	(*GetStorageEventsResponse)(nil),                 // 93: periscope.GetStorageEventsResponse
-	(*GetStorageUsageRequest)(nil),                   // 94: periscope.GetStorageUsageRequest
-	(*GetStorageUsageResponse)(nil),                  // 95: periscope.GetStorageUsageResponse
-	(*GetLiveUsageSummaryRequest)(nil),               // 96: periscope.GetLiveUsageSummaryRequest
-	(*LiveUsageSummary)(nil),                         // 97: periscope.LiveUsageSummary
-	(*GetLiveUsageSummaryResponse)(nil),              // 98: periscope.GetLiveUsageSummaryResponse
-	(*GetNetworkUsageRequest)(nil),                   // 99: periscope.GetNetworkUsageRequest
-	(*NetworkUsageRecord)(nil),                       // 100: periscope.NetworkUsageRecord
-	(*GetNetworkUsageResponse)(nil),                  // 101: periscope.GetNetworkUsageResponse
-	(*GetAcquisitionFunnelRequest)(nil),              // 102: periscope.GetAcquisitionFunnelRequest
-	(*AcquisitionFunnelEntry)(nil),                   // 103: periscope.AcquisitionFunnelEntry
-	(*GetAcquisitionFunnelResponse)(nil),             // 104: periscope.GetAcquisitionFunnelResponse
-	(*GetAcquisitionCohortUsageRequest)(nil),         // 105: periscope.GetAcquisitionCohortUsageRequest
-	(*AcquisitionCohortUsageRecord)(nil),             // 106: periscope.AcquisitionCohortUsageRecord
-	(*GetAcquisitionCohortUsageResponse)(nil),        // 107: periscope.GetAcquisitionCohortUsageResponse
-	(*StreamHealth5M)(nil),                           // 108: periscope.StreamHealth5m
-	(*GetStreamHealth5MRequest)(nil),                 // 109: periscope.GetStreamHealth5mRequest
-	(*GetStreamHealth5MResponse)(nil),                // 110: periscope.GetStreamHealth5mResponse
-	(*NodePerformance5M)(nil),                        // 111: periscope.NodePerformance5m
-	(*GetNodePerformance5MRequest)(nil),              // 112: periscope.GetNodePerformance5mRequest
-	(*GetNodePerformance5MResponse)(nil),             // 113: periscope.GetNodePerformance5mResponse
-	(*ViewerHoursHourly)(nil),                        // 114: periscope.ViewerHoursHourly
-	(*GetViewerHoursHourlyRequest)(nil),              // 115: periscope.GetViewerHoursHourlyRequest
-	(*GetViewerHoursHourlyResponse)(nil),             // 116: periscope.GetViewerHoursHourlyResponse
-	(*ViewerGeoHourly)(nil),                          // 117: periscope.ViewerGeoHourly
-	(*GetViewerGeoHourlyRequest)(nil),                // 118: periscope.GetViewerGeoHourlyRequest
-	(*GetViewerGeoHourlyResponse)(nil),               // 119: periscope.GetViewerGeoHourlyResponse
-	(*TenantDailyStat)(nil),                          // 120: periscope.TenantDailyStat
-	(*GetTenantDailyStatsRequest)(nil),               // 121: periscope.GetTenantDailyStatsRequest
-	(*GetTenantDailyStatsResponse)(nil),              // 122: periscope.GetTenantDailyStatsResponse
-	(*ProcessingUsageRecord)(nil),                    // 123: periscope.ProcessingUsageRecord
-	(*ProcessingUsageSummary)(nil),                   // 124: periscope.ProcessingUsageSummary
-	(*GetProcessingUsageRequest)(nil),                // 125: periscope.GetProcessingUsageRequest
-	(*GetProcessingUsageResponse)(nil),               // 126: periscope.GetProcessingUsageResponse
-	(*RebufferingEvent)(nil),                         // 127: periscope.RebufferingEvent
-	(*GetRebufferingEventsRequest)(nil),              // 128: periscope.GetRebufferingEventsRequest
-	(*GetRebufferingEventsResponse)(nil),             // 129: periscope.GetRebufferingEventsResponse
-	(*TenantAnalyticsDaily)(nil),                     // 130: periscope.TenantAnalyticsDaily
-	(*GetTenantAnalyticsDailyRequest)(nil),           // 131: periscope.GetTenantAnalyticsDailyRequest
-	(*GetTenantAnalyticsDailyResponse)(nil),          // 132: periscope.GetTenantAnalyticsDailyResponse
-	(*StreamAnalyticsDaily)(nil),                     // 133: periscope.StreamAnalyticsDaily
-	(*GetStreamAnalyticsDailyRequest)(nil),           // 134: periscope.GetStreamAnalyticsDailyRequest
-	(*GetStreamAnalyticsDailyResponse)(nil),          // 135: periscope.GetStreamAnalyticsDailyResponse
-	(*QualityTierSummary)(nil),                       // 136: periscope.QualityTierSummary
-	(*StreamAnalyticsSummary)(nil),                   // 137: periscope.StreamAnalyticsSummary
-	(*GetStreamAnalyticsSummaryRequest)(nil),         // 138: periscope.GetStreamAnalyticsSummaryRequest
-	(*GetStreamAnalyticsSummaryResponse)(nil),        // 139: periscope.GetStreamAnalyticsSummaryResponse
-	(*GetStreamAnalyticsSummariesRequest)(nil),       // 140: periscope.GetStreamAnalyticsSummariesRequest
-	(*GetStreamAnalyticsSummariesResponse)(nil),      // 141: periscope.GetStreamAnalyticsSummariesResponse
-	(*APIUsageRecord)(nil),                           // 142: periscope.APIUsageRecord
-	(*APIUsageSummary)(nil),                          // 143: periscope.APIUsageSummary
-	(*APIUsageOperationSummary)(nil),                 // 144: periscope.APIUsageOperationSummary
-	(*GetAPIUsageRequest)(nil),                       // 145: periscope.GetAPIUsageRequest
-	(*GetAPIUsageResponse)(nil),                      // 146: periscope.GetAPIUsageResponse
-	(*RoutingEfficiencySummary)(nil),                 // 147: periscope.RoutingEfficiencySummary
-	(*RoutingCountryStat)(nil),                       // 148: periscope.RoutingCountryStat
-	(*GetRoutingEfficiencyRequest)(nil),              // 149: periscope.GetRoutingEfficiencyRequest
-	(*GetRoutingEfficiencyResponse)(nil),             // 150: periscope.GetRoutingEfficiencyResponse
-	(*ClusterPairTraffic)(nil),                       // 151: periscope.ClusterPairTraffic
-	(*GetClusterTrafficMatrixRequest)(nil),           // 152: periscope.GetClusterTrafficMatrixRequest
-	(*GetClusterTrafficMatrixResponse)(nil),          // 153: periscope.GetClusterTrafficMatrixResponse
-	(*FederationEvent)(nil),                          // 154: periscope.FederationEvent
-	(*GetFederationEventsRequest)(nil),               // 155: periscope.GetFederationEventsRequest
-	(*GetFederationEventsResponse)(nil),              // 156: periscope.GetFederationEventsResponse
-	(*FederationEventCount)(nil),                     // 157: periscope.FederationEventCount
-	(*FederationSummary)(nil),                        // 158: periscope.FederationSummary
-	(*GetFederationSummaryRequest)(nil),              // 159: periscope.GetFederationSummaryRequest
-	(*GetFederationSummaryResponse)(nil),             // 160: periscope.GetFederationSummaryResponse
-	(*StreamHealthSummary)(nil),                      // 161: periscope.StreamHealthSummary
-	(*GetStreamHealthSummaryRequest)(nil),            // 162: periscope.GetStreamHealthSummaryRequest
-	(*GetStreamHealthSummaryResponse)(nil),           // 163: periscope.GetStreamHealthSummaryResponse
-	(*ClientQoeSummary)(nil),                         // 164: periscope.ClientQoeSummary
-	(*GetClientQoeSummaryRequest)(nil),               // 165: periscope.GetClientQoeSummaryRequest
-	(*GetClientQoeSummaryResponse)(nil),              // 166: periscope.GetClientQoeSummaryResponse
-	(*PlayerBootSummary)(nil),                        // 167: periscope.PlayerBootSummary
-	(*GetPlayerBootSummaryRequest)(nil),              // 168: periscope.GetPlayerBootSummaryRequest
-	(*GetPlayerBootSummaryResponse)(nil),             // 169: periscope.GetPlayerBootSummaryResponse
-	(*PlayerBootTimeSeriesBucket)(nil),               // 170: periscope.PlayerBootTimeSeriesBucket
-	(*GetPlayerBootTimeSeriesRequest)(nil),           // 171: periscope.GetPlayerBootTimeSeriesRequest
-	(*GetPlayerBootTimeSeriesResponse)(nil),          // 172: periscope.GetPlayerBootTimeSeriesResponse
-	(*ClusterBootOps)(nil),                           // 173: periscope.ClusterBootOps
-	(*GetClusterBootOpsRequest)(nil),                 // 174: periscope.GetClusterBootOpsRequest
-	(*GetClusterBootOpsResponse)(nil),                // 175: periscope.GetClusterBootOpsResponse
-	(*SessionQoeSummary)(nil),                        // 176: periscope.SessionQoeSummary
-	(*GetSessionQoeSummaryRequest)(nil),              // 177: periscope.GetSessionQoeSummaryRequest
-	(*GetSessionQoeSummaryResponse)(nil),             // 178: periscope.GetSessionQoeSummaryResponse
-	(*SessionQoeDetail)(nil),                         // 179: periscope.SessionQoeDetail
-	(*GetSessionQoeDetailRequest)(nil),               // 180: periscope.GetSessionQoeDetailRequest
-	(*GetSessionQoeDetailResponse)(nil),              // 181: periscope.GetSessionQoeDetailResponse
-	(*SessionQoeTimeSeriesBucket)(nil),               // 182: periscope.SessionQoeTimeSeriesBucket
-	(*GetSessionQoeTimeSeriesRequest)(nil),           // 183: periscope.GetSessionQoeTimeSeriesRequest
-	(*GetSessionQoeTimeSeriesResponse)(nil),          // 184: periscope.GetSessionQoeTimeSeriesResponse
-	(*ClusterQoeOps)(nil),                            // 185: periscope.ClusterQoeOps
-	(*GetClusterQoeOpsRequest)(nil),                  // 186: periscope.GetClusterQoeOpsRequest
-	(*GetClusterQoeOpsResponse)(nil),                 // 187: periscope.GetClusterQoeOpsResponse
-	(*ClusterWorkload)(nil),                          // 188: periscope.ClusterWorkload
-	(*GetClusterWorkloadRequest)(nil),                // 189: periscope.GetClusterWorkloadRequest
-	(*GetClusterWorkloadResponse)(nil),               // 190: periscope.GetClusterWorkloadResponse
-	(*VodRetentionPoint)(nil),                        // 191: periscope.VodRetentionPoint
-	(*VodRetention)(nil),                             // 192: periscope.VodRetention
-	(*GetVodRetentionRequest)(nil),                   // 193: periscope.GetVodRetentionRequest
-	(*GetVodRetentionResponse)(nil),                  // 194: periscope.GetVodRetentionResponse
-	(*VodRetentionAsset)(nil),                        // 195: periscope.VodRetentionAsset
-	(*ListVodRetentionAssetsRequest)(nil),            // 196: periscope.ListVodRetentionAssetsRequest
-	(*ListVodRetentionAssetsResponse)(nil),           // 197: periscope.ListVodRetentionAssetsResponse
-	(*TopAsset)(nil),                                 // 198: periscope.TopAsset
-	(*ListTopAssetsRequest)(nil),                     // 199: periscope.ListTopAssetsRequest
-	(*ListTopAssetsResponse)(nil),                    // 200: periscope.ListTopAssetsResponse
-	(*Orchestrator)(nil),                             // 201: periscope.Orchestrator
-	(*OrchestratorInstance)(nil),                     // 202: periscope.OrchestratorInstance
-	(*OrchestratorCapabilityPrice)(nil),              // 203: periscope.OrchestratorCapabilityPrice
-	(*OrchestratorVantage)(nil),                      // 204: periscope.OrchestratorVantage
-	(*OrchestratorPerformancePoint)(nil),             // 205: periscope.OrchestratorPerformancePoint
-	(*ListOrchestratorsRequest)(nil),                 // 206: periscope.ListOrchestratorsRequest
-	(*ListOrchestratorsResponse)(nil),                // 207: periscope.ListOrchestratorsResponse
-	(*GetOrchestratorRequest)(nil),                   // 208: periscope.GetOrchestratorRequest
-	(*GetOrchestratorResponse)(nil),                  // 209: periscope.GetOrchestratorResponse
-	(*ListOrchestratorInstancesRequest)(nil),         // 210: periscope.ListOrchestratorInstancesRequest
-	(*ListOrchestratorInstancesResponse)(nil),        // 211: periscope.ListOrchestratorInstancesResponse
-	(*ListOrchestratorVantagesRequest)(nil),          // 212: periscope.ListOrchestratorVantagesRequest
-	(*ListOrchestratorVantagesResponse)(nil),         // 213: periscope.ListOrchestratorVantagesResponse
-	(*GetOrchestratorPerformanceSeriesRequest)(nil),  // 214: periscope.GetOrchestratorPerformanceSeriesRequest
-	(*GetOrchestratorPerformanceSeriesResponse)(nil), // 215: periscope.GetOrchestratorPerformanceSeriesResponse
-	(*NetworkObservationsRequest)(nil),               // 216: periscope.NetworkObservationsRequest
-	(*NetworkObservationsResponse)(nil),              // 217: periscope.NetworkObservationsResponse
-	nil,                                              // 218: periscope.ViewerGeographicStats.CountryBreakdownEntry
-	nil,                                              // 219: periscope.StreamsStatusResponse.StatusesEntry
-	(*timestamppb.Timestamp)(nil),                    // 220: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),                          // 221: google.protobuf.Struct
-	(*common.TimeRange)(nil),                         // 222: common.TimeRange
-	(*common.CursorPaginationRequest)(nil),           // 223: common.CursorPaginationRequest
-	(*common.CursorPaginationResponse)(nil),          // 224: common.CursorPaginationResponse
-	(*ipc.StreamTrack)(nil),                          // 225: helmsmancontrol.StreamTrack
-	(*ipc.GeoBucket)(nil),                            // 226: helmsmancontrol.GeoBucket
-	(common.SortOrder)(0),                            // 227: common.SortOrder
+	(*SecurityActivityEvent)(nil),                    // 81: periscope.SecurityActivityEvent
+	(*GetSecurityActivityRequest)(nil),               // 82: periscope.GetSecurityActivityRequest
+	(*GetSecurityActivityResponse)(nil),              // 83: periscope.GetSecurityActivityResponse
+	(*StreamConnectionHourly)(nil),                   // 84: periscope.StreamConnectionHourly
+	(*GetStreamConnectionHourlyRequest)(nil),         // 85: periscope.GetStreamConnectionHourlyRequest
+	(*GetStreamConnectionHourlyResponse)(nil),        // 86: periscope.GetStreamConnectionHourlyResponse
+	(*ClientMetrics5M)(nil),                          // 87: periscope.ClientMetrics5m
+	(*GetClientMetrics5MRequest)(nil),                // 88: periscope.GetClientMetrics5mRequest
+	(*GetClientMetrics5MResponse)(nil),               // 89: periscope.GetClientMetrics5mResponse
+	(*QualityTierDaily)(nil),                         // 90: periscope.QualityTierDaily
+	(*GetQualityTierDailyRequest)(nil),               // 91: periscope.GetQualityTierDailyRequest
+	(*GetQualityTierDailyResponse)(nil),              // 92: periscope.GetQualityTierDailyResponse
+	(*StorageUsageRecord)(nil),                       // 93: periscope.StorageUsageRecord
+	(*StorageEvent)(nil),                             // 94: periscope.StorageEvent
+	(*GetStorageEventsRequest)(nil),                  // 95: periscope.GetStorageEventsRequest
+	(*GetStorageEventsResponse)(nil),                 // 96: periscope.GetStorageEventsResponse
+	(*GetStorageUsageRequest)(nil),                   // 97: periscope.GetStorageUsageRequest
+	(*GetStorageUsageResponse)(nil),                  // 98: periscope.GetStorageUsageResponse
+	(*GetLiveUsageSummaryRequest)(nil),               // 99: periscope.GetLiveUsageSummaryRequest
+	(*LiveUsageSummary)(nil),                         // 100: periscope.LiveUsageSummary
+	(*GetLiveUsageSummaryResponse)(nil),              // 101: periscope.GetLiveUsageSummaryResponse
+	(*GetNetworkUsageRequest)(nil),                   // 102: periscope.GetNetworkUsageRequest
+	(*NetworkUsageRecord)(nil),                       // 103: periscope.NetworkUsageRecord
+	(*GetNetworkUsageResponse)(nil),                  // 104: periscope.GetNetworkUsageResponse
+	(*GetAcquisitionFunnelRequest)(nil),              // 105: periscope.GetAcquisitionFunnelRequest
+	(*AcquisitionFunnelEntry)(nil),                   // 106: periscope.AcquisitionFunnelEntry
+	(*GetAcquisitionFunnelResponse)(nil),             // 107: periscope.GetAcquisitionFunnelResponse
+	(*GetAcquisitionCohortUsageRequest)(nil),         // 108: periscope.GetAcquisitionCohortUsageRequest
+	(*AcquisitionCohortUsageRecord)(nil),             // 109: periscope.AcquisitionCohortUsageRecord
+	(*GetAcquisitionCohortUsageResponse)(nil),        // 110: periscope.GetAcquisitionCohortUsageResponse
+	(*StreamHealth5M)(nil),                           // 111: periscope.StreamHealth5m
+	(*GetStreamHealth5MRequest)(nil),                 // 112: periscope.GetStreamHealth5mRequest
+	(*GetStreamHealth5MResponse)(nil),                // 113: periscope.GetStreamHealth5mResponse
+	(*NodePerformance5M)(nil),                        // 114: periscope.NodePerformance5m
+	(*GetNodePerformance5MRequest)(nil),              // 115: periscope.GetNodePerformance5mRequest
+	(*GetNodePerformance5MResponse)(nil),             // 116: periscope.GetNodePerformance5mResponse
+	(*ViewerHoursHourly)(nil),                        // 117: periscope.ViewerHoursHourly
+	(*GetViewerHoursHourlyRequest)(nil),              // 118: periscope.GetViewerHoursHourlyRequest
+	(*GetViewerHoursHourlyResponse)(nil),             // 119: periscope.GetViewerHoursHourlyResponse
+	(*ViewerGeoHourly)(nil),                          // 120: periscope.ViewerGeoHourly
+	(*GetViewerGeoHourlyRequest)(nil),                // 121: periscope.GetViewerGeoHourlyRequest
+	(*GetViewerGeoHourlyResponse)(nil),               // 122: periscope.GetViewerGeoHourlyResponse
+	(*TenantDailyStat)(nil),                          // 123: periscope.TenantDailyStat
+	(*GetTenantDailyStatsRequest)(nil),               // 124: periscope.GetTenantDailyStatsRequest
+	(*GetTenantDailyStatsResponse)(nil),              // 125: periscope.GetTenantDailyStatsResponse
+	(*ProcessingUsageRecord)(nil),                    // 126: periscope.ProcessingUsageRecord
+	(*ProcessingUsageSummary)(nil),                   // 127: periscope.ProcessingUsageSummary
+	(*GetProcessingUsageRequest)(nil),                // 128: periscope.GetProcessingUsageRequest
+	(*GetProcessingUsageResponse)(nil),               // 129: periscope.GetProcessingUsageResponse
+	(*RebufferingEvent)(nil),                         // 130: periscope.RebufferingEvent
+	(*GetRebufferingEventsRequest)(nil),              // 131: periscope.GetRebufferingEventsRequest
+	(*GetRebufferingEventsResponse)(nil),             // 132: periscope.GetRebufferingEventsResponse
+	(*TenantAnalyticsDaily)(nil),                     // 133: periscope.TenantAnalyticsDaily
+	(*GetTenantAnalyticsDailyRequest)(nil),           // 134: periscope.GetTenantAnalyticsDailyRequest
+	(*GetTenantAnalyticsDailyResponse)(nil),          // 135: periscope.GetTenantAnalyticsDailyResponse
+	(*StreamAnalyticsDaily)(nil),                     // 136: periscope.StreamAnalyticsDaily
+	(*GetStreamAnalyticsDailyRequest)(nil),           // 137: periscope.GetStreamAnalyticsDailyRequest
+	(*GetStreamAnalyticsDailyResponse)(nil),          // 138: periscope.GetStreamAnalyticsDailyResponse
+	(*QualityTierSummary)(nil),                       // 139: periscope.QualityTierSummary
+	(*StreamAnalyticsSummary)(nil),                   // 140: periscope.StreamAnalyticsSummary
+	(*GetStreamAnalyticsSummaryRequest)(nil),         // 141: periscope.GetStreamAnalyticsSummaryRequest
+	(*GetStreamAnalyticsSummaryResponse)(nil),        // 142: periscope.GetStreamAnalyticsSummaryResponse
+	(*GetStreamAnalyticsSummariesRequest)(nil),       // 143: periscope.GetStreamAnalyticsSummariesRequest
+	(*GetStreamAnalyticsSummariesResponse)(nil),      // 144: periscope.GetStreamAnalyticsSummariesResponse
+	(*APIUsageRecord)(nil),                           // 145: periscope.APIUsageRecord
+	(*APIUsageSummary)(nil),                          // 146: periscope.APIUsageSummary
+	(*APIUsageOperationSummary)(nil),                 // 147: periscope.APIUsageOperationSummary
+	(*GetAPIUsageRequest)(nil),                       // 148: periscope.GetAPIUsageRequest
+	(*GetAPIUsageResponse)(nil),                      // 149: periscope.GetAPIUsageResponse
+	(*RoutingEfficiencySummary)(nil),                 // 150: periscope.RoutingEfficiencySummary
+	(*RoutingCountryStat)(nil),                       // 151: periscope.RoutingCountryStat
+	(*GetRoutingEfficiencyRequest)(nil),              // 152: periscope.GetRoutingEfficiencyRequest
+	(*GetRoutingEfficiencyResponse)(nil),             // 153: periscope.GetRoutingEfficiencyResponse
+	(*ClusterPairTraffic)(nil),                       // 154: periscope.ClusterPairTraffic
+	(*GetClusterTrafficMatrixRequest)(nil),           // 155: periscope.GetClusterTrafficMatrixRequest
+	(*GetClusterTrafficMatrixResponse)(nil),          // 156: periscope.GetClusterTrafficMatrixResponse
+	(*FederationEvent)(nil),                          // 157: periscope.FederationEvent
+	(*GetFederationEventsRequest)(nil),               // 158: periscope.GetFederationEventsRequest
+	(*GetFederationEventsResponse)(nil),              // 159: periscope.GetFederationEventsResponse
+	(*FederationEventCount)(nil),                     // 160: periscope.FederationEventCount
+	(*FederationSummary)(nil),                        // 161: periscope.FederationSummary
+	(*GetFederationSummaryRequest)(nil),              // 162: periscope.GetFederationSummaryRequest
+	(*GetFederationSummaryResponse)(nil),             // 163: periscope.GetFederationSummaryResponse
+	(*StreamHealthSummary)(nil),                      // 164: periscope.StreamHealthSummary
+	(*GetStreamHealthSummaryRequest)(nil),            // 165: periscope.GetStreamHealthSummaryRequest
+	(*GetStreamHealthSummaryResponse)(nil),           // 166: periscope.GetStreamHealthSummaryResponse
+	(*ClientQoeSummary)(nil),                         // 167: periscope.ClientQoeSummary
+	(*GetClientQoeSummaryRequest)(nil),               // 168: periscope.GetClientQoeSummaryRequest
+	(*GetClientQoeSummaryResponse)(nil),              // 169: periscope.GetClientQoeSummaryResponse
+	(*PlayerBootSummary)(nil),                        // 170: periscope.PlayerBootSummary
+	(*GetPlayerBootSummaryRequest)(nil),              // 171: periscope.GetPlayerBootSummaryRequest
+	(*GetPlayerBootSummaryResponse)(nil),             // 172: periscope.GetPlayerBootSummaryResponse
+	(*PlayerBootTimeSeriesBucket)(nil),               // 173: periscope.PlayerBootTimeSeriesBucket
+	(*GetPlayerBootTimeSeriesRequest)(nil),           // 174: periscope.GetPlayerBootTimeSeriesRequest
+	(*GetPlayerBootTimeSeriesResponse)(nil),          // 175: periscope.GetPlayerBootTimeSeriesResponse
+	(*ClusterBootOps)(nil),                           // 176: periscope.ClusterBootOps
+	(*GetClusterBootOpsRequest)(nil),                 // 177: periscope.GetClusterBootOpsRequest
+	(*GetClusterBootOpsResponse)(nil),                // 178: periscope.GetClusterBootOpsResponse
+	(*SessionQoeSummary)(nil),                        // 179: periscope.SessionQoeSummary
+	(*GetSessionQoeSummaryRequest)(nil),              // 180: periscope.GetSessionQoeSummaryRequest
+	(*GetSessionQoeSummaryResponse)(nil),             // 181: periscope.GetSessionQoeSummaryResponse
+	(*SessionQoeDetail)(nil),                         // 182: periscope.SessionQoeDetail
+	(*GetSessionQoeDetailRequest)(nil),               // 183: periscope.GetSessionQoeDetailRequest
+	(*GetSessionQoeDetailResponse)(nil),              // 184: periscope.GetSessionQoeDetailResponse
+	(*SessionQoeTimeSeriesBucket)(nil),               // 185: periscope.SessionQoeTimeSeriesBucket
+	(*GetSessionQoeTimeSeriesRequest)(nil),           // 186: periscope.GetSessionQoeTimeSeriesRequest
+	(*GetSessionQoeTimeSeriesResponse)(nil),          // 187: periscope.GetSessionQoeTimeSeriesResponse
+	(*ClusterQoeOps)(nil),                            // 188: periscope.ClusterQoeOps
+	(*GetClusterQoeOpsRequest)(nil),                  // 189: periscope.GetClusterQoeOpsRequest
+	(*GetClusterQoeOpsResponse)(nil),                 // 190: periscope.GetClusterQoeOpsResponse
+	(*ClusterWorkload)(nil),                          // 191: periscope.ClusterWorkload
+	(*GetClusterWorkloadRequest)(nil),                // 192: periscope.GetClusterWorkloadRequest
+	(*GetClusterWorkloadResponse)(nil),               // 193: periscope.GetClusterWorkloadResponse
+	(*VodRetentionPoint)(nil),                        // 194: periscope.VodRetentionPoint
+	(*VodRetention)(nil),                             // 195: periscope.VodRetention
+	(*GetVodRetentionRequest)(nil),                   // 196: periscope.GetVodRetentionRequest
+	(*GetVodRetentionResponse)(nil),                  // 197: periscope.GetVodRetentionResponse
+	(*VodRetentionAsset)(nil),                        // 198: periscope.VodRetentionAsset
+	(*ListVodRetentionAssetsRequest)(nil),            // 199: periscope.ListVodRetentionAssetsRequest
+	(*ListVodRetentionAssetsResponse)(nil),           // 200: periscope.ListVodRetentionAssetsResponse
+	(*TopAsset)(nil),                                 // 201: periscope.TopAsset
+	(*ListTopAssetsRequest)(nil),                     // 202: periscope.ListTopAssetsRequest
+	(*ListTopAssetsResponse)(nil),                    // 203: periscope.ListTopAssetsResponse
+	(*Orchestrator)(nil),                             // 204: periscope.Orchestrator
+	(*OrchestratorInstance)(nil),                     // 205: periscope.OrchestratorInstance
+	(*OrchestratorCapabilityPrice)(nil),              // 206: periscope.OrchestratorCapabilityPrice
+	(*OrchestratorVantage)(nil),                      // 207: periscope.OrchestratorVantage
+	(*OrchestratorPerformancePoint)(nil),             // 208: periscope.OrchestratorPerformancePoint
+	(*ListOrchestratorsRequest)(nil),                 // 209: periscope.ListOrchestratorsRequest
+	(*ListOrchestratorsResponse)(nil),                // 210: periscope.ListOrchestratorsResponse
+	(*GetOrchestratorRequest)(nil),                   // 211: periscope.GetOrchestratorRequest
+	(*GetOrchestratorResponse)(nil),                  // 212: periscope.GetOrchestratorResponse
+	(*ListOrchestratorInstancesRequest)(nil),         // 213: periscope.ListOrchestratorInstancesRequest
+	(*ListOrchestratorInstancesResponse)(nil),        // 214: periscope.ListOrchestratorInstancesResponse
+	(*ListOrchestratorVantagesRequest)(nil),          // 215: periscope.ListOrchestratorVantagesRequest
+	(*ListOrchestratorVantagesResponse)(nil),         // 216: periscope.ListOrchestratorVantagesResponse
+	(*GetOrchestratorPerformanceSeriesRequest)(nil),  // 217: periscope.GetOrchestratorPerformanceSeriesRequest
+	(*GetOrchestratorPerformanceSeriesResponse)(nil), // 218: periscope.GetOrchestratorPerformanceSeriesResponse
+	(*NetworkObservationsRequest)(nil),               // 219: periscope.NetworkObservationsRequest
+	(*NetworkObservationsResponse)(nil),              // 220: periscope.NetworkObservationsResponse
+	nil,                                              // 221: periscope.ViewerGeographicStats.CountryBreakdownEntry
+	nil,                                              // 222: periscope.StreamsStatusResponse.StatusesEntry
+	(*timestamppb.Timestamp)(nil),                    // 223: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),                          // 224: google.protobuf.Struct
+	(*common.TimeRange)(nil),                         // 225: common.TimeRange
+	(*common.CursorPaginationRequest)(nil),           // 226: common.CursorPaginationRequest
+	(*common.CursorPaginationResponse)(nil),          // 227: common.CursorPaginationResponse
+	(*ipc.StreamTrack)(nil),                          // 228: helmsmancontrol.StreamTrack
+	(*ipc.GeoBucket)(nil),                            // 229: helmsmancontrol.GeoBucket
+	(common.SortOrder)(0),                            // 230: common.SortOrder
 }
 var file_periscope_proto_depIdxs = []int32{
-	220, // 0: periscope.StreamEvent.timestamp:type_name -> google.protobuf.Timestamp
-	221, // 1: periscope.StreamEvent.event_payload:type_name -> google.protobuf.Struct
-	222, // 2: periscope.GetStreamEventsRequest.time_range:type_name -> common.TimeRange
-	223, // 3: periscope.GetStreamEventsRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 4: periscope.GetStreamEventsResponse.pagination:type_name -> common.CursorPaginationResponse
+	223, // 0: periscope.StreamEvent.timestamp:type_name -> google.protobuf.Timestamp
+	224, // 1: periscope.StreamEvent.event_payload:type_name -> google.protobuf.Struct
+	225, // 2: periscope.GetStreamEventsRequest.time_range:type_name -> common.TimeRange
+	226, // 3: periscope.GetStreamEventsRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 4: periscope.GetStreamEventsResponse.pagination:type_name -> common.CursorPaginationResponse
 	2,   // 5: periscope.GetStreamEventsResponse.events:type_name -> periscope.StreamEvent
-	220, // 6: periscope.BufferEvent.timestamp:type_name -> google.protobuf.Timestamp
-	221, // 7: periscope.BufferEvent.event_payload:type_name -> google.protobuf.Struct
-	222, // 8: periscope.GetBufferEventsRequest.time_range:type_name -> common.TimeRange
-	223, // 9: periscope.GetBufferEventsRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 10: periscope.GetBufferEventsResponse.pagination:type_name -> common.CursorPaginationResponse
+	223, // 6: periscope.BufferEvent.timestamp:type_name -> google.protobuf.Timestamp
+	224, // 7: periscope.BufferEvent.event_payload:type_name -> google.protobuf.Struct
+	225, // 8: periscope.GetBufferEventsRequest.time_range:type_name -> common.TimeRange
+	226, // 9: periscope.GetBufferEventsRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 10: periscope.GetBufferEventsResponse.pagination:type_name -> common.CursorPaginationResponse
 	5,   // 11: periscope.GetBufferEventsResponse.events:type_name -> periscope.BufferEvent
-	220, // 12: periscope.EndEvent.timestamp:type_name -> google.protobuf.Timestamp
-	221, // 13: periscope.EndEvent.event_payload:type_name -> google.protobuf.Struct
-	222, // 14: periscope.GetEndEventsRequest.time_range:type_name -> common.TimeRange
-	223, // 15: periscope.GetEndEventsRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 16: periscope.GetEndEventsResponse.pagination:type_name -> common.CursorPaginationResponse
+	223, // 12: periscope.EndEvent.timestamp:type_name -> google.protobuf.Timestamp
+	224, // 13: periscope.EndEvent.event_payload:type_name -> google.protobuf.Struct
+	225, // 14: periscope.GetEndEventsRequest.time_range:type_name -> common.TimeRange
+	226, // 15: periscope.GetEndEventsRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 16: periscope.GetEndEventsResponse.pagination:type_name -> common.CursorPaginationResponse
 	8,   // 17: periscope.GetEndEventsResponse.events:type_name -> periscope.EndEvent
-	220, // 18: periscope.StreamHealthMetric.timestamp:type_name -> google.protobuf.Timestamp
-	225, // 19: periscope.StreamHealthMetric.tracks:type_name -> helmsmancontrol.StreamTrack
-	222, // 20: periscope.GetStreamHealthMetricsRequest.time_range:type_name -> common.TimeRange
-	223, // 21: periscope.GetStreamHealthMetricsRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 22: periscope.GetStreamHealthMetricsResponse.pagination:type_name -> common.CursorPaginationResponse
+	223, // 18: periscope.StreamHealthMetric.timestamp:type_name -> google.protobuf.Timestamp
+	228, // 19: periscope.StreamHealthMetric.tracks:type_name -> helmsmancontrol.StreamTrack
+	225, // 20: periscope.GetStreamHealthMetricsRequest.time_range:type_name -> common.TimeRange
+	226, // 21: periscope.GetStreamHealthMetricsRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 22: periscope.GetStreamHealthMetricsResponse.pagination:type_name -> common.CursorPaginationResponse
 	11,  // 23: periscope.GetStreamHealthMetricsResponse.metrics:type_name -> periscope.StreamHealthMetric
-	220, // 24: periscope.ViewerHistoryEntry.timestamp:type_name -> google.protobuf.Timestamp
-	218, // 25: periscope.ViewerGeographicStats.country_breakdown:type_name -> periscope.ViewerGeographicStats.CountryBreakdownEntry
+	223, // 24: periscope.ViewerHistoryEntry.timestamp:type_name -> google.protobuf.Timestamp
+	221, // 25: periscope.ViewerGeographicStats.country_breakdown:type_name -> periscope.ViewerGeographicStats.CountryBreakdownEntry
 	14,  // 26: periscope.GetViewerStatsResponse.viewer_history:type_name -> periscope.ViewerHistoryEntry
 	15,  // 27: periscope.GetViewerStatsResponse.geo_stats:type_name -> periscope.ViewerGeographicStats
-	220, // 28: periscope.ViewerSession.timestamp:type_name -> google.protobuf.Timestamp
-	226, // 29: periscope.ViewerSession.client_bucket:type_name -> helmsmancontrol.GeoBucket
-	220, // 30: periscope.ViewerSession.connected_at:type_name -> google.protobuf.Timestamp
-	220, // 31: periscope.ViewerSession.disconnected_at:type_name -> google.protobuf.Timestamp
-	222, // 32: periscope.GetViewerMetricsRequest.time_range:type_name -> common.TimeRange
-	223, // 33: periscope.GetViewerMetricsRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 34: periscope.GetViewerMetricsResponse.pagination:type_name -> common.CursorPaginationResponse
+	223, // 28: periscope.ViewerSession.timestamp:type_name -> google.protobuf.Timestamp
+	229, // 29: periscope.ViewerSession.client_bucket:type_name -> helmsmancontrol.GeoBucket
+	223, // 30: periscope.ViewerSession.connected_at:type_name -> google.protobuf.Timestamp
+	223, // 31: periscope.ViewerSession.disconnected_at:type_name -> google.protobuf.Timestamp
+	225, // 32: periscope.GetViewerMetricsRequest.time_range:type_name -> common.TimeRange
+	226, // 33: periscope.GetViewerMetricsRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 34: periscope.GetViewerMetricsResponse.pagination:type_name -> common.CursorPaginationResponse
 	18,  // 35: periscope.GetViewerMetricsResponse.sessions:type_name -> periscope.ViewerSession
-	220, // 36: periscope.ViewerCountBucket.timestamp:type_name -> google.protobuf.Timestamp
-	222, // 37: periscope.GetViewerCountTimeSeriesRequest.time_range:type_name -> common.TimeRange
+	223, // 36: periscope.ViewerCountBucket.timestamp:type_name -> google.protobuf.Timestamp
+	225, // 37: periscope.GetViewerCountTimeSeriesRequest.time_range:type_name -> common.TimeRange
 	21,  // 38: periscope.GetViewerCountTimeSeriesResponse.buckets:type_name -> periscope.ViewerCountBucket
-	222, // 39: periscope.GetGeographicDistributionRequest.time_range:type_name -> common.TimeRange
+	225, // 39: periscope.GetGeographicDistributionRequest.time_range:type_name -> common.TimeRange
 	24,  // 40: periscope.GetGeographicDistributionResponse.top_countries:type_name -> periscope.CountryMetric
 	25,  // 41: periscope.GetGeographicDistributionResponse.top_cities:type_name -> periscope.CityMetric
-	220, // 42: periscope.TrackListEvent.timestamp:type_name -> google.protobuf.Timestamp
-	225, // 43: periscope.TrackListEvent.tracks:type_name -> helmsmancontrol.StreamTrack
-	222, // 44: periscope.GetTrackListEventsRequest.time_range:type_name -> common.TimeRange
-	223, // 45: periscope.GetTrackListEventsRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 46: periscope.GetTrackListEventsResponse.pagination:type_name -> common.CursorPaginationResponse
+	223, // 42: periscope.TrackListEvent.timestamp:type_name -> google.protobuf.Timestamp
+	228, // 43: periscope.TrackListEvent.tracks:type_name -> helmsmancontrol.StreamTrack
+	225, // 44: periscope.GetTrackListEventsRequest.time_range:type_name -> common.TimeRange
+	226, // 45: periscope.GetTrackListEventsRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 46: periscope.GetTrackListEventsResponse.pagination:type_name -> common.CursorPaginationResponse
 	28,  // 47: periscope.GetTrackListEventsResponse.events:type_name -> periscope.TrackListEvent
-	220, // 48: periscope.ConnectionEvent.timestamp:type_name -> google.protobuf.Timestamp
-	226, // 49: periscope.ConnectionEvent.client_bucket:type_name -> helmsmancontrol.GeoBucket
-	226, // 50: periscope.ConnectionEvent.node_bucket:type_name -> helmsmancontrol.GeoBucket
-	222, // 51: periscope.GetConnectionEventsRequest.time_range:type_name -> common.TimeRange
-	223, // 52: periscope.GetConnectionEventsRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 53: periscope.GetConnectionEventsResponse.pagination:type_name -> common.CursorPaginationResponse
+	223, // 48: periscope.ConnectionEvent.timestamp:type_name -> google.protobuf.Timestamp
+	229, // 49: periscope.ConnectionEvent.client_bucket:type_name -> helmsmancontrol.GeoBucket
+	229, // 50: periscope.ConnectionEvent.node_bucket:type_name -> helmsmancontrol.GeoBucket
+	225, // 51: periscope.GetConnectionEventsRequest.time_range:type_name -> common.TimeRange
+	226, // 52: periscope.GetConnectionEventsRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 53: periscope.GetConnectionEventsResponse.pagination:type_name -> common.CursorPaginationResponse
 	31,  // 54: periscope.GetConnectionEventsResponse.events:type_name -> periscope.ConnectionEvent
-	220, // 55: periscope.NodeMetric.timestamp:type_name -> google.protobuf.Timestamp
-	221, // 56: periscope.NodeMetric.metadata:type_name -> google.protobuf.Struct
-	222, // 57: periscope.GetNodeMetricsRequest.time_range:type_name -> common.TimeRange
-	223, // 58: periscope.GetNodeMetricsRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 59: periscope.GetNodeMetricsResponse.pagination:type_name -> common.CursorPaginationResponse
+	223, // 55: periscope.NodeMetric.timestamp:type_name -> google.protobuf.Timestamp
+	224, // 56: periscope.NodeMetric.metadata:type_name -> google.protobuf.Struct
+	225, // 57: periscope.GetNodeMetricsRequest.time_range:type_name -> common.TimeRange
+	226, // 58: periscope.GetNodeMetricsRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 59: periscope.GetNodeMetricsResponse.pagination:type_name -> common.CursorPaginationResponse
 	34,  // 60: periscope.GetNodeMetricsResponse.metrics:type_name -> periscope.NodeMetric
-	220, // 61: periscope.NodeMetricHourly.timestamp:type_name -> google.protobuf.Timestamp
-	222, // 62: periscope.GetNodeMetrics1hRequest.time_range:type_name -> common.TimeRange
-	223, // 63: periscope.GetNodeMetrics1hRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 64: periscope.GetNodeMetrics1hResponse.pagination:type_name -> common.CursorPaginationResponse
+	223, // 61: periscope.NodeMetricHourly.timestamp:type_name -> google.protobuf.Timestamp
+	225, // 62: periscope.GetNodeMetrics1hRequest.time_range:type_name -> common.TimeRange
+	226, // 63: periscope.GetNodeMetrics1hRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 64: periscope.GetNodeMetrics1hResponse.pagination:type_name -> common.CursorPaginationResponse
 	37,  // 65: periscope.GetNodeMetrics1hResponse.metrics:type_name -> periscope.NodeMetricHourly
-	222, // 66: periscope.GetNodeMetricsAggregatedRequest.time_range:type_name -> common.TimeRange
+	225, // 66: periscope.GetNodeMetricsAggregatedRequest.time_range:type_name -> common.TimeRange
 	38,  // 67: periscope.GetNodeMetricsAggregatedResponse.metrics:type_name -> periscope.NodeMetricsAggregated
-	221, // 68: periscope.LiveNode.metadata:type_name -> google.protobuf.Struct
-	220, // 69: periscope.LiveNode.updated_at:type_name -> google.protobuf.Timestamp
+	224, // 68: periscope.LiveNode.metadata:type_name -> google.protobuf.Struct
+	223, // 69: periscope.LiveNode.updated_at:type_name -> google.protobuf.Timestamp
 	43,  // 70: periscope.GetLiveNodesResponse.nodes:type_name -> periscope.LiveNode
-	220, // 71: periscope.RoutingEvent.timestamp:type_name -> google.protobuf.Timestamp
-	226, // 72: periscope.RoutingEvent.client_bucket:type_name -> helmsmancontrol.GeoBucket
-	226, // 73: periscope.RoutingEvent.node_bucket:type_name -> helmsmancontrol.GeoBucket
-	222, // 74: periscope.GetRoutingEventsRequest.time_range:type_name -> common.TimeRange
-	223, // 75: periscope.GetRoutingEventsRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 76: periscope.GetRoutingEventsResponse.pagination:type_name -> common.CursorPaginationResponse
+	223, // 71: periscope.RoutingEvent.timestamp:type_name -> google.protobuf.Timestamp
+	229, // 72: periscope.RoutingEvent.client_bucket:type_name -> helmsmancontrol.GeoBucket
+	229, // 73: periscope.RoutingEvent.node_bucket:type_name -> helmsmancontrol.GeoBucket
+	225, // 74: periscope.GetRoutingEventsRequest.time_range:type_name -> common.TimeRange
+	226, // 75: periscope.GetRoutingEventsRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 76: periscope.GetRoutingEventsResponse.pagination:type_name -> common.CursorPaginationResponse
 	46,  // 77: periscope.GetRoutingEventsResponse.events:type_name -> periscope.RoutingEvent
 	49,  // 78: periscope.GetRealtimeStreamsResponse.streams:type_name -> periscope.RealtimeStream
 	52,  // 79: periscope.GetRealtimeViewersResponse.stream_viewers:type_name -> periscope.RealtimeStreamViewer
-	220, // 80: periscope.RealtimeEvent.timestamp:type_name -> google.protobuf.Timestamp
+	223, // 80: periscope.RealtimeEvent.timestamp:type_name -> google.protobuf.Timestamp
 	2,   // 81: periscope.RealtimeEvent.stream_event:type_name -> periscope.StreamEvent
 	31,  // 82: periscope.RealtimeEvent.connection_event:type_name -> periscope.ConnectionEvent
 	5,   // 83: periscope.RealtimeEvent.buffer_event:type_name -> periscope.BufferEvent
 	14,  // 84: periscope.RealtimeEvent.viewer_metrics:type_name -> periscope.ViewerHistoryEntry
 	55,  // 85: periscope.GetRealtimeEventsResponse.events:type_name -> periscope.RealtimeEvent
-	222, // 86: periscope.GetPlatformOverviewRequest.time_range:type_name -> common.TimeRange
-	220, // 87: periscope.GetPlatformOverviewResponse.generated_at:type_name -> google.protobuf.Timestamp
-	222, // 88: periscope.GetPlatformOverviewResponse.time_range:type_name -> common.TimeRange
-	222, // 89: periscope.ListTenantActivityRequest.time_range:type_name -> common.TimeRange
-	220, // 90: periscope.TenantActivity.last_stream_at:type_name -> google.protobuf.Timestamp
+	225, // 86: periscope.GetPlatformOverviewRequest.time_range:type_name -> common.TimeRange
+	223, // 87: periscope.GetPlatformOverviewResponse.generated_at:type_name -> google.protobuf.Timestamp
+	225, // 88: periscope.GetPlatformOverviewResponse.time_range:type_name -> common.TimeRange
+	225, // 89: periscope.ListTenantActivityRequest.time_range:type_name -> common.TimeRange
+	223, // 90: periscope.TenantActivity.last_stream_at:type_name -> google.protobuf.Timestamp
 	61,  // 91: periscope.ListTenantActivityResponse.tenants:type_name -> periscope.TenantActivity
-	220, // 92: periscope.ListTenantActivityResponse.generated_at:type_name -> google.protobuf.Timestamp
-	222, // 93: periscope.ListTenantActivityResponse.time_range:type_name -> common.TimeRange
-	220, // 94: periscope.ClipEvent.timestamp:type_name -> google.protobuf.Timestamp
-	222, // 95: periscope.GetClipEventsRequest.time_range:type_name -> common.TimeRange
-	223, // 96: periscope.GetClipEventsRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 97: periscope.GetClipEventsResponse.pagination:type_name -> common.CursorPaginationResponse
+	223, // 92: periscope.ListTenantActivityResponse.generated_at:type_name -> google.protobuf.Timestamp
+	225, // 93: periscope.ListTenantActivityResponse.time_range:type_name -> common.TimeRange
+	223, // 94: periscope.ClipEvent.timestamp:type_name -> google.protobuf.Timestamp
+	225, // 95: periscope.GetClipEventsRequest.time_range:type_name -> common.TimeRange
+	226, // 96: periscope.GetClipEventsRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 97: periscope.GetClipEventsResponse.pagination:type_name -> common.CursorPaginationResponse
 	63,  // 98: periscope.GetClipEventsResponse.events:type_name -> periscope.ClipEvent
-	220, // 99: periscope.ArtifactState.requested_at:type_name -> google.protobuf.Timestamp
-	220, // 100: periscope.ArtifactState.started_at:type_name -> google.protobuf.Timestamp
-	220, // 101: periscope.ArtifactState.completed_at:type_name -> google.protobuf.Timestamp
-	220, // 102: periscope.ArtifactState.updated_at:type_name -> google.protobuf.Timestamp
-	220, // 103: periscope.ArtifactState.expires_at:type_name -> google.protobuf.Timestamp
+	223, // 99: periscope.ArtifactState.requested_at:type_name -> google.protobuf.Timestamp
+	223, // 100: periscope.ArtifactState.started_at:type_name -> google.protobuf.Timestamp
+	223, // 101: periscope.ArtifactState.completed_at:type_name -> google.protobuf.Timestamp
+	223, // 102: periscope.ArtifactState.updated_at:type_name -> google.protobuf.Timestamp
+	223, // 103: periscope.ArtifactState.expires_at:type_name -> google.protobuf.Timestamp
 	66,  // 104: periscope.GetArtifactStateResponse.artifact:type_name -> periscope.ArtifactState
-	223, // 105: periscope.GetArtifactStatesRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 106: periscope.GetArtifactStatesResponse.pagination:type_name -> common.CursorPaginationResponse
+	226, // 105: periscope.GetArtifactStatesRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 106: periscope.GetArtifactStatesResponse.pagination:type_name -> common.CursorPaginationResponse
 	66,  // 107: periscope.GetArtifactStatesResponse.artifacts:type_name -> periscope.ArtifactState
 	71,  // 108: periscope.GetArtifactNodeCopiesResponse.copies:type_name -> periscope.ArtifactNodeCopy
-	220, // 109: periscope.StreamStatusResponse.started_at:type_name -> google.protobuf.Timestamp
-	220, // 110: periscope.StreamStatusResponse.ended_at:type_name -> google.protobuf.Timestamp
-	220, // 111: periscope.StreamStatusResponse.last_event_at:type_name -> google.protobuf.Timestamp
-	220, // 112: periscope.StreamStatusResponse.updated_at:type_name -> google.protobuf.Timestamp
-	219, // 113: periscope.StreamsStatusResponse.statuses:type_name -> periscope.StreamsStatusResponse.StatusesEntry
+	223, // 109: periscope.StreamStatusResponse.started_at:type_name -> google.protobuf.Timestamp
+	223, // 110: periscope.StreamStatusResponse.ended_at:type_name -> google.protobuf.Timestamp
+	223, // 111: periscope.StreamStatusResponse.last_event_at:type_name -> google.protobuf.Timestamp
+	223, // 112: periscope.StreamStatusResponse.updated_at:type_name -> google.protobuf.Timestamp
+	222, // 113: periscope.StreamsStatusResponse.statuses:type_name -> periscope.StreamsStatusResponse.StatusesEntry
 	78,  // 114: periscope.GetNetworkLiveStatsResponse.clusters:type_name -> periscope.NetworkClusterLiveStats
-	220, // 115: periscope.StreamConnectionHourly.hour:type_name -> google.protobuf.Timestamp
-	222, // 116: periscope.GetStreamConnectionHourlyRequest.time_range:type_name -> common.TimeRange
-	223, // 117: periscope.GetStreamConnectionHourlyRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 118: periscope.GetStreamConnectionHourlyResponse.pagination:type_name -> common.CursorPaginationResponse
-	81,  // 119: periscope.GetStreamConnectionHourlyResponse.records:type_name -> periscope.StreamConnectionHourly
-	220, // 120: periscope.ClientMetrics5m.timestamp:type_name -> google.protobuf.Timestamp
-	222, // 121: periscope.GetClientMetrics5mRequest.time_range:type_name -> common.TimeRange
-	223, // 122: periscope.GetClientMetrics5mRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 123: periscope.GetClientMetrics5mResponse.pagination:type_name -> common.CursorPaginationResponse
-	84,  // 124: periscope.GetClientMetrics5mResponse.records:type_name -> periscope.ClientMetrics5m
-	220, // 125: periscope.QualityTierDaily.day:type_name -> google.protobuf.Timestamp
-	222, // 126: periscope.GetQualityTierDailyRequest.time_range:type_name -> common.TimeRange
-	223, // 127: periscope.GetQualityTierDailyRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 128: periscope.GetQualityTierDailyResponse.pagination:type_name -> common.CursorPaginationResponse
-	87,  // 129: periscope.GetQualityTierDailyResponse.records:type_name -> periscope.QualityTierDaily
-	220, // 130: periscope.StorageUsageRecord.timestamp:type_name -> google.protobuf.Timestamp
-	220, // 131: periscope.StorageEvent.timestamp:type_name -> google.protobuf.Timestamp
-	222, // 132: periscope.GetStorageEventsRequest.time_range:type_name -> common.TimeRange
-	223, // 133: periscope.GetStorageEventsRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 134: periscope.GetStorageEventsResponse.pagination:type_name -> common.CursorPaginationResponse
-	91,  // 135: periscope.GetStorageEventsResponse.events:type_name -> periscope.StorageEvent
-	222, // 136: periscope.GetStorageUsageRequest.time_range:type_name -> common.TimeRange
-	223, // 137: periscope.GetStorageUsageRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 138: periscope.GetStorageUsageResponse.pagination:type_name -> common.CursorPaginationResponse
-	90,  // 139: periscope.GetStorageUsageResponse.records:type_name -> periscope.StorageUsageRecord
-	222, // 140: periscope.GetLiveUsageSummaryRequest.time_range:type_name -> common.TimeRange
-	220, // 141: periscope.LiveUsageSummary.period_start:type_name -> google.protobuf.Timestamp
-	220, // 142: periscope.LiveUsageSummary.period_end:type_name -> google.protobuf.Timestamp
-	24,  // 143: periscope.LiveUsageSummary.geo_breakdown:type_name -> periscope.CountryMetric
-	97,  // 144: periscope.GetLiveUsageSummaryResponse.summary:type_name -> periscope.LiveUsageSummary
-	222, // 145: periscope.GetNetworkUsageRequest.time_range:type_name -> common.TimeRange
-	0,   // 146: periscope.GetNetworkUsageRequest.group_by:type_name -> periscope.NetworkUsageGroupBy
-	220, // 147: periscope.NetworkUsageRecord.period_start:type_name -> google.protobuf.Timestamp
-	100, // 148: periscope.GetNetworkUsageResponse.records:type_name -> periscope.NetworkUsageRecord
-	222, // 149: periscope.GetAcquisitionFunnelRequest.time_range:type_name -> common.TimeRange
-	103, // 150: periscope.GetAcquisitionFunnelResponse.entries:type_name -> periscope.AcquisitionFunnelEntry
-	222, // 151: periscope.GetAcquisitionCohortUsageRequest.time_range:type_name -> common.TimeRange
-	220, // 152: periscope.GetAcquisitionCohortUsageRequest.cohort_month:type_name -> google.protobuf.Timestamp
-	220, // 153: periscope.AcquisitionCohortUsageRecord.day:type_name -> google.protobuf.Timestamp
-	220, // 154: periscope.AcquisitionCohortUsageRecord.cohort_month:type_name -> google.protobuf.Timestamp
-	106, // 155: periscope.GetAcquisitionCohortUsageResponse.records:type_name -> periscope.AcquisitionCohortUsageRecord
-	220, // 156: periscope.StreamHealth5m.timestamp:type_name -> google.protobuf.Timestamp
-	222, // 157: periscope.GetStreamHealth5mRequest.time_range:type_name -> common.TimeRange
-	223, // 158: periscope.GetStreamHealth5mRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 159: periscope.GetStreamHealth5mResponse.pagination:type_name -> common.CursorPaginationResponse
-	108, // 160: periscope.GetStreamHealth5mResponse.records:type_name -> periscope.StreamHealth5m
-	220, // 161: periscope.NodePerformance5m.timestamp:type_name -> google.protobuf.Timestamp
-	222, // 162: periscope.GetNodePerformance5mRequest.time_range:type_name -> common.TimeRange
-	223, // 163: periscope.GetNodePerformance5mRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 164: periscope.GetNodePerformance5mResponse.pagination:type_name -> common.CursorPaginationResponse
-	111, // 165: periscope.GetNodePerformance5mResponse.records:type_name -> periscope.NodePerformance5m
-	220, // 166: periscope.ViewerHoursHourly.hour:type_name -> google.protobuf.Timestamp
-	222, // 167: periscope.GetViewerHoursHourlyRequest.time_range:type_name -> common.TimeRange
-	223, // 168: periscope.GetViewerHoursHourlyRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 169: periscope.GetViewerHoursHourlyResponse.pagination:type_name -> common.CursorPaginationResponse
-	114, // 170: periscope.GetViewerHoursHourlyResponse.records:type_name -> periscope.ViewerHoursHourly
-	220, // 171: periscope.ViewerGeoHourly.hour:type_name -> google.protobuf.Timestamp
-	222, // 172: periscope.GetViewerGeoHourlyRequest.time_range:type_name -> common.TimeRange
-	223, // 173: periscope.GetViewerGeoHourlyRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 174: periscope.GetViewerGeoHourlyResponse.pagination:type_name -> common.CursorPaginationResponse
-	117, // 175: periscope.GetViewerGeoHourlyResponse.records:type_name -> periscope.ViewerGeoHourly
-	220, // 176: periscope.TenantDailyStat.date:type_name -> google.protobuf.Timestamp
-	120, // 177: periscope.GetTenantDailyStatsResponse.stats:type_name -> periscope.TenantDailyStat
-	220, // 178: periscope.ProcessingUsageRecord.timestamp:type_name -> google.protobuf.Timestamp
-	220, // 179: periscope.ProcessingUsageSummary.date:type_name -> google.protobuf.Timestamp
-	222, // 180: periscope.GetProcessingUsageRequest.time_range:type_name -> common.TimeRange
-	223, // 181: periscope.GetProcessingUsageRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 182: periscope.GetProcessingUsageResponse.pagination:type_name -> common.CursorPaginationResponse
-	123, // 183: periscope.GetProcessingUsageResponse.records:type_name -> periscope.ProcessingUsageRecord
-	124, // 184: periscope.GetProcessingUsageResponse.summaries:type_name -> periscope.ProcessingUsageSummary
-	220, // 185: periscope.RebufferingEvent.timestamp:type_name -> google.protobuf.Timestamp
-	220, // 186: periscope.RebufferingEvent.rebuffer_start:type_name -> google.protobuf.Timestamp
-	220, // 187: periscope.RebufferingEvent.rebuffer_end:type_name -> google.protobuf.Timestamp
-	222, // 188: periscope.GetRebufferingEventsRequest.time_range:type_name -> common.TimeRange
-	223, // 189: periscope.GetRebufferingEventsRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 190: periscope.GetRebufferingEventsResponse.pagination:type_name -> common.CursorPaginationResponse
-	127, // 191: periscope.GetRebufferingEventsResponse.events:type_name -> periscope.RebufferingEvent
-	220, // 192: periscope.TenantAnalyticsDaily.day:type_name -> google.protobuf.Timestamp
-	222, // 193: periscope.GetTenantAnalyticsDailyRequest.time_range:type_name -> common.TimeRange
-	223, // 194: periscope.GetTenantAnalyticsDailyRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 195: periscope.GetTenantAnalyticsDailyResponse.pagination:type_name -> common.CursorPaginationResponse
-	130, // 196: periscope.GetTenantAnalyticsDailyResponse.records:type_name -> periscope.TenantAnalyticsDaily
-	220, // 197: periscope.StreamAnalyticsDaily.day:type_name -> google.protobuf.Timestamp
-	222, // 198: periscope.GetStreamAnalyticsDailyRequest.time_range:type_name -> common.TimeRange
-	223, // 199: periscope.GetStreamAnalyticsDailyRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 200: periscope.GetStreamAnalyticsDailyResponse.pagination:type_name -> common.CursorPaginationResponse
-	133, // 201: periscope.GetStreamAnalyticsDailyResponse.records:type_name -> periscope.StreamAnalyticsDaily
-	222, // 202: periscope.StreamAnalyticsSummary.time_range:type_name -> common.TimeRange
-	136, // 203: periscope.StreamAnalyticsSummary.range_quality:type_name -> periscope.QualityTierSummary
-	222, // 204: periscope.GetStreamAnalyticsSummaryRequest.time_range:type_name -> common.TimeRange
-	137, // 205: periscope.GetStreamAnalyticsSummaryResponse.summary:type_name -> periscope.StreamAnalyticsSummary
-	222, // 206: periscope.GetStreamAnalyticsSummariesRequest.time_range:type_name -> common.TimeRange
-	223, // 207: periscope.GetStreamAnalyticsSummariesRequest.pagination:type_name -> common.CursorPaginationRequest
-	1,   // 208: periscope.GetStreamAnalyticsSummariesRequest.sort_by:type_name -> periscope.StreamSummarySortField
-	227, // 209: periscope.GetStreamAnalyticsSummariesRequest.sort_order:type_name -> common.SortOrder
-	224, // 210: periscope.GetStreamAnalyticsSummariesResponse.pagination:type_name -> common.CursorPaginationResponse
-	137, // 211: periscope.GetStreamAnalyticsSummariesResponse.summaries:type_name -> periscope.StreamAnalyticsSummary
-	220, // 212: periscope.APIUsageRecord.timestamp:type_name -> google.protobuf.Timestamp
-	220, // 213: periscope.APIUsageSummary.date:type_name -> google.protobuf.Timestamp
-	222, // 214: periscope.GetAPIUsageRequest.time_range:type_name -> common.TimeRange
-	223, // 215: periscope.GetAPIUsageRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 216: periscope.GetAPIUsageResponse.pagination:type_name -> common.CursorPaginationResponse
-	142, // 217: periscope.GetAPIUsageResponse.records:type_name -> periscope.APIUsageRecord
-	143, // 218: periscope.GetAPIUsageResponse.summaries:type_name -> periscope.APIUsageSummary
-	144, // 219: periscope.GetAPIUsageResponse.operation_summaries:type_name -> periscope.APIUsageOperationSummary
-	148, // 220: periscope.RoutingEfficiencySummary.top_countries:type_name -> periscope.RoutingCountryStat
-	222, // 221: periscope.GetRoutingEfficiencyRequest.time_range:type_name -> common.TimeRange
-	147, // 222: periscope.GetRoutingEfficiencyResponse.summary:type_name -> periscope.RoutingEfficiencySummary
-	222, // 223: periscope.GetClusterTrafficMatrixRequest.time_range:type_name -> common.TimeRange
-	151, // 224: periscope.GetClusterTrafficMatrixResponse.pairs:type_name -> periscope.ClusterPairTraffic
-	220, // 225: periscope.FederationEvent.timestamp:type_name -> google.protobuf.Timestamp
-	222, // 226: periscope.GetFederationEventsRequest.time_range:type_name -> common.TimeRange
-	154, // 227: periscope.GetFederationEventsResponse.events:type_name -> periscope.FederationEvent
-	157, // 228: periscope.FederationSummary.event_counts:type_name -> periscope.FederationEventCount
-	222, // 229: periscope.GetFederationSummaryRequest.time_range:type_name -> common.TimeRange
-	158, // 230: periscope.GetFederationSummaryResponse.summary:type_name -> periscope.FederationSummary
-	222, // 231: periscope.GetStreamHealthSummaryRequest.time_range:type_name -> common.TimeRange
-	161, // 232: periscope.GetStreamHealthSummaryResponse.summary:type_name -> periscope.StreamHealthSummary
-	222, // 233: periscope.GetClientQoeSummaryRequest.time_range:type_name -> common.TimeRange
-	164, // 234: periscope.GetClientQoeSummaryResponse.summary:type_name -> periscope.ClientQoeSummary
-	222, // 235: periscope.GetPlayerBootSummaryRequest.time_range:type_name -> common.TimeRange
-	167, // 236: periscope.GetPlayerBootSummaryResponse.summary:type_name -> periscope.PlayerBootSummary
-	220, // 237: periscope.PlayerBootTimeSeriesBucket.timestamp:type_name -> google.protobuf.Timestamp
-	222, // 238: periscope.GetPlayerBootTimeSeriesRequest.time_range:type_name -> common.TimeRange
-	170, // 239: periscope.GetPlayerBootTimeSeriesResponse.buckets:type_name -> periscope.PlayerBootTimeSeriesBucket
-	222, // 240: periscope.GetClusterBootOpsRequest.time_range:type_name -> common.TimeRange
-	173, // 241: periscope.GetClusterBootOpsResponse.rows:type_name -> periscope.ClusterBootOps
-	222, // 242: periscope.GetSessionQoeSummaryRequest.time_range:type_name -> common.TimeRange
-	176, // 243: periscope.GetSessionQoeSummaryResponse.summary:type_name -> periscope.SessionQoeSummary
-	220, // 244: periscope.SessionQoeDetail.first_seen:type_name -> google.protobuf.Timestamp
-	220, // 245: periscope.SessionQoeDetail.last_seen:type_name -> google.protobuf.Timestamp
-	222, // 246: periscope.GetSessionQoeDetailRequest.time_range:type_name -> common.TimeRange
-	223, // 247: periscope.GetSessionQoeDetailRequest.pagination:type_name -> common.CursorPaginationRequest
-	179, // 248: periscope.GetSessionQoeDetailResponse.sessions:type_name -> periscope.SessionQoeDetail
-	224, // 249: periscope.GetSessionQoeDetailResponse.pagination:type_name -> common.CursorPaginationResponse
-	220, // 250: periscope.SessionQoeTimeSeriesBucket.timestamp:type_name -> google.protobuf.Timestamp
-	222, // 251: periscope.GetSessionQoeTimeSeriesRequest.time_range:type_name -> common.TimeRange
-	182, // 252: periscope.GetSessionQoeTimeSeriesResponse.buckets:type_name -> periscope.SessionQoeTimeSeriesBucket
-	222, // 253: periscope.GetClusterQoeOpsRequest.time_range:type_name -> common.TimeRange
-	185, // 254: periscope.GetClusterQoeOpsResponse.rows:type_name -> periscope.ClusterQoeOps
-	220, // 255: periscope.ClusterWorkload.observed_at:type_name -> google.protobuf.Timestamp
-	222, // 256: periscope.GetClusterWorkloadRequest.time_range:type_name -> common.TimeRange
-	188, // 257: periscope.GetClusterWorkloadResponse.rows:type_name -> periscope.ClusterWorkload
-	191, // 258: periscope.VodRetention.points:type_name -> periscope.VodRetentionPoint
-	222, // 259: periscope.GetVodRetentionRequest.time_range:type_name -> common.TimeRange
-	192, // 260: periscope.GetVodRetentionResponse.retention:type_name -> periscope.VodRetention
-	220, // 261: periscope.VodRetentionAsset.last_seen:type_name -> google.protobuf.Timestamp
-	222, // 262: periscope.ListVodRetentionAssetsRequest.time_range:type_name -> common.TimeRange
-	223, // 263: periscope.ListVodRetentionAssetsRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 264: periscope.ListVodRetentionAssetsResponse.pagination:type_name -> common.CursorPaginationResponse
-	195, // 265: periscope.ListVodRetentionAssetsResponse.assets:type_name -> periscope.VodRetentionAsset
-	222, // 266: periscope.ListTopAssetsRequest.time_range:type_name -> common.TimeRange
-	198, // 267: periscope.ListTopAssetsResponse.assets:type_name -> periscope.TopAsset
-	220, // 268: periscope.Orchestrator.last_seen:type_name -> google.protobuf.Timestamp
-	220, // 269: periscope.Orchestrator.updated_at:type_name -> google.protobuf.Timestamp
-	203, // 270: periscope.OrchestratorInstance.capability_prices:type_name -> periscope.OrchestratorCapabilityPrice
-	220, // 271: periscope.OrchestratorInstance.last_seen:type_name -> google.protobuf.Timestamp
-	220, // 272: periscope.OrchestratorInstance.updated_at:type_name -> google.protobuf.Timestamp
-	220, // 273: periscope.OrchestratorVantage.geo_resolved_at:type_name -> google.protobuf.Timestamp
-	220, // 274: periscope.OrchestratorVantage.last_seen:type_name -> google.protobuf.Timestamp
-	220, // 275: periscope.OrchestratorPerformancePoint.timestamp:type_name -> google.protobuf.Timestamp
-	223, // 276: periscope.ListOrchestratorsRequest.pagination:type_name -> common.CursorPaginationRequest
-	224, // 277: periscope.ListOrchestratorsResponse.pagination:type_name -> common.CursorPaginationResponse
-	201, // 278: periscope.ListOrchestratorsResponse.orchestrators:type_name -> periscope.Orchestrator
-	201, // 279: periscope.GetOrchestratorResponse.orchestrator:type_name -> periscope.Orchestrator
-	202, // 280: periscope.GetOrchestratorResponse.instances:type_name -> periscope.OrchestratorInstance
-	204, // 281: periscope.GetOrchestratorResponse.vantages:type_name -> periscope.OrchestratorVantage
-	202, // 282: periscope.ListOrchestratorInstancesResponse.instances:type_name -> periscope.OrchestratorInstance
-	204, // 283: periscope.ListOrchestratorVantagesResponse.vantages:type_name -> periscope.OrchestratorVantage
-	222, // 284: periscope.GetOrchestratorPerformanceSeriesRequest.time_range:type_name -> common.TimeRange
-	205, // 285: periscope.GetOrchestratorPerformanceSeriesResponse.points:type_name -> periscope.OrchestratorPerformancePoint
-	222, // 286: periscope.NetworkObservationsRequest.time_range:type_name -> common.TimeRange
-	75,  // 287: periscope.StreamsStatusResponse.StatusesEntry.value:type_name -> periscope.StreamStatusResponse
-	3,   // 288: periscope.StreamAnalyticsService.GetStreamEvents:input_type -> periscope.GetStreamEventsRequest
-	6,   // 289: periscope.StreamAnalyticsService.GetBufferEvents:input_type -> periscope.GetBufferEventsRequest
-	12,  // 290: periscope.StreamAnalyticsService.GetStreamHealthMetrics:input_type -> periscope.GetStreamHealthMetricsRequest
-	74,  // 291: periscope.StreamAnalyticsService.GetStreamStatus:input_type -> periscope.GetStreamStatusRequest
-	76,  // 292: periscope.StreamAnalyticsService.GetStreamsStatus:input_type -> periscope.GetStreamsStatusRequest
-	19,  // 293: periscope.ViewerAnalyticsService.GetViewerMetrics:input_type -> periscope.GetViewerMetricsRequest
-	22,  // 294: periscope.ViewerAnalyticsService.GetViewerCountTimeSeries:input_type -> periscope.GetViewerCountTimeSeriesRequest
-	26,  // 295: periscope.ViewerAnalyticsService.GetGeographicDistribution:input_type -> periscope.GetGeographicDistributionRequest
-	29,  // 296: periscope.TrackAnalyticsService.GetTrackListEvents:input_type -> periscope.GetTrackListEventsRequest
-	32,  // 297: periscope.ConnectionAnalyticsService.GetConnectionEvents:input_type -> periscope.GetConnectionEventsRequest
-	35,  // 298: periscope.NodeAnalyticsService.GetNodeMetrics:input_type -> periscope.GetNodeMetricsRequest
-	39,  // 299: periscope.NodeAnalyticsService.GetNodeMetrics1h:input_type -> periscope.GetNodeMetrics1hRequest
-	41,  // 300: periscope.NodeAnalyticsService.GetNodeMetricsAggregated:input_type -> periscope.GetNodeMetricsAggregatedRequest
-	44,  // 301: periscope.NodeAnalyticsService.GetLiveNodes:input_type -> periscope.GetLiveNodesRequest
-	47,  // 302: periscope.RoutingAnalyticsService.GetRoutingEvents:input_type -> periscope.GetRoutingEventsRequest
-	149, // 303: periscope.RoutingAnalyticsService.GetRoutingEfficiency:input_type -> periscope.GetRoutingEfficiencyRequest
-	152, // 304: periscope.RoutingAnalyticsService.GetClusterTrafficMatrix:input_type -> periscope.GetClusterTrafficMatrixRequest
-	155, // 305: periscope.FederationAnalyticsService.GetFederationEvents:input_type -> periscope.GetFederationEventsRequest
-	159, // 306: periscope.FederationAnalyticsService.GetFederationSummary:input_type -> periscope.GetFederationSummaryRequest
-	58,  // 307: periscope.PlatformAnalyticsService.GetPlatformOverview:input_type -> periscope.GetPlatformOverviewRequest
-	60,  // 308: periscope.PlatformAnalyticsService.ListTenantActivity:input_type -> periscope.ListTenantActivityRequest
-	79,  // 309: periscope.PlatformAnalyticsService.GetNetworkLiveStats:input_type -> periscope.GetNetworkLiveStatsRequest
-	64,  // 310: periscope.ClipAnalyticsService.GetClipEvents:input_type -> periscope.GetClipEventsRequest
-	67,  // 311: periscope.ClipAnalyticsService.GetArtifactState:input_type -> periscope.GetArtifactStateRequest
-	69,  // 312: periscope.ClipAnalyticsService.GetArtifactStates:input_type -> periscope.GetArtifactStatesRequest
-	72,  // 313: periscope.ClipAnalyticsService.GetArtifactNodeCopies:input_type -> periscope.GetArtifactNodeCopiesRequest
-	82,  // 314: periscope.AggregatedAnalyticsService.GetStreamConnectionHourly:input_type -> periscope.GetStreamConnectionHourlyRequest
-	85,  // 315: periscope.AggregatedAnalyticsService.GetClientMetrics5m:input_type -> periscope.GetClientMetrics5mRequest
-	88,  // 316: periscope.AggregatedAnalyticsService.GetQualityTierDaily:input_type -> periscope.GetQualityTierDailyRequest
-	138, // 317: periscope.AggregatedAnalyticsService.GetStreamAnalyticsSummary:input_type -> periscope.GetStreamAnalyticsSummaryRequest
-	140, // 318: periscope.AggregatedAnalyticsService.GetStreamAnalyticsSummaries:input_type -> periscope.GetStreamAnalyticsSummariesRequest
-	94,  // 319: periscope.AggregatedAnalyticsService.GetStorageUsage:input_type -> periscope.GetStorageUsageRequest
-	92,  // 320: periscope.AggregatedAnalyticsService.GetStorageEvents:input_type -> periscope.GetStorageEventsRequest
-	109, // 321: periscope.AggregatedAnalyticsService.GetStreamHealth5m:input_type -> periscope.GetStreamHealth5mRequest
-	112, // 322: periscope.AggregatedAnalyticsService.GetNodePerformance5m:input_type -> periscope.GetNodePerformance5mRequest
-	115, // 323: periscope.AggregatedAnalyticsService.GetViewerHoursHourly:input_type -> periscope.GetViewerHoursHourlyRequest
-	118, // 324: periscope.AggregatedAnalyticsService.GetViewerGeoHourly:input_type -> periscope.GetViewerGeoHourlyRequest
-	121, // 325: periscope.AggregatedAnalyticsService.GetTenantDailyStats:input_type -> periscope.GetTenantDailyStatsRequest
-	125, // 326: periscope.AggregatedAnalyticsService.GetProcessingUsage:input_type -> periscope.GetProcessingUsageRequest
-	96,  // 327: periscope.AggregatedAnalyticsService.GetLiveUsageSummary:input_type -> periscope.GetLiveUsageSummaryRequest
-	128, // 328: periscope.AggregatedAnalyticsService.GetRebufferingEvents:input_type -> periscope.GetRebufferingEventsRequest
-	131, // 329: periscope.AggregatedAnalyticsService.GetTenantAnalyticsDaily:input_type -> periscope.GetTenantAnalyticsDailyRequest
-	134, // 330: periscope.AggregatedAnalyticsService.GetStreamAnalyticsDaily:input_type -> periscope.GetStreamAnalyticsDailyRequest
-	145, // 331: periscope.AggregatedAnalyticsService.GetAPIUsage:input_type -> periscope.GetAPIUsageRequest
-	162, // 332: periscope.AggregatedAnalyticsService.GetStreamHealthSummary:input_type -> periscope.GetStreamHealthSummaryRequest
-	165, // 333: periscope.AggregatedAnalyticsService.GetClientQoeSummary:input_type -> periscope.GetClientQoeSummaryRequest
-	168, // 334: periscope.AggregatedAnalyticsService.GetPlayerBootSummary:input_type -> periscope.GetPlayerBootSummaryRequest
-	174, // 335: periscope.AggregatedAnalyticsService.GetClusterBootOps:input_type -> periscope.GetClusterBootOpsRequest
-	177, // 336: periscope.AggregatedAnalyticsService.GetSessionQoeSummary:input_type -> periscope.GetSessionQoeSummaryRequest
-	180, // 337: periscope.AggregatedAnalyticsService.GetSessionQoeDetail:input_type -> periscope.GetSessionQoeDetailRequest
-	186, // 338: periscope.AggregatedAnalyticsService.GetClusterQoeOps:input_type -> periscope.GetClusterQoeOpsRequest
-	189, // 339: periscope.AggregatedAnalyticsService.GetClusterWorkload:input_type -> periscope.GetClusterWorkloadRequest
-	193, // 340: periscope.AggregatedAnalyticsService.GetVodRetention:input_type -> periscope.GetVodRetentionRequest
-	171, // 341: periscope.AggregatedAnalyticsService.GetPlayerBootTimeSeries:input_type -> periscope.GetPlayerBootTimeSeriesRequest
-	183, // 342: periscope.AggregatedAnalyticsService.GetSessionQoeTimeSeries:input_type -> periscope.GetSessionQoeTimeSeriesRequest
-	196, // 343: periscope.AggregatedAnalyticsService.ListVodRetentionAssets:input_type -> periscope.ListVodRetentionAssetsRequest
-	199, // 344: periscope.AggregatedAnalyticsService.ListTopAssets:input_type -> periscope.ListTopAssetsRequest
-	99,  // 345: periscope.AggregatedAnalyticsService.GetNetworkUsage:input_type -> periscope.GetNetworkUsageRequest
-	102, // 346: periscope.AggregatedAnalyticsService.GetAcquisitionFunnel:input_type -> periscope.GetAcquisitionFunnelRequest
-	105, // 347: periscope.AggregatedAnalyticsService.GetAcquisitionCohortUsage:input_type -> periscope.GetAcquisitionCohortUsageRequest
-	206, // 348: periscope.OrchestratorAnalyticsService.ListOrchestrators:input_type -> periscope.ListOrchestratorsRequest
-	208, // 349: periscope.OrchestratorAnalyticsService.GetOrchestrator:input_type -> periscope.GetOrchestratorRequest
-	210, // 350: periscope.OrchestratorAnalyticsService.ListOrchestratorInstances:input_type -> periscope.ListOrchestratorInstancesRequest
-	212, // 351: periscope.OrchestratorAnalyticsService.ListOrchestratorVantages:input_type -> periscope.ListOrchestratorVantagesRequest
-	214, // 352: periscope.OrchestratorAnalyticsService.GetOrchestratorPerformanceSeries:input_type -> periscope.GetOrchestratorPerformanceSeriesRequest
-	216, // 353: periscope.NetworkObservationService.GetNetworkObservations:input_type -> periscope.NetworkObservationsRequest
-	4,   // 354: periscope.StreamAnalyticsService.GetStreamEvents:output_type -> periscope.GetStreamEventsResponse
-	7,   // 355: periscope.StreamAnalyticsService.GetBufferEvents:output_type -> periscope.GetBufferEventsResponse
-	13,  // 356: periscope.StreamAnalyticsService.GetStreamHealthMetrics:output_type -> periscope.GetStreamHealthMetricsResponse
-	75,  // 357: periscope.StreamAnalyticsService.GetStreamStatus:output_type -> periscope.StreamStatusResponse
-	77,  // 358: periscope.StreamAnalyticsService.GetStreamsStatus:output_type -> periscope.StreamsStatusResponse
-	20,  // 359: periscope.ViewerAnalyticsService.GetViewerMetrics:output_type -> periscope.GetViewerMetricsResponse
-	23,  // 360: periscope.ViewerAnalyticsService.GetViewerCountTimeSeries:output_type -> periscope.GetViewerCountTimeSeriesResponse
-	27,  // 361: periscope.ViewerAnalyticsService.GetGeographicDistribution:output_type -> periscope.GetGeographicDistributionResponse
-	30,  // 362: periscope.TrackAnalyticsService.GetTrackListEvents:output_type -> periscope.GetTrackListEventsResponse
-	33,  // 363: periscope.ConnectionAnalyticsService.GetConnectionEvents:output_type -> periscope.GetConnectionEventsResponse
-	36,  // 364: periscope.NodeAnalyticsService.GetNodeMetrics:output_type -> periscope.GetNodeMetricsResponse
-	40,  // 365: periscope.NodeAnalyticsService.GetNodeMetrics1h:output_type -> periscope.GetNodeMetrics1hResponse
-	42,  // 366: periscope.NodeAnalyticsService.GetNodeMetricsAggregated:output_type -> periscope.GetNodeMetricsAggregatedResponse
-	45,  // 367: periscope.NodeAnalyticsService.GetLiveNodes:output_type -> periscope.GetLiveNodesResponse
-	48,  // 368: periscope.RoutingAnalyticsService.GetRoutingEvents:output_type -> periscope.GetRoutingEventsResponse
-	150, // 369: periscope.RoutingAnalyticsService.GetRoutingEfficiency:output_type -> periscope.GetRoutingEfficiencyResponse
-	153, // 370: periscope.RoutingAnalyticsService.GetClusterTrafficMatrix:output_type -> periscope.GetClusterTrafficMatrixResponse
-	156, // 371: periscope.FederationAnalyticsService.GetFederationEvents:output_type -> periscope.GetFederationEventsResponse
-	160, // 372: periscope.FederationAnalyticsService.GetFederationSummary:output_type -> periscope.GetFederationSummaryResponse
-	59,  // 373: periscope.PlatformAnalyticsService.GetPlatformOverview:output_type -> periscope.GetPlatformOverviewResponse
-	62,  // 374: periscope.PlatformAnalyticsService.ListTenantActivity:output_type -> periscope.ListTenantActivityResponse
-	80,  // 375: periscope.PlatformAnalyticsService.GetNetworkLiveStats:output_type -> periscope.GetNetworkLiveStatsResponse
-	65,  // 376: periscope.ClipAnalyticsService.GetClipEvents:output_type -> periscope.GetClipEventsResponse
-	68,  // 377: periscope.ClipAnalyticsService.GetArtifactState:output_type -> periscope.GetArtifactStateResponse
-	70,  // 378: periscope.ClipAnalyticsService.GetArtifactStates:output_type -> periscope.GetArtifactStatesResponse
-	73,  // 379: periscope.ClipAnalyticsService.GetArtifactNodeCopies:output_type -> periscope.GetArtifactNodeCopiesResponse
-	83,  // 380: periscope.AggregatedAnalyticsService.GetStreamConnectionHourly:output_type -> periscope.GetStreamConnectionHourlyResponse
-	86,  // 381: periscope.AggregatedAnalyticsService.GetClientMetrics5m:output_type -> periscope.GetClientMetrics5mResponse
-	89,  // 382: periscope.AggregatedAnalyticsService.GetQualityTierDaily:output_type -> periscope.GetQualityTierDailyResponse
-	139, // 383: periscope.AggregatedAnalyticsService.GetStreamAnalyticsSummary:output_type -> periscope.GetStreamAnalyticsSummaryResponse
-	141, // 384: periscope.AggregatedAnalyticsService.GetStreamAnalyticsSummaries:output_type -> periscope.GetStreamAnalyticsSummariesResponse
-	95,  // 385: periscope.AggregatedAnalyticsService.GetStorageUsage:output_type -> periscope.GetStorageUsageResponse
-	93,  // 386: periscope.AggregatedAnalyticsService.GetStorageEvents:output_type -> periscope.GetStorageEventsResponse
-	110, // 387: periscope.AggregatedAnalyticsService.GetStreamHealth5m:output_type -> periscope.GetStreamHealth5mResponse
-	113, // 388: periscope.AggregatedAnalyticsService.GetNodePerformance5m:output_type -> periscope.GetNodePerformance5mResponse
-	116, // 389: periscope.AggregatedAnalyticsService.GetViewerHoursHourly:output_type -> periscope.GetViewerHoursHourlyResponse
-	119, // 390: periscope.AggregatedAnalyticsService.GetViewerGeoHourly:output_type -> periscope.GetViewerGeoHourlyResponse
-	122, // 391: periscope.AggregatedAnalyticsService.GetTenantDailyStats:output_type -> periscope.GetTenantDailyStatsResponse
-	126, // 392: periscope.AggregatedAnalyticsService.GetProcessingUsage:output_type -> periscope.GetProcessingUsageResponse
-	98,  // 393: periscope.AggregatedAnalyticsService.GetLiveUsageSummary:output_type -> periscope.GetLiveUsageSummaryResponse
-	129, // 394: periscope.AggregatedAnalyticsService.GetRebufferingEvents:output_type -> periscope.GetRebufferingEventsResponse
-	132, // 395: periscope.AggregatedAnalyticsService.GetTenantAnalyticsDaily:output_type -> periscope.GetTenantAnalyticsDailyResponse
-	135, // 396: periscope.AggregatedAnalyticsService.GetStreamAnalyticsDaily:output_type -> periscope.GetStreamAnalyticsDailyResponse
-	146, // 397: periscope.AggregatedAnalyticsService.GetAPIUsage:output_type -> periscope.GetAPIUsageResponse
-	163, // 398: periscope.AggregatedAnalyticsService.GetStreamHealthSummary:output_type -> periscope.GetStreamHealthSummaryResponse
-	166, // 399: periscope.AggregatedAnalyticsService.GetClientQoeSummary:output_type -> periscope.GetClientQoeSummaryResponse
-	169, // 400: periscope.AggregatedAnalyticsService.GetPlayerBootSummary:output_type -> periscope.GetPlayerBootSummaryResponse
-	175, // 401: periscope.AggregatedAnalyticsService.GetClusterBootOps:output_type -> periscope.GetClusterBootOpsResponse
-	178, // 402: periscope.AggregatedAnalyticsService.GetSessionQoeSummary:output_type -> periscope.GetSessionQoeSummaryResponse
-	181, // 403: periscope.AggregatedAnalyticsService.GetSessionQoeDetail:output_type -> periscope.GetSessionQoeDetailResponse
-	187, // 404: periscope.AggregatedAnalyticsService.GetClusterQoeOps:output_type -> periscope.GetClusterQoeOpsResponse
-	190, // 405: periscope.AggregatedAnalyticsService.GetClusterWorkload:output_type -> periscope.GetClusterWorkloadResponse
-	194, // 406: periscope.AggregatedAnalyticsService.GetVodRetention:output_type -> periscope.GetVodRetentionResponse
-	172, // 407: periscope.AggregatedAnalyticsService.GetPlayerBootTimeSeries:output_type -> periscope.GetPlayerBootTimeSeriesResponse
-	184, // 408: periscope.AggregatedAnalyticsService.GetSessionQoeTimeSeries:output_type -> periscope.GetSessionQoeTimeSeriesResponse
-	197, // 409: periscope.AggregatedAnalyticsService.ListVodRetentionAssets:output_type -> periscope.ListVodRetentionAssetsResponse
-	200, // 410: periscope.AggregatedAnalyticsService.ListTopAssets:output_type -> periscope.ListTopAssetsResponse
-	101, // 411: periscope.AggregatedAnalyticsService.GetNetworkUsage:output_type -> periscope.GetNetworkUsageResponse
-	104, // 412: periscope.AggregatedAnalyticsService.GetAcquisitionFunnel:output_type -> periscope.GetAcquisitionFunnelResponse
-	107, // 413: periscope.AggregatedAnalyticsService.GetAcquisitionCohortUsage:output_type -> periscope.GetAcquisitionCohortUsageResponse
-	207, // 414: periscope.OrchestratorAnalyticsService.ListOrchestrators:output_type -> periscope.ListOrchestratorsResponse
-	209, // 415: periscope.OrchestratorAnalyticsService.GetOrchestrator:output_type -> periscope.GetOrchestratorResponse
-	211, // 416: periscope.OrchestratorAnalyticsService.ListOrchestratorInstances:output_type -> periscope.ListOrchestratorInstancesResponse
-	213, // 417: periscope.OrchestratorAnalyticsService.ListOrchestratorVantages:output_type -> periscope.ListOrchestratorVantagesResponse
-	215, // 418: periscope.OrchestratorAnalyticsService.GetOrchestratorPerformanceSeries:output_type -> periscope.GetOrchestratorPerformanceSeriesResponse
-	217, // 419: periscope.NetworkObservationService.GetNetworkObservations:output_type -> periscope.NetworkObservationsResponse
-	354, // [354:420] is the sub-list for method output_type
-	288, // [288:354] is the sub-list for method input_type
-	288, // [288:288] is the sub-list for extension type_name
-	288, // [288:288] is the sub-list for extension extendee
-	0,   // [0:288] is the sub-list for field type_name
+	223, // 115: periscope.SecurityActivityEvent.timestamp:type_name -> google.protobuf.Timestamp
+	226, // 116: periscope.GetSecurityActivityRequest.pagination:type_name -> common.CursorPaginationRequest
+	81,  // 117: periscope.GetSecurityActivityResponse.events:type_name -> periscope.SecurityActivityEvent
+	227, // 118: periscope.GetSecurityActivityResponse.pagination:type_name -> common.CursorPaginationResponse
+	223, // 119: periscope.StreamConnectionHourly.hour:type_name -> google.protobuf.Timestamp
+	225, // 120: periscope.GetStreamConnectionHourlyRequest.time_range:type_name -> common.TimeRange
+	226, // 121: periscope.GetStreamConnectionHourlyRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 122: periscope.GetStreamConnectionHourlyResponse.pagination:type_name -> common.CursorPaginationResponse
+	84,  // 123: periscope.GetStreamConnectionHourlyResponse.records:type_name -> periscope.StreamConnectionHourly
+	223, // 124: periscope.ClientMetrics5m.timestamp:type_name -> google.protobuf.Timestamp
+	225, // 125: periscope.GetClientMetrics5mRequest.time_range:type_name -> common.TimeRange
+	226, // 126: periscope.GetClientMetrics5mRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 127: periscope.GetClientMetrics5mResponse.pagination:type_name -> common.CursorPaginationResponse
+	87,  // 128: periscope.GetClientMetrics5mResponse.records:type_name -> periscope.ClientMetrics5m
+	223, // 129: periscope.QualityTierDaily.day:type_name -> google.protobuf.Timestamp
+	225, // 130: periscope.GetQualityTierDailyRequest.time_range:type_name -> common.TimeRange
+	226, // 131: periscope.GetQualityTierDailyRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 132: periscope.GetQualityTierDailyResponse.pagination:type_name -> common.CursorPaginationResponse
+	90,  // 133: periscope.GetQualityTierDailyResponse.records:type_name -> periscope.QualityTierDaily
+	223, // 134: periscope.StorageUsageRecord.timestamp:type_name -> google.protobuf.Timestamp
+	223, // 135: periscope.StorageEvent.timestamp:type_name -> google.protobuf.Timestamp
+	225, // 136: periscope.GetStorageEventsRequest.time_range:type_name -> common.TimeRange
+	226, // 137: periscope.GetStorageEventsRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 138: periscope.GetStorageEventsResponse.pagination:type_name -> common.CursorPaginationResponse
+	94,  // 139: periscope.GetStorageEventsResponse.events:type_name -> periscope.StorageEvent
+	225, // 140: periscope.GetStorageUsageRequest.time_range:type_name -> common.TimeRange
+	226, // 141: periscope.GetStorageUsageRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 142: periscope.GetStorageUsageResponse.pagination:type_name -> common.CursorPaginationResponse
+	93,  // 143: periscope.GetStorageUsageResponse.records:type_name -> periscope.StorageUsageRecord
+	225, // 144: periscope.GetLiveUsageSummaryRequest.time_range:type_name -> common.TimeRange
+	223, // 145: periscope.LiveUsageSummary.period_start:type_name -> google.protobuf.Timestamp
+	223, // 146: periscope.LiveUsageSummary.period_end:type_name -> google.protobuf.Timestamp
+	24,  // 147: periscope.LiveUsageSummary.geo_breakdown:type_name -> periscope.CountryMetric
+	100, // 148: periscope.GetLiveUsageSummaryResponse.summary:type_name -> periscope.LiveUsageSummary
+	225, // 149: periscope.GetNetworkUsageRequest.time_range:type_name -> common.TimeRange
+	0,   // 150: periscope.GetNetworkUsageRequest.group_by:type_name -> periscope.NetworkUsageGroupBy
+	223, // 151: periscope.NetworkUsageRecord.period_start:type_name -> google.protobuf.Timestamp
+	103, // 152: periscope.GetNetworkUsageResponse.records:type_name -> periscope.NetworkUsageRecord
+	225, // 153: periscope.GetAcquisitionFunnelRequest.time_range:type_name -> common.TimeRange
+	106, // 154: periscope.GetAcquisitionFunnelResponse.entries:type_name -> periscope.AcquisitionFunnelEntry
+	225, // 155: periscope.GetAcquisitionCohortUsageRequest.time_range:type_name -> common.TimeRange
+	223, // 156: periscope.GetAcquisitionCohortUsageRequest.cohort_month:type_name -> google.protobuf.Timestamp
+	223, // 157: periscope.AcquisitionCohortUsageRecord.day:type_name -> google.protobuf.Timestamp
+	223, // 158: periscope.AcquisitionCohortUsageRecord.cohort_month:type_name -> google.protobuf.Timestamp
+	109, // 159: periscope.GetAcquisitionCohortUsageResponse.records:type_name -> periscope.AcquisitionCohortUsageRecord
+	223, // 160: periscope.StreamHealth5m.timestamp:type_name -> google.protobuf.Timestamp
+	225, // 161: periscope.GetStreamHealth5mRequest.time_range:type_name -> common.TimeRange
+	226, // 162: periscope.GetStreamHealth5mRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 163: periscope.GetStreamHealth5mResponse.pagination:type_name -> common.CursorPaginationResponse
+	111, // 164: periscope.GetStreamHealth5mResponse.records:type_name -> periscope.StreamHealth5m
+	223, // 165: periscope.NodePerformance5m.timestamp:type_name -> google.protobuf.Timestamp
+	225, // 166: periscope.GetNodePerformance5mRequest.time_range:type_name -> common.TimeRange
+	226, // 167: periscope.GetNodePerformance5mRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 168: periscope.GetNodePerformance5mResponse.pagination:type_name -> common.CursorPaginationResponse
+	114, // 169: periscope.GetNodePerformance5mResponse.records:type_name -> periscope.NodePerformance5m
+	223, // 170: periscope.ViewerHoursHourly.hour:type_name -> google.protobuf.Timestamp
+	225, // 171: periscope.GetViewerHoursHourlyRequest.time_range:type_name -> common.TimeRange
+	226, // 172: periscope.GetViewerHoursHourlyRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 173: periscope.GetViewerHoursHourlyResponse.pagination:type_name -> common.CursorPaginationResponse
+	117, // 174: periscope.GetViewerHoursHourlyResponse.records:type_name -> periscope.ViewerHoursHourly
+	223, // 175: periscope.ViewerGeoHourly.hour:type_name -> google.protobuf.Timestamp
+	225, // 176: periscope.GetViewerGeoHourlyRequest.time_range:type_name -> common.TimeRange
+	226, // 177: periscope.GetViewerGeoHourlyRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 178: periscope.GetViewerGeoHourlyResponse.pagination:type_name -> common.CursorPaginationResponse
+	120, // 179: periscope.GetViewerGeoHourlyResponse.records:type_name -> periscope.ViewerGeoHourly
+	223, // 180: periscope.TenantDailyStat.date:type_name -> google.protobuf.Timestamp
+	123, // 181: periscope.GetTenantDailyStatsResponse.stats:type_name -> periscope.TenantDailyStat
+	223, // 182: periscope.ProcessingUsageRecord.timestamp:type_name -> google.protobuf.Timestamp
+	223, // 183: periscope.ProcessingUsageSummary.date:type_name -> google.protobuf.Timestamp
+	225, // 184: periscope.GetProcessingUsageRequest.time_range:type_name -> common.TimeRange
+	226, // 185: periscope.GetProcessingUsageRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 186: periscope.GetProcessingUsageResponse.pagination:type_name -> common.CursorPaginationResponse
+	126, // 187: periscope.GetProcessingUsageResponse.records:type_name -> periscope.ProcessingUsageRecord
+	127, // 188: periscope.GetProcessingUsageResponse.summaries:type_name -> periscope.ProcessingUsageSummary
+	223, // 189: periscope.RebufferingEvent.timestamp:type_name -> google.protobuf.Timestamp
+	223, // 190: periscope.RebufferingEvent.rebuffer_start:type_name -> google.protobuf.Timestamp
+	223, // 191: periscope.RebufferingEvent.rebuffer_end:type_name -> google.protobuf.Timestamp
+	225, // 192: periscope.GetRebufferingEventsRequest.time_range:type_name -> common.TimeRange
+	226, // 193: periscope.GetRebufferingEventsRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 194: periscope.GetRebufferingEventsResponse.pagination:type_name -> common.CursorPaginationResponse
+	130, // 195: periscope.GetRebufferingEventsResponse.events:type_name -> periscope.RebufferingEvent
+	223, // 196: periscope.TenantAnalyticsDaily.day:type_name -> google.protobuf.Timestamp
+	225, // 197: periscope.GetTenantAnalyticsDailyRequest.time_range:type_name -> common.TimeRange
+	226, // 198: periscope.GetTenantAnalyticsDailyRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 199: periscope.GetTenantAnalyticsDailyResponse.pagination:type_name -> common.CursorPaginationResponse
+	133, // 200: periscope.GetTenantAnalyticsDailyResponse.records:type_name -> periscope.TenantAnalyticsDaily
+	223, // 201: periscope.StreamAnalyticsDaily.day:type_name -> google.protobuf.Timestamp
+	225, // 202: periscope.GetStreamAnalyticsDailyRequest.time_range:type_name -> common.TimeRange
+	226, // 203: periscope.GetStreamAnalyticsDailyRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 204: periscope.GetStreamAnalyticsDailyResponse.pagination:type_name -> common.CursorPaginationResponse
+	136, // 205: periscope.GetStreamAnalyticsDailyResponse.records:type_name -> periscope.StreamAnalyticsDaily
+	225, // 206: periscope.StreamAnalyticsSummary.time_range:type_name -> common.TimeRange
+	139, // 207: periscope.StreamAnalyticsSummary.range_quality:type_name -> periscope.QualityTierSummary
+	225, // 208: periscope.GetStreamAnalyticsSummaryRequest.time_range:type_name -> common.TimeRange
+	140, // 209: periscope.GetStreamAnalyticsSummaryResponse.summary:type_name -> periscope.StreamAnalyticsSummary
+	225, // 210: periscope.GetStreamAnalyticsSummariesRequest.time_range:type_name -> common.TimeRange
+	226, // 211: periscope.GetStreamAnalyticsSummariesRequest.pagination:type_name -> common.CursorPaginationRequest
+	1,   // 212: periscope.GetStreamAnalyticsSummariesRequest.sort_by:type_name -> periscope.StreamSummarySortField
+	230, // 213: periscope.GetStreamAnalyticsSummariesRequest.sort_order:type_name -> common.SortOrder
+	227, // 214: periscope.GetStreamAnalyticsSummariesResponse.pagination:type_name -> common.CursorPaginationResponse
+	140, // 215: periscope.GetStreamAnalyticsSummariesResponse.summaries:type_name -> periscope.StreamAnalyticsSummary
+	223, // 216: periscope.APIUsageRecord.timestamp:type_name -> google.protobuf.Timestamp
+	223, // 217: periscope.APIUsageSummary.date:type_name -> google.protobuf.Timestamp
+	225, // 218: periscope.GetAPIUsageRequest.time_range:type_name -> common.TimeRange
+	226, // 219: periscope.GetAPIUsageRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 220: periscope.GetAPIUsageResponse.pagination:type_name -> common.CursorPaginationResponse
+	145, // 221: periscope.GetAPIUsageResponse.records:type_name -> periscope.APIUsageRecord
+	146, // 222: periscope.GetAPIUsageResponse.summaries:type_name -> periscope.APIUsageSummary
+	147, // 223: periscope.GetAPIUsageResponse.operation_summaries:type_name -> periscope.APIUsageOperationSummary
+	151, // 224: periscope.RoutingEfficiencySummary.top_countries:type_name -> periscope.RoutingCountryStat
+	225, // 225: periscope.GetRoutingEfficiencyRequest.time_range:type_name -> common.TimeRange
+	150, // 226: periscope.GetRoutingEfficiencyResponse.summary:type_name -> periscope.RoutingEfficiencySummary
+	225, // 227: periscope.GetClusterTrafficMatrixRequest.time_range:type_name -> common.TimeRange
+	154, // 228: periscope.GetClusterTrafficMatrixResponse.pairs:type_name -> periscope.ClusterPairTraffic
+	223, // 229: periscope.FederationEvent.timestamp:type_name -> google.protobuf.Timestamp
+	225, // 230: periscope.GetFederationEventsRequest.time_range:type_name -> common.TimeRange
+	157, // 231: periscope.GetFederationEventsResponse.events:type_name -> periscope.FederationEvent
+	160, // 232: periscope.FederationSummary.event_counts:type_name -> periscope.FederationEventCount
+	225, // 233: periscope.GetFederationSummaryRequest.time_range:type_name -> common.TimeRange
+	161, // 234: periscope.GetFederationSummaryResponse.summary:type_name -> periscope.FederationSummary
+	225, // 235: periscope.GetStreamHealthSummaryRequest.time_range:type_name -> common.TimeRange
+	164, // 236: periscope.GetStreamHealthSummaryResponse.summary:type_name -> periscope.StreamHealthSummary
+	225, // 237: periscope.GetClientQoeSummaryRequest.time_range:type_name -> common.TimeRange
+	167, // 238: periscope.GetClientQoeSummaryResponse.summary:type_name -> periscope.ClientQoeSummary
+	225, // 239: periscope.GetPlayerBootSummaryRequest.time_range:type_name -> common.TimeRange
+	170, // 240: periscope.GetPlayerBootSummaryResponse.summary:type_name -> periscope.PlayerBootSummary
+	223, // 241: periscope.PlayerBootTimeSeriesBucket.timestamp:type_name -> google.protobuf.Timestamp
+	225, // 242: periscope.GetPlayerBootTimeSeriesRequest.time_range:type_name -> common.TimeRange
+	173, // 243: periscope.GetPlayerBootTimeSeriesResponse.buckets:type_name -> periscope.PlayerBootTimeSeriesBucket
+	225, // 244: periscope.GetClusterBootOpsRequest.time_range:type_name -> common.TimeRange
+	176, // 245: periscope.GetClusterBootOpsResponse.rows:type_name -> periscope.ClusterBootOps
+	225, // 246: periscope.GetSessionQoeSummaryRequest.time_range:type_name -> common.TimeRange
+	179, // 247: periscope.GetSessionQoeSummaryResponse.summary:type_name -> periscope.SessionQoeSummary
+	223, // 248: periscope.SessionQoeDetail.first_seen:type_name -> google.protobuf.Timestamp
+	223, // 249: periscope.SessionQoeDetail.last_seen:type_name -> google.protobuf.Timestamp
+	225, // 250: periscope.GetSessionQoeDetailRequest.time_range:type_name -> common.TimeRange
+	226, // 251: periscope.GetSessionQoeDetailRequest.pagination:type_name -> common.CursorPaginationRequest
+	182, // 252: periscope.GetSessionQoeDetailResponse.sessions:type_name -> periscope.SessionQoeDetail
+	227, // 253: periscope.GetSessionQoeDetailResponse.pagination:type_name -> common.CursorPaginationResponse
+	223, // 254: periscope.SessionQoeTimeSeriesBucket.timestamp:type_name -> google.protobuf.Timestamp
+	225, // 255: periscope.GetSessionQoeTimeSeriesRequest.time_range:type_name -> common.TimeRange
+	185, // 256: periscope.GetSessionQoeTimeSeriesResponse.buckets:type_name -> periscope.SessionQoeTimeSeriesBucket
+	225, // 257: periscope.GetClusterQoeOpsRequest.time_range:type_name -> common.TimeRange
+	188, // 258: periscope.GetClusterQoeOpsResponse.rows:type_name -> periscope.ClusterQoeOps
+	223, // 259: periscope.ClusterWorkload.observed_at:type_name -> google.protobuf.Timestamp
+	225, // 260: periscope.GetClusterWorkloadRequest.time_range:type_name -> common.TimeRange
+	191, // 261: periscope.GetClusterWorkloadResponse.rows:type_name -> periscope.ClusterWorkload
+	194, // 262: periscope.VodRetention.points:type_name -> periscope.VodRetentionPoint
+	225, // 263: periscope.GetVodRetentionRequest.time_range:type_name -> common.TimeRange
+	195, // 264: periscope.GetVodRetentionResponse.retention:type_name -> periscope.VodRetention
+	223, // 265: periscope.VodRetentionAsset.last_seen:type_name -> google.protobuf.Timestamp
+	225, // 266: periscope.ListVodRetentionAssetsRequest.time_range:type_name -> common.TimeRange
+	226, // 267: periscope.ListVodRetentionAssetsRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 268: periscope.ListVodRetentionAssetsResponse.pagination:type_name -> common.CursorPaginationResponse
+	198, // 269: periscope.ListVodRetentionAssetsResponse.assets:type_name -> periscope.VodRetentionAsset
+	225, // 270: periscope.ListTopAssetsRequest.time_range:type_name -> common.TimeRange
+	201, // 271: periscope.ListTopAssetsResponse.assets:type_name -> periscope.TopAsset
+	223, // 272: periscope.Orchestrator.last_seen:type_name -> google.protobuf.Timestamp
+	223, // 273: periscope.Orchestrator.updated_at:type_name -> google.protobuf.Timestamp
+	206, // 274: periscope.OrchestratorInstance.capability_prices:type_name -> periscope.OrchestratorCapabilityPrice
+	223, // 275: periscope.OrchestratorInstance.last_seen:type_name -> google.protobuf.Timestamp
+	223, // 276: periscope.OrchestratorInstance.updated_at:type_name -> google.protobuf.Timestamp
+	223, // 277: periscope.OrchestratorVantage.geo_resolved_at:type_name -> google.protobuf.Timestamp
+	223, // 278: periscope.OrchestratorVantage.last_seen:type_name -> google.protobuf.Timestamp
+	223, // 279: periscope.OrchestratorPerformancePoint.timestamp:type_name -> google.protobuf.Timestamp
+	226, // 280: periscope.ListOrchestratorsRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 281: periscope.ListOrchestratorsResponse.pagination:type_name -> common.CursorPaginationResponse
+	204, // 282: periscope.ListOrchestratorsResponse.orchestrators:type_name -> periscope.Orchestrator
+	204, // 283: periscope.GetOrchestratorResponse.orchestrator:type_name -> periscope.Orchestrator
+	205, // 284: periscope.GetOrchestratorResponse.instances:type_name -> periscope.OrchestratorInstance
+	207, // 285: periscope.GetOrchestratorResponse.vantages:type_name -> periscope.OrchestratorVantage
+	205, // 286: periscope.ListOrchestratorInstancesResponse.instances:type_name -> periscope.OrchestratorInstance
+	207, // 287: periscope.ListOrchestratorVantagesResponse.vantages:type_name -> periscope.OrchestratorVantage
+	225, // 288: periscope.GetOrchestratorPerformanceSeriesRequest.time_range:type_name -> common.TimeRange
+	208, // 289: periscope.GetOrchestratorPerformanceSeriesResponse.points:type_name -> periscope.OrchestratorPerformancePoint
+	225, // 290: periscope.NetworkObservationsRequest.time_range:type_name -> common.TimeRange
+	75,  // 291: periscope.StreamsStatusResponse.StatusesEntry.value:type_name -> periscope.StreamStatusResponse
+	3,   // 292: periscope.StreamAnalyticsService.GetStreamEvents:input_type -> periscope.GetStreamEventsRequest
+	6,   // 293: periscope.StreamAnalyticsService.GetBufferEvents:input_type -> periscope.GetBufferEventsRequest
+	12,  // 294: periscope.StreamAnalyticsService.GetStreamHealthMetrics:input_type -> periscope.GetStreamHealthMetricsRequest
+	74,  // 295: periscope.StreamAnalyticsService.GetStreamStatus:input_type -> periscope.GetStreamStatusRequest
+	76,  // 296: periscope.StreamAnalyticsService.GetStreamsStatus:input_type -> periscope.GetStreamsStatusRequest
+	19,  // 297: periscope.ViewerAnalyticsService.GetViewerMetrics:input_type -> periscope.GetViewerMetricsRequest
+	22,  // 298: periscope.ViewerAnalyticsService.GetViewerCountTimeSeries:input_type -> periscope.GetViewerCountTimeSeriesRequest
+	26,  // 299: periscope.ViewerAnalyticsService.GetGeographicDistribution:input_type -> periscope.GetGeographicDistributionRequest
+	29,  // 300: periscope.TrackAnalyticsService.GetTrackListEvents:input_type -> periscope.GetTrackListEventsRequest
+	32,  // 301: periscope.ConnectionAnalyticsService.GetConnectionEvents:input_type -> periscope.GetConnectionEventsRequest
+	35,  // 302: periscope.NodeAnalyticsService.GetNodeMetrics:input_type -> periscope.GetNodeMetricsRequest
+	39,  // 303: periscope.NodeAnalyticsService.GetNodeMetrics1h:input_type -> periscope.GetNodeMetrics1hRequest
+	41,  // 304: periscope.NodeAnalyticsService.GetNodeMetricsAggregated:input_type -> periscope.GetNodeMetricsAggregatedRequest
+	44,  // 305: periscope.NodeAnalyticsService.GetLiveNodes:input_type -> periscope.GetLiveNodesRequest
+	47,  // 306: periscope.RoutingAnalyticsService.GetRoutingEvents:input_type -> periscope.GetRoutingEventsRequest
+	152, // 307: periscope.RoutingAnalyticsService.GetRoutingEfficiency:input_type -> periscope.GetRoutingEfficiencyRequest
+	155, // 308: periscope.RoutingAnalyticsService.GetClusterTrafficMatrix:input_type -> periscope.GetClusterTrafficMatrixRequest
+	158, // 309: periscope.FederationAnalyticsService.GetFederationEvents:input_type -> periscope.GetFederationEventsRequest
+	162, // 310: periscope.FederationAnalyticsService.GetFederationSummary:input_type -> periscope.GetFederationSummaryRequest
+	82,  // 311: periscope.PlatformAnalyticsService.GetSecurityActivity:input_type -> periscope.GetSecurityActivityRequest
+	58,  // 312: periscope.PlatformAnalyticsService.GetPlatformOverview:input_type -> periscope.GetPlatformOverviewRequest
+	60,  // 313: periscope.PlatformAnalyticsService.ListTenantActivity:input_type -> periscope.ListTenantActivityRequest
+	79,  // 314: periscope.PlatformAnalyticsService.GetNetworkLiveStats:input_type -> periscope.GetNetworkLiveStatsRequest
+	64,  // 315: periscope.ClipAnalyticsService.GetClipEvents:input_type -> periscope.GetClipEventsRequest
+	67,  // 316: periscope.ClipAnalyticsService.GetArtifactState:input_type -> periscope.GetArtifactStateRequest
+	69,  // 317: periscope.ClipAnalyticsService.GetArtifactStates:input_type -> periscope.GetArtifactStatesRequest
+	72,  // 318: periscope.ClipAnalyticsService.GetArtifactNodeCopies:input_type -> periscope.GetArtifactNodeCopiesRequest
+	85,  // 319: periscope.AggregatedAnalyticsService.GetStreamConnectionHourly:input_type -> periscope.GetStreamConnectionHourlyRequest
+	88,  // 320: periscope.AggregatedAnalyticsService.GetClientMetrics5m:input_type -> periscope.GetClientMetrics5mRequest
+	91,  // 321: periscope.AggregatedAnalyticsService.GetQualityTierDaily:input_type -> periscope.GetQualityTierDailyRequest
+	141, // 322: periscope.AggregatedAnalyticsService.GetStreamAnalyticsSummary:input_type -> periscope.GetStreamAnalyticsSummaryRequest
+	143, // 323: periscope.AggregatedAnalyticsService.GetStreamAnalyticsSummaries:input_type -> periscope.GetStreamAnalyticsSummariesRequest
+	97,  // 324: periscope.AggregatedAnalyticsService.GetStorageUsage:input_type -> periscope.GetStorageUsageRequest
+	95,  // 325: periscope.AggregatedAnalyticsService.GetStorageEvents:input_type -> periscope.GetStorageEventsRequest
+	112, // 326: periscope.AggregatedAnalyticsService.GetStreamHealth5m:input_type -> periscope.GetStreamHealth5mRequest
+	115, // 327: periscope.AggregatedAnalyticsService.GetNodePerformance5m:input_type -> periscope.GetNodePerformance5mRequest
+	118, // 328: periscope.AggregatedAnalyticsService.GetViewerHoursHourly:input_type -> periscope.GetViewerHoursHourlyRequest
+	121, // 329: periscope.AggregatedAnalyticsService.GetViewerGeoHourly:input_type -> periscope.GetViewerGeoHourlyRequest
+	124, // 330: periscope.AggregatedAnalyticsService.GetTenantDailyStats:input_type -> periscope.GetTenantDailyStatsRequest
+	128, // 331: periscope.AggregatedAnalyticsService.GetProcessingUsage:input_type -> periscope.GetProcessingUsageRequest
+	99,  // 332: periscope.AggregatedAnalyticsService.GetLiveUsageSummary:input_type -> periscope.GetLiveUsageSummaryRequest
+	131, // 333: periscope.AggregatedAnalyticsService.GetRebufferingEvents:input_type -> periscope.GetRebufferingEventsRequest
+	134, // 334: periscope.AggregatedAnalyticsService.GetTenantAnalyticsDaily:input_type -> periscope.GetTenantAnalyticsDailyRequest
+	137, // 335: periscope.AggregatedAnalyticsService.GetStreamAnalyticsDaily:input_type -> periscope.GetStreamAnalyticsDailyRequest
+	148, // 336: periscope.AggregatedAnalyticsService.GetAPIUsage:input_type -> periscope.GetAPIUsageRequest
+	165, // 337: periscope.AggregatedAnalyticsService.GetStreamHealthSummary:input_type -> periscope.GetStreamHealthSummaryRequest
+	168, // 338: periscope.AggregatedAnalyticsService.GetClientQoeSummary:input_type -> periscope.GetClientQoeSummaryRequest
+	171, // 339: periscope.AggregatedAnalyticsService.GetPlayerBootSummary:input_type -> periscope.GetPlayerBootSummaryRequest
+	177, // 340: periscope.AggregatedAnalyticsService.GetClusterBootOps:input_type -> periscope.GetClusterBootOpsRequest
+	180, // 341: periscope.AggregatedAnalyticsService.GetSessionQoeSummary:input_type -> periscope.GetSessionQoeSummaryRequest
+	183, // 342: periscope.AggregatedAnalyticsService.GetSessionQoeDetail:input_type -> periscope.GetSessionQoeDetailRequest
+	189, // 343: periscope.AggregatedAnalyticsService.GetClusterQoeOps:input_type -> periscope.GetClusterQoeOpsRequest
+	192, // 344: periscope.AggregatedAnalyticsService.GetClusterWorkload:input_type -> periscope.GetClusterWorkloadRequest
+	196, // 345: periscope.AggregatedAnalyticsService.GetVodRetention:input_type -> periscope.GetVodRetentionRequest
+	174, // 346: periscope.AggregatedAnalyticsService.GetPlayerBootTimeSeries:input_type -> periscope.GetPlayerBootTimeSeriesRequest
+	186, // 347: periscope.AggregatedAnalyticsService.GetSessionQoeTimeSeries:input_type -> periscope.GetSessionQoeTimeSeriesRequest
+	199, // 348: periscope.AggregatedAnalyticsService.ListVodRetentionAssets:input_type -> periscope.ListVodRetentionAssetsRequest
+	202, // 349: periscope.AggregatedAnalyticsService.ListTopAssets:input_type -> periscope.ListTopAssetsRequest
+	102, // 350: periscope.AggregatedAnalyticsService.GetNetworkUsage:input_type -> periscope.GetNetworkUsageRequest
+	105, // 351: periscope.AggregatedAnalyticsService.GetAcquisitionFunnel:input_type -> periscope.GetAcquisitionFunnelRequest
+	108, // 352: periscope.AggregatedAnalyticsService.GetAcquisitionCohortUsage:input_type -> periscope.GetAcquisitionCohortUsageRequest
+	209, // 353: periscope.OrchestratorAnalyticsService.ListOrchestrators:input_type -> periscope.ListOrchestratorsRequest
+	211, // 354: periscope.OrchestratorAnalyticsService.GetOrchestrator:input_type -> periscope.GetOrchestratorRequest
+	213, // 355: periscope.OrchestratorAnalyticsService.ListOrchestratorInstances:input_type -> periscope.ListOrchestratorInstancesRequest
+	215, // 356: periscope.OrchestratorAnalyticsService.ListOrchestratorVantages:input_type -> periscope.ListOrchestratorVantagesRequest
+	217, // 357: periscope.OrchestratorAnalyticsService.GetOrchestratorPerformanceSeries:input_type -> periscope.GetOrchestratorPerformanceSeriesRequest
+	219, // 358: periscope.NetworkObservationService.GetNetworkObservations:input_type -> periscope.NetworkObservationsRequest
+	4,   // 359: periscope.StreamAnalyticsService.GetStreamEvents:output_type -> periscope.GetStreamEventsResponse
+	7,   // 360: periscope.StreamAnalyticsService.GetBufferEvents:output_type -> periscope.GetBufferEventsResponse
+	13,  // 361: periscope.StreamAnalyticsService.GetStreamHealthMetrics:output_type -> periscope.GetStreamHealthMetricsResponse
+	75,  // 362: periscope.StreamAnalyticsService.GetStreamStatus:output_type -> periscope.StreamStatusResponse
+	77,  // 363: periscope.StreamAnalyticsService.GetStreamsStatus:output_type -> periscope.StreamsStatusResponse
+	20,  // 364: periscope.ViewerAnalyticsService.GetViewerMetrics:output_type -> periscope.GetViewerMetricsResponse
+	23,  // 365: periscope.ViewerAnalyticsService.GetViewerCountTimeSeries:output_type -> periscope.GetViewerCountTimeSeriesResponse
+	27,  // 366: periscope.ViewerAnalyticsService.GetGeographicDistribution:output_type -> periscope.GetGeographicDistributionResponse
+	30,  // 367: periscope.TrackAnalyticsService.GetTrackListEvents:output_type -> periscope.GetTrackListEventsResponse
+	33,  // 368: periscope.ConnectionAnalyticsService.GetConnectionEvents:output_type -> periscope.GetConnectionEventsResponse
+	36,  // 369: periscope.NodeAnalyticsService.GetNodeMetrics:output_type -> periscope.GetNodeMetricsResponse
+	40,  // 370: periscope.NodeAnalyticsService.GetNodeMetrics1h:output_type -> periscope.GetNodeMetrics1hResponse
+	42,  // 371: periscope.NodeAnalyticsService.GetNodeMetricsAggregated:output_type -> periscope.GetNodeMetricsAggregatedResponse
+	45,  // 372: periscope.NodeAnalyticsService.GetLiveNodes:output_type -> periscope.GetLiveNodesResponse
+	48,  // 373: periscope.RoutingAnalyticsService.GetRoutingEvents:output_type -> periscope.GetRoutingEventsResponse
+	153, // 374: periscope.RoutingAnalyticsService.GetRoutingEfficiency:output_type -> periscope.GetRoutingEfficiencyResponse
+	156, // 375: periscope.RoutingAnalyticsService.GetClusterTrafficMatrix:output_type -> periscope.GetClusterTrafficMatrixResponse
+	159, // 376: periscope.FederationAnalyticsService.GetFederationEvents:output_type -> periscope.GetFederationEventsResponse
+	163, // 377: periscope.FederationAnalyticsService.GetFederationSummary:output_type -> periscope.GetFederationSummaryResponse
+	83,  // 378: periscope.PlatformAnalyticsService.GetSecurityActivity:output_type -> periscope.GetSecurityActivityResponse
+	59,  // 379: periscope.PlatformAnalyticsService.GetPlatformOverview:output_type -> periscope.GetPlatformOverviewResponse
+	62,  // 380: periscope.PlatformAnalyticsService.ListTenantActivity:output_type -> periscope.ListTenantActivityResponse
+	80,  // 381: periscope.PlatformAnalyticsService.GetNetworkLiveStats:output_type -> periscope.GetNetworkLiveStatsResponse
+	65,  // 382: periscope.ClipAnalyticsService.GetClipEvents:output_type -> periscope.GetClipEventsResponse
+	68,  // 383: periscope.ClipAnalyticsService.GetArtifactState:output_type -> periscope.GetArtifactStateResponse
+	70,  // 384: periscope.ClipAnalyticsService.GetArtifactStates:output_type -> periscope.GetArtifactStatesResponse
+	73,  // 385: periscope.ClipAnalyticsService.GetArtifactNodeCopies:output_type -> periscope.GetArtifactNodeCopiesResponse
+	86,  // 386: periscope.AggregatedAnalyticsService.GetStreamConnectionHourly:output_type -> periscope.GetStreamConnectionHourlyResponse
+	89,  // 387: periscope.AggregatedAnalyticsService.GetClientMetrics5m:output_type -> periscope.GetClientMetrics5mResponse
+	92,  // 388: periscope.AggregatedAnalyticsService.GetQualityTierDaily:output_type -> periscope.GetQualityTierDailyResponse
+	142, // 389: periscope.AggregatedAnalyticsService.GetStreamAnalyticsSummary:output_type -> periscope.GetStreamAnalyticsSummaryResponse
+	144, // 390: periscope.AggregatedAnalyticsService.GetStreamAnalyticsSummaries:output_type -> periscope.GetStreamAnalyticsSummariesResponse
+	98,  // 391: periscope.AggregatedAnalyticsService.GetStorageUsage:output_type -> periscope.GetStorageUsageResponse
+	96,  // 392: periscope.AggregatedAnalyticsService.GetStorageEvents:output_type -> periscope.GetStorageEventsResponse
+	113, // 393: periscope.AggregatedAnalyticsService.GetStreamHealth5m:output_type -> periscope.GetStreamHealth5mResponse
+	116, // 394: periscope.AggregatedAnalyticsService.GetNodePerformance5m:output_type -> periscope.GetNodePerformance5mResponse
+	119, // 395: periscope.AggregatedAnalyticsService.GetViewerHoursHourly:output_type -> periscope.GetViewerHoursHourlyResponse
+	122, // 396: periscope.AggregatedAnalyticsService.GetViewerGeoHourly:output_type -> periscope.GetViewerGeoHourlyResponse
+	125, // 397: periscope.AggregatedAnalyticsService.GetTenantDailyStats:output_type -> periscope.GetTenantDailyStatsResponse
+	129, // 398: periscope.AggregatedAnalyticsService.GetProcessingUsage:output_type -> periscope.GetProcessingUsageResponse
+	101, // 399: periscope.AggregatedAnalyticsService.GetLiveUsageSummary:output_type -> periscope.GetLiveUsageSummaryResponse
+	132, // 400: periscope.AggregatedAnalyticsService.GetRebufferingEvents:output_type -> periscope.GetRebufferingEventsResponse
+	135, // 401: periscope.AggregatedAnalyticsService.GetTenantAnalyticsDaily:output_type -> periscope.GetTenantAnalyticsDailyResponse
+	138, // 402: periscope.AggregatedAnalyticsService.GetStreamAnalyticsDaily:output_type -> periscope.GetStreamAnalyticsDailyResponse
+	149, // 403: periscope.AggregatedAnalyticsService.GetAPIUsage:output_type -> periscope.GetAPIUsageResponse
+	166, // 404: periscope.AggregatedAnalyticsService.GetStreamHealthSummary:output_type -> periscope.GetStreamHealthSummaryResponse
+	169, // 405: periscope.AggregatedAnalyticsService.GetClientQoeSummary:output_type -> periscope.GetClientQoeSummaryResponse
+	172, // 406: periscope.AggregatedAnalyticsService.GetPlayerBootSummary:output_type -> periscope.GetPlayerBootSummaryResponse
+	178, // 407: periscope.AggregatedAnalyticsService.GetClusterBootOps:output_type -> periscope.GetClusterBootOpsResponse
+	181, // 408: periscope.AggregatedAnalyticsService.GetSessionQoeSummary:output_type -> periscope.GetSessionQoeSummaryResponse
+	184, // 409: periscope.AggregatedAnalyticsService.GetSessionQoeDetail:output_type -> periscope.GetSessionQoeDetailResponse
+	190, // 410: periscope.AggregatedAnalyticsService.GetClusterQoeOps:output_type -> periscope.GetClusterQoeOpsResponse
+	193, // 411: periscope.AggregatedAnalyticsService.GetClusterWorkload:output_type -> periscope.GetClusterWorkloadResponse
+	197, // 412: periscope.AggregatedAnalyticsService.GetVodRetention:output_type -> periscope.GetVodRetentionResponse
+	175, // 413: periscope.AggregatedAnalyticsService.GetPlayerBootTimeSeries:output_type -> periscope.GetPlayerBootTimeSeriesResponse
+	187, // 414: periscope.AggregatedAnalyticsService.GetSessionQoeTimeSeries:output_type -> periscope.GetSessionQoeTimeSeriesResponse
+	200, // 415: periscope.AggregatedAnalyticsService.ListVodRetentionAssets:output_type -> periscope.ListVodRetentionAssetsResponse
+	203, // 416: periscope.AggregatedAnalyticsService.ListTopAssets:output_type -> periscope.ListTopAssetsResponse
+	104, // 417: periscope.AggregatedAnalyticsService.GetNetworkUsage:output_type -> periscope.GetNetworkUsageResponse
+	107, // 418: periscope.AggregatedAnalyticsService.GetAcquisitionFunnel:output_type -> periscope.GetAcquisitionFunnelResponse
+	110, // 419: periscope.AggregatedAnalyticsService.GetAcquisitionCohortUsage:output_type -> periscope.GetAcquisitionCohortUsageResponse
+	210, // 420: periscope.OrchestratorAnalyticsService.ListOrchestrators:output_type -> periscope.ListOrchestratorsResponse
+	212, // 421: periscope.OrchestratorAnalyticsService.GetOrchestrator:output_type -> periscope.GetOrchestratorResponse
+	214, // 422: periscope.OrchestratorAnalyticsService.ListOrchestratorInstances:output_type -> periscope.ListOrchestratorInstancesResponse
+	216, // 423: periscope.OrchestratorAnalyticsService.ListOrchestratorVantages:output_type -> periscope.ListOrchestratorVantagesResponse
+	218, // 424: periscope.OrchestratorAnalyticsService.GetOrchestratorPerformanceSeries:output_type -> periscope.GetOrchestratorPerformanceSeriesResponse
+	220, // 425: periscope.NetworkObservationService.GetNetworkObservations:output_type -> periscope.NetworkObservationsResponse
+	359, // [359:426] is the sub-list for method output_type
+	292, // [292:359] is the sub-list for method input_type
+	292, // [292:292] is the sub-list for extension type_name
+	292, // [292:292] is the sub-list for extension extendee
+	0,   // [0:292] is the sub-list for field type_name
 }
 
 func init() { file_periscope_proto_init() }
@@ -21804,48 +22014,48 @@ func file_periscope_proto_init() {
 	file_periscope_proto_msgTypes[64].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[67].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[73].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[80].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[82].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[83].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[85].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[86].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[89].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[90].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[92].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[103].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[93].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[95].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[106].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[110].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[109].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[113].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[116].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[121].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[123].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[119].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[124].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[126].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[132].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[129].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[135].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[143].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[147].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[149].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[138].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[146].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[150].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[152].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[153].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[160].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[162].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[155].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[156].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[163].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[165].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[166].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[169].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[175].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[177].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[181].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[186].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[204].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[208].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[210].OneofWrappers = []any{}
-	file_periscope_proto_msgTypes[212].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[172].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[178].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[180].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[184].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[189].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[207].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[211].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[213].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[215].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_periscope_proto_rawDesc), len(file_periscope_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   218,
+			NumMessages:   221,
 			NumExtensions: 0,
 			NumServices:   12,
 		},

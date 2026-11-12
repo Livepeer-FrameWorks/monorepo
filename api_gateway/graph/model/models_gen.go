@@ -2538,6 +2538,28 @@ type RoutingImpactPreview struct {
 	ActiveViewers int `json:"activeViewers"`
 }
 
+type SecurityActivityConnection struct {
+	Edges      []*SecurityActivityEdge  `json:"edges"`
+	Nodes      []*SecurityActivityEvent `json:"nodes"`
+	PageInfo   *PageInfo                `json:"pageInfo"`
+	TotalCount int                      `json:"totalCount"`
+}
+
+type SecurityActivityEdge struct {
+	Cursor string                 `json:"cursor"`
+	Node   *SecurityActivityEvent `json:"node"`
+}
+
+// A security event concerning only the signed-in user.
+type SecurityActivityEvent struct {
+	ID         string               `json:"id"`
+	Kind       SecurityActivityKind `json:"kind"`
+	Timestamp  time.Time            `json:"timestamp"`
+	AuthMethod AuthMethod           `json:"authMethod"`
+	SessionID  *string              `json:"sessionId,omitempty"`
+	Reason     *string              `json:"reason,omitempty"`
+}
+
 // Input for sending a message.
 type SendMessageInput struct {
 	// The conversation ID to send the message to.
@@ -5933,6 +5955,73 @@ func (e *RetentionSource) UnmarshalJSON(b []byte) error {
 }
 
 func (e RetentionSource) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type SecurityActivityKind string
+
+const (
+	SecurityActivityKindSignInSucceeded SecurityActivityKind = "SIGN_IN_SUCCEEDED"
+	SecurityActivityKindSignInFailed    SecurityActivityKind = "SIGN_IN_FAILED"
+	SecurityActivityKindSessionRevoked  SecurityActivityKind = "SESSION_REVOKED"
+	SecurityActivityKindSessionsRevoked SecurityActivityKind = "SESSIONS_REVOKED"
+	SecurityActivityKindPasswordChanged SecurityActivityKind = "PASSWORD_CHANGED"
+	SecurityActivityKindPasswordReset   SecurityActivityKind = "PASSWORD_RESET"
+	SecurityActivityKindWalletLinked    SecurityActivityKind = "WALLET_LINKED"
+	SecurityActivityKindWalletUnlinked  SecurityActivityKind = "WALLET_UNLINKED"
+)
+
+var AllSecurityActivityKind = []SecurityActivityKind{
+	SecurityActivityKindSignInSucceeded,
+	SecurityActivityKindSignInFailed,
+	SecurityActivityKindSessionRevoked,
+	SecurityActivityKindSessionsRevoked,
+	SecurityActivityKindPasswordChanged,
+	SecurityActivityKindPasswordReset,
+	SecurityActivityKindWalletLinked,
+	SecurityActivityKindWalletUnlinked,
+}
+
+func (e SecurityActivityKind) IsValid() bool {
+	switch e {
+	case SecurityActivityKindSignInSucceeded, SecurityActivityKindSignInFailed, SecurityActivityKindSessionRevoked, SecurityActivityKindSessionsRevoked, SecurityActivityKindPasswordChanged, SecurityActivityKindPasswordReset, SecurityActivityKindWalletLinked, SecurityActivityKindWalletUnlinked:
+		return true
+	}
+	return false
+}
+
+func (e SecurityActivityKind) String() string {
+	return string(e)
+}
+
+func (e *SecurityActivityKind) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = SecurityActivityKind(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid SecurityActivityKind", str)
+	}
+	return nil
+}
+
+func (e SecurityActivityKind) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *SecurityActivityKind) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e SecurityActivityKind) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

@@ -136,6 +136,7 @@ var operations = map[string]operationInfo{
 	"GetReviewMediaPlacementChange":            {Kind: "query", Since: "v0.3.11", Identity: "sha256:b679ababa998919bcb1deef66ca064b7a1f29461e80bc70022e1af87623d9422"},
 	"GetRoutingEfficiency":                     {Kind: "query", Since: "v0.3.11", Identity: "sha256:2037cdd3540ce396440d4f80d5adfb500ad5256b7174dee6073713b1fcddde6d"},
 	"GetRoutingEventsConnection":               {Kind: "query", Since: "v0.3.11", Identity: "sha256:9131e96ec00598758df8f346bf51bd50b1644ed4bc9289a8c154ca658ee986ce"},
+	"GetSecurityActivityConnection":            {Kind: "query", Since: "v0.3.15", Identity: "sha256:484970447feb659e7fa56d020ebcdc08d4102f888f49f865dc2881e4213eae2e"},
 	"GetServiceInstancesConnection":            {Kind: "query", Since: "v0.3.11", Identity: "sha256:bb3177d01c24074039fd99f31eaa5c64247e106652fac6532d0943579ba086f0"},
 	"GetServiceInstancesHealth":                {Kind: "query", Since: "v0.3.11", Identity: "sha256:129784c63a564658876edd5f777efcc424555dcbccc97d1aa30dc3baeb9f35e9"},
 	"GetSessionQoeSummary":                     {Kind: "query", Since: "v0.3.11", Identity: "sha256:21af1153e1f33749ca4d4025071764c7ad359556395f9321407d0b7b844d0b41"},

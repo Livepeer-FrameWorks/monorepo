@@ -202,6 +202,7 @@ func TestRefreshTokenReuseRevokesOnlyTheAffectedSession(t *testing.T) {
 	mock.ExpectQuery(`UPDATE commodore.auth_sessions SET revoked_at`).WithArgs(testTenantID, sessionTestUserID, authSessionTestID, "reuse_detected").
 		WillReturnRows(sqlmock.NewRows(authSessionColumns).AddRow(sessionValues(authSessionTestID, time.Now())...))
 	expectRefreshFamilyDeletion(mock, authSessionTestID)
+	mock.ExpectExec(`INSERT INTO commodore.account_email_outbox`).WithArgs(testTenantID, sessionTestUserID, "security_reuse:"+authSessionTestID, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	payload := expectNamedSessionEvent(mock)
 	mock.ExpectCommit()
 	if _, err := s.RefreshToken(context.Background(), &commodorepb.RefreshTokenRequest{RefreshToken: "raw-refresh"}); status.Code(err) != codes.Unauthenticated {
@@ -360,8 +361,8 @@ func TestValidateNamedSessionRejectsRevocationAndExpiry(t *testing.T) {
 				revokedAt = now
 			}
 			mock.ExpectQuery(`FROM commodore\.auth_sessions\s+WHERE tenant_id = \$1 AND user_id = \$2 AND id = \$3`).WithArgs(testTenantID, sessionTestUserID, sessionID).
-				WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "user_id", "auth_method", "client_id", "device_label", "client_version", "created_ip", "last_ip", "user_agent", "created_at", "last_seen_at", "idle_expires_at", "absolute_expires_at", "revoked_at", "revoke_reason"}).
-					AddRow(sessionID, testTenantID, sessionTestUserID, "password", "web", "Browser", "", "", "", "", now, now, now.Add(tc.idle), now.Add(tc.absolute), revokedAt, nil))
+				WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "user_id", "auth_method", "client_id", "device_label", "client_version", "created_ip", "last_ip", "user_agent", "created_at", "last_seen_at", "idle_expires_at", "absolute_expires_at", "revoked_at", "revoke_reason", "device_key"}).
+					AddRow(sessionID, testTenantID, sessionTestUserID, "password", "web", "Browser", "", "", "", "", now, now, now.Add(tc.idle), now.Add(tc.absolute), revokedAt, nil, ""))
 			response, err := s.ValidateSession(context.Background(), &commodorepb.ValidateSessionRequest{Token: token})
 			if err != nil || response.GetValid() != tc.valid {
 				t.Fatalf("valid=%v err=%v", response.GetValid(), err)

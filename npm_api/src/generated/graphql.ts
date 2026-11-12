@@ -973,6 +973,17 @@ export type ReviewMediaPlacementChangeInput = {
   updates: Array<MediaPlacementVerbUpdateInput>;
 };
 
+export type SecurityActivityKind =
+  | 'PASSWORD_CHANGED'
+  | 'PASSWORD_RESET'
+  | 'SESSIONS_REVOKED'
+  | 'SESSION_REVOKED'
+  | 'SIGN_IN_FAILED'
+  | 'SIGN_IN_SUCCEEDED'
+  | 'WALLET_LINKED'
+  | 'WALLET_UNLINKED'
+  | '%future added value';
+
 /** Input for sending a message. */
 export type SendMessageInput = {
   /** The message content. */
@@ -3155,6 +3166,9 @@ allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for th
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null };
+
+/** A security event concerning only the signed-in user. */
+export type SecurityActivityEventDefaultFieldsFragment = { id: string, kind: SecurityActivityKind, timestamp: string, authMethod: AuthMethod, sessionId: string | null, reason: string | null };
 
 export type ServiceInstanceDefaultFieldsFragment = { id: string, instanceId: string, clusterId: string, nodeId: string | null, serviceId: string, version: string | null, port: number | null, processId: number | null, containerId: string | null, status: InstanceStatus, healthStatus: NodeStatus, startedAt: string | null, stoppedAt: string | null, lastHealthCheck: string | null };
 
@@ -8025,6 +8039,16 @@ export type GetRoutingEventsConnectionQueryVariables = Exact<{
 export type GetRoutingEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Infrastructure analytics: routing, node metrics, services. */
 infra: { routingEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, streamId: string, selectedNode: string, nodeId: string | null, status: string, details: string | null, score: number | null, clientCountry: string | null, clientLatitude: number | null, clientLongitude: number | null, nodeLatitude: number | null, nodeLongitude: number | null, nodeName: string | null, routingDistance: number | null, candidatesCount: number | null, latencyMs: number | null, eventType: string | null, source: string | null, streamTenantId: string | null, clusterId: string | null, remoteClusterId: string | null, selectedClusterId: string | null, controlCellId: string | null, originClusterId: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+
+export type GetSecurityActivityConnectionQueryVariables = Exact<{
+  first?: number | null | undefined;
+  after?: string | null | undefined;
+}>;
+
+
+/** Your own security activity from the past 90 days. */
+export type GetSecurityActivityConnectionQuery = { /** Your own security activity from the past 90 days. */
+securityActivityConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, kind: SecurityActivityKind, timestamp: string, authMethod: AuthMethod, sessionId: string | null, reason: string | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
 
 export type GetServiceInstancesConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -14083,6 +14107,17 @@ export const RoutingEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocum
   originClusterId
 }
     `, {"fragmentName":"RoutingEventDefaultFields"}) as unknown as TypedDocumentString<RoutingEventDefaultFieldsFragment, unknown>;
+/** A security event concerning only the signed-in user. */
+export const SecurityActivityEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
+    fragment SecurityActivityEventDefaultFields on SecurityActivityEvent {
+  id
+  kind
+  timestamp
+  authMethod
+  sessionId
+  reason
+}
+    `, {"fragmentName":"SecurityActivityEventDefaultFields"}) as unknown as TypedDocumentString<SecurityActivityEventDefaultFieldsFragment, unknown>;
 export const ServiceInstanceDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment ServiceInstanceDefaultFields on ServiceInstance {
   id
@@ -25573,6 +25608,36 @@ fragment RoutingEventDefaultFields on RoutingEvent {
   controlCellId
   originClusterId
 }`) as unknown as TypedDocumentString<GetRoutingEventsConnectionQuery, GetRoutingEventsConnectionQueryVariables>;
+/** Your own security activity from the past 90 days. */
+export const GetSecurityActivityConnectionDocument = /*#__PURE__*/ new TypedDocumentString(`
+    query GetSecurityActivityConnection($first: Int, $after: String) {
+  securityActivityConnection(first: $first, after: $after) {
+    edges {
+      cursor
+      node {
+        ...SecurityActivityEventDefaultFields
+      }
+    }
+    pageInfo {
+      ...PageInfoDefaultFields
+    }
+    totalCount
+  }
+}
+    fragment PageInfoDefaultFields on PageInfo {
+  startCursor
+  endCursor
+  hasNextPage
+  hasPreviousPage
+}
+fragment SecurityActivityEventDefaultFields on SecurityActivityEvent {
+  id
+  kind
+  timestamp
+  authMethod
+  sessionId
+  reason
+}`) as unknown as TypedDocumentString<GetSecurityActivityConnectionQuery, GetSecurityActivityConnectionQueryVariables>;
 export const GetServiceInstancesConnectionDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetServiceInstancesConnection($page: ConnectionInput, $clusterId: String, $nodeId: String, $status: InstanceStatus) {
   analytics {

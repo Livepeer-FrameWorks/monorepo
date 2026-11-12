@@ -131,6 +131,7 @@ export function getSdk(client: FrameWorksClient, options: { subscriptions?: Subs
   getReviewMediaPlacementChange: (...args: OperationArguments<documents.GetReviewMediaPlacementChangeQueryVariables>) => client.request(documents.GetReviewMediaPlacementChangeDocument, ...args),
   getRoutingEfficiency: (...args: OperationArguments<documents.GetRoutingEfficiencyQueryVariables>) => client.request(documents.GetRoutingEfficiencyDocument, ...args),
   getRoutingEventsConnection: (...args: OperationArguments<documents.GetRoutingEventsConnectionQueryVariables>) => client.request(documents.GetRoutingEventsConnectionDocument, ...args),
+  getSecurityActivityConnection: (...args: OperationArguments<documents.GetSecurityActivityConnectionQueryVariables>) => client.request(documents.GetSecurityActivityConnectionDocument, ...args),
   getServiceInstancesConnection: (...args: OperationArguments<documents.GetServiceInstancesConnectionQueryVariables>) => client.request(documents.GetServiceInstancesConnectionDocument, ...args),
   getServiceInstancesHealth: (...args: OperationArguments<documents.GetServiceInstancesHealthQueryVariables>) => client.request(documents.GetServiceInstancesHealthDocument, ...args),
   getSessionQoeSummary: (...args: OperationArguments<documents.GetSessionQoeSummaryQueryVariables>) => client.request(documents.GetSessionQoeSummaryDocument, ...args),

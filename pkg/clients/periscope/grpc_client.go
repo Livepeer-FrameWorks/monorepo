@@ -1388,3 +1388,7 @@ func (c *GRPCClient) GetOrchestratorPerformanceSeries(ctx context.Context, tenan
 func (c *GRPCClient) GetNetworkObservations(ctx context.Context, req *periscopepb.NetworkObservationsRequest) (*periscopepb.NetworkObservationsResponse, error) {
 	return periscopepb.NewNetworkObservationServiceClient(c.conn).GetNetworkObservations(withServiceAuth(ctx), req, grpc.MaxCallRecvMsgSize(16<<20))
 }
+
+func (c *GRPCClient) GetSecurityActivity(ctx context.Context, page *commonpb.CursorPaginationRequest) (*periscopepb.GetSecurityActivityResponse, error) {
+	return c.platform.GetSecurityActivity(ctx, &periscopepb.GetSecurityActivityRequest{Pagination: page})
+}

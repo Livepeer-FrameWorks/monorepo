@@ -2652,6 +2652,23 @@ export const scalarFields = {
         "activeViewers",
         "__typename"
     ],
+    "SecurityActivityConnection": [
+        "totalCount",
+        "__typename"
+    ],
+    "SecurityActivityEdge": [
+        "cursor",
+        "__typename"
+    ],
+    "SecurityActivityEvent": [
+        "id",
+        "kind",
+        "timestamp",
+        "authMethod",
+        "sessionId",
+        "reason",
+        "__typename"
+    ],
     "SendMessageInput": [
         "conversationId",
         "content",

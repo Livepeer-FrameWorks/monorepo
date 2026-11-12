@@ -285,6 +285,12 @@ type AccessDecision struct {
 // independent enforcement state and must not reopen control-plane mutation
 // access merely because those mutations do not immediately incur usage.
 var suspendedRecoveryAllowlist = map[string]bool{
+	"authSessionsConnection":        true,
+	"securityActivityConnection":    true,
+	"renameAuthSession":             true,
+	"revokeAuthSession":             true,
+	"revokeOtherAuthSessions":       true,
+	"changePassword":                true,
 	"prepaidBalance":                true,
 	"balanceTransactionsConnection": true,
 	"createCardTopup":               true,

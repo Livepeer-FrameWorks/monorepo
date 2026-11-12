@@ -8,6 +8,7 @@ package commodoredb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 )
 
@@ -36,7 +37,7 @@ SET status = 'abandoned',
 WHERE user_id = $3::uuid
   AND purpose = $4::text
   AND tenant_id = $5::uuid
-  AND status = 'pending'
+  AND status IN ('pending', 'security_pending')
   AND ($6::text = '' OR lease_token = $6::text)
 `
 
@@ -67,9 +68,10 @@ const claimAccountEmailBatch = `-- name: ClaimAccountEmailBatch :many
 SELECT user_id::text AS user_id,
        tenant_id::text AS tenant_id,
        purpose,
-       attempts
+       attempts,
+       payload
 FROM commodore.account_email_outbox
-WHERE status = 'pending'
+WHERE status IN ('pending', 'security_pending')
   AND next_attempt_at <= NOW()
 ORDER BY next_attempt_at
 FOR UPDATE SKIP LOCKED
@@ -77,10 +79,11 @@ LIMIT $1
 `
 
 type ClaimAccountEmailBatchRow struct {
-	UserID   string `db:"user_id" json:"user_id"`
-	TenantID string `db:"tenant_id" json:"tenant_id"`
-	Purpose  string `db:"purpose" json:"purpose"`
-	Attempts int32  `db:"attempts" json:"attempts"`
+	UserID   string          `db:"user_id" json:"user_id"`
+	TenantID string          `db:"tenant_id" json:"tenant_id"`
+	Purpose  string          `db:"purpose" json:"purpose"`
+	Attempts int32           `db:"attempts" json:"attempts"`
+	Payload  json.RawMessage `db:"payload" json:"payload"`
 }
 
 func (q *Queries) ClaimAccountEmailBatch(ctx context.Context, batchSize int32) ([]ClaimAccountEmailBatchRow, error) {
@@ -97,6 +100,7 @@ func (q *Queries) ClaimAccountEmailBatch(ctx context.Context, batchSize int32) (
 			&i.TenantID,
 			&i.Purpose,
 			&i.Attempts,
+			&i.Payload,
 		); err != nil {
 			return nil, err
 		}
@@ -117,7 +121,7 @@ SET status = 'completed', completed_at = NOW(), updated_at = NOW(), last_error =
 WHERE user_id = $1::uuid
   AND purpose = $2::text
   AND tenant_id = $3::uuid
-  AND status = 'pending'
+  AND status IN ('pending', 'security_pending')
   AND ($4::text = '' OR lease_token = $4::text)
 `
 
@@ -175,7 +179,7 @@ SET attempts = $1,
 WHERE user_id = $4::uuid
   AND purpose = $5::text
   AND tenant_id = $6::uuid
-  AND status = 'pending'
+  AND status IN ('pending', 'security_pending')
   AND ($7::text = '' OR lease_token = $7::text)
 `
 
@@ -235,7 +239,7 @@ SET next_attempt_at = NOW() + ($1::bigint * INTERVAL '1 millisecond'),
 WHERE user_id = $2::uuid
   AND purpose = $3::text
   AND tenant_id = $4::uuid
-  AND status = 'pending'
+  AND status IN ('pending', 'security_pending')
 RETURNING lease_token
 `
 

@@ -22,7 +22,7 @@ import (
 
 const authSessionTestID = "50000000-0000-4000-8000-000000000081"
 
-var authSessionColumns = []string{"id", "tenant_id", "user_id", "auth_method", "client_id", "device_label", "client_version", "created_ip", "last_ip", "user_agent", "created_at", "last_seen_at", "idle_expires_at", "absolute_expires_at", "revoked_at", "revoke_reason"}
+var authSessionColumns = []string{"id", "tenant_id", "user_id", "auth_method", "client_id", "device_label", "client_version", "created_ip", "last_ip", "user_agent", "created_at", "last_seen_at", "idle_expires_at", "absolute_expires_at", "revoked_at", "revoke_reason", "device_key"}
 
 func sessionValues(id string, revokedAt any) []driver.Value {
 	var reason any
@@ -30,7 +30,7 @@ func sessionValues(id string, revokedAt any) []driver.Value {
 		reason = "user"
 	}
 	now := time.Now()
-	return []driver.Value{id, testTenantID, sessionTestUserID, "password", "web", "Browser", "", "203.0.113.10", "203.0.113.10", "Browser/1", now.Add(-time.Hour), now, now.Add(time.Hour), now.Add(2 * time.Hour), revokedAt, reason}
+	return []driver.Value{id, testTenantID, sessionTestUserID, "password", "web", "Browser", "", "203.0.113.10", "203.0.113.10", "Browser/1", now.Add(-time.Hour), now, now.Add(time.Hour), now.Add(2 * time.Hour), revokedAt, reason, ""}
 }
 
 func sessionContext(id string) context.Context {
@@ -164,6 +164,25 @@ func TestRevokeSessionHidesOtherOwnersAndIsIdempotent(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestRevokeSessionRecognizesEquivalentCurrentUUID(t *testing.T) {
+	s, mock, done := newMockServer(t)
+	defer done()
+	id := "50000000-0000-4000-8000-0000000000ab"
+	mock.ExpectBegin()
+	expectSessionUserLock(mock)
+	mock.ExpectQuery(`FROM commodore.auth_sessions\s+WHERE tenant_id = \$1 AND user_id = \$2 AND id = \$3 FOR UPDATE`).
+		WithArgs(testTenantID, sessionTestUserID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows(authSessionColumns).AddRow(sessionValues(id, time.Now())...))
+	mock.ExpectCommit()
+	response, err := s.RevokeSession(sessionContext(id), &commodorepb.RevokeSessionRequest{SessionId: strings.ToUpper(id)})
+	if err != nil || !response.GetSuccess() || !response.GetCurrent() {
+		t.Fatalf("equivalent UUID must identify the current session: response=%+v err=%v", response, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

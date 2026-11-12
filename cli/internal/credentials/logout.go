@@ -12,18 +12,25 @@ import (
 )
 
 func namedSession(token string) bool {
+	return userSessionID(token) != ""
+}
+
+func userSessionID(token string) string {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return false
+		return ""
 	}
 	data, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return false
+		return ""
 	}
 	var claims struct {
 		SessionID string `json:"sid"`
 	}
-	return json.Unmarshal(data, &claims) == nil && claims.SessionID != ""
+	if json.Unmarshal(data, &claims) != nil {
+		return ""
+	}
+	return claims.SessionID
 }
 
 // LogoutSession uses only the owned CLI credential and its original Bridge.

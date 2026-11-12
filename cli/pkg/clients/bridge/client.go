@@ -31,10 +31,18 @@ type Client struct {
 // "https://bridge.frameworks.network"). The caller is responsible for
 // trimming trailing slashes; New tolerates either form.
 func New(baseURL string) *Client {
+	return NewWithRefresh(baseURL, credentials.RefreshUserAuth)
+}
+
+// NewWithRefresh uses caller-owned renewal. Nil disables renewal for borrowed
+// credentials such as FW_USER_TOKEN from a parent application.
+func NewWithRefresh(baseURL string, refresh func(context.Context, string, string) (string, error)) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		http:    &http.Client{Timeout: 75 * time.Second},
-		refresh: credentials.RefreshUserAuth,
+		http: &http.Client{Timeout: 75 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}},
+		refresh: refresh,
 	}
 }
 
@@ -57,7 +65,7 @@ func (c *Client) do(ctx context.Context, query, jwt string, variables map[string
 	if err != nil {
 		return fmt.Errorf("bridge: marshal request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/graphql/", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/graphql", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("bridge: build request: %w", err)
 	}

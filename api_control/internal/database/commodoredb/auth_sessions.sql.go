@@ -120,7 +120,7 @@ func (q *Queries) DeleteOtherLegacyRefreshTokens(ctx context.Context, arg Delete
 }
 
 const getAuthSession = `-- name: GetAuthSession :one
-SELECT id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason FROM commodore.auth_sessions
+SELECT id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason, device_key FROM commodore.auth_sessions
 WHERE tenant_id = $1 AND user_id = $2 AND id = $3
 `
 
@@ -150,6 +150,7 @@ func (q *Queries) GetAuthSession(ctx context.Context, arg GetAuthSessionParams) 
 		&i.AbsoluteExpiresAt,
 		&i.RevokedAt,
 		&i.RevokeReason,
+		&i.DeviceKey,
 	)
 	return i, err
 }
@@ -234,14 +235,14 @@ func (q *Queries) GetSessionRefreshSuccessor(ctx context.Context, arg GetSession
 const insertAuthSession = `-- name: InsertAuthSession :one
 INSERT INTO commodore.auth_sessions (
     tenant_id, user_id, auth_method, client_id, device_label, client_version,
-    created_ip, last_ip, user_agent, idle_expires_at, absolute_expires_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8,
-    LEAST($9::timestamptz, $10::timestamptz,
+    created_ip, last_ip, user_agent, device_key, idle_expires_at, absolute_expires_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9,
+    LEAST($10::timestamptz, $11::timestamptz,
           NOW() + INTERVAL '720 hours',
           NOW() + CASE WHEN $4 IN ('cli', 'tray-mac') THEN INTERVAL '4320 hours' ELSE INTERVAL '2160 hours' END),
-    LEAST($10::timestamptz,
+    LEAST($11::timestamptz,
           NOW() + CASE WHEN $4 IN ('cli', 'tray-mac') THEN INTERVAL '4320 hours' ELSE INTERVAL '2160 hours' END))
-RETURNING id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason
+RETURNING id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason, device_key
 `
 
 type InsertAuthSessionParams struct {
@@ -253,6 +254,7 @@ type InsertAuthSessionParams struct {
 	ClientVersion     string    `db:"client_version" json:"client_version"`
 	CreatedIp         string    `db:"created_ip" json:"created_ip"`
 	UserAgent         string    `db:"user_agent" json:"user_agent"`
+	DeviceKey         string    `db:"device_key" json:"device_key"`
 	IdleExpiresAt     time.Time `db:"idle_expires_at" json:"idle_expires_at"`
 	AbsoluteExpiresAt time.Time `db:"absolute_expires_at" json:"absolute_expires_at"`
 }
@@ -267,6 +269,7 @@ func (q *Queries) InsertAuthSession(ctx context.Context, arg InsertAuthSessionPa
 		arg.ClientVersion,
 		arg.CreatedIp,
 		arg.UserAgent,
+		arg.DeviceKey,
 		arg.IdleExpiresAt,
 		arg.AbsoluteExpiresAt,
 	)
@@ -288,6 +291,7 @@ func (q *Queries) InsertAuthSession(ctx context.Context, arg InsertAuthSessionPa
 		&i.AbsoluteExpiresAt,
 		&i.RevokedAt,
 		&i.RevokeReason,
+		&i.DeviceKey,
 	)
 	return i, err
 }
@@ -362,7 +366,7 @@ func (q *Queries) ListAuthSessionRevocationsSince(ctx context.Context, revokedAt
 }
 
 const listAuthSessions = `-- name: ListAuthSessions :many
-SELECT id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason FROM commodore.auth_sessions
+SELECT id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason, device_key FROM commodore.auth_sessions
 WHERE tenant_id = $1 AND user_id = $2
   AND revoked_at IS NULL AND idle_expires_at > NOW() AND absolute_expires_at > NOW()
   AND ($3::timestamptz IS NULL OR
@@ -410,6 +414,7 @@ func (q *Queries) ListAuthSessions(ctx context.Context, arg ListAuthSessionsPara
 			&i.AbsoluteExpiresAt,
 			&i.RevokedAt,
 			&i.RevokeReason,
+			&i.DeviceKey,
 		); err != nil {
 			return nil, err
 		}
@@ -425,7 +430,7 @@ func (q *Queries) ListAuthSessions(ctx context.Context, arg ListAuthSessionsPara
 }
 
 const listOldestAuthSessions = `-- name: ListOldestAuthSessions :many
-SELECT id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason FROM commodore.auth_sessions
+SELECT id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason, device_key FROM commodore.auth_sessions
 WHERE tenant_id = $1 AND user_id = $2 AND revoked_at IS NULL
   AND idle_expires_at > NOW() AND absolute_expires_at > NOW()
 ORDER BY last_seen_at, created_at, id LIMIT $3 FOR UPDATE
@@ -463,6 +468,7 @@ func (q *Queries) ListOldestAuthSessions(ctx context.Context, arg ListOldestAuth
 			&i.AbsoluteExpiresAt,
 			&i.RevokedAt,
 			&i.RevokeReason,
+			&i.DeviceKey,
 		); err != nil {
 			return nil, err
 		}
@@ -478,7 +484,7 @@ func (q *Queries) ListOldestAuthSessions(ctx context.Context, arg ListOldestAuth
 }
 
 const lockAuthSession = `-- name: LockAuthSession :one
-SELECT id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason FROM commodore.auth_sessions
+SELECT id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason, device_key FROM commodore.auth_sessions
 WHERE tenant_id = $1 AND user_id = $2 AND id = $3 FOR UPDATE
 `
 
@@ -508,6 +514,7 @@ func (q *Queries) LockAuthSession(ctx context.Context, arg LockAuthSessionParams
 		&i.AbsoluteExpiresAt,
 		&i.RevokedAt,
 		&i.RevokeReason,
+		&i.DeviceKey,
 	)
 	return i, err
 }
@@ -624,7 +631,7 @@ func (q *Queries) RenameAuthSession(ctx context.Context, arg RenameAuthSessionPa
 const revokeAllAuthSessions = `-- name: RevokeAllAuthSessions :many
 UPDATE commodore.auth_sessions SET revoked_at = clock_timestamp(), revoke_reason = $3
 WHERE tenant_id = $1 AND user_id = $2 AND revoked_at IS NULL
-RETURNING id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason
+RETURNING id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason, device_key
 `
 
 type RevokeAllAuthSessionsParams struct {
@@ -659,6 +666,7 @@ func (q *Queries) RevokeAllAuthSessions(ctx context.Context, arg RevokeAllAuthSe
 			&i.AbsoluteExpiresAt,
 			&i.RevokedAt,
 			&i.RevokeReason,
+			&i.DeviceKey,
 		); err != nil {
 			return nil, err
 		}
@@ -676,7 +684,7 @@ func (q *Queries) RevokeAllAuthSessions(ctx context.Context, arg RevokeAllAuthSe
 const revokeAuthSession = `-- name: RevokeAuthSession :one
 UPDATE commodore.auth_sessions SET revoked_at = clock_timestamp(), revoke_reason = $4
 WHERE tenant_id = $1 AND user_id = $2 AND id = $3 AND revoked_at IS NULL
-RETURNING id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason
+RETURNING id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason, device_key
 `
 
 type RevokeAuthSessionParams struct {
@@ -711,6 +719,7 @@ func (q *Queries) RevokeAuthSession(ctx context.Context, arg RevokeAuthSessionPa
 		&i.AbsoluteExpiresAt,
 		&i.RevokedAt,
 		&i.RevokeReason,
+		&i.DeviceKey,
 	)
 	return i, err
 }
@@ -745,7 +754,7 @@ const revokeOtherAuthSessions = `-- name: RevokeOtherAuthSessions :many
 UPDATE commodore.auth_sessions SET revoked_at = clock_timestamp(), revoke_reason = $4
 WHERE tenant_id = $1 AND user_id = $2 AND id <> $3 AND revoked_at IS NULL
   AND idle_expires_at > NOW() AND absolute_expires_at > NOW()
-RETURNING id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason
+RETURNING id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason, device_key
 `
 
 type RevokeOtherAuthSessionsParams struct {
@@ -786,6 +795,7 @@ func (q *Queries) RevokeOtherAuthSessions(ctx context.Context, arg RevokeOtherAu
 			&i.AbsoluteExpiresAt,
 			&i.RevokedAt,
 			&i.RevokeReason,
+			&i.DeviceKey,
 		); err != nil {
 			return nil, err
 		}
@@ -806,7 +816,7 @@ SET last_seen_at = NOW(), last_ip = $4,
     idle_expires_at = LEAST(NOW() + INTERVAL '720 hours', absolute_expires_at)
 WHERE tenant_id = $1 AND user_id = $2 AND id = $3
   AND revoked_at IS NULL AND idle_expires_at > NOW() AND absolute_expires_at > NOW()
-RETURNING id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason
+RETURNING id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason, device_key
 `
 
 type TouchAuthSessionParams struct {
@@ -841,6 +851,7 @@ func (q *Queries) TouchAuthSession(ctx context.Context, arg TouchAuthSessionPara
 		&i.AbsoluteExpiresAt,
 		&i.RevokedAt,
 		&i.RevokeReason,
+		&i.DeviceKey,
 	)
 	return i, err
 }
