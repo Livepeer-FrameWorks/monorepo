@@ -9,6 +9,11 @@
   become: true
   gather_facts: true
   tasks:
+    - name: Install the trusted TLS probe client
+      ansible.builtin.package:
+        name: curl
+        state: present
+
     # Privateer owns the ingress reload trigger; its role creates the user
     # before nginx runs on a provisioned host.
     - name: Create the Privateer system user

@@ -26,15 +26,24 @@
           - privateer_ingress_root.stat.gr_name == 'frameworks-ingress'
           - privateer_ingress_root.stat.mode == '2750'
 
-    - name: Preview permission changes before the new reader group exists
+- name: Preview Privateer permissions with an absent reader group
+  hosts: all
+  become: true
+  gather_facts: true
+  check_mode: true
+  vars:
+    privateer_ingress_reader_group: frameworks-ingress-preview
+  tasks:
+    - name: Preview public ingress permission convergence
       ansible.builtin.include_role:
         name: frameworks.infra.privateer
         tasks_from: ingress_permissions
-        apply:
-          check_mode: true
-      vars:
-        privateer_ingress_reader_group: frameworks-ingress-preview
 
+- name: Verify Privateer preview made no changes
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
     - name: Confirm the preview did not create the reader group
       ansible.builtin.command: getent group frameworks-ingress-preview
       register: privateer_preview_group
