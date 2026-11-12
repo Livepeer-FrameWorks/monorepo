@@ -138,6 +138,11 @@ type Querier interface {
 	DeleteOtherLegacyRefreshTokens(ctx context.Context, arg DeleteOtherLegacyRefreshTokensParams) error
 	DeletePushTarget(ctx context.Context, arg DeletePushTargetParams) (string, error)
 	DeleteRefreshTokensForUser(ctx context.Context, arg DeleteRefreshTokensForUserParams) error
+	DeleteRetainedAuthSession(ctx context.Context, arg DeleteRetainedAuthSessionParams) (int64, error)
+	DeleteRetainedAuthorizationCode(ctx context.Context, arg DeleteRetainedAuthorizationCodeParams) (int64, error)
+	DeleteRetainedDeviceCode(ctx context.Context, arg DeleteRetainedDeviceCodeParams) (int64, error)
+	DeleteRetainedSessionToken(ctx context.Context, arg DeleteRetainedSessionTokenParams) (int64, error)
+	DeleteRetainedUnassignedToken(ctx context.Context, arg DeleteRetainedUnassignedTokenParams) (int64, error)
 	DeleteRetiredMediaAuthorityTargets(ctx context.Context, arg DeleteRetiredMediaAuthorityTargetsParams) (int64, error)
 	DeleteStreamKeysForDeletion(ctx context.Context, arg DeleteStreamKeysForDeletionParams) error
 	DeleteTenantWalletIdentities(ctx context.Context, tenantID string) error
@@ -310,6 +315,8 @@ type Querier interface {
 	GetVerificationUser(ctx context.Context, verificationToken sql.NullString) (GetVerificationUserRow, error)
 	GetWalletIdentityByAddress(ctx context.Context, arg GetWalletIdentityByAddressParams) (GetWalletIdentityByAddressRow, error)
 	HardDeleteFinalizedStream(ctx context.Context, arg HardDeleteFinalizedStreamParams) (int64, error)
+	// A live legacy successor can depend on an older ancestor for its original age.
+	HasLiveUnassignedRefreshToken(ctx context.Context, arg HasLiveUnassignedRefreshTokenParams) (bool, error)
 	HasUserWallet(ctx context.Context, arg HasUserWalletParams) (bool, error)
 	InsertAPIToken(ctx context.Context, arg InsertAPITokenParams) error
 	InsertAuthSession(ctx context.Context, arg InsertAuthSessionParams) (CommodoreAuthSession, error)
@@ -373,6 +380,8 @@ type Querier interface {
 	// index scan rather than a sort of every pending row once a second.
 	ListAuthoritiesAwaitingActivation(ctx context.Context, arg ListAuthoritiesAwaitingActivationParams) ([]ListAuthoritiesAwaitingActivationRow, error)
 	ListBootstrapMistNativeStreams(ctx context.Context, tenantID string) ([]ListBootstrapMistNativeStreamsRow, error)
+	// A consumed code is terminal even if its original expiry has not passed.
+	ListConsumedAuthorizationCodeKeys(ctx context.Context, batchSize int32) ([]ListConsumedAuthorizationCodeKeysRow, error)
 	// Current live authorities with no live renewal obligation. A settled row does
 	// not count: only a tombstone may rest on one. Versions published before the
 	// tombstone column existed all read as live, so the caller still decodes the
@@ -386,6 +395,12 @@ type Querier interface {
 	ListCurrentMediaAuthorityRollout(ctx context.Context, arg ListCurrentMediaAuthorityRolloutParams) ([]ListCurrentMediaAuthorityRolloutRow, error)
 	ListCurrentTenantAuthorityIDs(ctx context.Context) ([]string, error)
 	ListEnabledPushTargets(ctx context.Context, arg ListEnabledPushTargetsParams) ([]ListEnabledPushTargetsRow, error)
+	// Global read-only discovery; each delete is scoped to the returned owner/key.
+	ListExpiredAuthorizationCodeKeys(ctx context.Context, batchSize int32) ([]ListExpiredAuthorizationCodeKeysRow, error)
+	// NULL tenant_id identifies a device code not yet approved by a user.
+	ListExpiredDeviceCodeKeys(ctx context.Context, batchSize int32) ([]ListExpiredDeviceCodeKeysRow, error)
+	// Global indexed metadata discovery; mutations use the returned full owner.
+	ListExpiredSessionRetentionKeys(ctx context.Context, arg ListExpiredSessionRetentionKeysParams) ([]ListExpiredSessionRetentionKeysRow, error)
 	// Authorities still being renewed whose bound version has run out: renewal did
 	// not reach them in time, and cells are refusing them or asking for them on
 	// every decision. A dormant renewal is an authority nobody uses and is expected
@@ -435,6 +450,7 @@ type Querier interface {
 	ListPullSourceEventsByStream(ctx context.Context, arg ListPullSourceEventsByStreamParams) ([]ListPullSourceEventsByStreamRow, error)
 	ListPushTargetSiblingsForOwner(ctx context.Context, arg ListPushTargetSiblingsForOwnerParams) ([]ListPushTargetSiblingsForOwnerRow, error)
 	ListPushTargets(ctx context.Context, arg ListPushTargetsParams) ([]ListPushTargetsRow, error)
+	ListRevokedSessionRetentionKeys(ctx context.Context, arg ListRevokedSessionRetentionKeysParams) ([]ListRevokedSessionRetentionKeysRow, error)
 	// Platform-wide by design: Gateway replicas refuse every tenant's signed-out
 	// session tokens, so this read spans tenants.
 	ListSessionRevocationsSince(ctx context.Context, sessionsRevokedAt sql.NullTime) ([]ListSessionRevocationsSinceRow, error)
@@ -475,6 +491,7 @@ type Querier interface {
 	// current version is oldest, so a caller looking for any unconverged object
 	// usually stops at the first row.
 	ListTenantPlacementDependents(ctx context.Context, tenantID string) ([]ListTenantPlacementDependentsRow, error)
+	ListUnassignedRefreshRetentionKeys(ctx context.Context, arg ListUnassignedRefreshRetentionKeysParams) ([]ListUnassignedRefreshRetentionKeysRow, error)
 	ListUserLiveStreamAuthorityTargets(ctx context.Context, arg ListUserLiveStreamAuthorityTargetsParams) ([]string, error)
 	ListUserWallets(ctx context.Context, userID string) ([]ListUserWalletsRow, error)
 	// Tenants whose authority is still being renewed. Reconciliation covers these;
@@ -513,6 +530,9 @@ type Querier interface {
 	LockPublisherLeaseExecutions(ctx context.Context, executionKeys []string) error
 	LockPushTargetStatus(ctx context.Context, arg LockPushTargetStatusParams) (sql.NullString, error)
 	LockRefreshTokenByHash(ctx context.Context, tokenHash string) (LockRefreshTokenByHashRow, error)
+	LockRetainedAuthSession(ctx context.Context, arg LockRetainedAuthSessionParams) (string, error)
+	LockRetainedSessionTokenKeys(ctx context.Context, arg LockRetainedSessionTokenKeysParams) ([]string, error)
+	LockRetainedUnassignedToken(ctx context.Context, arg LockRetainedUnassignedTokenParams) (string, error)
 	LockSigningKeyTenant(ctx context.Context, tenantID string) error
 	LockStreamMistSourcePins(ctx context.Context, arg LockStreamMistSourcePinsParams) ([]string, error)
 	LockStreamPullSourcePins(ctx context.Context, arg LockStreamPullSourcePinsParams) ([]string, error)

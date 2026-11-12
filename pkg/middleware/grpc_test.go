@@ -215,6 +215,35 @@ func TestGRPCStreamAuthInterceptorRejectsJWTForServiceOnlyMethod(t *testing.T) {
 	}
 }
 
+func TestLocalSessionAuthorityDoesNotCallCommodore(t *testing.T) {
+	secret := []byte("local-authority")
+	token, err := auth.GenerateJWT("user", "tenant", "user@example.com", "member", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revocations := auth.NewSessionRevocations()
+	calls := 0
+	cfg := GRPCAuthConfig{JWTSecret: secret, SessionRevocations: revocations, RequireSessionValidation: true,
+		ValidateSession: func(context.Context, string) error {
+			calls++
+			return status.Error(codes.Unavailable, "Commodore offline")
+		}}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+token))
+	handler := func(context.Context, any) (any, error) { return "ok", nil }
+	for range 10 {
+		if _, err := GRPCAuthInterceptor(cfg)(ctx, nil, &grpc.UnaryServerInfo{FullMethod: "/test/Read"}, handler); err != nil {
+			t.Fatalf("locally valid session rejected during Commodore outage: %v", err)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("validation RPCs = %d, want zero", calls)
+	}
+	revocations.Record("tenant", "user", time.Now())
+	if _, err := GRPCAuthInterceptor(cfg)(ctx, nil, &grpc.UnaryServerInfo{FullMethod: "/test/Read"}, handler); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("known revocation accepted: %v", err)
+	}
+}
+
 func TestGRPCInterceptorsRejectRevokedSession(t *testing.T) {
 	secret := []byte("session-state-test")
 	token, err := auth.GenerateJWT("user", "tenant", "user@example.com", "member", secret)

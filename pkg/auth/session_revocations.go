@@ -13,12 +13,37 @@ type sessionRevocationKey struct{ tenant, user, session string }
 // SessionRevocations retains revocations while an affected access JWT can verify.
 // An empty session identifies the legacy user-wide issue-time cutoff.
 type SessionRevocations struct {
-	mu      sync.RWMutex
-	cutoffs map[sessionRevocationKey]time.Time
+	mu       sync.RWMutex
+	cutoffs  map[sessionRevocationKey]time.Time
+	prunedAt time.Time
 }
 
 func NewSessionRevocations() *SessionRevocations {
 	return &SessionRevocations{cutoffs: make(map[sessionRevocationKey]time.Time)}
+}
+
+// Prune releases cutoffs after no affected access JWT can still verify.
+func (r *SessionRevocations) Prune() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pruneLocked()
+}
+
+func (r *SessionRevocations) Len() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.cutoffs)
+}
+
+func (r *SessionRevocations) pruneLocked() {
+	now := time.Now()
+	expired := now.Add(-SessionTokenTTL - JWTClockSkewLeeway)
+	for key, at := range r.cutoffs {
+		if at.Before(expired) {
+			delete(r.cutoffs, key)
+		}
+	}
+	r.prunedAt = now
 }
 
 func (r *SessionRevocations) Record(tenantID, userID string, revokedAt time.Time) {
@@ -38,14 +63,19 @@ func (r *SessionRevocations) record(tenantID, userID, sessionID string, revokedA
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	expired := time.Now().Add(-SessionTokenTTL - JWTClockSkewLeeway)
-	for key, at := range r.cutoffs {
-		if at.Before(expired) {
-			delete(r.cutoffs, key)
-		}
+	// A snapshot can contain many revocations; avoid a full cache scan for each.
+	if time.Since(r.prunedAt) >= time.Minute {
+		r.pruneLocked()
 	}
 	if r.cutoffs == nil {
 		r.cutoffs = make(map[sessionRevocationKey]time.Time)
+	}
+	// Named entries are presence checks, so retain them for a full token lifetime
+	// after observation. A transaction's revocation timestamp may precede issuance
+	// while waiting for the issuer's lock. User-wide cutoffs must keep their actual
+	// issue-time boundary so a later legitimate sign-in remains valid.
+	if sessionID != "" && revokedAt.Before(time.Now()) {
+		revokedAt = time.Now()
 	}
 	key := sessionRevocationKey{tenantID, userID, sessionID}
 	if previous, ok := r.cutoffs[key]; !ok || revokedAt.After(previous) {

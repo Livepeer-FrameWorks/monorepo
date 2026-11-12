@@ -142,6 +142,7 @@ type Foghorn struct {
 	config.SystemTenant
 	config.GeoIP
 	config.GRPCTLS
+	config.SessionRevocationStream
 	config.Postgres
 	config.BuildEnvironment
 	FoghornRedis

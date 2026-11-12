@@ -17,6 +17,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
 	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/sessionrevocations"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -29,6 +30,46 @@ import (
 )
 
 const testServiceToken = "service-token"
+
+type observingTenantHub func(string, signalmanpb.EventType, signalmanpb.Channel, *signalmanpb.EventData)
+
+func (h observingTenantHub) BroadcastToTenant(tenant string, kind signalmanpb.EventType, channel signalmanpb.Channel, data *signalmanpb.EventData) {
+	h(tenant, kind, channel, data)
+}
+
+func TestSignalmanAppliesLocalRevocationBeforeBroadcast(t *testing.T) {
+	for _, named := range []bool{false, true} {
+		t.Run(map[bool]string{false: "user", true: "session"}[named], func(t *testing.T) {
+			feed := sessionrevocations.Start(context.Background(), sessionrevocations.Config{})
+			defer feed.Close()
+			tenant, user, sid := uuid.NewString(), uuid.NewString(), uuid.NewString()
+			var payload proto.Message = &internalv1.UserSessionsRevoked{UserId: user, RevokedAt: timestamppb.Now()}
+			if named {
+				payload = &internalv1.AuthSessionRevoked{UserId: user, SessionId: sid, RevokedAt: timestamppb.Now()}
+			}
+			record, _ := domainRecord(t, "domain.events", tenant, user, payload)
+			broadcast := false
+			hub := observingTenantHub(func(_ string, _ signalmanpb.EventType, _ signalmanpb.Channel, _ *signalmanpb.EventData) {
+				broadcast = true
+				if !feed.Cache().SessionRevoked(tenant, user, sid, time.Now()) {
+					t.Fatal("Signalman broadcast revocation before applying its local authority")
+				}
+				if named && feed.Cache().SessionRevoked(tenant, user, "other-device", time.Now()) {
+					t.Fatal("named event revoked another device")
+				}
+			})
+			handler := newDomainEventHandler(hub, newEventIDWindow(signalmanEventDedupCapacity, signalmanEventDedupTTL), testDomainMetrics(), logging.NewLogger(), func(tenant string, event *signalmanpb.TenantEvent) {
+				feed.Apply(sessionrevocations.Decode(tenant, event))
+			})
+			if err := handler(context.Background(), record); err != nil {
+				t.Fatal(err)
+			}
+			if !broadcast {
+				t.Fatal("revocation was not broadcast")
+			}
+		})
+	}
+}
 
 // startSignalman serves a real Signalman hub over bufconn behind the real
 // stream auth interceptor, so subscribers carry their tenant the way the

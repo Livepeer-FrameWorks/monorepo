@@ -4466,10 +4466,12 @@ func (x *SessionRevocation) GetSessionId() string {
 }
 
 type ListRecentSessionRevocationsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Revocations   []*SessionRevocation   `protobuf:"bytes,1,rep,name=revocations,proto3" json:"revocations,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Revocations []*SessionRevocation   `protobuf:"bytes,1,rep,name=revocations,proto3" json:"revocations,omitempty"`
+	// True only after the opted-in named-session snapshot was read successfully.
+	AuthSessionsIncluded bool `protobuf:"varint,2,opt,name=auth_sessions_included,json=authSessionsIncluded,proto3" json:"auth_sessions_included,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *ListRecentSessionRevocationsResponse) Reset() {
@@ -4507,6 +4509,13 @@ func (x *ListRecentSessionRevocationsResponse) GetRevocations() []*SessionRevoca
 		return x.Revocations
 	}
 	return nil
+}
+
+func (x *ListRecentSessionRevocationsResponse) GetAuthSessionsIncluded() bool {
+	if x != nil {
+		return x.AuthSessionsIncluded
+	}
+	return false
 }
 
 // Mint request carries only the target node. Identity (user_id / tenant_id
@@ -18072,9 +18081,10 @@ const file_commodore_proto_rawDesc = "" +
 	"revoked_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\trevokedAt\x12/\n" +
 	"\x13account_deactivated\x18\x04 \x01(\bR\x12accountDeactivated\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x05 \x01(\tR\tsessionId\"f\n" +
+	"session_id\x18\x05 \x01(\tR\tsessionId\"\x9c\x01\n" +
 	"$ListRecentSessionRevocationsResponse\x12>\n" +
-	"\vrevocations\x18\x01 \x03(\v2\x1c.commodore.SessionRevocationR\vrevocations\"6\n" +
+	"\vrevocations\x18\x01 \x03(\v2\x1c.commodore.SessionRevocationR\vrevocations\x124\n" +
+	"\x16auth_sessions_included\x18\x02 \x01(\bR\x14authSessionsIncluded\"6\n" +
 	"\x1bMintMistAdminSessionRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"t\n" +
 	"\x1cMintMistAdminSessionResponse\x12\x14\n" +

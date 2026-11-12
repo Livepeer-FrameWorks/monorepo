@@ -29,9 +29,11 @@ type GRPCAuthConfig struct {
 	ServiceToken string
 	// JWTSecret is the secret for validating user JWTs (as bytes)
 	JWTSecret []byte
-	// ValidateSession checks authoritative state for interactive JWTs. Service
-	// credentials and audience-bound programmatic assertions bypass this check.
+	// ValidateSession checks interactive state locally or at the owning service.
+	// Downstream services supply a local cache checker, never a remote RPC.
 	ValidateSession func(context.Context, string) error
+	// SessionRevocations is local authority for downstream interactive requests.
+	SessionRevocations *auth.SessionRevocations
 	// RequireSessionValidation rejects interactive JWTs when no authoritative
 	// validator is configured, while service and delegated credentials bypass it.
 	RequireSessionValidation bool
@@ -307,6 +309,16 @@ func checkInteractiveSession(ctx context.Context, token string, claims *auth.Cla
 	if claims.AuthType != "" {
 		return nil
 	}
+	if cfg.SessionRevocations != nil {
+		var issuedAt time.Time
+		if claims.IssuedAt != nil {
+			issuedAt = claims.IssuedAt.Time
+		}
+		if cfg.SessionRevocations.SessionRevoked(claims.TenantID, claims.UserID, claims.SessionID, issuedAt) {
+			return status.Error(codes.Unauthenticated, "session signed out")
+		}
+		return nil
+	}
 	if cfg.ValidateSession == nil {
 		if cfg.RequireSessionValidation {
 			return status.Error(codes.Unavailable, "session state unavailable")
@@ -316,8 +328,8 @@ func checkInteractiveSession(ctx context.Context, token string, claims *auth.Cla
 	return cfg.ValidateSession(ctx, token)
 }
 
-// Interactive streams keep the credential's deadline and recheck authoritative
-// state, including when the peer sends no further messages.
+// Interactive streams keep the credential's deadline and recheck their configured
+// local authority, including when the peer sends no further messages.
 func runInteractiveStream(ctx context.Context, token string, claims *auth.Claims, cfg GRPCAuthConfig, srv any, stream grpc.ServerStream, handler grpc.StreamHandler) error {
 	if claims.ExpiresAt == nil || !time.Now().Before(claims.ExpiresAt.Time) {
 		return status.Error(codes.Unauthenticated, "session expired")
@@ -326,7 +338,7 @@ func runInteractiveStream(ctx context.Context, token string, claims *auth.Claims
 	defer stopDeadline()
 	streamCtx, cancel := context.WithCancelCause(deadlineCtx)
 	defer cancel(nil)
-	if cfg.ValidateSession != nil {
+	if cfg.ValidateSession != nil || cfg.SessionRevocations != nil {
 		go func() {
 			ticker := time.NewTicker(30 * time.Second)
 			defer ticker.Stop()
@@ -336,7 +348,7 @@ func runInteractiveStream(ctx context.Context, token string, claims *auth.Claims
 					return
 				case <-ticker.C:
 					checkCtx, stopCheck := context.WithTimeout(streamCtx, 5*time.Second)
-					err := cfg.ValidateSession(checkCtx, token)
+					err := checkInteractiveSession(checkCtx, token, claims, cfg)
 					stopCheck()
 					if err != nil {
 						cancel(err)

@@ -72,7 +72,7 @@ func isSessionRevocationType(eventType string) bool {
 // The window is separate from the one the legacy topics use: while producers
 // dual-write, a legacy service event carries the same ID as its domain event,
 // and each belongs on its own channel.
-func newDomainEventHandler(hub tenantEventHub, window *eventIDWindow, m *metrics.Metrics, logger logging.Logger) kafka.Handler {
+func newDomainEventHandler(hub tenantEventHub, window *eventIDWindow, m *metrics.Metrics, logger logging.Logger, applyRevocations ...func(string, *signalmanpb.TenantEvent)) kafka.Handler {
 	return func(_ context.Context, msg kafka.Message) error {
 		channel := signalmanpb.Channel_CHANNEL_EVENTS
 		switch {
@@ -124,14 +124,20 @@ func newDomainEventHandler(hub tenantEventHub, window *eventIDWindow, m *metrics
 		if err != nil {
 			return fmt.Errorf("pack %s: %w", rec.Type, err)
 		}
+		event := &signalmanpb.TenantEvent{
+			Id:      rec.ID,
+			Type:    rec.Type,
+			Time:    timestamppb.New(rec.Time),
+			Subject: rec.Subject,
+			Data:    data,
+		}
+		if channel == signalmanpb.Channel_CHANNEL_SESSIONS {
+			for _, apply := range applyRevocations {
+				apply(rec.TenantID, event)
+			}
+		}
 		hub.BroadcastToTenant(rec.TenantID, signalmanpb.EventType_EVENT_TYPE_TENANT_EVENT, channel,
-			&signalmanpb.EventData{Payload: &signalmanpb.EventData_TenantEvent{TenantEvent: &signalmanpb.TenantEvent{
-				Id:      rec.ID,
-				Type:    rec.Type,
-				Time:    timestamppb.New(rec.Time),
-				Subject: rec.Subject,
-				Data:    data,
-			}}})
+			&signalmanpb.EventData{Payload: &signalmanpb.EventData_TenantEvent{TenantEvent: event}})
 		return nil
 	}
 }

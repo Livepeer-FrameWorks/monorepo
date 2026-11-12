@@ -1073,6 +1073,8 @@ message SessionRevocation {
 
 message ListRecentSessionRevocationsResponse {
   repeated SessionRevocation revocations = 1;
+  // True only after the opted-in named-session snapshot was read successfully.
+  bool auth_sessions_included = 2;
 }
 
 // ============================================================================
