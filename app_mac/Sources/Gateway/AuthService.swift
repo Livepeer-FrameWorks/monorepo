@@ -31,14 +31,31 @@ class AuthService {
     let server = BrowserLoginCallbackServer()
     browserLoginServer?.stop()
     browserLoginServer = server
+    defer {
+      server.stop()
+      if browserLoginServer === server {
+        browserLoginServer = nil
+      }
+    }
+
     let port = try await server.start(lifetimeSeconds: browserLoginTimeoutSeconds)
 
     let redirectURI = "http://127.0.0.1:\(port)/callback"
-    guard let authorizeURL = makeAuthorizeURL(
+    let request = AuthAuthorizationRequest { path, body, headers in
+      try await loginGateway.requestWithResponse(
+        method: "POST", path: path, body: body, authenticated: false, headers: headers)
+    }
+    let requestContext = try await request.start(
+      redirectURI: redirectURI, codeChallenge: challenge, state: state)
+    try Task.checkCancellation()
+    guard !loggingOut else { throw CancellationError() }
+    guard GatewayClient.sameBridge(loginBridge, gateway.baseURL) else { throw AuthError.bridgeChanged }
+    guard let authorizeURL = AuthAuthorizationRequest.authorizationURL(
       webappBaseURL: webappBaseURL,
       redirectURI: redirectURI,
       codeChallenge: challenge,
-      state: state
+      state: state,
+      requestContext: requestContext
     ) else {
       server.stop()
       throw AuthError.invalidAuthorizationURL
@@ -47,13 +64,6 @@ class AuthService {
     guard NSWorkspace.shared.open(authorizeURL) else {
       server.stop()
       throw AuthError.browserOpenFailed
-    }
-
-    defer {
-      server.stop()
-      if browserLoginServer === server {
-        browserLoginServer = nil
-      }
     }
 
     let callback = try await waitForBrowserCallback(from: server)
@@ -249,26 +259,6 @@ class AuthService {
     }
   }
 
-  private func makeAuthorizeURL(
-    webappBaseURL: String,
-    redirectURI: String,
-    codeChallenge: String,
-    state: String
-  ) -> URL? {
-    let trimmed = webappBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty, var base = URLComponents(string: trimmed) else { return nil }
-    base.path = pathByAppending("authorize", to: base.path)
-    base.queryItems = [
-      URLQueryItem(name: "client_id", value: "tray-mac"),
-      URLQueryItem(name: "redirect_uri", value: redirectURI),
-      URLQueryItem(name: "code_challenge", value: codeChallenge),
-      URLQueryItem(name: "code_challenge_method", value: "S256"),
-      URLQueryItem(name: "state", value: state),
-      URLQueryItem(name: "scope", value: "account"),
-    ]
-    return base.url
-  }
-
   private func fetchWebappBaseURL(gateway: GatewayClient) async throws -> String {
     let data = try await gateway.request(
       method: "GET",
@@ -285,14 +275,6 @@ class AuthService {
 
   private func waitForBrowserCallback(from server: BrowserLoginCallbackServer) async throws -> BrowserLoginCallback {
     try await server.waitForCallback()
-  }
-
-  private func pathByAppending(_ component: String, to path: String) -> String {
-    let trimmedPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-    if trimmedPath.isEmpty {
-      return "/\(component)"
-    }
-    return "/\(trimmedPath)/\(component)"
   }
 
   private func parseManualCallback(_ value: String) throws -> BrowserLoginCallback {
@@ -335,7 +317,8 @@ class AuthService {
       method: "POST",
       path: "/auth/oauth/token",
       body: body,
-      authenticated: false
+      authenticated: false,
+      headers: AuthAuthorizationRequest.clientHeaders()
     )
     return try JSONDecoder().decode(AuthResponse.self, from: data)
   }

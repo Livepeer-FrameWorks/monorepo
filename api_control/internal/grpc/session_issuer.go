@@ -26,7 +26,7 @@ const maxLiveAuthSessions = sessionstore.MaxLive
 
 type SessionContext struct {
 	AuthMethod, ClientID, DeviceLabel, ClientVersion, IP, UserAgent string
-	passwordHash                                                    string
+	passwordHash, walletAddress                                     string
 }
 
 func boundedSessionText(value string, limit int) string {
@@ -74,6 +74,19 @@ func sessionContextFromClientMetadata(method, client string, info ctxkeys.AuthCl
 	return SessionContext{AuthMethod: method, ClientID: client, DeviceLabel: label,
 		ClientVersion: boundedSessionText(info.Version, 100), IP: ip,
 		UserAgent: boundedSessionText(info.UserAgent, 1024)}
+}
+
+func authIPBucket(source string) string {
+	ip := net.ParseIP(source)
+	if ip == nil {
+		return ""
+	}
+	bits, prefix := 128, 48
+	if v4 := ip.To4(); v4 != nil {
+		ip, bits, prefix = v4, 32, 24
+	}
+	mask := net.CIDRMask(prefix, bits)
+	return (&net.IPNet{IP: ip.Mask(mask), Mask: mask}).String()
 }
 
 func sessionIssueError(err error) error {
@@ -138,6 +151,18 @@ func (s *CommodoreServer) issueUserSessionTx(ctx context.Context, tx *sql.Tx, us
 			return nil, status.Error(codes.Unauthenticated, "credentials changed; sign in again")
 		}
 	}
+	walletID := ""
+	if info.AuthMethod == "wallet" {
+		// The verified wallet must still belong to this owner after waiting for
+		// concurrent credential changes under the shared owner lock.
+		walletID, err = queries.GetAuthSessionWalletID(ctx, commodoredb.GetAuthSessionWalletIDParams{TenantID: tenantID, UserID: userID, WalletAddress: info.walletAddress})
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, status.Error(codes.Unauthenticated, "wallet credentials changed; sign in again")
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 	count, err := queries.CountAuthSessionsForIssuance(ctx, commodoredb.CountAuthSessionsForIssuanceParams{TenantID: tenantID, UserID: userID, RowLimit: sessionstore.CountLimit})
 	if err != nil {
 		return nil, err
@@ -174,7 +199,11 @@ func (s *CommodoreServer) issueUserSessionTx(ctx context.Context, tx *sql.Tx, us
 	}); err != nil {
 		return nil, err
 	}
-	if err = s.enqueueAuthEventTx(ctx, tx, eventAuthLoginSucceeded, userID, tenantID, info.AuthMethod, ""); err != nil {
+	event := s.buildAuthEvent(ctx, eventAuthLoginSucceeded, userID, tenantID, info.AuthMethod, walletID, "", "")
+	// Native grants retain the source approved by the browser; the later poll or
+	// redemption request must not replace that origin in the sign-in audit.
+	event.GetAuthEvent().IpBucket = authIPBucket(info.IP)
+	if err = s.enqueueEventTx(ctx, tx, event, nil); err != nil {
 		return nil, err
 	}
 	return s.sessionResponse(row, user, refresh)

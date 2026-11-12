@@ -33,7 +33,7 @@ func (q *Queries) DeleteExpiredSessionDevice(ctx context.Context, arg DeleteExpi
 const deleteTerminalAccountEmail = `-- name: DeleteTerminalAccountEmail :execrows
 DELETE FROM commodore.account_email_outbox
 WHERE tenant_id = $1 AND user_id = $2 AND purpose = $3
-  AND status IN ('completed', 'abandoned') AND updated_at < NOW() - INTERVAL '720 hours'
+  AND status IN ('completed', 'abandoned') AND updated_at < (NOW() - INTERVAL '720 hours')::timestamp
 `
 
 type DeleteTerminalAccountEmailParams struct {
@@ -129,9 +129,9 @@ func (q *Queries) ListExpiredSessionDeviceKeys(ctx context.Context, limit int32)
 }
 
 const listTerminalAccountEmailKeys = `-- name: ListTerminalAccountEmailKeys :many
-SELECT tenant_id::text AS tenant_id, user_id::text AS user_id, purpose FROM commodore.account_email_outbox
-WHERE status IN ('completed', 'abandoned') AND updated_at < NOW() - INTERVAL '720 hours'
-ORDER BY updated_at, tenant_id, user_id, purpose LIMIT $1
+SELECT e.tenant_id::text AS tenant_id, e.user_id::text AS user_id, e.purpose FROM commodore.account_email_outbox AS e
+WHERE e.status IN ('completed', 'abandoned') AND e.updated_at < (NOW() - INTERVAL '720 hours')::timestamp
+ORDER BY e.updated_at, e.tenant_id, e.user_id, e.purpose LIMIT $1
 `
 
 type ListTerminalAccountEmailKeysRow struct {

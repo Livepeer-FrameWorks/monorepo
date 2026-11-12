@@ -37,7 +37,8 @@ type Querier interface {
 	BackoffArtifactCreationCommandAck(ctx context.Context, arg BackoffArtifactCreationCommandAckParams) error
 	BeginMediaAuthorityCompile(ctx context.Context, scopeKey string) (int64, error)
 	ChangeSessionPassword(ctx context.Context, arg ChangeSessionPasswordParams) error
-	ClaimAccountEmailBatch(ctx context.Context, batchSize int32) ([]ClaimAccountEmailBatchRow, error)
+	// One SMTP send and settlement must finish inside the row lease.
+	ClaimAccountEmailBatch(ctx context.Context) ([]ClaimAccountEmailBatchRow, error)
 	ClaimArtifactCreationCommandAcks(ctx context.Context, arg ClaimArtifactCreationCommandAcksParams) ([]ClaimArtifactCreationCommandAcksRow, error)
 	ClaimArtifactCreationIntents(ctx context.Context, arg ClaimArtifactCreationIntentsParams) ([]ClaimArtifactCreationIntentsRow, error)
 	ClaimInvalidationBatch(ctx context.Context, batchSize int32) ([]ClaimInvalidationBatchRow, error)
@@ -211,6 +212,7 @@ type Querier interface {
 	GetArtifactMediaAuthoritySource(ctx context.Context, authorityID string) (GetArtifactMediaAuthoritySourceRow, error)
 	GetArtifactRouteByContent(ctx context.Context, dollar_1 string) (GetArtifactRouteByContentRow, error)
 	GetAuthSession(ctx context.Context, arg GetAuthSessionParams) (CommodoreAuthSession, error)
+	GetAuthSessionWalletID(ctx context.Context, arg GetAuthSessionWalletIDParams) (string, error)
 	GetBootstrapMistNativeStream(ctx context.Context, arg GetBootstrapMistNativeStreamParams) (GetBootstrapMistNativeStreamRow, error)
 	GetBootstrapOwnerUser(ctx context.Context, tenantID string) (string, error)
 	GetBootstrapPullStream(ctx context.Context, arg GetBootstrapPullStreamParams) (GetBootstrapPullStreamRow, error)
@@ -507,7 +509,7 @@ type Querier interface {
 	ListTerminalAccountEmailKeys(ctx context.Context, limit int32) ([]ListTerminalAccountEmailKeysRow, error)
 	ListUnassignedRefreshRetentionKeys(ctx context.Context, arg ListUnassignedRefreshRetentionKeysParams) ([]ListUnassignedRefreshRetentionKeysRow, error)
 	ListUserLiveStreamAuthorityTargets(ctx context.Context, arg ListUserLiveStreamAuthorityTargetsParams) ([]string, error)
-	ListUserWallets(ctx context.Context, userID string) ([]ListUserWalletsRow, error)
+	ListUserWallets(ctx context.Context, arg ListUserWalletsParams) ([]ListUserWalletsRow, error)
 	// Tenants whose authority is still being renewed. Reconciliation covers these;
 	// a tenant nobody uses is compiled when it is next used.
 	ListWarmTenantIDs(ctx context.Context) ([]string, error)

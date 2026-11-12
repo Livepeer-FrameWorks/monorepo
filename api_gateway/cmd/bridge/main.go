@@ -77,13 +77,27 @@ func main() {
 		logger.WithError(err).Fatal("Failed to initialize service clients")
 	}
 
+	sessionGeoIP, geoIPErr := geoip.Open(cfg.MMDBPath)
+	if geoIPErr != nil {
+		logger.WithError(geoIPErr).Warn("Session GeoIP unavailable")
+	}
+	if sessionGeoIP != nil {
+		defer func() {
+			if closeErr := sessionGeoIP.Close(); closeErr != nil {
+				logger.WithError(closeErr).Warn("Session GeoIP close failed")
+			}
+		}()
+	}
+
 	// Initialize auth handlers (gRPC-based)
 	authHandlers := handlers.NewAuthHandlers(serviceClients.Commodore, logger, handlers.AuthConfig{
 		CookieDomain: cfg.CookieDomain,
+		SessionGeoIP: sessionGeoIP,
 		Runtime: func() handlers.AuthRuntime {
 			current := liveConfig.Get()
 			return handlers.AuthRuntime{
 				SecureCookies:   !current.IsDevelopment(),
+				JWTSecret:       []byte(current.JWTSecret),
 				WebappPublicURL: current.WebappPublicURL,
 			}
 		},
@@ -156,17 +170,6 @@ func main() {
 	}
 
 	// Initialize GraphQL resolver and server
-	sessionGeoIP, geoIPErr := geoip.Open(cfg.MMDBPath)
-	if geoIPErr != nil {
-		logger.WithError(geoIPErr).Warn("Session GeoIP unavailable")
-	}
-	if sessionGeoIP != nil {
-		defer func() {
-			if closeErr := sessionGeoIP.Close(); closeErr != nil {
-				logger.WithError(closeErr).Warn("Session GeoIP close failed")
-			}
-		}()
-	}
 	resolverCfg := resolverConfig(liveConfig)
 	resolverCfg.SessionGeoIP = sessionGeoIP
 	resolver := graph.NewResolver(serviceClients, logger, graphqlMetrics, resolverCfg)
@@ -446,12 +449,15 @@ func main() {
 		// loopback receiver and the CLI; the matching webapp consent
 		// endpoints are protected and live in the authProtected group below.
 		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/oauth/token", authHandlers.OAuthToken())
+		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/authorize/start", authHandlers.AuthorizeStart())
 		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/device/start", authHandlers.DeviceStart())
 		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/device/poll", authHandlers.DevicePoll())
 
 		// Protected auth endpoints (require JWT from cookie or header)
 		authProtected := auth.Group("", middleware.RequireJWTAuth([]byte(jwtSecret)))
 		server.HandleOptionalTrailingSlash(authProtected, http.MethodPost, "/logout", authHandlers.Logout())
+		server.HandleOptionalTrailingSlash(authProtected, http.MethodGet, "/me/wallets", authHandlers.SecurityWallets())
+		server.HandleOptionalTrailingSlash(authProtected, http.MethodPost, "/authorize/lookup", authHandlers.AuthorizeLookup())
 		server.HandleOptionalTrailingSlash(authProtected, http.MethodPost, "/authorize/complete", authHandlers.AuthorizeComplete())
 		server.HandleOptionalTrailingSlash(authProtected, http.MethodPost, "/device/lookup", authHandlers.DeviceLookup())
 		server.HandleOptionalTrailingSlash(authProtected, http.MethodPost, "/device/approve", authHandlers.DeviceApprove())

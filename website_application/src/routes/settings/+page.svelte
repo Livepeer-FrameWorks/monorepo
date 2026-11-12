@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount } from "svelte";
   import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import { authAPI } from "$lib/authAPI";
@@ -11,29 +11,9 @@
   import { getIconComponent } from "$lib/iconUtils";
   import ThemePicker from "$lib/components/ThemePicker.svelte";
   import { themeStore } from "$lib/stores/theme.svelte";
-  import { connect, getConnectors } from "wagmi/actions";
-  import { wagmiConfig } from "$lib/wallet/config";
-  import {
-    setupWalletWatcher,
-    cleanupWalletWatcher,
-    signAuthMessage,
-    disconnectWallet,
-  } from "$lib/wallet/store.svelte";
-  import {
-    LinkWalletStore,
-    UnlinkWalletStore,
-    LinkEmailStore,
-    GetBillingDetailsStore,
-    UpdateBillingDetailsStore,
-  } from "$houdini";
+  import { GetBillingDetailsStore, UpdateBillingDetailsStore } from "$houdini";
 
   let firstName = $state("");
-
-  // Link Email state (for wallet-only users)
-  let linkEmailEmail = $state("");
-  let linkEmailPassword = $state("");
-  let linkEmailConfirm = $state("");
-  let linkEmailLoading = $state(false);
 
   // Billing Details state
   interface BillingDetailsState {
@@ -79,27 +59,14 @@
   let loading = $state(false);
   let pageLoading = $state(true);
 
-  // Wallet state
-  interface LinkedWallet {
-    id: string;
-    address: string;
-    createdAt: string;
-    lastAuthAt?: string;
-  }
-  let linkedWallets = $state<LinkedWallet[]>([]);
-  let walletLoading = $state(false);
-  let walletConnectors = $state<ReturnType<typeof getConnectors>>([]);
-
   onMount(async () => {
     if ($auth.user) {
       const user = $auth.user as unknown as {
         first_name?: string;
         last_name?: string;
-        wallets?: LinkedWallet[];
       };
       firstName = user.first_name || "";
       lastName = user.last_name || "";
-      linkedWallets = user.wallets || [];
 
       // Load billing details for all users
       try {
@@ -141,54 +108,7 @@
       }
     }
     pageLoading = false;
-    setupWalletWatcher();
-    walletConnectors = getConnectors(wagmiConfig);
   });
-
-  onDestroy(() => {
-    cleanupWalletWatcher();
-  });
-
-  async function handleLinkEmail() {
-    if (!linkEmailEmail || !linkEmailPassword) {
-      toast.error("Email and password are required");
-      return;
-    }
-    if (linkEmailPassword !== linkEmailConfirm) {
-      toast.error("Passwords do not match");
-      return;
-    }
-    if (linkEmailPassword.length < 8) {
-      toast.error("Password must be at least 8 characters");
-      return;
-    }
-
-    linkEmailLoading = true;
-    try {
-      const linkEmailMutation = new LinkEmailStore();
-      const result = await linkEmailMutation.mutate({
-        input: { email: linkEmailEmail, password: linkEmailPassword },
-      });
-
-      const data = result.data?.linkEmail;
-      if (data && "success" in data && data.success) {
-        toast.success(data.message || "Email linked successfully");
-        if (data.verificationSent) {
-          toast.success("Verification email sent - please check your inbox");
-        }
-        // Clear form
-        linkEmailEmail = "";
-        linkEmailPassword = "";
-        linkEmailConfirm = "";
-      } else if (data && "message" in data) {
-        throw new Error(data.message);
-      }
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to link email");
-    } finally {
-      linkEmailLoading = false;
-    }
-  }
 
   async function handleSaveBillingDetails() {
     billingDetailsSaving = true;
@@ -249,77 +169,6 @@
     }
   }
 
-  async function linkNewWallet(connector: (typeof walletConnectors)[0]) {
-    walletLoading = true;
-    try {
-      const result = await connect(wagmiConfig, { connector });
-      if (!result.accounts[0]) throw new Error("No account connected");
-
-      const address = result.accounts[0];
-      const message = await auth.issueWalletChallenge(address, result.chainId);
-      const signed = await signAuthMessage(message);
-      if (!signed) throw new Error("Failed to sign message");
-
-      const linkWallet = new LinkWalletStore();
-      const response = await linkWallet.mutate({
-        input: { address, message: signed.message, signature: signed.signature },
-      });
-
-      const data = response.data?.linkWallet;
-      if (data && "id" in data) {
-        linkedWallets = [
-          ...linkedWallets,
-          {
-            id: data.id,
-            address: data.address,
-            createdAt: data.createdAt,
-            lastAuthAt: data.lastAuthAt || undefined,
-          },
-        ];
-        toast.success("Wallet linked successfully");
-      } else if (data && "message" in data) {
-        throw new Error(data.message);
-      }
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to link wallet");
-      await disconnectWallet();
-    } finally {
-      walletLoading = false;
-    }
-  }
-
-  async function unlinkWallet(walletId: string) {
-    walletLoading = true;
-    try {
-      const unlinkWalletStore = new UnlinkWalletStore();
-      const response = await unlinkWalletStore.mutate({ walletId });
-
-      const data = response.data?.unlinkWallet;
-      if (data && "success" in data && data.success) {
-        linkedWallets = linkedWallets.filter((w) => w.id !== walletId);
-        toast.success("Wallet unlinked");
-      } else if (data && "message" in data) {
-        throw new Error(data.message);
-      }
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to unlink wallet");
-    } finally {
-      walletLoading = false;
-    }
-  }
-
-  function formatAddress(address: string): string {
-    return `${address.slice(0, 6)}...${address.slice(-4)}`;
-  }
-
-  function finalWalletRemovalUnavailable(): boolean {
-    const user = $auth.user;
-    return (
-      linkedWallets.length === 1 &&
-      !(user?.email && (user.email_verified === true || user.is_verified === true))
-    );
-  }
-
   async function saveProfile() {
     loading = true;
     try {
@@ -355,9 +204,7 @@
   const UserIcon = getIconComponent("User");
   const BellIcon = getIconComponent("Bell");
   const CreditCardIcon = getIconComponent("CreditCard");
-  const WalletIcon = getIconComponent("Wallet");
-  const TrashIcon = getIconComponent("Trash2");
-  const MailIcon = getIconComponent("Mail");
+  const SecurityIcon = getIconComponent("ShieldCheck");
   const PaletteIcon = getIconComponent("Palette");
 </script>
 
@@ -503,125 +350,23 @@
           </div>
         </div>
 
-        <!-- Linked Wallets Section Slab -->
         <div class="slab">
           <div class="slab-header">
             <div class="flex items-center gap-2">
-              <WalletIcon class="w-4 h-4 text-primary" />
-              <h3>Linked Wallets</h3>
+              <SecurityIcon class="w-4 h-4 text-primary" />
+              <h3>Account Security</h3>
             </div>
           </div>
           <div class="slab-body--padded">
-            {#if linkedWallets.length === 0}
-              <p class="text-sm text-muted-foreground mb-4">
-                No wallets linked. Connect a wallet to enable wallet-based authentication.
-              </p>
-            {:else}
-              <div class="space-y-3 mb-4">
-                {#each linkedWallets as wallet (wallet.id)}
-                  <div class="flex items-center justify-between p-3 bg-muted/30 rounded-md">
-                    <div>
-                      <p class="font-mono text-sm font-medium">{formatAddress(wallet.address)}</p>
-                      <p class="text-xs text-muted-foreground">
-                        Added {new Date(wallet.createdAt).toLocaleDateString()}
-                      </p>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onclick={() => unlinkWallet(wallet.id)}
-                      disabled={walletLoading || finalWalletRemovalUnavailable()}
-                      title={finalWalletRemovalUnavailable()
-                        ? "Verify a password sign-in before unlinking the final wallet"
-                        : "Unlink wallet"}
-                    >
-                      <TrashIcon class="w-4 h-4 text-destructive" />
-                    </Button>
-                  </div>
-                {/each}
-              </div>
-            {/if}
-
-            {#if walletConnectors.length > 0}
-              <div class="space-y-2">
-                <p class="text-sm text-muted-foreground">Add a wallet:</p>
-                {#each walletConnectors as connector (connector.id)}
-                  <Button
-                    variant="outline"
-                    class="w-full justify-start"
-                    disabled={walletLoading}
-                    onclick={() => linkNewWallet(connector)}
-                  >
-                    {walletLoading ? "Connecting..." : connector.name}
-                  </Button>
-                {/each}
-              </div>
-            {:else}
-              <p class="text-sm text-muted-foreground">
-                No wallet extensions detected. Install MetaMask or another wallet to link.
-              </p>
-            {/if}
+            <p class="text-sm text-muted-foreground">
+              Manage signed-in sessions, change your password, link an email and manage wallet
+              sign-ins.
+            </p>
+          </div>
+          <div class="slab-actions">
+            <Button href={resolve("/account/security")} variant="ghost">Open Security</Button>
           </div>
         </div>
-
-        <!-- Link Email Section (for wallet-only users) -->
-        {#if !$auth.user?.email}
-          <div class="slab">
-            <div class="slab-header">
-              <div class="flex items-center gap-2">
-                <MailIcon class="w-4 h-4 text-primary" />
-                <h3>Link Email</h3>
-              </div>
-            </div>
-            <div class="slab-body--padded">
-              <p class="text-sm text-muted-foreground mb-4">
-                Add and verify an email address to enable password sign-in and the metered €0 Free
-                tier. Paid postpaid tiers additionally require billing details and confirmed
-                provider setup; prepaid funding does not require switching billing models.
-              </p>
-              <div class="space-y-3">
-                <div>
-                  <label for="linkEmail" class="text-sm font-medium text-muted-foreground"
-                    >Email</label
-                  >
-                  <Input
-                    id="linkEmail"
-                    type="email"
-                    bind:value={linkEmailEmail}
-                    placeholder="you@example.com"
-                  />
-                </div>
-                <div>
-                  <label for="linkPassword" class="text-sm font-medium text-muted-foreground"
-                    >Password</label
-                  >
-                  <Input
-                    id="linkPassword"
-                    type="password"
-                    bind:value={linkEmailPassword}
-                    placeholder="At least 8 characters"
-                  />
-                </div>
-                <div>
-                  <label for="linkConfirm" class="text-sm font-medium text-muted-foreground"
-                    >Confirm Password</label
-                  >
-                  <Input
-                    id="linkConfirm"
-                    type="password"
-                    bind:value={linkEmailConfirm}
-                    placeholder="Confirm password"
-                  />
-                </div>
-              </div>
-            </div>
-            <div class="slab-actions">
-              <Button onclick={handleLinkEmail} disabled={linkEmailLoading}>
-                {linkEmailLoading ? "Linking..." : "Link Email"}
-              </Button>
-            </div>
-          </div>
-        {/if}
 
         <!-- Billing Details Slab -->
         <div class="slab col-span-full">

@@ -6,6 +6,7 @@ package platformfeatures
 // shipped holds the sorted slugs of shipped product-audience features,
 // subitems included.
 var shipped = []string{
+	"account-security",
 	"agents-mcp",
 	"billing",
 	"clips",

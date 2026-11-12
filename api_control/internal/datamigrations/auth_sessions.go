@@ -14,12 +14,13 @@ const AuthSessionsID = "commodore_auth_sessions_v0_3_15"
 // AuthSessionsBatchSQL binds each live head and its predecessors to one owner.
 // A head written by an old issuer inherits any session already on its chain.
 // Hour intervals keep the maximum age fixed across timezone and DST changes.
+// UTC timestamp cutoffs match the legacy column so expiry ranges reach storage.
 const AuthSessionsBatchSQL = `
 WITH RECURSIVE heads AS (
     SELECT id, tenant_id, user_id, created_at, expires_at
     FROM commodore.refresh_tokens
     WHERE tenant_id = $1 AND session_id IS NULL
-      AND COALESCE(revoked, false) = false AND expires_at > NOW()
+      AND COALESCE(revoked, false) = false AND expires_at > (NOW() AT TIME ZONE 'UTC')
     ORDER BY expires_at, id LIMIT $2 FOR UPDATE SKIP LOCKED
 ), chain AS (
     SELECT h.id AS head_id, r.id AS token_id, r.tenant_id, r.user_id, r.created_at, r.session_id
@@ -78,9 +79,12 @@ func runAuthSessions(ctx context.Context, db datamigrate.DB, opts datamigrate.Ru
 	if size <= 0 || size > 1000 {
 		size = 100
 	}
+	// Yugabyte can prefer the tenant-leading pending index even for a global
+	// ordered probe. Pin the expiry range so LIMIT bounds physical reads.
+	// PostgreSQL ignores the hint comment and uses its normal range plan.
 	if opts.DryRun {
-		rows, err := db.QueryContext(ctx, `SELECT id FROM commodore.refresh_tokens
-            WHERE session_id IS NULL AND COALESCE(revoked, false) = false AND expires_at > NOW()
+		rows, err := db.QueryContext(ctx, `SELECT /*+ IndexOnlyScan(refresh_tokens idx_refresh_tokens_pending_session_range) */ id FROM commodore.refresh_tokens
+            WHERE session_id IS NULL AND COALESCE(revoked, false) = false AND expires_at > (NOW() AT TIME ZONE 'UTC')
             ORDER BY expires_at, tenant_id, id LIMIT $1`, size)
 		if err != nil {
 			return datamigrate.Progress{}, err
@@ -108,8 +112,8 @@ func runAuthSessions(ctx context.Context, db datamigrate.DB, opts datamigrate.Ru
 	}
 	// Discovery is read-only across tenants; each mutation locks one tenant.
 	var tenantID string
-	err := db.QueryRowContext(ctx, `SELECT tenant_id FROM commodore.refresh_tokens
-		WHERE session_id IS NULL AND COALESCE(revoked, false) = false AND expires_at > NOW()
+	err := db.QueryRowContext(ctx, `SELECT /*+ IndexOnlyScan(refresh_tokens idx_refresh_tokens_pending_session_range) */ tenant_id FROM commodore.refresh_tokens
+		WHERE session_id IS NULL AND COALESCE(revoked, false) = false AND expires_at > (NOW() AT TIME ZONE 'UTC')
         ORDER BY expires_at, tenant_id, id LIMIT 1`).Scan(&tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return normalizeBackfilledSessionCaps(ctx, db, opts.Checkpoint)
@@ -125,17 +129,17 @@ func runAuthSessions(ctx context.Context, db datamigrate.DB, opts datamigrate.Ru
 }
 
 func verifyAuthSessions(ctx context.Context, db datamigrate.DB) error {
-	// Read one ordered pending head directly. EXISTS can discard ORDER BY and
-	// choose a different access path from the bounded pending-head index.
+	// Keep the global completion probe ordered: EXISTS can discard ordering
+	// and choose an owner-leading index instead of the pending-head range.
 	var pendingID string
-	err := db.QueryRowContext(ctx, `SELECT id FROM commodore.refresh_tokens
-        WHERE session_id IS NULL AND COALESCE(revoked, false) = false AND expires_at > NOW()
+	err := db.QueryRowContext(ctx, `SELECT /*+ IndexOnlyScan(refresh_tokens idx_refresh_tokens_pending_session_range) */ id FROM commodore.refresh_tokens
+        WHERE session_id IS NULL AND COALESCE(revoked, false) = false AND expires_at > (NOW() AT TIME ZONE 'UTC')
         ORDER BY expires_at, tenant_id, id LIMIT 1`).Scan(&pendingID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return verifyBackfilledSessionCaps(ctx, db)
+	if err == nil {
+		return fmt.Errorf("auth sessions still have live unassigned refresh tokens")
 	}
-	if err != nil {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	return fmt.Errorf("auth sessions still have live unassigned refresh tokens")
+	return verifyBackfilledSessionCaps(ctx, db)
 }

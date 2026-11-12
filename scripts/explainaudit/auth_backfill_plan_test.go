@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -23,12 +22,23 @@ func TestRecordedAuthBackfillPlansUsePendingIndexes(t *testing.T) {
 	}
 	seen := map[string]int{}
 	for _, r := range results {
-		if authBackfillFixtureFor(r.ID) == nil {
+		fixture := authBackfillFixtureFor(r.ID)
+		if fixture == nil {
 			continue
 		}
 		seen[r.Layout]++
 		if r.Status != "analyzed" || r.Metrics == nil || r.Metrics.StorageRowsRead == 0 {
 			t.Errorf("%s/%s did not execute against live pending heads: %+v", r.Layout, r.Name, r)
+		}
+		bound := float64(20)
+		if fixture.name == "runAuthSessions" {
+			bound = 200
+		}
+		if fixture.name == "runAuthSessions#3" {
+			bound = 100
+		}
+		if r.Metrics != nil && r.Metrics.StorageRowsRead > bound {
+			t.Errorf("%s/%s scanned %.0f rows, pending-head bound %.0f", r.Layout, r.Name, r.Metrics.StorageRowsRead, bound)
 		}
 		for _, flag := range []string{"SEQ_SCAN_LARGE", "READ_AMPLIFICATION", "SORT_LARGE", "CORRELATED_SUBPLAN"} {
 			if hasFlag(r, flag) {
@@ -45,10 +55,14 @@ func TestRecordedAuthBackfillPlansUsePendingIndexes(t *testing.T) {
 		if err = json.Unmarshal(data, &recorded); err != nil {
 			t.Fatal(err)
 		}
+		requiredIndex := "idx_refresh_tokens_pending_session_range"
+		if fixture.name == "runAuthSessions#3" {
+			requiredIndex = "idx_refresh_tokens_pending_session_owner_range"
+		}
 		indexed := false
 		var inspect func(planNode)
 		inspect = func(node planNode) {
-			if strings.HasPrefix(node.Index, "idx_refresh_tokens_pending_session_") {
+			if node.Index == requiredIndex {
 				indexed = true
 			}
 			for _, child := range node.Plans {
@@ -59,7 +73,7 @@ func TestRecordedAuthBackfillPlansUsePendingIndexes(t *testing.T) {
 			inspect(root.Plan)
 		}
 		if !indexed {
-			t.Errorf("%s/%s did not use the pending-head range index", r.Layout, r.Name)
+			t.Errorf("%s/%s did not use %s", r.Layout, r.Name, requiredIndex)
 		}
 	}
 	for _, layout := range []string{"declared", "distributed"} {

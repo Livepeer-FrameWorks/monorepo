@@ -49,6 +49,7 @@ targets:
       - Sources/AppState.swift
       - Sources/Edge/ServiceManager.swift
       - Sources/Gateway/GatewayClient.swift
+      - Sources/Gateway/AuthAuthorizationRequest.swift
       - Sources/Gateway/AuthTokenRefresher.swift
       - Sources/Gateway/AuthSessionRecovery.swift
       - Sources/Gateway/AuthSessionLogout.swift

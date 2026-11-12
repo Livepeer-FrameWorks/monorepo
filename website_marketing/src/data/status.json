@@ -62,13 +62,13 @@
     "account-security": {
       "id": "account-security",
       "title": "Account security",
-      "status": "partial",
-      "availability": "Expanding",
+      "status": "shipped",
+      "availability": "Available",
       "maturity": null,
       "horizon": "now",
       "tier": "Shipping today",
       "tag": "Shipping",
-      "note": "Session controls are available through the CLI and API. The dashboard security page is still being built.",
+      "note": "Manage your own sessions, password and linked wallets in Account Security or through the CLI and API. Team-member session administration is separate.",
       "roadmap": null,
       "showcase": null
     },
