@@ -16,12 +16,13 @@ type PeriscopeQuery struct {
 	config.Logging
 	config.ServiceAuth
 	config.GRPCTLS
+	config.SessionRevocationStream
 	config.Postgres
 	config.ClickHouse
 	config.Registration
 
-	CommodoreGRPCAddr          string `env:"COMMODORE_GRPC_ADDR" default:"commodore:@port(commodore.grpc)" desc:"Commodore gRPC address used to validate interactive user sessions." introduced:"v0.3.15"`
-	CommodoreGRPCTLSServerName string `env:"COMMODORE_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Commodore session-validation connection." introduced:"v0.3.15"`
+	CommodoreGRPCAddr          string `env:"COMMODORE_GRPC_ADDR" default:"commodore:@port(commodore.grpc)" desc:"Commodore gRPC address for background session-revocation snapshots." introduced:"v0.3.15"`
+	CommodoreGRPCTLSServerName string `env:"COMMODORE_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Commodore revocation snapshot connection." introduced:"v0.3.15"`
 
 	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:@port(quartermaster.grpc)" desc:"Quartermaster gRPC address used for service registration." introduced:"v0.3.0"`
 	QuartermasterGRPCTLSServerName string `env:"QUARTERMASTER_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Quartermaster connection. Empty uses the canonical internal name." introduced:"v0.3.0"`

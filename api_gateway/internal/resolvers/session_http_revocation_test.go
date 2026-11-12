@@ -38,7 +38,7 @@ func (l *revocationLister) ListRecentSessionRevocations(_ context.Context, req *
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.calls++
-	resp := &commodorepb.ListRecentSessionRevocationsResponse{}
+	resp := &commodorepb.ListRecentSessionRevocationsResponse{AuthSessionsIncluded: req.GetIncludeAuthSessions()}
 	for _, rev := range l.revocations {
 		if rev.GetRevokedAt().AsTime().After(req.GetSince().AsTime()) {
 			resp.Revocations = append(resp.Revocations, rev)
@@ -67,9 +67,9 @@ func httpReplica(t *testing.T, broker streamOpener, sc *clients.ServiceClients) 
 	sm.SetCredentialSockets(sessions)
 	middleware.EnforceSessionRevocations(sessions.SessionRevocations())
 	t.Cleanup(func() { middleware.EnforceSessionRevocations(nil) })
-	go sm.WatchSessionRevocations(context.Background(), func() {
-		sessions.ResumeSessionRevocations(sc.Commodore.ListRecentSessionRevocations, nil)
-	})
+	sessionFeed := sessions.StartSessionRevocations(context.Background(), sc.Commodore.ListRecentSessionRevocations, nil)
+	t.Cleanup(sessionFeed.Close)
+	go sm.WatchSessionRevocations(context.Background(), sessionFeed.Resume)
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()

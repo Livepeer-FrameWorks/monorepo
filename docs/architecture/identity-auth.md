@@ -84,6 +84,14 @@ a sid-less successor written by an older issuer. A concurrent password change
 cannot reuse a proof against the previous hash. Failed revocation-event storage
 rolls the credential change and revocations back together.
 
+`LinkEmail` creates password credentials for an interactive wallet-only account
+under the same owner lock. It preserves the current named session and its
+legacy refresh successor, revokes other sessions, invalidates reset proofs and
+queues verification delivery in `account_email_outbox` in one transaction.
+Concurrent attempts cannot replace the first linked email. A delivery/event
+persistence failure rolls the credential change and revocations back together;
+SMTP availability is handled by the existing delivery worker.
+
 Named revocation deletes only the connected refresh family and emits
 `auth_session.revoked`. It locks existing chain rows before deleting, then uses
 a fresh statement snapshot to include an in-flight older issuer's sid-less
@@ -101,20 +109,45 @@ user-wide events; a named revocation never becomes an account-wide sign-out
 through an older event consumer. Bridge caches use the full owner and session
 ID, and close only matching WebSockets for named revocation.
 
-State validation is wired into Bridge authentication and network diagnostics,
-Commodore unary/stream authentication, Foghorn internal HTTP, and Skipper's
-gRPC, REST and notification MCP requests. Quartermaster, Purser, Periscope,
-Signalman, Bosun and Lookout validate raw interactive gRPC JWTs with Commodore
-on every call and reject them when session state is unavailable. Service tokens
-and audience-bound delegated assertions retain their separate authentication.
-Interactive gRPC streams end at JWT expiry and recheck session state every
-30 seconds with a five-second validation timeout. Revocation ends them with
-Unauthenticated; a validation outage ends them with Unavailable. Signalman's
-idle Subscribe handler observes cancellation without waiting for a message.
-`ValidateSession` marks successful checks with `session_state_checked`. New
-callers refuse an older authority's unmarked success as Unavailable, preserving
-named revocation during mixed-version rollout. Upgrade Commodore before the
-consumers of this contract; older consumers ignore the additive response field.
+Bridge authentication and network diagnostics, Foghorn internal HTTP, Skipper's
+gRPC/REST/notification MCP paths, and the raw interactive gRPC ingresses in
+Quartermaster, Purser, Periscope Query, Signalman, Bosun and Lookout each use
+replica-local `auth.SessionRevocations`. Validating an access JWT does not make
+a Commodore RPC or load a missing session from the database. Commodore retains
+its own in-process account/session checks for authoritative operations. Service
+tokens, audience-bound delegation and wallet bearer verification keep their
+credential-specific rules.
+
+The shared `pkg/sessionrevocations` feed receives every tenant's typed revocation
+events over one service-authenticated, tenantless Signalman `CHANNEL_SESSIONS`
+stream per replica. Signalman applies its existing domain-event consumer's
+revocations locally before broadcasting them, without subscribing to itself.
+Bridge reuses its confirmed upstream subscription and applies shared backfill
+results to both its HTTP cache and WebSocket closures.
+
+Background snapshots start at boot, after every confirmed stream reconnection,
+and on a jittered one-minute reconciliation interval. They opt into named
+revocations with `include_auth_sessions`, span access-token lifetime plus clock
+leeway, and merge monotonically with live events. A snapshot includes
+`auth_sessions_included=true` only after Commodore read the named-session state;
+an older response still supplies legacy cutoffs but cannot establish complete
+named coverage. Snapshot failures retry with bounded exponential backoff.
+
+Loss of Commodore or the event stream preserves known revocations and serves
+otherwise locally valid access credentials, including before a cold replica
+finishes hydrating. When neither path can deliver a new revocation, that fact
+cannot be enforced until recovery or signed JWT expiry (at most fifteen minutes
+plus clock leeway). Issuance, refresh and account/session mutations still need
+Commodore. Synchronization metrics expose background degradation; it does not
+make ordinary authentication unavailable.
+
+Interactive gRPC streams end at JWT expiry and recheck the same local cache
+every thirty seconds. A known revocation ends a stream with Unauthenticated;
+background synchronization failures do not close it. Signalman's idle Subscribe
+handler observes cancellation without waiting for a message. During rollout,
+upgrade Commodore's named snapshot and Signalman's event contract before the
+consumers. Explicit `ValidateSession` RPC clients still require its additive
+`session_state_checked` proof; downstream access checks no longer invoke it.
 
 ## Native credential ownership and compatibility
 
@@ -152,12 +185,27 @@ logout semantics.
 
 ## Release state
 
+Commodore runs bounded retention sweeps once per minute. Consumed or expired
+authorization codes and expired device codes are removed after 24 hours.
+Sessions are eligible 720 hours after revocation or idle expiry; the schema
+keeps idle expiry at or before absolute expiry. Session refresh children are
+locked and removed in batches of at most 100 per sweep before their parent is
+deleted. Every mutation includes the full tenant and user owner.
+
+During mixed-version operation, a live refresh token without session ownership
+preserves that owner's chain history. Cleanup checks for a live legacy successor
+in a fresh READ COMMITTED statement after locking its candidate tokens. Locked
+rows are skipped, and keyset cursors continue past protected owners before
+wrapping to revisit them. This prevents cleanup from erasing the original-age
+anchor of a chain being rotated by an older issuer. Revocation snapshots remain
+available far longer than an access token can verify.
+
 The pending `v0.3.15` expand migration adds the session table, nullable refresh
 ownership and authorization-code metadata. Existing-table indexes build online
 and are validated after deployment. The service-owned
 `commodore_auth_sessions_v0_3_15` data migration must finish before contract.
 No session-ownership `NOT NULL` contract ships in the foundation migration.
 
-The self-service UI, security email, activity reader, password-change UI,
-authorization consent metadata and retention sweep remain tracked in
+The self-service UI, security email, activity reader, password-change UI and
+authorization consent metadata remain tracked in
 [the account-security RFC](../rfcs/RFC_account_security_sessions.md).

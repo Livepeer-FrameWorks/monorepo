@@ -167,9 +167,10 @@ func main() {
 	// subscription manager.
 	middleware.EnforceSessionRevocations(websocketSessions.SessionRevocations())
 	if serviceClients.Commodore != nil {
-		go resolver.SubManager.WatchSessionRevocations(context.Background(), func() {
-			websocketSessions.ResumeSessionRevocations(serviceClients.Commodore.ListRecentSessionRevocations, logger)
-		})
+		sessionFeed := websocketSessions.StartSessionRevocations(context.Background(), serviceClients.Commodore.ListRecentSessionRevocations, logger)
+		defer sessionFeed.Close()
+		sessionFeed.Observe(metricsCollector)
+		go resolver.SubManager.WatchSessionRevocations(context.Background(), sessionFeed.Resume)
 	}
 
 	// Setup complexity functions for pagination-aware query cost calculation

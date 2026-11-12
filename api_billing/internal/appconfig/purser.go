@@ -35,6 +35,7 @@ type Purser struct {
 	config.GeoIP
 	config.ServiceAuth
 	config.GRPCTLS
+	config.SessionRevocationStream
 	config.Postgres
 	config.Registration
 	config.DomainEventActor

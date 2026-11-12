@@ -26,6 +26,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/serviceevents"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/sessionrevocations"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
@@ -64,10 +65,15 @@ func main() {
 		logger.WithError(err).Fatal("Failed to create Commodore session-validation client")
 	}
 	defer func() { _ = commodoreClient.Close() }()
+	sessionFeed := sessionrevocations.Start(context.Background(), sessionrevocations.Config{
+		Secret: []byte(cfg.JWTSecret), List: commodoreClient.ListRecentSessionRevocations, Logger: logger,
+	})
+	defer sessionFeed.Close()
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("signalman", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("signalman", version.Version, version.GitCommit)
+	sessionFeed.Observe(metricsCollector)
 
 	// Create custom metrics
 	serviceMetrics := &metrics.Metrics{
@@ -294,7 +300,10 @@ func main() {
 	}
 
 	// Public domain events go to their tenant's CHANNEL_EVENTS subscribers.
-	domainHandler := newDomainEventHandler(grpcHub, newEventIDWindow(signalmanEventDedupCapacity, signalmanEventDedupTTL), serviceMetrics, logger)
+	domainHandler := newDomainEventHandler(grpcHub, newEventIDWindow(signalmanEventDedupCapacity, signalmanEventDedupTTL), serviceMetrics, logger,
+		func(tenant string, event *signalmanpb.TenantEvent) {
+			sessionFeed.Apply(sessionrevocations.Decode(tenant, event))
+		})
 	registerDomainEventSubscriptions(consumer, cfg.MirrorRegionPrefixes, domainHandler, func(name string, handler kafka.Handler) kafka.Handler {
 		return wrapWithDLQ(name, handler)
 	})
@@ -356,7 +365,7 @@ func main() {
 		// The gRPC server is built after the port is bound, so HTTP health
 		// serves while the TLS files are still being synced.
 		GRPC: []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCListen.Port, Build: func(ctx context.Context) (*grpc.Server, error) {
-			return newGRPCServer(ctx, cfg, logger, signalmanServer, commodoreClient.CheckSession)
+			return newGRPCServer(ctx, cfg, logger, signalmanServer, sessionFeed.CheckSession)
 		}}},
 		OnDrain: []func(context.Context){closeStreamsHook(signalmanServer)},
 		OnShutdown: []func(context.Context){func(context.Context) {

@@ -756,6 +756,9 @@ func (c *GRPCClient) RenameSession(ctx context.Context, sessionID, label string)
 // sessions were revoked after since (clamped by Commodore to a session
 // token's lifetime).
 func (c *GRPCClient) ListRecentSessionRevocations(ctx context.Context, since time.Time) (*commodorepb.ListRecentSessionRevocationsResponse, error) {
+	if c == nil {
+		return nil, status.Error(codes.Unavailable, "revocation snapshot unavailable")
+	}
 	return c.internal.ListRecentSessionRevocations(withServiceAuth(ctx), &commodorepb.ListRecentSessionRevocationsRequest{
 		Since:               timestamppb.New(since),
 		IncludeAuthSessions: true,

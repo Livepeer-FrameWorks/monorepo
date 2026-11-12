@@ -296,6 +296,9 @@ func TestListRecentSessionRevocationsClampsItsLookback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRecentSessionRevocations: %v", err)
 	}
+	if !resp.GetAuthSessionsIncluded() {
+		t.Fatal("named snapshot omitted capability proof")
+	}
 	if len(resp.GetRevocations()) != 3 || resp.GetRevocations()[0].GetUserId() != sessionTestUserID || resp.GetRevocations()[1].GetTenantId() != "40000000-0000-4000-8000-0000000000d4" || resp.GetRevocations()[2].GetSessionId() != "50000000-0000-4000-8000-000000000081" {
 		t.Fatalf("revocations = %v", resp.GetRevocations())
 	}
@@ -317,7 +320,7 @@ func TestLegacyRevocationBackfillNeverReceivesNamedSessions(t *testing.T) {
 	mock.ExpectQuery(`FROM commodore\.users\s+WHERE sessions_revoked_at > \$1`).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "sessions_revoked_at", "is_active"}))
 	response, err := s.ListRecentSessionRevocations(context.Background(), &commodorepb.ListRecentSessionRevocationsRequest{})
-	if err != nil || len(response.GetRevocations()) != 0 {
+	if err != nil || len(response.GetRevocations()) != 0 || response.GetAuthSessionsIncluded() {
 		t.Fatalf("legacy backfill queried named sessions: response=%v err=%v", response, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

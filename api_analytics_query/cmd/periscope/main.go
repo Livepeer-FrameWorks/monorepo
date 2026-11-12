@@ -16,6 +16,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/sessionrevocations"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"google.golang.org/grpc"
 )
@@ -50,6 +51,18 @@ func main() {
 	}
 	defer func() { _ = commodoreClient.Close() }()
 
+	sessionFeed, closeSessionFeed, err := sessionrevocations.Connect(context.Background(), sessionrevocations.Config{
+		Secret: []byte(cfg.JWTSecret), List: commodoreClient.ListRecentSessionRevocations, Logger: logger,
+	}, sessionrevocations.Transport{
+		Address: cfg.SignalmanGRPCAddr, ServiceToken: cfg.ServiceToken,
+		AllowInsecure: cfg.AllowInsecure, CAPath: cfg.CAPath,
+		ServerName: cfg.SignalmanGRPCTLSServerName, Logger: logger,
+	})
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid session revocation feed configuration")
+	}
+	defer closeSessionFeed()
+
 	// Connect to ClickHouse (primary analytics database)
 	chConfig := database.DefaultClickHouseConfig()
 	chConfig.ServiceName = "periscope-query"
@@ -68,6 +81,7 @@ func main() {
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("periscope-query", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("periscope-query", version.Version, version.GitCommit)
+	sessionFeed.Observe(metricsCollector)
 
 	// Add health checks
 	healthChecker.AddCheck("clickhouse", monitoring.DatabaseHealthCheck(clickhouse))
@@ -112,7 +126,7 @@ func main() {
 			Logger:          logger,
 			ServiceToken:    cfg.ServiceToken,
 			JWTSecret:       []byte(cfg.JWTSecret),
-			ValidateSession: commodoreClient.CheckSession,
+			ValidateSession: sessionFeed.CheckSession,
 			Metrics:         serviceMetrics,
 			CertFile:        cfg.CertPath,
 			KeyFile:         cfg.KeyPath,

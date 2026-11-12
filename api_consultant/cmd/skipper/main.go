@@ -45,6 +45,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/search"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/sessionrevocations"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
@@ -162,6 +163,19 @@ func main() {
 	} else {
 		defer func() { _ = commodoreClient.Close() }()
 	}
+	sessionFeed, closeSessionFeed, err := sessionrevocations.Connect(context.Background(), sessionrevocations.Config{
+		Secret: []byte(appCfg.JWTSecret), List: commodoreClient.ListRecentSessionRevocations, Logger: logger,
+	}, sessionrevocations.Transport{
+		Address: appCfg.SignalmanGRPCAddr, ServiceToken: appCfg.ServiceToken,
+		AllowInsecure: appCfg.AllowInsecure, CAPath: appCfg.CAPath,
+		ServerName: appCfg.SignalmanGRPCTLSServerName, Logger: logger,
+	})
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid session revocation feed configuration")
+	}
+	defer closeSessionFeed()
+	sessionFeed.Observe(metricsCollector)
+
 	var billingClient heartbeat.BillingClient
 	if purserClient != nil {
 		billingClient = purserClient
@@ -623,7 +637,7 @@ func main() {
 	grpcAuthCfg := middleware.GRPCAuthConfig{
 		ServiceToken:    serviceToken,
 		JWTSecret:       []byte(jwtSecret),
-		ValidateSession: commodoreClient.CheckSession,
+		ValidateSession: sessionFeed.CheckSession,
 		MetadataPolicy:  metadataPolicy,
 		Logger:          logger,
 		SkipMethods:     []string{"/grpc.health.v1.Health/Check", "/grpc.health.v1.Health/Watch"},
@@ -679,7 +693,7 @@ func main() {
 	apiGroup := router.Group("/api/skipper")
 	jwtOpts := []auth.JWTOption{
 		auth.WithServiceIdentity(serviceToken, systemTenantID),
-		auth.WithSessionValidation(commodoreClient.CheckSession),
+		auth.WithSessionValidation(sessionFeed.CheckSession),
 	}
 	apiGroup.Use(auth.JWTAuthMiddleware([]byte(jwtSecret), jwtOpts...))
 	apiGroup.Use(skipperContextBridge())
@@ -828,7 +842,7 @@ func main() {
 		},
 		&mcp.StreamableHTTPOptions{Stateless: false},
 	)
-	notificationHandler := notificationSessionAuth(mcpHandler, []byte(jwtSecret), commodoreClient.CheckSession)
+	notificationHandler := notificationSessionAuth(mcpHandler, []byte(jwtSecret), sessionFeed.CheckSession)
 	router.Any("/mcp/notify", gin.WrapH(notificationHandler))
 	router.Any("/mcp/notify/*path", gin.WrapH(notificationHandler))
 

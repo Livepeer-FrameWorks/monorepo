@@ -3,10 +3,32 @@ package auth
 import (
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
+
+func TestNamedRevocationOutlivesTransactionTimestamp(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		secret := []byte("revocation-retention")
+		cache := NewSessionRevocations()
+		token, err := GenerateNamedSessionJWT("user", "tenant", "user@example.test", "member", nil, "session", time.Now(), time.Now().Add(SessionTokenTTL), secret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// NOW() can precede issuance while the revoker waits for the issuer's lock.
+		cache.RecordSession("tenant", "user", "session", time.Now().Add(-30*time.Second))
+		time.Sleep(SessionTokenTTL + JWTClockSkewLeeway - 20*time.Second)
+		cache.Prune()
+		if _, err := ValidateInteractiveJWT(token, secret); err != nil {
+			t.Fatalf("fixture JWT no longer verifies in clock leeway: %v", err)
+		}
+		if _, err := ValidateRevocableSessionJWT(token, secret, cache); !errors.Is(err, ErrSessionRevoked) {
+			t.Fatalf("pruning forgot a known revocation while the token still verifies: %v", err)
+		}
+	})
+}
 
 func TestSessionRevocationKeepsOtherSessionsAndLegacyCutoff(t *testing.T) {
 	cache := NewSessionRevocations()

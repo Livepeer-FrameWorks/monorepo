@@ -583,11 +583,12 @@ func TestSessionRevocationBackfillClosesADeactivatedUserAsDeactivated(t *testing
 	sessions := NewWebsocketSessions(nil)
 	now := time.Now()
 	conn, _ := openSubscription(t, sc, "Bearer "+sessionJWTIssuedAt(t, now.Add(-time.Minute), now.Add(time.Hour)), sessions, 0)
-	sessions.ResumeSessionRevocations(func(context.Context, time.Time) (*commodorepb.ListRecentSessionRevocationsResponse, error) {
-		return &commodorepb.ListRecentSessionRevocationsResponse{Revocations: []*commodorepb.SessionRevocation{{
+	sessionFeed := sessions.StartSessionRevocations(context.Background(), func(context.Context, time.Time) (*commodorepb.ListRecentSessionRevocationsResponse, error) {
+		return &commodorepb.ListRecentSessionRevocationsResponse{AuthSessionsIncluded: true, Revocations: []*commodorepb.SessionRevocation{{
 			TenantId: "tenant-1", UserId: "user-1", RevokedAt: timestamppb.New(now), AccountDeactivated: true,
 		}}}, nil
 	}, nil)
+	defer sessionFeed.Close()
 	if code, text := awaitCloseFrame(t, conn, 2*time.Second); code != WebsocketCloseForbidden || text != "account deactivated" {
 		t.Fatalf("backfilled deactivation closed with %d %q, want %d \"account deactivated\"", code, text, WebsocketCloseForbidden)
 	}

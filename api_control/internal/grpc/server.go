@@ -3487,6 +3487,7 @@ func (s *CommodoreServer) ListRecentSessionRevocations(ctx context.Context, req 
 			RevokedAt: timestamppb.New(session.RevokedAt.Time),
 		})
 	}
+	resp.AuthSessionsIncluded = true
 	return resp, nil
 }
 
@@ -6516,88 +6517,6 @@ func (s *CommodoreServer) ListWallets(ctx context.Context, req *commodorepb.List
 	}
 
 	return &commodorepb.ListWalletsResponse{Wallets: wallets}, nil
-}
-
-// LinkEmail adds an email to a wallet-only account (for postpaid upgrade path)
-func (s *CommodoreServer) LinkEmail(ctx context.Context, req *commodorepb.LinkEmailRequest) (*commodorepb.LinkEmailResponse, error) {
-	userID, tenantID, err := extractUserContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	email := normalizeEmail(req.GetEmail())
-	password := req.GetPassword()
-
-	if email == "" {
-		return nil, status.Error(codes.InvalidArgument, "email required")
-	}
-	if password == "" || len(password) < 8 {
-		return nil, status.Error(codes.InvalidArgument, "password must be at least 8 characters")
-	}
-
-	// Check if user already has an email
-	queries := commodoredb.New(s.db)
-	existingEmail, err := queries.GetUserEmail(ctx, commodoredb.GetUserEmailParams{ID: userID, TenantID: tenantID})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to check user: %v", err)
-	}
-	if existingEmail.Valid && existingEmail.String != "" {
-		return nil, status.Error(codes.AlreadyExists, "email already linked to your account")
-	}
-
-	// Check if email is already used by another account
-	_, err = queries.FindOtherUserIDByEmail(ctx, commodoredb.FindOtherUserIDByEmailParams{
-		Email: sql.NullString{String: email, Valid: true}, ID: userID,
-	})
-	if err == nil {
-		return nil, status.Error(codes.AlreadyExists, "email already in use by another account")
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Errorf(codes.Internal, "failed to check email: %v", err)
-	}
-
-	// Hash password
-	passwordHash, err := auth.HashPassword(password)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to hash password: %v", err)
-	}
-
-	// Generate verification token
-	tokenBytes := make([]byte, 32)
-	if _, randErr := rand.Read(tokenBytes); randErr != nil {
-		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", randErr)
-	}
-	verificationToken := hex.EncodeToString(tokenBytes)
-	verificationTokenHash := hashToken(verificationToken)
-	tokenExpiry := time.Now().Add(24 * time.Hour)
-
-	// Update user with email, password, and verification token
-	err = queries.LinkUserEmail(ctx, commodoredb.LinkUserEmailParams{
-		Email:             sql.NullString{String: email, Valid: true},
-		PasswordHash:      sql.NullString{String: passwordHash, Valid: true},
-		VerificationToken: sql.NullString{String: verificationTokenHash, Valid: true},
-		TokenExpiresAt:    sql.NullTime{Time: tokenExpiry, Valid: true},
-		ID:                userID,
-		TenantID:          tenantID,
-	})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to link email: %v", err)
-	}
-
-	// Send verification email
-	if err := s.sendVerificationEmail(email, verificationToken); err != nil {
-		s.logger.WithError(err).Warn("Failed to send verification email")
-		return &commodorepb.LinkEmailResponse{
-			Success:          true,
-			Message:          "Email linked. Verification email could not be sent - please use resend verification.",
-			VerificationSent: false,
-		}, nil
-	}
-
-	return &commodorepb.LinkEmailResponse{
-		Success:          true,
-		Message:          fmt.Sprintf("Verification email sent to %s", email),
-		VerificationSent: true,
-	}, nil
 }
 
 // ============================================================================
@@ -10231,6 +10150,8 @@ func NewGRPCServer(ctx context.Context, cfg CommodoreServerConfig) (*grpc.Server
 	// Drain commodore.account_email_outbox: verification emails retry through SMTP outages instead of being
 	// attempted once and lost.
 	go commodoreServer.runAccountEmailOutboxWorker(context.Background())
+	go commodoreServer.runAuthCodeRetention(context.Background())
+	go commodoreServer.runSessionRetention(context.Background())
 
 	// Drain commodore.service_event_outbox to Decklog: a Decklog outage degrades to
 	// outbox-backlog growth rather than dropped events.

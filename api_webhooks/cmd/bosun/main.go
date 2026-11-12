@@ -33,6 +33,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/sessionrevocations"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -77,6 +78,18 @@ func main() {
 		logger.WithError(err).Fatal("Failed to create Commodore session-validation client")
 	}
 	defer func() { _ = commodoreClient.Close() }()
+	sessionFeed, closeSessionFeed, err := sessionrevocations.Connect(context.Background(), sessionrevocations.Config{
+		Secret: []byte(cfg.JWTSecret), List: commodoreClient.ListRecentSessionRevocations, Logger: logger,
+	}, sessionrevocations.Transport{
+		Address: cfg.SignalmanGRPCAddr, ServiceToken: cfg.ServiceToken,
+		AllowInsecure: cfg.AllowInsecure, CAPath: cfg.CAPath,
+		ServerName: cfg.SignalmanGRPCTLSServerName, Logger: logger,
+	})
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid session revocation feed configuration")
+	}
+	defer closeSessionFeed()
+
 	keyring, err := cfg.FieldKeyring()
 	if err != nil {
 		logger.WithError(err).Fatal("Invalid BOSUN_FIELD_ENCRYPTION_KEY settings")
@@ -90,6 +103,7 @@ func main() {
 
 	healthChecker := monitoring.NewHealthChecker("bosun", version.Version)
 	metricsCollector := metrics.NewCollector(version.Version, version.GitCommit)
+	sessionFeed.Observe(metricsCollector)
 	domainMetrics := metrics.New(metricsCollector)
 	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
 
@@ -266,7 +280,7 @@ func main() {
 		// The gRPC server is built after the port is bound, so HTTP health
 		// serves while the TLS files are still being synced.
 		GRPC: []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCPort, Build: func(buildCtx context.Context) (*grpc.Server, error) {
-			return newGRPCServer(buildCtx, cfg, logger, api, domainMetrics.GRPCRequests, domainMetrics.GRPCDuration, commodoreClient.CheckSession)
+			return newGRPCServer(buildCtx, cfg, logger, api, domainMetrics.GRPCRequests, domainMetrics.GRPCDuration, sessionFeed.CheckSession)
 		}}},
 		OnDrain: []func(context.Context){func(ctx context.Context) {
 			stopWork()

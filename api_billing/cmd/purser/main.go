@@ -34,6 +34,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/sessionrevocations"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
 	"github.com/shopspring/decimal"
@@ -226,6 +227,18 @@ func main() {
 		logger.WithError(err).Fatal("Failed to create Commodore gRPC client")
 	}
 	defer func() { _ = commodoreClient.Close() }()
+	sessionFeed, closeSessionFeed, err := sessionrevocations.Connect(context.Background(), sessionrevocations.Config{
+		Secret: []byte(cfg.JWTSecret), List: commodoreClient.ListRecentSessionRevocations, Logger: logger,
+	}, sessionrevocations.Transport{
+		Address: cfg.SignalmanGRPCAddr, ServiceToken: cfg.ServiceToken,
+		AllowInsecure: cfg.AllowInsecure, CAPath: cfg.CAPath,
+		ServerName: cfg.SignalmanGRPCTLSServerName, Logger: logger,
+	})
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid session revocation feed configuration")
+	}
+	defer closeSessionFeed()
+	sessionFeed.Observe(metricsCollector)
 
 	// Create Decklog gRPC client for service events
 	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
@@ -381,7 +394,7 @@ func main() {
 		MollieClient:        mollieClient,
 		QuartermasterClient: qmGRPCClient,
 		CommodoreClient:     commodoreClient,
-		ValidateSession:     commodoreClient.CheckSession,
+		ValidateSession:     sessionFeed.CheckSession,
 		DecklogClient:       decklogClient,
 		Billing:             billingSvc,
 		TokenHasher:         tokenHasher,

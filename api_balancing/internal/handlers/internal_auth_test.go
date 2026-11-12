@@ -10,8 +10,6 @@ import (
 	"frameworks/api_balancing/internal/appconfig"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/gin-gonic/gin"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func TestInternalOperatorIngressRejectsDelegatedAPIToken(t *testing.T) {
@@ -65,17 +63,23 @@ func TestInternalOperatorIngressRejectsRevokedSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		name  string
-		valid bool
-		err   error
-		want  int
+		name    string
+		revoked bool
+		want    int
 	}{
-		{"revoked", false, nil, http.StatusForbidden},
-		{"outage", false, status.Error(codes.Unavailable, "offline"), http.StatusServiceUnavailable},
-		{"active", true, nil, http.StatusNoContent},
+		{"revoked", true, http.StatusForbidden},
+		{"authority unavailable", false, http.StatusNoContent},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			startIngestCommodoreFake(t, &ingestCommodoreFake{sessionValid: tc.valid, sessionErr: tc.err})
+			previousClient := commodoreClient
+			commodoreClient = nil
+			previousCache := sessionRevocations.Load()
+			cache := auth.NewSessionRevocations()
+			SetSessionRevocations(cache)
+			t.Cleanup(func() { commodoreClient = previousClient; SetSessionRevocations(previousCache) })
+			if tc.revoked {
+				cache.Record("tenant", "operator", time.Now())
+			}
 			router := gin.New()
 			router.GET("/internal", RequireInternalMutation(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/internal", nil)
