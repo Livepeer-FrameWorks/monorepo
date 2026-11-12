@@ -47,6 +47,36 @@ func TestWebsiteDocsFrameworksCommandsExist(t *testing.T) {
 	}
 }
 
+func TestDocsInvocationResolvesFlagsBeforeSubcommands(t *testing.T) {
+	for _, prefix := range []string{"--context production", "--context=production", "--verbose --context production", "-v --context production"} {
+		t.Run(prefix, func(t *testing.T) {
+			root := NewRootCmd()
+			fields := strings.Fields("frameworks " + prefix + " cluster provision --gitops-dir ../gitops --only-services nginx --dry-run")
+			cmd, err := resolveFrameworksInvocation(root, fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cmd.CommandPath() != "frameworks cluster provision" {
+				t.Fatalf("resolved %q, want cluster provision", cmd.CommandPath())
+			}
+			actual, _, err := root.Find(fields[1:])
+			if err != nil || actual != cmd {
+				t.Fatalf("documentation resolver differs from Cobra: %v", err)
+			}
+			if err := validateFrameworksInvocationFlags(root, fields); err != nil {
+				t.Fatal(err)
+			}
+			fields = append(fields, "--not-a-real-provision-flag")
+			if err := validateFrameworksInvocationFlags(root, fields); err == nil {
+				t.Fatal("unknown child flag was accepted")
+			}
+			if _, err := resolveFrameworksInvocation(root, strings.Fields("frameworks "+prefix+" cluster not-a-command")); err == nil {
+				t.Fatal("unknown subcommand after a persistent flag was accepted")
+			}
+		})
+	}
+}
+
 func TestCLIReferenceCoversCommandTree(t *testing.T) {
 	referencePath := filepath.Join("..", "..", "website_docs", "src", "content", "docs", "operators", "cli-reference.mdx")
 	contentBytes, err := os.ReadFile(referencePath)
@@ -222,9 +252,29 @@ func validateFrameworksInvocationFlags(root *cobra.Command, fields []string) err
 func resolveFrameworksInvocation(root *cobra.Command, fields []string) (*cobra.Command, error) {
 	current := root
 	path := []string{"frameworks"}
-	for _, field := range fields[1:] {
-		if strings.HasPrefix(field, "-") || isShellOperator(field) {
+	for i := 1; i < len(fields); i++ {
+		field := fields[i]
+		if field == "--" || isShellOperator(field) {
 			return current, nil
+		}
+		if strings.HasPrefix(field, "-") {
+			name, _, inline := strings.Cut(strings.TrimLeft(field, "-"), "=")
+			var flag *pflag.Flag
+			if strings.HasPrefix(field, "--") {
+				flag = current.Flag(name)
+			} else if len(name) == 1 {
+				flag = current.LocalFlags().ShorthandLookup(name)
+				if flag == nil {
+					flag = current.InheritedFlags().ShorthandLookup(name)
+				}
+			}
+			if flag == nil {
+				return current, nil
+			}
+			if !inline && flag.NoOptDefVal == "" {
+				i++
+			}
+			continue
 		}
 		if next := findChildCommand(current, field); next != nil {
 			current = next
