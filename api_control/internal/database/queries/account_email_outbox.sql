@@ -21,17 +21,18 @@ WHERE status = 'pending'
   AND created_at < NOW() - (sqlc.arg(window_ms)::bigint * INTERVAL '1 millisecond');
 
 -- name: ClaimAccountEmailBatch :many
+-- One SMTP send and settlement must finish inside the row lease.
 SELECT user_id::text AS user_id,
        tenant_id::text AS tenant_id,
        purpose,
        attempts,
-       payload
+       COALESCE(payload, '{}'::jsonb) AS payload
 FROM commodore.account_email_outbox
 WHERE status IN ('pending', 'security_pending')
-  AND next_attempt_at <= NOW()
+  AND next_attempt_at <= NOW()::timestamp
 ORDER BY next_attempt_at
 FOR UPDATE SKIP LOCKED
-LIMIT sqlc.arg(batch_size);
+LIMIT 1;
 
 -- name: LeaseAccountEmail :one
 UPDATE commodore.account_email_outbox

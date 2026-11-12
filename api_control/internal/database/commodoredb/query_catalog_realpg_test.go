@@ -587,8 +587,8 @@ func TestGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {
 func prepareCommodoreQueryCatalog(t *testing.T, db *sql.DB) {
 	t.Helper()
 	queries := commodoreGeneratedQueries(t)
-	if len(queries) != 490 {
-		t.Fatalf("found %d generated Commodore queries, want 490", len(queries))
+	if len(queries) != 491 {
+		t.Fatalf("found %d generated Commodore queries, want 491", len(queries))
 	}
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)

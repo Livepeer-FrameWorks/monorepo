@@ -69,13 +69,13 @@ SELECT user_id::text AS user_id,
        tenant_id::text AS tenant_id,
        purpose,
        attempts,
-       payload
+       COALESCE(payload, '{}'::jsonb) AS payload
 FROM commodore.account_email_outbox
 WHERE status IN ('pending', 'security_pending')
-  AND next_attempt_at <= NOW()
+  AND next_attempt_at <= NOW()::timestamp
 ORDER BY next_attempt_at
 FOR UPDATE SKIP LOCKED
-LIMIT $1
+LIMIT 1
 `
 
 type ClaimAccountEmailBatchRow struct {
@@ -86,8 +86,9 @@ type ClaimAccountEmailBatchRow struct {
 	Payload  json.RawMessage `db:"payload" json:"payload"`
 }
 
-func (q *Queries) ClaimAccountEmailBatch(ctx context.Context, batchSize int32) ([]ClaimAccountEmailBatchRow, error) {
-	rows, err := q.db.QueryContext(ctx, claimAccountEmailBatch, batchSize)
+// One SMTP send and settlement must finish inside the row lease.
+func (q *Queries) ClaimAccountEmailBatch(ctx context.Context) ([]ClaimAccountEmailBatchRow, error) {
+	rows, err := q.db.QueryContext(ctx, claimAccountEmailBatch)
 	if err != nil {
 		return nil, err
 	}

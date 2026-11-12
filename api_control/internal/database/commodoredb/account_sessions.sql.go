@@ -55,6 +55,24 @@ func (q *Queries) FindUserIDByEmail(ctx context.Context, email sql.NullString) (
 	return id, err
 }
 
+const getAuthSessionWalletID = `-- name: GetAuthSessionWalletID :one
+SELECT id FROM commodore.wallet_identities
+WHERE tenant_id = $1 AND user_id = $2 AND chain_type = 'ethereum' AND wallet_address = $3
+`
+
+type GetAuthSessionWalletIDParams struct {
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
+	UserID        string `db:"user_id" json:"user_id"`
+	WalletAddress string `db:"wallet_address" json:"wallet_address"`
+}
+
+func (q *Queries) GetAuthSessionWalletID(ctx context.Context, arg GetAuthSessionWalletIDParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getAuthSessionWalletID, arg.TenantID, arg.UserID, arg.WalletAddress)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getLoginUserByEmail = `-- name: GetLoginUserByEmail :one
 SELECT
     id,
@@ -480,9 +498,14 @@ func (q *Queries) ListSessionRevocationsSince(ctx context.Context, sessionsRevok
 const listUserWallets = `-- name: ListUserWallets :many
 SELECT id, wallet_address, created_at, last_auth_at
 FROM commodore.wallet_identities
-WHERE user_id = $1
+WHERE user_id = $1 AND tenant_id = $2
 ORDER BY created_at DESC
 `
+
+type ListUserWalletsParams struct {
+	UserID   string `db:"user_id" json:"user_id"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+}
 
 type ListUserWalletsRow struct {
 	ID            string       `db:"id" json:"id"`
@@ -491,8 +514,8 @@ type ListUserWalletsRow struct {
 	LastAuthAt    sql.NullTime `db:"last_auth_at" json:"last_auth_at"`
 }
 
-func (q *Queries) ListUserWallets(ctx context.Context, userID string) ([]ListUserWalletsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listUserWallets, userID)
+func (q *Queries) ListUserWallets(ctx context.Context, arg ListUserWalletsParams) ([]ListUserWalletsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUserWallets, arg.UserID, arg.TenantID)
 	if err != nil {
 		return nil, err
 	}
