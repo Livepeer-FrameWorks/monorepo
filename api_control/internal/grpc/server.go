@@ -5372,14 +5372,26 @@ func (s *CommodoreServer) withStatusTx(ctx context.Context, onBegin, onCommit fu
 		phaseCommit
 	)
 	phase := phaseBegin
-	err := fwdb.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) { phase = phaseBegin }, func(tx *sql.Tx) error {
-		phase = phaseBody
-		if bodyErr := fn(tx); bodyErr != nil {
-			return bodyErr
+	var err error
+	for {
+		phase = phaseBegin
+		err = fwdb.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) { phase = phaseBegin }, func(tx *sql.Tx) error {
+			phase = phaseBody
+			if bodyErr := fn(tx); bodyErr != nil {
+				return bodyErr
+			}
+			phase = phaseCommit
+			return nil
+		})
+		recovered, recoveryErr := s.recoverSessionCap(ctx, err)
+		if recoveryErr != nil {
+			return sessionIssueError(recoveryErr)
 		}
-		phase = phaseCommit
-		return nil
-	})
+		if !recovered {
+			break
+		}
+	}
+
 	if err == nil {
 		return nil
 	}
@@ -5459,6 +5471,7 @@ func (s *CommodoreServer) StartDeviceAuthorization(ctx context.Context, req *com
 	// long-lived pending codes.
 	var userCode string
 	queries := commodoredb.New(s.db)
+	requestInfo := sessionContextFromRequest(ctx, "device_code", clientID)
 	const maxAttempts = 5
 	for range maxAttempts {
 		userCode, err = generateUserCode()
@@ -5472,6 +5485,8 @@ func (s *CommodoreServer) StartDeviceAuthorization(ctx context.Context, req *com
 			Scope:               scope,
 			PollIntervalSeconds: int32(deviceCodePollInterval.Seconds()),
 			ExpiresAt:           expiresAt,
+			DeviceLabel:         requestInfo.DeviceLabel, ClientVersion: requestInfo.ClientVersion,
+			RequestIp: requestInfo.IP, UserAgent: requestInfo.UserAgent,
 		})
 		if err == nil {
 			break
@@ -5587,7 +5602,7 @@ func (s *CommodoreServer) PollDeviceAuthorization(ctx context.Context, req *comm
 			// Approved — issue session and consume the row (DELETE so a re-poll
 			// returns ACCESS_DENIED on missing row).
 			userID, tenantID = deviceRow.UserID.String, deviceRow.TenantID.String
-			resp, err = s.issueUserSessionTx(ctx, tx, userID, tenantID, sessionContextFromRequest(ctx, "device_code", deviceRow.ClientID))
+			resp, err = s.issueUserSessionTx(ctx, tx, userID, tenantID, sessionContextFromClientMetadata("device_code", deviceRow.ClientID, ctxkeys.AuthClientMetadata{DeviceLabel: deviceRow.DeviceLabel, Version: deviceRow.ClientVersion, IP: deviceRow.RequestIp, UserAgent: deviceRow.UserAgent}))
 			if err != nil {
 				return err
 			}
@@ -5655,11 +5670,18 @@ func (s *CommodoreServer) LookupDeviceAuthorization(ctx context.Context, req *co
 		return nil, committedOutcome
 	}
 
-	return &commodorepb.LookupDeviceAuthorizationResponse{
-		ClientId:  deviceRow.ClientID,
-		Scope:     deviceRow.Scope,
-		ExpiresAt: timestamppb.New(deviceRow.ExpiresAt),
-	}, nil
+	response := &commodorepb.LookupDeviceAuthorizationResponse{
+		ClientId:    deviceRow.ClientID,
+		Scope:       deviceRow.Scope,
+		ExpiresAt:   timestamppb.New(deviceRow.ExpiresAt),
+		DeviceLabel: deviceRow.DeviceLabel, ClientVersion: deviceRow.ClientVersion,
+		RequestIp: deviceRow.RequestIp, UserAgent: deviceRow.UserAgent,
+		RequestedAt: timestamppb.New(deviceRow.CreatedAt),
+	}
+	if location := s.sessionGeoIP.Lookup(deviceRow.RequestIp); location != nil {
+		response.Location = strings.Trim(strings.Join([]string{location.City, location.CountryName}, ", "), ", ")
+	}
+	return response, nil
 }
 
 // ApproveDeviceAuthorization marks a pending device-code row as approved and

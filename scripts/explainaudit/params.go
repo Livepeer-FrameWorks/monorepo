@@ -176,6 +176,11 @@ func (b *binder) bind(text string, names []string, types []string) []paramBindin
 	for i, typ := range types {
 		n := i + 1
 		pb := paramBinding{Index: n, Type: typ}
+		if fixture := authCapFixtureFor(b.queryID); fixture != nil {
+			pb.Source, pb.Value = "populated auth cap fixture", fixture.parameter(typ)
+			out[i] = pb
+			continue
+		}
 		if fixture := authBackfillFixtureFor(b.queryID); fixture != nil {
 			pb.Source, pb.Value = "live auth backfill fixture", fixture.parameter(typ)
 			out[i] = pb

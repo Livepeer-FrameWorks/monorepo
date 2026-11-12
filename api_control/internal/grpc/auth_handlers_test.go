@@ -568,7 +568,7 @@ func TestStartDeviceAuthorization(t *testing.T) {
 			return RuntimeSettings{Branding: config.EmailBranding{WebAppURL: "https://app.example.com"}}
 		}
 		mock.ExpectExec("INSERT INTO commodore.auth_device_codes").
-			WithArgs("cli", sqlmock.AnyArg(), sqlmock.AnyArg(), "account", sqlmock.AnyArg(), sqlmock.AnyArg()).
+			WithArgs("cli", sqlmock.AnyArg(), sqlmock.AnyArg(), "account", sqlmock.AnyArg(), sqlmock.AnyArg(), "FrameWorks CLI", "", "", "").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		resp, err := s.StartDeviceAuthorization(context.Background(), &commodorepb.StartDeviceAuthorizationRequest{ClientId: "cli"})
 		if err != nil {
@@ -587,7 +587,7 @@ func TestStartDeviceAuthorization(t *testing.T) {
 }
 
 func TestPollDeviceAuthorization(t *testing.T) {
-	deviceCodeCols := []string{"id", "client_id", "status", "user_id", "tenant_id", "expires_at", "last_polled_at", "poll_interval_seconds"}
+	deviceCodeCols := []string{"id", "client_id", "status", "user_id", "tenant_id", "expires_at", "last_polled_at", "poll_interval_seconds", "device_label", "client_version", "request_ip", "user_agent"}
 	const devCode = "dev-code-1"
 	future := time.Now().Add(time.Hour)
 	past := time.Now().Add(-time.Hour)
@@ -622,7 +622,7 @@ func TestPollDeviceAuthorization(t *testing.T) {
 		mock.ExpectQuery("FROM commodore.auth_device_codes").
 			WithArgs(hashToken(devCode)).
 			WillReturnRows(sqlmock.NewRows(deviceCodeCols).
-				AddRow("row1", "tray-mac", "pending", nil, nil, future, nil, 5))
+				AddRow("row1", "tray-mac", "pending", nil, nil, future, nil, 5, "", "", "", ""))
 		mock.ExpectRollback()
 		_, err := s.PollDeviceAuthorization(context.Background(), &commodorepb.PollDeviceAuthorizationRequest{
 			DeviceCode: devCode, ClientId: "cli",
@@ -637,7 +637,7 @@ func TestPollDeviceAuthorization(t *testing.T) {
 		mock.ExpectQuery("FROM commodore.auth_device_codes").
 			WithArgs(hashToken(devCode)).
 			WillReturnRows(sqlmock.NewRows(deviceCodeCols).
-				AddRow("row1", "cli", "pending", nil, nil, future, nil, 5))
+				AddRow("row1", "cli", "pending", nil, nil, future, nil, 5, "", "", "", ""))
 		mock.ExpectExec("SET last_polled_at").WithArgs("row1").WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 		_, err := s.PollDeviceAuthorization(context.Background(), &commodorepb.PollDeviceAuthorizationRequest{
@@ -655,7 +655,7 @@ func TestPollDeviceAuthorization(t *testing.T) {
 			mock.ExpectQuery("FROM commodore.auth_device_codes").
 				WithArgs(hashToken(devCode)).
 				WillReturnRows(sqlmock.NewRows(deviceCodeCols).
-					AddRow("row1", "cli", "pending", nil, nil, future, nil, 5))
+					AddRow("row1", "cli", "pending", nil, nil, future, nil, 5, "", "", "", ""))
 			poll := mock.ExpectExec("SET last_polled_at").WithArgs("row1")
 			if attempt == 0 {
 				poll.WillReturnError(serializationFailure())
@@ -681,7 +681,7 @@ func TestPollDeviceAuthorization(t *testing.T) {
 		mock.ExpectQuery("FROM commodore.auth_device_codes").
 			WithArgs(hashToken(devCode)).
 			WillReturnRows(sqlmock.NewRows(deviceCodeCols).
-				AddRow("row1", "cli", "pending", nil, nil, past, nil, 5))
+				AddRow("row1", "cli", "pending", nil, nil, past, nil, 5, "", "", "", ""))
 		mock.ExpectExec("status = 'expired'").WithArgs("row1").WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 		_, err := s.PollDeviceAuthorization(context.Background(), &commodorepb.PollDeviceAuthorizationRequest{

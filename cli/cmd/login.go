@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	fwv "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"io"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode"
 
 	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/internal/credentials"
@@ -283,7 +285,7 @@ func validateLoginToken(ctx context.Context, bridgeURL, token string) error {
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", "FrameWorks-CLI/1.0")
+	setLoginClientMetadata(req.Header)
 
 	resp, err := loginHTTPClient.Do(req)
 	if err != nil {
@@ -326,7 +328,7 @@ func postJSONWithStatus(ctx context.Context, url string, body any, out any) (int
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "FrameWorks-CLI/1.0")
+	setLoginClientMetadata(req.Header)
 
 	resp, err := loginHTTPClient.Do(req)
 	if err != nil {
@@ -395,4 +397,32 @@ func loginNextSteps(persona fwcfg.Persona) []ux.NextStep {
 			{Cmd: "frameworks setup", Why: "No active context — run setup to pick a persona first."},
 		}
 	}
+}
+
+func loginDisplayHeader(value string, limit int) string {
+	value = strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(value, "")))
+	runes := []rune(value)
+	if len(runes) > limit {
+		return string(runes[:limit])
+	}
+	return value
+}
+
+func setLoginClientMetadata(header http.Header) {
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "FrameWorks CLI"
+	}
+	label := loginDisplayHeader(hostname, 200)
+	if label == "" {
+		label = "FrameWorks CLI"
+	}
+	header.Set("X-Device-Label", label)
+	header.Set("X-Client-Version", loginDisplayHeader(fmt.Sprintf("%s (CLI %s; %s/%s)", fwv.Version, fwv.ComponentVersion, runtime.GOOS, runtime.GOARCH), 100))
+	header.Set("User-Agent", loginDisplayHeader(fmt.Sprintf("FrameWorks-CLI/%s (%s/%s)", fwv.ComponentVersion, runtime.GOOS, runtime.GOARCH), 200))
 }

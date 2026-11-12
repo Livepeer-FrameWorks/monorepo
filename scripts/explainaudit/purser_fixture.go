@@ -15,6 +15,9 @@ type executionFixture interface {
 }
 
 func executionFixtureFor(id string, now time.Time) executionFixture {
+	if f := authCapFixtureFor(id); f != nil {
+		return f
+	}
 	if f := authBackfillFixtureFor(id); f != nil {
 		return f
 	}

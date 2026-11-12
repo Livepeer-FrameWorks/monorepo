@@ -20,7 +20,7 @@ type Querier interface {
 	AcquirePublisherLease(ctx context.Context, arg AcquirePublisherLeaseParams) (AcquirePublisherLeaseRow, error)
 	ActivateMediaPlacementPolicy(ctx context.Context, arg ActivateMediaPlacementPolicyParams) (int64, error)
 	AdminGetUserByEmail(ctx context.Context, email string) (AdminGetUserByEmailRow, error)
-	AdoptAuthSessionRefreshFamily(ctx context.Context, arg AdoptAuthSessionRefreshFamilyParams) (sql.NullString, error)
+	AdoptAuthSessionRefreshFamily(ctx context.Context, arg AdoptAuthSessionRefreshFamilyParams) (AdoptAuthSessionRefreshFamilyRow, error)
 	// Settles unfinished rows of the pre-obligation inbox so their targets can be
 	// folded into obligations. Leased rows belong to a replica still draining the
 	// inbox and are left alone.
@@ -110,6 +110,7 @@ type Querier interface {
 	CountActivePlatformOperators(ctx context.Context, tenantID string) (int64, error)
 	CountActiveSigningKeys(ctx context.Context, tenantID string) (int64, error)
 	CountAuthSessions(ctx context.Context, arg CountAuthSessionsParams) (int32, error)
+	CountAuthSessionsForIssuance(ctx context.Context, arg CountAuthSessionsForIssuanceParams) (CountAuthSessionsForIssuanceRow, error)
 	CountFailedTenantAccountClosures(ctx context.Context) (int64, error)
 	// Platform-wide recovery metric; a single failed call may recover after backoff.
 	CountRepeatedTenantAccountClosureFailures(ctx context.Context) (int64, error)
@@ -363,6 +364,9 @@ type Querier interface {
 	ListActiveMediaAuthorityCells(ctx context.Context, arg ListActiveMediaAuthorityCellsParams) ([]string, error)
 	ListActivePlaybackSigningKeys(ctx context.Context, tenantID string) ([]ListActivePlaybackSigningKeysRow, error)
 	ListArtifactMediaAuthoritySources(ctx context.Context) ([]ListArtifactMediaAuthoritySourcesRow, error)
+	// Platform-wide owner discovery for the migration. Each cap read and mutation
+	// rechecks the discovered tenant and user before changing session state.
+	ListAuthSessionCapOwners(ctx context.Context, arg ListAuthSessionCapOwnersParams) ([]ListAuthSessionCapOwnersRow, error)
 	// Platform-wide delivery/backfill is the only cross-tenant session read.
 	ListAuthSessionRevocationsSince(ctx context.Context, revokedAt sql.NullTime) ([]ListAuthSessionRevocationsSinceRow, error)
 	ListAuthSessions(ctx context.Context, arg ListAuthSessionsParams) ([]CommodoreAuthSession, error)
@@ -450,6 +454,7 @@ type Querier interface {
 	ListMediaCellPlacementCapabilities(ctx context.Context, cellIds []string) ([]ListMediaCellPlacementCapabilitiesRow, error)
 	ListNamedRefreshRetentionKeys(ctx context.Context, arg ListNamedRefreshRetentionKeysParams) ([]ListNamedRefreshRetentionKeysRow, error)
 	ListOldestAuthSessions(ctx context.Context, arg ListOldestAuthSessionsParams) ([]CommodoreAuthSession, error)
+	ListOldestOtherAuthSessions(ctx context.Context, arg ListOldestOtherAuthSessionsParams) ([]CommodoreAuthSession, error)
 	// Private operator read, fenced by tenant and ordered through the tenant-time index.
 	ListOperatorAccountAudit(ctx context.Context, arg ListOperatorAccountAuditParams) ([]ListOperatorAccountAuditRow, error)
 	ListParkedMediaAuthorityObligationCounts(ctx context.Context) ([]ListParkedMediaAuthorityObligationCountsRow, error)
@@ -563,6 +568,7 @@ type Querier interface {
 	// touched; one in flight keeps its lease. Each branch reads one of the cell's
 	// partial queue indexes.
 	MakeCellMediaAuthorityDeliveriesDue(ctx context.Context, arg MakeCellMediaAuthorityDeliveriesDueParams) (int64, error)
+	MarkAuthSessionExpired(ctx context.Context, arg MarkAuthSessionExpiredParams) (int64, error)
 	MarkCreatedStreamPull(ctx context.Context, arg MarkCreatedStreamPullParams) error
 	// A cell reported holding something other than what it acknowledged. Until it
 	// acknowledges again, it may hold any version it was ever sent.

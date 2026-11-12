@@ -29,6 +29,44 @@ expect() { # expect <description> <command...>
   if "$@"; then printf 'ok    %s\n' "$what"; else printf 'FAIL  %s\n' "$what"; failures=$((failures + 1)); fi
 }
 
+# Values are read by the extracted production loop and ingress_specs.
+# shellcheck disable=SC2034
+session_ingress_loop_preserves_input() (
+  local source="$here/scenarios/56-session-validator-revocation.sh"
+  local WORK="$work/session-ingresses" descriptor tenant=fixture-tenant
+  local STACK_QUARTERMASTER_GRPC_ADDR=quartermaster STACK_PURSER_GRPC_ADDR=purser
+  local STACK_PERISCOPE_GRPC_ADDR=periscope STACK_SIGNALMAN_GRPC_ADDR=signalman
+  local STACK_BOSUN_GRPC_ADDR=bosun STACK_LOOKOUT_GRPC_ADDR=lookout
+  mkdir -p "$WORK"
+  descriptor="$WORK/descriptor"
+  printf 'fixture-token\n' >"$WORK/revoked.jwt"
+  eval "$(sed -n '/^ingress_specs() {$/,/^}$/p' "$source")"
+  python3 - "$source" "$WORK/loop.sh" <<'INGRESS'
+import pathlib,sys
+source=pathlib.Path(sys.argv[1]).read_text()
+start=source.index("while IFS='|' read -r service address method body; do")
+end=source.index('done < <(ingress_specs)',start)+len('done < <(ingress_specs)')
+pathlib.Path(sys.argv[2]).write_text(source[start:end])
+INGRESS
+  stack_exec() {
+    if [ "$2" = test ]; then
+      printf '%s\n' "$4" >>"$WORK/retained"
+      # docker compose exec forwards stdin even for a command that ignores it.
+      cat >/dev/null
+    fi
+  }
+  must_check() { shift; "$@"; }
+  ingress_rpc() { return 0; }
+  rpc_error() { return 1; }
+  . "$WORK/loop.sh"
+  [ "$(wc -l <"$WORK/retained" | tr -d ' ')" = 6 ] || {
+    printf 'expected six retained ingress descriptors, got:\n' >&2
+    cat "$WORK/retained" >&2
+    return 1
+  }
+)
+expect 'all six ingress descriptors survive interactive exec stdin forwarding' session_ingress_loop_preserves_input
+
 revocation_log_failure_is_red() (
   FAIL=0 PASS=0
   SINCE=now REFUSED_AT=later

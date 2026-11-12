@@ -4640,6 +4640,75 @@
       }
     },
     {
+      "slug": "account-security",
+      "name": "Account security",
+      "area": "account",
+      "kind": "product",
+      "audience": "product",
+      "description": "Personal browser, CLI and macOS tray sessions with named revocation, automatic refresh, password controls and mandatory security alerts.",
+      "status": "partial",
+      "gap_reason": "Self-service GraphQL and CLI controls, security activity and mandatory email are implemented. The Account Security dashboard and expanded device/authorize consent pages remain pending.",
+      "horizon": "now",
+      "note": "Session controls are available through the CLI and API. The dashboard security page is still being built.",
+      "required_surfaces": {
+        "cli": {
+          "required": true
+        },
+        "docs": {
+          "required": true
+        },
+        "graphql": {
+          "required": true
+        },
+        "mcp": {
+          "required": false,
+          "reason": "Session security controls require an interactive user credential."
+        },
+        "webapp": {
+          "required": true
+        }
+      },
+      "surfaces": {
+        "graphql": {
+          "mutations": [
+            "revokeAuthSession",
+            "revokeOtherAuthSessions",
+            "renameAuthSession",
+            "changePassword"
+          ],
+          "queries": [
+            "authSessionsConnection",
+            "securityActivityConnection"
+          ]
+        },
+        "mcp": {},
+        "cli": {
+          "commands": [
+            "auth status",
+            "auth sessions list",
+            "auth sessions revoke",
+            "auth sessions revoke-others",
+            "login",
+            "logout"
+          ]
+        },
+        "webapp": {},
+        "docs": {
+          "pages": [
+            "builders/account-security.mdx",
+            "operators/cli-reference.mdx"
+          ]
+        }
+      },
+      "actual_surfaces": {
+        "cli": true,
+        "docs": true,
+        "graphql": true,
+        "mcp": false,
+        "webapp": false
+      }
+    },
+    {
       "slug": "tenant",
       "name": "Tenant settings",
       "area": "account",
@@ -4647,9 +4716,9 @@
       "audience": "product",
       "description": "Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle.",
       "status": "partial",
-      "gap_reason": "Core tenant account setup is live: retry-safe wallet-provisioned prepaid accounts, refreshable wallet sessions, tenant name, billing details, billing tier/balance, storage retention defaults,\nand preferred cluster/routing settings are exposed. Broader tenant administration is still expanding: team/RBAC, notification preferences,\ncustom domains, security controls, and account lifecycle controls are not yet complete across API, dashboard, MCP, and docs.\n",
+      "gap_reason": "Core tenant account setup is live: retry-safe wallet-provisioned prepaid accounts, refreshable wallet sessions, tenant name, billing details, billing tier/balance, storage retention defaults,\nand preferred cluster/routing settings are exposed. Broader tenant administration is still expanding: team/RBAC, notification preferences,\ncustom domains and account lifecycle controls are not yet complete across API, dashboard, MCP, and docs.\n",
       "horizon": "now",
-      "note": "Teams, notification preferences, custom domains, and account security controls are not there yet.",
+      "note": "Teams, notification preferences and custom domains are not there yet. Personal session controls are tracked under account security.",
       "required_surfaces": {
         "docs": {
           "required": true

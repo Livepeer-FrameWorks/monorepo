@@ -2597,6 +2597,40 @@ features:
 
   # ───────────────── Account & Apps ─────────────────
 
+  - slug: account-security
+    name: Account security
+    area: account
+    description: Personal browser, CLI and macOS tray sessions with named revocation, automatic refresh, password controls and mandatory security alerts.
+    status: partial
+    gap_reason: Self-service GraphQL and CLI controls, security activity and mandatory email are implemented. The Account Security dashboard and expanded device/authorize consent pages remain pending.
+    note: Session controls are available through the CLI and API. The dashboard security page is still being built.
+    required_surfaces:
+      graphql: { required: true }
+      cli: { required: true }
+      webapp: { required: true }
+      docs: { required: true }
+      mcp:
+        {
+          required: false,
+          reason: "Session security controls require an interactive user credential.",
+        }
+    surfaces:
+      graphql:
+        queries: [authSessionsConnection, securityActivityConnection]
+        mutations: [revokeAuthSession, revokeOtherAuthSessions, renameAuthSession, changePassword]
+      cli:
+        commands:
+          [
+            "auth status",
+            "auth sessions list",
+            "auth sessions revoke",
+            "auth sessions revoke-others",
+            "login",
+            "logout",
+          ]
+      docs:
+        pages: [builders/account-security.mdx, operators/cli-reference.mdx]
+
   - slug: tenant
     name: Tenant settings
     area: account
@@ -2606,8 +2640,8 @@ features:
     gap_reason: |
       Core tenant account setup is live: retry-safe wallet-provisioned prepaid accounts, refreshable wallet sessions, tenant name, billing details, billing tier/balance, storage retention defaults,
       and preferred cluster/routing settings are exposed. Broader tenant administration is still expanding: team/RBAC, notification preferences,
-      custom domains, security controls, and account lifecycle controls are not yet complete across API, dashboard, MCP, and docs.
-    note: Teams, notification preferences, custom domains, and account security controls are not there yet.
+      custom domains and account lifecycle controls are not yet complete across API, dashboard, MCP, and docs.
+    note: Teams, notification preferences and custom domains are not there yet. Personal session controls are tracked under account security.
     required_surfaces:
       graphql: { required: true }
       webapp: { required: true }

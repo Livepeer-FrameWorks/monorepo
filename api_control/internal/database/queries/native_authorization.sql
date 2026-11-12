@@ -21,14 +21,14 @@ WHERE id = $1;
 -- name: InsertDeviceAuthorization :exec
 INSERT INTO commodore.auth_device_codes (
     client_id, device_code_hash, user_code, scope, status,
-    poll_interval_seconds, expires_at
+    poll_interval_seconds, expires_at, device_label, client_version, request_ip, user_agent
 )
-VALUES ($1, $2, $3, $4, 'pending', $5, $6);
+VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10);
 
 -- name: LockDeviceAuthorizationByHash :one
 SELECT
     id, client_id, status, user_id, tenant_id, expires_at,
-    last_polled_at, poll_interval_seconds
+    last_polled_at, poll_interval_seconds, device_label, client_version, request_ip, user_agent
 FROM commodore.auth_device_codes
 WHERE device_code_hash = $1
 FOR UPDATE;
@@ -48,7 +48,7 @@ DELETE FROM commodore.auth_device_codes
 WHERE id = $1;
 
 -- name: LockDeviceAuthorizationByUserCode :one
-SELECT id, client_id, scope, status, expires_at
+SELECT id, client_id, scope, status, expires_at, device_label, client_version, request_ip, user_agent, created_at
 FROM commodore.auth_device_codes
 WHERE user_code = $1
 FOR UPDATE;

@@ -97,6 +97,12 @@ func runAuthSessions(ctx context.Context, db datamigrate.DB, opts datamigrate.Ru
 		if err := rows.Err(); err != nil {
 			return datamigrate.Progress{}, err
 		}
+		if err := rows.Err(); err != nil {
+			return datamigrate.Progress{}, err
+		}
+		if scanned == 0 {
+			return previewBackfilledSessionCaps(ctx, db, size)
+		}
 		return datamigrate.Progress{Scanned: scanned, Done: scanned < int64(size),
 			Summary: []string{fmt.Sprintf("sampled at most %d pending refresh heads; a full batch does not establish completion", size)}}, nil
 	}
@@ -106,7 +112,7 @@ func runAuthSessions(ctx context.Context, db datamigrate.DB, opts datamigrate.Ru
 		WHERE session_id IS NULL AND COALESCE(revoked, false) = false AND expires_at > NOW()
         ORDER BY expires_at, tenant_id, id LIMIT 1`).Scan(&tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return datamigrate.Progress{Done: true}, nil
+		return normalizeBackfilledSessionCaps(ctx, db, opts.Checkpoint)
 	}
 	if err != nil {
 		return datamigrate.Progress{}, err
@@ -126,7 +132,7 @@ func verifyAuthSessions(ctx context.Context, db datamigrate.DB) error {
         WHERE session_id IS NULL AND COALESCE(revoked, false) = false AND expires_at > NOW()
         ORDER BY expires_at, tenant_id, id LIMIT 1`).Scan(&pendingID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		return verifyBackfilledSessionCaps(ctx, db)
 	}
 	if err != nil {
 		return err

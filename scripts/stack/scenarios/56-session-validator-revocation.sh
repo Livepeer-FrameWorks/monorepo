@@ -103,7 +103,7 @@ while IFS='|' read -r service address method body; do
     grpcurl -plaintext -max-time 10 -protoset-out "$1" -H "authorization: Bearer $token" \
       "$2" describe "$3" >/dev/null
   ' sh "$descriptor-$service" "$address" "${method%/*}" >"$WORK/$service.schema" 2>&1
-  must_check "retain $service schema before revocation" stack_exec commodore test -s "$descriptor-$service" || { rpc_error "$WORK/$service.schema"; finish; }
+  must_check "retain $service schema before revocation" stack_exec commodore test -s "$descriptor-$service" </dev/null || { rpc_error "$WORK/$service.schema"; finish; }
   ingress_rpc "$service" "$address" "$method" "$body" "$WORK/revoked.jwt" >"$WORK/$service.initial" 2>&1
   initial_status=$?
   must_check "live named session reaches $service directly" [ "$initial_status" = 0 ] || { rpc_error "$WORK/$service.initial"; finish; }

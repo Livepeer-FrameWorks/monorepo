@@ -9,7 +9,9 @@ import (
 	"unicode/utf8"
 
 	"frameworks/api_control/internal/database/commodoredb"
+	"frameworks/api_control/internal/sessionstore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -119,31 +121,16 @@ func (s *CommodoreServer) RenameSession(ctx context.Context, req *commodorepb.Re
 }
 
 func (s *CommodoreServer) finishAuthSessionRevocationTx(ctx context.Context, tx *sql.Tx, row commodoredb.CommodoreAuthSession, reason internalv1.SessionRevocationReason) error {
-	queries := commodoredb.New(tx)
-	// An older issuer locks its refresh row, then writes a successor without
-	// sid. Wait for that rotation before taking the deletion statement's snapshot.
-	if _, err := queries.LockAuthSessionRefreshTokens(ctx, commodoredb.LockAuthSessionRefreshTokensParams{
-		TenantID: row.TenantID, UserID: row.UserID, SessionID: sql.NullString{String: row.ID, Valid: true},
-	}); err != nil {
-		return err
+	if s.tokenHasher == nil {
+		return errors.New("domain event actor hasher is not configured")
 	}
-	// Deleting the connected family makes old issuers return invalid_grant
-	// instead of interpreting an explicit sign-out as user-wide token theft.
-	if err := queries.RevokeAuthSessionRefreshTokens(ctx, commodoredb.RevokeAuthSessionRefreshTokensParams{
-		TenantID: row.TenantID, UserID: row.UserID, SessionID: sql.NullString{String: row.ID, Valid: true},
-	}); err != nil {
-		return err
-	}
+	var before sessionstore.BeforeRevocationEvent
 	if reason == internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE {
-		if err := enqueueSessionSecurityEmailTx(ctx, tx, row, "reuse"); err != nil {
-			return err
+		before = func(mailCtx context.Context, mailTx *sql.Tx, revoked commodoredb.CommodoreAuthSession) error {
+			return enqueueSessionSecurityEmailTx(mailCtx, mailTx, revoked, "reuse")
 		}
 	}
-	_, err := s.enqueueDomainEventTx(ctx, tx, row.TenantID, &domainEvent{
-		msg:         &internalv1.AuthSessionRevoked{UserId: row.UserID, SessionId: row.ID, RevokedAt: timestamppb.New(row.RevokedAt.Time), Reason: reason},
-		aggregateID: row.ID,
-	}, row.RevokedAt.Time)
-	return err
+	return sessionstore.FinalizeRevocationTx(ctx, tx, row, reason, events.ActorFromContext(ctx, s.tokenHasher), before)
 }
 
 func (s *CommodoreServer) RevokeSession(ctx context.Context, req *commodorepb.RevokeSessionRequest) (*commodorepb.RevokeSessionResponse, error) {

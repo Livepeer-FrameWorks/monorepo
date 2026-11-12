@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -255,6 +256,7 @@ func TestServeColdFileWritesBlocksToDisk(t *testing.T) {
 		Resolver:  resolver,
 		BlockSize: 16,
 	})
+	waitFillsOnCleanup(t, s)
 	ts := mount(t, s)
 	defer ts.Close()
 
@@ -266,10 +268,18 @@ func TestServeColdFileWritesBlocksToDisk(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d", resp.StatusCode)
 	}
-	got, _ := io.ReadAll(resp.Body)
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !bytes.Equal(got, body) {
 		t.Fatalf("got=%q want=%q", got, body)
 	}
+	// Readers receive bytes before fsync and atomic publication finish. Close
+	// the request server before waiting so no handler can start another fill.
+	_ = resp.Body.Close()
+	ts.Close()
+	s.fills.wg.Wait()
 	// Block cache wrote every block to disk; meta.json present.
 	blocksDir := filepath.Join(dir, "vod", file+".blocks")
 	if _, metaErr := os.Stat(filepath.Join(blocksDir, "meta.json")); metaErr != nil {
@@ -286,8 +296,17 @@ func TestServeColdFileWritesBlocksToDisk(t *testing.T) {
 			blocks = append(blocks, e.Name())
 		}
 	}
-	if len(blocks) == 0 {
-		t.Fatalf("no .blk files in %s; entries=%v", blocksDir, entries)
+	sort.Strings(blocks)
+	var cached []byte
+	for _, name := range blocks {
+		data, readErr := os.ReadFile(filepath.Join(blocksDir, name))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		cached = append(cached, data...)
+	}
+	if !bytes.Equal(cached, body) {
+		t.Fatalf("published blocks=%q want=%q; entries=%v", cached, body, entries)
 	}
 }
 

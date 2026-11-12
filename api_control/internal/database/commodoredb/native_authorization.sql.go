@@ -100,9 +100,9 @@ func (q *Queries) InsertAuthorizationCode(ctx context.Context, arg InsertAuthori
 const insertDeviceAuthorization = `-- name: InsertDeviceAuthorization :exec
 INSERT INTO commodore.auth_device_codes (
     client_id, device_code_hash, user_code, scope, status,
-    poll_interval_seconds, expires_at
+    poll_interval_seconds, expires_at, device_label, client_version, request_ip, user_agent
 )
-VALUES ($1, $2, $3, $4, 'pending', $5, $6)
+VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10)
 `
 
 type InsertDeviceAuthorizationParams struct {
@@ -112,6 +112,10 @@ type InsertDeviceAuthorizationParams struct {
 	Scope               string    `db:"scope" json:"scope"`
 	PollIntervalSeconds int32     `db:"poll_interval_seconds" json:"poll_interval_seconds"`
 	ExpiresAt           time.Time `db:"expires_at" json:"expires_at"`
+	DeviceLabel         string    `db:"device_label" json:"device_label"`
+	ClientVersion       string    `db:"client_version" json:"client_version"`
+	RequestIp           string    `db:"request_ip" json:"request_ip"`
+	UserAgent           string    `db:"user_agent" json:"user_agent"`
 }
 
 func (q *Queries) InsertDeviceAuthorization(ctx context.Context, arg InsertDeviceAuthorizationParams) error {
@@ -122,6 +126,10 @@ func (q *Queries) InsertDeviceAuthorization(ctx context.Context, arg InsertDevic
 		arg.Scope,
 		arg.PollIntervalSeconds,
 		arg.ExpiresAt,
+		arg.DeviceLabel,
+		arg.ClientVersion,
+		arg.RequestIp,
+		arg.UserAgent,
 	)
 	return err
 }
@@ -165,7 +173,7 @@ func (q *Queries) LockAuthorizationCode(ctx context.Context, codeHash string) (L
 const lockDeviceAuthorizationByHash = `-- name: LockDeviceAuthorizationByHash :one
 SELECT
     id, client_id, status, user_id, tenant_id, expires_at,
-    last_polled_at, poll_interval_seconds
+    last_polled_at, poll_interval_seconds, device_label, client_version, request_ip, user_agent
 FROM commodore.auth_device_codes
 WHERE device_code_hash = $1
 FOR UPDATE
@@ -180,6 +188,10 @@ type LockDeviceAuthorizationByHashRow struct {
 	ExpiresAt           time.Time      `db:"expires_at" json:"expires_at"`
 	LastPolledAt        sql.NullTime   `db:"last_polled_at" json:"last_polled_at"`
 	PollIntervalSeconds int32          `db:"poll_interval_seconds" json:"poll_interval_seconds"`
+	DeviceLabel         string         `db:"device_label" json:"device_label"`
+	ClientVersion       string         `db:"client_version" json:"client_version"`
+	RequestIp           string         `db:"request_ip" json:"request_ip"`
+	UserAgent           string         `db:"user_agent" json:"user_agent"`
 }
 
 func (q *Queries) LockDeviceAuthorizationByHash(ctx context.Context, deviceCodeHash string) (LockDeviceAuthorizationByHashRow, error) {
@@ -194,23 +206,32 @@ func (q *Queries) LockDeviceAuthorizationByHash(ctx context.Context, deviceCodeH
 		&i.ExpiresAt,
 		&i.LastPolledAt,
 		&i.PollIntervalSeconds,
+		&i.DeviceLabel,
+		&i.ClientVersion,
+		&i.RequestIp,
+		&i.UserAgent,
 	)
 	return i, err
 }
 
 const lockDeviceAuthorizationByUserCode = `-- name: LockDeviceAuthorizationByUserCode :one
-SELECT id, client_id, scope, status, expires_at
+SELECT id, client_id, scope, status, expires_at, device_label, client_version, request_ip, user_agent, created_at
 FROM commodore.auth_device_codes
 WHERE user_code = $1
 FOR UPDATE
 `
 
 type LockDeviceAuthorizationByUserCodeRow struct {
-	ID        string    `db:"id" json:"id"`
-	ClientID  string    `db:"client_id" json:"client_id"`
-	Scope     string    `db:"scope" json:"scope"`
-	Status    string    `db:"status" json:"status"`
-	ExpiresAt time.Time `db:"expires_at" json:"expires_at"`
+	ID            string    `db:"id" json:"id"`
+	ClientID      string    `db:"client_id" json:"client_id"`
+	Scope         string    `db:"scope" json:"scope"`
+	Status        string    `db:"status" json:"status"`
+	ExpiresAt     time.Time `db:"expires_at" json:"expires_at"`
+	DeviceLabel   string    `db:"device_label" json:"device_label"`
+	ClientVersion string    `db:"client_version" json:"client_version"`
+	RequestIp     string    `db:"request_ip" json:"request_ip"`
+	UserAgent     string    `db:"user_agent" json:"user_agent"`
+	CreatedAt     time.Time `db:"created_at" json:"created_at"`
 }
 
 func (q *Queries) LockDeviceAuthorizationByUserCode(ctx context.Context, userCode string) (LockDeviceAuthorizationByUserCodeRow, error) {
@@ -222,6 +243,11 @@ func (q *Queries) LockDeviceAuthorizationByUserCode(ctx context.Context, userCod
 		&i.Scope,
 		&i.Status,
 		&i.ExpiresAt,
+		&i.DeviceLabel,
+		&i.ClientVersion,
+		&i.RequestIp,
+		&i.UserAgent,
+		&i.CreatedAt,
 	)
 	return i, err
 }

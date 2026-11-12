@@ -157,7 +157,7 @@ WITH RECURSIVE family AS (
            EXISTS (SELECT 1 FROM commodore.auth_sessions s WHERE s.tenant_id = $1 AND s.user_id = $2 AND s.id = o.session_id))
     RETURNING r.session_id
 )
-SELECT session_id FROM attached LIMIT 1;
+SELECT session_id, EXISTS(SELECT 1 FROM inserted) AS created FROM attached LIMIT 1;
 
 -- name: GetSessionRefreshSuccessor :one
 SELECT id, COALESCE(revoked, false)::boolean AS revoked, replaced_by
@@ -166,5 +166,24 @@ FROM commodore.refresh_tokens WHERE tenant_id = $1 AND user_id = $2 AND id = $3;
 -- name: ListOldestAuthSessions :many
 SELECT * FROM commodore.auth_sessions
 WHERE tenant_id = $1 AND user_id = $2 AND revoked_at IS NULL
-  AND idle_expires_at > NOW() AND absolute_expires_at > NOW()
 ORDER BY last_seen_at, created_at, id LIMIT $3 FOR UPDATE;
+
+-- name: CountAuthSessionsForIssuance :one
+SELECT COUNT(*)::INTEGER AS live_count, NOW()::timestamptz AS checked_at FROM (
+    SELECT 1 FROM commodore.auth_sessions
+    WHERE tenant_id = $1 AND user_id = $2 AND revoked_at IS NULL
+      AND idle_expires_at > NOW() AND absolute_expires_at > NOW()
+    LIMIT sqlc.arg(row_limit)
+) AS live_sample;
+
+-- name: ListOldestOtherAuthSessions :many
+SELECT * FROM commodore.auth_sessions
+WHERE tenant_id = $1 AND user_id = $2 AND id <> sqlc.arg(protected_session_id)::uuid
+  AND revoked_at IS NULL
+ORDER BY last_seen_at, created_at, id LIMIT sqlc.arg(row_limit) FOR UPDATE;
+
+-- name: MarkAuthSessionExpired :execrows
+UPDATE commodore.auth_sessions
+SET revoked_at = LEAST(idle_expires_at, absolute_expires_at), revoke_reason = 'expired'
+WHERE tenant_id = $1 AND user_id = $2 AND id = $3 AND revoked_at IS NULL
+  AND LEAST(idle_expires_at, absolute_expires_at) <= sqlc.arg(checked_at)::timestamptz;
