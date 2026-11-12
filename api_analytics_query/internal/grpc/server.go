@@ -8276,15 +8276,16 @@ func (s *PeriscopeServer) GetAPIUsage(ctx context.Context, req *periscopepb.GetA
 // Analytics queries use ClickHouse; ReplayDB durably consumes delegated API-token
 // assertions before they reach a query handler.
 type GRPCServerConfig struct {
-	ClickHouse    database.ClickHouseConn
-	ReplayDB      *sql.DB
-	Logger        logging.Logger
-	ServiceToken  string
-	JWTSecret     []byte
-	Metrics       *metrics.Metrics
-	CertFile      string
-	KeyFile       string
-	AllowInsecure bool
+	ClickHouse      database.ClickHouseConn
+	ReplayDB        *sql.DB
+	Logger          logging.Logger
+	ServiceToken    string
+	JWTSecret       []byte
+	ValidateSession func(context.Context, string) error
+	Metrics         *metrics.Metrics
+	CertFile        string
+	KeyFile         string
+	AllowInsecure   bool
 }
 
 // NewGRPCServer creates the Periscope gRPC server. It waits up to two minutes
@@ -8293,11 +8294,13 @@ type GRPCServerConfig struct {
 func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, error) {
 	// Chain auth interceptor with logging interceptor
 	grpcAuthCfg := middleware.GRPCAuthConfig{
-		ServiceToken:         cfg.ServiceToken,
-		JWTSecret:            cfg.JWTSecret,
-		DelegatedJWTAudience: "periscope",
-		MetadataPolicy:       middleware.MetadataPolicyDeny,
-		Logger:               cfg.Logger,
+		ServiceToken:             cfg.ServiceToken,
+		JWTSecret:                cfg.JWTSecret,
+		ValidateSession:          cfg.ValidateSession,
+		RequireSessionValidation: true,
+		DelegatedJWTAudience:     "periscope",
+		MetadataPolicy:           middleware.MetadataPolicyDeny,
+		Logger:                   cfg.Logger,
 		SkipMethods: []string{
 			"/grpc.health.v1.Health/Check",
 			"/grpc.health.v1.Health/Watch",

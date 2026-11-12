@@ -15,6 +15,7 @@ import (
 	"frameworks/api_webhooks/internal/metrics"
 	"frameworks/api_webhooks/internal/notify"
 
+	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
@@ -67,6 +68,15 @@ func main() {
 		logger.WithError(err).Fatal("Invalid configuration")
 	}
 	cfg.ApplyLogLevel(logger)
+	commodoreClient, err := commodoreclient.NewGRPCClient(commodoreclient.GRPCConfig{
+		GRPCAddr: cfg.CommodoreGRPCAddr, Timeout: 5 * time.Second, Logger: logger,
+		ServiceToken: cfg.ServiceToken, AllowInsecure: cfg.AllowInsecure,
+		CACertFile: cfg.CAPath, ServerName: cfg.CommodoreGRPCTLSServerName,
+	})
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to create Commodore session-validation client")
+	}
+	defer func() { _ = commodoreClient.Close() }()
 	keyring, err := cfg.FieldKeyring()
 	if err != nil {
 		logger.WithError(err).Fatal("Invalid BOSUN_FIELD_ENCRYPTION_KEY settings")
@@ -256,7 +266,7 @@ func main() {
 		// The gRPC server is built after the port is bound, so HTTP health
 		// serves while the TLS files are still being synced.
 		GRPC: []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCPort, Build: func(buildCtx context.Context) (*grpc.Server, error) {
-			return newGRPCServer(buildCtx, cfg, logger, api, domainMetrics.GRPCRequests, domainMetrics.GRPCDuration)
+			return newGRPCServer(buildCtx, cfg, logger, api, domainMetrics.GRPCRequests, domainMetrics.GRPCDuration, commodoreClient.CheckSession)
 		}}},
 		OnDrain: []func(context.Context){func(ctx context.Context) {
 			stopWork()
@@ -282,16 +292,18 @@ func main() {
 
 // newGRPCServer builds the Bosun gRPC server. It waits up to two minutes for
 // the TLS files, and stops waiting when ctx ends.
-func newGRPCServer(ctx context.Context, cfg *appconfig.Bosun, logger logging.Logger, srv bosunpb.BosunServiceServer, requests *prometheus.CounterVec, duration *prometheus.HistogramVec) (*grpc.Server, error) {
+func newGRPCServer(ctx context.Context, cfg *appconfig.Bosun, logger logging.Logger, srv bosunpb.BosunServiceServer, requests *prometheus.CounterVec, duration *prometheus.HistogramVec, validateSession func(context.Context, string) error) (*grpc.Server, error) {
 	metadataPolicy, policyErr := middleware.ParseMetadataPolicy(cfg.MetadataPolicy)
 	if policyErr != nil {
 		return nil, policyErr
 	}
 	authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
-		ServiceToken:   cfg.ServiceToken,
-		JWTSecret:      []byte(cfg.JWTSecret),
-		MetadataPolicy: metadataPolicy,
-		Logger:         logger,
+		ServiceToken:             cfg.ServiceToken,
+		JWTSecret:                []byte(cfg.JWTSecret),
+		ValidateSession:          validateSession,
+		RequireSessionValidation: true,
+		MetadataPolicy:           metadataPolicy,
+		Logger:                   logger,
 		SkipMethods: []string{
 			"/grpc.health.v1.Health/Check",
 			"/grpc.health.v1.Health/Watch",

@@ -4274,8 +4274,11 @@ type ValidateSessionResponse struct {
 	// account_deactivated is set with valid=false when the token's user was
 	// deactivated by an operator.
 	AccountDeactivated bool `protobuf:"varint,2,opt,name=account_deactivated,json=accountDeactivated,proto3" json:"account_deactivated,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// True only when the authority checked the named-session revocation contract.
+	// Older servers omit this field; new consumers must not treat them as proof.
+	SessionStateChecked bool `protobuf:"varint,3,opt,name=session_state_checked,json=sessionStateChecked,proto3" json:"session_state_checked,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *ValidateSessionResponse) Reset() {
@@ -4318,6 +4321,13 @@ func (x *ValidateSessionResponse) GetValid() bool {
 func (x *ValidateSessionResponse) GetAccountDeactivated() bool {
 	if x != nil {
 		return x.AccountDeactivated
+	}
+	return false
+}
+
+func (x *ValidateSessionResponse) GetSessionStateChecked() bool {
+	if x != nil {
+		return x.SessionStateChecked
 	}
 	return false
 }
@@ -18047,10 +18057,11 @@ const file_commodore_proto_rawDesc = "" +
 	"\x11platform_operator\x18\b \x01(\bR\x10platformOperator\x12/\n" +
 	"\x13account_deactivated\x18\t \x01(\bR\x12accountDeactivated\".\n" +
 	"\x16ValidateSessionRequest\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\"`\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\"\x94\x01\n" +
 	"\x17ValidateSessionResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12/\n" +
-	"\x13account_deactivated\x18\x02 \x01(\bR\x12accountDeactivated\"\x8b\x01\n" +
+	"\x13account_deactivated\x18\x02 \x01(\bR\x12accountDeactivated\x122\n" +
+	"\x15session_state_checked\x18\x03 \x01(\bR\x13sessionStateChecked\"\x8b\x01\n" +
 	"#ListRecentSessionRevocationsRequest\x120\n" +
 	"\x05since\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x05since\x122\n" +
 	"\x15include_auth_sessions\x18\x02 \x01(\bR\x13includeAuthSessions\"\xd4\x01\n" +

@@ -97,7 +97,8 @@ type tenantBillingLookupStub struct {
 
 type sessionStateStub struct {
 	commodorepb.UnimplementedInternalServiceServer
-	valid atomic.Bool
+	valid   atomic.Bool
+	checked atomic.Bool
 }
 
 func (s *sessionStateStub) ValidateSession(ctx context.Context, req *commodorepb.ValidateSessionRequest) (*commodorepb.ValidateSessionResponse, error) {
@@ -108,7 +109,7 @@ func (s *sessionStateStub) ValidateSession(ctx context.Context, req *commodorepb
 	if req.GetToken() != "interactive-token" {
 		return nil, status.Error(codes.InvalidArgument, "unexpected session")
 	}
-	return &commodorepb.ValidateSessionResponse{Valid: s.valid.Load()}, nil
+	return &commodorepb.ValidateSessionResponse{Valid: s.valid.Load(), SessionStateChecked: s.checked.Load()}, nil
 }
 
 func TestCheckSessionDoesNotCacheAcceptedTokens(t *testing.T) {
@@ -128,6 +129,10 @@ func TestCheckSessionDoesNotCacheAcceptedTokens(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = client.Close() })
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyJWTToken, "interactive-token")
+	if err := client.CheckSession(ctx, "interactive-token"); status.Code(err) != codes.Unavailable {
+		t.Fatalf("older validation response without session-state proof was accepted: %v", err)
+	}
+	service.checked.Store(true)
 	if err := client.CheckSession(ctx, "interactive-token"); err != nil {
 		t.Fatalf("active session: %v", err)
 	}

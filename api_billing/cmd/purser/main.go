@@ -381,6 +381,7 @@ func main() {
 		MollieClient:        mollieClient,
 		QuartermasterClient: qmGRPCClient,
 		CommodoreClient:     commodoreClient,
+		ValidateSession:     commodoreClient.CheckSession,
 		DecklogClient:       decklogClient,
 		Billing:             billingSvc,
 		TokenHasher:         tokenHasher,

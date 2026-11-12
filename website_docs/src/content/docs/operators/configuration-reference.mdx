@@ -31,6 +31,8 @@ Read by `api_webhooks/cmd/bosun`.
 | `DATABASE_URL` | string |  | required, secret | v0.3.0 | Connection URL for this service's PostgreSQL or YugabyteDB database. |
 | `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
+| `COMMODORE_GRPC_ADDR` | string | `commodore:19001` |  | v0.3.15 | Commodore gRPC address used to validate interactive user sessions. |
+| `COMMODORE_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Commodore session-validation connection. |
 | `EMAIL_LOGO_URL` | string |  |  | v0.3.10 | Absolute URL of the logo image in outgoing emails. Empty uses the light logomark served under WEBAPP_PUBLIC_URL. |
 | `WEBAPP_PUBLIC_URL` | string |  |  | v0.3.0 | Public base URL of the web application. Links in outgoing emails and notifications and redirects back to the web application are built from it, and it serves the default email logo when EMAIL_LOGO_URL is empty. |
 | `SUPPORT_EMAIL` | string |  |  | v0.3.10 | Support mailbox shown in the footer of outgoing emails and set as Reply-To on the emails that carry one. Empty uses support@frameworks.network. |
@@ -521,6 +523,8 @@ Read by `api_realtime/cmd/signalman`.
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
 | `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
+| `COMMODORE_GRPC_ADDR` | string | `commodore:19001` |  | v0.3.15 | Commodore gRPC address used to validate interactive user sessions. |
+| `COMMODORE_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Commodore session-validation connection. |
 | `KAFKA_BROKERS` | list |  | required | v0.3.0 | Comma-separated Kafka bootstrap brokers for the event consumer and the DLQ producer. |
 | `KAFKA_CLUSTER_ID` | string |  | required | v0.3.0 | Kafka cluster identifier attached to the consumer and DLQ producer clients. |
 | `KAFKA_GROUP_ID` | string | `signalman-group` |  | v0.3.0 | Kafka consumer group. Each replica needs its own group so every replica receives every event for fan-out. |
@@ -686,6 +690,8 @@ Read by `api_analytics_query/cmd/periscope`.
 | `CLICKHOUSE_PASSWORD` | string |  | required, secret | v0.3.0 | Password for CLICKHOUSE_USER. |
 | `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
+| `COMMODORE_GRPC_ADDR` | string | `commodore:19001` |  | v0.3.15 | Commodore gRPC address used to validate interactive user sessions. |
+| `COMMODORE_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Commodore session-validation connection. |
 | `QUARTERMASTER_GRPC_ADDR` | string | `quartermaster:19002` |  | v0.3.0 | Quartermaster gRPC address used for service registration. |
 | `QUARTERMASTER_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.0 | TLS server name override for the Quartermaster connection. Empty uses the canonical internal name. |
 | `PERISCOPE_QUERY_HOST` | string | `periscope-query` |  | v0.3.0 | Host name this instance advertises when it registers with Quartermaster. |
@@ -944,6 +950,8 @@ Read by `api_incidents/cmd/lookout`.
 | `DATABASE_URL` | string |  | required, secret | v0.3.0 | Connection URL for this service's PostgreSQL or YugabyteDB database. |
 | `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
+| `COMMODORE_GRPC_ADDR` | string | `commodore:19001` |  | v0.3.15 | Commodore gRPC address used to validate interactive user sessions. |
+| `COMMODORE_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Commodore session-validation connection. |
 | `EMAIL_LOGO_URL` | string |  |  | v0.3.10 | Absolute URL of the logo image in outgoing emails. Empty uses the light logomark served under WEBAPP_PUBLIC_URL. |
 | `WEBAPP_PUBLIC_URL` | string |  |  | v0.3.0 | Public base URL of the web application. Links in outgoing emails and notifications and redirects back to the web application are built from it, and it serves the default email logo when EMAIL_LOGO_URL is empty. |
 | `SUPPORT_EMAIL` | string |  |  | v0.3.10 | Support mailbox shown in the footer of outgoing emails and set as Reply-To on the emails that carry one. Empty uses support@frameworks.network. |

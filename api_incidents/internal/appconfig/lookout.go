@@ -20,6 +20,9 @@ type Lookout struct {
 	config.GRPCTLS
 	config.Postgres
 	config.Registration
+
+	CommodoreGRPCAddr          string `env:"COMMODORE_GRPC_ADDR" default:"commodore:@port(commodore.grpc)" desc:"Commodore gRPC address used to validate interactive user sessions." introduced:"v0.3.15"`
+	CommodoreGRPCTLSServerName string `env:"COMMODORE_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Commodore session-validation connection." introduced:"v0.3.15"`
 	config.EmailBranding
 
 	HTTPPort         string `env:"LOOKOUT_PORT" default:"@servicedefs.http_port" desc:"TCP port for the HTTP listener that serves the Alertmanager webhook, health, readiness, and metrics. PORT overrides it." introduced:"v0.3.8"`

@@ -8,6 +8,7 @@ import (
 	"frameworks/api_analytics_query/internal/database/periscopequerydb"
 	periscopegrpc "frameworks/api_analytics_query/internal/grpc"
 	"frameworks/api_analytics_query/internal/metrics"
+	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
@@ -39,6 +40,15 @@ func main() {
 		logger.WithError(err).Fatal("Invalid configuration")
 	}
 	cfg.ApplyLogLevel(logger)
+	commodoreClient, err := commodoreclient.NewGRPCClient(commodoreclient.GRPCConfig{
+		GRPCAddr: cfg.CommodoreGRPCAddr, Timeout: 5 * time.Second, Logger: logger,
+		ServiceToken: cfg.ServiceToken, AllowInsecure: cfg.AllowInsecure,
+		CACertFile: cfg.CAPath, ServerName: cfg.CommodoreGRPCTLSServerName,
+	})
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to create Commodore session-validation client")
+	}
+	defer func() { _ = commodoreClient.Close() }()
 
 	// Connect to ClickHouse (primary analytics database)
 	chConfig := database.DefaultClickHouseConfig()
@@ -97,15 +107,16 @@ func main() {
 	// background while HTTP health already serves.
 	buildGRPCServer := func(buildCtx context.Context) (*grpc.Server, error) {
 		return periscopegrpc.NewGRPCServer(buildCtx, periscopegrpc.GRPCServerConfig{
-			ClickHouse:    clickhouse,
-			ReplayDB:      replayDB,
-			Logger:        logger,
-			ServiceToken:  cfg.ServiceToken,
-			JWTSecret:     []byte(cfg.JWTSecret),
-			Metrics:       serviceMetrics,
-			CertFile:      cfg.CertPath,
-			KeyFile:       cfg.KeyPath,
-			AllowInsecure: cfg.AllowInsecure,
+			ClickHouse:      clickhouse,
+			ReplayDB:        replayDB,
+			Logger:          logger,
+			ServiceToken:    cfg.ServiceToken,
+			JWTSecret:       []byte(cfg.JWTSecret),
+			ValidateSession: commodoreClient.CheckSession,
+			Metrics:         serviceMetrics,
+			CertFile:        cfg.CertPath,
+			KeyFile:         cfg.KeyPath,
+			AllowInsecure:   cfg.AllowInsecure,
 		})
 	}
 

@@ -7,6 +7,12 @@
 export BRIDGE_URL="http://bridge:18000"
 export BRIDGE_GRAPHQL_URL="$BRIDGE_URL/graphql"
 export BRIDGE_WS_URL="ws://bridge:18000/graphql/ws"
+export STACK_QUARTERMASTER_GRPC_ADDR="quartermaster:19002"
+export STACK_PURSER_GRPC_ADDR="purser:19003"
+export STACK_PERISCOPE_GRPC_ADDR="periscope-query:19004"
+export STACK_SIGNALMAN_GRPC_ADDR="signalman:19005"
+export STACK_LOOKOUT_GRPC_ADDR="lookout:19008"
+export STACK_BOSUN_GRPC_ADDR="bosun:19009"
 
 # Foghorn replicas per cell (public HTTP). The first entry is the one the
 # gateway auth webhook uses; scenarios must resolve through every replica.

@@ -1048,6 +1048,9 @@ message ValidateSessionResponse {
   // account_deactivated is set with valid=false when the token's user was
   // deactivated by an operator.
   bool account_deactivated = 2;
+  // True only when the authority checked the named-session revocation contract.
+  // Older servers omit this field; new consumers must not treat them as proof.
+  bool session_state_checked = 3;
 }
 
 message ListRecentSessionRevocationsRequest {

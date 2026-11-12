@@ -14,6 +14,7 @@ import (
 	"frameworks/api_incidents/internal/notify"
 	"frameworks/api_incidents/internal/ownership"
 
+	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
@@ -64,6 +65,15 @@ func main() {
 		logger.WithError(err).Fatal("Invalid configuration")
 	}
 	cfg.ApplyLogLevel(logger)
+	commodoreClient, err := commodoreclient.NewGRPCClient(commodoreclient.GRPCConfig{
+		GRPCAddr: cfg.CommodoreGRPCAddr, Timeout: 5 * time.Second, Logger: logger,
+		ServiceToken: cfg.ServiceToken, AllowInsecure: cfg.AllowInsecure,
+		CACertFile: cfg.CAPath, ServerName: cfg.CommodoreGRPCTLSServerName,
+	})
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to create Commodore session-validation client")
+	}
+	defer func() { _ = commodoreClient.Close() }()
 	// The Alertmanager token and the notification settings are read through
 	// liveConfig on every use, so they follow a SIGHUP env-file reload.
 	liveConfig := config.NewLive(cfg, configOptions)
@@ -230,7 +240,7 @@ func main() {
 		// the Alertmanager webhook serve while the TLS files are still being
 		// synced.
 		GRPC: []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCPort, Build: func(buildCtx context.Context) (*grpc.Server, error) {
-			return newGRPCServer(buildCtx, cfg, logger, incidentServer, grpcRequests, grpcDuration)
+			return newGRPCServer(buildCtx, cfg, logger, incidentServer, grpcRequests, grpcDuration, commodoreClient.CheckSession)
 		}}},
 		// Only settings read through liveConfig follow a reload; everything
 		// else keeps its startup value.
@@ -270,16 +280,18 @@ func notifySettings(cfg *appconfig.Lookout) notify.Settings {
 
 // newGRPCServer builds the Lookout gRPC server. It waits up to two minutes
 // for the TLS files, and stops waiting when ctx ends.
-func newGRPCServer(ctx context.Context, cfg *appconfig.Lookout, logger logging.Logger, srv *grpcserver.Server, requests *prometheus.CounterVec, duration *prometheus.HistogramVec) (*grpc.Server, error) {
+func newGRPCServer(ctx context.Context, cfg *appconfig.Lookout, logger logging.Logger, srv *grpcserver.Server, requests *prometheus.CounterVec, duration *prometheus.HistogramVec, validateSession func(context.Context, string) error) (*grpc.Server, error) {
 	metadataPolicy, policyErr := middleware.ParseMetadataPolicy(cfg.MetadataPolicy)
 	if policyErr != nil {
 		return nil, policyErr
 	}
 	authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
-		ServiceToken:   cfg.ServiceToken,
-		JWTSecret:      []byte(cfg.JWTSecret),
-		MetadataPolicy: metadataPolicy,
-		Logger:         logger,
+		ServiceToken:             cfg.ServiceToken,
+		JWTSecret:                []byte(cfg.JWTSecret),
+		ValidateSession:          validateSession,
+		RequireSessionValidation: true,
+		MetadataPolicy:           metadataPolicy,
+		Logger:                   logger,
 		SkipMethods: []string{
 			"/grpc.health.v1.Health/Check",
 			"/grpc.health.v1.Health/Watch",

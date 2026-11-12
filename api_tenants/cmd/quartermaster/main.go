@@ -394,6 +394,7 @@ func main() {
 			DecklogClient:               decklogClient,
 			PurserClient:                purserClient,
 			MediaAuthorityRefreshClient: commodoreClient,
+			ValidateSession:             commodoreClient.CheckSession,
 			GeoIPReader:                 geoipReader,
 			Metrics:                     serverMetrics,
 			CertFile:                    cfg.CertPath,
