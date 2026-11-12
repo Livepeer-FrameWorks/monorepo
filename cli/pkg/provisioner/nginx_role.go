@@ -26,8 +26,10 @@ func nginxRoleVars(_ context.Context, _ inventory.Host, config ServiceConfig, _ 
 		// to. The Ansible role has matching defaults so molecule and
 		// standalone invocations still work, but in CLI-driven runs these
 		// values from pkg/ingress always win.
-		"nginx_ingress_tls_root":       ingress.TLSRoot,
-		"nginx_ingress_reload_trigger": ingress.ReloadTrigger,
+		"nginx_ingress_tls_root":          ingress.TLSRoot,
+		"nginx_ingress_reader_group":      ingress.ReaderGroup,
+		"nginx_tenant_alias_applied_path": ingress.TenantAliasAppliedPath,
+		"nginx_ingress_reload_trigger":    ingress.ReloadTrigger,
 	}
 	if tap, ok := config.Metadata["tenant_alias_playback"].(map[string]any); ok && len(tap) > 0 {
 		enabled := map[string]any{"enabled": true}

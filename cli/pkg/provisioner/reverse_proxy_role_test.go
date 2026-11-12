@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ingress"
 )
 
 func TestReverseProxyComposeVarsRendersNginxConfigMount(t *testing.T) {
@@ -254,12 +256,12 @@ func TestReverseProxyComposeVarsRendersTenantAliasPlayback(t *testing.T) {
 	files := decodedComposeFilesAny(t, vars)
 	conf := files["frameworks.conf"].(string)
 	for _, want := range []string{
-		`map $ssl_server_name $fw_tenant_alias_sub {`,
-		`~^foghorn\.(?<sub>[a-z0-9][a-z0-9-]*)\.cdn\.frameworks\.network$ $sub;`,
+		`map $ssl_server_name $fw_tenant_alias_bundle {`,
+		`include /etc/frameworks/ingress/tls/tenant-alias/nginx.map;`,
 		`server_name ~^foghorn\.[a-z0-9][a-z0-9-]*\.cdn\.frameworks\.network$;`,
 		`return 308 https://$host$request_uri;`,
-		`ssl_certificate /etc/frameworks/ingress/tls/tenant-alias/$fw_tenant_alias_sub/tls.crt;`,
-		`ssl_certificate_key /etc/frameworks/ingress/tls/tenant-alias/$fw_tenant_alias_sub/tls.key;`,
+		`ssl_certificate /etc/frameworks/ingress/tls/tenant-alias/$fw_tenant_alias_bundle/tls.crt;`,
+		`ssl_certificate_key /etc/frameworks/ingress/tls/tenant-alias/$fw_tenant_alias_bundle/tls.key;`,
 		`proxy_pass http://host.docker.internal:18008;`,
 	} {
 		if !strings.Contains(conf, want) {
@@ -274,6 +276,17 @@ func TestReverseProxyComposeVarsRendersTenantAliasPlayback(t *testing.T) {
 			t.Fatalf("tenant-alias compose missing %q:\n%s", want, compose)
 		}
 	}
+	bridge, ok := vars["compose_stack_tenant_alias_ingress"].(map[string]any)
+	if !ok || bridge["container_name"] != "frameworks-nginx" || bridge["applied_path"] != ingress.TenantAliasAppliedPath {
+		t.Fatalf("Docker proxy omitted its automatic apply bridge: %#v", bridge)
+	}
+	if !strings.Contains(compose, ". /etc/nginx/ingress-readers.sh") {
+		t.Fatal("Docker workers are not initialized with the public certificate reader group")
+	}
+	if _, ok := files["ingress-readers.sh"]; !ok {
+		t.Fatal("Docker certificate reader setup was not staged")
+	}
+
 }
 
 // Without the metadata key, nothing tenant-alias related renders.
@@ -292,7 +305,7 @@ func TestReverseProxyComposeVarsTenantAliasDisabledByDefault(t *testing.T) {
 	}
 	files := decodedComposeFilesAny(t, vars)
 	conf := files["frameworks.conf"].(string)
-	if strings.Contains(conf, "fw_tenant_alias_sub") {
+	if strings.Contains(conf, "fw_tenant_alias_bundle") {
 		t.Fatalf("tenant-alias blocks rendered without metadata:\n%s", conf)
 	}
 }

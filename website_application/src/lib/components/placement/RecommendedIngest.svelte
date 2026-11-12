@@ -25,6 +25,11 @@
   const identity = $derived(`${$auth.user?.tenant_id ?? ""}:${$auth.user?.id ?? ""}`);
   const canResolve = $derived($auth.isAuthenticated && !!$auth.user?.tenant_id && !!$auth.user?.id);
   const rtmp = $derived(result ? splitRtmpDestination(result.primary, streamKey) : null);
+  const destinationLabel = $derived(
+    result
+      ? [destinationHost(result.primary), result.primary.region?.trim()].filter(Boolean).join(" · ")
+      : ""
+  );
   $effect(() => {
     const binding = `${identity}:${canResolve}:${streamId}:${streamKey}:${requestedProtocol}`;
     untrack(() => {
@@ -90,8 +95,8 @@
   <div class="slab-header"><h3>Recommended destination</h3></div>
   <div class="slab-body--padded space-y-3">
     <p class="text-sm text-muted-foreground">
-      Resolve for this publisher’s connection. This uses the ingest resolver; it is not a
-      hypothetical placement preview.
+      Find a current destination for your encoder. The stream’s standard ingest URL follows network
+      routing automatically; resolving here gives you a specific server to connect to.
     </p>
     <label class="block text-sm space-y-1">
       <span>Publisher protocol</span>
@@ -118,12 +123,11 @@
     {#if error}<p role="alert" class="text-sm text-destructive">{error}</p>{/if}
     {#if result}
       <p class="font-medium break-all">
-        {destinationHost(result.primary)} · {result.primary.region ?? "Region unavailable"}
+        {destinationLabel}
       </p>
       <p class="text-xs text-muted-foreground">
-        Resolved at {observedAt}. Advisory only: refresh before connecting. This is not admission or
-        a node reservation. Policy rollout and active ingest claim status are not included in this
-        response.
+        Resolved at {observedAt}. Refresh before connecting. Availability and stream access are
+        checked when your encoder connects.
       </p>
       <label class="flex items-center gap-2 text-sm min-h-11"
         ><input type="checkbox" bind:checked={reveal} />Show credential-bearing connection URLs</label

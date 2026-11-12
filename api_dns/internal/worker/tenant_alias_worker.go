@@ -27,13 +27,16 @@ type EdgeAddressResolver interface {
 }
 
 type ServiceAddress struct {
-	NodeID string
-	IP     string
+	NodeID    string
+	IP        string
+	Latitude  *float64
+	Longitude *float64
 }
 
 type tenantAliasAddr struct {
-	ip     string
-	nodeID string
+	ip        string
+	nodeID    string
+	geography bunnyrecords.GeoCoordinates
 }
 
 type TenantServiceAddressResolver interface {
@@ -570,7 +573,7 @@ func (w *AliasApplyStateWorker) publishTenantSmartRecords(ctx context.Context, a
 					continue
 				}
 				seen[key] = struct{}{}
-				out = append(out, tenantAliasAddr{ip: a.IP, nodeID: a.NodeID})
+				out = append(out, tenantAliasAddr{ip: a.IP, nodeID: a.NodeID, geography: bunnyrecords.GeoCoordinates{Latitude: a.Latitude, Longitude: a.Longitude}})
 			}
 			return out, nil
 		}
@@ -613,10 +616,11 @@ func (w *AliasApplyStateWorker) publishTenantSmartRecords(ctx context.Context, a
 		desired := make([]bunny.Record, 0, len(addrs))
 		for _, a := range addrs {
 			desired = append(desired, bunnyrecords.ARecord(bunnyrecords.ARecordInput{
-				Name:  name,
-				Value: a.ip,
-				TTL:   60,
-				FQDN:  bunnyRecordFQDN(name, zoneFQDN),
+				Name:      name,
+				Value:     a.ip,
+				TTL:       60,
+				FQDN:      bunnyRecordFQDN(name, zoneFQDN),
+				Geography: a.geography,
 			}))
 		}
 		if err := w.bunny.ReconcileRecordSet(ctx, zone.ID, name, bunny.RecordTypeA, desired); err != nil {

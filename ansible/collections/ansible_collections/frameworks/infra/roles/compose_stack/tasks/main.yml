@@ -4,9 +4,37 @@
   tags: [install, configure, pki]
   when: compose_stack_pki | default({}) | length > 0
 
+- name: Compose_stack | tenant playback certificate custody
+  ansible.builtin.include_role:
+    name: frameworks.infra.nginx
+    tasks_from: tenant_alias_permissions
+  vars:
+    nginx_tenant_alias_playback: "{{ compose_stack_tenant_alias_ingress }}"
+    nginx_ingress_tls_root: "{{ compose_stack_tenant_alias_ingress.tls_root }}"
+    nginx_ingress_reader_group: "{{ compose_stack_tenant_alias_ingress.reader_group }}"
+    nginx_manage_native_worker: false
+  when: compose_stack_tenant_alias_ingress.enabled | default(false)
+  tags: [install, configure]
+
 - name: Compose_stack | install (pull + up)
   ansible.builtin.import_tasks: install.yml
   tags: [install, configure, service]
+
+- name: Compose_stack | automatic hosted playback reload bridge
+  ansible.builtin.include_role:
+    name: frameworks.infra.nginx
+    tasks_from: reload_unit
+  vars:
+    nginx_tenant_alias_playback: "{{ compose_stack_tenant_alias_ingress }}"
+    nginx_ingress_tls_root: "{{ compose_stack_tenant_alias_ingress.tls_root }}"
+    nginx_ingress_reader_group: "{{ compose_stack_tenant_alias_ingress.reader_group }}"
+    nginx_ingress_reload_trigger: "{{ compose_stack_tenant_alias_ingress.reload_trigger }}"
+    nginx_tenant_alias_applied_path: "{{ compose_stack_tenant_alias_ingress.applied_path }}"
+    nginx_ingress_container_name: "{{ compose_stack_tenant_alias_ingress.container_name }}"
+    nginx_ingress_reload_mode: docker
+    nginx_manage_native_worker: false
+  when: compose_stack_tenant_alias_ingress.enabled | default(false)
+  tags: [configure, service]
 
 - name: Compose_stack | flush handlers before validate
   ansible.builtin.meta: flush_handlers

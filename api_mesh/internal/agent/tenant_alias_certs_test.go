@@ -32,7 +32,7 @@ func (f *fakeAliasedTenantsClient) ListAliasedTenantsForCluster(_ context.Contex
 func foghornRegistry() *fakeServiceRegistryClient {
 	return &fakeServiceRegistryClient{
 		responses: []*quartermasterpb.ListServiceInstancesResponse{{
-			Instances: []*quartermasterpb.ServiceInstance{{ServiceId: "foghorn", Status: "running"}},
+			Instances: []*quartermasterpb.ServiceInstance{{ServiceId: "foghorn", InstanceId: "fh-1", ClusterId: "media-test", Status: "running"}},
 		}},
 	}
 }
@@ -63,7 +63,7 @@ func newAliasTestAgent(t *testing.T, registry *fakeServiceRegistryClient, alias 
 func TestSyncTenantAliasCertificatesWritesPrunesAndTouchesTrigger(t *testing.T) {
 	navigator := &fakeCertificateClient{
 		tlsBundles: map[string]*dnspb.GetTLSBundleResponse{
-			"tenant:t-acme": {Found: true, BundleId: "tenant:t-acme", CertPem: "acme-cert", KeyPem: "acme-key", Version: "v1"},
+			"tenant:t-acme": aliasTestBundle(t, "t-acme", "acme", "v1"),
 			// tenant:t-globex intentionally absent → issuance pending.
 		},
 	}
@@ -77,32 +77,36 @@ func TestSyncTenantAliasCertificatesWritesPrunesAndTouchesTrigger(t *testing.T) 
 
 	// Pre-plant a leftover from a downgraded tenant; the sync must prune it.
 	staleDir := filepath.Join(tlsRoot, "tenant-alias", "oldco")
-	if err := os.MkdirAll(staleDir, 0o750); err != nil {
-		t.Fatalf("mkdir stale: %v", err)
+	if callErr := os.MkdirAll(staleDir, 0o750); callErr != nil {
+		t.Fatalf("mkdir stale: %v", callErr)
 	}
-	if err := os.WriteFile(filepath.Join(staleDir, "tls.crt"), []byte("stale"), 0o644); err != nil {
-		t.Fatalf("write stale: %v", err)
-	}
-
-	if err := agent.syncTenantAliasCertificates(); err != nil {
-		t.Fatalf("syncTenantAliasCertificates: %v", err)
+	if callErr := os.WriteFile(filepath.Join(staleDir, "tls.crt"), []byte("stale"), 0o644); callErr != nil {
+		t.Fatalf("write stale: %v", callErr)
 	}
 
-	acmeDir := filepath.Join(tlsRoot, "tenant-alias", "acme")
-	if got, err := os.ReadFile(filepath.Join(acmeDir, "tls.crt")); err != nil || string(got) != "acme-cert" {
+	if callErr := agent.syncTenantAliasCertificates(); callErr != nil {
+		t.Fatalf("syncTenantAliasCertificates: %v", callErr)
+	}
+
+	inventory, err := agent.loadAliasInventory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	acmeDir := agent.tenantAliasDir(inventory["t-acme"].Path)
+	if got, err := os.ReadFile(filepath.Join(acmeDir, "tls.crt")); err != nil || string(got) != navigator.tlsBundles["tenant:t-acme"].CertPem {
 		t.Fatalf("acme tls.crt = %q err=%v, want acme-cert", string(got), err)
 	}
-	if got, err := os.ReadFile(filepath.Join(acmeDir, "tls.key")); err != nil || string(got) != "acme-key" {
+	if got, err := os.ReadFile(filepath.Join(acmeDir, "tls.key")); err != nil || string(got) != navigator.tlsBundles["tenant:t-acme"].KeyPem {
 		t.Fatalf("acme tls.key = %q err=%v, want acme-key", string(got), err)
 	}
-	if _, err := os.Stat(filepath.Join(tlsRoot, "tenant-alias", "globex")); !os.IsNotExist(err) {
-		t.Fatalf("globex (pending issuance) should have no dir; stat err=%v", err)
+	if _, callErr := os.Stat(filepath.Join(tlsRoot, "tenant-alias", "globex")); !os.IsNotExist(callErr) {
+		t.Fatalf("globex (pending issuance) should have no dir; stat callErr=%v", callErr)
 	}
-	if _, err := os.Stat(staleDir); !os.IsNotExist(err) {
-		t.Fatalf("stale oldco dir should have been pruned; stat err=%v", err)
+	if _, callErr := os.Stat(staleDir); !os.IsNotExist(callErr) {
+		t.Fatalf("stale oldco dir should have been pruned; stat callErr=%v", callErr)
 	}
-	if _, err := os.Stat(trigger); err != nil {
-		t.Fatalf("expected reload trigger to be touched: %v", err)
+	if _, callErr := os.Stat(trigger); callErr != nil {
+		t.Fatalf("expected reload trigger to be touched: %v", callErr)
 	}
 }
 
@@ -118,18 +122,18 @@ func TestSyncTenantAliasCertificatesNonFoghornNodePrunes(t *testing.T) {
 	agent, tlsRoot, _ := newAliasTestAgent(t, registry, alias, &fakeCertificateClient{})
 
 	staleDir := filepath.Join(tlsRoot, "tenant-alias", "acme")
-	if err := os.MkdirAll(staleDir, 0o750); err != nil {
-		t.Fatalf("mkdir stale: %v", err)
+	if callErr := os.MkdirAll(staleDir, 0o750); callErr != nil {
+		t.Fatalf("mkdir stale: %v", callErr)
 	}
 
-	if err := agent.syncTenantAliasCertificates(); err != nil {
-		t.Fatalf("syncTenantAliasCertificates: %v", err)
+	if callErr := agent.syncTenantAliasCertificates(); callErr != nil {
+		t.Fatalf("syncTenantAliasCertificates: %v", callErr)
 	}
 	if alias.calls != 0 {
 		t.Fatalf("ListAliasedTenantsForCluster calls = %d, want 0 on non-foghorn node", alias.calls)
 	}
-	if _, err := os.Stat(staleDir); !os.IsNotExist(err) {
-		t.Fatalf("non-foghorn node should prune alias certs; stat err=%v", err)
+	if _, callErr := os.Stat(staleDir); !os.IsNotExist(callErr) {
+		t.Fatalf("non-foghorn node should prune alias certs; stat callErr=%v", callErr)
 	}
 }
 
@@ -149,13 +153,13 @@ func TestSyncTenantAliasCertificatesRejectsUnsafeSubdomain(t *testing.T) {
 	}}
 	agent, tlsRoot, _ := newAliasTestAgent(t, foghornRegistry(), alias, navigator)
 
-	if err := agent.syncTenantAliasCertificates(); err != nil {
-		t.Fatalf("syncTenantAliasCertificates: %v", err)
+	if callErr := agent.syncTenantAliasCertificates(); callErr != nil {
+		t.Fatalf("syncTenantAliasCertificates: %v", callErr)
 	}
 	if len(navigator.tlsBundleRequests) != 0 {
 		t.Fatalf("GetTLSBundle calls = %d, want 0 (unsafe subdomains skipped)", len(navigator.tlsBundleRequests))
 	}
-	if entries, err := os.ReadDir(filepath.Join(tlsRoot, "tenant-alias")); err == nil && len(entries) != 0 {
-		t.Fatalf("expected no alias dirs for unsafe subdomains, got %v", entries)
+	if entries, err := os.ReadDir(filepath.Join(tlsRoot, "tenant-alias", "revisions")); err == nil && len(entries) != 0 {
+		t.Fatalf("expected no certificate generations for unsafe subdomains, got %v", entries)
 	}
 }

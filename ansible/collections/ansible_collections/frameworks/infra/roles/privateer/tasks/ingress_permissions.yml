@@ -1,0 +1,24 @@
+---
+- name: Ensure dedicated public ingress reader group
+  ansible.builtin.group:
+    name: "{{ privateer_ingress_reader_group }}"
+    system: true
+
+- name: Allow Privateer to publish public ingress certificates
+  ansible.builtin.user:
+    name: "{{ privateer_user }}"
+    groups: "{{ privateer_ingress_reader_group }}"
+    append: true
+  when: not ansible_check_mode
+
+- name: Ensure Privateer owns the public ingress certificate root
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ privateer_user }}"
+    group: "{{ privateer_ingress_reader_group }}"
+    mode: "2750"
+  loop:
+    - "{{ privateer_ingress_tls_root | dirname }}"
+    - "{{ privateer_ingress_tls_root }}"
+  when: not ansible_check_mode

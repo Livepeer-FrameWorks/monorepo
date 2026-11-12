@@ -4,6 +4,13 @@
   become: true
   gather_facts: true
   tasks:
+    - name: Create the certificate courier identity for hosted ingress
+      ansible.builtin.user:
+        name: privateer
+        system: true
+        create_home: false
+        shell: /usr/sbin/nologin
+
     - name: Apply frameworks.infra.compose_stack
       ansible.builtin.include_role:
         name: frameworks.infra.compose_stack

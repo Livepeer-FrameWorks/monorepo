@@ -16,8 +16,8 @@
     path: "{{ nginx_ingress_reload_trigger | dirname }}"
     state: directory
     owner: privateer
-    group: privateer
-    mode: "0750"
+    group: "{{ nginx_ingress_reader_group if nginx_tenant_alias_playback.enabled | default(false) else 'privateer' }}"
+    mode: "2750"
   when: not ansible_check_mode
 
 - name: Pre-create ingress reload trigger file
@@ -29,6 +29,22 @@
     mode: "0644"
     force: false
   when: not ansible_check_mode
+
+- name: Ensure hosted ingress helper directory
+  ansible.builtin.file:
+    path: /usr/local/libexec
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install root-owned hosted ingress apply helper
+  ansible.builtin.template:
+    src: frameworks-nginx-reload.sh.j2
+    dest: /usr/local/libexec/frameworks-nginx-reload
+    owner: root
+    group: root
+    mode: "0755"
 
 - name: Render frameworks-nginx-reload.service unit
   ansible.builtin.template:

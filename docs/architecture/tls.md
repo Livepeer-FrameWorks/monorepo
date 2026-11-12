@@ -243,6 +243,64 @@ The Ed25519 media-authority trust set and X25519 cell seal keys are separate
 from both TLS systems above. Their production render/custody rules are described
 in [Media-cluster authority](media-authority.md).
 
+## Tenant aliases on edges and hosted playback
+
+A tenant alias is a logical service identity across its authorized clusters.
+Navigator issues the alias apex and `*.{tenant}.cdn.{root}` together. The same
+bundle covers the tenant's ingress, egress and Foghorn labels; adding a replica
+does not require another tenant hostname or certificate.
+
+Edges receive the complete bundle set through ConfigSeed. Helmsman installs it
+in Caddy and acknowledges the applied revision. Hosted playback uses a separate
+TLS termination path: public HTTPS ends at Nginx, which proxies plain HTTP to
+Foghorn's public playback router. Foghorn's external gRPC certificate holder is
+not that HTTPS terminator.
+
+Privateer obtains the local running Foghorn instances from Quartermaster and
+resolves each instance's served-cluster assignments. It lists alias-eligible
+tenants for the union of those media scopes. Its own physical mesh cluster ID
+is not a substitute for those scopes. A failed or incomplete discovery response
+preserves the existing inventory. Tenant eligibility is checked on each sync;
+only renewal reads for unchanged, valid certificates use the certificate refresh
+interval. New tenants and withdrawals do not wait for that interval.
+
+Privateer validates certificate/key agreement, validity and the authoritative
+alias apex/wildcard SAN pair before publishing material. During a pending rename,
+Navigator's last-good SANs remain the serving identity. Certificate generations
+are immutable under:
+
+`/etc/frameworks/ingress/tls/tenant-alias/revisions/{alias}/{digest}/tls.{crt,key}`
+
+The Privateer-owned `tenant-alias/nginx.map` maps SNI hostnames to these
+generations. A single generic Nginx server includes that inventory. Privateer
+writes the complete map atomically and requests the normal ingress reload.
+The root-owned reload helper pins the inventory with a shared directory lock,
+validates and reloads the native service or Docker container, and records the
+accepted map digest in `/run/frameworks-nginx/tenant-alias.applied`. Privateer
+uses a nonblocking exclusive publication lock and reports an unapplied inventory
+as a degraded `public_ingress` health check, independently of mesh liveness.
+Existing workers retain their loaded generation, and new workers select the
+new pair. No tenant-specific server blocks or operator edits are required.
+Old generations remain until certificate expiry so a retiring worker cannot
+lose its pair; sync removes expired unused generations. The durable
+`manifest.json` records the current tenant-to-generation view without storing
+private-key content. A restart compares the root-owned apply receipt with the
+current map and requests application if they differ. Merely writing files or
+touching the trigger never advances the applied state.
+
+The dedicated `frameworks-ingress` group gives the Nginx worker access to public
+certificate directories and keys. It does not grant access to Privateer's mesh
+credentials or the internal-PKI `frameworks` group. Keys remain mode `0640`;
+directories are setgid and group-traversable. Native provisioning and the Docker
+proxy reader setup preserve the same ownership boundary.
+
+`cert_issued` proves issuance, and the alias `dns_ready` flag currently proves
+an edge ACK-gated DNS member. Neither alone proves that hosted Nginx has loaded
+the tenant's certificate. Rollout verification must use system-trust SNI
+handshakes on every published playback address. The automatic reconciliation
+and proxy convergence must both be deployed; a Go gRPC listener change cannot
+repair TLS terminated upstream by Nginx.
+
 ## Private-edge bootstrap and persistent control identity
 
 Quartermaster returns two public endpoint roles for a cluster-bound edge token.
