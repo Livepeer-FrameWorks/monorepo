@@ -1,0 +1,1 @@
+ALTER TABLE purser.provider_settlements VALIDATE CONSTRAINT chk_provider_settlements_state;

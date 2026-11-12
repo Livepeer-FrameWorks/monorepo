@@ -117,7 +117,7 @@ func seedLiveReconnect(t *testing.T, internal, node, tenant string) (*Processor,
 	p.SetPeerNotifier(peer)
 	// Give the resolver the tenant so any tenant-scoped effect that DID run would be attributable
 	// (proving suppression, not an accidental unresolved-tenant short-circuit).
-	p.streamCache.Set(tenant+":"+internal, streamContext{TenantID: tenant, StreamID: "stream-x"}, time.Minute)
+	p.streamCache.Set(streamContextCacheKey("live+"+internal), streamContext{TenantID: tenant, StreamID: "stream-x"}, time.Minute)
 
 	return p, offlineObservers{reg: reg, sm: sm, peer: peer, capture: capture}
 }

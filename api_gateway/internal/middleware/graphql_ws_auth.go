@@ -30,6 +30,6 @@ func GraphQLOperationAuth() graphql.OperationMiddleware {
 			return next(context.WithValue(ctx, ctxkeys.KeyPublicAllowlisted, true))
 		}
 
-		return graphqlAccessDenied("authentication required", "UNAUTHORIZED")
+		return TerminalGraphQLError(ctx, "authentication required", "UNAUTHORIZED")
 	}
 }

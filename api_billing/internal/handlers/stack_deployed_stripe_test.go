@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"frameworks/api_billing/internal/fx"
 	"io"
 	"net/http"
 	"os"
@@ -160,6 +161,55 @@ func TestStackDeployedCardTopupTax(t *testing.T) {
 		t.Fatalf("topup doc count=%d net=%d vat=%d gross=%d lot=%d credit=%d", count, net, vat, gross, lot, credit)
 	}
 	t.Log("deployed NL card topup collected1210, issued exactly one tax invoice, credited1000 once")
+}
+
+func TestStackDeployedNativeUSDSettlement(t *testing.T) {
+	ctx, conn, db, tenant := stackBillingConnection(t)
+	response, err := purserpb.NewPrepaidServiceClient(conn).CreateCardTopup(ctx, &purserpb.CreateCardTopupRequest{TenantId: tenant, AmountCents: 1000, Provider: "stripe", SuccessUrl: "https://app.stack.test/billing/success", CancelUrl: "https://app.stack.test/billing/cancel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var completion []stackProviderEvent
+	stackProviderControl(t, ctx, "complete", map[string]string{"session_id": response.CheckoutId}, &completion)
+	deliverStackProviderEvents(t, ctx, conn, db, tenant, completion)
+	var payment string
+	if err := db.QueryRowContext(ctx, `SELECT provider_payment_id FROM purser.provider_settlements WHERE tenant_id=$1 AND pending_topup_id=$2 AND provider='stripe'`, tenant, response.TopupId).Scan(&payment); err != nil {
+		t.Fatal(err)
+	}
+	native := response.AmountCents * 6 / 5
+	var settlement stackProviderEvent
+	stackProviderControl(t, ctx, "native_settlement", map[string]any{"payment_id": payment, "currency": "usd", "amount": native, "fee": 60, "exchange_rate": 1.2}, &settlement)
+	deliverStackProviderEvents(t, ctx, conn, db, tenant, []stackProviderEvent{settlement})
+	var status, currency string
+	var gross, fee, net, grossEUR, feeEUR, netEUR int64
+	var at time.Time
+	if err := db.QueryRowContext(ctx, `SELECT status,settlement_currency,settled_amount_cents,fee_cents,net_cents,settled_eur_cents,fee_eur_cents,net_eur_cents,settled_at FROM purser.provider_settlements WHERE tenant_id=$1 AND provider='stripe' AND provider_payment_id=$2`, tenant, payment).Scan(&status, &currency, &gross, &fee, &net, &grossEUR, &feeEUR, &netEUR, &at); err != nil {
+		t.Fatal(err)
+	}
+	rate, err := fx.Lookup(ctx, db, fx.USD, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantGross, err := fx.RecordToEUR(native, rate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFee, err := fx.RecordToEUR(60, rate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "settled" || currency != "USD" || gross != native || fee != 60 || net != native-60 || grossEUR != wantGross.EURMinor || feeEUR != wantFee.EURMinor || netEUR != grossEUR-feeEUR {
+		t.Fatalf("deployed native/EUR settlement: %s %s %d/%d/%d EUR %d/%d/%d", status, currency, gross, fee, net, grossEUR, feeEUR, netEUR)
+	}
+	var count int
+	var credit int64
+	if err := db.QueryRowContext(ctx, `SELECT count(*),COALESCE(sum(net_credit_eur_cents),0) FROM purser.prepaid_funding_lots WHERE tenant_id=$1 AND source_reference_type='prepaid_topup' AND source_reference_id=$2`, tenant, response.TopupId).Scan(&count, &credit); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || credit != 1000 {
+		t.Fatalf("settlement replay changed customer credit: lots=%d credit=%d", count, credit)
+	}
+	t.Log("deployed signed USD balance transaction retained native evidence, valued EUR once and preserved one customer credit")
 }
 
 func TestStackDeployedStripeRenewalTax(t *testing.T) {

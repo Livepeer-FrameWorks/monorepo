@@ -191,7 +191,7 @@ type Processor struct {
 
 	// Hold-down so an in-flight ResolveIdentifier cannot repopulate stale
 	// stream-context entries between InvalidatePlaybackAuthCache and the
-	// next USER_NEW. Keyed by either full cache-key (tenant:internal) or
+	// next USER_NEW. Keyed by canonical resource cache key or
 	// tenant_id; the latter blocks any new key for that tenant.
 	streamCacheHoldsMu     sync.Mutex
 	streamCacheKeyHolds    map[string]time.Time
@@ -378,6 +378,7 @@ func NewProcessor(logger logging.Logger, commodoreClient *commodore.GRPCClient, 
 		NegativeTTL:          0,
 		MaxEntries:           50000,
 		SkipStore:            p.streamCacheHeld,
+		SkipStoreValue:       p.streamCacheOwnerHeld,
 	}, cache.MetricsHooks{
 		OnHit:  func(_ map[string]string) { atomic.AddUint64(&p.streamCacheHits, 1) },
 		OnMiss: func(_ map[string]string) { atomic.AddUint64(&p.streamCacheMisses, 1) },
@@ -826,10 +827,13 @@ func (p *Processor) GetBillingStatus(ctx context.Context, internalName, tenantID
 	var admissionStatus *BillingStatus
 	// Seed tenant-keyed authority from the stream context recorded at admission.
 	if p.streamCache != nil && internalName != "" && tenantID != "" {
-		cacheKey := tenantID + ":" + internalName
+		cacheKey := streamContextCacheKey("live+" + internalName)
 		if cached, ok := p.streamCache.Peek(cacheKey); ok {
 			//nolint:errcheck // cache stores streamContext values; enforced on write
 			info := cached.(streamContext)
+			if info.TenantID != tenantID {
+				return &BillingStatus{TenantID: tenantID, State: BillingStatusUnavailable}
+			}
 			if info.BillingModel == "postpaid" || info.BillingModel == "prepaid" {
 				status := &BillingStatus{
 					TenantID:          info.TenantID,
@@ -935,37 +939,28 @@ func (p *Processor) GetClusterPeers(internalName, tenantID string) []*clusterpee
 	if p.streamCache == nil || internalName == "" || tenantID == "" {
 		return nil
 	}
-	cacheKey := tenantID + ":" + internalName
+	cacheKey := streamContextCacheKey("live+" + internalName)
 	if cached, ok := p.streamCache.Peek(cacheKey); ok {
-		if info, ok := cached.(streamContext); ok {
+		if info, ok := cached.(streamContext); ok && info.TenantID == tenantID {
 			return info.ClusterPeers
 		}
 	}
 	return nil
 }
 
-// GetStreamOrigin returns the tenantID and origin cluster for a stream by scanning the cache.
+// GetStreamOrigin returns the owner and origin of a canonical source cache entry.
 // Unlike GetClusterPeers which requires both tenantID and internalName, this only needs
 // the internalName — useful when MistServer asks for source selection without tenant context.
 func (p *Processor) GetStreamOrigin(internalName string) (tenantID, originClusterID string) {
 	if p.streamCache == nil || internalName == "" {
 		return "", ""
 	}
-	suffix := ":" + internalName
-	var found int
-	for _, entry := range p.streamCache.Snapshot() {
-		if strings.HasSuffix(entry.Key, suffix) {
-			if info, ok := entry.Value.(streamContext); ok {
-				tenantID = info.TenantID
-				originClusterID = info.OriginClusterID
-				found++
-				if found > 1 {
-					return "", ""
-				}
-			}
+	if value, found := p.streamCache.Peek(streamContextCacheKey("live+" + internalName)); found {
+		if info, ok := value.(streamContext); ok {
+			return info.TenantID, info.OriginClusterID
 		}
 	}
-	return tenantID, originClusterID
+	return "", ""
 }
 
 // InvalidateTenantCache evicts all cache entries for a specific tenant.
@@ -976,6 +971,7 @@ func (p *Processor) InvalidateTenantCache(tenantID string) int {
 		return 0
 	}
 
+	p.holdStreamCacheTenant(tenantID)
 	// Get all cache entries and find those belonging to this tenant
 	var keysToEvict []string
 	if p.streamCache != nil {
@@ -994,9 +990,6 @@ func (p *Processor) InvalidateTenantCache(tenantID string) int {
 	// Evict each matching entry
 	for _, key := range keysToEvict {
 		p.streamCache.Delete(key)
-	}
-	if p.streamCache != nil {
-		p.holdStreamCacheTenant(tenantID)
 	}
 	if p.billingCache != nil {
 		p.billingCache.Delete(tenantID)
@@ -1018,7 +1011,7 @@ func (p *Processor) InvalidateTenantCache(tenantID string) int {
 }
 
 // holdStreamCacheKey suppresses repopulation of cacheKey for the hold window.
-// Caller passes the full "tenant:internal" cache key.
+// Caller passes the canonical resource cache key.
 func (p *Processor) holdStreamCacheKey(cacheKey string) {
 	if cacheKey == "" {
 		return
@@ -1031,7 +1024,7 @@ func (p *Processor) holdStreamCacheKey(cacheKey string) {
 	p.streamCacheKeyHolds[cacheKey] = time.Now().Add(streamCacheHoldDuration)
 }
 
-// holdStreamCacheTenant suppresses repopulation of every "tenant:..." key
+// holdStreamCacheTenant suppresses repopulation of every value owned by the tenant
 // for the hold window. Used by tenant-wide invalidation.
 func (p *Processor) holdStreamCacheTenant(tenantID string) {
 	if tenantID == "" {
@@ -1060,15 +1053,7 @@ func (p *Processor) streamCacheHeld(cacheKey string) bool {
 		}
 		delete(p.streamCacheKeyHolds, cacheKey)
 	}
-	if i := strings.IndexByte(cacheKey, ':'); i > 0 {
-		tenantID := cacheKey[:i]
-		if t, ok := p.streamCacheTenantHolds[tenantID]; ok {
-			if now.Before(t) {
-				return true
-			}
-			delete(p.streamCacheTenantHolds, tenantID)
-		}
-	}
+
 	return false
 }
 
@@ -1089,17 +1074,27 @@ func (p *Processor) InvalidatePlaybackAuthCache(tenantID string, internalNames [
 		if name == "" {
 			continue
 		}
-		key := tenantID + ":" + mist.ExtractInternalName(name)
-		if _, ok := seen[key]; ok {
-			continue
+		keys := []string{streamContextCacheKey(name)}
+		if streamident.Parse(name).Kind == streamident.KindBare {
+			for _, prefix := range []string{"vod+", "dvr+", "processing+"} {
+				keys = append(keys, streamContextCacheKey(prefix+name))
+			}
 		}
-		seen[key] = struct{}{}
-		keysToEvict = append(keysToEvict, key)
+		for _, key := range keys {
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			p.holdStreamCacheKey(tenantID + "\x1f" + key)
+			if value, found := p.streamCache.Peek(key); found {
+				if info, ok := value.(streamContext); ok && info.TenantID == tenantID {
+					p.streamCache.Delete(key)
+					keysToEvict = append(keysToEvict, key)
+				}
+			}
+		}
 	}
-	for _, key := range keysToEvict {
-		p.streamCache.Delete(key)
-		p.holdStreamCacheKey(key)
-	}
+
 	if p.commodoreClient != nil {
 		p.commodoreClient.InvalidateTenantCacheKeys(tenantID)
 	}
@@ -1480,6 +1475,40 @@ func (p *Processor) handleRawMistWebhook(trigger *ipcpb.MistTrigger) (string, bo
 	return "", false, nil
 }
 
+// processingBillingContext resolves delivered work, independently of whether
+// admission is still allowed. Retained ownership is sufficient to attribute a
+// final window; this context never grants playback or ingest permission.
+func (p *Processor) processingBillingContext(ctx context.Context, trigger *ipcpb.MistTrigger, sourceName string) (streamContext, error) {
+	parsed := streamident.Parse(sourceName)
+	if parsed.Concrete == "" {
+		return streamContext{}, errStreamIdentifierNotFound
+	}
+	if !parsed.IsArtifact() {
+		local, found, localErr := p.readReadyLocalPlayback(ctx, mist.ExtractInternalName(sourceName), false)
+		if localErr == nil && found && local.object.Authority.GetLiveStream() != nil && local.object.Authority.GetTenantId() != "" {
+			object := local.object.Authority
+			info := streamContext{TenantID: object.GetTenantId(), UserID: object.GetUserId(), StreamID: object.GetLiveStream().GetStreamId(), OriginClusterID: object.GetOriginClusterId(), Source: "local_accounting_identity"}
+			return p.applyResolvedStreamContext(trigger, sourceName, info), nil
+		}
+	}
+	var artifactErr error
+	if parsed.Kind == streamident.KindArtifactProcessing {
+		if resolver := identity.Default(); resolver != nil {
+			id, err := resolver.ResolveArtifact(ctx, parsed.Concrete, "")
+			if err == nil && id.TenantID != "" {
+				info := streamContext{TenantID: id.TenantID, StreamID: id.StreamID, ArtifactHash: id.ArtifactHash, OriginClusterID: id.OriginClusterID, Source: "identity_" + id.Source}
+				return p.applyResolvedStreamContext(trigger, sourceName, info), nil
+			}
+			artifactErr = err
+		}
+	}
+	info, err := p.applyStreamContextWithContextError(ctx, trigger, sourceName)
+	if info.TenantID == "" && errors.Is(artifactErr, identity.ErrUnavailable) {
+		return info, artifactErr
+	}
+	return info, err
+}
+
 // handleProcessBilling forwards ProcessBillingEvent to Decklog
 func (p *Processor) handleProcessBilling(trigger *ipcpb.MistTrigger) (string, bool, error) {
 	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_ProcessBilling)
@@ -1489,7 +1518,8 @@ func (p *Processor) handleProcessBilling(trigger *ipcpb.MistTrigger) (string, bo
 	pbill := payload.ProcessBilling
 	// Helmsman builds before this release forward the Mist process label
 	// "<source>→<sink>" as the stream name.
-	internalName := mist.ExtractInternalName(mist.ProcessSourceStream(pbill.GetStreamName()))
+	sourceName := mist.ProcessSourceStream(pbill.GetStreamName())
+	internalName := mist.ExtractInternalName(sourceName)
 
 	// The billing tenant is resource-bound: resolve it from the stream, ALWAYS (even when the sidecar asserted
 	// one in the payload), and verify the assertion against the resolved owner. Seed the asserted value so
@@ -1499,7 +1529,7 @@ func (p *Processor) handleProcessBilling(trigger *ipcpb.MistTrigger) (string, bo
 	if assertedTenant != "" {
 		trigger.TenantId = &assertedTenant
 	}
-	info := p.applyStreamContext(trigger, internalName)
+	info, resolveErr := p.processingBillingContext(context.Background(), trigger, sourceName)
 	if assertedTenantConflicts(assertedTenant, trigger.GetTenantId()) {
 		p.logger.WithFields(logging.Fields{
 			"trigger_type":    trigger.GetTriggerType(),
@@ -1510,17 +1540,15 @@ func (p *Processor) handleProcessBilling(trigger *ipcpb.MistTrigger) (string, bo
 		}).Warn("Dropping process_billing trigger: asserted tenant conflicts with resolved stream owner")
 		return "", false, nil
 	}
-	// FAIL CLOSED when the stream owner cannot be resolved: billing is attribution-bearing (money), so a
-	// node-asserted tenant must NEVER be forwarded unverified. Dropping a suspect billing event is strictly
-	// safer than mis-billing another tenant during a resolver/cache outage.
 	if strings.TrimSpace(info.TenantID) == "" {
-		p.logger.WithFields(logging.Fields{
-			"trigger_type":    trigger.GetTriggerType(),
-			"internal_name":   internalName,
-			"asserted_tenant": assertedTenant,
-			"node_id":         trigger.GetNodeId(),
-		}).Warn("Dropping process_billing trigger: stream owner unresolved; refusing to bill against a node-asserted tenant")
-		return "", false, nil
+		if errors.Is(resolveErr, errStreamIdentifierNotFound) {
+			p.logger.WithField("internal_name", internalName).Info("Discarding billing report for an authoritatively absent resource")
+			return "", false, nil
+		}
+		if resolveErr == nil {
+			resolveErr = errors.New("stream owner unavailable")
+		}
+		return "", false, fmt.Errorf("resolve processing billing owner: %w", resolveErr)
 	}
 	resolved := info.TenantID
 	pbill.TenantId = &resolved
@@ -2606,7 +2634,7 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 			cacheTTL = 1 * time.Minute
 		}
 		if streamValidation.TenantId != "" {
-			cacheKey := streamValidation.TenantId + ":" + streamValidation.InternalName
+			cacheKey := streamContextCacheKey("live+" + streamValidation.InternalName)
 			p.streamCache.Set(cacheKey, info, cacheTTL)
 		}
 		// Secondary in-memory index for STREAM_PROCESS lookup (keyed by internal name only).
@@ -5901,7 +5929,7 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 	if assertedTenant != "" {
 		trigger.TenantId = &assertedTenant
 	}
-	info := p.applyStreamContext(trigger, internal)
+	info := p.applyStreamContext(trigger, slu.GetInternalName())
 	if assertedTenantConflicts(assertedTenant, trigger.GetTenantId()) {
 		p.logger.WithFields(logging.Fields{
 			"trigger_type":    trigger.GetTriggerType(),
@@ -7018,7 +7046,7 @@ func stringPtrIfNotEmpty(s string) *string {
 	return &s
 }
 
-func (p *Processor) resolveStreamContext(ctx context.Context, key, tenantIDHint string, allowCache bool) (streamContext, bool, error) {
+func (p *Processor) resolveStreamContext(ctx context.Context, key string, allowCache bool) (streamContext, bool, error) {
 	if local, found, err := p.resolveReadyLocalPlayback(ctx, key, false); found {
 		if err != nil {
 			if IsLocalAuthorityDenied(err) || IsLocalAuthorityExpired(err) {
@@ -7033,14 +7061,14 @@ func (p *Processor) resolveStreamContext(ctx context.Context, key, tenantIDHint 
 	// For artifacts (VOD playback), check in-memory state first.
 	// This avoids Commodore calls for artifacts we already know about.
 	// Key may be artifact_hash (from processing+) or artifact_internal_name (from vod+).
-	if tenantIDHint != "" && p.streamCache != nil {
+	if p.streamCache != nil {
 		_, artifactInfo := state.DefaultManager().FindNodeByArtifactHash(key)
 		if artifactInfo == nil {
 			_, artifactInfo = state.DefaultManager().FindNodeByArtifactInternalName(key)
 		}
 		if artifactInfo != nil && artifactInfo.GetStreamName() != "" {
 			parentInternal := mist.ExtractInternalName(artifactInfo.GetStreamName())
-			cacheKey := tenantIDHint + ":" + parentInternal
+			cacheKey := streamContextCacheKey("live+" + parentInternal)
 			if v, ok := p.streamCache.Peek(cacheKey); ok {
 				if parentInfo, ok := v.(streamContext); ok && parentInfo.TenantID != "" {
 					info := streamContext{
@@ -7099,7 +7127,7 @@ func (p *Processor) resolveStreamContext(ctx context.Context, key, tenantIDHint 
 		p.logger.WithFields(logging.Fields{
 			"identifier": key,
 		}).Warn("Identifier not found in any Commodore registry")
-		return streamContext{}, false, fmt.Errorf("identifier not found")
+		return streamContext{}, false, errStreamIdentifierNotFound
 	}
 
 	// Cache the result
@@ -7144,7 +7172,10 @@ func (p *Processor) resolveStreamContext(ctx context.Context, key, tenantIDHint 
 
 	// If this was a playback_id, also cache by the canonical internal_name
 	if allowCache && resp.GetIdentifierType() == "playback_id" && resp.GetInternalName() != "" && p.streamCache != nil && resp.GetTenantId() != "" {
-		cacheKey := resp.GetTenantId() + ":" + resp.GetInternalName()
+		cacheKey := streamContextCacheKey("live+" + resp.GetInternalName())
+		if resp.GetArtifactHash() != "" {
+			cacheKey = streamContextCacheKey("vod+" + resp.GetInternalName())
+		}
 		p.streamCache.Set(cacheKey, info, 10*time.Minute)
 	}
 
@@ -7158,32 +7189,57 @@ func (p *Processor) resolveStreamContext(ctx context.Context, key, tenantIDHint 
 }
 
 // getStreamContext gets tenant and user IDs from cache, with fallback to Commodore
-func (p *Processor) getStreamContext(ctx context.Context, streamName, tenantIDHint string) streamContext {
+var errStreamIdentifierNotFound = errors.New("stream identifier not found")
+
+func streamContextCacheKey(name string) string {
+	parsed := streamident.Parse(name)
+	if parsed.IsArtifact() {
+		return parsed.Kind.String() + ":" + parsed.Concrete
+	}
+	return "source:" + parsed.Concrete
+}
+
+func (p *Processor) streamCacheOwnerHeld(key string, value interface{}) bool {
+	if p.streamCacheHeld(key) {
+		return true
+	}
+	info, ok := value.(streamContext)
+	if !ok || info.TenantID == "" {
+		return false
+	}
+	if p.streamCacheHeld(info.TenantID + "\x1f" + key) {
+		return true
+	}
+	p.streamCacheHoldsMu.Lock()
+	defer p.streamCacheHoldsMu.Unlock()
+	until := p.streamCacheTenantHolds[info.TenantID]
+	if time.Now().Before(until) {
+		return true
+	}
+	delete(p.streamCacheTenantHolds, info.TenantID)
+	return false
+}
+
+func (p *Processor) getStreamContext(ctx context.Context, streamName string) (streamContext, error) {
 	if streamName == "" {
-		return streamContext{}
+		return streamContext{}, errStreamIdentifierNotFound
 	}
-
 	internalName := mist.ExtractInternalName(streamName)
-	if p.streamCache == nil || tenantIDHint == "" {
-		info, ok, _ := p.resolveStreamContext(ctx, internalName, tenantIDHint, false)
-		if !ok {
-			return streamContext{}
-		}
-		return info
+	if p.streamCache == nil {
+		info, _, err := p.resolveStreamContext(ctx, internalName, false)
+		return info, err
 	}
-
-	cacheKey := tenantIDHint + ":" + internalName
-	val, ok, _ := p.streamCache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
-		return p.resolveStreamContext(ctx, internalName, tenantIDHint, true)
+	cacheKey := streamContextCacheKey(streamName)
+	val, ok, err := p.streamCache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
+		return p.resolveStreamContext(ctx, internalName, true)
 	})
-
 	if !ok {
-		return streamContext{}
+		return streamContext{}, err
 	}
 	if info, ok := val.(streamContext); ok {
-		return info
+		return info, nil
 	}
-	return streamContext{}
+	return streamContext{}, errors.New("invalid stream context cache value")
 }
 
 // applyStreamContext enriches trigger with tenant/user/stream IDs if available.
@@ -7235,18 +7291,21 @@ func (p *Processor) applyArtifactHashContext(trigger *ipcpb.MistTrigger, artifac
 }
 
 func (p *Processor) applyStreamContextWithContext(ctx context.Context, trigger *ipcpb.MistTrigger, streamName string) streamContext {
+	info, err := p.applyStreamContextWithContextError(ctx, trigger, streamName)
+	if err != nil {
+		p.logger.WithError(err).WithField("stream_name", streamName).Debug("Stream context unavailable")
+	}
+	return info
+}
+
+func (p *Processor) applyStreamContextWithContextError(ctx context.Context, trigger *ipcpb.MistTrigger, streamName string) (streamContext, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tenantHint := ""
-	if trigger != nil && trigger.TenantId != nil {
-		tenantHint = *trigger.TenantId
-	}
-
 	internalName := mist.ExtractInternalName(streamName)
 	local, _, localErr := p.resolveReadyLocalPlayback(ctx, internalName, false)
 	if localErr == nil && local.target != nil {
-		return p.applyResolvedStreamContext(trigger, streamName, local.info)
+		return p.applyResolvedStreamContext(trigger, streamName, local.info), nil
 	}
 
 	var info streamContext
@@ -7267,7 +7326,7 @@ func (p *Processor) applyStreamContextWithContext(ctx context.Context, trigger *
 	// the identity fields above, getStreamContext refreshes the rest of
 	// the streamContext on cache miss; on cache hit the cached entry
 	// supersedes the partial info above.
-	full := p.getStreamContext(ctx, streamName, tenantHint)
+	full, lookupErr := p.getStreamContext(ctx, streamName)
 	if full.TenantID != "" || full.StreamID != "" {
 		info = full
 	}
@@ -7276,7 +7335,10 @@ func (p *Processor) applyStreamContextWithContext(ctx context.Context, trigger *
 	if IsLocalAuthorityDenied(localErr) {
 		stampDeniedContentIdentity(trigger, streamName, local.object.Authority)
 	}
-	return info
+	if info.TenantID == "" {
+		return info, lookupErr
+	}
+	return info, nil
 }
 
 func (p *Processor) applyResolvedStreamContext(trigger *ipcpb.MistTrigger, streamName string, info streamContext) streamContext {

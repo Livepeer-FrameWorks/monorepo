@@ -16,6 +16,21 @@ interface DeviceManagerEvents {
 export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
   private devices: DeviceInfo[] = [];
   private currentStream: MediaStream | null = null;
+  private destroyed = false;
+  private mediaDevices: MediaDevices | undefined;
+  private readonly handleDeviceChange = async (): Promise<void> => {
+    try {
+      const devices = await this.enumerateDevices();
+      if (!this.destroyed) this.emit("devicesChanged", { devices });
+    } catch (error) {
+      if (!this.destroyed) {
+        this.emit("error", {
+          message: "Device enumeration failed",
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+      }
+    }
+  };
   private permissionStatus: { video: boolean; audio: boolean } = {
     video: false,
     audio: false,
@@ -31,22 +46,43 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
    */
   private setupDeviceChangeListener(): void {
     if (typeof navigator !== "undefined" && navigator.mediaDevices) {
-      navigator.mediaDevices.addEventListener("devicechange", async () => {
-        await this.enumerateDevices();
-        this.emit("devicesChanged", { devices: this.devices });
-      });
+      this.mediaDevices = navigator.mediaDevices;
+      this.mediaDevices.addEventListener("devicechange", this.handleDeviceChange);
     }
+  }
+
+  private assertActive(): void {
+    if (this.destroyed) throw new DOMException("Device manager destroyed", "AbortError");
+  }
+
+  private async capture(constraints: MediaStreamConstraints): Promise<MediaStream> {
+    this.assertActive();
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (error) {
+      this.assertActive();
+      throw error;
+    }
+    // Permission prompts cannot be cancelled; their late tracks still need an owner.
+    if (this.destroyed) {
+      stream.getTracks().forEach((track) => track.stop());
+      this.assertActive();
+    }
+    return stream;
   }
 
   /**
    * Enumerate all media devices
    */
   async enumerateDevices(): Promise<DeviceInfo[]> {
+    if (this.destroyed) return [];
     if (!navigator.mediaDevices?.enumerateDevices) {
       throw new Error("enumerateDevices not supported");
     }
 
     const devices = await navigator.mediaDevices.enumerateDevices();
+    if (this.destroyed) return [];
 
     this.devices = devices
       .filter((d) => d.kind === "audioinput" || d.kind === "videoinput" || d.kind === "audiooutput")
@@ -92,7 +128,7 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
   ): Promise<{ video: boolean; audio: boolean }> {
     try {
       // Request a temporary stream to trigger permission prompts
-      const stream = await navigator.mediaDevices.getUserMedia({
+      const stream = await this.capture({
         video: options.video,
         audio: options.audio,
       });
@@ -106,6 +142,7 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
 
       // Re-enumerate devices to get labels
       await this.enumerateDevices();
+      this.assertActive();
 
       this.emit("permissionChanged", {
         granted: true,
@@ -114,6 +151,7 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
 
       return this.permissionStatus;
     } catch (error) {
+      this.assertActive();
       const err = error instanceof Error ? error : new Error(String(error));
 
       if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
@@ -162,7 +200,7 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
 
     try {
       // Try with all constraints first
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const stream = await this.capture(constraints);
       this.currentStream = stream;
 
       // Update permission status
@@ -171,6 +209,7 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
 
       return stream;
     } catch (error) {
+      this.assertActive();
       // Fallback: try without specific device constraints
       const err = error instanceof Error ? error : new Error(String(error));
 
@@ -185,7 +224,7 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
           audio: constraints.audio ? true : false,
         };
 
-        const stream = await navigator.mediaDevices.getUserMedia(relaxedConstraints);
+        const stream = await this.capture(relaxedConstraints);
         this.currentStream = stream;
         return stream;
       }
@@ -235,6 +274,7 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
     profile: QualityProfile = "professional",
     stream: MediaStream | null = this.currentStream
   ): Promise<MediaStreamTrack | null> {
+    this.assertActive();
     if (!stream) {
       throw new Error("No active stream to replace track in");
     }
@@ -248,7 +288,7 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
 
     // Get new video track
     const constraints = buildMediaConstraints(profile, { videoDeviceId: deviceId });
-    const newStream = await navigator.mediaDevices.getUserMedia({
+    const newStream = await this.capture({
       video: constraints.video,
       audio: false,
     });
@@ -268,27 +308,34 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
     deviceId: string,
     profile: QualityProfile = "professional"
   ): Promise<MediaStreamTrack | null> {
+    this.assertActive();
     if (!this.currentStream) {
       throw new Error("No active stream to replace track in");
     }
 
     // Stop current audio track
-    const currentAudioTrack = this.currentStream.getAudioTracks()[0];
+    const targetStream = this.currentStream;
+    const currentAudioTrack = targetStream.getAudioTracks()[0];
     if (currentAudioTrack) {
       currentAudioTrack.stop();
-      this.currentStream.removeTrack(currentAudioTrack);
+      targetStream.removeTrack(currentAudioTrack);
     }
 
     // Get new audio track
     const constraints = buildMediaConstraints(profile, { audioDeviceId: deviceId });
-    const newStream = await navigator.mediaDevices.getUserMedia({
+    const newStream = await this.capture({
       video: false,
       audio: constraints.audio,
     });
 
+    if (this.currentStream !== targetStream) {
+      newStream.getTracks().forEach((track) => track.stop());
+      throw new DOMException("Capture stream released", "AbortError");
+    }
+
     const newTrack = newStream.getAudioTracks()[0];
     if (newTrack) {
-      this.currentStream.addTrack(newTrack);
+      targetStream.addTrack(newTrack);
     }
 
     return newTrack || null;
@@ -303,7 +350,7 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
     profile: QualityProfile = "professional"
   ): Promise<MediaStreamTrack | null> {
     const open = (audioDeviceId?: string) =>
-      navigator.mediaDevices.getUserMedia({
+      this.capture({
         video: false,
         audio: buildMediaConstraints(profile, { audioDeviceId }).audio,
       });
@@ -330,7 +377,11 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
    * Clean up resources
    */
   destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.mediaDevices?.removeEventListener("devicechange", this.handleDeviceChange);
     this.stopAllTracks();
+    this.devices = [];
     this.removeAllListeners();
   }
 }

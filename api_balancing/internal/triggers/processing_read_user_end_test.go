@@ -20,7 +20,7 @@ func TestProcessingReadUserEndStaysOutOfViewerAnalytics(t *testing.T) {
 	p := NewProcessor(logging.NewLogger(), nil, nil, nil, nil)
 	p.decklogClient = client
 	const tenant, internal = "tenant-read", "stream-read"
-	p.streamCache.Set(tenant+":"+internal, streamContext{TenantID: tenant, StreamID: "11111111-1111-4111-8111-000000000010"}, time.Minute)
+	p.streamCache.Set(streamContextCacheKey("live+"+internal), streamContext{TenantID: tenant, StreamID: "11111111-1111-4111-8111-000000000010"}, time.Minute)
 
 	end := func(sessionID, token, connector string) {
 		t.Helper()

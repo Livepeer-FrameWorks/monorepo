@@ -340,7 +340,7 @@ func TestHandleLiveTrackList_PersistsTenantScopedTrackState(t *testing.T) {
 	const nodeID = "node-tl"
 	// Seed streamContext so applyStreamContext returns the tenant from cache
 	// (commodore is nil; the cache hit is the only source of tenant identity).
-	p.streamCache.Set(tenantID+":"+internal, streamContext{TenantID: tenantID}, time.Minute)
+	p.streamCache.Set(streamContextCacheKey("live+"+internal), streamContext{TenantID: tenantID}, time.Minute)
 
 	_, abort, err := p.handleLiveTrackList(&ipcpb.MistTrigger{
 		NodeId:   nodeID,
@@ -454,7 +454,7 @@ func TestHandleUserNew_TenantViewerCapRejects(t *testing.T) {
 	const tenantID = "tenant-cap"
 	// RequiresAuthKnown+!RequiresAuth would otherwise admit; MaxViewers=1 gates
 	// before policy. Seed the cap and an authoritative tenant.
-	p.streamCache.Set(tenantID+":"+internal, streamContext{
+	p.streamCache.Set(streamContextCacheKey("live+"+internal), streamContext{
 		TenantID:          tenantID,
 		MaxViewers:        1,
 		RequiresAuthKnown: true,
@@ -500,7 +500,7 @@ func TestHandleUserNew_AdmittedViewerRegistersUnderCap(t *testing.T) {
 
 	const internal = "admit-stream"
 	const tenantID = "tenant-admit"
-	p.streamCache.Set(tenantID+":"+internal, streamContext{
+	p.streamCache.Set(streamContextCacheKey("live+"+internal), streamContext{
 		TenantID:          tenantID,
 		OriginClusterID:   "cluster-origin",
 		MaxViewers:        5,
@@ -546,7 +546,7 @@ func TestHandleUserNew_UnentitledServingClusterHasNoViewerSideEffect(t *testing.
 
 	const internal = "cluster-gated-stream"
 	const tenantID = "tenant-viewer"
-	p.streamCache.Set(tenantID+":"+internal, streamContext{
+	p.streamCache.Set(streamContextCacheKey("live+"+internal), streamContext{
 		TenantID:          tenantID,
 		MaxViewers:        5,
 		RequiresAuthKnown: true,
@@ -581,7 +581,7 @@ func TestHandleUserNew_UsesResolvedEnvelopeWithoutCrossInstancePrewarm(t *testin
 		internal = "ha-envelope-stream"
 		tenantID = "tenant-ha"
 	)
-	p.streamCache.Set(tenantID+":"+internal, streamContext{
+	p.streamCache.Set(streamContextCacheKey("live+"+internal), streamContext{
 		TenantID:          tenantID,
 		RequiresAuthKnown: true,
 		ClusterPeers: []*clusterpeerpb.TenantClusterPeer{{

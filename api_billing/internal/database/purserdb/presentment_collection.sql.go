@@ -10,6 +10,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 const activateAdvanceBilledSubscription = `-- name: ActivateAdvanceBilledSubscription :execrows
@@ -291,7 +293,9 @@ func (q *Queries) GetMollieBalanceCursor(ctx context.Context, balanceID string) 
 const getProviderSettlement = `-- name: GetProviderSettlement :one
 SELECT tenant_id::text AS tenant_id, status, charge_amount_cents, charge_currency::text AS charge_currency,
        COALESCE(provider_balance_transaction_id, '')::text AS provider_balance_transaction_id,
-       settled_amount_cents, fee_cents, net_cents, COALESCE(exchange_rate::text, '')::text AS exchange_rate
+       settled_amount_cents, fee_cents, net_cents, COALESCE(exchange_rate::text, '')::text AS exchange_rate,
+       COALESCE(settlement_currency::text, '')::text AS settlement_currency, settled_at,
+       COALESCE(last_error_code, '')::text AS last_error_code
 FROM purser.provider_settlements
 WHERE provider = $1 AND provider_payment_id = $2
 `
@@ -311,6 +315,9 @@ type GetProviderSettlementRow struct {
 	FeeCents                     sql.NullInt64 `db:"fee_cents" json:"fee_cents"`
 	NetCents                     sql.NullInt64 `db:"net_cents" json:"net_cents"`
 	ExchangeRate                 string        `db:"exchange_rate" json:"exchange_rate"`
+	SettlementCurrency           string        `db:"settlement_currency" json:"settlement_currency"`
+	SettledAt                    sql.NullTime  `db:"settled_at" json:"settled_at"`
+	LastErrorCode                string        `db:"last_error_code" json:"last_error_code"`
 }
 
 func (q *Queries) GetProviderSettlement(ctx context.Context, arg GetProviderSettlementParams) (GetProviderSettlementRow, error) {
@@ -326,6 +333,9 @@ func (q *Queries) GetProviderSettlement(ctx context.Context, arg GetProviderSett
 		&i.FeeCents,
 		&i.NetCents,
 		&i.ExchangeRate,
+		&i.SettlementCurrency,
+		&i.SettledAt,
+		&i.LastErrorCode,
 	)
 	return i, err
 }
@@ -670,6 +680,62 @@ func (q *Queries) ListPurserInvoicedClusterSubscriptionsForPeriod(ctx context.Co
 	return items, nil
 }
 
+const listRecordedProviderSettlements = `-- name: ListRecordedProviderSettlements :many
+SELECT provider, provider_payment_id, tenant_id::text AS tenant_id FROM (
+    (SELECT id, provider, provider_payment_id, tenant_id, updated_at FROM purser.provider_settlements
+     WHERE status = 'recorded' AND updated_at <= $1::timestamptz
+     ORDER BY updated_at, id LIMIT 100)
+    UNION ALL
+    (SELECT candidate.id, candidate.provider, candidate.provider_payment_id, candidate.tenant_id, candidate.updated_at FROM unnest($2::text[]) AS currency(code)
+     CROSS JOIN LATERAL (
+       SELECT id, provider, provider_payment_id, tenant_id, updated_at FROM purser.provider_settlements
+       WHERE status = 'blocked' AND last_error_code = 'unsupported_currency'
+         AND settlement_currency = currency.code::character(3)
+         AND updated_at <= $1::timestamptz
+       ORDER BY updated_at, id LIMIT 100
+     ) candidate
+     ORDER BY candidate.updated_at, candidate.id LIMIT 100)
+) candidates
+ORDER BY updated_at, id LIMIT 100
+`
+
+type ListRecordedProviderSettlementsParams struct {
+	UpdatedBefore       time.Time `db:"updated_before" json:"updated_before"`
+	SupportedCurrencies []string  `db:"supported_currencies" json:"supported_currencies"`
+}
+
+type ListRecordedProviderSettlementsRow struct {
+	Provider          string `db:"provider" json:"provider"`
+	ProviderPaymentID string `db:"provider_payment_id" json:"provider_payment_id"`
+	TenantID          string `db:"tenant_id" json:"tenant_id"`
+}
+
+// Unsupported evidence remains visible but makes no provider calls. A newly
+// supported currency can resume from the same immutable native evidence.
+// Service-owned queue deliberately spans tenant IDs; mutations remain tenant fenced.
+func (q *Queries) ListRecordedProviderSettlements(ctx context.Context, arg ListRecordedProviderSettlementsParams) ([]ListRecordedProviderSettlementsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listRecordedProviderSettlements, arg.UpdatedBefore, pq.Array(arg.SupportedCurrencies))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRecordedProviderSettlementsRow{}
+	for rows.Next() {
+		var i ListRecordedProviderSettlementsRow
+		if err := rows.Scan(&i.Provider, &i.ProviderPaymentID, &i.TenantID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockOverlappedBaseFeeInvoice = `-- name: LockOverlappedBaseFeeInvoice :one
 SELECT invoice.id::text AS id, invoice.status, invoice.base_amount::text AS base_amount,
  invoice.tax_status,invoice.gross_eur_cents,invoice.document_gross_minor,
@@ -744,6 +810,85 @@ func (q *Queries) MarkBaseFeeUnusedShareReturned(ctx context.Context, arg MarkBa
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const recordNativeProviderSettlement = `-- name: RecordNativeProviderSettlement :execrows
+UPDATE purser.provider_settlements
+SET status = 'recorded',
+    provider_balance_transaction_id = $1::text,
+    settled_amount_cents = $2::bigint,
+    fee_cents = $3::bigint,
+    net_cents = $4::bigint,
+    settlement_currency = $5::text,
+    exchange_rate = $6::text::numeric,
+    settled_at = $7::timestamptz,
+    last_error_code = NULL, last_error = NULL, updated_at = NOW()
+WHERE tenant_id = $8::text::uuid
+  AND provider = $9 AND provider_payment_id = $10
+  AND status = 'pending'
+`
+
+type RecordNativeProviderSettlementParams struct {
+	BalanceTransactionID string         `db:"balance_transaction_id" json:"balance_transaction_id"`
+	SettledAmountCents   int64          `db:"settled_amount_cents" json:"settled_amount_cents"`
+	FeeCents             int64          `db:"fee_cents" json:"fee_cents"`
+	NetCents             int64          `db:"net_cents" json:"net_cents"`
+	SettlementCurrency   string         `db:"settlement_currency" json:"settlement_currency"`
+	ExchangeRate         sql.NullString `db:"exchange_rate" json:"exchange_rate"`
+	SettledAt            time.Time      `db:"settled_at" json:"settled_at"`
+	TenantID             string         `db:"tenant_id" json:"tenant_id"`
+	Provider             string         `db:"provider" json:"provider"`
+	ProviderPaymentID    string         `db:"provider_payment_id" json:"provider_payment_id"`
+}
+
+func (q *Queries) RecordNativeProviderSettlement(ctx context.Context, arg RecordNativeProviderSettlementParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordNativeProviderSettlement,
+		arg.BalanceTransactionID,
+		arg.SettledAmountCents,
+		arg.FeeCents,
+		arg.NetCents,
+		arg.SettlementCurrency,
+		arg.ExchangeRate,
+		arg.SettledAt,
+		arg.TenantID,
+		arg.Provider,
+		arg.ProviderPaymentID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const recordProviderValuationFailure = `-- name: RecordProviderValuationFailure :exec
+UPDATE purser.provider_settlements
+SET status = CASE WHEN $1::boolean THEN 'blocked' ELSE 'recorded' END,
+    last_error_code = $2::text,
+    last_error = $3::text, updated_at = NOW()
+WHERE tenant_id = $4::text::uuid
+  AND provider = $5 AND provider_payment_id = $6
+  AND status IN ('recorded', 'blocked')
+`
+
+type RecordProviderValuationFailureParams struct {
+	Blocked           bool   `db:"blocked" json:"blocked"`
+	ErrorCode         string `db:"error_code" json:"error_code"`
+	ErrorMessage      string `db:"error_message" json:"error_message"`
+	TenantID          string `db:"tenant_id" json:"tenant_id"`
+	Provider          string `db:"provider" json:"provider"`
+	ProviderPaymentID string `db:"provider_payment_id" json:"provider_payment_id"`
+}
+
+func (q *Queries) RecordProviderValuationFailure(ctx context.Context, arg RecordProviderValuationFailureParams) error {
+	_, err := q.db.ExecContext(ctx, recordProviderValuationFailure,
+		arg.Blocked,
+		arg.ErrorCode,
+		arg.ErrorMessage,
+		arg.TenantID,
+		arg.Provider,
+		arg.ProviderPaymentID,
+	)
+	return err
 }
 
 const reduceUnpaidBaseFeeInvoice = `-- name: ReduceUnpaidBaseFeeInvoice :execrows
@@ -862,40 +1007,39 @@ func (q *Queries) SetInvoicePresentment(ctx context.Context, arg SetInvoicePrese
 const settleProviderSettlement = `-- name: SettleProviderSettlement :execrows
 UPDATE purser.provider_settlements
 SET status = 'settled',
-    provider_balance_transaction_id = $1,
-    settled_amount_cents = $2::bigint,
-    fee_cents = $3::bigint,
-    net_cents = $4::bigint,
-    settlement_currency = $5::text,
-    exchange_rate = $6::text::numeric,
-    settled_at = $7::timestamptz,
+    settled_eur_cents = $1::bigint,
+    fee_eur_cents = $2::bigint,
+    net_eur_cents = $1::bigint - $2::bigint,
+    valuation_units_per_eur = $3::text::numeric,
+    valuation_reference_date = $4::date,
+    valuation_source = $5::text,
+    last_error_code = NULL, last_error = NULL,
     updated_at = NOW()
-WHERE provider = $8
-  AND provider_payment_id = $9
-  AND status = 'pending'
+WHERE tenant_id = $6::text::uuid
+  AND provider = $7
+  AND provider_payment_id = $8
+  AND status IN ('recorded', 'blocked')
 `
 
 type SettleProviderSettlementParams struct {
-	BalanceTransactionID sql.NullString `db:"balance_transaction_id" json:"balance_transaction_id"`
-	SettledAmountCents   int64          `db:"settled_amount_cents" json:"settled_amount_cents"`
-	FeeCents             int64          `db:"fee_cents" json:"fee_cents"`
-	NetCents             int64          `db:"net_cents" json:"net_cents"`
-	SettlementCurrency   string         `db:"settlement_currency" json:"settlement_currency"`
-	ExchangeRate         sql.NullString `db:"exchange_rate" json:"exchange_rate"`
-	SettledAt            time.Time      `db:"settled_at" json:"settled_at"`
-	Provider             string         `db:"provider" json:"provider"`
-	ProviderPaymentID    string         `db:"provider_payment_id" json:"provider_payment_id"`
+	SettledEurCents        int64     `db:"settled_eur_cents" json:"settled_eur_cents"`
+	FeeEurCents            int64     `db:"fee_eur_cents" json:"fee_eur_cents"`
+	ValuationUnitsPerEur   string    `db:"valuation_units_per_eur" json:"valuation_units_per_eur"`
+	ValuationReferenceDate time.Time `db:"valuation_reference_date" json:"valuation_reference_date"`
+	ValuationSource        string    `db:"valuation_source" json:"valuation_source"`
+	TenantID               string    `db:"tenant_id" json:"tenant_id"`
+	Provider               string    `db:"provider" json:"provider"`
+	ProviderPaymentID      string    `db:"provider_payment_id" json:"provider_payment_id"`
 }
 
 func (q *Queries) SettleProviderSettlement(ctx context.Context, arg SettleProviderSettlementParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, settleProviderSettlement,
-		arg.BalanceTransactionID,
-		arg.SettledAmountCents,
-		arg.FeeCents,
-		arg.NetCents,
-		arg.SettlementCurrency,
-		arg.ExchangeRate,
-		arg.SettledAt,
+		arg.SettledEurCents,
+		arg.FeeEurCents,
+		arg.ValuationUnitsPerEur,
+		arg.ValuationReferenceDate,
+		arg.ValuationSource,
+		arg.TenantID,
 		arg.Provider,
 		arg.ProviderPaymentID,
 	)

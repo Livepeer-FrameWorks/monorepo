@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 
@@ -49,9 +50,7 @@ func GraphQLOperationRateLimit(rl *RateLimiter, tenantLimits func(string) (int, 
 		bucket := RateLimitBucketKey(ctxkeys.GetTenantID(ctx), ctxkeys.GetClientIP(ctx))
 		limit, burst := RateLimitsForBucket(rl, bucket, tenantLimits)
 		if allowed, _, resetSeconds := rl.Allow(bucket, limit, burst); !allowed {
-			return func(ctx context.Context) *graphql.Response {
-				return graphql.ErrorResponse(ctx, "rate limit exceeded, retry in %ds", resetSeconds)
-			}
+			return TerminalGraphQLError(ctx, fmt.Sprintf("rate limit exceeded, retry in %ds", resetSeconds), "")
 		}
 		return next(ctx)
 	}

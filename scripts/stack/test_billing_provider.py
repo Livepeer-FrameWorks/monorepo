@@ -23,6 +23,23 @@ class BillingProviderTest(unittest.TestCase):
     def setUp(self):
         self.provider = MODULE.Provider()
 
+    def test_native_settlement_preserves_payment_identity_and_currency(self):
+        intent = self.provider.create("pi", "payment_intent", {"status": "succeeded", "amount": 1000, "currency": "eur", "metadata": {"tenant_id": "tenant-native"}})
+        result = self.call("POST", "/__test/native_settlement", json.dumps({"payment_id": intent["id"], "currency": "usd", "amount": 1200, "fee": 60, "exchange_rate": 1.2}).encode())
+        self.assertIn("body", result, "native settlement must produce a signed provider event")
+        event = json.loads(result["body"])
+        self.assertEqual(event["type"], "charge.updated")
+        charge = event["data"]["object"]
+        self.assertEqual(charge["payment_intent"], intent["id"])
+        self.assertEqual(charge["metadata"]["tenant_id"], "tenant-native")
+        transaction = self.provider.objects[charge["balance_transaction"]]
+        self.assertEqual((transaction["currency"], transaction["amount"], transaction["fee"], transaction["net"]), ("usd", 1200, 60, 1140))
+        self.assertEqual(intent["currency"], "eur")
+        signature = result["signature"]
+        self.assertTrue(signature.startswith("t="))
+        status, _ = self.provider.dispatch("POST", "/__test/native_settlement", {}, json.dumps({"payment_id": intent["id"], "currency": "usd", "amount": 1201, "fee": 60, "exchange_rate": 1.2}).encode(), "fixture-test")
+        self.assertEqual(status, 400, "fixture must not rewrite recorded settlement facts")
+
     def call(self, method, path, body=b""):
         status, value = self.provider.dispatch(method, path, {}, body, "fixture-test")
         self.assertEqual(status, 200, value)

@@ -60,6 +60,31 @@ func (r *Rendered) Validate() error {
 
 func (r *Rendered) validateQuartermaster(errs *ValidationErrors) {
 	qm := r.Quartermaster
+	if scope := qm.RegistryScope; scope != nil {
+		if scope.Owner == "" || strings.TrimSpace(scope.Owner) != scope.Owner || len(scope.Owner) > 100 || len(scope.Clusters) == 0 {
+			*errs = append(*errs, &ValidationError{Path: "quartermaster.registry_scope", Msg: "requires a non-empty owner and declared clusters"})
+		}
+		clusters := map[string]bool{}
+		for _, cluster := range scope.Clusters {
+			declared := false
+			for _, entry := range qm.Clusters {
+				if entry.ID == cluster {
+					declared = true
+				}
+			}
+			if !declared || clusters[cluster] {
+				*errs = append(*errs, &ValidationError{Path: "quartermaster.registry_scope.clusters", Msg: "cluster must be unique and declared in this manifest"})
+			}
+			clusters[cluster] = true
+		}
+		adopted := map[string]bool{}
+		for _, item := range scope.Adopt {
+			if item.InstanceID == "" || item.ServiceName == "" || item.NodeID == "" || item.Protocol == "" || item.Port <= 0 || item.Port > 65535 || !clusters[item.ClusterID] || adopted[item.InstanceID] {
+				*errs = append(*errs, &ValidationError{Path: "quartermaster.registry_scope.adopt", Msg: "requires unique instance and exact service, scoped cluster, node, protocol and port evidence"})
+			}
+			adopted[item.InstanceID] = true
+		}
+	}
 
 	if qm.SystemTenant != nil {
 		if qm.SystemTenant.Alias == "" {

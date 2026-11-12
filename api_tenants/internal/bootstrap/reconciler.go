@@ -70,7 +70,7 @@ func ReconcileWithOptions(ctx context.Context, exec DBTX, qm QuartermasterSectio
 		return out, fmt.Errorf("ingress: %w", err)
 	}
 
-	srRes, err := ReconcileServiceRegistry(ctx, exec, qm.ServiceRegistry)
+	srRes, err := ReconcileManagedServiceRegistry(ctx, exec, qm.ServiceRegistry, qm.RegistryScope, qm.Clusters)
 	out.ServiceRegistry = srRes
 	if err != nil {
 		return out, fmt.Errorf("service_registry: %w", err)

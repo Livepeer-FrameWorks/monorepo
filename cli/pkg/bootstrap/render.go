@@ -61,6 +61,9 @@ func Derive(m *inventory.Manifest, opts DeriveOptions) (*Derived, error) {
 	// Clusters — iterate AllClusterIDs to handle manifests without an explicit
 	// `clusters:` section (single auto-generated id from type+profile).
 	clusterIDs := m.AllClusterIDs()
+	if m.RegistryOwner != "" {
+		d.Quartermaster.RegistryScope = &ServiceRegistryScope{Owner: m.RegistryOwner, Clusters: append([]string(nil), clusterIDs...), Complete: true}
+	}
 	for _, clusterID := range clusterIDs {
 		cc, hasCfg := m.Clusters[clusterID]
 		c := Cluster{
@@ -928,6 +931,17 @@ func mergeQuartermaster(derived, overlay QuartermasterSection) (QuartermasterSec
 	out.Ingress.TLSBundles = append(out.Ingress.TLSBundles, overlay.Ingress.TLSBundles...)
 	out.Ingress.Sites = append(out.Ingress.Sites, overlay.Ingress.Sites...)
 	out.ServiceRegistry = append(out.ServiceRegistry, overlay.ServiceRegistry...)
+	if overlay.RegistryScope != nil {
+		if out.RegistryScope != nil && (overlay.RegistryScope.Owner != out.RegistryScope.Owner || !slices.Equal(overlay.RegistryScope.Clusters, out.RegistryScope.Clusters) || overlay.RegistryScope.Complete != out.RegistryScope.Complete) {
+			return out, fmt.Errorf("registry_scope overlay cannot widen or replace manifest ownership")
+		}
+		if out.RegistryScope == nil {
+			return out, fmt.Errorf("registry_scope requires registry_owner in the cluster manifest")
+		}
+		copyScope := *out.RegistryScope
+		copyScope.Adopt = append(append([]ServiceRegistryAdoption(nil), out.RegistryScope.Adopt...), overlay.RegistryScope.Adopt...)
+		out.RegistryScope = &copyScope
+	}
 
 	// SystemTenantClusterAccess: overlay overrides if present.
 	if overlay.SystemTenantClusterAccess != nil {

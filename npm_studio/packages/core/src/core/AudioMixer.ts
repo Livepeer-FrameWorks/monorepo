@@ -804,6 +804,7 @@ export class AudioMixer extends TypedEventEmitter<AudioMixerEvents> {
 
     this.destination = null;
     this.masterGain = null;
+    this.outputStream?.getTracks().forEach((track) => track.stop());
     this.outputStream = null;
 
     this.removeAllListeners();

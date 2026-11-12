@@ -129,15 +129,6 @@ func respondMistResult(c *gin.Context, result *control.MistTriggerResult, emptyA
 	respondMistAction(c, http.StatusOK, action, reason, result.Response)
 }
 
-func applyTenantContext(trigger *ipcpb.MistTrigger) {
-	if trigger == nil {
-		return
-	}
-	if tenantID := config.GetTenantID(); tenantID != "" {
-		trigger.TenantId = &tenantID
-	}
-}
-
 // forwardDurable persists a registered durable trigger to the local WAL
 // after stamping the stable source_event_id on RequestId for Foghorn ack
 // correlation and a deterministic UUID on EventId for downstream Periscope
@@ -202,7 +193,6 @@ func forwardDurableParseFailure(triggerType string, body []byte, headers http.He
 			rawTrigger.TriggerUnixMillis = millis
 		}
 	}
-	applyTenantContext(rawTrigger)
 	return forwardDurable(triggerType, body, rawTrigger)
 }
 
@@ -729,7 +719,6 @@ func HandlePushRewrite(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
-	applyTenantContext(mistTrigger)
 	result, err := sendMistTrigger(mistTriggerForwardContext(c.Request.Context(), mistTrigger), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("PUSH_REWRITE", "forward_error")
@@ -876,7 +865,6 @@ func HandlePlayRewrite(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
-	applyTenantContext(mistTrigger)
 	result, err := sendMistTrigger(mistTriggerForwardContext(c.Request.Context(), mistTrigger), mistTrigger, logger)
 	if err != nil && viewerRequest {
 		// Foghorn cannot be asked. A new session of a stream whose grant this
@@ -983,7 +971,6 @@ func HandleStreamProcess(c *gin.Context) {
 		}
 	}
 
-	applyTenantContext(mistTrigger)
 	result, err := sendMistTrigger(mistTriggerForwardContext(c.Request.Context(), mistTrigger), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("STREAM_PROCESS", "forward_error")
@@ -1120,7 +1107,6 @@ func HandleStreamSource(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
-	applyTenantContext(mistTrigger)
 	result, err := sendMistTrigger(mistTriggerForwardContext(c.Request.Context(), mistTrigger), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("STREAM_SOURCE", "forward_error")
@@ -1471,7 +1457,6 @@ func HandlePushEnd(c *gin.Context) {
 
 	// Durably persist before responding to Mist; forwarder drains the WAL
 	// and waits for Foghorn's MistTriggerAck (ack-after-Kafka).
-	applyTenantContext(mistTrigger)
 	sourceEventID, err := forwardDurable(string(mist.TriggerPushEnd), body, mistTrigger)
 	if err != nil {
 		respondDurableEnqueueError(c, logger, "PUSH_END", sourceEventID, err)
@@ -1540,7 +1525,6 @@ func HandlePushInputClose(c *gin.Context) {
 		return
 	}
 
-	applyTenantContext(mistTrigger)
 	sourceEventID, err := forwardDurable(string(mist.TriggerPushInputClose), body, mistTrigger)
 	if err != nil {
 		respondDurableEnqueueError(c, logger, "PUSH_INPUT_CLOSE", sourceEventID, err)
@@ -1588,7 +1572,6 @@ func HandlePushOutStart(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
-	applyTenantContext(mistTrigger)
 	if pushStart := mistTrigger.GetPushOutStart(); pushStart != nil {
 		if report, managed := control.ResolveRestreamTarget(pushStart.GetStreamName(), 0, pushStart.GetPushTarget(), ""); managed {
 			report.State = ipcpb.RestreamState_RESTREAM_STATE_PUSHING
@@ -1677,7 +1660,6 @@ func HandleStreamBuffer(c *gin.Context) {
 	}
 
 	// Forward enriched trigger to Foghorn via gRPC (non-blocking)
-	applyTenantContext(mistTrigger)
 	_, err = sendMistTrigger(mistTriggerForwardContext(c.Request.Context(), mistTrigger), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("STREAM_BUFFER", "forward_error")
@@ -1737,7 +1719,6 @@ func HandleStreamEnd(c *gin.Context) {
 
 	// Durably persist before responding to Mist; forwarder drains the WAL
 	// and waits for Foghorn's MistTriggerAck (ack-after-Kafka).
-	applyTenantContext(mistTrigger)
 	sourceEventID, err := forwardDurable(string(mist.TriggerStreamEnd), body, mistTrigger)
 	if err != nil {
 		respondDurableEnqueueError(c, logger, "STREAM_END", sourceEventID, err)
@@ -1814,7 +1795,6 @@ func HandleUserNew(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
-	applyTenantContext(mistTrigger)
 	result, err := sendMistTrigger(mistTriggerForwardContext(c.Request.Context(), mistTrigger), mistTrigger, logger)
 	if err != nil {
 		if viewer != nil && playbackGrants != nil {
@@ -1942,7 +1922,6 @@ func HandleUserEnd(c *gin.Context) {
 
 	// Durably persist before responding to Mist; forwarder drains the WAL
 	// and waits for Foghorn's MistTriggerAck (ack-after-Kafka).
-	applyTenantContext(mistTrigger)
 	sourceEventID, err := forwardDurable(string(mist.TriggerUserEnd), body, mistTrigger)
 	if err != nil {
 		respondDurableEnqueueError(c, logger, "USER_END", sourceEventID, err)
@@ -2046,7 +2025,6 @@ func HandleRecordingEnd(c *gin.Context) {
 
 	// Durably persist before responding to Mist; forwarder drains the WAL
 	// and waits for Foghorn's MistTriggerAck (ack-after-Kafka).
-	applyTenantContext(mistTrigger)
 	sourceEventID, err := forwardDurable(string(mist.TriggerRecordingEnd), body, mistTrigger)
 	if err != nil {
 		respondDurableEnqueueError(c, logger, "RECORDING_END", sourceEventID, err)
@@ -2110,7 +2088,6 @@ func HandleRecordingSegment(c *gin.Context) {
 	// and waits for Foghorn's MistTriggerAck (ack-after-Kafka). No goroutine
 	// needed — the WAL append is sub-millisecond and the actual send runs
 	// off the forwarder goroutine.
-	applyTenantContext(mistTrigger)
 	sourceEventID, err := forwardDurable(string(mist.TriggerRecordingSegment), body, mistTrigger)
 	if err != nil {
 		respondDurableEnqueueError(c, logger, "RECORDING_SEGMENT", sourceEventID, err)
@@ -2587,7 +2564,6 @@ func HandleLivepeerSegmentComplete(c *gin.Context) {
 			ProcessBilling: billingEvent,
 		},
 	}
-	applyTenantContext(billingTrigger)
 	sourceEventID, err := forwardDurable(string(mist.TriggerLivepeerSegmentComplete), body, billingTrigger)
 	if err != nil {
 		respondDurableEnqueueError(c, logger, "LIVEPEER_SEGMENT_COMPLETE", sourceEventID, err)
@@ -2793,7 +2769,6 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 			ProcessBilling: billingEvent,
 		},
 	}
-	applyTenantContext(billingTrigger)
 	processKey := strings.Join([]string{
 		strings.TrimSpace(c.GetHeader("X-PID")), streamName, trackType, inputCodec, outputCodec,
 		outputWidth + "x" + outputHeight,

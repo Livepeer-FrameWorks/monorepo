@@ -22,7 +22,7 @@ func TestUploadedVODLifecycleIsForwardedUnderItsArtifact(t *testing.T) {
 	p.decklogClient = client
 	const tenant = "tenant-vod"
 	const artifactHash = "20261005175800a1b2c3d4e5f60718"
-	p.streamCache.Set(tenant+":vodInternal", streamContext{TenantID: tenant, ArtifactHash: artifactHash}, time.Minute)
+	p.streamCache.Set(streamContextCacheKey("vod+vodInternal"), streamContext{TenantID: tenant, ArtifactHash: artifactHash}, time.Minute)
 
 	tenantID, inputs := tenant, uint32(1)
 	if _, _, err := p.handleStreamLifecycleUpdate(&ipcpb.MistTrigger{

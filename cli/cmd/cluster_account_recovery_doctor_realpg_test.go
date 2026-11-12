@@ -158,7 +158,7 @@ func TestAccountRecoveryDoctorRealPG(t *testing.T) {
 		"1 session stop(s) pending",
 		"(" + closedTenant + ": 1 stop)",
 		"1 confirmed downgrade(s) held past their effective time (" + heldTenant,
-		"1 billing recovery item(s) failing repeatedly or unresolved over 14 days (" + heldTenant + ": 1 item)",
+		"1 billing recovery item(s) blocked, failing repeatedly or overdue (" + heldTenant + ": 1 item)",
 		"1 prepaid tenant(s) below the -€10 suspension threshold but not suspended; their running sessions continue (" + unsuspendedTenant + ": €15.00 owed)",
 		"1 move(s) to Free failing or waiting on settlement over 14 days (" + fallbackTenant + ": 3 failures)",
 		"1 operator grant expiry(ies) failing repeatedly (" + grantTenant + ": 2 failures)",

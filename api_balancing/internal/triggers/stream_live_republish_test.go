@@ -44,7 +44,7 @@ func TestLifecycleReportMarksRepublishedSessionPlayable(t *testing.T) {
 			resetStateTrigHandlers(t)
 			mock := installControlDBForTest(t)
 			p := minimalProcessorTrigHandlers(t)
-			p.streamCache.Set(tenantID+":"+internal, streamContext{TenantID: tenantID, StreamID: streamID}, time.Minute)
+			p.streamCache.Set(streamContextCacheKey("live+"+internal), streamContext{TenantID: tenantID, StreamID: streamID}, time.Minute)
 			if tc.marks {
 				mock.ExpectBegin()
 				mock.ExpectQuery(`UPDATE foghorn\.ingest_sessions[\s\S]*SET playable_at = NOW\(\)`).

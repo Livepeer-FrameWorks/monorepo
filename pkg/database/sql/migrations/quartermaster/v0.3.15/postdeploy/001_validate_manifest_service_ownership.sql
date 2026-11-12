@@ -1,0 +1,1 @@
+ALTER TABLE quartermaster.service_instances VALIDATE CONSTRAINT chk_service_instance_registration_source;

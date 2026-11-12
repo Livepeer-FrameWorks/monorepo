@@ -198,6 +198,7 @@ type SystemTenantClusterAccess struct {
 // shape across Derived, Overlay, and Rendered — Quartermaster carries no secret values
 // in the bootstrap path.
 type QuartermasterSection struct {
+	RegistryScope             *ServiceRegistryScope      `yaml:"registry_scope,omitempty"`
 	SystemTenant              *Tenant                    `yaml:"system_tenant,omitempty"`
 	Tenants                   []Tenant                   `yaml:"tenants,omitempty"`
 	Clusters                  []Cluster                  `yaml:"clusters,omitempty"`
@@ -585,4 +586,22 @@ type Rendered struct {
 	Purser        PurserSection            `yaml:"purser,omitempty"`
 	Commodore     CommodoreRenderedSection `yaml:"commodore,omitempty"`
 	Accounts      []AccountRendered        `yaml:"accounts,omitempty"`
+}
+
+// ServiceRegistryScope is an explicit ownership boundary for a complete manifest.
+// Omitted scopes preserve the additive bootstrap contract.
+type ServiceRegistryScope struct {
+	Owner    string                    `yaml:"owner"`
+	Clusters []string                  `yaml:"clusters"`
+	Complete bool                      `yaml:"complete"`
+	Adopt    []ServiceRegistryAdoption `yaml:"adopt,omitempty"`
+}
+
+type ServiceRegistryAdoption struct {
+	InstanceID  string `yaml:"instance_id"`
+	ServiceName string `yaml:"service_name"`
+	ClusterID   string `yaml:"cluster_id"`
+	NodeID      string `yaml:"node_id"`
+	Protocol    string `yaml:"protocol"`
+	Port        int    `yaml:"port"`
 }

@@ -59,7 +59,7 @@ func TestStreamSourceRestartsHeldManagedSourceOnlyWhereItRuns(t *testing.T) {
 			processor := newTestProcessor(t)
 			processor.commodoreClient = commodoreClient
 			processor.clusterID = "media-eu-1"
-			processor.streamCache.Set(tenantID+":"+name, streamContext{
+			processor.streamCache.Set(streamContextCacheKey("live+"+name), streamContext{
 				TenantID: tenantID, BillingModel: "prepaid", IsSuspended: tc.suspended, IsBalanceNegative: tc.balanceNegative,
 			}, time.Minute)
 

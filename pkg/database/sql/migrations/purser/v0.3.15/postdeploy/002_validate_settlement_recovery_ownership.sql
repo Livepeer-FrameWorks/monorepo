@@ -1,0 +1,1 @@
+ALTER TABLE purser.provider_webhook_inbox VALIDATE CONSTRAINT chk_provider_webhook_inbox_status;

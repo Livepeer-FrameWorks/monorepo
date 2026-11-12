@@ -1,9 +1,28 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, cleanup } from "@testing-library/react";
 import IdleScreen from "../src/components/IdleScreen";
 
 describe("IdleScreen", () => {
+  it("cancels every stage of the idle animation on unmount", () => {
+    cleanup();
+    vi.useFakeTimers();
+    try {
+      for (const elapsed of [1, 4500, 8000]) {
+        const baseline = vi.getTimerCount();
+        const view = render(<IdleScreen status="ERROR" error="HTTP 503" />);
+        act(() => vi.advanceTimersByTime(elapsed));
+        view.unmount();
+        expect(vi.getTimerCount()).toBe(baseline);
+        act(() => vi.advanceTimersByTime(20000));
+        expect(vi.getTimerCount()).toBe(baseline);
+      }
+    } finally {
+      cleanup();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
   it("shows raw error text instead of only generic stream status", () => {
     render(<IdleScreen status="ERROR" message="Stream error" error="HTTP 503" />);
 

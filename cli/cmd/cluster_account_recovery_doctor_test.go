@@ -65,7 +65,7 @@ spend_below_limit_tenant:tenant-g=1500
 		"2 tenant closure(s) failing Quartermaster synchronization (tenant-a: 7 failures, tenant-b: 3 failures)",
 		"4 session stop(s) pending, oldest 2h0m (tenant-c: 3 stops)",
 		"1 confirmed downgrade(s) held past their effective time (tenant-d: 26h0m past effective)",
-		"2 billing recovery item(s) failing repeatedly or unresolved over 14 days (tenant-e: 1 item, unbound: 1 item)",
+		"2 billing recovery item(s) blocked, failing repeatedly or overdue (tenant-e: 1 item, unbound: 1 item)",
 		"1 prepaid tenant(s) below the -€10 suspension threshold but not suspended; their running sessions continue (tenant-g: €15.00 owed)",
 	} {
 		if !strings.Contains(problems, want) {

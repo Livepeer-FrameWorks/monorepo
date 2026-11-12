@@ -71,6 +71,7 @@ deployed_stripe() {
   "$STACK_REPO/bin/stack-billing-runner" -test.run "^$1$" -test.v -test.timeout "$timeout"
 }
 check 'deployed NL card top-up collects gross and credits net once' deployed_stripe TestStackDeployedCardTopupTax
+check 'deployed native USD settlement values EUR without duplicating credit' deployed_stripe TestStackDeployedNativeUSDSettlement
 check 'deployed Stripe renewal retains exactly one original VAT invoice and PDF' deployed_stripe TestStackDeployedStripeRenewalTax
 check 'EU business profile saved' json_has "$(profile business AT ATU12345678)" '.errors == null'
 check 'deployed VIES-validated EU business settles one reverse-charge invoice' deployed_crypto 0

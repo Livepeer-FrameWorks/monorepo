@@ -27,7 +27,9 @@ const cases = [
   ["network-layout.html", "width=1280"],
   ["skipper-height.html", "width=390"],
   ["skipper-height.html", "width=1280"],
-];
+  ["stream-test-lifecycle.html", ""],
+].filter(([fixture]) => !process.env.BROWSER_FIXTURE || fixture === process.env.BROWSER_FIXTURE);
+if (cases.length === 0) throw new Error(`Unknown browser fixture: ${process.env.BROWSER_FIXTURE}`);
 
 const freePort = () =>
   new Promise((resolve, reject) => {

@@ -77,16 +77,8 @@ func TestAccountRecoveryDoctorMatchesServiceRules(t *testing.T) {
 	}
 
 	stuck := query(read("api_billing/internal/database/queries/provider_webhook_inbox.sql"), "ProviderWebhookInboxRepeatedFailures")
-	for _, predicate := range []string{
-		"WHERE status IN ('pending', 'failed', 'processing') AND attempts > 1",
-		"WHERE status IN ('pending', 'failed', 'processing') AND unresolved_since < NOW() - INTERVAL '" + strconv.Itoa(purserRecoveryUnresolvedDays) + " days'",
-	} {
-		if !strings.Contains(stuck, predicate) {
-			t.Fatalf("ProviderWebhookInboxRepeatedFailures no longer matches %q:\n%s", predicate, stuck)
-		}
-		if strings.Count(doctor, predicate) != 2 {
-			t.Fatalf("doctor recovery predicates drifted from ProviderWebhookInboxRepeatedFailures: want %q in both stuck queries", predicate)
-		}
+	if !strings.Contains(stuck, "FROM purser.billing_recovery_failures") || strings.Count(doctor, "FROM purser.billing_recovery_failures") != 2 {
+		t.Fatal("service and deep doctor must read the same Purser-owned failure inventory")
 	}
 
 	// Commodore refuses new sessions for a prepaid balance at or below zero;

@@ -13,10 +13,13 @@ import (
 type Querier interface {
 	AcceptClusterInviteRecord(ctx context.Context, inviteID string) error
 	ActivateBootstrapTenantClusterAccess(ctx context.Context, arg ActivateBootstrapTenantClusterAccessParams) error
+	// Explicit inventory evidence is required; an instance ID format proves no ownership.
+	AdoptLegacyManifestRegistryInstance(ctx context.Context, arg AdoptLegacyManifestRegistryInstanceParams) (sql.Result, error)
 	ApplyTenantBillingEntitlements(ctx context.Context, arg ApplyTenantBillingEntitlementsParams) (int64, error)
 	ApproveClusterSubscriptionRecord(ctx context.Context, arg ApproveClusterSubscriptionRecordParams) error
 	BootstrapTenantClusterAccess(ctx context.Context, arg BootstrapTenantClusterAccessParams) error
 	ClaimIdleFoghornsForCluster(ctx context.Context, arg ClaimIdleFoghornsForClusterParams) (int64, error)
+	ClaimManifestRegistryInstance(ctx context.Context, arg ClaimManifestRegistryInstanceParams) (sql.Result, error)
 	ClaimMediaAuthorityRefreshBatch(ctx context.Context, arg ClaimMediaAuthorityRefreshBatchParams) ([]ClaimMediaAuthorityRefreshBatchRow, error)
 	ClaimNavigatorCustomDomainOutboxBatch(ctx context.Context, arg ClaimNavigatorCustomDomainOutboxBatchParams) ([]ClaimNavigatorCustomDomainOutboxBatchRow, error)
 	ClaimNavigatorTenantAliasOutboxBatch(ctx context.Context, arg ClaimNavigatorTenantAliasOutboxBatchParams) ([]ClaimNavigatorTenantAliasOutboxBatchRow, error)
@@ -164,6 +167,7 @@ type Querier interface {
 	ListTenantEntitledClusterIDs(ctx context.Context, tenantID string) ([]string, error)
 	ListTenantIDsForCluster(ctx context.Context, clusterID string) ([]string, error)
 	LockActiveTenantDomains(ctx context.Context, tenantID string) (LockActiveTenantDomainsRow, error)
+	LockManifestRegistryOwner(ctx context.Context, owner string) error
 	LockOwnedMediaCapacityConsent(ctx context.Context, arg LockOwnedMediaCapacityConsentParams) (LockOwnedMediaCapacityConsentRow, error)
 	LockServiceBootstrapToken(ctx context.Context, tokenHash string) (LockServiceBootstrapTokenRow, error)
 	LockServiceType(ctx context.Context, serviceType string) error
@@ -229,6 +233,8 @@ type Querier interface {
 	RevokeMaterializedTenantClusterAccess(ctx context.Context, arg RevokeMaterializedTenantClusterAccessParams) (int64, error)
 	SetGeneratedTenantSubdomain(ctx context.Context, arg SetGeneratedTenantSubdomainParams) error
 	SetTenantOfficialCluster(ctx context.Context, arg SetTenantOfficialClusterParams) error
+	// Manifest inventory is cluster-scoped, not tenant resource data.
+	StopRemovedManifestRegistryInstances(ctx context.Context, arg StopRemovedManifestRegistryInstancesParams) ([]string, error)
 	SubscribeTenantToCluster(ctx context.Context, arg SubscribeTenantToClusterParams) error
 	TenantAliasOutboxHasPending(ctx context.Context, tenantID string) (bool, error)
 	TenantCustomDomainOutboxHasPending(ctx context.Context, tenantID string) (bool, error)

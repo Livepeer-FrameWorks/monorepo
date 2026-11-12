@@ -60,6 +60,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   private reportedCaptureFailure: string | null = null;
 
   private state: IngestState = "idle";
+  private destroyed = false;
   private stateContext: IngestStateContextV2 = {};
   private sources: Map<string, MediaSource> = new Map();
   private mediaFiles: Map<string, { file: MediaFileSource; unsubs: Array<() => void> }> = new Map();
@@ -277,6 +278,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Update state
    */
   private setState(newState: IngestState, context?: Partial<IngestStateContextV2>): void {
+    if (this.destroyed && newState !== "destroyed") return;
     this.state = newState;
     if (context) {
       this.stateContext = { ...this.stateContext, ...context };
@@ -354,6 +356,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * no webcam, so the studio stays ready for the next source either way.
    */
   private failCapture(error: unknown): void {
+    if (this.destroyed) return;
     const reported = this.reportedCaptureFailure;
     this.reportedCaptureFailure = null;
 
@@ -413,6 +416,10 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Add a media source
    */
   private addMediaSource(type: SourceType, stream: MediaStream, label: string): MediaSource {
+    if (this.destroyed) {
+      stream.getTracks().forEach((track) => track.stop());
+      throw new DOMException("Controller destroyed", "AbortError");
+    }
     const id = generateSourceId(type);
 
     // Check if this is the first video source (will be primary by default)
@@ -736,6 +743,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Start camera capture
    */
   async startCamera(options: CaptureOptions = {}): Promise<MediaSource> {
+    if (this.destroyed) throw new DOMException("Controller destroyed", "AbortError");
     this.log("Starting camera capture", options);
     this.reportedCaptureFailure = null;
     this.setCaptureState("requesting_permissions", { error: undefined });
@@ -826,6 +834,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Start screen share capture
    */
   async startScreenShare(options: ScreenCaptureOptions = {}): Promise<MediaSource | null> {
+    if (this.destroyed) throw new DOMException("Controller destroyed", "AbortError");
     this.log("Starting screen share", options);
     this.reportedCaptureFailure = null;
     this.setCaptureState("requesting_permissions", { error: undefined });
@@ -2166,6 +2175,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Destroy the controller
    */
   destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
     this.destinationResolution?.abort();
     this.log("Destroying IngestControllerV2");
     this.stopStatsPolling();

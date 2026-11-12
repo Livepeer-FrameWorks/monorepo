@@ -189,7 +189,7 @@ func TestPopulateStreamContext_WritesPushRewriteEquivalentCacheKeys(t *testing.T
 		ProcessesJson: `[{"type":"thumbnail","interval_seconds":10}]`,
 	})
 
-	if _, ok := m.p.streamCache.Peek("tenant-1:internal-1"); !ok {
+	if _, ok := m.p.streamCache.Peek("source:internal-1"); !ok {
 		t.Fatalf("primary cache key tenantId:internalName not written")
 	}
 	if _, ok := m.p.streamCache.Peek("process:internal-1"); !ok {
@@ -251,7 +251,7 @@ func TestPopulateStreamContext_NoOpWhenNotAdmitted(t *testing.T) {
 		TenantId:     "tenant-1",
 	})
 
-	if _, ok := m.p.streamCache.Peek("tenant-1:internal-1"); ok {
+	if _, ok := m.p.streamCache.Peek("source:internal-1"); ok {
 		t.Fatalf("denied admission must not write any cache entry")
 	}
 }

@@ -135,8 +135,11 @@ func runReconcileTransaction(ctx context.Context, db *sql.DB, dryRun bool, recon
 }
 
 func printSection(name string, r bootstrap.Result) {
-	fmt.Fprintf(os.Stdout, "quartermaster bootstrap %s: created=%d updated=%d noop=%d\n",
-		name, len(r.Created), len(r.Updated), len(r.Noop))
+	fmt.Fprintf(os.Stdout, "quartermaster bootstrap %s: created=%d updated=%d noop=%d stopped=%d\n",
+		name, len(r.Created), len(r.Updated), len(r.Noop), len(r.Stopped))
+	for _, instance := range r.Stopped {
+		fmt.Fprintf(os.Stdout, "quartermaster bootstrap %s: stop %s\n", name, instance)
+	}
 }
 
 // loadBootstrapDesiredState reads + decodes the rendered bootstrap YAML for

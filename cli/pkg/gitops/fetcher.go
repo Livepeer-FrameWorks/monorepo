@@ -29,6 +29,7 @@ const (
 
 // Fetcher fetches and caches manifests from the gitops repository
 type Fetcher struct {
+	requestContext context.Context
 	repository     string
 	cacheDir       string
 	client         *http.Client
@@ -107,6 +108,12 @@ func NewFetcher(opts FetchOptions) (*Fetcher, error) {
 // FetchFromRepositories tries remote repositories in order. A local repository
 // is authoritative: its errors must not select a different deployment source.
 func FetchFromRepositories(opts FetchOptions, repositories []string, channel, version string) (*Manifest, error) {
+	return FetchFromRepositoriesContext(context.Background(), opts, repositories, channel, version)
+}
+
+// FetchFromRepositoriesContext preserves command cancellation across repository
+// selection, HTTP retries and cache fallback.
+func FetchFromRepositoriesContext(ctx context.Context, opts FetchOptions, repositories []string, channel, version string) (*Manifest, error) {
 	repos := dedupeRepositories(repositories)
 	if len(repos) == 0 {
 		if opts.Repository != "" {
@@ -118,6 +125,9 @@ func FetchFromRepositories(opts FetchOptions, repositories []string, channel, ve
 
 	var errs []string
 	for _, repo := range repos {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		repoOpts := opts
 		repoOpts.Repository = repo
 
@@ -126,7 +136,10 @@ func FetchFromRepositories(opts FetchOptions, repositories []string, channel, ve
 			return nil, fmt.Errorf("%s: create fetcher: %w", repo, err)
 		}
 
-		manifest, err := fetcher.Fetch(channel, version)
+		manifest, err := fetcher.FetchContext(ctx, channel, version)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if err == nil {
 			return manifest, nil
 		}
@@ -141,6 +154,13 @@ func FetchFromRepositories(opts FetchOptions, repositories []string, channel, ve
 
 // Fetch retrieves a manifest for a specific channel and version
 func (f *Fetcher) Fetch(channel, version string) (*Manifest, error) {
+	return f.FetchContext(context.Background(), channel, version)
+}
+
+func (f *Fetcher) fetch(channel, version string) (*Manifest, error) {
+	if err := f.requestContext.Err(); err != nil {
+		return nil, err
+	}
 	// Default channel
 	if channel == "" {
 		channel = "stable"
@@ -199,6 +219,9 @@ func (f *Fetcher) Fetch(channel, version string) (*Manifest, error) {
 
 	// Fetch from repository
 	manifest, err := f.fetchFromRepo(channel, version)
+	if f.requestContext.Err() != nil {
+		return nil, f.requestContext.Err()
+	}
 	if err != nil {
 		if cacheErr == nil && time.Since(cachedAt) <= maxStale {
 			fmt.Printf("Warning: using stale cached manifest after fetch failure: %v\n", err)
@@ -217,6 +240,13 @@ func (f *Fetcher) Fetch(channel, version string) (*Manifest, error) {
 	}
 
 	return manifest, nil
+}
+
+// FetchContext scopes one fetch without mutating a shared fetcher's context.
+func (f *Fetcher) FetchContext(ctx context.Context, channel, version string) (*Manifest, error) {
+	scoped := *f
+	scoped.requestContext = ctx
+	return scoped.fetch(channel, version)
 }
 
 // channelPointer represents a channel file that points to a specific release manifest.
@@ -264,9 +294,13 @@ func (f *Fetcher) fetchFromRepo(channel, version string) (*Manifest, error) {
 
 // fetchHTTP downloads raw bytes from a URL with retries.
 func (f *Fetcher) fetchHTTP(url string) ([]byte, error) {
+	ctx := f.requestContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var lastErr error
 	for attempt := 1; attempt <= f.retryCount; attempt++ {
-		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build request: %w", err)
 		}
@@ -290,9 +324,16 @@ func (f *Fetcher) fetchHTTP(url string) ([]byte, error) {
 			}
 		}
 
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if attempt < f.retryCount {
 			if delay := f.retryDelay * time.Duration(attempt); delay > 0 {
-				time.Sleep(delay)
+				select {
+				case <-time.After(delay):
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
 			}
 		}
 	}

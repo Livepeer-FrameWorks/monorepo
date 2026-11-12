@@ -52,7 +52,7 @@ function fakeContext(gains: FakeGain[]) {
       ...node(),
     })),
     createMediaStreamDestination: vi.fn(() => ({
-      stream: { getAudioTracks: () => [{ kind: "audio" }] },
+      stream: { getAudioTracks: () => [{ kind: "audio" }], getTracks: () => [] },
       channelCount: 0,
     })),
     close: vi.fn(async () => {}),

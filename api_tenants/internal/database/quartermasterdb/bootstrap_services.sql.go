@@ -7,7 +7,60 @@ package quartermasterdb
 
 import (
 	"context"
+	"database/sql"
+
+	"github.com/lib/pq"
 )
+
+const adoptLegacyManifestRegistryInstance = `-- name: AdoptLegacyManifestRegistryInstance :execresult
+UPDATE quartermaster.service_instances instance
+SET registration_source='manifest', registry_owner=$1::text, updated_at=NOW()
+FROM quartermaster.services service
+WHERE instance.instance_id=$2::text AND instance.service_id=service.service_id
+ AND service.name=$3::text AND instance.cluster_id=$4::text
+ AND instance.node_id=$5::text AND instance.protocol=$6::text AND instance.port=$7::integer
+ AND (instance.registration_source='legacy' OR (instance.registration_source='manifest' AND instance.registry_owner=$1::text))
+`
+
+type AdoptLegacyManifestRegistryInstanceParams struct {
+	Owner       string `db:"owner" json:"owner"`
+	InstanceID  string `db:"instance_id" json:"instance_id"`
+	ServiceName string `db:"service_name" json:"service_name"`
+	ClusterID   string `db:"cluster_id" json:"cluster_id"`
+	NodeID      string `db:"node_id" json:"node_id"`
+	Protocol    string `db:"protocol" json:"protocol"`
+	Port        int32  `db:"port" json:"port"`
+}
+
+// Explicit inventory evidence is required; an instance ID format proves no ownership.
+func (q *Queries) AdoptLegacyManifestRegistryInstance(ctx context.Context, arg AdoptLegacyManifestRegistryInstanceParams) (sql.Result, error) {
+	return q.db.ExecContext(ctx, adoptLegacyManifestRegistryInstance,
+		arg.Owner,
+		arg.InstanceID,
+		arg.ServiceName,
+		arg.ClusterID,
+		arg.NodeID,
+		arg.Protocol,
+		arg.Port,
+	)
+}
+
+const claimManifestRegistryInstance = `-- name: ClaimManifestRegistryInstance :execresult
+UPDATE quartermaster.service_instances
+SET registration_source='manifest', registry_owner=$1::text, updated_at=NOW()
+WHERE id=$2::text::uuid AND cluster_id=$3::text
+ AND (registration_source='legacy' OR (registration_source='manifest' AND (registry_owner IS NULL OR registry_owner=$1::text)))
+`
+
+type ClaimManifestRegistryInstanceParams struct {
+	Owner     string `db:"owner" json:"owner"`
+	ID        string `db:"id" json:"id"`
+	ClusterID string `db:"cluster_id" json:"cluster_id"`
+}
+
+func (q *Queries) ClaimManifestRegistryInstance(ctx context.Context, arg ClaimManifestRegistryInstanceParams) (sql.Result, error) {
+	return q.db.ExecContext(ctx, claimManifestRegistryInstance, arg.Owner, arg.ID, arg.ClusterID)
+}
 
 const getBootstrapNodeAdvertiseHost = `-- name: GetBootstrapNodeAdvertiseHost :one
 SELECT cluster_id,
@@ -46,7 +99,8 @@ const getBootstrapServiceInstance = `-- name: GetBootstrapServiceInstance :one
 SELECT id::text AS id,
        COALESCE(advertise_host, '')::text AS advertise_host,
        COALESCE(health_endpoint_override, '')::text AS health_endpoint,
-       COALESCE(metadata::text, '{}')::text AS metadata
+       COALESCE(metadata::text, '{}')::text AS metadata,
+       registration_source, COALESCE(registry_owner, '')::text AS registry_owner, COALESCE(status, '')::text AS status
 FROM quartermaster.service_instances
 WHERE service_id = $1::text
   AND cluster_id = $2::text
@@ -66,10 +120,13 @@ type GetBootstrapServiceInstanceParams struct {
 }
 
 type GetBootstrapServiceInstanceRow struct {
-	ID             string `db:"id" json:"id"`
-	AdvertiseHost  string `db:"advertise_host" json:"advertise_host"`
-	HealthEndpoint string `db:"health_endpoint" json:"health_endpoint"`
-	Metadata       string `db:"metadata" json:"metadata"`
+	ID                 string `db:"id" json:"id"`
+	AdvertiseHost      string `db:"advertise_host" json:"advertise_host"`
+	HealthEndpoint     string `db:"health_endpoint" json:"health_endpoint"`
+	Metadata           string `db:"metadata" json:"metadata"`
+	RegistrationSource string `db:"registration_source" json:"registration_source"`
+	RegistryOwner      string `db:"registry_owner" json:"registry_owner"`
+	Status             string `db:"status" json:"status"`
 }
 
 func (q *Queries) GetBootstrapServiceInstance(ctx context.Context, arg GetBootstrapServiceInstanceParams) (GetBootstrapServiceInstanceRow, error) {
@@ -86,6 +143,9 @@ func (q *Queries) GetBootstrapServiceInstance(ctx context.Context, arg GetBootst
 		&i.AdvertiseHost,
 		&i.HealthEndpoint,
 		&i.Metadata,
+		&i.RegistrationSource,
+		&i.RegistryOwner,
+		&i.Status,
 	)
 	return i, err
 }
@@ -129,7 +189,7 @@ const insertBootstrapServiceInstance = `-- name: InsertBootstrapServiceInstance 
 INSERT INTO quartermaster.service_instances (
     instance_id, cluster_id, node_id, service_id, protocol, advertise_host,
     health_endpoint_override, port, metadata, status, health_status,
-    created_at, updated_at
+    registration_source, registry_owner, created_at, updated_at
 ) VALUES (
     $1::text,
     $2::text,
@@ -140,7 +200,7 @@ INSERT INTO quartermaster.service_instances (
     $7::text,
     $8::integer,
     $9::text::jsonb,
-    'running', 'unknown', NOW(), NOW()
+    'running', 'unknown', 'manifest', NULLIF($10::text, ''), NOW(), NOW()
 )
 `
 
@@ -154,6 +214,7 @@ type InsertBootstrapServiceInstanceParams struct {
 	HealthEndpoint string `db:"health_endpoint" json:"health_endpoint"`
 	Port           int32  `db:"port" json:"port"`
 	Metadata       string `db:"metadata" json:"metadata"`
+	RegistryOwner  string `db:"registry_owner" json:"registry_owner"`
 }
 
 func (q *Queries) InsertBootstrapServiceInstance(ctx context.Context, arg InsertBootstrapServiceInstanceParams) error {
@@ -167,8 +228,57 @@ func (q *Queries) InsertBootstrapServiceInstance(ctx context.Context, arg Insert
 		arg.HealthEndpoint,
 		arg.Port,
 		arg.Metadata,
+		arg.RegistryOwner,
 	)
 	return err
+}
+
+const lockManifestRegistryOwner = `-- name: LockManifestRegistryOwner :exec
+SELECT pg_advisory_xact_lock(hashtextextended('manifest-registry:' || $1::text, 0))
+`
+
+func (q *Queries) LockManifestRegistryOwner(ctx context.Context, owner string) error {
+	_, err := q.db.ExecContext(ctx, lockManifestRegistryOwner, owner)
+	return err
+}
+
+const stopRemovedManifestRegistryInstances = `-- name: StopRemovedManifestRegistryInstances :many
+UPDATE quartermaster.service_instances
+SET status='stopped', health_status='unknown', stopped_at=NOW(), updated_at=NOW()
+WHERE registration_source='manifest' AND registry_owner=$1::text
+ AND cluster_id=ANY($2::text[]) AND status<>'stopped'
+ AND NOT (id::text=ANY($3::text[]))
+RETURNING instance_id
+`
+
+type StopRemovedManifestRegistryInstancesParams struct {
+	Owner      string   `db:"owner" json:"owner"`
+	ClusterIds []string `db:"cluster_ids" json:"cluster_ids"`
+	DesiredIds []string `db:"desired_ids" json:"desired_ids"`
+}
+
+// Manifest inventory is cluster-scoped, not tenant resource data.
+func (q *Queries) StopRemovedManifestRegistryInstances(ctx context.Context, arg StopRemovedManifestRegistryInstancesParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, stopRemovedManifestRegistryInstances, arg.Owner, pq.Array(arg.ClusterIds), pq.Array(arg.DesiredIds))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var instance_id string
+		if err := rows.Scan(&instance_id); err != nil {
+			return nil, err
+		}
+		items = append(items, instance_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateBootstrapServiceCatalog = `-- name: UpdateBootstrapServiceCatalog :exec
@@ -222,7 +332,9 @@ WITH input AS (
            $4::text AS metadata
 )
 UPDATE quartermaster.service_instances
-SET advertise_host = input.advertise_host,
+SET status = CASE WHEN registration_source = 'manifest' THEN 'running' ELSE status END,
+    stopped_at = CASE WHEN registration_source = 'manifest' THEN NULL ELSE stopped_at END,
+    advertise_host = input.advertise_host,
     health_endpoint_override = input.health_endpoint,
     metadata = input.metadata::jsonb,
     updated_at = NOW()

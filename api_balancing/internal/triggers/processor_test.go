@@ -1065,7 +1065,7 @@ func TestHandlePlayRewriteBareMistNativeResolvesThroughInternalName(t *testing.T
 	processor := newTestProcessor(t)
 	processor.commodoreClient = commodoreClient
 	processor.clusterID = "media-eu-1"
-	processor.streamCache.Set("tenant-system:60546679b497415db2338cd5cae54992", streamContext{
+	processor.streamCache.Set("source:60546679b497415db2338cd5cae54992", streamContext{
 		TenantID:     "tenant-system",
 		BillingModel: "postpaid",
 	}, time.Minute)
@@ -1215,6 +1215,7 @@ func newTestProcessor(t *testing.T) *Processor {
 		NegativeTTL:          0,
 		MaxEntries:           100,
 		SkipStore:            p.streamCacheHeld,
+		SkipStoreValue:       p.streamCacheOwnerHeld,
 	}, cache.MetricsHooks{})
 	p.billingCache = cache.New(cache.Options{
 		TTL:                  10 * time.Minute,
@@ -1233,7 +1234,7 @@ func TestInvalidatePlaybackAuthCacheHoldsDownPerKeyRepopulate(t *testing.T) {
 	processor := newTestProcessor(t)
 	tenantID := "tenant-1"
 	internalName := "stream-x"
-	cacheKey := tenantID + ":" + internalName
+	cacheKey := streamContextCacheKey("live+" + internalName)
 
 	processor.streamCache.Set(cacheKey, streamContext{TenantID: tenantID}, time.Minute)
 
@@ -1272,13 +1273,13 @@ func TestInvalidateTenantCacheHoldsDownTenantPrefix(t *testing.T) {
 
 	processor.InvalidateTenantCache(tenantID)
 
-	cacheKey := tenantID + ":new-stream-arriving-after-evict"
+	cacheKey := "source:new-stream-arriving-after-evict"
 	processor.streamCache.Set(cacheKey, streamContext{TenantID: tenantID}, time.Minute)
 	if _, ok := processor.streamCache.Peek(cacheKey); ok {
 		t.Fatal("tenant hold-down did not block a new key for the same tenant")
 	}
 
-	otherKey := "tenant-2:still-allowed"
+	otherKey := "source:still-allowed"
 	processor.streamCache.Set(otherKey, streamContext{TenantID: "tenant-2"}, time.Minute)
 	if _, ok := processor.streamCache.Peek(otherKey); !ok {
 		t.Fatal("hold-down leaked across tenant boundary")
@@ -1290,7 +1291,7 @@ func TestInvalidateTenantCacheHoldsDownTenantPrefix(t *testing.T) {
 func TestStreamCacheHoldExpires(t *testing.T) {
 	processor := newTestProcessor(t)
 	tenantID := "tenant-1"
-	cacheKey := tenantID + ":stream-x"
+	cacheKey := "source:stream-x"
 
 	processor.holdStreamCacheKey(cacheKey)
 
@@ -1315,7 +1316,7 @@ func TestHandlePlayRewriteStartsCorrelatedPlaybackViewer(t *testing.T) {
 	clientIP := "192.0.2.10"
 	sm.SetNodeConnectionInfo(context.Background(), nodeID, nodeID+":18090", "", "test-cluster", nil)
 	admitViewerPlacementForTest(t, processor)
-	processor.streamCache.Set(tenantID+":"+internalName, streamContext{
+	processor.streamCache.Set(streamContextCacheKey("live+"+internalName), streamContext{
 		TenantID:          tenantID,
 		BillingModel:      "postpaid",
 		RequiresAuth:      false,
@@ -1424,7 +1425,7 @@ func TestViewerCapCountsThePlaybackSessionNotTheMistSession(t *testing.T) {
 	clientIP := "192.0.2.50"
 	sm.SetNodeConnectionInfo(context.Background(), nodeID, nodeID+":18090", "", "test-cluster", nil)
 	admitViewerPlacementForTest(t, processor)
-	processor.streamCache.Set(tenantID+":"+internalName, streamContext{
+	processor.streamCache.Set(streamContextCacheKey("live+"+internalName), streamContext{
 		TenantID:          tenantID,
 		BillingModel:      "postpaid",
 		MaxViewers:        1,
@@ -1533,7 +1534,7 @@ func TestHandleUserNewDoesNotStartPlaybackViewer(t *testing.T) {
 	internalName := "stream-user-new"
 	clientIP := "192.0.2.10"
 	admitViewerPlacementForTest(t, processor)
-	processor.streamCache.Set(tenantID+":"+internalName, streamContext{
+	processor.streamCache.Set(streamContextCacheKey("live+"+internalName), streamContext{
 		TenantID:          tenantID,
 		RequiresAuth:      false,
 		RequiresAuthKnown: true,
@@ -1573,7 +1574,7 @@ func TestHandleUserEndCountsOnlyConfirmedPlaybackDisconnect(t *testing.T) {
 	nodeID := "node-1"
 	internalName := "stream-disconnect"
 	clientIP := "192.0.2.11"
-	processor.streamCache.Set(tenantID+":"+internalName, streamContext{TenantID: tenantID}, time.Minute)
+	processor.streamCache.Set(streamContextCacheKey("live+"+internalName), streamContext{TenantID: tenantID}, time.Minute)
 
 	viewerID := sm.CreateVirtualViewer(nodeID, internalName, clientIP)
 	if confirmed := sm.ConfirmVirtualViewerByID(viewerID, nodeID, internalName, clientIP, "mist-session-1"); !confirmed {
@@ -1759,7 +1760,7 @@ func TestHandleProcessBilling_EnrichesFromCache(t *testing.T) {
 	processor := newTestProcessor(t)
 	tenantID := "tenant-1"
 	internalName := "stream-abc"
-	cacheKey := tenantID + ":" + internalName
+	cacheKey := streamContextCacheKey("live+" + internalName)
 	processor.streamCache.Set(cacheKey, streamContext{
 		TenantID: tenantID,
 		UserID:   "user-1",
@@ -1816,7 +1817,7 @@ func TestHandleProcessBilling_ResolvesProcessLabel(t *testing.T) {
 	processor := newTestProcessor(t)
 	tenantID := "tenant-1"
 	internalName := "stream-abc"
-	processor.streamCache.Set(tenantID+":"+internalName, streamContext{
+	processor.streamCache.Set(streamContextCacheKey("live+"+internalName), streamContext{
 		TenantID: tenantID,
 		UserID:   "user-1",
 		StreamID: "stream-id",
@@ -1846,7 +1847,7 @@ func TestHandleProcessBilling_BillsResolvedOwnerNotNodeTenant(t *testing.T) {
 	nodeTenant := "tenant-node-seed"
 	ownerTenant := "tenant-owner"
 	internalName := "stream-abc"
-	processor.streamCache.Set(nodeTenant+":"+internalName, streamContext{
+	processor.streamCache.Set(streamContextCacheKey("live+"+internalName), streamContext{
 		TenantID: ownerTenant,
 		StreamID: "stream-id",
 		Source:   "test",
@@ -1884,7 +1885,7 @@ func TestHandleStorageLifecycleData_UsesCacheAndStreamIDFallback(t *testing.T) {
 	processor := newTestProcessor(t)
 	tenantID := "tenant-2"
 	internalName := "storage-stream"
-	cacheKey := tenantID + ":" + internalName
+	cacheKey := streamContextCacheKey("live+" + internalName)
 	processor.streamCache.Set(cacheKey, streamContext{
 		TenantID:        tenantID,
 		UserID:          "user-2",
@@ -1978,7 +1979,7 @@ func TestHandleDVRLifecycleData_NormalizesInternalName(t *testing.T) {
 	processor := newTestProcessor(t)
 	tenantID := "tenant-3"
 	internalName := "dvr-stream"
-	cacheKey := tenantID + ":" + internalName
+	cacheKey := streamContextCacheKey("live+" + internalName)
 	processor.streamCache.Set(cacheKey, streamContext{
 		TenantID: tenantID,
 		UserID:   "user-3",
@@ -2113,7 +2114,7 @@ func TestHandlePushRewrite_CachesBillingContext(t *testing.T) {
 		t.Fatalf("expected stream ID to be set, got %q", trigger.GetStreamId())
 	}
 
-	cacheKey := "tenant-4:push-stream"
+	cacheKey := "source:push-stream"
 	cached, ok := processor.streamCache.Peek(cacheKey)
 	if !ok {
 		t.Fatalf("expected stream cache entry for %q", cacheKey)
@@ -2224,7 +2225,7 @@ func TestGetStreamOrigin_PrefixedStreamName(t *testing.T) {
 	processor := newTestProcessor(t)
 
 	// Cache stores bare internal name (as written by PUSH_REWRITE)
-	processor.streamCache.Set("tenantA:abc123-def456", streamContext{
+	processor.streamCache.Set("source:abc123-def456", streamContext{
 		TenantID:        "tenantA",
 		OriginClusterID: "cluster-eu",
 	}, time.Minute)
@@ -2249,21 +2250,21 @@ func TestGetStreamOrigin_PrefixedStreamName(t *testing.T) {
 	})
 }
 
-func TestGetStreamOrigin_AmbiguousInternalName(t *testing.T) {
+func TestGetStreamOrigin_SeparatesSourceAndArtifactNamespaces(t *testing.T) {
 	processor := newTestProcessor(t)
 
-	processor.streamCache.Set("tenant-a:mystream", streamContext{
+	processor.streamCache.Set("source:mystream", streamContext{
 		TenantID:        "tenant-a",
 		OriginClusterID: "cluster-eu",
 	}, time.Minute)
-	processor.streamCache.Set("tenant-b:mystream", streamContext{
+	processor.streamCache.Set("artifact_vod:mystream", streamContext{
 		TenantID:        "tenant-b",
 		OriginClusterID: "cluster-us",
 	}, time.Minute)
 
 	tenantID, clusterID := processor.GetStreamOrigin("mystream")
-	if tenantID != "" || clusterID != "" {
-		t.Fatalf("expected empty returns for ambiguous name, got tenant=%q cluster=%q", tenantID, clusterID)
+	if tenantID != "tenant-a" || clusterID != "cluster-eu" {
+		t.Fatalf("artifact cache collided with source identity, got tenant=%q cluster=%q", tenantID, clusterID)
 	}
 }
 
@@ -2271,7 +2272,7 @@ func TestApplyStreamContext_SeparatesClusterAndOrigin(t *testing.T) {
 	processor := newTestProcessor(t)
 	processor.clusterID = "cluster-local"
 
-	processor.streamCache.Set("tenant-1:stream-a", streamContext{
+	processor.streamCache.Set("source:stream-a", streamContext{
 		TenantID:        "tenant-1",
 		UserID:          "user-1",
 		StreamID:        "stream-id-1",
@@ -2308,11 +2309,11 @@ func TestApplyStreamContext_UsesTenantHintToAvoidCrossTenantMixups(t *testing.T)
 	processor := newTestProcessor(t)
 	processor.clusterID = "cluster-local"
 
-	processor.streamCache.Set("tenant-a:shared-stream", streamContext{
+	processor.streamCache.Set("source:shared-stream", streamContext{
 		TenantID:        "tenant-a",
 		OriginClusterID: "cluster-a",
 	}, time.Minute)
-	processor.streamCache.Set("tenant-b:shared-stream", streamContext{
+	processor.streamCache.Set("source:shared-stream", streamContext{
 		TenantID:        "tenant-b",
 		OriginClusterID: "cluster-b",
 	}, time.Minute)

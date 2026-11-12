@@ -8,6 +8,7 @@ import (
 
 // Manifest represents the cluster.yaml configuration
 type Manifest struct {
+	RegistryOwner string `yaml:"registry_owner,omitempty"`
 	// DatabaseDeployment scopes SQL administration without changing service bindings.
 	DatabaseDeployment string          `yaml:"-"`
 	DatabasePrimary    *PostgresConfig `yaml:"-"`

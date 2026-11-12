@@ -123,3 +123,43 @@ and actionable exceptions. It does not produce balanced journal entries,
 reconcile a payout to the bank, approve withdrawals or certify an accounting
 close. See the [operator guide](../../website_docs/src/content/docs/operators/billing-financials.mdx)
 and the remaining [close/journal proposal](../rfcs/RFC_billing_documents_operator_financials.md).
+
+## Native provider settlements and EUR reference valuation
+
+`purser.provider_settlements` preserves the provider balance transaction's native
+currency, gross, fee, net, transaction ID, timestamp and charge-to-settlement
+exchange rate when conversion occurs. Stripe supplies that rate; for Mollie the
+existing effective ratio is derived from native gross and the recorded charge
+amount. Native evidence is committed before EUR valuation. A same-currency
+provider settlement needs no provider exchange rate, regardless of the ledger
+currency.
+
+The separate EUR fields are a reference valuation using the existing ECB rate
+for the transaction's UTC date (maximum reference age five days). They do not
+assert that the provider converted cash into EUR. Gross and fee are rounded once;
+EUR net is their difference. EUR settlements use an identity valuation. A
+compatibility trigger supplies that complete identity record for older EUR
+writers during rollout.
+
+States distinguish `pending` provider evidence, `recorded` native evidence awaiting
+valuation, `blocked` unsupported valuation policy, and `settled` complete evidence
+and valuation. Missing reference rates retain native facts and retry valuation
+without calling the provider again. Unsupported currency stops provider polling
+and stays in operator recovery inventory. Adding support lets the ordinary
+valuation job resume from the same facts. Valuation and waking a bound blocked
+callback commit together; neither duplicates payment, customer credit, invoice
+activation or provider charges.
+
+Verified callbacks bind to a tenant through the recorded provider payment. Stripe
+charge IDs are never used in place of PaymentIntent IDs. Request tenant headers
+cannot establish ownership. Internal reconciliation preserves typed waiting,
+blocked and transient causes; the public failure response stays generic. Recovery
+errors contain a fixed cause code and the verified payment ID, without embedding
+provider payloads or signatures. Purser's alert count and the SSH-based deep
+cluster doctor both read the service-owned `purser.billing_recovery_failures` view,
+including poll-discovered settlements with no callback. A settlement valuation
+and its callback are distinct retained obligations when both are blocked,
+correlated by payment ID. Blocked records remain visible and normal settlement waits become actionable
+only after the existing age threshold.
+
+The balance-side amount semantics follow [Mollie's balance transaction contract](https://docs.mollie.com/reference/list-balance-transactions).

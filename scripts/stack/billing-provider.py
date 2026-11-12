@@ -242,6 +242,22 @@ class Provider:
                 return 200, self.requests
             if path == "/__test/objects":
                 return 200, self.objects
+            if path == "/__test/native_settlement":
+                data = json.loads(body)
+                payment = self.objects.get(data.get("payment_id"), {})
+                currency = data.get("currency", "").lower()
+                amount, fee = data.get("amount"), data.get("fee")
+                if payment.get("object") != "payment_intent" or payment.get("status") != "succeeded" or payment.get("latest_charge"):
+                    return self.invalid("native settlement requires an unsettled paid PaymentIntent")
+                if not re.fullmatch(r"[a-z]{3}", currency) or not isinstance(amount, int) or not isinstance(fee, int) or fee < 0:
+                    return self.invalid("native settlement requires currency and integer amounts")
+                rate = data.get("exchange_rate")
+                if currency != payment["currency"] and (rate is None or Decimal(str(rate)) <= 0):
+                    return self.invalid("cross-currency provider settlement requires its exchange rate")
+                transaction = self.create("txn", "balance_transaction", {"amount": amount, "fee": fee, "net": amount-fee, "currency": currency, "exchange_rate": rate, "created": int(time.time())})
+                charge = self.create("ch", "charge", {"amount": payment["amount"], "currency": payment["currency"], "payment_intent": payment["id"], "balance_transaction": transaction["id"], "metadata": dict(payment.get("metadata", {}))})
+                payment["latest_charge"] = charge
+                return 200, self.event("charge.updated", charge)
             if path == "/__test/vies":
                 data = json.loads(body)
                 self.vies_validity[data["vat_number"]] = bool(data["valid"])

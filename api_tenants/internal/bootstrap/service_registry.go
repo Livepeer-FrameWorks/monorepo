@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 
 	"frameworks/api_tenants/internal/database/quartermasterdb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
@@ -161,6 +163,7 @@ func upsertServiceInstance(ctx context.Context, exec DBTX, serviceID, advHost st
 			NodeID: e.NodeID, ServiceID: serviceID,
 			Protocol: protocol, AdvertiseHost: advHost, HealthEndpoint: e.HealthEndpoint,
 			Port: int32(e.Port), Metadata: metadataJSON,
+			RegistryOwner: e.registryOwner,
 		}); insertErr != nil {
 			return "", fmt.Errorf("insert service_instance: %w", insertErr)
 		}
@@ -168,8 +171,17 @@ func upsertServiceInstance(ctx context.Context, exec DBTX, serviceID, advHost st
 	case err != nil:
 		return "", fmt.Errorf("probe service_instance: %w", err)
 	}
+	if e.registryOwner != "" && current.RegistryOwner != e.registryOwner {
+		result, err := queries.ClaimManifestRegistryInstance(ctx, quartermasterdb.ClaimManifestRegistryInstanceParams{ID: current.ID, ClusterID: e.ClusterID, Owner: e.registryOwner})
+		if err != nil {
+			return "", err
+		}
+		if count, err := result.RowsAffected(); err != nil || count != 1 {
+			return "", fmt.Errorf("service instance is owned by another manifest or a runtime registrar")
+		}
+	}
 
-	if current.AdvertiseHost == advHost && current.HealthEndpoint == e.HealthEndpoint && jsonObjectEq(current.Metadata, metadataJSON) {
+	if current.AdvertiseHost == advHost && current.HealthEndpoint == e.HealthEndpoint && jsonObjectEq(current.Metadata, metadataJSON) && current.Status != "stopped" {
 		return "noop", nil
 	}
 	if err := queries.UpdateBootstrapServiceInstance(ctx, quartermasterdb.UpdateBootstrapServiceInstanceParams{
@@ -178,6 +190,87 @@ func upsertServiceInstance(ctx context.Context, exec DBTX, serviceID, advHost st
 		return "", fmt.Errorf("update service_instance: %w", err)
 	}
 	return "updated", nil
+}
+
+func validateRegistryScope(scope *ServiceRegistryScope, clusters []Cluster) error {
+	if scope == nil {
+		return nil
+	}
+	if scope.Owner == "" || strings.TrimSpace(scope.Owner) != scope.Owner || len(scope.Owner) > 100 || len(scope.Clusters) == 0 {
+		return errors.New("registry_scope requires a non-empty owner and declared clusters")
+	}
+	seen := make(map[string]bool)
+	for _, cluster := range scope.Clusters {
+		if seen[cluster] || !slices.ContainsFunc(clusters, func(c Cluster) bool { return c.ID == cluster }) {
+			return fmt.Errorf("registry_scope cluster %q is duplicated or absent from this manifest", cluster)
+		}
+		seen[cluster] = true
+	}
+	adopted := make(map[string]bool)
+	for _, item := range scope.Adopt {
+		if item.InstanceID == "" || item.ServiceName == "" || item.NodeID == "" || item.Protocol == "" || item.Port <= 0 || item.Port > 65535 || !seen[item.ClusterID] || adopted[item.InstanceID] {
+			return errors.New("registry_scope adoption requires a unique instance and its exact service, scoped cluster, node, protocol and port")
+		}
+		adopted[item.InstanceID] = true
+	}
+	return nil
+}
+
+// ReconcileManagedServiceRegistry retires only an explicitly complete owner's
+// inventory. The caller's transaction makes ownership, upserts and stops atomic.
+func ReconcileManagedServiceRegistry(ctx context.Context, exec DBTX, entries []ServiceRegistryEntry, scope *ServiceRegistryScope, clusters []Cluster) (Result, error) {
+	if err := validateRegistryScope(scope, clusters); err != nil {
+		return Result{}, err
+	}
+	if scope == nil {
+		return ReconcileServiceRegistry(ctx, exec, entries)
+	}
+	q := quartermasterdb.New(exec)
+	if err := q.LockManifestRegistryOwner(ctx, scope.Owner); err != nil {
+		return Result{}, err
+	}
+	for _, item := range scope.Adopt {
+		result, err := q.AdoptLegacyManifestRegistryInstance(ctx, quartermasterdb.AdoptLegacyManifestRegistryInstanceParams{
+			Owner: scope.Owner, InstanceID: item.InstanceID, ServiceName: item.ServiceName, ClusterID: item.ClusterID, NodeID: item.NodeID, Protocol: item.Protocol, Port: int32(item.Port),
+		})
+		if err != nil {
+			return Result{}, err
+		}
+		if count, err := result.RowsAffected(); err != nil || count != 1 {
+			return Result{}, fmt.Errorf("legacy instance %q does not match adoption evidence or belongs to another registrar", item.InstanceID)
+		}
+	}
+	owned := append([]ServiceRegistryEntry(nil), entries...)
+	for i := range owned {
+		if slices.Contains(scope.Clusters, owned[i].ClusterID) {
+			owned[i].registryOwner = scope.Owner
+		}
+	}
+	result, err := ReconcileServiceRegistry(ctx, exec, owned)
+	if err != nil || !scope.Complete {
+		return result, err
+	}
+	desiredIDs := make([]string, 0, len(owned))
+	for _, entry := range owned {
+		if entry.registryOwner == "" {
+			continue
+		}
+		service, catalogErr := q.GetBootstrapServiceCatalog(ctx, entry.ServiceName)
+		if catalogErr != nil {
+			return Result{}, catalogErr
+		}
+		protocol := entry.Protocol
+		if protocol == "" {
+			protocol = "http"
+		}
+		row, instanceErr := q.GetBootstrapServiceInstance(ctx, quartermasterdb.GetBootstrapServiceInstanceParams{ServiceID: service, ClusterID: entry.ClusterID, NodeID: entry.NodeID, Protocol: protocol, Port: int32(entry.Port)})
+		if instanceErr != nil {
+			return Result{}, instanceErr
+		}
+		desiredIDs = append(desiredIDs, row.ID)
+	}
+	result.Stopped, err = q.StopRemovedManifestRegistryInstances(ctx, quartermasterdb.StopRemovedManifestRegistryInstancesParams{Owner: scope.Owner, ClusterIds: scope.Clusters, DesiredIds: desiredIDs})
+	return result, err
 }
 
 func encodeMetadata(m map[string]string) (string, error) {

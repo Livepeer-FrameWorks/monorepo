@@ -99,9 +99,8 @@ func TestAssertedTenantConflicts(t *testing.T) {
 func TestApplyStreamContext_ServerResolvedOwnerOverridesAssertion(t *testing.T) {
 	t.Run("conflicting assertion is overwritten by resolved owner", func(t *testing.T) {
 		p := newTestProcessor(t)
-		// applyStreamContext passes the trigger's asserted tenant as the resolver cache hint, so the key is
-		// "<asserted>:<internalName>". Seed the resolver's view: the resource truly belongs to tenant-a.
-		p.streamCache.Set("tenant-b:stream-x", streamContext{TenantID: "tenant-a", StreamID: "sid-1"}, time.Minute)
+		// The canonical resource cache establishes the owner independently of node assertions.
+		p.streamCache.Set("source:stream-x", streamContext{TenantID: "tenant-a", StreamID: "sid-1"}, time.Minute)
 
 		asserted := "tenant-b"
 		trigger := &ipcpb.MistTrigger{TriggerType: "STREAM_LIFECYCLE", TenantId: &asserted}
@@ -117,7 +116,7 @@ func TestApplyStreamContext_ServerResolvedOwnerOverridesAssertion(t *testing.T) 
 
 	t.Run("matching assertion is preserved", func(t *testing.T) {
 		p := newTestProcessor(t)
-		p.streamCache.Set("tenant-a:stream-y", streamContext{TenantID: "tenant-a"}, time.Minute)
+		p.streamCache.Set("source:stream-y", streamContext{TenantID: "tenant-a"}, time.Minute)
 
 		asserted := "tenant-a"
 		trigger := &ipcpb.MistTrigger{TriggerType: "STREAM_LIFECYCLE", TenantId: &asserted}

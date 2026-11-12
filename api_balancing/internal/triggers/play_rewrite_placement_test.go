@@ -17,7 +17,7 @@ func TestPlayRewritePlacementPrecedesMediaAndViewerEffects(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			sm := resetStateTrigHandlers(t)
 			p := newTestProcessor(t)
-			p.streamCache.Set("tenant:stream", streamContext{TenantID: "tenant", BillingModel: "postpaid", RequiresAuthKnown: true}, time.Minute)
+			p.streamCache.Set("source:stream", streamContext{TenantID: "tenant", BillingModel: "postpaid", RequiresAuthKnown: true}, time.Minute)
 			viewerID := sm.CreateVirtualViewer("node", "stream", "203.0.113.1")
 			calls := 0
 			p.SetViewerPlacementAdmission(func(ctx context.Context, connection ViewerPlacementConnection) (federation.PlacementAdmissionDecision, error) {
@@ -92,7 +92,7 @@ func TestPlayRewriteMetadataRequiresPlacementWithoutStartingViewer(t *testing.T)
 		t.Run(scenario, func(t *testing.T) {
 			sm := resetStateTrigHandlers(t)
 			p := newTestProcessor(t)
-			p.streamCache.Set("tenant:stream", streamContext{TenantID: "tenant", BillingModel: "postpaid", RequiresAuthKnown: true}, time.Minute)
+			p.streamCache.Set("source:stream", streamContext{TenantID: "tenant", BillingModel: "postpaid", RequiresAuthKnown: true}, time.Minute)
 			p.SetViewerPlacementAdmission(func(_ context.Context, connection ViewerPlacementConnection) (federation.PlacementAdmissionDecision, error) {
 				if !connection.PreSource || connection.Connector != "HTTP" {
 					t.Fatalf("metadata lost its trusted connector evidence: %+v", connection)

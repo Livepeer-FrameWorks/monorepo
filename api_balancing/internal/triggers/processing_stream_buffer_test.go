@@ -20,8 +20,8 @@ func TestProcessingStreamBufferStaysOutOfStreamAnalytics(t *testing.T) {
 	p := NewProcessor(logging.NewLogger(), nil, nil, nil, nil)
 	p.decklogClient = client
 	const tenant, liveInternal, artifactHash = "tenant-buffer", "stream-buffer", "20261006024432101d684a081632c3"
-	p.streamCache.Set(tenant+":"+liveInternal, streamContext{TenantID: tenant, StreamID: "11111111-1111-4111-8111-000000000020"}, time.Minute)
-	p.streamCache.Set(tenant+":"+artifactHash, streamContext{TenantID: tenant, ArtifactHash: artifactHash}, time.Minute)
+	p.streamCache.Set(streamContextCacheKey("live+"+liveInternal), streamContext{TenantID: tenant, StreamID: "11111111-1111-4111-8111-000000000020"}, time.Minute)
+	p.streamCache.Set(streamContextCacheKey("live+"+artifactHash), streamContext{TenantID: tenant, ArtifactHash: artifactHash}, time.Minute)
 
 	buffer := func(streamName string) {
 		t.Helper()

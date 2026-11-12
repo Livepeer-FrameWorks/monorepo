@@ -15,6 +15,7 @@ type DesiredState struct {
 const SystemTenantAlias = "frameworks"
 
 type QuartermasterSection struct {
+	RegistryScope             *ServiceRegistryScope      `yaml:"registry_scope,omitempty"`
 	SystemTenant              *Tenant                    `yaml:"system_tenant,omitempty"`
 	Tenants                   []Tenant                   `yaml:"tenants,omitempty"`
 	Clusters                  []Cluster                  `yaml:"clusters,omitempty"`
@@ -131,6 +132,7 @@ type IngressUpstream struct {
 }
 
 type ServiceRegistryEntry struct {
+	registryOwner  string
 	ServiceName    string            `yaml:"service_name"`
 	Type           string            `yaml:"type"`
 	Protocol       string            `yaml:"protocol,omitempty"`
@@ -148,9 +150,28 @@ type SystemTenantClusterAccess struct {
 
 // Result reports per-row reconciler outcomes so callers can assert idempotency.
 type Result struct {
+	Stopped []string
 	Created []string
 	Updated []string
 	Noop    []string
 }
 
-func (r Result) Total() int { return len(r.Created) + len(r.Updated) + len(r.Noop) }
+func (r Result) Total() int { return len(r.Created) + len(r.Updated) + len(r.Noop) + len(r.Stopped) }
+
+// ServiceRegistryScope is an explicit ownership boundary for a complete manifest.
+// Omitted scopes preserve the additive bootstrap contract.
+type ServiceRegistryScope struct {
+	Owner    string                    `yaml:"owner"`
+	Clusters []string                  `yaml:"clusters"`
+	Complete bool                      `yaml:"complete"`
+	Adopt    []ServiceRegistryAdoption `yaml:"adopt,omitempty"`
+}
+
+type ServiceRegistryAdoption struct {
+	InstanceID  string `yaml:"instance_id"`
+	ServiceName string `yaml:"service_name"`
+	ClusterID   string `yaml:"cluster_id"`
+	NodeID      string `yaml:"node_id"`
+	Protocol    string `yaml:"protocol"`
+	Port        int    `yaml:"port"`
+}

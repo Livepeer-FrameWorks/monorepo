@@ -52,7 +52,8 @@ WHERE node_id = sqlc.arg(node_id)::text;
 SELECT id::text AS id,
        COALESCE(advertise_host, '')::text AS advertise_host,
        COALESCE(health_endpoint_override, '')::text AS health_endpoint,
-       COALESCE(metadata::text, '{}')::text AS metadata
+       COALESCE(metadata::text, '{}')::text AS metadata,
+       registration_source, COALESCE(registry_owner, '')::text AS registry_owner, COALESCE(status, '')::text AS status
 FROM quartermaster.service_instances
 WHERE service_id = sqlc.arg(service_id)::text
   AND cluster_id = sqlc.arg(cluster_id)::text
@@ -66,7 +67,7 @@ LIMIT 1;
 INSERT INTO quartermaster.service_instances (
     instance_id, cluster_id, node_id, service_id, protocol, advertise_host,
     health_endpoint_override, port, metadata, status, health_status,
-    created_at, updated_at
+    registration_source, registry_owner, created_at, updated_at
 ) VALUES (
     sqlc.arg(instance_id)::text,
     sqlc.arg(cluster_id)::text,
@@ -77,7 +78,7 @@ INSERT INTO quartermaster.service_instances (
     sqlc.arg(health_endpoint)::text,
     sqlc.arg(port)::integer,
     sqlc.arg(metadata)::text::jsonb,
-    'running', 'unknown', NOW(), NOW()
+    'running', 'unknown', 'manifest', NULLIF(sqlc.arg(registry_owner)::text, ''), NOW(), NOW()
 );
 
 -- name: UpdateBootstrapServiceInstance :exec
@@ -88,9 +89,39 @@ WITH input AS (
            sqlc.arg(metadata)::text AS metadata
 )
 UPDATE quartermaster.service_instances
-SET advertise_host = input.advertise_host,
+SET status = CASE WHEN registration_source = 'manifest' THEN 'running' ELSE status END,
+    stopped_at = CASE WHEN registration_source = 'manifest' THEN NULL ELSE stopped_at END,
+    advertise_host = input.advertise_host,
     health_endpoint_override = input.health_endpoint,
     metadata = input.metadata::jsonb,
     updated_at = NOW()
 FROM input
 WHERE service_instances.id = input.id;
+
+-- name: LockManifestRegistryOwner :exec
+SELECT pg_advisory_xact_lock(hashtextextended('manifest-registry:' || sqlc.arg(owner)::text, 0));
+
+-- name: ClaimManifestRegistryInstance :execresult
+UPDATE quartermaster.service_instances
+SET registration_source='manifest', registry_owner=sqlc.arg(owner)::text, updated_at=NOW()
+WHERE id=sqlc.arg(id)::text::uuid AND cluster_id=sqlc.arg(cluster_id)::text
+ AND (registration_source='legacy' OR (registration_source='manifest' AND (registry_owner IS NULL OR registry_owner=sqlc.arg(owner)::text)));
+
+-- name: AdoptLegacyManifestRegistryInstance :execresult
+-- Explicit inventory evidence is required; an instance ID format proves no ownership.
+UPDATE quartermaster.service_instances instance
+SET registration_source='manifest', registry_owner=sqlc.arg(owner)::text, updated_at=NOW()
+FROM quartermaster.services service
+WHERE instance.instance_id=sqlc.arg(instance_id)::text AND instance.service_id=service.service_id
+ AND service.name=sqlc.arg(service_name)::text AND instance.cluster_id=sqlc.arg(cluster_id)::text
+ AND instance.node_id=sqlc.arg(node_id)::text AND instance.protocol=sqlc.arg(protocol)::text AND instance.port=sqlc.arg(port)::integer
+ AND (instance.registration_source='legacy' OR (instance.registration_source='manifest' AND instance.registry_owner=sqlc.arg(owner)::text));
+
+-- name: StopRemovedManifestRegistryInstances :many
+-- Manifest inventory is cluster-scoped, not tenant resource data.
+UPDATE quartermaster.service_instances
+SET status='stopped', health_status='unknown', stopped_at=NOW(), updated_at=NOW()
+WHERE registration_source='manifest' AND registry_owner=sqlc.arg(owner)::text
+ AND cluster_id=ANY(sqlc.arg(cluster_ids)::text[]) AND status<>'stopped'
+ AND NOT (id::text=ANY(sqlc.arg(desired_ids)::text[]))
+RETURNING instance_id;

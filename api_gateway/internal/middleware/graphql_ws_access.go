@@ -8,7 +8,6 @@ import (
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/gin-gonic/gin"
-	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
 // GraphQLOperationAccess applies billing/access classification to WebSocket-
@@ -43,7 +42,7 @@ func GraphQLOperationAccess(billingChecker BillingChecker) graphql.OperationMidd
 		status, err := billingChecker.GetBillingAccessStatus(req.TenantID)
 		if err != nil {
 			if !classified || !unfundedAllowed {
-				return graphqlAccessDenied("billing status is temporarily unavailable", "BILLING_STATUS_UNAVAILABLE")
+				return TerminalGraphQLError(ctx, "billing status is temporarily unavailable", "BILLING_STATUS_UNAVAILABLE")
 			}
 			return next(ctx)
 		}
@@ -53,33 +52,24 @@ func GraphQLOperationAccess(billingChecker BillingChecker) graphql.OperationMidd
 			}
 		}
 		if status.IsSuspended && !suspendedRequestAllowed(req) {
-			return graphqlAccessDenied("account is suspended", "ACCOUNT_SUSPENDED")
+			return TerminalGraphQLError(ctx, "account is suspended", "ACCOUNT_SUSPENDED")
 		}
 		if status.BillingModel == "prepaid" && status.IsBalanceNegative {
 			if !classified {
-				return graphqlAccessDenied("operation access policy is unavailable", "ACCESS_POLICY_UNCLASSIFIED")
+				return TerminalGraphQLError(ctx, "operation access policy is unavailable", "ACCESS_POLICY_UNCLASSIFIED")
 			}
 			if !unfundedAllowed {
-				return graphqlAccessDenied("payment required for rated work", "INSUFFICIENT_BALANCE")
+				return TerminalGraphQLError(ctx, "payment required for rated work", "INSUFFICIENT_BALANCE")
 			}
 		}
 		if status.BillingModel == "postpaid" && !unfundedAllowed {
 			if status.TierName == "" {
-				return graphqlAccessDenied("billing status is temporarily unavailable", "BILLING_STATUS_UNAVAILABLE")
+				return TerminalGraphQLError(ctx, "billing status is temporarily unavailable", "BILLING_STATUS_UNAVAILABLE")
 			}
 			if !strings.EqualFold(status.TierName, "free") && !status.CollectionReady {
-				return graphqlAccessDenied("confirmed payment-provider setup is required for this paid tier", "PAYMENT_SETUP_REQUIRED")
+				return TerminalGraphQLError(ctx, "confirmed payment-provider setup is required for this paid tier", "PAYMENT_SETUP_REQUIRED")
 			}
 		}
 		return next(ctx)
-	}
-}
-
-func graphqlAccessDenied(message, code string) graphql.ResponseHandler {
-	return func(context.Context) *graphql.Response {
-		return &graphql.Response{Errors: gqlerror.List{&gqlerror.Error{
-			Message:    message,
-			Extensions: map[string]any{"code": code},
-		}}}
 	}
 }

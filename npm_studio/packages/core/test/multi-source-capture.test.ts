@@ -44,6 +44,7 @@ function track(kind: "video" | "audio", deviceId = kind) {
     readyState: "live",
     stop: vi.fn(),
     addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
     getSettings: () => ({ deviceId }),
     applyConstraints: vi.fn(async () => {}),
   } as unknown as MediaStreamTrack;
@@ -119,7 +120,12 @@ beforeEach(() => {
   enumerateDevices.mockReset();
   vi.stubGlobal("MediaStream", FakeMediaStream);
   vi.stubGlobal("navigator", {
-    mediaDevices: { getUserMedia, enumerateDevices, addEventListener: vi.fn() },
+    mediaDevices: {
+      getUserMedia,
+      enumerateDevices,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    },
   });
 });
 
@@ -219,7 +225,13 @@ describe("more than one camera", () => {
       throw new DOMException("Capture failed", "NotReadableError");
     });
     vi.stubGlobal("navigator", {
-      mediaDevices: { getUserMedia, enumerateDevices, getDisplayMedia, addEventListener: vi.fn() },
+      mediaDevices: {
+        getUserMedia,
+        enumerateDevices,
+        getDisplayMedia,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
     });
     const controller = create();
     const errors = vi.fn();

@@ -742,3 +742,30 @@ accounts:
 The CLI merges the overlay onto the manifest-derived state. The final rendered file is
 the union, with overlay-supplied tenants/clusters/pricing/accounts added and any
 overlay-marked overrides applied to derived items.
+
+## Service registry ownership and retirement
+
+Set `registry_owner: <stable-deployment-name>` in a cluster manifest to make its
+service registry authoritative. The CLI renders `quartermaster.registry_scope`
+with that owner, the manifest's cluster IDs, and `complete: true`. Each instance
+records `registration_source` and `registry_owner`. Reconciliation locks the owner
+and atomically creates, updates, revives, and stops its registrations. Removed
+instances retain their rows with `status=stopped`; the health poller and discovery
+exclude them. The bootstrap dry-run prints the stopped instance IDs before
+rolling back.
+
+An omitted scope keeps additive reconciliation. `complete: false` permits scoped
+upserts without retirement. Neither form stops runtime registrations, another
+owner's instances, or rows in clusters outside the scope. Owner names must remain
+stable across releases; changing one requires an explicit ownership migration.
+
+Existing instances start as `legacy`, while runtime registrations default to
+`runtime`. A declared tuple can acquire manifest ownership when it is legacy or
+an unowned manifest row. Runtime and other-owner rows refuse that takeover.
+Retiring a legacy row absent from the new manifest requires reviewed adoption in
+the bootstrap overlay. Its `registry_scope` repeats the exact derived owner,
+clusters and completeness, and supplies `adopt` entries with `instance_id`,
+`service_name`, `cluster_id`, `node_id`, `protocol`, and `port`. Every field must
+match the persisted row; an opaque or deterministic ID alone establishes no
+provenance. A mismatch aborts the transaction. Inspect the dry-run before the
+normal apply. No migration guesses which historical instances to stop.

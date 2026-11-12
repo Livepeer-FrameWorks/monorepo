@@ -420,6 +420,8 @@ CREATE TABLE IF NOT EXISTS quartermaster.service_instances (
     -- ===== IDENTITY =====
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     instance_id VARCHAR(100) UNIQUE NOT NULL,
+    registration_source TEXT NOT NULL DEFAULT 'runtime',
+    registry_owner TEXT,
     cluster_id VARCHAR(100) NOT NULL REFERENCES quartermaster.infrastructure_clusters(cluster_id),
     node_id VARCHAR(100) REFERENCES quartermaster.infrastructure_nodes(node_id),
     service_id VARCHAR(100) NOT NULL REFERENCES quartermaster.services(service_id),
@@ -444,6 +446,7 @@ CREATE TABLE IF NOT EXISTS quartermaster.service_instances (
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
 
+    CONSTRAINT chk_service_instance_registration_source CHECK (registration_source IN ('runtime', 'legacy', 'manifest') AND (registry_owner IS NULL OR (registration_source = 'manifest' AND btrim(registry_owner) <> ''))),
     CONSTRAINT fk_qm_service_instances_node_cluster
         FOREIGN KEY (node_id, cluster_id)
         REFERENCES quartermaster.infrastructure_nodes(node_id, cluster_id)
@@ -1261,3 +1264,8 @@ CREATE TABLE IF NOT EXISTS public._schema_baseline (
 );
 INSERT INTO public._schema_baseline (floor)
     SELECT 'v0.3.0' WHERE NOT EXISTS (SELECT 1 FROM public._schema_baseline);
+
+
+CREATE INDEX IF NOT EXISTS idx_service_instances_manifest_owner
+ ON quartermaster.service_instances(registry_owner ASC, cluster_id ASC, id ASC)
+ WHERE registration_source = 'manifest';

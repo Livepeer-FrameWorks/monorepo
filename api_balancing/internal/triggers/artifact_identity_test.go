@@ -51,7 +51,7 @@ func TestHandleClientLifecycleKeepsArtifactOnlySample(t *testing.T) {
 	p := newTestProcessor(t)
 	p.clientBatcher = newClientLifecycleBatcher(sender.send, testLogger(), nil)
 	const resolvedHash = "20261004093042f2da667dcd8ab1ee"
-	p.streamCache.Set("tenant-1:vodInternal", streamContext{TenantID: "tenant-1", ArtifactHash: resolvedHash}, time.Minute)
+	p.streamCache.Set("artifact_vod:vodInternal", streamContext{TenantID: "tenant-1", ArtifactHash: resolvedHash}, time.Minute)
 
 	clu := artifactClu("tenant-1", "20261004093042ffffffffffffffff", "node-1", "")
 	clu.InternalName = "vod+vodInternal"
