@@ -90,7 +90,7 @@ if [ ! -s "$ENV_FILE" ]; then
     printf 'SUPPLIER_REGISTRATION_NUMBER=00000000\n'
     printf 'SUPPLIER_COUNTRY=NL\n'
   } >>"$secrets"
-  (cd scripts/env && GOCACHE="$PWD/.gocache" go run . --secrets "$secrets" --output "$ENV_FILE") ||
+  (cd scripts/env && GOCACHE="${GOCACHE:-$PWD/.gocache}" go run . --secrets "$secrets" --output "$ENV_FILE") ||
     fail "could not generate the slot environment"
 fi
 grep -qE '^MIST_API_PASSWORD="?[^"[:space:]]' "$ENV_FILE" ||

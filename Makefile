@@ -418,6 +418,7 @@ verify-go-lint:
 
 # The CI "Go build" job, step for step.
 verify-go-build:
+	$(MAKE) --no-print-directory test-remote-dev-job
 	$(MAKE) --no-print-directory proto-check
 	$(MAKE) --no-print-directory proto-breaking
 	$(MAKE) --no-print-directory sqlc-check
@@ -858,6 +859,10 @@ stack-up:
 stack-down:
 	@bash $(CURDIR)/scripts/stack/down.sh
 
+.PHONY: test-remote-dev-job
+test-remote-dev-job:
+	@bash $(CURDIR)/scripts/test-remote-dev-job.sh
+
 test-topology:
 	@echo "Running infrastructure topology contract tests..."
 	@(cd $(SERVICE_DIR_pkg) && go test $(GO_TAG_FLAGS) ./topology -race -count=1)
@@ -1007,12 +1012,12 @@ coverage:
 
 env:
 	@echo "Generating .env and .env.frontend from config/env/*.env..."
-	@cd scripts/env && GOCACHE=$$(pwd)/.gocache go run . --output ../../.env
-	@cd scripts/env && GOCACHE=$$(pwd)/.gocache go run . --frontend-only --output ../../.env.frontend
+	@cd scripts/env && GOCACHE="$${GOCACHE:-$$(pwd)/.gocache}" go run . --output ../../.env
+	@cd scripts/env && GOCACHE="$${GOCACHE:-$$(pwd)/.gocache}" go run . --frontend-only --output ../../.env.frontend
 
 frontend-env:
 	@echo "Generating .env.frontend from config/env/base.env..."
-	@cd scripts/env && GOCACHE=$$(pwd)/.gocache go run . --frontend-only --output ../../.env.frontend
+	@cd scripts/env && GOCACHE="$${GOCACHE:-$$(pwd)/.gocache}" go run . --frontend-only --output ../../.env.frontend
 
 # Stages edge/dist for the dev compose edge image: Helmsman from source, pinned MistServer and
 # Caddy release tarballs. EDGE_DEV_MIST_TAR=<install-tree tar.gz> stages a local Mist build.
