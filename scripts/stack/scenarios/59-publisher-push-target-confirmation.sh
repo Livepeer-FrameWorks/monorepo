@@ -14,8 +14,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-source=$(create_stream "targets58-source-$(date +%s)" false)
-destination=$(create_stream "targets58-destination-$(date +%s)" false)
+source=$(create_stream "targets59-source-$(date +%s)" false)
+destination=$(create_stream "targets59-destination-$(date +%s)" false)
 source_id=$(echo "$source" | jq -r '.id // empty')
 destination_id=$(echo "$destination" | jq -r '.id // empty')
 source_uuid=$(echo "$source" | jq -r '.streamId // empty')
@@ -31,14 +31,17 @@ released() {
   [ "$(pg "$FOGHORN_B_DB" "SELECT count(*) FROM foghorn.ingest_sessions WHERE tenant_id='$STACK_TENANT_ID' AND stream_internal_name IN ('$internal','live+$internal') AND ended_at IS NULL")" = 0 ]
 }
 eventually 45 "prewarm generation ended" released || finish
-before=$(pg commodore "SELECT authority_version FROM commodore.media_authority_current WHERE tenant_id='$STACK_TENANT_ID' AND authority_kind='media_object' AND authority_id='live_stream:$source_uuid'")
+target_authority_version() {
+  pg commodore "SELECT current.authority_version FROM commodore.media_authority_current current JOIN commodore.streams source ON current.authority_kind='media_object' AND current.authority_id='live_stream:' || source.id::text WHERE source.tenant_id='$STACK_TENANT_ID' AND source.id='$source_uuid'"
+}
+before=$(target_authority_version)
 [ -n "$before" ] || { fail "source authority version is missing"; finish; }
 target=$(gql 'mutation($id:ID!,$input:CreatePushTargetInput!){createPushTarget(streamId:$id,input:$input){id}}' \
-  "$(jq -cn --arg id "$source_id" --arg uri "rtmp://edge:1935/live/$destination_key" '{id:$id,input:{name:"stack58",platform:"custom",targetUri:$uri,videoChoice:"SOURCE_VIDEO"}}')")
+  "$(jq -cn --arg id "$source_id" --arg uri "rtmp://edge:1935/live/$destination_key" '{id:$id,input:{name:"stack59",platform:"custom",targetUri:$uri,videoChoice:"SOURCE_VIDEO"}}')")
 check "create cross-cell restream target" json_has "$target" '.data.createPushTarget.id != null'
 target_authority_ready() {
   local current
-  current=$(pg commodore "SELECT authority_version FROM commodore.media_authority_current WHERE tenant_id='$STACK_TENANT_ID' AND authority_kind='media_object' AND authority_id='live_stream:$source_uuid'")
+  current=$(target_authority_version)
   [ -n "$current" ] && [ "$current" -gt "$before" ] &&
     [ "$(pg "$FOGHORN_B_DB" "SELECT count(*) FROM foghorn.media_object_authority_projection WHERE tenant_id='$STACK_TENANT_ID' AND stream_id='$source_uuid' AND authority_version=$current AND local_ingest_ready")" = 1 ]
 }
@@ -60,7 +63,7 @@ eventually 60 "destination receives real cross-cell restream media" media_at "${
 decode_target() {
   local location
   location=$(location_at "${a_bases[0]}" "$destination_playback")
-  edge_a_location "$location" && timeout 15 ffmpeg -hide_banner -loglevel error -i "$location" -frames:v 1 -f null - >"$STACK_STATE_DIR/target58-decode.log" 2>&1
+  edge_a_location "$location" && timeout 15 ffmpeg -hide_banner -loglevel error -i "$location" -frames:v 1 -f null - >"$STACK_STATE_DIR/target59-decode.log" 2>&1
 }
 check "cross-cell target decodes a video frame" decode_target
 check "exactly one source effect exists" [ "$(pg "$FOGHORN_B_DB" "SELECT count(*) FROM foghorn.ingest_admission_effects WHERE tenant_id='$STACK_TENANT_ID' AND source_generation='$generation'")" = 1 ]
