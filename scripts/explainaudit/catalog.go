@@ -356,6 +356,7 @@ func (b *catalogBuilder) scanParsed(parsed *ast.File, dir string, emit func(q qu
 			continue
 		}
 		ev := &evaluator{b: b, dir: dir, imports: imports, locals: map[string]string{}}
+		clickHouseConnections := clickHouseReceivers(fn, imports)
 		ast.Inspect(fn.Body, func(node ast.Node) bool {
 			switch n := node.(type) {
 			case *ast.AssignStmt:
@@ -388,6 +389,9 @@ func (b *catalogBuilder) scanParsed(parsed *ast.File, dir string, emit func(q qu
 				if !ok || !sqlMethods[sel.Sel.Name] {
 					return true
 				}
+				if conn, ok := sel.X.(*ast.Ident); ok && clickHouseConnections[conn.Name] {
+					return true
+				}
 				for idx := 0; idx < 2 && idx < len(n.Args); idx++ {
 					text, ok := ev.eval(n.Args[idx])
 					if !ok || !sqlStartRe.MatchString(text) {
@@ -416,6 +420,109 @@ func (b *catalogBuilder) scanParsed(parsed *ast.File, dir string, emit func(q qu
 			return true
 		})
 	}
+}
+
+func clickHouseReceivers(fn *ast.FuncDecl, imports map[string]string) map[string]bool {
+	connections, factories := clickHouseParameters(fn.Type, imports)
+	// Only an unshadowed, immutable typed factory identifies its result's engine.
+	ast.Inspect(fn.Body, func(node ast.Node) bool {
+		switch n := node.(type) {
+		case *ast.AssignStmt:
+			for _, lhs := range n.Lhs {
+				if name, ok := lhs.(*ast.Ident); ok {
+					delete(factories, name.Name)
+				}
+			}
+		case *ast.ValueSpec:
+			for _, name := range n.Names {
+				delete(factories, name.Name)
+			}
+		case *ast.FuncLit:
+			if n.Type.Params != nil {
+				for _, field := range n.Type.Params.List {
+					for _, name := range field.Names {
+						delete(factories, name.Name)
+					}
+				}
+			}
+		}
+		return true
+	})
+	ambiguous := map[string]bool{}
+	ast.Inspect(fn.Body, func(node ast.Node) bool {
+		switch n := node.(type) {
+		case *ast.AssignStmt:
+			factoryResult := false
+			if len(n.Rhs) == 1 {
+				if call, ok := n.Rhs[0].(*ast.CallExpr); ok {
+					if factory, ok := call.Fun.(*ast.Ident); ok {
+						factoryResult = factories[factory.Name]
+					}
+				}
+			}
+			for i, lhs := range n.Lhs {
+				if name, ok := lhs.(*ast.Ident); ok {
+					if i == 0 && factoryResult {
+						connections[name.Name] = true
+					} else {
+						ambiguous[name.Name] = true
+					}
+				}
+			}
+		case *ast.ValueSpec:
+			for _, name := range n.Names {
+				ambiguous[name.Name] = true
+			}
+		case *ast.FuncLit:
+			params, _ := clickHouseParameters(n.Type, imports)
+			if n.Type.Params != nil {
+				for _, field := range n.Type.Params.List {
+					for _, name := range field.Names {
+						if !params[name.Name] {
+							ambiguous[name.Name] = true
+						}
+					}
+				}
+			}
+		}
+		return true
+	})
+	// A shadowed or reassigned name may also carry a PostgreSQL connection.
+	// Retain ambiguous calls for the audit instead of silently losing coverage.
+	for name := range ambiguous {
+		delete(connections, name)
+	}
+	return connections
+}
+
+// ClickHouseConn aliases *sql.DB, so SQL method names alone do not identify the
+// engine. Keep typed ClickHouse parameters and factory results out of YSQL.
+func clickHouseParameters(fn *ast.FuncType, imports map[string]string) (map[string]bool, map[string]bool) {
+	connections, factories := map[string]bool{}, map[string]bool{}
+	if fn.Params == nil {
+		return connections, factories
+	}
+	isClickHouse := func(expr ast.Expr) bool {
+		typeName, ok := expr.(*ast.SelectorExpr)
+		if !ok || typeName.Sel.Name != "ClickHouseConn" {
+			return false
+		}
+		pkg, ok := typeName.X.(*ast.Ident)
+		return ok && imports[pkg.Name] == "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	}
+	for _, field := range fn.Params.List {
+		if isClickHouse(field.Type) {
+			for _, name := range field.Names {
+				connections[name.Name] = true
+			}
+		}
+		if factory, ok := field.Type.(*ast.FuncType); ok && factory.Results != nil && len(factory.Results.List) > 0 && isClickHouse(factory.Results.List[0].Type) {
+			for _, name := range field.Names {
+				factories[name.Name] = true
+			}
+		}
+	}
+	return connections, factories
 }
 
 var dynamicParamRe = regexp.MustCompile(`\$` + dynamicMarker)
