@@ -87,7 +87,7 @@ func resolvePreparedIngestEndpoints(ctx context.Context, deps *IngestDependencie
 		}
 		if endpoint == nil {
 			endpoint = &sharedpb.IngestEndpoint{NodeId: prepared.NodeID, ClusterId: prepared.ClusterID, BaseUrl: prepared.PublicBaseURL,
-				Kind: sharedpb.IngestEndpointKind_INGEST_ENDPOINT_KIND_NODE_SPECIFIC}
+				Kind: sharedpb.IngestEndpointKind_INGEST_ENDPOINT_KIND_NODE_SPECIFIC, Region: stringPtrIfNotEmpty(prepared.Region)}
 			endpoints = append(endpoints, endpoint)
 		}
 		switch protocol {

@@ -1253,9 +1253,13 @@ func (s *NavigatorServer) IssueInternalCert(ctx context.Context, req *dnspb.Issu
 // asking Quartermaster for a node's external IPv4. The alias apply-state
 // worker uses this to populate Bunny smart record sets with the actual
 // public IPs of edges that have ACKed the tenant's TLS bundle.
-type quartermasterEdgeResolver struct {
-	qm *quartermaster.GRPCClient
+type tenantAliasNodeReader interface {
+	GetNode(context.Context, string) (*quartermasterpb.NodeResponse, error)
+	GetCluster(context.Context, string) (*quartermasterpb.ClusterResponse, error)
+	ListHealthyNodesForDNSForCluster(context.Context, int, string, string) (*quartermasterpb.ListHealthyNodesForDNSResponse, error)
 }
+
+type quartermasterEdgeResolver struct{ qm tenantAliasNodeReader }
 
 func (r quartermasterEdgeResolver) ResolveEdgeAddresses(ctx context.Context, nodeID string) ([]string, []string, error) {
 	if r.qm == nil || strings.TrimSpace(nodeID) == "" {
@@ -1301,7 +1305,7 @@ func (r quartermasterEdgeResolver) ResolveServiceAddressesForClusters(ctx contex
 				continue
 			}
 			seen[key] = struct{}{}
-			out = append(out, worker.ServiceAddress{NodeID: node.GetNodeId(), IP: ip})
+			out = append(out, worker.ServiceAddress{NodeID: node.GetNodeId(), IP: ip, Latitude: node.Latitude, Longitude: node.Longitude})
 		}
 	}
 	return out, nil

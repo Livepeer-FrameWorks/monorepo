@@ -68,6 +68,21 @@ and peer-channel identity checks.
 
 Which clusters may ingest or serve a stream is decided by media placement policy: tenant and stream rules compiled by Commodore into signed media authority and enforced by Foghorn at routing and final admission. See [media-authority.md](media-authority.md).
 
+## Tenant alias geographic routing
+
+Root media entrypoints and branded tenant aliases use the same Bunny record
+builder and geographic-routing policy. Quartermaster node coordinates survive
+the alias address adapter and worker, so both paths send validated latitude and
+longitude to the provider. Missing or invalid coordinates use the shared
+non-geographic fallback; they are not replaced with a tenant's primary region.
+
+An alias pool contains the tenant's authorized, healthy service members, with
+applied-certificate ACKs required for edge members. GeoDNS selects among the
+eligible locations. The tenant's primary/official cluster metadata does not pin
+an otherwise global alias to that region or remove its other authorized cells.
+A branded alias and a node-specific Resolve recommendation are separate endpoint
+forms. Resolving does not replace the stable alias after an error.
+
 ## Media DNS and gateway health
 
 Quartermaster accepts only the canonical `edge-cap-{node}-{service_type}` row

@@ -182,6 +182,13 @@ func main() {
 		return monitoring.CheckResult{Status: "unhealthy", Message: "internal certificate sync repeatedly failing"}
 	})
 
+	healthChecker.AddCheck("public_ingress", func() monitoring.CheckResult {
+		if a.IsTenantAliasIngressApplied() {
+			return monitoring.CheckResult{Status: monitoring.StatusHealthy, Message: "hosted tenant certificate inventory applied"}
+		}
+		return monitoring.CheckResult{Status: monitoring.StatusDegraded, Message: "hosted tenant certificate inventory is not yet applied"}
+	})
+
 	// Readiness reports only local startup: the WireGuard interface, the
 	// startup mesh layer, and the DNS server. Quartermaster and Navigator
 	// reachability stay in the liveness checks so a control plane outage

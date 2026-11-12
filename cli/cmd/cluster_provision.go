@@ -3655,18 +3655,15 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 		// wildcard certs on disk. Edge Caddy gets alias hosts via ConfigSeed
 		// instead, so this is nginx-only.
 		if task.Type == "nginx" && manifest.RootDomain != "" {
-			if foghornPort, ok := localSvcs["foghorn"].(int); ok && foghornPort != 0 {
-				if label, labelOK := pkgdns.PublicSubdomain("foghorn"); labelOK && label != "" {
-					config.Metadata["tenant_alias_playback"] = map[string]any{
-						"service_label": label,
-						"zone_label":    pkgdns.TenantAliasZoneLabel,
-						"root_domain":   manifest.RootDomain,
-						"upstream_port": foghornPort,
-						"mesh_only":     provisioner.LocalUpstreamOnLoopbackAndMesh("foghorn", proxyServiceConfig(manifest, "foghorn").Mode),
-					}
-				}
+			aliasPlayback, err := localFoghornAliasPlayback(manifest, localSvcs)
+			if err != nil {
+				return config, err
+			}
+			if aliasPlayback != nil {
+				config.Metadata["tenant_alias_playback"] = aliasPlayback
 			}
 		}
+
 		hasPKI := manifest.Services["navigator"].Enabled
 		if grpcAddr, ok := runtimeData["quartermaster_grpc_addr"].(string); ok && grpcAddr != "" {
 			if hasPKI {
@@ -5424,6 +5421,35 @@ func stringSliceFromAny(v any) []string {
 	default:
 		return nil
 	}
+}
+
+func localFoghornAliasPlayback(manifest *inventory.Manifest, localServices map[string]any) (map[string]any, error) {
+	var result map[string]any
+	for name, rawPort := range localServices {
+		service := proxyServiceConfig(manifest, name)
+		serviceType, ok := clusterderive.ManifestServiceType(name, service)
+		if !ok || serviceType != "foghorn" {
+			continue
+		}
+		port, ok := rawPort.(int)
+		if !ok || port == 0 {
+			continue
+		}
+		meshOnly := provisioner.LocalUpstreamOnLoopbackAndMesh(serviceType, service.Mode)
+		if result != nil {
+			if result["upstream_port"] != port || result["mesh_only"] != meshOnly {
+				return nil, fmt.Errorf("tenant playback has multiple incompatible local Foghorn upstreams")
+			}
+			continue
+		}
+		label, ok := pkgdns.PublicSubdomain(serviceType)
+		if !ok || label == "" {
+			return nil, fmt.Errorf("foghorn has no public service label")
+		}
+		result = map[string]any{"service_label": label, "zone_label": pkgdns.TenantAliasZoneLabel,
+			"root_domain": manifest.RootDomain, "upstream_port": port, "mesh_only": meshOnly}
+	}
+	return result, nil
 }
 
 func addLocalProxyRoutes(routes map[string]any, hostName string, services map[string]inventory.ServiceConfig, skipName string) {

@@ -75,3 +75,6 @@ compose_stack_compose_plugin_dir: /usr/local/lib/docker/cli-plugins
 # up (and the validate-tag `docker compose ps` probe). Used by molecule
 # scenarios that want to exercise rendering without a docker daemon.
 compose_stack_render_only: false
+
+# Hosted playback proxies opt into Privateer's generic certificate inventory.
+compose_stack_tenant_alias_ingress: {}

@@ -1,0 +1,191 @@
+---
+- name: Automatic tenant playback TLS
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    alias_tls_root: /etc/frameworks/ingress/tls/tenant-alias
+    alias_tls_host: foghorn.acme.cdn.frameworks.test
+  tasks:
+    - name: Record the generic proxy configuration before tenant additions
+      ansible.builtin.stat:
+        path: /etc/nginx/conf.d/frameworks.conf
+        checksum_algorithm: sha256
+      register: alias_generic_before
+
+    - name: Create immutable test certificate generations
+      ansible.builtin.file:
+        path: "{{ alias_tls_root }}/revisions/{{ item }}"
+        state: directory
+        owner: privateer
+        group: frameworks-ingress
+        mode: "2750"
+      loop: [acme/v1, acme/v2, globex/v1]
+
+    - name: Issue toy certificates with independent keys for each generation
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -x509
+          - -nodes
+          - -newkey
+          - rsa:2048
+          - -days
+          - "1"
+          - -subj
+          - "/CN=foghorn.{{ item.tenant }}.cdn.frameworks.test"
+          - -addext
+          - "subjectAltName=DNS:foghorn.{{ item.tenant }}.cdn.frameworks.test"
+          - -keyout
+          - "{{ alias_tls_root }}/revisions/{{ item.path }}/tls.key"
+          - -out
+          - "{{ alias_tls_root }}/revisions/{{ item.path }}/tls.crt"
+        creates: "{{ alias_tls_root }}/revisions/{{ item.path }}/tls.crt"
+      loop:
+        - { tenant: acme, path: acme/v1 }
+        - { tenant: acme, path: acme/v2 }
+        - { tenant: globex, path: globex/v1 }
+      changed_when: true
+
+    - name: Apply private-key reader permissions
+      ansible.builtin.file:
+        path: "{{ alias_tls_root }}/revisions/{{ item }}/tls.key"
+        owner: privateer
+        group: frameworks-ingress
+        mode: "0640"
+      loop: [acme/v1, acme/v2, globex/v1]
+
+    - name: Install the first alias without editing the proxy configuration
+      ansible.builtin.copy:
+        dest: "{{ alias_tls_root }}/nginx.map"
+        content: "{{ alias_tls_host }} revisions/acme/v1;\n"
+        owner: privateer
+        group: frameworks-ingress
+        mode: "0640"
+
+    - name: Ask the normal ingress path unit to activate the inventory
+      ansible.builtin.command: touch /etc/frameworks/ingress/reload.trigger
+      become_user: privateer
+      changed_when: true
+
+    - name: Verify the first alias with ordinary certificate validation
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --silent
+          - --show-error
+          - --max-time
+          - "5"
+          - --cacert
+          - "{{ alias_tls_root }}/revisions/acme/v1/tls.crt"
+          - --resolve
+          - "{{ alias_tls_host }}:443:127.0.0.1"
+          - -o
+          - /dev/null
+          - "https://{{ alias_tls_host }}/play/probe/hls/index.m3u8"
+      register: alias_first_handshake
+      until: alias_first_handshake.rc == 0
+      retries: 30
+      delay: 1
+      changed_when: false
+
+    - name: Rotate one key and add a second tenant through the automatic inventory
+      ansible.builtin.copy:
+        dest: "{{ alias_tls_root }}/nginx.map"
+        content: |
+          {{ alias_tls_host }} revisions/acme/v2;
+          foghorn.globex.cdn.frameworks.test revisions/globex/v1;
+        owner: privateer
+        group: frameworks-ingress
+        mode: "0640"
+
+    - name: Activate the replacement inventory through the path unit
+      ansible.builtin.command: touch /etc/frameworks/ingress/reload.trigger
+      become_user: privateer
+      changed_when: true
+
+    - name: Verify both active tenant certificates after rotation
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --silent
+          - --show-error
+          - --max-time
+          - "5"
+          - --cacert
+          - "{{ alias_tls_root }}/revisions/{{ item.path }}/tls.crt"
+          - --resolve
+          - "foghorn.{{ item.tenant }}.cdn.frameworks.test:443:127.0.0.1"
+          - -o
+          - /dev/null
+          - "https://foghorn.{{ item.tenant }}.cdn.frameworks.test/play/probe/hls/index.m3u8"
+      loop:
+        - { tenant: acme, path: acme/v2 }
+        - { tenant: globex, path: globex/v1 }
+      register: alias_rotated_handshake
+      until: alias_rotated_handshake.rc == 0
+      retries: 30
+      delay: 1
+      changed_when: false
+
+    - name: Check the worker can read a private key without root
+      ansible.builtin.command:
+        argv:
+          [runuser, -u, www-data, --, test, -r, "{{ alias_tls_root }}/revisions/acme/v2/tls.key"]
+      changed_when: false
+
+    - name: Read the Nginx worker groups
+      ansible.builtin.command: id -Gn www-data
+      register: alias_worker_groups
+      changed_when: false
+
+    - name: Check the private key is not world readable
+      ansible.builtin.stat:
+        path: "{{ alias_tls_root }}/revisions/acme/v2/tls.key"
+      register: alias_private_key
+
+    - name: Record the generic proxy configuration after tenant additions
+      ansible.builtin.stat:
+        path: /etc/nginx/conf.d/frameworks.conf
+        checksum_algorithm: sha256
+      register: alias_generic_after
+
+    - name: Assert tenant lifecycle requires no proxy edits or broader secret access
+      ansible.builtin.assert:
+        that:
+          - alias_generic_before.stat.checksum == alias_generic_after.stat.checksum
+          - alias_private_key.stat.mode == '0640'
+          - "'frameworks-ingress' in alias_worker_groups.stdout.split()"
+          - "'privateer' not in alias_worker_groups.stdout.split()"
+          - "'frameworks' not in alias_worker_groups.stdout.split()"
+
+    - name: Preview ingress permission changes before the new reader group exists
+      ansible.builtin.include_role:
+        name: frameworks.infra.nginx
+        tasks_from: configure
+        apply:
+          check_mode: true
+      vars:
+        nginx_ingress_reader_group: frameworks-ingress-preview
+
+    - name: Confirm the preview did not create the reader group
+      ansible.builtin.command: getent group frameworks-ingress-preview
+      register: alias_preview_group
+      failed_when: alias_preview_group.rc != 2
+      changed_when: false
+
+    - name: Read the hosted ingress apply receipt
+      ansible.builtin.slurp:
+        src: /run/frameworks-nginx/tenant-alias.applied
+      register: alias_apply_receipt
+
+    - name: Compute the current inventory digest
+      ansible.builtin.command: sha256sum /etc/frameworks/ingress/tls/tenant-alias/nginx.map
+      register: alias_inventory_digest
+      changed_when: false
+
+    - name: Assert the root reloader acknowledged this exact inventory
+      ansible.builtin.assert:
+        that:
+          - (alias_apply_receipt.content | b64decode | trim) == alias_inventory_digest.stdout.split()[0]

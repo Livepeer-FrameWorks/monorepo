@@ -145,13 +145,13 @@ server {
 {% set tap_profile = nginx_route_profiles.media_delivery %}
 # Tenant-alias playback: one catch-all for every alias tenant's
 # {{ tap_label }}.<sub>.{{ tap_zone }}.{{ tap.root_domain }} host. The cert is
-# resolved per-handshake from the SNI subdomain; Privateer materializes
-# tenant wildcard bundles under {{ nginx_ingress_tls_root }}/tenant-alias/.
+# selected by a Privateer-owned SNI inventory. Each loaded worker pins an
+# immutable cert/key generation through a rotation or alias rename.
 # A tenant whose cert is not (yet) on disk fails its TLS handshake only —
 # variable cert paths are not checked by `nginx -t`.
-map $ssl_server_name $fw_tenant_alias_sub {
-    ~^{{ tap_label }}\.(?<sub>[a-z0-9][a-z0-9-]*)\.{{ tap_zone }}\.{{ tap_root_re }}$ $sub;
+map $ssl_server_name $fw_tenant_alias_bundle {
     default "";
+    include {{ nginx_ingress_tls_root }}/tenant-alias/nginx.map;
 }
 
 server {
@@ -169,8 +169,8 @@ server {
 {% if nginx_effective_http2_directive_mode == 'standalone' %}
     http2 on;
 {% endif %}
-    ssl_certificate {{ nginx_ingress_tls_root }}/tenant-alias/$fw_tenant_alias_sub/tls.crt;
-    ssl_certificate_key {{ nginx_ingress_tls_root }}/tenant-alias/$fw_tenant_alias_sub/tls.key;
+    ssl_certificate {{ nginx_ingress_tls_root }}/tenant-alias/$fw_tenant_alias_bundle/tls.crt;
+    ssl_certificate_key {{ nginx_ingress_tls_root }}/tenant-alias/$fw_tenant_alias_bundle/tls.key;
 
 {% for cred_prefix in ['/ingest/', '/webrtc/'] %}
     location ^~ {{ cred_prefix }} {

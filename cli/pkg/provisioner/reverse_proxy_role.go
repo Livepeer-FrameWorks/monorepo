@@ -125,12 +125,20 @@ func reverseProxyComposeVars(serviceName string, defaultPort int, host inventory
 		configMounts,
 		certMounts,
 	)
-	return map[string]any{
+	vars := map[string]any{
 		"compose_stack_name":            serviceName,
 		"compose_stack_project_dir":     "/opt/frameworks/" + serviceName,
 		"compose_stack_compose_content": compose,
 		"compose_stack_files":           composeStackFiles(configFiles),
-	}, nil
+	}
+	if tap != nil {
+		vars["compose_stack_tenant_alias_ingress"] = map[string]any{
+			"enabled": true, "tls_root": ingress.TLSRoot, "reader_group": ingress.ReaderGroup,
+			"reload_trigger": ingress.ReloadTrigger, "applied_path": ingress.TenantAliasAppliedPath,
+			"container_name": "frameworks-" + serviceName,
+		}
+	}
+	return vars, nil
 }
 
 func reverseProxyContainerConfigs(serviceName string, port int, sites []proxySite, tap *tenantAliasPlayback) (map[string]string, map[string]any) {
@@ -146,8 +154,36 @@ func reverseProxyContainerConfigs(serviceName string, port int, sites []proxySit
 			"nginx.conf":      renderNginxRootConfig("/etc/nginx/conf.d/frameworks.conf"),
 			"frameworks.conf": renderNginxConfig(port, sites, tap),
 		}
+		if tap != nil {
+			mounts["ingress-readers.sh"] = "/etc/nginx/ingress-readers.sh"
+			files["ingress-readers.sh"] = nginxIngressReadersScript()
+		}
 		return mounts, files
 	}
+}
+
+// Prepare the mounted certificate reader group before starting Nginx workers.
+// Match the mounted directory's group without exposing keys to other users or
+// granting the container access to Privateer's environment and mesh secrets.
+func nginxIngressReadersScript() string {
+	return `#!/bin/sh
+set -eu
+ingress_gid=$(stat -c '%g' /etc/frameworks/ingress/tls/tenant-alias)
+ingress_group=$(awk -F: -v gid="$ingress_gid" '$3 == gid { print $1; exit }' /etc/group)
+if [ -z "$ingress_group" ]; then
+    ingress_group=frameworks-ingress
+    if command -v groupadd >/dev/null 2>&1; then
+        groupadd -g "$ingress_gid" "$ingress_group"
+    else
+        addgroup -g "$ingress_gid" -S "$ingress_group"
+    fi
+fi
+if command -v usermod >/dev/null 2>&1; then
+    usermod -a -G "$ingress_group" nginx
+else
+    addgroup nginx "$ingress_group"
+fi
+`
 }
 
 func reverseProxyComposeContent(
@@ -171,8 +207,14 @@ func reverseProxyComposeContent(
     ports:
       - "%d:%d"
 `, serviceName, image, serviceName, hostPort, containerPort)
+
 	if httpsPort > 0 {
 		fmt.Fprintf(&b, "      - \"%d:443\"\n", httpsPort)
+	}
+	if serviceName == "nginx" {
+		if _, aliases := configMounts["ingress-readers.sh"]; aliases {
+			b.WriteString("    command: [\"/bin/sh\", \"-ec\", \". /etc/nginx/ingress-readers.sh; exec /docker-entrypoint.sh nginx -g 'daemon off;'\"]\n")
+		}
 	}
 	b.WriteString(composelog.Block("    "))
 	fmt.Fprintf(&b, `    volumes:
@@ -446,10 +488,9 @@ func writeNginxTenantAliasPlayback(b *strings.Builder, tap *tenantAliasPlayback)
 	rootRe := strings.ReplaceAll(tap.RootDomain, ".", `\.`)
 	hostRe := fmt.Sprintf(`%s\.[a-z0-9][a-z0-9-]*\.%s\.%s`, tap.ServiceLabel, tap.ZoneLabel, rootRe)
 	aliasCertDir := ingress.TLSRoot + "/" + ingress.TenantAliasDirName
-	fmt.Fprintf(b, "map $ssl_server_name $fw_tenant_alias_sub {\n    ~^%s\\.(?<sub>[a-z0-9][a-z0-9-]*)\\.%s\\.%s$ $sub;\n    default \"\";\n}\n\n",
-		tap.ServiceLabel, tap.ZoneLabel, rootRe)
+	fmt.Fprintf(b, "map $ssl_server_name $fw_tenant_alias_bundle {\n    default \"\";\n    include %s/%s;\n}\n\n", aliasCertDir, ingress.TenantAliasMapName)
 	fmt.Fprintf(b, "server {\n    listen 80;\n    server_name ~^%s$;\n\n    location / {\n        return 308 https://$host$request_uri;\n    }\n}\n\n", hostRe)
-	fmt.Fprintf(b, "server {\n    listen 443 ssl;\n    server_name ~^%s$;\n    http2 on;\n    ssl_certificate %s/$fw_tenant_alias_sub/tls.crt;\n    ssl_certificate_key %s/$fw_tenant_alias_sub/tls.key;\n",
+	fmt.Fprintf(b, "server {\n    listen 443 ssl;\n    server_name ~^%s$;\n    http2 on;\n    ssl_certificate %s/$fw_tenant_alias_bundle/tls.crt;\n    ssl_certificate_key %s/$fw_tenant_alias_bundle/tls.key;\n",
 		hostRe, aliasCertDir, aliasCertDir)
 	// Docker-mode nginx reaches a host-native foghorn via the compose
 	// extra_hosts gateway alias, matching normalizeProxyUpstream's rewrite.

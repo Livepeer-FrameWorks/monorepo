@@ -59,6 +59,10 @@ func (f *fakeServiceRegistryClient) ListServiceInstances(_ context.Context, _, _
 	return resp, nil
 }
 
+func (f *fakeServiceRegistryClient) ListServiceClusterAssignments(context.Context, string, string) (*quartermasterpb.ListServiceClusterAssignmentsResponse, error) {
+	return &quartermasterpb.ListServiceClusterAssignmentsResponse{}, f.err
+}
+
 type fakeCertificateClient struct {
 	caResponse               *dnspb.GetCABundleResponse
 	caErr                    error

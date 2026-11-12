@@ -22,5 +22,14 @@ platforms:
       - /tmp
 provisioner:
   name: ansible
+  inventory:
+    group_vars:
+      all:
+        nginx_tenant_alias_playback:
+          enabled: true
+          service_label: foghorn
+          zone_label: cdn
+          root_domain: frameworks.test
+          upstream_port: 18008
 verifier:
   name: ansible

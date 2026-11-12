@@ -119,15 +119,17 @@ func runAuthSessions(ctx context.Context, db datamigrate.DB, opts datamigrate.Ru
 }
 
 func verifyAuthSessions(ctx context.Context, db datamigrate.DB) error {
-	// Completion covers every tenant; no live head may be left unassigned.
-	var remaining bool
-	if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM commodore.refresh_tokens
+	// Read one ordered pending head directly. EXISTS can discard ORDER BY and
+	// choose a different access path from the bounded pending-head index.
+	var pendingID string
+	err := db.QueryRowContext(ctx, `SELECT id FROM commodore.refresh_tokens
         WHERE session_id IS NULL AND COALESCE(revoked, false) = false AND expires_at > NOW()
-        ORDER BY expires_at, tenant_id, id LIMIT 1)`).Scan(&remaining); err != nil {
+        ORDER BY expires_at, tenant_id, id LIMIT 1`).Scan(&pendingID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
 		return err
 	}
-	if remaining {
-		return fmt.Errorf("auth sessions still have live unassigned refresh tokens")
-	}
-	return nil
+	return fmt.Errorf("auth sessions still have live unassigned refresh tokens")
 }

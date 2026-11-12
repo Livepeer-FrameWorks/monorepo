@@ -29,3 +29,6 @@ privateer_static_peers: []
 privateer_wireguard_ip: ""
 privateer_wireguard_private_key: ""
 privateer_wireguard_port: 51820
+
+privateer_ingress_reader_group: frameworks-ingress
+privateer_ingress_tls_root: /etc/frameworks/ingress/tls

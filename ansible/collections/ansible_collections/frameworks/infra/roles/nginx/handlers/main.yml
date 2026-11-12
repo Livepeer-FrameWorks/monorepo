@@ -19,7 +19,9 @@
   ansible.builtin.systemd:
     name: "{{ nginx_service_name }}"
     state: reloaded
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - nginx_manage_native_worker | default(true) | bool
 
 - name: Restart nginx
   listen: nginx restart

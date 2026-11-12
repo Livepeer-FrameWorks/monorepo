@@ -2,6 +2,7 @@ package bunny
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -99,5 +100,39 @@ func TestReconcileRecordSetRetriesStaleBunnyRecordID(t *testing.T) {
 	}
 	if got := postCount.Load(); got != 2 {
 		t.Fatalf("POST count = %d, want 2", got)
+	}
+}
+
+func TestReconcileRecordSetPromotesExistingRecordToGeographicRouting(t *testing.T) {
+	var updates atomic.Int32
+	latitude, longitude := 39.0, -77.0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/dnszone/123":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":123,"Domain":"cdn.example.test","Records":[{"Id":10,"Type":0,"Name":"foghorn.acme","Value":"192.0.2.10","Ttl":60,"Weight":100,"SmartRoutingType":0}]}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/dnszone/123/records/10":
+			var record Record
+			if callErr := json.NewDecoder(r.Body).Decode(&record); callErr != nil {
+				t.Error(callErr)
+			}
+			if record.SmartRoutingType != SmartRoutingGeolocation || record.GeolocationLatitude == nil || record.GeolocationLongitude == nil || *record.GeolocationLatitude != latitude || *record.GeolocationLongitude != longitude {
+				t.Errorf("existing alias was not promoted to GeoDNS: %+v", record)
+			}
+			updates.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("alias repair recreated or removed a record: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	client := NewClient("test-key")
+	client.baseURL = server.URL
+	if callErr := client.ReconcileRecordSet(t.Context(), 123, "foghorn.acme", RecordTypeA, []Record{{Name: "foghorn.acme", Value: "192.0.2.10", TTL: 60, Weight: 100, SmartRoutingType: SmartRoutingGeolocation, GeolocationLatitude: &latitude, GeolocationLongitude: &longitude}}); callErr != nil {
+		t.Fatal(callErr)
+	}
+	if updates.Load() != 1 {
+		t.Fatalf("existing provider record updates = %d, want 1", updates.Load())
 	}
 }

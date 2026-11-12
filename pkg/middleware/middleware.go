@@ -203,10 +203,9 @@ func isPublicCORSPath(path string) bool {
 	case "/.well-known/mcp.json", "/.well-known/oauth-protected-resource", "/.well-known/did.json":
 		return true
 	}
-	// Foghorn's ingest front door: a browser WHIP publish POSTs
-	// application/sdp, which is never a CORS-simple content type, so it always
-	// preflights from whatever origin the customer's page is served on.
-	if strings.HasPrefix(path, "/ingest/") {
+	// Public publishing and playback are embedded on customer origins. Their
+	// handlers enforce media credentials independently of browser cookies.
+	if strings.HasPrefix(path, "/ingest/") || strings.HasPrefix(path, "/play/") || strings.HasPrefix(path, "/resolve/") {
 		return true
 	}
 	return strings.HasPrefix(path, "/mcp/")

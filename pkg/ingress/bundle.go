@@ -11,6 +11,16 @@ package ingress
 
 import "regexp"
 
+// ReaderGroup grants only public ingress certificate access, independently of
+// Privateer's mesh credentials and the internal service-PKI reader group.
+const ReaderGroup = "frameworks-ingress"
+
+// TenantAliasMapName is the generic Nginx SNI inventory Privateer publishes.
+const TenantAliasMapName = "nginx.map"
+
+// TenantAliasAppliedPath is written only by the root-owned Nginx reload service.
+const TenantAliasAppliedPath = "/run/frameworks-nginx/tenant-alias.applied"
+
 // TLSRoot is the on-host directory beneath which Privateer writes per-bundle
 // TLS material. Per-bundle layout: <TLSRoot>/<bundle_id>/tls.{crt,key}.
 const TLSRoot = "/etc/frameworks/ingress/tls"

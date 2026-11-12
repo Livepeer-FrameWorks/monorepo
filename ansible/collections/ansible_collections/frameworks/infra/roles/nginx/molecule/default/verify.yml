@@ -51,3 +51,6 @@
       ansible.builtin.systemd:
         name: nginx
         state: started
+
+- name: Verify automatic tenant TLS serving as the real Nginx worker
+  ansible.builtin.import_playbook: tenant_alias_tls.yml

@@ -32,3 +32,6 @@
 # no Privateer artifact, so it also runs when converge short-circuited.
 - name: Privateer PKI repair gate
   ansible.builtin.import_playbook: pki_repair.yml
+
+- name: Privateer public ingress permission contract
+  ansible.builtin.import_playbook: ingress_permissions.yml

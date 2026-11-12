@@ -25,6 +25,13 @@ provisioner:
   inventory:
     group_vars:
       all:
+        compose_stack_tenant_alias_ingress:
+          enabled: true
+          tls_root: /etc/frameworks/ingress/tls
+          reader_group: frameworks-ingress
+          reload_trigger: /etc/frameworks/ingress/reload.trigger
+          applied_path: /run/frameworks-nginx/tenant-alias.applied
+          container_name: frameworks-nginx
         compose_stack_name: nginx-smoke
         compose_stack_compose_content: |
           services:

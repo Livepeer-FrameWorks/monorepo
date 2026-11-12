@@ -1,0 +1,45 @@
+---
+- name: Ensure dedicated public ingress reader group
+  ansible.builtin.group:
+    name: "{{ nginx_ingress_reader_group }}"
+    system: true
+
+- name: Allow Privateer to publish public ingress material
+  ansible.builtin.user:
+    name: privateer
+    groups: "{{ nginx_ingress_reader_group }}"
+    append: true
+  when: not ansible_check_mode
+
+- name: Allow Nginx workers to read public ingress material
+  ansible.builtin.user:
+    name: "{{ nginx_worker_user }}"
+    groups: "{{ nginx_ingress_reader_group }}"
+    append: true
+  when:
+    - not ansible_check_mode
+    - nginx_manage_native_worker | bool
+  notify: "{{ ['nginx reload'] if nginx_manage_native_worker | bool else [] }}"
+
+- name: Ensure worker-traversable public ingress directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: privateer
+    group: "{{ nginx_ingress_reader_group }}"
+    mode: "2750"
+  loop:
+    - "{{ nginx_ingress_tls_root }}"
+    - "{{ nginx_ingress_tls_root }}/tenant-alias"
+  when: not ansible_check_mode
+
+- name: Initialize automatic tenant SNI inventory without replacing live state
+  ansible.builtin.copy:
+    dest: "{{ nginx_ingress_tls_root }}/tenant-alias/nginx.map"
+    content: "# Managed by Privateer; waiting for certificate synchronization.\n"
+    force: false
+    owner: privateer
+    group: "{{ nginx_ingress_reader_group }}"
+    mode: "0640"
+  when: not ansible_check_mode
+  notify: "{{ ['nginx reload'] if nginx_manage_native_worker | bool else [] }}"

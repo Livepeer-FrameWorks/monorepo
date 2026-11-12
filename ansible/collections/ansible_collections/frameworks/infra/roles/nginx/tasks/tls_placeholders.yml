@@ -33,8 +33,8 @@
     path: "{{ nginx_ingress_tls_root }}"
     state: directory
     owner: privateer
-    group: privateer
-    mode: "0750"
+    group: "{{ nginx_ingress_reader_group if nginx_tenant_alias_playback.enabled | default(false) else 'privateer' }}"
+    mode: "2750"
   when:
     - not ansible_check_mode
     - nginx_ingress_tls_bundles | length > 0

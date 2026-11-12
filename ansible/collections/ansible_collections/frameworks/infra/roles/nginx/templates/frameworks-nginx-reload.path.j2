@@ -1,6 +1,6 @@
 [Unit]
 Description=FrameWorks nginx reload watcher (ingress TLS rotation)
-After={{ nginx_service_name }}.service
+After={{ 'docker' if nginx_ingress_reload_mode == 'docker' else nginx_service_name }}.service
 
 [Path]
 PathModified={{ nginx_ingress_reload_trigger }}

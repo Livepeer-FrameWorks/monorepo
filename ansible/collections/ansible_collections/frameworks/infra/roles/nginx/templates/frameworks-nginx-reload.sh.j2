@@ -1,0 +1,32 @@
+#!/bin/sh
+set -eu
+inventory={{ (nginx_ingress_tls_root ~ '/tenant-alias/nginx.map') | quote }}
+applied={{ nginx_tenant_alias_applied_path | quote }}
+# Pin the complete inventory while the terminator loads it. Privateer uses
+# a nonblocking exclusive lock on this stable directory for publication.
+if [ -d "$(dirname "$inventory")" ]; then
+    exec 9< "$(dirname "$inventory")"
+    flock -s 9
+fi
+before=""
+if [ -f "$inventory" ]; then
+    before=$(sha256sum "$inventory" | cut -d ' ' -f1)
+fi
+{% if nginx_ingress_reload_mode == 'docker' %}
+docker exec {{ nginx_ingress_container_name | quote }} nginx -t
+docker exec {{ nginx_ingress_container_name | quote }} nginx -s reload
+{% else %}
+{{ nginx_binary_path | quote }} -t
+/bin/systemctl reload {{ (nginx_service_name ~ '.service') | quote }}
+{% endif %}
+if [ -n "$before" ]; then
+    after=$(sha256sum "$inventory" | cut -d ' ' -f1)
+    # A concurrent publication requires another pass; do not acknowledge a map
+    # different from the one available when Nginx accepted the reload.
+    [ "$before" = "$after" ] || exit 75
+    temporary=$(mktemp "$applied.XXXXXX")
+    trap 'rm -f "$temporary"' EXIT
+    printf '%s\n' "$before" > "$temporary"
+    chmod 0644 "$temporary"
+    mv "$temporary" "$applied"
+fi

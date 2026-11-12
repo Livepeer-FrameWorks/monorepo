@@ -82,6 +82,8 @@ const (
 )
 
 type PlacementPreparationResult struct {
+	// Region is display metadata attached by the coordinator from its observed node.
+	Region           string
 	Outcome          PlacementPreparationOutcome
 	TenantID         string
 	ObjectID         string
@@ -613,6 +615,15 @@ func (router PlacementRouter) Route(ctx context.Context, req PlacementRouteReque
 		if prepared.Outcome == PlacementAccepted {
 			if prepared.Endpoint == "" || !now().Before(decisionUntil) {
 				return result, ErrPlacementPreparation
+			}
+			// Display metadata comes from the exact observed destination, never an
+			// unverified field in a remote preparation acknowledgement.
+			prepared.Region = ""
+			for _, candidate := range candidates {
+				if candidate.ClusterID == choice.ClusterID && candidate.NodeID == choice.NodeID {
+					prepared.Region = candidate.Region
+					break
+				}
 			}
 			result.Preparation = prepared
 			return result, nil

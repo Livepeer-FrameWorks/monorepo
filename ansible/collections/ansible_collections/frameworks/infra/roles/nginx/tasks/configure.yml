@@ -1,4 +1,8 @@
 ---
+- name: Configure automatic tenant playback certificate access
+  ansible.builtin.import_tasks: tenant_alias_permissions.yml
+  when: nginx_tenant_alias_playback.enabled | default(false)
+
 - name: Resolve active Nginx config path
   ansible.builtin.set_fact:
     nginx_effective_config_dir: >-

@@ -154,3 +154,11 @@ nginx_ingress_tls_root: /etc/frameworks/ingress/tls
 # The nginx role pre-creates the file so the path watch latches onto a
 # stable inode; Privateer owns the file so it can rewrite it without sudo.
 nginx_ingress_reload_trigger: /etc/frameworks/ingress/reload.trigger
+
+nginx_ingress_reader_group: frameworks-ingress
+
+nginx_tenant_alias_applied_path: /run/frameworks-nginx/tenant-alias.applied
+
+nginx_manage_native_worker: true
+nginx_ingress_reload_mode: native
+nginx_ingress_container_name: frameworks-nginx
