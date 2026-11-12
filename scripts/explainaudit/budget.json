@@ -1439,6 +1439,18 @@
     "reason": "Ordered pending index stops at the claim limit; one indexed first-in-aggregate probe per visited candidate preserves aggregate ordering. Removes the whole-pending-set sort, trading more bounded RPCs for fewer scanned rows. Bosun fixture: 2348 rows and 203 RPCs for 100 claims.",
     "rows_scanned": 2400
   },
+  "purser:ProviderWebhookInboxRepeatedFailures@declared": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 10,
+    "rows_scanned": 2892,
+    "reason": "Exact combined count of 914 unresolved webhook and native-settlement obligations; five indexed failure branches read 2,892 storage rows. Aggregate returns one scalar. No sequential-scan or additional RPC allowance."
+  },
+  "purser:ProviderWebhookInboxRepeatedFailures@distributed": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 10,
+    "rows_scanned": 2892,
+    "reason": "Exact combined count of 914 unresolved webhook and native-settlement obligations; five indexed failure branches read 2,892 storage rows. Aggregate returns one scalar. No sequential-scan or additional RPC allowance."
+  },
   "purser:ClaimBillingEventOutboxCandidates@declared": {
     "flags": ["MANY_READ_RPCS"],
     "read_requests": 104,

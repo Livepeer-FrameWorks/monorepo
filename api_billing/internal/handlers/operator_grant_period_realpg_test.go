@@ -676,6 +676,7 @@ func providerReservationCases() []providerReservationCase {
 		{"ProviderNativeSettlementRoundingUsesUTCReferenceDate", TestProviderNativeSettlementRoundingUsesUTCReferenceDate_RealPG},
 		{"ProviderSettlementRecoveryPreservesCauseAndOwner", TestProviderSettlementRecoveryPreservesCauseAndOwner_RealPG},
 		{"PolledBlockedSettlementRemainsVisibleWithoutWebhook", TestPolledBlockedSettlementRemainsVisibleWithoutWebhook_RealPG},
+		{"ProviderSettlementConflictStaysBlockedAfterValuation", TestProviderSettlementConflictStaysBlockedAfterValuation_RealPG},
 
 		{"AdvanceActivationStartsOneCappedCalendarMonth", TestAdvanceActivationStartsOneCappedCalendarMonth_RealPG},
 		{"AdvanceSetupRefusesMidPeriodTierChange", TestAdvanceSetupRefusesMidPeriodTierChange_RealPG},

@@ -109,6 +109,12 @@ user-wide events; a named revocation never becomes an account-wide sign-out
 through an older event consumer. Bridge caches use the full owner and session
 ID, and close only matching WebSockets for named revocation.
 
+Named cache entries remain for a full access-token lifetime plus clock leeway
+after receipt. A transaction-start revocation timestamp can precede issuance
+while the revoker waits for a lock; eviction must not let a still-verifiable
+token work again. User-wide cutoffs keep their actual issue-time boundary so
+later legitimate sign-ins survive delayed delivery.
+
 Bridge authentication and network diagnostics, Foghorn internal HTTP, Skipper's
 gRPC/REST/notification MCP paths, and the raw interactive gRPC ingresses in
 Quartermaster, Purser, Periscope Query, Signalman, Bosun and Lookout each use
@@ -183,14 +189,18 @@ grants, outages and redirects never select that path. Credentials without a
 named session use local sign-out against old platforms, avoiding their global
 logout semantics.
 
-## Release state
+## Retention
 
 Commodore runs bounded retention sweeps once per minute. Consumed or expired
 authorization codes and expired device codes are removed after 24 hours.
 Sessions are eligible 720 hours after revocation or idle expiry; the schema
 keeps idle expiry at or before absolute expiry. Session refresh children are
 locked and removed in batches of at most 100 per sweep before their parent is
-deleted. Every mutation includes the full tenant and user owner.
+deleted. A separate indexed pass removes at most 100 refresh rotations that
+expired over 720 hours ago, including those belonging to still-live named
+sessions. Every mutation includes the full tenant and user owner. Transactions
+use the shared serialization/deadlock retry helper; rolled-back writes do not
+consume the committed batch budget.
 
 During mixed-version operation, a live refresh token without session ownership
 preserves that owner's chain history. Cleanup checks for a live legacy successor
@@ -199,6 +209,8 @@ rows are skipped, and keyset cursors continue past protected owners before
 wrapping to revisit them. This prevents cleanup from erasing the original-age
 anchor of a chain being rotated by an older issuer. Revocation snapshots remain
 available far longer than an access token can verify.
+
+## Release state
 
 The pending `v0.3.15` expand migration adds the session table, nullable refresh
 ownership and authorization-code metadata. Existing-table indexes build online

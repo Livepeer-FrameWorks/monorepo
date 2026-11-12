@@ -38,27 +38,39 @@ func TestProcessingBillingUsesLocalArtifactOwnerAfterDeletion(t *testing.T) {
 }
 
 func TestFinalProcessingBillingUsesTombstonedSourceIdentity(t *testing.T) {
-	p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
-	defer closeDB()
-	object := &mediaauthoritypb.MediaObjectAuthority{}
-	if err := proto.Unmarshal(objectBytes, object); err != nil {
-		t.Fatal(err)
-	}
-	object.Lifecycle = mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_TOMBSTONE
-	objectBytes, err := proto.Marshal(object)
-	if err != nil {
-		t.Fatal(err)
-	}
-	expectLocalPair(mock, objectBytes, tenantBytes, time.Now().Add(-time.Hour), time.Now().Add(time.Hour), false)
-	trigger := &ipcpb.MistTrigger{TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{ProcessBilling: &ipcpb.ProcessBillingEvent{StreamName: "live+stream-internal"}}}
-	if _, _, err := p.handleProcessBilling(trigger); err != nil {
-		t.Fatalf("final billing required fresh admission authority: %v", err)
-	}
-	if billing := trigger.GetProcessBilling(); billing.GetTenantId() != object.TenantId || billing.GetStreamId() != object.GetLiveStream().GetStreamId() {
-		t.Fatalf("final billing lost signed source identity: %+v", billing)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
+	for _, test := range []struct {
+		name      string
+		lifecycle mediaauthoritypb.AuthorityLifecycle
+		ready     bool
+	}{
+		{"tombstone", mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_TOMBSTONE, false},
+		{"expired", mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE, true},
+		{"unready", mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
+			defer closeDB()
+			object := &mediaauthoritypb.MediaObjectAuthority{}
+			if err := proto.Unmarshal(objectBytes, object); err != nil {
+				t.Fatal(err)
+			}
+			object.Lifecycle = test.lifecycle
+			objectBytes, err := proto.Marshal(object)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expectLocalPair(mock, objectBytes, tenantBytes, time.Now().Add(-time.Hour), time.Now().Add(time.Hour), test.ready)
+			trigger := &ipcpb.MistTrigger{TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{ProcessBilling: &ipcpb.ProcessBillingEvent{StreamName: "live+stream-internal"}}}
+			if _, _, err := p.handleProcessBilling(trigger); err != nil {
+				t.Fatalf("final billing required fresh admission authority: %v", err)
+			}
+			if billing := trigger.GetProcessBilling(); billing.GetTenantId() != object.TenantId || billing.GetStreamId() != object.GetLiveStream().GetStreamId() {
+				t.Fatalf("final billing lost signed source identity: %+v", billing)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

@@ -5,6 +5,7 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -101,7 +102,11 @@ VALUES($1::uuid,$2,$3,$4,$1::text,$5,$6)`, id, tenant, owner, sid, old.Add(-24*t
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.rollbackRetentionTx(rotation)
+	defer func() {
+		if rollbackErr := rotation.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			t.Errorf("rollback rotation: %v", rollbackErr)
+		}
+	}()
 	if _, err = rotation.ExecContext(ctx, `SELECT id FROM commodore.refresh_tokens WHERE tenant_id=$1 AND user_id=$2 AND id=$3 FOR UPDATE`, tenant, legacyUser, ancestor); err != nil {
 		t.Fatal(err)
 	}
@@ -137,12 +142,25 @@ VALUES($1::uuid,$2,$3,$1::text,$4)`, head, tenant, legacyUser, future); err != n
 	}
 	// The first protected candidate must not stop the next eligible owner.
 	collectable := addSession(uuid.NewString(), uuid.NewString(), old.Add(time.Hour), nil)
+	activeSession := addSession(user, uuid.NewString(), future, nil)
+	staleRotation := addToken(user, activeSession.ID, old)
+	liveRotation := addToken(user, activeSession.ID, future)
 	var progress sessionRetentionProgress
 	if _, err = s.sweepSessionRetention(ctx, &progress); err != nil {
 		t.Fatal(err)
 	}
 	existsSession(collectable, false)
 	existsSession(protected, true)
+	existsSession(activeSession, true)
+	for _, entry := range []struct {
+		id   string
+		keep bool
+	}{{staleRotation, false}, {liveRotation, true}} {
+		var retained bool
+		if queryErr := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM commodore.refresh_tokens WHERE tenant_id=$1 AND user_id=$2 AND id=$3)`, tenant, user, entry.id).Scan(&retained); queryErr != nil || retained != entry.keep {
+			t.Fatalf("rotation retention on a live named session: retained=%t want=%t err=%v", retained, entry.keep, queryErr)
+		}
+	}
 	if _, err = s.sweepSessionRetention(ctx, &progress); err != nil {
 		t.Fatal(err)
 	}

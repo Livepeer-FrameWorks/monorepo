@@ -108,7 +108,7 @@ UPDATE purser.provider_webhook_inbox
 SET status = CASE WHEN wake_requested THEN 'pending' ELSE 'processed' END,
     processed_at = CASE WHEN NOT wake_requested THEN NOW() END,
     next_attempt_at = CASE WHEN wake_requested THEN NOW() ELSE next_attempt_at END, claimed_at = NULL,
-    lease_token = NULL, last_error = NULL, updated_at = NOW()
+    lease_token = NULL, last_error = NULL, last_error_code = NULL, updated_at = NOW()
 WHERE id = $1
   AND ($2::text = '' OR lease_token::text = $2::text)
 `
@@ -176,16 +176,18 @@ SET status = CASE WHEN $1::boolean THEN 'blocked'
     unresolved_since = COALESCE(unresolved_since, NOW()),
     next_attempt_at = CASE WHEN wake_requested THEN NOW() ELSE NOW() + ($3::bigint * INTERVAL '1 millisecond') END,
     claimed_at = NULL, lease_token = NULL,
-    last_error = $4::text || CASE WHEN provider_payment_id IS NOT NULL
+    last_error_code = NULLIF($4::text, ''),
+    last_error = $5::text || CASE WHEN provider_payment_id IS NOT NULL
         THEN ' (payment ' || left(provider_payment_id, 120) || ')' ELSE '' END, updated_at = NOW()
-WHERE id = $5
-  AND ($6::text = '' OR lease_token::text = $6::text)
+WHERE id = $6
+  AND ($7::text = '' OR lease_token::text = $7::text)
 `
 
 type FailProviderWebhookParams struct {
 	Blocked             bool      `db:"blocked" json:"blocked"`
 	Waiting             bool      `db:"waiting" json:"waiting"`
 	BackoffMilliseconds int64     `db:"backoff_milliseconds" json:"backoff_milliseconds"`
+	ErrorCode           string    `db:"error_code" json:"error_code"`
 	LastError           string    `db:"last_error" json:"last_error"`
 	ID                  uuid.UUID `db:"id" json:"id"`
 	LeaseToken          string    `db:"lease_token" json:"lease_token"`
@@ -196,6 +198,7 @@ func (q *Queries) FailProviderWebhook(ctx context.Context, arg FailProviderWebho
 		arg.Blocked,
 		arg.Waiting,
 		arg.BackoffMilliseconds,
+		arg.ErrorCode,
 		arg.LastError,
 		arg.ID,
 		arg.LeaseToken,
@@ -255,18 +258,18 @@ func (q *Queries) InsertCheckoutRecoveryAudit(ctx context.Context, arg InsertChe
 
 const listCheckoutRecovery = `-- name: ListCheckoutRecovery :many
 WITH selected AS (
-    (SELECT inbox.id, inbox.provider, inbox.tenant_id, inbox.provider_payment_id, inbox.event_key, inbox.headers, inbox.raw_payload, inbox.status, inbox.attempts, inbox.wait_attempts, inbox.unresolved_since, inbox.next_attempt_at, inbox.claimed_at, inbox.lease_token, inbox.wake_requested, inbox.last_error, inbox.processed_at, inbox.created_at, inbox.updated_at FROM purser.provider_webhook_inbox inbox
+    (SELECT inbox.id, inbox.provider, inbox.tenant_id, inbox.provider_payment_id, inbox.event_key, inbox.headers, inbox.raw_payload, inbox.status, inbox.attempts, inbox.wait_attempts, inbox.unresolved_since, inbox.next_attempt_at, inbox.claimed_at, inbox.lease_token, inbox.wake_requested, inbox.last_error, inbox.last_error_code, inbox.processed_at, inbox.created_at, inbox.updated_at FROM purser.provider_webhook_inbox inbox
      WHERE inbox.status <> 'processed' AND $3::text = ''
      ORDER BY inbox.created_at, inbox.id
      LIMIT ($2::bigint + $1::bigint))
     UNION ALL
-    (SELECT inbox.id, inbox.provider, inbox.tenant_id, inbox.provider_payment_id, inbox.event_key, inbox.headers, inbox.raw_payload, inbox.status, inbox.attempts, inbox.wait_attempts, inbox.unresolved_since, inbox.next_attempt_at, inbox.claimed_at, inbox.lease_token, inbox.wake_requested, inbox.last_error, inbox.processed_at, inbox.created_at, inbox.updated_at FROM purser.provider_webhook_inbox inbox
+    (SELECT inbox.id, inbox.provider, inbox.tenant_id, inbox.provider_payment_id, inbox.event_key, inbox.headers, inbox.raw_payload, inbox.status, inbox.attempts, inbox.wait_attempts, inbox.unresolved_since, inbox.next_attempt_at, inbox.claimed_at, inbox.lease_token, inbox.wake_requested, inbox.last_error, inbox.last_error_code, inbox.processed_at, inbox.created_at, inbox.updated_at FROM purser.provider_webhook_inbox inbox
      WHERE inbox.status <> 'processed' AND $3::text <> ''
        AND COALESCE(inbox.tenant_id::text, inbox.headers->>'tenant_id') = $3::text
      ORDER BY inbox.created_at, inbox.id
      LIMIT ($2::bigint + $1::bigint))
 ), page AS MATERIALIZED (
-    SELECT selected.id, selected.provider, selected.tenant_id, selected.provider_payment_id, selected.event_key, selected.headers, selected.raw_payload, selected.status, selected.attempts, selected.wait_attempts, selected.unresolved_since, selected.next_attempt_at, selected.claimed_at, selected.lease_token, selected.wake_requested, selected.last_error, selected.processed_at, selected.created_at, selected.updated_at,
+    SELECT selected.id, selected.provider, selected.tenant_id, selected.provider_payment_id, selected.event_key, selected.headers, selected.raw_payload, selected.status, selected.attempts, selected.wait_attempts, selected.unresolved_since, selected.next_attempt_at, selected.claimed_at, selected.lease_token, selected.wake_requested, selected.last_error, selected.last_error_code, selected.processed_at, selected.created_at, selected.updated_at,
            CASE WHEN selected.provider IN ('checkout_recovery', 'checkout_delivery_review', 'tier_upgrade')
                 THEN convert_from(selected.raw_payload, 'UTF8')::jsonb END AS internal_payload
     FROM selected
@@ -274,7 +277,8 @@ WITH selected AS (
     LIMIT ($2::bigint + $1::bigint)
 ), inbox_rows AS (
 SELECT i.id::text AS id, COALESCE(p.provider, i.headers->>'provider', i.provider)::text AS provider,
-       i.event_key, i.status, i.attempts, i.last_error, i.next_attempt_at,
+       i.event_key, i.status, i.attempts, i.last_error,
+       CASE WHEN i.status <> 'blocked' THEN i.next_attempt_at END AS next_attempt_at,
        COALESCE(i.tenant_id::text, p.tenant_id::text, i.headers->>'tenant_id', i.internal_payload->>'tenant_id', '')::text AS tenant_id,
        COALESCE(p.id::text, upgrade.id::text, i.headers->>'reference_id', '')::text AS reservation_id,
        COALESCE(p.expires_at, p.created_at + INTERVAL '24 hours') AS expires_at,
@@ -660,7 +664,7 @@ UPDATE purser.provider_webhook_inbox
 SET status='pending', next_attempt_at=NOW(), wake_requested=TRUE, updated_at=NOW()
 WHERE tenant_id=$1::text::uuid
   AND provider=$2::text AND provider_payment_id=$3::text
-  AND status='blocked'
+  AND status='blocked' AND last_error_code='unsupported_currency'
 `
 
 type WakeValuedProviderWebhooksParams struct {

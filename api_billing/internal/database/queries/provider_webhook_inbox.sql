@@ -26,7 +26,7 @@ UPDATE purser.provider_webhook_inbox
 SET status = CASE WHEN wake_requested THEN 'pending' ELSE 'processed' END,
     processed_at = CASE WHEN NOT wake_requested THEN NOW() END,
     next_attempt_at = CASE WHEN wake_requested THEN NOW() ELSE next_attempt_at END, claimed_at = NULL,
-    lease_token = NULL, last_error = NULL, updated_at = NOW()
+    lease_token = NULL, last_error = NULL, last_error_code = NULL, updated_at = NOW()
 WHERE id = sqlc.arg(id)
   AND (sqlc.arg(lease_token)::text = '' OR lease_token::text = sqlc.arg(lease_token)::text);
 
@@ -39,6 +39,7 @@ SET status = CASE WHEN sqlc.arg(blocked)::boolean THEN 'blocked'
     unresolved_since = COALESCE(unresolved_since, NOW()),
     next_attempt_at = CASE WHEN wake_requested THEN NOW() ELSE NOW() + (sqlc.arg(backoff_milliseconds)::bigint * INTERVAL '1 millisecond') END,
     claimed_at = NULL, lease_token = NULL,
+    last_error_code = NULLIF(sqlc.arg(error_code)::text, ''),
     last_error = sqlc.arg(last_error)::text || CASE WHEN provider_payment_id IS NOT NULL
         THEN ' (payment ' || left(provider_payment_id, 120) || ')' ELSE '' END, updated_at = NOW()
 WHERE id = sqlc.arg(id)
@@ -65,7 +66,7 @@ UPDATE purser.provider_webhook_inbox
 SET status='pending', next_attempt_at=NOW(), wake_requested=TRUE, updated_at=NOW()
 WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid
   AND provider=sqlc.arg(provider)::text AND provider_payment_id=sqlc.arg(provider_payment_id)::text
-  AND status='blocked';
+  AND status='blocked' AND last_error_code='unsupported_currency';
 
 -- name: ListCheckoutRecovery :many
 -- Platform-operator inventory includes unbound callbacks; a supplied tenant narrows to its reservations.
@@ -91,7 +92,8 @@ WITH selected AS (
     LIMIT (sqlc.arg(row_limit)::bigint + sqlc.arg(row_offset)::bigint)
 ), inbox_rows AS (
 SELECT i.id::text AS id, COALESCE(p.provider, i.headers->>'provider', i.provider)::text AS provider,
-       i.event_key, i.status, i.attempts, i.last_error, i.next_attempt_at,
+       i.event_key, i.status, i.attempts, i.last_error,
+       CASE WHEN i.status <> 'blocked' THEN i.next_attempt_at END AS next_attempt_at,
        COALESCE(i.tenant_id::text, p.tenant_id::text, i.headers->>'tenant_id', i.internal_payload->>'tenant_id', '')::text AS tenant_id,
        COALESCE(p.id::text, upgrade.id::text, i.headers->>'reference_id', '')::text AS reservation_id,
        COALESCE(p.expires_at, p.created_at + INTERVAL '24 hours') AS expires_at,
