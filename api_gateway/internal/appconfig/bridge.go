@@ -29,6 +29,7 @@ type Bridge struct {
 	config.HTTPListen
 	config.HTTPRuntime
 	config.Logging
+	config.GeoIP
 	config.ServiceAuth
 	config.Registration
 	config.BuildEnvironment

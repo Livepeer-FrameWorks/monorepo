@@ -123,6 +123,24 @@ query GetArtifactStatesConnection(
   }
 }
 
+query GetAuthSessionsConnection(
+  $first: Int
+  $after: String
+) {
+  authSessionsConnection(first: $first, after: $after) {
+    edges {
+      cursor
+      node {
+        ...AuthSessionDefaultFields
+      }
+    }
+    pageInfo {
+      ...PageInfoDefaultFields
+    }
+    totalCount
+  }
+}
+
 query GetBalanceTransactionsConnection(
   $page: ConnectionInput
   $transactionType: String

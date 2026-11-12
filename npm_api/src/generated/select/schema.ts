@@ -385,10 +385,52 @@ export interface AssetNodeCopy {
     __typename: 'AssetNodeCopy'
 }
 
+
+/** The interactive client that created a sign-in session. */
+export type AuthClientKind = 'BROWSER' | 'CLI' | 'DESKTOP' | 'UNKNOWN'
+
 export interface AuthError {
     message: Scalars['String']
     code: (Scalars['String'] | null)
     __typename: 'AuthError'
+}
+
+
+/** The proof used to create a sign-in session. */
+export type AuthMethod = 'PASSWORD' | 'WALLET' | 'BROWSER_HANDOFF' | 'DEVICE_CODE' | 'UNKNOWN'
+
+
+/** One of the signed-in user's own interactive sessions. */
+export interface AuthSession {
+    id: Scalars['ID']
+    clientKind: AuthClientKind
+    clientId: Scalars['String']
+    authMethod: AuthMethod
+    label: Scalars['String']
+    clientVersion: (Scalars['String'] | null)
+    /** Masked source IP; full addresses are never returned. */
+    ipAddress: (Scalars['String'] | null)
+    /** City and country when a local GeoIP database is configured. */
+    location: (Scalars['String'] | null)
+    createdAt: Scalars['Time']
+    lastActiveAt: Scalars['Time']
+    expiresAt: Scalars['Time']
+    current: Scalars['Boolean']
+    __typename: 'AuthSession'
+}
+
+export interface AuthSessionConnection {
+    edges: AuthSessionEdge[]
+    nodes: AuthSession[]
+    pageInfo: PageInfo
+    totalCount: Scalars['Int']
+    __typename: 'AuthSessionConnection'
+}
+
+export interface AuthSessionEdge {
+    cursor: Scalars['String']
+    node: AuthSession
+    __typename: 'AuthSessionEdge'
 }
 
 export interface AvailableCluster {
@@ -790,6 +832,14 @@ export interface ChangeBillingTierPayload {
 }
 
 export type ChangeBillingTierResult = (ChangeBillingTierPayload | ValidationError | AuthError) & { __isUnion?: true }
+
+export interface ChangePasswordPayload {
+    success: Scalars['Boolean']
+    revokedCount: Scalars['Int']
+    __typename: 'ChangePasswordPayload'
+}
+
+export type ChangePasswordResult = (ChangePasswordPayload | ValidationError | AuthError) & { __isUnion?: true }
 
 export interface CityMetric {
     city: Scalars['String']
@@ -2930,6 +2980,14 @@ export interface MultistreamStatusChanged {
  * Check the result type to handle success/error cases appropriately.
  */
 export interface Mutation {
+    /** Sign out one of the signed-in user’s own sessions. Idempotent; current=true means this caller was signed out. */
+    revokeAuthSession: RevokeAuthSessionResult
+    /** Sign out every other session while retaining the presented named session. */
+    revokeOtherAuthSessions: RevokeOtherAuthSessionsResult
+    /** Rename one of the signed-in user’s own sessions. */
+    renameAuthSession: RenameAuthSessionResult
+    /** Change the password and sign out other sessions, retaining this session. */
+    changePassword: ChangePasswordResult
     /** Create a new stream for live broadcasting. */
     createStream: CreateStreamResult
     /** Update an existing stream's configuration. */
@@ -4243,6 +4301,8 @@ export interface QualityTierSummary {
  * Most connection fields are non-null, but some may be nullable when upstream data is optional.
  */
 export interface Query {
+    /** The signed-in user’s own interactive sessions, newest first. Supports first=1..100. */
+    authSessionsConnection: AuthSessionConnection
     /**
      * Unified analytics surface providing access to all platform metrics.
      * Combines data from Periscope (historical) and Signalman (real-time).
@@ -4652,6 +4712,8 @@ export interface RecordingStopped {
     __typename: 'RecordingStopped'
 }
 
+export type RenameAuthSessionResult = (AuthSession | ValidationError | NotFoundError | AuthError) & { __isUnion?: true }
+
 export type ReplayWebhookDeliveriesResult = (WebhookReplayResult | ValidationError | NotFoundError | AuthError) & { __isUnion?: true }
 
 export type ReplayWebhookDeliveryResult = (WebhookDelivery | ValidationError | NotFoundError | AuthError) & { __isUnion?: true }
@@ -4664,9 +4726,25 @@ export type ReplayWebhookDeliveryResult = (WebhookDelivery | ValidationError | N
  */
 export type RetentionSource = 'TENANT_DEFAULT' | 'PER_STREAM_OVERRIDE' | 'PER_ASSET_OVERRIDE' | 'TIER_ENTITLEMENT'
 
+export interface RevokeAuthSessionPayload {
+    success: Scalars['Boolean']
+    /** True when the presented session was signed out. */
+    current: Scalars['Boolean']
+    __typename: 'RevokeAuthSessionPayload'
+}
+
+export type RevokeAuthSessionResult = (RevokeAuthSessionPayload | ValidationError | NotFoundError | AuthError) & { __isUnion?: true }
+
 export type RevokeClusterInviteResult = (DeleteSuccess | NotFoundError | AuthError) & { __isUnion?: true }
 
 export type RevokeDeveloperTokenResult = (DeleteSuccess | NotFoundError | AuthError) & { __isUnion?: true }
+
+export interface RevokeOtherAuthSessionsPayload {
+    revokedCount: Scalars['Int']
+    __typename: 'RevokeOtherAuthSessionsPayload'
+}
+
+export type RevokeOtherAuthSessionsResult = (RevokeOtherAuthSessionsPayload | ValidationError | AuthError) & { __isUnion?: true }
 
 export type RevokeSigningKeyResult = (SigningKey | NotFoundError | AuthError) & { __isUnion?: true }
 
@@ -7316,6 +7394,43 @@ export interface AuthErrorGenqlSelection{
     __scalar?: boolean | number
 }
 
+
+/** One of the signed-in user's own interactive sessions. */
+export interface AuthSessionGenqlSelection{
+    id?: boolean | number
+    clientKind?: boolean | number
+    clientId?: boolean | number
+    authMethod?: boolean | number
+    label?: boolean | number
+    clientVersion?: boolean | number
+    /** Masked source IP; full addresses are never returned. */
+    ipAddress?: boolean | number
+    /** City and country when a local GeoIP database is configured. */
+    location?: boolean | number
+    createdAt?: boolean | number
+    lastActiveAt?: boolean | number
+    expiresAt?: boolean | number
+    current?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+export interface AuthSessionConnectionGenqlSelection{
+    edges?: AuthSessionEdgeGenqlSelection
+    nodes?: AuthSessionGenqlSelection
+    pageInfo?: PageInfoGenqlSelection
+    totalCount?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+export interface AuthSessionEdgeGenqlSelection{
+    cursor?: boolean | number
+    node?: AuthSessionGenqlSelection
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
 export interface AvailableClusterGenqlSelection{
     clusterId?: boolean | number
     clusterName?: boolean | number
@@ -7760,6 +7875,21 @@ export interface ChangeBillingTierPayloadGenqlSelection{
 
 export interface ChangeBillingTierResultGenqlSelection{
     on_ChangeBillingTierPayload?:ChangeBillingTierPayloadGenqlSelection,
+    on_ValidationError?:ValidationErrorGenqlSelection,
+    on_AuthError?:AuthErrorGenqlSelection,
+    on_Error?: ErrorGenqlSelection,
+    __typename?: boolean | number
+}
+
+export interface ChangePasswordPayloadGenqlSelection{
+    success?: boolean | number
+    revokedCount?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+export interface ChangePasswordResultGenqlSelection{
+    on_ChangePasswordPayload?:ChangePasswordPayloadGenqlSelection,
     on_ValidationError?:ValidationErrorGenqlSelection,
     on_AuthError?:AuthErrorGenqlSelection,
     on_Error?: ErrorGenqlSelection,
@@ -10396,6 +10526,14 @@ export interface MultistreamStatusChangedGenqlSelection{
  * Check the result type to handle success/error cases appropriately.
  */
 export interface MutationGenqlSelection{
+    /** Sign out one of the signed-in user’s own sessions. Idempotent; current=true means this caller was signed out. */
+    revokeAuthSession?: (RevokeAuthSessionResultGenqlSelection & { __args: {id: Scalars['ID']} })
+    /** Sign out every other session while retaining the presented named session. */
+    revokeOtherAuthSessions?: RevokeOtherAuthSessionsResultGenqlSelection
+    /** Rename one of the signed-in user’s own sessions. */
+    renameAuthSession?: (RenameAuthSessionResultGenqlSelection & { __args: {id: Scalars['ID'], label: Scalars['String']} })
+    /** Change the password and sign out other sessions, retaining this session. */
+    changePassword?: (ChangePasswordResultGenqlSelection & { __args: {currentPassword: Scalars['String'], newPassword: Scalars['String']} })
     /** Create a new stream for live broadcasting. */
     createStream?: (CreateStreamResultGenqlSelection & { __args: {
     /** Stream configuration. */
@@ -12031,6 +12169,8 @@ export interface QualityTierSummaryGenqlSelection{
  * Most connection fields are non-null, but some may be nullable when upstream data is optional.
  */
 export interface QueryGenqlSelection{
+    /** The signed-in user’s own interactive sessions, newest first. Supports first=1..100. */
+    authSessionsConnection?: (AuthSessionConnectionGenqlSelection & { __args?: {first?: (Scalars['Int'] | null), after?: (Scalars['String'] | null)} })
     /**
      * Unified analytics surface providing access to all platform metrics.
      * Combines data from Periscope (historical) and Signalman (real-time).
@@ -12594,6 +12734,15 @@ export interface RecordingStoppedGenqlSelection{
     __scalar?: boolean | number
 }
 
+export interface RenameAuthSessionResultGenqlSelection{
+    on_AuthSession?:AuthSessionGenqlSelection,
+    on_ValidationError?:ValidationErrorGenqlSelection,
+    on_NotFoundError?:NotFoundErrorGenqlSelection,
+    on_AuthError?:AuthErrorGenqlSelection,
+    on_Error?: ErrorGenqlSelection,
+    __typename?: boolean | number
+}
+
 export interface ReplayWebhookDeliveriesResultGenqlSelection{
     on_WebhookReplayResult?:WebhookReplayResultGenqlSelection,
     on_ValidationError?:ValidationErrorGenqlSelection,
@@ -12618,6 +12767,23 @@ export interface ReviewMediaCapacityConsentInput {clusterId: Scalars['ID'],expec
 
 export interface ReviewMediaPlacementChangeInput {scope: MediaPlacementScopeInput,expectedRevision: Scalars['String'],expectedParentRevision: Scalars['String'],updates: MediaPlacementVerbUpdateInput[]}
 
+export interface RevokeAuthSessionPayloadGenqlSelection{
+    success?: boolean | number
+    /** True when the presented session was signed out. */
+    current?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+export interface RevokeAuthSessionResultGenqlSelection{
+    on_RevokeAuthSessionPayload?:RevokeAuthSessionPayloadGenqlSelection,
+    on_ValidationError?:ValidationErrorGenqlSelection,
+    on_NotFoundError?:NotFoundErrorGenqlSelection,
+    on_AuthError?:AuthErrorGenqlSelection,
+    on_Error?: ErrorGenqlSelection,
+    __typename?: boolean | number
+}
+
 export interface RevokeClusterInviteResultGenqlSelection{
     on_DeleteSuccess?:DeleteSuccessGenqlSelection,
     on_NotFoundError?:NotFoundErrorGenqlSelection,
@@ -12629,6 +12795,20 @@ export interface RevokeClusterInviteResultGenqlSelection{
 export interface RevokeDeveloperTokenResultGenqlSelection{
     on_DeleteSuccess?:DeleteSuccessGenqlSelection,
     on_NotFoundError?:NotFoundErrorGenqlSelection,
+    on_AuthError?:AuthErrorGenqlSelection,
+    on_Error?: ErrorGenqlSelection,
+    __typename?: boolean | number
+}
+
+export interface RevokeOtherAuthSessionsPayloadGenqlSelection{
+    revokedCount?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+export interface RevokeOtherAuthSessionsResultGenqlSelection{
+    on_RevokeOtherAuthSessionsPayload?:RevokeOtherAuthSessionsPayloadGenqlSelection,
+    on_ValidationError?:ValidationErrorGenqlSelection,
     on_AuthError?:AuthErrorGenqlSelection,
     on_Error?: ErrorGenqlSelection,
     __typename?: boolean | number
@@ -15593,6 +15773,30 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
+    const AuthSession_possibleTypes: string[] = ['AuthSession']
+    export const isAuthSession = (obj?: { __typename?: any } | null): obj is AuthSession => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isAuthSession"')
+      return AuthSession_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const AuthSessionConnection_possibleTypes: string[] = ['AuthSessionConnection']
+    export const isAuthSessionConnection = (obj?: { __typename?: any } | null): obj is AuthSessionConnection => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isAuthSessionConnection"')
+      return AuthSessionConnection_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const AuthSessionEdge_possibleTypes: string[] = ['AuthSessionEdge']
+    export const isAuthSessionEdge = (obj?: { __typename?: any } | null): obj is AuthSessionEdge => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isAuthSessionEdge"')
+      return AuthSessionEdge_possibleTypes.includes(obj.__typename)
+    }
+
+
+
     const AvailableCluster_possibleTypes: string[] = ['AvailableCluster']
     export const isAvailableCluster = (obj?: { __typename?: any } | null): obj is AvailableCluster => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isAvailableCluster"')
@@ -15789,6 +15993,22 @@ export interface X402PaymentResultGenqlSelection{
     export const isChangeBillingTierResult = (obj?: { __typename?: any } | null): obj is ChangeBillingTierResult => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isChangeBillingTierResult"')
       return ChangeBillingTierResult_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const ChangePasswordPayload_possibleTypes: string[] = ['ChangePasswordPayload']
+    export const isChangePasswordPayload = (obj?: { __typename?: any } | null): obj is ChangePasswordPayload => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isChangePasswordPayload"')
+      return ChangePasswordPayload_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const ChangePasswordResult_possibleTypes: string[] = ['ChangePasswordPayload','ValidationError','AuthError']
+    export const isChangePasswordResult = (obj?: { __typename?: any } | null): obj is ChangePasswordResult => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isChangePasswordResult"')
+      return ChangePasswordResult_possibleTypes.includes(obj.__typename)
     }
 
 
@@ -17713,6 +17933,14 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
+    const RenameAuthSessionResult_possibleTypes: string[] = ['AuthSession','ValidationError','NotFoundError','AuthError']
+    export const isRenameAuthSessionResult = (obj?: { __typename?: any } | null): obj is RenameAuthSessionResult => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isRenameAuthSessionResult"')
+      return RenameAuthSessionResult_possibleTypes.includes(obj.__typename)
+    }
+
+
+
     const ReplayWebhookDeliveriesResult_possibleTypes: string[] = ['WebhookReplayResult','ValidationError','NotFoundError','AuthError']
     export const isReplayWebhookDeliveriesResult = (obj?: { __typename?: any } | null): obj is ReplayWebhookDeliveriesResult => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isReplayWebhookDeliveriesResult"')
@@ -17729,6 +17957,22 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
+    const RevokeAuthSessionPayload_possibleTypes: string[] = ['RevokeAuthSessionPayload']
+    export const isRevokeAuthSessionPayload = (obj?: { __typename?: any } | null): obj is RevokeAuthSessionPayload => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isRevokeAuthSessionPayload"')
+      return RevokeAuthSessionPayload_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const RevokeAuthSessionResult_possibleTypes: string[] = ['RevokeAuthSessionPayload','ValidationError','NotFoundError','AuthError']
+    export const isRevokeAuthSessionResult = (obj?: { __typename?: any } | null): obj is RevokeAuthSessionResult => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isRevokeAuthSessionResult"')
+      return RevokeAuthSessionResult_possibleTypes.includes(obj.__typename)
+    }
+
+
+
     const RevokeClusterInviteResult_possibleTypes: string[] = ['DeleteSuccess','NotFoundError','AuthError']
     export const isRevokeClusterInviteResult = (obj?: { __typename?: any } | null): obj is RevokeClusterInviteResult => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isRevokeClusterInviteResult"')
@@ -17741,6 +17985,22 @@ export interface X402PaymentResultGenqlSelection{
     export const isRevokeDeveloperTokenResult = (obj?: { __typename?: any } | null): obj is RevokeDeveloperTokenResult => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isRevokeDeveloperTokenResult"')
       return RevokeDeveloperTokenResult_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const RevokeOtherAuthSessionsPayload_possibleTypes: string[] = ['RevokeOtherAuthSessionsPayload']
+    export const isRevokeOtherAuthSessionsPayload = (obj?: { __typename?: any } | null): obj is RevokeOtherAuthSessionsPayload => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isRevokeOtherAuthSessionsPayload"')
+      return RevokeOtherAuthSessionsPayload_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const RevokeOtherAuthSessionsResult_possibleTypes: string[] = ['RevokeOtherAuthSessionsPayload','ValidationError','AuthError']
+    export const isRevokeOtherAuthSessionsResult = (obj?: { __typename?: any } | null): obj is RevokeOtherAuthSessionsResult => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isRevokeOtherAuthSessionsResult"')
+      return RevokeOtherAuthSessionsResult_possibleTypes.includes(obj.__typename)
     }
 
 
@@ -19207,6 +19467,21 @@ export interface X402PaymentResultGenqlSelection{
       return X402PaymentResult_possibleTypes.includes(obj.__typename)
     }
 
+
+export const enumAuthClientKind = {
+   BROWSER: 'BROWSER' as const,
+   CLI: 'CLI' as const,
+   DESKTOP: 'DESKTOP' as const,
+   UNKNOWN: 'UNKNOWN' as const
+}
+
+export const enumAuthMethod = {
+   PASSWORD: 'PASSWORD' as const,
+   WALLET: 'WALLET' as const,
+   BROWSER_HANDOFF: 'BROWSER_HANDOFF' as const,
+   DEVICE_CODE: 'DEVICE_CODE' as const,
+   UNKNOWN: 'UNKNOWN' as const
+}
 
 export const enumBufferState = {
    FULL: 'FULL' as const,

@@ -420,6 +420,25 @@
       }
     },
     {
+      "name": "ChangePassword",
+      "document": "mutation ChangePassword ($currentPassword: String!, $newPassword: String!) {\n  changePassword(currentPassword: $currentPassword, newPassword: $newPassword) {\n    __typename\n    ... ChangePasswordPayloadDefaultFields\n    ... ValidationErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment ChangePasswordPayloadDefaultFields on ChangePasswordPayload {\n  success\n  revokedCount\n}\nfragment ValidationErrorDefaultFields on ValidationError {\n  message\n  code\n  field\n  constraint\n}\n",
+      "identity": "sha256:f6271e5751a39741a5ccc6a3b84703953b36bac3b1d254f049a354e5ededfbea",
+      "kind": "mutation",
+      "variables": {
+        "currentPassword": "text",
+        "newPassword": "text"
+      },
+      "response": {
+        "data": {
+          "changePassword": {
+            "__typename": "ChangePasswordPayload",
+            "revokedCount": 1,
+            "success": true
+          }
+        }
+      }
+    },
+    {
       "name": "CompleteVodUpload",
       "document": "mutation CompleteVodUpload ($input: CompleteVodUploadInput!) {\n  completeVodUpload(input: $input) {\n    __typename\n    ... VodAssetFields\n    ... ValidationErrorFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment EffectiveRetentionFields on EffectiveRetention {\n  retentionDays\n  retentionUntil\n  source\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment PlaybackPolicyFields on PlaybackPolicy {\n  type\n  jwt {\n    allowedKids\n    requiredAudience\n    requiredClaimsJson {\n      name\n      jsonValue\n    }\n  }\n  webhook {\n    url\n    timeoutMs\n    secretMasked\n    context\n  }\n  allowedOrigins\n}\nfragment ThumbnailAssetsFields on ThumbnailAssets {\n  posterUrl\n  spriteVttUrl\n  spriteJpgUrl\n  assetKey\n}\nfragment ValidationErrorFields on ValidationError {\n  __typename\n  message\n  code\n  field\n  constraint\n}\nfragment VodAssetFields on VodAsset {\n  __typename\n  id\n  artifactHash\n  playbackId\n  streamId\n  title\n  description\n  filename\n  status\n  sizeBytes\n  durationMs\n  resolution\n  videoCodec\n  audioCodec\n  bitrateKbps\n  createdAt\n  updatedAt\n  expiresAt\n  errorMessage\n  playbackPolicy {\n    ... PlaybackPolicyFields\n  }\n  thumbnailAssets {\n    ... ThumbnailAssetsFields\n  }\n  effectiveRetention {\n    ... EffectiveRetentionFields\n  }\n}\n",
       "identity": "sha256:c6c87a8e558ca7dee39bc22a6b2fe67a0874ff1661e6e914d90ff40f4cd745f2",
@@ -1833,6 +1852,45 @@
                 "totalCount": 1
               }
             }
+          }
+        }
+      }
+    },
+    {
+      "name": "GetAuthSessionsConnection",
+      "document": "query GetAuthSessionsConnection ($first: Int, $after: String) {\n  authSessionsConnection(first: $first, after: $after) {\n    edges {\n      cursor\n      node {\n        ... AuthSessionDefaultFields\n      }\n    }\n    pageInfo {\n      ... PageInfoDefaultFields\n    }\n    totalCount\n  }\n}\nfragment AuthSessionDefaultFields on AuthSession {\n  id\n  clientKind\n  clientId\n  authMethod\n  label\n  clientVersion\n  ipAddress\n  location\n  createdAt\n  lastActiveAt\n  expiresAt\n  current\n}\nfragment PageInfoDefaultFields on PageInfo {\n  startCursor\n  endCursor\n  hasNextPage\n  hasPreviousPage\n}\n",
+      "identity": "sha256:d83223835f72a9bacd69f7863077169297fd1bce123939ba4a725fae375d2846",
+      "kind": "query",
+      "variables": {},
+      "response": {
+        "data": {
+          "authSessionsConnection": {
+            "edges": [
+              {
+                "cursor": "text",
+                "node": {
+                  "authMethod": "PASSWORD",
+                  "clientId": "text",
+                  "clientKind": "BROWSER",
+                  "clientVersion": "text",
+                  "createdAt": "2026-09-19T14:03:27Z",
+                  "current": true,
+                  "expiresAt": "2026-09-19T14:03:27Z",
+                  "id": "id-1",
+                  "ipAddress": "text",
+                  "label": "text",
+                  "lastActiveAt": "2026-09-19T14:03:27Z",
+                  "location": "text"
+                }
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "text",
+              "hasNextPage": true,
+              "hasPreviousPage": true,
+              "startCursor": "text"
+            },
+            "totalCount": 1
           }
         }
       }
@@ -10710,6 +10768,35 @@
       }
     },
     {
+      "name": "RenameAuthSession",
+      "document": "mutation RenameAuthSession ($id: ID!, $label: String!) {\n  renameAuthSession(id: $id, label: $label) {\n    __typename\n    ... AuthSessionDefaultFields\n    ... ValidationErrorDefaultFields\n    ... NotFoundErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment AuthSessionDefaultFields on AuthSession {\n  id\n  clientKind\n  clientId\n  authMethod\n  label\n  clientVersion\n  ipAddress\n  location\n  createdAt\n  lastActiveAt\n  expiresAt\n  current\n}\nfragment NotFoundErrorDefaultFields on NotFoundError {\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment ValidationErrorDefaultFields on ValidationError {\n  message\n  code\n  field\n  constraint\n}\n",
+      "identity": "sha256:127cb40c86a630f23ae9d82c3048910ffc2e86497fff1a4479730b5d06ba2c4d",
+      "kind": "mutation",
+      "variables": {
+        "id": "id-1",
+        "label": "text"
+      },
+      "response": {
+        "data": {
+          "renameAuthSession": {
+            "__typename": "AuthSession",
+            "authMethod": "PASSWORD",
+            "clientId": "text",
+            "clientKind": "BROWSER",
+            "clientVersion": "text",
+            "createdAt": "2026-09-19T14:03:27Z",
+            "current": true,
+            "expiresAt": "2026-09-19T14:03:27Z",
+            "id": "id-1",
+            "ipAddress": "text",
+            "label": "text",
+            "lastActiveAt": "2026-09-19T14:03:27Z",
+            "location": "text"
+          }
+        }
+      }
+    },
+    {
       "name": "ReplayWebhookDeliveries",
       "document": "mutation ReplayWebhookDeliveries ($endpointId: ID!, $createdAfter: Time!, $createdBefore: Time!) {\n  replayWebhookDeliveries(endpointId: $endpointId, createdAfter: $createdAfter, createdBefore: $createdBefore) {\n    __typename\n    ... WebhookReplayResultDefaultFields\n    ... ValidationErrorDefaultFields\n    ... NotFoundErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment NotFoundErrorDefaultFields on NotFoundError {\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment ValidationErrorDefaultFields on ValidationError {\n  message\n  code\n  field\n  constraint\n}\nfragment WebhookReplayResultDefaultFields on WebhookReplayResult {\n  replayedCount\n  hasMore\n}\n",
       "identity": "sha256:eebcf5ecfd57a9492b4f26c19cf34819cec147d799fbd5e5c316c19afade82fc",
@@ -10968,6 +11055,24 @@
       }
     },
     {
+      "name": "RevokeAuthSession",
+      "document": "mutation RevokeAuthSession ($id: ID!) {\n  revokeAuthSession(id: $id) {\n    __typename\n    ... RevokeAuthSessionPayloadDefaultFields\n    ... ValidationErrorDefaultFields\n    ... NotFoundErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment NotFoundErrorDefaultFields on NotFoundError {\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment RevokeAuthSessionPayloadDefaultFields on RevokeAuthSessionPayload {\n  success\n  current\n}\nfragment ValidationErrorDefaultFields on ValidationError {\n  message\n  code\n  field\n  constraint\n}\n",
+      "identity": "sha256:3256a3e3827e836daffb19243b896571485a037ed5d732d7243419b3d51663e5",
+      "kind": "mutation",
+      "variables": {
+        "id": "id-1"
+      },
+      "response": {
+        "data": {
+          "revokeAuthSession": {
+            "__typename": "RevokeAuthSessionPayload",
+            "current": true,
+            "success": true
+          }
+        }
+      }
+    },
+    {
       "name": "RevokeClusterInvite",
       "document": "mutation RevokeClusterInvite ($inviteId: ID!) {\n  revokeClusterInvite(inviteId: $inviteId) {\n    __typename\n    ... DeleteSuccessDefaultFields\n    ... NotFoundErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment DeleteSuccessDefaultFields on DeleteSuccess {\n  success\n  deletedId\n  pending\n}\nfragment NotFoundErrorDefaultFields on NotFoundError {\n  message\n  code\n  resourceType\n  resourceId\n}\n",
       "identity": "sha256:0cc364ac453bc4c6e753b14f5eb46fb4a1383306c2748485bf50e1a22c3b650a",
@@ -11001,6 +11106,21 @@
             "deletedId": "id-1",
             "pending": true,
             "success": true
+          }
+        }
+      }
+    },
+    {
+      "name": "RevokeOtherAuthSessions",
+      "document": "mutation RevokeOtherAuthSessions {\n  revokeOtherAuthSessions {\n    __typename\n    ... RevokeOtherAuthSessionsPayloadDefaultFields\n    ... ValidationErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment RevokeOtherAuthSessionsPayloadDefaultFields on RevokeOtherAuthSessionsPayload {\n  revokedCount\n}\nfragment ValidationErrorDefaultFields on ValidationError {\n  message\n  code\n  field\n  constraint\n}\n",
+      "identity": "sha256:e922e03c361ab45f2a0f6090d8d6d0510c24f33af40b7a9e16248ff1e163f3e5",
+      "kind": "mutation",
+      "variables": {},
+      "response": {
+        "data": {
+          "revokeOtherAuthSessions": {
+            "__typename": "RevokeOtherAuthSessionsPayload",
+            "revokedCount": 1
           }
         }
       }

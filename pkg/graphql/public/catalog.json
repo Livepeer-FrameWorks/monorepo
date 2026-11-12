@@ -305,6 +305,46 @@
       }
     },
     {
+      "name": "ChangePassword",
+      "kind": "mutation",
+      "target": "mutation.changePassword",
+      "since": "v0.3.15",
+      "hash": "sha256:e9a0e4c5e78a32e0b70769929a62c087d1839cdc77b621ac8861d19157a4715f",
+      "identity": "sha256:f6271e5751a39741a5ccc6a3b84703953b36bac3b1d254f049a354e5ededfbea",
+      "document": "mutation ChangePassword ($currentPassword: String!, $newPassword: String!) {\n  changePassword(currentPassword: $currentPassword, newPassword: $newPassword) {\n    __typename\n    ... ChangePasswordPayloadDefaultFields\n    ... ValidationErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment ChangePasswordPayloadDefaultFields on ChangePasswordPayload {\n  success\n  revokedCount\n}\nfragment ValidationErrorDefaultFields on ValidationError {\n  message\n  code\n  field\n  constraint\n}\n",
+      "variables": [
+        {
+          "name": "currentPassword",
+          "type": {
+            "kind": "NON_NULL",
+            "ofType": {
+              "name": "String"
+            }
+          },
+          "typeString": "String!",
+          "required": true,
+          "hasDefault": false
+        },
+        {
+          "name": "newPassword",
+          "type": {
+            "kind": "NON_NULL",
+            "ofType": {
+              "name": "String"
+            }
+          },
+          "typeString": "String!",
+          "required": true,
+          "hasDefault": false
+        }
+      ],
+      "result": {
+        "field": "changePassword",
+        "responseKey": "changePassword",
+        "type": "ChangePasswordResult!"
+      }
+    },
+    {
       "name": "CompleteVodUpload",
       "kind": "mutation",
       "target": "mutation.completeVodUpload",
@@ -1543,6 +1583,40 @@
         "field": "analytics",
         "responseKey": "analytics",
         "type": "Analytics!"
+      }
+    },
+    {
+      "name": "GetAuthSessionsConnection",
+      "kind": "query",
+      "target": "query.authSessionsConnection",
+      "since": "v0.3.15",
+      "hash": "sha256:18810b1760988594b6ddfc0a60c1c8742e5cef19a9d0512bb4f436dce8c32118",
+      "identity": "sha256:d83223835f72a9bacd69f7863077169297fd1bce123939ba4a725fae375d2846",
+      "document": "query GetAuthSessionsConnection ($first: Int, $after: String) {\n  authSessionsConnection(first: $first, after: $after) {\n    edges {\n      cursor\n      node {\n        ... AuthSessionDefaultFields\n      }\n    }\n    pageInfo {\n      ... PageInfoDefaultFields\n    }\n    totalCount\n  }\n}\nfragment AuthSessionDefaultFields on AuthSession {\n  id\n  clientKind\n  clientId\n  authMethod\n  label\n  clientVersion\n  ipAddress\n  location\n  createdAt\n  lastActiveAt\n  expiresAt\n  current\n}\nfragment PageInfoDefaultFields on PageInfo {\n  startCursor\n  endCursor\n  hasNextPage\n  hasPreviousPage\n}\n",
+      "variables": [
+        {
+          "name": "first",
+          "type": {
+            "name": "Int"
+          },
+          "typeString": "Int",
+          "required": false,
+          "hasDefault": false
+        },
+        {
+          "name": "after",
+          "type": {
+            "name": "String"
+          },
+          "typeString": "String",
+          "required": false,
+          "hasDefault": false
+        }
+      ],
+      "result": {
+        "field": "authSessionsConnection",
+        "responseKey": "authSessionsConnection",
+        "type": "AuthSessionConnection!"
       }
     },
     {
@@ -6972,6 +7046,46 @@
       }
     },
     {
+      "name": "RenameAuthSession",
+      "kind": "mutation",
+      "target": "mutation.renameAuthSession",
+      "since": "v0.3.15",
+      "hash": "sha256:3830ebb9431933765ed3639568f96452a4ffe76574b9c21d8358b5ede8c499b8",
+      "identity": "sha256:127cb40c86a630f23ae9d82c3048910ffc2e86497fff1a4479730b5d06ba2c4d",
+      "document": "mutation RenameAuthSession ($id: ID!, $label: String!) {\n  renameAuthSession(id: $id, label: $label) {\n    __typename\n    ... AuthSessionDefaultFields\n    ... ValidationErrorDefaultFields\n    ... NotFoundErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment AuthSessionDefaultFields on AuthSession {\n  id\n  clientKind\n  clientId\n  authMethod\n  label\n  clientVersion\n  ipAddress\n  location\n  createdAt\n  lastActiveAt\n  expiresAt\n  current\n}\nfragment NotFoundErrorDefaultFields on NotFoundError {\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment ValidationErrorDefaultFields on ValidationError {\n  message\n  code\n  field\n  constraint\n}\n",
+      "variables": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "NON_NULL",
+            "ofType": {
+              "name": "ID"
+            }
+          },
+          "typeString": "ID!",
+          "required": true,
+          "hasDefault": false
+        },
+        {
+          "name": "label",
+          "type": {
+            "kind": "NON_NULL",
+            "ofType": {
+              "name": "String"
+            }
+          },
+          "typeString": "String!",
+          "required": true,
+          "hasDefault": false
+        }
+      ],
+      "result": {
+        "field": "renameAuthSession",
+        "responseKey": "renameAuthSession",
+        "type": "RenameAuthSessionResult!"
+      }
+    },
+    {
       "name": "ReplayWebhookDeliveries",
       "kind": "mutation",
       "target": "mutation.replayWebhookDeliveries",
@@ -7219,6 +7333,34 @@
       }
     },
     {
+      "name": "RevokeAuthSession",
+      "kind": "mutation",
+      "target": "mutation.revokeAuthSession",
+      "since": "v0.3.15",
+      "hash": "sha256:8aff383e3e4057279a638e03529a0dcef5d4c35e9604375b74cd7b6d42625dcf",
+      "identity": "sha256:3256a3e3827e836daffb19243b896571485a037ed5d732d7243419b3d51663e5",
+      "document": "mutation RevokeAuthSession ($id: ID!) {\n  revokeAuthSession(id: $id) {\n    __typename\n    ... RevokeAuthSessionPayloadDefaultFields\n    ... ValidationErrorDefaultFields\n    ... NotFoundErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment NotFoundErrorDefaultFields on NotFoundError {\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment RevokeAuthSessionPayloadDefaultFields on RevokeAuthSessionPayload {\n  success\n  current\n}\nfragment ValidationErrorDefaultFields on ValidationError {\n  message\n  code\n  field\n  constraint\n}\n",
+      "variables": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "NON_NULL",
+            "ofType": {
+              "name": "ID"
+            }
+          },
+          "typeString": "ID!",
+          "required": true,
+          "hasDefault": false
+        }
+      ],
+      "result": {
+        "field": "revokeAuthSession",
+        "responseKey": "revokeAuthSession",
+        "type": "RevokeAuthSessionResult!"
+      }
+    },
+    {
       "name": "RevokeClusterInvite",
       "kind": "mutation",
       "target": "mutation.revokeClusterInvite",
@@ -7272,6 +7414,21 @@
         "field": "revokeDeveloperToken",
         "responseKey": "revokeDeveloperToken",
         "type": "RevokeDeveloperTokenResult!"
+      }
+    },
+    {
+      "name": "RevokeOtherAuthSessions",
+      "kind": "mutation",
+      "target": "mutation.revokeOtherAuthSessions",
+      "since": "v0.3.15",
+      "hash": "sha256:3c0a5a26e4d5d6d006ec7c7ed45b30c0f1b3d1350e56972bf7fddc98d4dd692a",
+      "identity": "sha256:e922e03c361ab45f2a0f6090d8d6d0510c24f33af40b7a9e16248ff1e163f3e5",
+      "document": "mutation RevokeOtherAuthSessions {\n  revokeOtherAuthSessions {\n    __typename\n    ... RevokeOtherAuthSessionsPayloadDefaultFields\n    ... ValidationErrorDefaultFields\n    ... AuthErrorDefaultFields\n  }\n}\nfragment AuthErrorDefaultFields on AuthError {\n  message\n  code\n}\nfragment RevokeOtherAuthSessionsPayloadDefaultFields on RevokeOtherAuthSessionsPayload {\n  revokedCount\n}\nfragment ValidationErrorDefaultFields on ValidationError {\n  message\n  code\n  field\n  constraint\n}\n",
+      "variables": [],
+      "result": {
+        "field": "revokeOtherAuthSessions",
+        "responseKey": "revokeOtherAuthSessions",
+        "type": "RevokeOtherAuthSessionsResult!"
       }
     },
     {

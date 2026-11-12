@@ -14,6 +14,7 @@ from .async_base_client import AsyncBaseClient
 from .base_model import UNSET, UnsetType
 from .bootstrap_edge import BootstrapEdge
 from .change_billing_tier import ChangeBillingTier
+from .change_password import ChangePassword
 from .complete_vod_upload import CompleteVodUpload
 from .create_card_topup import CreateCardTopup
 from .create_clip import CreateClip
@@ -62,6 +63,7 @@ from .get_api_usage_connection import GetApiUsageConnection
 from .get_artifact_events_connection import GetArtifactEventsConnection
 from .get_artifact_node_copies import GetArtifactNodeCopies
 from .get_artifact_states_connection import GetArtifactStatesConnection
+from .get_auth_sessions_connection import GetAuthSessionsConnection
 from .get_balance_transactions_connection import GetBalanceTransactionsConnection
 from .get_billing_details import GetBillingDetails
 from .get_billing_lifecycle import GetBillingLifecycle
@@ -264,6 +266,7 @@ from .open_mist_admin_session import OpenMistAdminSession
 from .promote_to_paid import PromoteToPaid
 from .refresh_stream_key import RefreshStreamKey
 from .reject_cluster_subscription import RejectClusterSubscription
+from .rename_auth_session import RenameAuthSession
 from .replay_webhook_deliveries import ReplayWebhookDeliveries
 from .replay_webhook_delivery import ReplayWebhookDelivery
 from .request_cluster_subscription import RequestClusterSubscription
@@ -271,8 +274,10 @@ from .reset_media_retention_override import ResetMediaRetentionOverride
 from .resolve_incident import ResolveIncident
 from .resolve_ingest_endpoint import ResolveIngestEndpoint
 from .resolve_viewer_endpoint import ResolveViewerEndpoint
+from .revoke_auth_session import RevokeAuthSession
 from .revoke_cluster_invite import RevokeClusterInvite
 from .revoke_developer_token import RevokeDeveloperToken
+from .revoke_other_auth_sessions import RevokeOtherAuthSessions
 from .revoke_signing_key import RevokeSigningKey
 from .rotate_webhook_endpoint_secret import RotateWebhookEndpointSecret
 from .send_message import SendMessage
@@ -959,6 +964,47 @@ class AsyncGraphQLClient(AsyncBaseClient):
         )
         data = self.get_data(response)
         return ChangeBillingTier.model_validate(data)
+
+    async def change_password(
+        self, current_password: str, new_password: str, **kwargs: Any
+    ) -> ChangePassword:
+        """Change the password and sign out other sessions, retaining this session."""
+        query = gql("""
+            mutation ChangePassword($currentPassword: String!, $newPassword: String!) {
+              changePassword(currentPassword: $currentPassword, newPassword: $newPassword) {
+                __typename
+                ...ChangePasswordPayloadDefaultFields
+                ...ValidationErrorDefaultFields
+                ...AuthErrorDefaultFields
+              }
+            }
+
+            fragment AuthErrorDefaultFields on AuthError {
+              message
+              code
+            }
+
+            fragment ChangePasswordPayloadDefaultFields on ChangePasswordPayload {
+              success
+              revokedCount
+            }
+
+            fragment ValidationErrorDefaultFields on ValidationError {
+              message
+              code
+              field
+              constraint
+            }
+            """)
+        variables: dict[str, object] = {
+            "currentPassword": current_password,
+            "newPassword": new_password,
+        }
+        response = await self.execute(
+            query=query, operation_name="ChangePassword", variables=variables, **kwargs
+        )
+        data = self.get_data(response)
+        return ChangePassword.model_validate(data)
 
     async def create_card_topup(
         self, input: CreateCardTopupInput, **kwargs: Any
@@ -2149,6 +2195,65 @@ class AsyncGraphQLClient(AsyncBaseClient):
         data = self.get_data(response)
         return RejectClusterSubscription.model_validate(data)
 
+    async def rename_auth_session(
+        self, id: str, label: str, **kwargs: Any
+    ) -> RenameAuthSession:
+        """Rename one of the signed-in user’s own sessions."""
+        query = gql("""
+            mutation RenameAuthSession($id: ID!, $label: String!) {
+              renameAuthSession(id: $id, label: $label) {
+                __typename
+                ...AuthSessionDefaultFields
+                ...ValidationErrorDefaultFields
+                ...NotFoundErrorDefaultFields
+                ...AuthErrorDefaultFields
+              }
+            }
+
+            fragment AuthErrorDefaultFields on AuthError {
+              message
+              code
+            }
+
+            fragment AuthSessionDefaultFields on AuthSession {
+              id
+              clientKind
+              clientId
+              authMethod
+              label
+              clientVersion
+              ipAddress
+              location
+              createdAt
+              lastActiveAt
+              expiresAt
+              current
+            }
+
+            fragment NotFoundErrorDefaultFields on NotFoundError {
+              message
+              code
+              resourceType
+              resourceId
+            }
+
+            fragment ValidationErrorDefaultFields on ValidationError {
+              message
+              code
+              field
+              constraint
+            }
+            """)
+        variables: dict[str, object] = {"id": id, "label": label}
+        response = await self.execute(
+            query=query,
+            operation_name="RenameAuthSession",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return RenameAuthSession.model_validate(data)
+
     async def replay_webhook_deliveries(
         self,
         endpoint_id: str,
@@ -2467,6 +2572,53 @@ class AsyncGraphQLClient(AsyncBaseClient):
         data = self.get_data(response)
         return ResolveIncident.model_validate(data)
 
+    async def revoke_auth_session(self, id: str, **kwargs: Any) -> RevokeAuthSession:
+        """Sign out one of the signed-in user’s own sessions. Idempotent; current=true means this caller was signed out."""
+        query = gql("""
+            mutation RevokeAuthSession($id: ID!) {
+              revokeAuthSession(id: $id) {
+                __typename
+                ...RevokeAuthSessionPayloadDefaultFields
+                ...ValidationErrorDefaultFields
+                ...NotFoundErrorDefaultFields
+                ...AuthErrorDefaultFields
+              }
+            }
+
+            fragment AuthErrorDefaultFields on AuthError {
+              message
+              code
+            }
+
+            fragment NotFoundErrorDefaultFields on NotFoundError {
+              message
+              code
+              resourceType
+              resourceId
+            }
+
+            fragment RevokeAuthSessionPayloadDefaultFields on RevokeAuthSessionPayload {
+              success
+              current
+            }
+
+            fragment ValidationErrorDefaultFields on ValidationError {
+              message
+              code
+              field
+              constraint
+            }
+            """)
+        variables: dict[str, object] = {"id": id}
+        response = await self.execute(
+            query=query,
+            operation_name="RevokeAuthSession",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return RevokeAuthSession.model_validate(data)
+
     async def revoke_cluster_invite(
         self, invite_id: str, **kwargs: Any
     ) -> RevokeClusterInvite:
@@ -2508,6 +2660,46 @@ class AsyncGraphQLClient(AsyncBaseClient):
         )
         data = self.get_data(response)
         return RevokeClusterInvite.model_validate(data)
+
+    async def revoke_other_auth_sessions(
+        self, **kwargs: Any
+    ) -> RevokeOtherAuthSessions:
+        """Sign out every other session while retaining the presented named session."""
+        query = gql("""
+            mutation RevokeOtherAuthSessions {
+              revokeOtherAuthSessions {
+                __typename
+                ...RevokeOtherAuthSessionsPayloadDefaultFields
+                ...ValidationErrorDefaultFields
+                ...AuthErrorDefaultFields
+              }
+            }
+
+            fragment AuthErrorDefaultFields on AuthError {
+              message
+              code
+            }
+
+            fragment RevokeOtherAuthSessionsPayloadDefaultFields on RevokeOtherAuthSessionsPayload {
+              revokedCount
+            }
+
+            fragment ValidationErrorDefaultFields on ValidationError {
+              message
+              code
+              field
+              constraint
+            }
+            """)
+        variables: dict[str, object] = {}
+        response = await self.execute(
+            query=query,
+            operation_name="RevokeOtherAuthSessions",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return RevokeOtherAuthSessions.model_validate(data)
 
     async def rotate_webhook_endpoint_secret(
         self,
@@ -3962,6 +4154,61 @@ class AsyncGraphQLClient(AsyncBaseClient):
         )
         data = self.get_data(response)
         return GetArtifactStatesConnection.model_validate(data)
+
+    async def get_auth_sessions_connection(
+        self,
+        first: Union[Optional[int], UnsetType] = UNSET,
+        after: Union[Optional[str], UnsetType] = UNSET,
+        **kwargs: Any,
+    ) -> GetAuthSessionsConnection:
+        """The signed-in user’s own interactive sessions, newest first. Supports first=1..100."""
+        query = gql("""
+            query GetAuthSessionsConnection($first: Int, $after: String) {
+              authSessionsConnection(first: $first, after: $after) {
+                edges {
+                  cursor
+                  node {
+                    ...AuthSessionDefaultFields
+                  }
+                }
+                pageInfo {
+                  ...PageInfoDefaultFields
+                }
+                totalCount
+              }
+            }
+
+            fragment AuthSessionDefaultFields on AuthSession {
+              id
+              clientKind
+              clientId
+              authMethod
+              label
+              clientVersion
+              ipAddress
+              location
+              createdAt
+              lastActiveAt
+              expiresAt
+              current
+            }
+
+            fragment PageInfoDefaultFields on PageInfo {
+              startCursor
+              endCursor
+              hasNextPage
+              hasPreviousPage
+            }
+            """)
+        variables: dict[str, object] = {"first": first, "after": after}
+        response = await self.execute(
+            query=query,
+            operation_name="GetAuthSessionsConnection",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return GetAuthSessionsConnection.model_validate(data)
 
     async def get_balance_transactions_connection(
         self,

@@ -83,6 +83,7 @@ Read by `api_gateway/cmd/bridge`.
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
+| `GEOIP_MMDB_PATH` | string |  |  | v0.3.0 | Path to an MMDB city database used for IP geolocation. Empty disables GeoIP lookups; a set path that cannot be opened logs a warning and disables lookups. |
 | `SERVICE_TOKEN` | string |  | required, secret | v0.3.0 | Shared service-to-service bearer token for internal gRPC and HTTP calls. |
 | `JWT_SECRET` | string |  | required, secret | v0.3.0 | HMAC secret that signs and verifies user session JWTs. |
 | `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |

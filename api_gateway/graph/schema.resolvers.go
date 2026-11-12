@@ -2123,6 +2123,26 @@ func (r *mollieMandateResolver) CreatedAt(ctx context.Context, obj *purserpb.Mol
 	return &t, nil
 }
 
+// RevokeAuthSession is the resolver for the revokeAuthSession field.
+func (r *mutationResolver) RevokeAuthSession(ctx context.Context, id string) (model.RevokeAuthSessionResult, error) {
+	return r.DoRevokeAuthSession(ctx, id)
+}
+
+// RevokeOtherAuthSessions is the resolver for the revokeOtherAuthSessions field.
+func (r *mutationResolver) RevokeOtherAuthSessions(ctx context.Context) (model.RevokeOtherAuthSessionsResult, error) {
+	return r.DoRevokeOtherAuthSessions(ctx)
+}
+
+// RenameAuthSession is the resolver for the renameAuthSession field.
+func (r *mutationResolver) RenameAuthSession(ctx context.Context, id string, label string) (model.RenameAuthSessionResult, error) {
+	return r.DoRenameAuthSession(ctx, id, label)
+}
+
+// ChangePassword is the resolver for the changePassword field.
+func (r *mutationResolver) ChangePassword(ctx context.Context, currentPassword string, newPassword string) (model.ChangePasswordResult, error) {
+	return r.DoChangePassword(ctx, currentPassword, newPassword)
+}
+
 // CreateStream is the resolver for the createStream field.
 func (r *mutationResolver) CreateStream(ctx context.Context, input model.CreateStreamInput) (model.CreateStreamResult, error) {
 	return r.DoCreateStream(ctx, input)
@@ -3469,6 +3489,11 @@ func (r *qualityTierSummaryResolver) CodecVp9Minutes(ctx context.Context, obj *p
 // CodecAv1Minutes is the resolver for the codecAv1Minutes field.
 func (r *qualityTierSummaryResolver) CodecAv1Minutes(ctx context.Context, obj *periscopepb.QualityTierSummary) (int, error) {
 	return int(obj.CodecAv1Minutes), nil
+}
+
+// AuthSessionsConnection is the resolver for the authSessionsConnection field.
+func (r *queryResolver) AuthSessionsConnection(ctx context.Context, first *int, after *string) (*model.AuthSessionConnection, error) {
+	return r.DoAuthSessionsConnection(ctx, first, after)
 }
 
 // Analytics is the resolver for the analytics field.

@@ -69,6 +69,12 @@ from .change_billing_tier import (
     ChangeBillingTierChangeBillingTierChangeBillingTierPayload,
     ChangeBillingTierChangeBillingTierValidationError,
 )
+from .change_password import (
+    ChangePassword,
+    ChangePasswordChangePasswordAuthError,
+    ChangePasswordChangePasswordChangePasswordPayload,
+    ChangePasswordChangePasswordValidationError,
+)
 from .complete_vod_upload import (
     CompleteVodUpload,
     CompleteVodUploadCompleteVodUploadAuthError,
@@ -241,6 +247,8 @@ from .enable_webhook_endpoint import (
     EnableWebhookEndpointEnableWebhookEndpointWebhookEndpoint,
 )
 from .enums import (
+    AuthClientKind,
+    AuthMethod,
     BufferState,
     CardPaymentProvider,
     ClipCreationMode,
@@ -347,6 +355,7 @@ from .fragments import (
     AssetNodeCopiesDefaultCopies,
     AuthError,
     AuthErrorDefault,
+    AuthSessionDefault,
     AvailableClusterDefault,
     BalanceTransactionDefault,
     BillingDetailsDefault,
@@ -399,6 +408,7 @@ from .fragments import (
     ChangeBillingTierPayloadDefaultPendingTierEntitlements,
     ChangeBillingTierPayloadDefaultPendingTierFeatures,
     ChangeBillingTierPayloadDefaultPendingTierPricingRules,
+    ChangePasswordPayloadDefault,
     ClientMetrics5mDefault,
     ClientMetrics5mDefaultStream,
     ClientMetrics5mDefaultStreamManagedSource,
@@ -656,6 +666,8 @@ from .fragments import (
     RebufferingEventDefaultStreamRetentionOverrides,
     RebufferingEventDefaultStreamSourceLocation,
     RebufferingEventDefaultStreamThumbnailAssets,
+    RevokeAuthSessionPayloadDefault,
+    RevokeOtherAuthSessionsPayloadDefault,
     RoutingEfficiencyDefault,
     RoutingEfficiencyDefaultTopCountries,
     RoutingEventDefault,
@@ -1028,6 +1040,13 @@ from .get_artifact_states_connection import (
     GetArtifactStatesConnectionAnalyticsLifecycleArtifactStatesConnectionEdges,
     GetArtifactStatesConnectionAnalyticsLifecycleArtifactStatesConnectionEdgesNode,
     GetArtifactStatesConnectionAnalyticsLifecycleArtifactStatesConnectionPageInfo,
+)
+from .get_auth_sessions_connection import (
+    GetAuthSessionsConnection,
+    GetAuthSessionsConnectionAuthSessionsConnection,
+    GetAuthSessionsConnectionAuthSessionsConnectionEdges,
+    GetAuthSessionsConnectionAuthSessionsConnectionEdgesNode,
+    GetAuthSessionsConnectionAuthSessionsConnectionPageInfo,
 )
 from .get_balance_transactions_connection import (
     GetBalanceTransactionsConnection,
@@ -1939,6 +1958,13 @@ from .reject_cluster_subscription import (
     RejectClusterSubscriptionRejectClusterSubscriptionNotFoundError,
     RejectClusterSubscriptionRejectClusterSubscriptionValidationError,
 )
+from .rename_auth_session import (
+    RenameAuthSession,
+    RenameAuthSessionRenameAuthSessionAuthError,
+    RenameAuthSessionRenameAuthSessionAuthSession,
+    RenameAuthSessionRenameAuthSessionNotFoundError,
+    RenameAuthSessionRenameAuthSessionValidationError,
+)
 from .replay_webhook_deliveries import (
     ReplayWebhookDeliveries,
     ReplayWebhookDeliveriesReplayWebhookDeliveriesAuthError,
@@ -1989,6 +2015,13 @@ from .resolve_viewer_endpoint import (
     ResolveViewerEndpointResolveViewerEndpointMetadataThumbnailAssets,
     ResolveViewerEndpointResolveViewerEndpointPrimary,
 )
+from .revoke_auth_session import (
+    RevokeAuthSession,
+    RevokeAuthSessionRevokeAuthSessionAuthError,
+    RevokeAuthSessionRevokeAuthSessionNotFoundError,
+    RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload,
+    RevokeAuthSessionRevokeAuthSessionValidationError,
+)
 from .revoke_cluster_invite import (
     RevokeClusterInvite,
     RevokeClusterInviteRevokeClusterInviteAuthError,
@@ -2000,6 +2033,12 @@ from .revoke_developer_token import (
     RevokeDeveloperTokenRevokeDeveloperTokenAuthError,
     RevokeDeveloperTokenRevokeDeveloperTokenDeleteSuccess,
     RevokeDeveloperTokenRevokeDeveloperTokenNotFoundError,
+)
+from .revoke_other_auth_sessions import (
+    RevokeOtherAuthSessions,
+    RevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError,
+    RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload,
+    RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError,
 )
 from .revoke_signing_key import (
     RevokeSigningKey,
@@ -2285,8 +2324,11 @@ __all__ = [
     "AssignIncidentAssignIncidentValidationError",
     "AsyncBaseClient",
     "AsyncGraphQLClient",
+    "AuthClientKind",
     "AuthErrorDefault",
     "AuthError",
+    "AuthMethod",
+    "AuthSessionDefault",
     "AvailableClusterDefault",
     "BalanceTransactionDefault",
     "BaseModel",
@@ -2353,6 +2395,11 @@ __all__ = [
     "ChangeBillingTierPayloadDefaultPendingTierEntitlements",
     "ChangeBillingTierPayloadDefaultPendingTierFeatures",
     "ChangeBillingTierPayloadDefaultPendingTierPricingRules",
+    "ChangePassword",
+    "ChangePasswordChangePasswordAuthError",
+    "ChangePasswordChangePasswordChangePasswordPayload",
+    "ChangePasswordChangePasswordValidationError",
+    "ChangePasswordPayloadDefault",
     "ClientMetrics5mDefault",
     "ClientMetrics5mDefaultStream",
     "ClientMetrics5mDefaultStreamManagedSource",
@@ -2644,6 +2691,11 @@ __all__ = [
     "GetArtifactStatesConnectionAnalyticsLifecycleArtifactStatesConnectionEdges",
     "GetArtifactStatesConnectionAnalyticsLifecycleArtifactStatesConnectionEdgesNode",
     "GetArtifactStatesConnectionAnalyticsLifecycleArtifactStatesConnectionPageInfo",
+    "GetAuthSessionsConnection",
+    "GetAuthSessionsConnectionAuthSessionsConnection",
+    "GetAuthSessionsConnectionAuthSessionsConnectionEdges",
+    "GetAuthSessionsConnectionAuthSessionsConnectionEdgesNode",
+    "GetAuthSessionsConnectionAuthSessionsConnectionPageInfo",
     "GetBalanceTransactionsConnection",
     "GetBalanceTransactionsConnectionBalanceTransactionsConnection",
     "GetBalanceTransactionsConnectionBalanceTransactionsConnectionEdges",
@@ -3497,6 +3549,11 @@ __all__ = [
     "RejectClusterSubscriptionRejectClusterSubscriptionClusterSubscription",
     "RejectClusterSubscriptionRejectClusterSubscriptionNotFoundError",
     "RejectClusterSubscriptionRejectClusterSubscriptionValidationError",
+    "RenameAuthSession",
+    "RenameAuthSessionRenameAuthSessionAuthError",
+    "RenameAuthSessionRenameAuthSessionAuthSession",
+    "RenameAuthSessionRenameAuthSessionNotFoundError",
+    "RenameAuthSessionRenameAuthSessionValidationError",
     "ReplayWebhookDeliveries",
     "ReplayWebhookDeliveriesReplayWebhookDeliveriesAuthError",
     "ReplayWebhookDeliveriesReplayWebhookDeliveriesNotFoundError",
@@ -3537,6 +3594,12 @@ __all__ = [
     "RetentionSource",
     "ReviewMediaCapacityConsentInput",
     "ReviewMediaPlacementChangeInput",
+    "RevokeAuthSession",
+    "RevokeAuthSessionPayloadDefault",
+    "RevokeAuthSessionRevokeAuthSessionAuthError",
+    "RevokeAuthSessionRevokeAuthSessionNotFoundError",
+    "RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload",
+    "RevokeAuthSessionRevokeAuthSessionValidationError",
     "RevokeClusterInvite",
     "RevokeClusterInviteRevokeClusterInviteAuthError",
     "RevokeClusterInviteRevokeClusterInviteDeleteSuccess",
@@ -3545,6 +3608,11 @@ __all__ = [
     "RevokeDeveloperTokenRevokeDeveloperTokenAuthError",
     "RevokeDeveloperTokenRevokeDeveloperTokenDeleteSuccess",
     "RevokeDeveloperTokenRevokeDeveloperTokenNotFoundError",
+    "RevokeOtherAuthSessions",
+    "RevokeOtherAuthSessionsPayloadDefault",
+    "RevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError",
+    "RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload",
+    "RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError",
     "RevokeSigningKey",
     "RevokeSigningKeyRevokeSigningKeyAuthError",
     "RevokeSigningKeyRevokeSigningKeyNotFoundError",

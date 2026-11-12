@@ -1,6 +1,21 @@
 from ..._forward import OpenEnum
 
 
+class AuthClientKind(OpenEnum):
+    BROWSER = "BROWSER"
+    CLI = "CLI"
+    DESKTOP = "DESKTOP"
+    UNKNOWN = "UNKNOWN"
+
+
+class AuthMethod(OpenEnum):
+    PASSWORD = "PASSWORD"
+    WALLET = "WALLET"
+    BROWSER_HANDOFF = "BROWSER_HANDOFF"
+    DEVICE_CODE = "DEVICE_CODE"
+    UNKNOWN = "UNKNOWN"
+
+
 class BufferState(OpenEnum):
     FULL = "FULL"
     EMPTY = "EMPTY"

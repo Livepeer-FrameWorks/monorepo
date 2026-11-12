@@ -14,6 +14,23 @@ enum GQL {
   }
   """
 
+  static let AuthSessionFields = """
+  fragment AuthSessionFields on AuthSession {
+    id
+    clientKind
+    clientId
+    authMethod
+    label
+    clientVersion
+    ipAddress
+    location
+    createdAt
+    lastActiveAt
+    expiresAt
+    current
+  }
+  """
+
   static let BillingTierFields = """
   fragment BillingTierFields on BillingTier {
     id
@@ -1122,6 +1139,23 @@ enum GQL {
           totalCount
         }
       }
+    }
+  }
+  """
+
+  static let GetAuthSessions = """
+  query GetAuthSessions($first: Int, $after: String) {
+    authSessionsConnection(first: $first, after: $after) {
+      nodes {
+        ...AuthSessionFields
+      }
+      pageInfo {
+        startCursor
+        endCursor
+        hasNextPage
+        hasPreviousPage
+      }
+      totalCount
     }
   }
   """
@@ -5284,6 +5318,26 @@ enum GQL {
   }
   """
 
+  static let ChangePassword = """
+  mutation ChangePassword($currentPassword: String!, $newPassword: String!) {
+    changePassword(currentPassword: $currentPassword, newPassword: $newPassword) {
+      __typename
+      ... on ChangePasswordPayload {
+        success
+        revokedCount
+      }
+      ... on ValidationError {
+        message
+        field
+        code
+      }
+      ... on AuthError {
+        ...AuthErrorFields
+      }
+    }
+  }
+  """
+
   static let CompleteVodUpload = """
   mutation CompleteVodUpload($input: CompleteVodUploadInput!) {
     completeVodUpload(input: $input) {
@@ -6144,6 +6198,29 @@ enum GQL {
   }
   """
 
+  static let RenameAuthSession = """
+  mutation RenameAuthSession($id: ID!, $label: String!) {
+    renameAuthSession(id: $id, label: $label) {
+      __typename
+      ... on AuthSession {
+        ...AuthSessionFields
+      }
+      ... on ValidationError {
+        message
+        field
+        code
+      }
+      ... on AuthError {
+        ...AuthErrorFields
+      }
+      ... on NotFoundError {
+        message
+        code
+      }
+    }
+  }
+  """
+
   static let ReplayWebhookDeliveries = """
   # Replay the failed and skipped deliveries of one endpoint in a time range
   mutation ReplayWebhookDeliveries($endpointId: ID!, $createdAfter: Time!, $createdBefore: Time!) {
@@ -6274,6 +6351,49 @@ enum GQL {
       }
       ... on NotFoundError {
         ...NotFoundErrorFields
+      }
+      ... on AuthError {
+        ...AuthErrorFields
+      }
+    }
+  }
+  """
+
+  static let RevokeAuthSession = """
+  mutation RevokeAuthSession($id: ID!) {
+    revokeAuthSession(id: $id) {
+      __typename
+      ... on RevokeAuthSessionPayload {
+        success
+        current
+      }
+      ... on ValidationError {
+        message
+        field
+        code
+      }
+      ... on AuthError {
+        ...AuthErrorFields
+      }
+      ... on NotFoundError {
+        message
+        code
+      }
+    }
+  }
+  """
+
+  static let RevokeOtherAuthSessions = """
+  mutation RevokeOtherAuthSessions {
+    revokeOtherAuthSessions {
+      __typename
+      ... on RevokeOtherAuthSessionsPayload {
+        revokedCount
+      }
+      ... on ValidationError {
+        message
+        field
+        code
       }
       ... on AuthError {
         ...AuthErrorFields

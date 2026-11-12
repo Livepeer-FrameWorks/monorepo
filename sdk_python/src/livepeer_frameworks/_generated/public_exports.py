@@ -3,6 +3,8 @@
 
 from .graphql.client import GraphQLClient
 from .graphql.enums import (
+    AuthClientKind,
+    AuthMethod,
     BufferState,
     CardPaymentProvider,
     ClipCreationMode,
@@ -177,6 +179,8 @@ from .graphql.input_types import (
 __all__ = [
     "ApplyMediaCapacityConsentInput",
     "ApplyMediaPlacementChangeInput",
+    "AuthClientKind",
+    "AuthMethod",
     "BillingAddressInput",
     "BootstrapEdgeInput",
     "BufferState",

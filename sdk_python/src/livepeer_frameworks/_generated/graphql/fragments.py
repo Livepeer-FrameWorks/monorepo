@@ -5,6 +5,8 @@ from pydantic import Field
 
 from .base_model import BaseModel
 from .enums import (
+    AuthClientKind,
+    AuthMethod,
     BufferState,
     ClusterPricingModel,
     ClusterSubscriptionStatus,
@@ -1181,6 +1183,30 @@ class AuthError(BaseModel):
     typename__: str = Field(alias="__typename")
     message: str
     code: Optional[str]
+
+
+class AuthSessionDefault(BaseModel):
+    """One of the signed-in user's own interactive sessions."""
+
+    id: str
+    client_kind: AuthClientKind = Field(alias="clientKind")
+    client_id: str = Field(alias="clientId")
+    auth_method: AuthMethod = Field(alias="authMethod")
+    label: str
+    client_version: Optional[str] = Field(alias="clientVersion")
+    ip_address: Optional[str] = Field(
+        alias="ipAddress",
+        description="Masked source IP; full addresses are never returned.",
+    )
+    "Masked source IP; full addresses are never returned."
+    location: Optional[str] = Field(
+        description="City and country when a local GeoIP database is configured."
+    )
+    "City and country when a local GeoIP database is configured."
+    created_at: datetime = Field(alias="createdAt")
+    last_active_at: datetime = Field(alias="lastActiveAt")
+    expires_at: datetime = Field(alias="expiresAt")
+    current: bool
 
 
 class AvailableClusterDefault(BaseModel):
@@ -2656,6 +2682,11 @@ class ChangeBillingTierPayloadDefaultPendingTierEntitlements(BaseModel):
 
     key: str
     value: str
+
+
+class ChangePasswordPayloadDefault(BaseModel):
+    success: bool
+    revoked_count: int = Field(alias="revokedCount")
 
 
 class ClientMetrics5mDefault(BaseModel):
@@ -9367,6 +9398,16 @@ class RebufferingEventDefaultStreamRetentionOverrides(BaseModel):
     clip_retention_days_override: Optional[int] = Field(
         alias="clipRetentionDaysOverride"
     )
+
+
+class RevokeAuthSessionPayloadDefault(BaseModel):
+    success: bool
+    current: bool = Field(description="True when the presented session was signed out.")
+    "True when the presented session was signed out."
+
+
+class RevokeOtherAuthSessionsPayloadDefault(BaseModel):
+    revoked_count: int = Field(alias="revokedCount")
 
 
 class RoutingEfficiencyDefault(BaseModel):
@@ -19439,6 +19480,7 @@ ArtifactStateDefault.model_rebuild()
 AssetNodeCopiesDefault.model_rebuild()
 AuthErrorDefault.model_rebuild()
 AuthError.model_rebuild()
+AuthSessionDefault.model_rebuild()
 AvailableClusterDefault.model_rebuild()
 BalanceTransactionDefault.model_rebuild()
 BillingDetailsDefault.model_rebuild()
@@ -19452,6 +19494,7 @@ BufferEventInNodeDefault.model_rebuild()
 CapabilitiesDefault.model_rebuild()
 CardTopupResultDefault.model_rebuild()
 ChangeBillingTierPayloadDefault.model_rebuild()
+ChangePasswordPayloadDefault.model_rebuild()
 ClientMetrics5mDefault.model_rebuild()
 ClientQoeSummaryDefault.model_rebuild()
 EffectiveRetention.model_rebuild()
@@ -19545,6 +19588,8 @@ QualityTierDailyDefault.model_rebuild()
 RateLimitErrorDefault.model_rebuild()
 RateLimitError.model_rebuild()
 RebufferingEventDefault.model_rebuild()
+RevokeAuthSessionPayloadDefault.model_rebuild()
+RevokeOtherAuthSessionsPayloadDefault.model_rebuild()
 RoutingEfficiencyDefault.model_rebuild()
 RoutingEventDefault.model_rebuild()
 ServiceInstanceDefault.model_rebuild()

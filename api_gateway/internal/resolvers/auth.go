@@ -269,15 +269,14 @@ func (r *Resolver) DoLinkEmail(ctx context.Context, input model.LinkEmailInput) 
 		return nil, errDemoUnavailable("Email linking")
 	}
 
-	// Requires authenticated user
-	if ctxkeys.GetUserID(ctx) == "" {
+	if authErr := requireInteractiveSecurity(ctx); authErr != nil {
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("linkEmail", "auth_error").Inc()
 		}
-		return &model.AuthError{
-			Message: "Authentication required",
-			Code:    ptrString("UNAUTHENTICATED"),
-		}, nil
+		return authSessionResultError[model.LinkEmailResult](authErr)
+	}
+	if ctxkeys.GetSessionID(ctx) == "" {
+		return securitySessionRefreshRequired(), nil
 	}
 
 	// Call Commodore to link email

@@ -28,6 +28,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/networkobserver"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
@@ -155,7 +156,19 @@ func main() {
 	}
 
 	// Initialize GraphQL resolver and server
+	sessionGeoIP, geoIPErr := geoip.Open(cfg.MMDBPath)
+	if geoIPErr != nil {
+		logger.WithError(geoIPErr).Warn("Session GeoIP unavailable")
+	}
+	if sessionGeoIP != nil {
+		defer func() {
+			if closeErr := sessionGeoIP.Close(); closeErr != nil {
+				logger.WithError(closeErr).Warn("Session GeoIP close failed")
+			}
+		}()
+	}
 	resolverCfg := resolverConfig(liveConfig)
+	resolverCfg.SessionGeoIP = sessionGeoIP
 	resolver := graph.NewResolver(serviceClients, logger, graphqlMetrics, resolverCfg)
 	websocketSessions := middleware.NewWebsocketSessions(resolver.SubManager.WatchAPITokenRevocations)
 	resolver.SubManager.SetCredentialSockets(websocketSessions)

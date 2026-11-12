@@ -13,6 +13,7 @@ import (
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/telemetrytoken"
@@ -39,11 +40,13 @@ type GraphQLMetrics struct {
 
 // Resolver represents the GraphQL resolver
 type Resolver struct {
-	Clients    *clients.ServiceClients
-	Logger     logging.Logger
-	SubManager *SubscriptionManager
-	Metrics    *GraphQLMetrics
-	Fetcher    *datafetcher.DataFetcher
+	// SessionGeoIP resolves display locations; nil disables geolocation.
+	SessionGeoIP *geoip.Reader
+	Clients      *clients.ServiceClients
+	Logger       logging.Logger
+	SubManager   *SubscriptionManager
+	Metrics      *GraphQLMetrics
+	Fetcher      *datafetcher.DataFetcher
 	// TelemetrySecret signs player-telemetry attribution tokens. Empty disables
 	// minting (cluster attribution then stays unproven downstream). Platform key,
 	// never a customer playback-auth secret.
@@ -84,6 +87,7 @@ type StreamingSettings struct {
 
 // ResolverConfig is the configuration NewResolver needs.
 type ResolverConfig struct {
+	SessionGeoIP *geoip.Reader
 	ServiceToken string
 	// SignalmanAddr is the required local-region Signalman service alias. The
 	// raw comma-separated SignalmanAddrs value optionally lists replica targets
@@ -149,6 +153,7 @@ func NewResolver(serviceClients *clients.ServiceClients, logger logging.Logger, 
 
 	return &Resolver{
 		Clients:         serviceClients,
+		SessionGeoIP:    cfg.SessionGeoIP,
 		Logger:          logger,
 		SubManager:      subManager,
 		Metrics:         metrics,

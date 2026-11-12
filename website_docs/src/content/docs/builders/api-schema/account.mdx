@@ -7,11 +7,35 @@ sidebar:
 
 [GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/)
 
-The tenant, wallet and email identities.
+The tenant, wallet and email identities, and self-service sign-in security.
 
 Types used by more than one domain are on [Shared types](/builders/api-schema/shared/).
 
 ## Queries
+
+### Query.authSessionsConnection
+
+The signed-in user’s own interactive sessions, newest first. Supports first=1..100.
+
+```graphql
+authSessionsConnection(
+  first: Int
+  after: String
+): AuthSessionConnection!
+```
+
+**Returns:** `AuthSessionConnection!` ([AuthSessionConnection](/builders/api-schema/account/#authsessionconnection))
+
+**Arguments**
+
+- `first`: `Int`
+- `after`: `String`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetAuthSessionsConnection | `GetAuthSessionsConnectionDocument` | `GetAuthSessionsConnection` | `get_auth_sessions_connection` |
 
 ### Query.tenant
 
@@ -30,6 +54,30 @@ tenant: Tenant
 | GetTenant | `GetTenantDocument` | `GetTenant` | `get_tenant` |
 
 ## Mutations
+
+### Mutation.changePassword
+
+Change the password and sign out other sessions, retaining this session.
+
+```graphql
+changePassword(
+  currentPassword: String!
+  newPassword: String!
+): ChangePasswordResult!
+```
+
+**Returns:** `ChangePasswordResult!` ([ChangePasswordResult](/builders/api-schema/account/#changepasswordresult))
+
+**Arguments**
+
+- `currentPassword`: `String!`
+- `newPassword`: `String!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ChangePassword | `ChangePasswordDocument` | `ChangePassword` | `change_password` |
 
 ### Mutation.linkEmail
 
@@ -74,6 +122,68 @@ linkWallet(
 | Operation | TypeScript | Go | Python |
 | --- | --- | --- | --- |
 | LinkWallet | `LinkWalletDocument` | `LinkWallet` | `link_wallet` |
+
+### Mutation.renameAuthSession
+
+Rename one of the signed-in user’s own sessions.
+
+```graphql
+renameAuthSession(
+  id: ID!
+  label: String!
+): RenameAuthSessionResult!
+```
+
+**Returns:** `RenameAuthSessionResult!` ([RenameAuthSessionResult](/builders/api-schema/account/#renameauthsessionresult))
+
+**Arguments**
+
+- `id`: `ID!`
+- `label`: `String!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| RenameAuthSession | `RenameAuthSessionDocument` | `RenameAuthSession` | `rename_auth_session` |
+
+### Mutation.revokeAuthSession
+
+Sign out one of the signed-in user’s own sessions. Idempotent; current=true means this caller was signed out.
+
+```graphql
+revokeAuthSession(
+  id: ID!
+): RevokeAuthSessionResult!
+```
+
+**Returns:** `RevokeAuthSessionResult!` ([RevokeAuthSessionResult](/builders/api-schema/account/#revokeauthsessionresult))
+
+**Arguments**
+
+- `id`: `ID!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| RevokeAuthSession | `RevokeAuthSessionDocument` | `RevokeAuthSession` | `revoke_auth_session` |
+
+### Mutation.revokeOtherAuthSessions
+
+Sign out every other session while retaining the presented named session.
+
+```graphql
+revokeOtherAuthSessions: RevokeOtherAuthSessionsResult!
+```
+
+**Returns:** `RevokeOtherAuthSessionsResult!` ([RevokeOtherAuthSessionsResult](/builders/api-schema/account/#revokeotherauthsessionsresult))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| RevokeOtherAuthSessions | `RevokeOtherAuthSessionsDocument` | `RevokeOtherAuthSessions` | `revoke_other_auth_sessions` |
 
 ### Mutation.unlinkWallet
 
@@ -143,6 +253,79 @@ walletLogin(
 
 ## Types
 
+### AuthClientKind
+
+**enum**
+
+The interactive client that created a sign-in session.
+
+- `BROWSER`
+- `CLI`
+- `DESKTOP`
+- `UNKNOWN`
+
+### AuthMethod
+
+**enum**
+
+The proof used to create a sign-in session.
+
+- `PASSWORD`
+- `WALLET`
+- `BROWSER_HANDOFF`
+- `DEVICE_CODE`
+- `UNKNOWN`
+
+### AuthSession
+
+**object**
+
+One of the signed-in user&#39;s own interactive sessions.
+
+- **id**: `ID!`
+- **clientKind**: `AuthClientKind!` ([AuthClientKind](/builders/api-schema/account/#authclientkind))
+- **clientId**: `String!`
+- **authMethod**: `AuthMethod!` ([AuthMethod](/builders/api-schema/account/#authmethod))
+- **label**: `String!`
+- **clientVersion**: `String`
+- **ipAddress**: `String` — Masked source IP; full addresses are never returned.
+- **location**: `String` — City and country when a local GeoIP database is configured.
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **lastActiveAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **expiresAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **current**: `Boolean!`
+
+### AuthSessionConnection
+
+**object**
+
+- **edges**: `[AuthSessionEdge!]!` ([AuthSessionEdge](/builders/api-schema/account/#authsessionedge))
+- **nodes**: `[AuthSession!]!` ([AuthSession](/builders/api-schema/account/#authsession))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+### AuthSessionEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `AuthSession!` ([AuthSession](/builders/api-schema/account/#authsession))
+
+### ChangePasswordPayload
+
+**object**
+
+- **success**: `Boolean!`
+- **revokedCount**: `Int!`
+
+### ChangePasswordResult
+
+**union**
+
+- Member: [ChangePasswordPayload](/builders/api-schema/account/#changepasswordpayload)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
 ### CustomDomainStatus
 
 **object**
@@ -190,6 +373,45 @@ Successful email link response.
 **union**
 
 - Member: [WalletIdentity](/builders/api-schema/account/#walletidentity)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### RenameAuthSessionResult
+
+**union**
+
+- Member: [AuthSession](/builders/api-schema/account/#authsession)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### RevokeAuthSessionPayload
+
+**object**
+
+- **success**: `Boolean!`
+- **current**: `Boolean!` — True when the presented session was signed out.
+
+### RevokeAuthSessionResult
+
+**union**
+
+- Member: [RevokeAuthSessionPayload](/builders/api-schema/account/#revokeauthsessionpayload)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### RevokeOtherAuthSessionsPayload
+
+**object**
+
+- **revokedCount**: `Int!`
+
+### RevokeOtherAuthSessionsResult
+
+**union**
+
+- Member: [RevokeOtherAuthSessionsPayload](/builders/api-schema/account/#revokeotherauthsessionspayload)
 - Member: [ValidationError](/builders/api-schema/shared/#validationerror)
 - Member: [AuthError](/builders/api-schema/shared/#autherror)
 

@@ -6683,6 +6683,23 @@ func (v *AssignIncidentResponse) __premarshalJSON() (*__premarshalAssignIncident
 	return &retval, nil
 }
 
+// The interactive client that created a sign-in session.
+type AuthClientKind string
+
+const (
+	AuthClientKindBrowser AuthClientKind = "BROWSER"
+	AuthClientKindCli     AuthClientKind = "CLI"
+	AuthClientKindDesktop AuthClientKind = "DESKTOP"
+	AuthClientKindUnknown AuthClientKind = "UNKNOWN"
+)
+
+var AllAuthClientKind = []AuthClientKind{
+	AuthClientKindBrowser,
+	AuthClientKindCli,
+	AuthClientKindDesktop,
+	AuthClientKindUnknown,
+}
+
 // AuthErrorDefaultFields includes the GraphQL fields of AuthError requested by the fragment AuthErrorDefaultFields.
 type AuthErrorDefaultFields struct {
 	Message string  `json:"message"`
@@ -6710,6 +6727,82 @@ func (v *AuthErrorFields) GetMessage() string { return v.Message }
 
 // GetCode returns AuthErrorFields.Code, and is useful for accessing the field via an interface.
 func (v *AuthErrorFields) GetCode() *string { return v.Code }
+
+// The proof used to create a sign-in session.
+type AuthMethod string
+
+const (
+	AuthMethodPassword       AuthMethod = "PASSWORD"
+	AuthMethodWallet         AuthMethod = "WALLET"
+	AuthMethodBrowserHandoff AuthMethod = "BROWSER_HANDOFF"
+	AuthMethodDeviceCode     AuthMethod = "DEVICE_CODE"
+	AuthMethodUnknown        AuthMethod = "UNKNOWN"
+)
+
+var AllAuthMethod = []AuthMethod{
+	AuthMethodPassword,
+	AuthMethodWallet,
+	AuthMethodBrowserHandoff,
+	AuthMethodDeviceCode,
+	AuthMethodUnknown,
+}
+
+// AuthSessionDefaultFields includes the GraphQL fields of AuthSession requested by the fragment AuthSessionDefaultFields.
+// The GraphQL type's documentation follows.
+//
+// One of the signed-in user's own interactive sessions.
+type AuthSessionDefaultFields struct {
+	Id            string         `json:"id"`
+	ClientKind    AuthClientKind `json:"clientKind"`
+	ClientId      string         `json:"clientId"`
+	AuthMethod    AuthMethod     `json:"authMethod"`
+	Label         string         `json:"label"`
+	ClientVersion *string        `json:"clientVersion"`
+	// Masked source IP; full addresses are never returned.
+	IpAddress *string `json:"ipAddress"`
+	// City and country when a local GeoIP database is configured.
+	Location     *string   `json:"location"`
+	CreatedAt    time.Time `json:"createdAt"`
+	LastActiveAt time.Time `json:"lastActiveAt"`
+	ExpiresAt    time.Time `json:"expiresAt"`
+	Current      bool      `json:"current"`
+}
+
+// GetId returns AuthSessionDefaultFields.Id, and is useful for accessing the field via an interface.
+func (v *AuthSessionDefaultFields) GetId() string { return v.Id }
+
+// GetClientKind returns AuthSessionDefaultFields.ClientKind, and is useful for accessing the field via an interface.
+func (v *AuthSessionDefaultFields) GetClientKind() AuthClientKind { return v.ClientKind }
+
+// GetClientId returns AuthSessionDefaultFields.ClientId, and is useful for accessing the field via an interface.
+func (v *AuthSessionDefaultFields) GetClientId() string { return v.ClientId }
+
+// GetAuthMethod returns AuthSessionDefaultFields.AuthMethod, and is useful for accessing the field via an interface.
+func (v *AuthSessionDefaultFields) GetAuthMethod() AuthMethod { return v.AuthMethod }
+
+// GetLabel returns AuthSessionDefaultFields.Label, and is useful for accessing the field via an interface.
+func (v *AuthSessionDefaultFields) GetLabel() string { return v.Label }
+
+// GetClientVersion returns AuthSessionDefaultFields.ClientVersion, and is useful for accessing the field via an interface.
+func (v *AuthSessionDefaultFields) GetClientVersion() *string { return v.ClientVersion }
+
+// GetIpAddress returns AuthSessionDefaultFields.IpAddress, and is useful for accessing the field via an interface.
+func (v *AuthSessionDefaultFields) GetIpAddress() *string { return v.IpAddress }
+
+// GetLocation returns AuthSessionDefaultFields.Location, and is useful for accessing the field via an interface.
+func (v *AuthSessionDefaultFields) GetLocation() *string { return v.Location }
+
+// GetCreatedAt returns AuthSessionDefaultFields.CreatedAt, and is useful for accessing the field via an interface.
+func (v *AuthSessionDefaultFields) GetCreatedAt() time.Time { return v.CreatedAt }
+
+// GetLastActiveAt returns AuthSessionDefaultFields.LastActiveAt, and is useful for accessing the field via an interface.
+func (v *AuthSessionDefaultFields) GetLastActiveAt() time.Time { return v.LastActiveAt }
+
+// GetExpiresAt returns AuthSessionDefaultFields.ExpiresAt, and is useful for accessing the field via an interface.
+func (v *AuthSessionDefaultFields) GetExpiresAt() time.Time { return v.ExpiresAt }
+
+// GetCurrent returns AuthSessionDefaultFields.Current, and is useful for accessing the field via an interface.
+func (v *AuthSessionDefaultFields) GetCurrent() bool { return v.Current }
 
 // AvailableClusterDefaultFields includes the GraphQL fields of AvailableCluster requested by the fragment AvailableClusterDefaultFields.
 type AvailableClusterDefaultFields struct {
@@ -10601,6 +10694,416 @@ func (v *ChangeBillingTierResponse) __premarshalJSON() (*__premarshalChangeBilli
 		if err != nil {
 			return nil, fmt.Errorf(
 				"unable to marshal ChangeBillingTierResponse.ChangeBillingTier: %w", err)
+		}
+	}
+	return &retval, nil
+}
+
+// ChangePasswordChangePasswordAuthError includes the requested fields of the GraphQL type AuthError.
+type ChangePasswordChangePasswordAuthError struct {
+	Typename               *string `json:"__typename"`
+	AuthErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns ChangePasswordChangePasswordAuthError.Typename, and is useful for accessing the field via an interface.
+func (v *ChangePasswordChangePasswordAuthError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns ChangePasswordChangePasswordAuthError.Message, and is useful for accessing the field via an interface.
+func (v *ChangePasswordChangePasswordAuthError) GetMessage() string {
+	return v.AuthErrorDefaultFields.Message
+}
+
+// GetCode returns ChangePasswordChangePasswordAuthError.Code, and is useful for accessing the field via an interface.
+func (v *ChangePasswordChangePasswordAuthError) GetCode() *string {
+	return v.AuthErrorDefaultFields.Code
+}
+
+func (v *ChangePasswordChangePasswordAuthError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*ChangePasswordChangePasswordAuthError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.ChangePasswordChangePasswordAuthError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.AuthErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalChangePasswordChangePasswordAuthError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+}
+
+func (v *ChangePasswordChangePasswordAuthError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *ChangePasswordChangePasswordAuthError) __premarshalJSON() (*__premarshalChangePasswordChangePasswordAuthError, error) {
+	var retval __premarshalChangePasswordChangePasswordAuthError
+
+	retval.Typename = v.Typename
+	retval.Message = v.AuthErrorDefaultFields.Message
+	retval.Code = v.AuthErrorDefaultFields.Code
+	return &retval, nil
+}
+
+// ChangePasswordChangePasswordChangePasswordPayload includes the requested fields of the GraphQL type ChangePasswordPayload.
+type ChangePasswordChangePasswordChangePasswordPayload struct {
+	Typename                           *string `json:"__typename"`
+	ChangePasswordPayloadDefaultFields `json:"-"`
+}
+
+// GetTypename returns ChangePasswordChangePasswordChangePasswordPayload.Typename, and is useful for accessing the field via an interface.
+func (v *ChangePasswordChangePasswordChangePasswordPayload) GetTypename() *string { return v.Typename }
+
+// GetSuccess returns ChangePasswordChangePasswordChangePasswordPayload.Success, and is useful for accessing the field via an interface.
+func (v *ChangePasswordChangePasswordChangePasswordPayload) GetSuccess() bool {
+	return v.ChangePasswordPayloadDefaultFields.Success
+}
+
+// GetRevokedCount returns ChangePasswordChangePasswordChangePasswordPayload.RevokedCount, and is useful for accessing the field via an interface.
+func (v *ChangePasswordChangePasswordChangePasswordPayload) GetRevokedCount() int {
+	return v.ChangePasswordPayloadDefaultFields.RevokedCount
+}
+
+func (v *ChangePasswordChangePasswordChangePasswordPayload) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*ChangePasswordChangePasswordChangePasswordPayload
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.ChangePasswordChangePasswordChangePasswordPayload = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.ChangePasswordPayloadDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalChangePasswordChangePasswordChangePasswordPayload struct {
+	Typename *string `json:"__typename"`
+
+	Success bool `json:"success"`
+
+	RevokedCount int `json:"revokedCount"`
+}
+
+func (v *ChangePasswordChangePasswordChangePasswordPayload) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *ChangePasswordChangePasswordChangePasswordPayload) __premarshalJSON() (*__premarshalChangePasswordChangePasswordChangePasswordPayload, error) {
+	var retval __premarshalChangePasswordChangePasswordChangePasswordPayload
+
+	retval.Typename = v.Typename
+	retval.Success = v.ChangePasswordPayloadDefaultFields.Success
+	retval.RevokedCount = v.ChangePasswordPayloadDefaultFields.RevokedCount
+	return &retval, nil
+}
+
+// ChangePasswordChangePasswordChangePasswordResult includes the requested fields of the GraphQL interface ChangePasswordResult.
+//
+// ChangePasswordChangePasswordChangePasswordResult is implemented by the following types:
+// ChangePasswordChangePasswordAuthError
+// ChangePasswordChangePasswordChangePasswordPayload
+// ChangePasswordChangePasswordValidationError
+type ChangePasswordChangePasswordChangePasswordResult interface {
+	implementsGraphQLInterfaceChangePasswordChangePasswordChangePasswordResult()
+	// GetTypename returns the receiver's concrete GraphQL type-name (see interface doc for possible values).
+	GetTypename() *string
+}
+
+func (v *ChangePasswordChangePasswordAuthError) implementsGraphQLInterfaceChangePasswordChangePasswordChangePasswordResult() {
+}
+func (v *ChangePasswordChangePasswordChangePasswordPayload) implementsGraphQLInterfaceChangePasswordChangePasswordChangePasswordResult() {
+}
+func (v *ChangePasswordChangePasswordValidationError) implementsGraphQLInterfaceChangePasswordChangePasswordChangePasswordResult() {
+}
+
+func __unmarshalChangePasswordChangePasswordChangePasswordResult(b []byte, v *ChangePasswordChangePasswordChangePasswordResult) error {
+	if string(b) == "null" {
+		return nil
+	}
+
+	var tn struct {
+		TypeName string `json:"__typename"`
+	}
+	err := json.Unmarshal(b, &tn)
+	if err != nil {
+		return err
+	}
+
+	switch tn.TypeName {
+	case "AuthError":
+		*v = new(ChangePasswordChangePasswordAuthError)
+		return json.Unmarshal(b, *v)
+	case "ChangePasswordPayload":
+		*v = new(ChangePasswordChangePasswordChangePasswordPayload)
+		return json.Unmarshal(b, *v)
+	case "ValidationError":
+		*v = new(ChangePasswordChangePasswordValidationError)
+		return json.Unmarshal(b, *v)
+	case "":
+		return fmt.Errorf(
+			"response was missing ChangePasswordResult.__typename")
+	default:
+		*v = newUnknownMember(tn.TypeName, b)
+		return nil
+	}
+}
+
+func __marshalChangePasswordChangePasswordChangePasswordResult(v *ChangePasswordChangePasswordChangePasswordResult) ([]byte, error) {
+
+	var typename string
+	switch v := (*v).(type) {
+	case *ChangePasswordChangePasswordAuthError:
+		typename = "AuthError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalChangePasswordChangePasswordAuthError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *ChangePasswordChangePasswordChangePasswordPayload:
+		typename = "ChangePasswordPayload"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalChangePasswordChangePasswordChangePasswordPayload
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *ChangePasswordChangePasswordValidationError:
+		typename = "ValidationError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalChangePasswordChangePasswordValidationError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case nil:
+		return []byte("null"), nil
+	case *UnknownMember:
+		return v.MarshalJSON()
+	default:
+		return nil, fmt.Errorf(
+			`unexpected concrete type for ChangePasswordChangePasswordChangePasswordResult: "%T"`, v)
+	}
+}
+
+// ChangePasswordChangePasswordValidationError includes the requested fields of the GraphQL type ValidationError.
+type ChangePasswordChangePasswordValidationError struct {
+	Typename                     *string `json:"__typename"`
+	ValidationErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns ChangePasswordChangePasswordValidationError.Typename, and is useful for accessing the field via an interface.
+func (v *ChangePasswordChangePasswordValidationError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns ChangePasswordChangePasswordValidationError.Message, and is useful for accessing the field via an interface.
+func (v *ChangePasswordChangePasswordValidationError) GetMessage() string {
+	return v.ValidationErrorDefaultFields.Message
+}
+
+// GetCode returns ChangePasswordChangePasswordValidationError.Code, and is useful for accessing the field via an interface.
+func (v *ChangePasswordChangePasswordValidationError) GetCode() *string {
+	return v.ValidationErrorDefaultFields.Code
+}
+
+// GetField returns ChangePasswordChangePasswordValidationError.Field, and is useful for accessing the field via an interface.
+func (v *ChangePasswordChangePasswordValidationError) GetField() *string {
+	return v.ValidationErrorDefaultFields.Field
+}
+
+// GetConstraint returns ChangePasswordChangePasswordValidationError.Constraint, and is useful for accessing the field via an interface.
+func (v *ChangePasswordChangePasswordValidationError) GetConstraint() *string {
+	return v.ValidationErrorDefaultFields.Constraint
+}
+
+func (v *ChangePasswordChangePasswordValidationError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*ChangePasswordChangePasswordValidationError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.ChangePasswordChangePasswordValidationError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.ValidationErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalChangePasswordChangePasswordValidationError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+
+	Field *string `json:"field"`
+
+	Constraint *string `json:"constraint"`
+}
+
+func (v *ChangePasswordChangePasswordValidationError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *ChangePasswordChangePasswordValidationError) __premarshalJSON() (*__premarshalChangePasswordChangePasswordValidationError, error) {
+	var retval __premarshalChangePasswordChangePasswordValidationError
+
+	retval.Typename = v.Typename
+	retval.Message = v.ValidationErrorDefaultFields.Message
+	retval.Code = v.ValidationErrorDefaultFields.Code
+	retval.Field = v.ValidationErrorDefaultFields.Field
+	retval.Constraint = v.ValidationErrorDefaultFields.Constraint
+	return &retval, nil
+}
+
+// ChangePasswordPayloadDefaultFields includes the GraphQL fields of ChangePasswordPayload requested by the fragment ChangePasswordPayloadDefaultFields.
+type ChangePasswordPayloadDefaultFields struct {
+	Success      bool `json:"success"`
+	RevokedCount int  `json:"revokedCount"`
+}
+
+// GetSuccess returns ChangePasswordPayloadDefaultFields.Success, and is useful for accessing the field via an interface.
+func (v *ChangePasswordPayloadDefaultFields) GetSuccess() bool { return v.Success }
+
+// GetRevokedCount returns ChangePasswordPayloadDefaultFields.RevokedCount, and is useful for accessing the field via an interface.
+func (v *ChangePasswordPayloadDefaultFields) GetRevokedCount() int { return v.RevokedCount }
+
+// ChangePasswordResponse is returned by ChangePassword on success.
+type ChangePasswordResponse struct {
+	// Change the password and sign out other sessions, retaining this session.
+	ChangePassword ChangePasswordChangePasswordChangePasswordResult `json:"-"`
+}
+
+// GetChangePassword returns ChangePasswordResponse.ChangePassword, and is useful for accessing the field via an interface.
+func (v *ChangePasswordResponse) GetChangePassword() ChangePasswordChangePasswordChangePasswordResult {
+	return v.ChangePassword
+}
+
+func (v *ChangePasswordResponse) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*ChangePasswordResponse
+		ChangePassword json.RawMessage `json:"changePassword"`
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.ChangePasswordResponse = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	{
+		dst := &v.ChangePassword
+		src := firstPass.ChangePassword
+		if len(src) != 0 && string(src) != "null" {
+			err = __unmarshalChangePasswordChangePasswordChangePasswordResult(
+				src, dst)
+			if err != nil {
+				return fmt.Errorf(
+					"unable to unmarshal ChangePasswordResponse.ChangePassword: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+type __premarshalChangePasswordResponse struct {
+	ChangePassword json.RawMessage `json:"changePassword"`
+}
+
+func (v *ChangePasswordResponse) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *ChangePasswordResponse) __premarshalJSON() (*__premarshalChangePasswordResponse, error) {
+	var retval __premarshalChangePasswordResponse
+
+	{
+
+		dst := &retval.ChangePassword
+		src := v.ChangePassword
+		var err error
+		*dst, err = __marshalChangePasswordChangePasswordChangePasswordResult(
+			&src)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"unable to marshal ChangePasswordResponse.ChangePassword: %w", err)
 		}
 	}
 	return &retval, nil
@@ -31142,6 +31645,278 @@ type GetArtifactStatesConnectionResponse struct {
 // GetAnalytics returns GetArtifactStatesConnectionResponse.Analytics, and is useful for accessing the field via an interface.
 func (v *GetArtifactStatesConnectionResponse) GetAnalytics() GetArtifactStatesConnectionAnalytics {
 	return v.Analytics
+}
+
+// GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnection includes the requested fields of the GraphQL type AuthSessionConnection.
+type GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnection struct {
+	Edges      []GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdge `json:"edges"`
+	PageInfo   GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo               `json:"pageInfo"`
+	TotalCount int                                                                                        `json:"totalCount"`
+}
+
+// GetEdges returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnection.Edges, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnection) GetEdges() []GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdge {
+	return v.Edges
+}
+
+// GetPageInfo returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnection.PageInfo, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnection) GetPageInfo() GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo {
+	return v.PageInfo
+}
+
+// GetTotalCount returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnection.TotalCount, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnection) GetTotalCount() int {
+	return v.TotalCount
+}
+
+// GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdge includes the requested fields of the GraphQL type AuthSessionEdge.
+type GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdge struct {
+	Cursor string                                                                                                  `json:"cursor"`
+	Node   GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession `json:"node"`
+}
+
+// GetCursor returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdge.Cursor, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdge) GetCursor() string {
+	return v.Cursor
+}
+
+// GetNode returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdge.Node, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdge) GetNode() GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession {
+	return v.Node
+}
+
+// GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession includes the requested fields of the GraphQL type AuthSession.
+// The GraphQL type's documentation follows.
+//
+// One of the signed-in user's own interactive sessions.
+type GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession struct {
+	AuthSessionDefaultFields `json:"-"`
+}
+
+// GetId returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession.Id, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession) GetId() string {
+	return v.AuthSessionDefaultFields.Id
+}
+
+// GetClientKind returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession.ClientKind, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession) GetClientKind() AuthClientKind {
+	return v.AuthSessionDefaultFields.ClientKind
+}
+
+// GetClientId returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession.ClientId, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession) GetClientId() string {
+	return v.AuthSessionDefaultFields.ClientId
+}
+
+// GetAuthMethod returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession.AuthMethod, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession) GetAuthMethod() AuthMethod {
+	return v.AuthSessionDefaultFields.AuthMethod
+}
+
+// GetLabel returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession.Label, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession) GetLabel() string {
+	return v.AuthSessionDefaultFields.Label
+}
+
+// GetClientVersion returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession.ClientVersion, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession) GetClientVersion() *string {
+	return v.AuthSessionDefaultFields.ClientVersion
+}
+
+// GetIpAddress returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession.IpAddress, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession) GetIpAddress() *string {
+	return v.AuthSessionDefaultFields.IpAddress
+}
+
+// GetLocation returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession.Location, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession) GetLocation() *string {
+	return v.AuthSessionDefaultFields.Location
+}
+
+// GetCreatedAt returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession.CreatedAt, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession) GetCreatedAt() time.Time {
+	return v.AuthSessionDefaultFields.CreatedAt
+}
+
+// GetLastActiveAt returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession.LastActiveAt, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession) GetLastActiveAt() time.Time {
+	return v.AuthSessionDefaultFields.LastActiveAt
+}
+
+// GetExpiresAt returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession.ExpiresAt, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession) GetExpiresAt() time.Time {
+	return v.AuthSessionDefaultFields.ExpiresAt
+}
+
+// GetCurrent returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession.Current, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession) GetCurrent() bool {
+	return v.AuthSessionDefaultFields.Current
+}
+
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.AuthSessionDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalGetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession struct {
+	Id string `json:"id"`
+
+	ClientKind AuthClientKind `json:"clientKind"`
+
+	ClientId string `json:"clientId"`
+
+	AuthMethod AuthMethod `json:"authMethod"`
+
+	Label string `json:"label"`
+
+	ClientVersion *string `json:"clientVersion"`
+
+	IpAddress *string `json:"ipAddress"`
+
+	Location *string `json:"location"`
+
+	CreatedAt time.Time `json:"createdAt"`
+
+	LastActiveAt time.Time `json:"lastActiveAt"`
+
+	ExpiresAt time.Time `json:"expiresAt"`
+
+	Current bool `json:"current"`
+}
+
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession) __premarshalJSON() (*__premarshalGetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession, error) {
+	var retval __premarshalGetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionEdgesAuthSessionEdgeNodeAuthSession
+
+	retval.Id = v.AuthSessionDefaultFields.Id
+	retval.ClientKind = v.AuthSessionDefaultFields.ClientKind
+	retval.ClientId = v.AuthSessionDefaultFields.ClientId
+	retval.AuthMethod = v.AuthSessionDefaultFields.AuthMethod
+	retval.Label = v.AuthSessionDefaultFields.Label
+	retval.ClientVersion = v.AuthSessionDefaultFields.ClientVersion
+	retval.IpAddress = v.AuthSessionDefaultFields.IpAddress
+	retval.Location = v.AuthSessionDefaultFields.Location
+	retval.CreatedAt = v.AuthSessionDefaultFields.CreatedAt
+	retval.LastActiveAt = v.AuthSessionDefaultFields.LastActiveAt
+	retval.ExpiresAt = v.AuthSessionDefaultFields.ExpiresAt
+	retval.Current = v.AuthSessionDefaultFields.Current
+	return &retval, nil
+}
+
+// GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo includes the requested fields of the GraphQL type PageInfo.
+type GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo struct {
+	PageInfoDefaultFields `json:"-"`
+}
+
+// GetStartCursor returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo.StartCursor, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo) GetStartCursor() *string {
+	return v.PageInfoDefaultFields.StartCursor
+}
+
+// GetEndCursor returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo.EndCursor, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo) GetEndCursor() *string {
+	return v.PageInfoDefaultFields.EndCursor
+}
+
+// GetHasNextPage returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo.HasNextPage, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo) GetHasNextPage() bool {
+	return v.PageInfoDefaultFields.HasNextPage
+}
+
+// GetHasPreviousPage returns GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo.HasPreviousPage, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo) GetHasPreviousPage() bool {
+	return v.PageInfoDefaultFields.HasPreviousPage
+}
+
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.PageInfoDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalGetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo struct {
+	StartCursor *string `json:"startCursor"`
+
+	EndCursor *string `json:"endCursor"`
+
+	HasNextPage bool `json:"hasNextPage"`
+
+	HasPreviousPage bool `json:"hasPreviousPage"`
+}
+
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo) __premarshalJSON() (*__premarshalGetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo, error) {
+	var retval __premarshalGetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnectionPageInfo
+
+	retval.StartCursor = v.PageInfoDefaultFields.StartCursor
+	retval.EndCursor = v.PageInfoDefaultFields.EndCursor
+	retval.HasNextPage = v.PageInfoDefaultFields.HasNextPage
+	retval.HasPreviousPage = v.PageInfoDefaultFields.HasPreviousPage
+	return &retval, nil
+}
+
+// GetAuthSessionsConnectionResponse is returned by GetAuthSessionsConnection on success.
+type GetAuthSessionsConnectionResponse struct {
+	// The signed-in user’s own interactive sessions, newest first. Supports first=1..100.
+	AuthSessionsConnection GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnection `json:"authSessionsConnection"`
+}
+
+// GetAuthSessionsConnection returns GetAuthSessionsConnectionResponse.AuthSessionsConnection, and is useful for accessing the field via an interface.
+func (v *GetAuthSessionsConnectionResponse) GetAuthSessionsConnection() GetAuthSessionsConnectionAuthSessionsConnectionAuthSessionConnection {
+	return v.AuthSessionsConnection
 }
 
 // GetBalanceTransactionsConnectionBalanceTransactionsConnection includes the requested fields of the GraphQL type BalanceTransactionsConnection.
@@ -84934,6 +85709,588 @@ func (v *RejectClusterSubscriptionResponse) __premarshalJSON() (*__premarshalRej
 	return &retval, nil
 }
 
+// RenameAuthSessionRenameAuthSession includes the requested fields of the GraphQL type AuthSession.
+// The GraphQL type's documentation follows.
+//
+// One of the signed-in user's own interactive sessions.
+type RenameAuthSessionRenameAuthSession struct {
+	Typename                 *string `json:"__typename"`
+	AuthSessionDefaultFields `json:"-"`
+}
+
+// GetTypename returns RenameAuthSessionRenameAuthSession.Typename, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSession) GetTypename() *string { return v.Typename }
+
+// GetId returns RenameAuthSessionRenameAuthSession.Id, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSession) GetId() string { return v.AuthSessionDefaultFields.Id }
+
+// GetClientKind returns RenameAuthSessionRenameAuthSession.ClientKind, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSession) GetClientKind() AuthClientKind {
+	return v.AuthSessionDefaultFields.ClientKind
+}
+
+// GetClientId returns RenameAuthSessionRenameAuthSession.ClientId, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSession) GetClientId() string {
+	return v.AuthSessionDefaultFields.ClientId
+}
+
+// GetAuthMethod returns RenameAuthSessionRenameAuthSession.AuthMethod, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSession) GetAuthMethod() AuthMethod {
+	return v.AuthSessionDefaultFields.AuthMethod
+}
+
+// GetLabel returns RenameAuthSessionRenameAuthSession.Label, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSession) GetLabel() string {
+	return v.AuthSessionDefaultFields.Label
+}
+
+// GetClientVersion returns RenameAuthSessionRenameAuthSession.ClientVersion, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSession) GetClientVersion() *string {
+	return v.AuthSessionDefaultFields.ClientVersion
+}
+
+// GetIpAddress returns RenameAuthSessionRenameAuthSession.IpAddress, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSession) GetIpAddress() *string {
+	return v.AuthSessionDefaultFields.IpAddress
+}
+
+// GetLocation returns RenameAuthSessionRenameAuthSession.Location, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSession) GetLocation() *string {
+	return v.AuthSessionDefaultFields.Location
+}
+
+// GetCreatedAt returns RenameAuthSessionRenameAuthSession.CreatedAt, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSession) GetCreatedAt() time.Time {
+	return v.AuthSessionDefaultFields.CreatedAt
+}
+
+// GetLastActiveAt returns RenameAuthSessionRenameAuthSession.LastActiveAt, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSession) GetLastActiveAt() time.Time {
+	return v.AuthSessionDefaultFields.LastActiveAt
+}
+
+// GetExpiresAt returns RenameAuthSessionRenameAuthSession.ExpiresAt, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSession) GetExpiresAt() time.Time {
+	return v.AuthSessionDefaultFields.ExpiresAt
+}
+
+// GetCurrent returns RenameAuthSessionRenameAuthSession.Current, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSession) GetCurrent() bool {
+	return v.AuthSessionDefaultFields.Current
+}
+
+func (v *RenameAuthSessionRenameAuthSession) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*RenameAuthSessionRenameAuthSession
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.RenameAuthSessionRenameAuthSession = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.AuthSessionDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalRenameAuthSessionRenameAuthSession struct {
+	Typename *string `json:"__typename"`
+
+	Id string `json:"id"`
+
+	ClientKind AuthClientKind `json:"clientKind"`
+
+	ClientId string `json:"clientId"`
+
+	AuthMethod AuthMethod `json:"authMethod"`
+
+	Label string `json:"label"`
+
+	ClientVersion *string `json:"clientVersion"`
+
+	IpAddress *string `json:"ipAddress"`
+
+	Location *string `json:"location"`
+
+	CreatedAt time.Time `json:"createdAt"`
+
+	LastActiveAt time.Time `json:"lastActiveAt"`
+
+	ExpiresAt time.Time `json:"expiresAt"`
+
+	Current bool `json:"current"`
+}
+
+func (v *RenameAuthSessionRenameAuthSession) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *RenameAuthSessionRenameAuthSession) __premarshalJSON() (*__premarshalRenameAuthSessionRenameAuthSession, error) {
+	var retval __premarshalRenameAuthSessionRenameAuthSession
+
+	retval.Typename = v.Typename
+	retval.Id = v.AuthSessionDefaultFields.Id
+	retval.ClientKind = v.AuthSessionDefaultFields.ClientKind
+	retval.ClientId = v.AuthSessionDefaultFields.ClientId
+	retval.AuthMethod = v.AuthSessionDefaultFields.AuthMethod
+	retval.Label = v.AuthSessionDefaultFields.Label
+	retval.ClientVersion = v.AuthSessionDefaultFields.ClientVersion
+	retval.IpAddress = v.AuthSessionDefaultFields.IpAddress
+	retval.Location = v.AuthSessionDefaultFields.Location
+	retval.CreatedAt = v.AuthSessionDefaultFields.CreatedAt
+	retval.LastActiveAt = v.AuthSessionDefaultFields.LastActiveAt
+	retval.ExpiresAt = v.AuthSessionDefaultFields.ExpiresAt
+	retval.Current = v.AuthSessionDefaultFields.Current
+	return &retval, nil
+}
+
+// RenameAuthSessionRenameAuthSessionAuthError includes the requested fields of the GraphQL type AuthError.
+type RenameAuthSessionRenameAuthSessionAuthError struct {
+	Typename               *string `json:"__typename"`
+	AuthErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns RenameAuthSessionRenameAuthSessionAuthError.Typename, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSessionAuthError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns RenameAuthSessionRenameAuthSessionAuthError.Message, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSessionAuthError) GetMessage() string {
+	return v.AuthErrorDefaultFields.Message
+}
+
+// GetCode returns RenameAuthSessionRenameAuthSessionAuthError.Code, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSessionAuthError) GetCode() *string {
+	return v.AuthErrorDefaultFields.Code
+}
+
+func (v *RenameAuthSessionRenameAuthSessionAuthError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*RenameAuthSessionRenameAuthSessionAuthError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.RenameAuthSessionRenameAuthSessionAuthError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.AuthErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalRenameAuthSessionRenameAuthSessionAuthError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+}
+
+func (v *RenameAuthSessionRenameAuthSessionAuthError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *RenameAuthSessionRenameAuthSessionAuthError) __premarshalJSON() (*__premarshalRenameAuthSessionRenameAuthSessionAuthError, error) {
+	var retval __premarshalRenameAuthSessionRenameAuthSessionAuthError
+
+	retval.Typename = v.Typename
+	retval.Message = v.AuthErrorDefaultFields.Message
+	retval.Code = v.AuthErrorDefaultFields.Code
+	return &retval, nil
+}
+
+// RenameAuthSessionRenameAuthSessionNotFoundError includes the requested fields of the GraphQL type NotFoundError.
+type RenameAuthSessionRenameAuthSessionNotFoundError struct {
+	Typename                   *string `json:"__typename"`
+	NotFoundErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns RenameAuthSessionRenameAuthSessionNotFoundError.Typename, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSessionNotFoundError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns RenameAuthSessionRenameAuthSessionNotFoundError.Message, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSessionNotFoundError) GetMessage() string {
+	return v.NotFoundErrorDefaultFields.Message
+}
+
+// GetCode returns RenameAuthSessionRenameAuthSessionNotFoundError.Code, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSessionNotFoundError) GetCode() *string {
+	return v.NotFoundErrorDefaultFields.Code
+}
+
+// GetResourceType returns RenameAuthSessionRenameAuthSessionNotFoundError.ResourceType, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSessionNotFoundError) GetResourceType() string {
+	return v.NotFoundErrorDefaultFields.ResourceType
+}
+
+// GetResourceId returns RenameAuthSessionRenameAuthSessionNotFoundError.ResourceId, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSessionNotFoundError) GetResourceId() string {
+	return v.NotFoundErrorDefaultFields.ResourceId
+}
+
+func (v *RenameAuthSessionRenameAuthSessionNotFoundError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*RenameAuthSessionRenameAuthSessionNotFoundError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.RenameAuthSessionRenameAuthSessionNotFoundError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.NotFoundErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalRenameAuthSessionRenameAuthSessionNotFoundError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+
+	ResourceType string `json:"resourceType"`
+
+	ResourceId string `json:"resourceId"`
+}
+
+func (v *RenameAuthSessionRenameAuthSessionNotFoundError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *RenameAuthSessionRenameAuthSessionNotFoundError) __premarshalJSON() (*__premarshalRenameAuthSessionRenameAuthSessionNotFoundError, error) {
+	var retval __premarshalRenameAuthSessionRenameAuthSessionNotFoundError
+
+	retval.Typename = v.Typename
+	retval.Message = v.NotFoundErrorDefaultFields.Message
+	retval.Code = v.NotFoundErrorDefaultFields.Code
+	retval.ResourceType = v.NotFoundErrorDefaultFields.ResourceType
+	retval.ResourceId = v.NotFoundErrorDefaultFields.ResourceId
+	return &retval, nil
+}
+
+// RenameAuthSessionRenameAuthSessionRenameAuthSessionResult includes the requested fields of the GraphQL interface RenameAuthSessionResult.
+//
+// RenameAuthSessionRenameAuthSessionRenameAuthSessionResult is implemented by the following types:
+// RenameAuthSessionRenameAuthSessionAuthError
+// RenameAuthSessionRenameAuthSession
+// RenameAuthSessionRenameAuthSessionNotFoundError
+// RenameAuthSessionRenameAuthSessionValidationError
+type RenameAuthSessionRenameAuthSessionRenameAuthSessionResult interface {
+	implementsGraphQLInterfaceRenameAuthSessionRenameAuthSessionRenameAuthSessionResult()
+	// GetTypename returns the receiver's concrete GraphQL type-name (see interface doc for possible values).
+	GetTypename() *string
+}
+
+func (v *RenameAuthSessionRenameAuthSessionAuthError) implementsGraphQLInterfaceRenameAuthSessionRenameAuthSessionRenameAuthSessionResult() {
+}
+func (v *RenameAuthSessionRenameAuthSession) implementsGraphQLInterfaceRenameAuthSessionRenameAuthSessionRenameAuthSessionResult() {
+}
+func (v *RenameAuthSessionRenameAuthSessionNotFoundError) implementsGraphQLInterfaceRenameAuthSessionRenameAuthSessionRenameAuthSessionResult() {
+}
+func (v *RenameAuthSessionRenameAuthSessionValidationError) implementsGraphQLInterfaceRenameAuthSessionRenameAuthSessionRenameAuthSessionResult() {
+}
+
+func __unmarshalRenameAuthSessionRenameAuthSessionRenameAuthSessionResult(b []byte, v *RenameAuthSessionRenameAuthSessionRenameAuthSessionResult) error {
+	if string(b) == "null" {
+		return nil
+	}
+
+	var tn struct {
+		TypeName string `json:"__typename"`
+	}
+	err := json.Unmarshal(b, &tn)
+	if err != nil {
+		return err
+	}
+
+	switch tn.TypeName {
+	case "AuthError":
+		*v = new(RenameAuthSessionRenameAuthSessionAuthError)
+		return json.Unmarshal(b, *v)
+	case "AuthSession":
+		*v = new(RenameAuthSessionRenameAuthSession)
+		return json.Unmarshal(b, *v)
+	case "NotFoundError":
+		*v = new(RenameAuthSessionRenameAuthSessionNotFoundError)
+		return json.Unmarshal(b, *v)
+	case "ValidationError":
+		*v = new(RenameAuthSessionRenameAuthSessionValidationError)
+		return json.Unmarshal(b, *v)
+	case "":
+		return fmt.Errorf(
+			"response was missing RenameAuthSessionResult.__typename")
+	default:
+		*v = newUnknownMember(tn.TypeName, b)
+		return nil
+	}
+}
+
+func __marshalRenameAuthSessionRenameAuthSessionRenameAuthSessionResult(v *RenameAuthSessionRenameAuthSessionRenameAuthSessionResult) ([]byte, error) {
+
+	var typename string
+	switch v := (*v).(type) {
+	case *RenameAuthSessionRenameAuthSessionAuthError:
+		typename = "AuthError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalRenameAuthSessionRenameAuthSessionAuthError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *RenameAuthSessionRenameAuthSession:
+		typename = "AuthSession"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalRenameAuthSessionRenameAuthSession
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *RenameAuthSessionRenameAuthSessionNotFoundError:
+		typename = "NotFoundError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalRenameAuthSessionRenameAuthSessionNotFoundError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *RenameAuthSessionRenameAuthSessionValidationError:
+		typename = "ValidationError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalRenameAuthSessionRenameAuthSessionValidationError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case nil:
+		return []byte("null"), nil
+	case *UnknownMember:
+		return v.MarshalJSON()
+	default:
+		return nil, fmt.Errorf(
+			`unexpected concrete type for RenameAuthSessionRenameAuthSessionRenameAuthSessionResult: "%T"`, v)
+	}
+}
+
+// RenameAuthSessionRenameAuthSessionValidationError includes the requested fields of the GraphQL type ValidationError.
+type RenameAuthSessionRenameAuthSessionValidationError struct {
+	Typename                     *string `json:"__typename"`
+	ValidationErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns RenameAuthSessionRenameAuthSessionValidationError.Typename, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSessionValidationError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns RenameAuthSessionRenameAuthSessionValidationError.Message, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSessionValidationError) GetMessage() string {
+	return v.ValidationErrorDefaultFields.Message
+}
+
+// GetCode returns RenameAuthSessionRenameAuthSessionValidationError.Code, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSessionValidationError) GetCode() *string {
+	return v.ValidationErrorDefaultFields.Code
+}
+
+// GetField returns RenameAuthSessionRenameAuthSessionValidationError.Field, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSessionValidationError) GetField() *string {
+	return v.ValidationErrorDefaultFields.Field
+}
+
+// GetConstraint returns RenameAuthSessionRenameAuthSessionValidationError.Constraint, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionRenameAuthSessionValidationError) GetConstraint() *string {
+	return v.ValidationErrorDefaultFields.Constraint
+}
+
+func (v *RenameAuthSessionRenameAuthSessionValidationError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*RenameAuthSessionRenameAuthSessionValidationError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.RenameAuthSessionRenameAuthSessionValidationError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.ValidationErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalRenameAuthSessionRenameAuthSessionValidationError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+
+	Field *string `json:"field"`
+
+	Constraint *string `json:"constraint"`
+}
+
+func (v *RenameAuthSessionRenameAuthSessionValidationError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *RenameAuthSessionRenameAuthSessionValidationError) __premarshalJSON() (*__premarshalRenameAuthSessionRenameAuthSessionValidationError, error) {
+	var retval __premarshalRenameAuthSessionRenameAuthSessionValidationError
+
+	retval.Typename = v.Typename
+	retval.Message = v.ValidationErrorDefaultFields.Message
+	retval.Code = v.ValidationErrorDefaultFields.Code
+	retval.Field = v.ValidationErrorDefaultFields.Field
+	retval.Constraint = v.ValidationErrorDefaultFields.Constraint
+	return &retval, nil
+}
+
+// RenameAuthSessionResponse is returned by RenameAuthSession on success.
+type RenameAuthSessionResponse struct {
+	// Rename one of the signed-in user’s own sessions.
+	RenameAuthSession RenameAuthSessionRenameAuthSessionRenameAuthSessionResult `json:"-"`
+}
+
+// GetRenameAuthSession returns RenameAuthSessionResponse.RenameAuthSession, and is useful for accessing the field via an interface.
+func (v *RenameAuthSessionResponse) GetRenameAuthSession() RenameAuthSessionRenameAuthSessionRenameAuthSessionResult {
+	return v.RenameAuthSession
+}
+
+func (v *RenameAuthSessionResponse) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*RenameAuthSessionResponse
+		RenameAuthSession json.RawMessage `json:"renameAuthSession"`
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.RenameAuthSessionResponse = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	{
+		dst := &v.RenameAuthSession
+		src := firstPass.RenameAuthSession
+		if len(src) != 0 && string(src) != "null" {
+			err = __unmarshalRenameAuthSessionRenameAuthSessionRenameAuthSessionResult(
+				src, dst)
+			if err != nil {
+				return fmt.Errorf(
+					"unable to unmarshal RenameAuthSessionResponse.RenameAuthSession: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+type __premarshalRenameAuthSessionResponse struct {
+	RenameAuthSession json.RawMessage `json:"renameAuthSession"`
+}
+
+func (v *RenameAuthSessionResponse) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *RenameAuthSessionResponse) __premarshalJSON() (*__premarshalRenameAuthSessionResponse, error) {
+	var retval __premarshalRenameAuthSessionResponse
+
+	{
+
+		dst := &retval.RenameAuthSession
+		src := v.RenameAuthSession
+		var err error
+		*dst, err = __marshalRenameAuthSessionRenameAuthSessionRenameAuthSessionResult(
+			&src)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"unable to marshal RenameAuthSessionResponse.RenameAuthSession: %w", err)
+		}
+	}
+	return &retval, nil
+}
+
 // ReplayWebhookDeliveriesReplayWebhookDeliveriesAuthError includes the requested fields of the GraphQL type AuthError.
 type ReplayWebhookDeliveriesReplayWebhookDeliveriesAuthError struct {
 	Typename               *string `json:"__typename"`
@@ -88635,6 +89992,522 @@ func (v *ReviewMediaPlacementChangeInput) GetUpdates() []MediaPlacementVerbUpdat
 	return v.Updates
 }
 
+// RevokeAuthSessionPayloadDefaultFields includes the GraphQL fields of RevokeAuthSessionPayload requested by the fragment RevokeAuthSessionPayloadDefaultFields.
+type RevokeAuthSessionPayloadDefaultFields struct {
+	Success bool `json:"success"`
+	// True when the presented session was signed out.
+	Current bool `json:"current"`
+}
+
+// GetSuccess returns RevokeAuthSessionPayloadDefaultFields.Success, and is useful for accessing the field via an interface.
+func (v *RevokeAuthSessionPayloadDefaultFields) GetSuccess() bool { return v.Success }
+
+// GetCurrent returns RevokeAuthSessionPayloadDefaultFields.Current, and is useful for accessing the field via an interface.
+func (v *RevokeAuthSessionPayloadDefaultFields) GetCurrent() bool { return v.Current }
+
+// RevokeAuthSessionResponse is returned by RevokeAuthSession on success.
+type RevokeAuthSessionResponse struct {
+	// Sign out one of the signed-in user’s own sessions. Idempotent; current=true means this caller was signed out.
+	RevokeAuthSession RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionResult `json:"-"`
+}
+
+// GetRevokeAuthSession returns RevokeAuthSessionResponse.RevokeAuthSession, and is useful for accessing the field via an interface.
+func (v *RevokeAuthSessionResponse) GetRevokeAuthSession() RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionResult {
+	return v.RevokeAuthSession
+}
+
+func (v *RevokeAuthSessionResponse) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*RevokeAuthSessionResponse
+		RevokeAuthSession json.RawMessage `json:"revokeAuthSession"`
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.RevokeAuthSessionResponse = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	{
+		dst := &v.RevokeAuthSession
+		src := firstPass.RevokeAuthSession
+		if len(src) != 0 && string(src) != "null" {
+			err = __unmarshalRevokeAuthSessionRevokeAuthSessionRevokeAuthSessionResult(
+				src, dst)
+			if err != nil {
+				return fmt.Errorf(
+					"unable to unmarshal RevokeAuthSessionResponse.RevokeAuthSession: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+type __premarshalRevokeAuthSessionResponse struct {
+	RevokeAuthSession json.RawMessage `json:"revokeAuthSession"`
+}
+
+func (v *RevokeAuthSessionResponse) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *RevokeAuthSessionResponse) __premarshalJSON() (*__premarshalRevokeAuthSessionResponse, error) {
+	var retval __premarshalRevokeAuthSessionResponse
+
+	{
+
+		dst := &retval.RevokeAuthSession
+		src := v.RevokeAuthSession
+		var err error
+		*dst, err = __marshalRevokeAuthSessionRevokeAuthSessionRevokeAuthSessionResult(
+			&src)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"unable to marshal RevokeAuthSessionResponse.RevokeAuthSession: %w", err)
+		}
+	}
+	return &retval, nil
+}
+
+// RevokeAuthSessionRevokeAuthSessionAuthError includes the requested fields of the GraphQL type AuthError.
+type RevokeAuthSessionRevokeAuthSessionAuthError struct {
+	Typename               *string `json:"__typename"`
+	AuthErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns RevokeAuthSessionRevokeAuthSessionAuthError.Typename, and is useful for accessing the field via an interface.
+func (v *RevokeAuthSessionRevokeAuthSessionAuthError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns RevokeAuthSessionRevokeAuthSessionAuthError.Message, and is useful for accessing the field via an interface.
+func (v *RevokeAuthSessionRevokeAuthSessionAuthError) GetMessage() string {
+	return v.AuthErrorDefaultFields.Message
+}
+
+// GetCode returns RevokeAuthSessionRevokeAuthSessionAuthError.Code, and is useful for accessing the field via an interface.
+func (v *RevokeAuthSessionRevokeAuthSessionAuthError) GetCode() *string {
+	return v.AuthErrorDefaultFields.Code
+}
+
+func (v *RevokeAuthSessionRevokeAuthSessionAuthError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*RevokeAuthSessionRevokeAuthSessionAuthError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.RevokeAuthSessionRevokeAuthSessionAuthError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.AuthErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalRevokeAuthSessionRevokeAuthSessionAuthError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+}
+
+func (v *RevokeAuthSessionRevokeAuthSessionAuthError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *RevokeAuthSessionRevokeAuthSessionAuthError) __premarshalJSON() (*__premarshalRevokeAuthSessionRevokeAuthSessionAuthError, error) {
+	var retval __premarshalRevokeAuthSessionRevokeAuthSessionAuthError
+
+	retval.Typename = v.Typename
+	retval.Message = v.AuthErrorDefaultFields.Message
+	retval.Code = v.AuthErrorDefaultFields.Code
+	return &retval, nil
+}
+
+// RevokeAuthSessionRevokeAuthSessionNotFoundError includes the requested fields of the GraphQL type NotFoundError.
+type RevokeAuthSessionRevokeAuthSessionNotFoundError struct {
+	Typename                   *string `json:"__typename"`
+	NotFoundErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns RevokeAuthSessionRevokeAuthSessionNotFoundError.Typename, and is useful for accessing the field via an interface.
+func (v *RevokeAuthSessionRevokeAuthSessionNotFoundError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns RevokeAuthSessionRevokeAuthSessionNotFoundError.Message, and is useful for accessing the field via an interface.
+func (v *RevokeAuthSessionRevokeAuthSessionNotFoundError) GetMessage() string {
+	return v.NotFoundErrorDefaultFields.Message
+}
+
+// GetCode returns RevokeAuthSessionRevokeAuthSessionNotFoundError.Code, and is useful for accessing the field via an interface.
+func (v *RevokeAuthSessionRevokeAuthSessionNotFoundError) GetCode() *string {
+	return v.NotFoundErrorDefaultFields.Code
+}
+
+// GetResourceType returns RevokeAuthSessionRevokeAuthSessionNotFoundError.ResourceType, and is useful for accessing the field via an interface.
+func (v *RevokeAuthSessionRevokeAuthSessionNotFoundError) GetResourceType() string {
+	return v.NotFoundErrorDefaultFields.ResourceType
+}
+
+// GetResourceId returns RevokeAuthSessionRevokeAuthSessionNotFoundError.ResourceId, and is useful for accessing the field via an interface.
+func (v *RevokeAuthSessionRevokeAuthSessionNotFoundError) GetResourceId() string {
+	return v.NotFoundErrorDefaultFields.ResourceId
+}
+
+func (v *RevokeAuthSessionRevokeAuthSessionNotFoundError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*RevokeAuthSessionRevokeAuthSessionNotFoundError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.RevokeAuthSessionRevokeAuthSessionNotFoundError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.NotFoundErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalRevokeAuthSessionRevokeAuthSessionNotFoundError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+
+	ResourceType string `json:"resourceType"`
+
+	ResourceId string `json:"resourceId"`
+}
+
+func (v *RevokeAuthSessionRevokeAuthSessionNotFoundError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *RevokeAuthSessionRevokeAuthSessionNotFoundError) __premarshalJSON() (*__premarshalRevokeAuthSessionRevokeAuthSessionNotFoundError, error) {
+	var retval __premarshalRevokeAuthSessionRevokeAuthSessionNotFoundError
+
+	retval.Typename = v.Typename
+	retval.Message = v.NotFoundErrorDefaultFields.Message
+	retval.Code = v.NotFoundErrorDefaultFields.Code
+	retval.ResourceType = v.NotFoundErrorDefaultFields.ResourceType
+	retval.ResourceId = v.NotFoundErrorDefaultFields.ResourceId
+	return &retval, nil
+}
+
+// RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload includes the requested fields of the GraphQL type RevokeAuthSessionPayload.
+type RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload struct {
+	Typename                              *string `json:"__typename"`
+	RevokeAuthSessionPayloadDefaultFields `json:"-"`
+}
+
+// GetTypename returns RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload.Typename, and is useful for accessing the field via an interface.
+func (v *RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload) GetTypename() *string {
+	return v.Typename
+}
+
+// GetSuccess returns RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload.Success, and is useful for accessing the field via an interface.
+func (v *RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload) GetSuccess() bool {
+	return v.RevokeAuthSessionPayloadDefaultFields.Success
+}
+
+// GetCurrent returns RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload.Current, and is useful for accessing the field via an interface.
+func (v *RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload) GetCurrent() bool {
+	return v.RevokeAuthSessionPayloadDefaultFields.Current
+}
+
+func (v *RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.RevokeAuthSessionPayloadDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalRevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload struct {
+	Typename *string `json:"__typename"`
+
+	Success bool `json:"success"`
+
+	Current bool `json:"current"`
+}
+
+func (v *RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload) __premarshalJSON() (*__premarshalRevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload, error) {
+	var retval __premarshalRevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload
+
+	retval.Typename = v.Typename
+	retval.Success = v.RevokeAuthSessionPayloadDefaultFields.Success
+	retval.Current = v.RevokeAuthSessionPayloadDefaultFields.Current
+	return &retval, nil
+}
+
+// RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionResult includes the requested fields of the GraphQL interface RevokeAuthSessionResult.
+//
+// RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionResult is implemented by the following types:
+// RevokeAuthSessionRevokeAuthSessionAuthError
+// RevokeAuthSessionRevokeAuthSessionNotFoundError
+// RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload
+// RevokeAuthSessionRevokeAuthSessionValidationError
+type RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionResult interface {
+	implementsGraphQLInterfaceRevokeAuthSessionRevokeAuthSessionRevokeAuthSessionResult()
+	// GetTypename returns the receiver's concrete GraphQL type-name (see interface doc for possible values).
+	GetTypename() *string
+}
+
+func (v *RevokeAuthSessionRevokeAuthSessionAuthError) implementsGraphQLInterfaceRevokeAuthSessionRevokeAuthSessionRevokeAuthSessionResult() {
+}
+func (v *RevokeAuthSessionRevokeAuthSessionNotFoundError) implementsGraphQLInterfaceRevokeAuthSessionRevokeAuthSessionRevokeAuthSessionResult() {
+}
+func (v *RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload) implementsGraphQLInterfaceRevokeAuthSessionRevokeAuthSessionRevokeAuthSessionResult() {
+}
+func (v *RevokeAuthSessionRevokeAuthSessionValidationError) implementsGraphQLInterfaceRevokeAuthSessionRevokeAuthSessionRevokeAuthSessionResult() {
+}
+
+func __unmarshalRevokeAuthSessionRevokeAuthSessionRevokeAuthSessionResult(b []byte, v *RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionResult) error {
+	if string(b) == "null" {
+		return nil
+	}
+
+	var tn struct {
+		TypeName string `json:"__typename"`
+	}
+	err := json.Unmarshal(b, &tn)
+	if err != nil {
+		return err
+	}
+
+	switch tn.TypeName {
+	case "AuthError":
+		*v = new(RevokeAuthSessionRevokeAuthSessionAuthError)
+		return json.Unmarshal(b, *v)
+	case "NotFoundError":
+		*v = new(RevokeAuthSessionRevokeAuthSessionNotFoundError)
+		return json.Unmarshal(b, *v)
+	case "RevokeAuthSessionPayload":
+		*v = new(RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload)
+		return json.Unmarshal(b, *v)
+	case "ValidationError":
+		*v = new(RevokeAuthSessionRevokeAuthSessionValidationError)
+		return json.Unmarshal(b, *v)
+	case "":
+		return fmt.Errorf(
+			"response was missing RevokeAuthSessionResult.__typename")
+	default:
+		*v = newUnknownMember(tn.TypeName, b)
+		return nil
+	}
+}
+
+func __marshalRevokeAuthSessionRevokeAuthSessionRevokeAuthSessionResult(v *RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionResult) ([]byte, error) {
+
+	var typename string
+	switch v := (*v).(type) {
+	case *RevokeAuthSessionRevokeAuthSessionAuthError:
+		typename = "AuthError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalRevokeAuthSessionRevokeAuthSessionAuthError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *RevokeAuthSessionRevokeAuthSessionNotFoundError:
+		typename = "NotFoundError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalRevokeAuthSessionRevokeAuthSessionNotFoundError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload:
+		typename = "RevokeAuthSessionPayload"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalRevokeAuthSessionRevokeAuthSessionRevokeAuthSessionPayload
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *RevokeAuthSessionRevokeAuthSessionValidationError:
+		typename = "ValidationError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalRevokeAuthSessionRevokeAuthSessionValidationError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case nil:
+		return []byte("null"), nil
+	case *UnknownMember:
+		return v.MarshalJSON()
+	default:
+		return nil, fmt.Errorf(
+			`unexpected concrete type for RevokeAuthSessionRevokeAuthSessionRevokeAuthSessionResult: "%T"`, v)
+	}
+}
+
+// RevokeAuthSessionRevokeAuthSessionValidationError includes the requested fields of the GraphQL type ValidationError.
+type RevokeAuthSessionRevokeAuthSessionValidationError struct {
+	Typename                     *string `json:"__typename"`
+	ValidationErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns RevokeAuthSessionRevokeAuthSessionValidationError.Typename, and is useful for accessing the field via an interface.
+func (v *RevokeAuthSessionRevokeAuthSessionValidationError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns RevokeAuthSessionRevokeAuthSessionValidationError.Message, and is useful for accessing the field via an interface.
+func (v *RevokeAuthSessionRevokeAuthSessionValidationError) GetMessage() string {
+	return v.ValidationErrorDefaultFields.Message
+}
+
+// GetCode returns RevokeAuthSessionRevokeAuthSessionValidationError.Code, and is useful for accessing the field via an interface.
+func (v *RevokeAuthSessionRevokeAuthSessionValidationError) GetCode() *string {
+	return v.ValidationErrorDefaultFields.Code
+}
+
+// GetField returns RevokeAuthSessionRevokeAuthSessionValidationError.Field, and is useful for accessing the field via an interface.
+func (v *RevokeAuthSessionRevokeAuthSessionValidationError) GetField() *string {
+	return v.ValidationErrorDefaultFields.Field
+}
+
+// GetConstraint returns RevokeAuthSessionRevokeAuthSessionValidationError.Constraint, and is useful for accessing the field via an interface.
+func (v *RevokeAuthSessionRevokeAuthSessionValidationError) GetConstraint() *string {
+	return v.ValidationErrorDefaultFields.Constraint
+}
+
+func (v *RevokeAuthSessionRevokeAuthSessionValidationError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*RevokeAuthSessionRevokeAuthSessionValidationError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.RevokeAuthSessionRevokeAuthSessionValidationError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.ValidationErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalRevokeAuthSessionRevokeAuthSessionValidationError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+
+	Field *string `json:"field"`
+
+	Constraint *string `json:"constraint"`
+}
+
+func (v *RevokeAuthSessionRevokeAuthSessionValidationError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *RevokeAuthSessionRevokeAuthSessionValidationError) __premarshalJSON() (*__premarshalRevokeAuthSessionRevokeAuthSessionValidationError, error) {
+	var retval __premarshalRevokeAuthSessionRevokeAuthSessionValidationError
+
+	retval.Typename = v.Typename
+	retval.Message = v.ValidationErrorDefaultFields.Message
+	retval.Code = v.ValidationErrorDefaultFields.Code
+	retval.Field = v.ValidationErrorDefaultFields.Field
+	retval.Constraint = v.ValidationErrorDefaultFields.Constraint
+	return &retval, nil
+}
+
 // RevokeClusterInviteResponse is returned by RevokeClusterInvite on success.
 type RevokeClusterInviteResponse struct {
 	// Revoke a cluster invite.
@@ -89453,6 +91326,410 @@ func __marshalRevokeDeveloperTokenRevokeDeveloperTokenRevokeDeveloperTokenResult
 		return nil, fmt.Errorf(
 			`unexpected concrete type for RevokeDeveloperTokenRevokeDeveloperTokenRevokeDeveloperTokenResult: "%T"`, v)
 	}
+}
+
+// RevokeOtherAuthSessionsPayloadDefaultFields includes the GraphQL fields of RevokeOtherAuthSessionsPayload requested by the fragment RevokeOtherAuthSessionsPayloadDefaultFields.
+type RevokeOtherAuthSessionsPayloadDefaultFields struct {
+	RevokedCount int `json:"revokedCount"`
+}
+
+// GetRevokedCount returns RevokeOtherAuthSessionsPayloadDefaultFields.RevokedCount, and is useful for accessing the field via an interface.
+func (v *RevokeOtherAuthSessionsPayloadDefaultFields) GetRevokedCount() int { return v.RevokedCount }
+
+// RevokeOtherAuthSessionsResponse is returned by RevokeOtherAuthSessions on success.
+type RevokeOtherAuthSessionsResponse struct {
+	// Sign out every other session while retaining the presented named session.
+	RevokeOtherAuthSessions RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsResult `json:"-"`
+}
+
+// GetRevokeOtherAuthSessions returns RevokeOtherAuthSessionsResponse.RevokeOtherAuthSessions, and is useful for accessing the field via an interface.
+func (v *RevokeOtherAuthSessionsResponse) GetRevokeOtherAuthSessions() RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsResult {
+	return v.RevokeOtherAuthSessions
+}
+
+func (v *RevokeOtherAuthSessionsResponse) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*RevokeOtherAuthSessionsResponse
+		RevokeOtherAuthSessions json.RawMessage `json:"revokeOtherAuthSessions"`
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.RevokeOtherAuthSessionsResponse = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	{
+		dst := &v.RevokeOtherAuthSessions
+		src := firstPass.RevokeOtherAuthSessions
+		if len(src) != 0 && string(src) != "null" {
+			err = __unmarshalRevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsResult(
+				src, dst)
+			if err != nil {
+				return fmt.Errorf(
+					"unable to unmarshal RevokeOtherAuthSessionsResponse.RevokeOtherAuthSessions: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+type __premarshalRevokeOtherAuthSessionsResponse struct {
+	RevokeOtherAuthSessions json.RawMessage `json:"revokeOtherAuthSessions"`
+}
+
+func (v *RevokeOtherAuthSessionsResponse) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *RevokeOtherAuthSessionsResponse) __premarshalJSON() (*__premarshalRevokeOtherAuthSessionsResponse, error) {
+	var retval __premarshalRevokeOtherAuthSessionsResponse
+
+	{
+
+		dst := &retval.RevokeOtherAuthSessions
+		src := v.RevokeOtherAuthSessions
+		var err error
+		*dst, err = __marshalRevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsResult(
+			&src)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"unable to marshal RevokeOtherAuthSessionsResponse.RevokeOtherAuthSessions: %w", err)
+		}
+	}
+	return &retval, nil
+}
+
+// RevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError includes the requested fields of the GraphQL type AuthError.
+type RevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError struct {
+	Typename               *string `json:"__typename"`
+	AuthErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns RevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError.Typename, and is useful for accessing the field via an interface.
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError) GetTypename() *string {
+	return v.Typename
+}
+
+// GetMessage returns RevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError.Message, and is useful for accessing the field via an interface.
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError) GetMessage() string {
+	return v.AuthErrorDefaultFields.Message
+}
+
+// GetCode returns RevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError.Code, and is useful for accessing the field via an interface.
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError) GetCode() *string {
+	return v.AuthErrorDefaultFields.Code
+}
+
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*RevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.RevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.AuthErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalRevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+}
+
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError) __premarshalJSON() (*__premarshalRevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError, error) {
+	var retval __premarshalRevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError
+
+	retval.Typename = v.Typename
+	retval.Message = v.AuthErrorDefaultFields.Message
+	retval.Code = v.AuthErrorDefaultFields.Code
+	return &retval, nil
+}
+
+// RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload includes the requested fields of the GraphQL type RevokeOtherAuthSessionsPayload.
+type RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload struct {
+	Typename                                    *string `json:"__typename"`
+	RevokeOtherAuthSessionsPayloadDefaultFields `json:"-"`
+}
+
+// GetTypename returns RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload.Typename, and is useful for accessing the field via an interface.
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload) GetTypename() *string {
+	return v.Typename
+}
+
+// GetRevokedCount returns RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload.RevokedCount, and is useful for accessing the field via an interface.
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload) GetRevokedCount() int {
+	return v.RevokeOtherAuthSessionsPayloadDefaultFields.RevokedCount
+}
+
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.RevokeOtherAuthSessionsPayloadDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalRevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload struct {
+	Typename *string `json:"__typename"`
+
+	RevokedCount int `json:"revokedCount"`
+}
+
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload) __premarshalJSON() (*__premarshalRevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload, error) {
+	var retval __premarshalRevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload
+
+	retval.Typename = v.Typename
+	retval.RevokedCount = v.RevokeOtherAuthSessionsPayloadDefaultFields.RevokedCount
+	return &retval, nil
+}
+
+// RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsResult includes the requested fields of the GraphQL interface RevokeOtherAuthSessionsResult.
+//
+// RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsResult is implemented by the following types:
+// RevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError
+// RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload
+// RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError
+type RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsResult interface {
+	implementsGraphQLInterfaceRevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsResult()
+	// GetTypename returns the receiver's concrete GraphQL type-name (see interface doc for possible values).
+	GetTypename() *string
+}
+
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError) implementsGraphQLInterfaceRevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsResult() {
+}
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload) implementsGraphQLInterfaceRevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsResult() {
+}
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError) implementsGraphQLInterfaceRevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsResult() {
+}
+
+func __unmarshalRevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsResult(b []byte, v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsResult) error {
+	if string(b) == "null" {
+		return nil
+	}
+
+	var tn struct {
+		TypeName string `json:"__typename"`
+	}
+	err := json.Unmarshal(b, &tn)
+	if err != nil {
+		return err
+	}
+
+	switch tn.TypeName {
+	case "AuthError":
+		*v = new(RevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError)
+		return json.Unmarshal(b, *v)
+	case "RevokeOtherAuthSessionsPayload":
+		*v = new(RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload)
+		return json.Unmarshal(b, *v)
+	case "ValidationError":
+		*v = new(RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError)
+		return json.Unmarshal(b, *v)
+	case "":
+		return fmt.Errorf(
+			"response was missing RevokeOtherAuthSessionsResult.__typename")
+	default:
+		*v = newUnknownMember(tn.TypeName, b)
+		return nil
+	}
+}
+
+func __marshalRevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsResult(v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsResult) ([]byte, error) {
+
+	var typename string
+	switch v := (*v).(type) {
+	case *RevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError:
+		typename = "AuthError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalRevokeOtherAuthSessionsRevokeOtherAuthSessionsAuthError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload:
+		typename = "RevokeOtherAuthSessionsPayload"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalRevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsPayload
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError:
+		typename = "ValidationError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalRevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case nil:
+		return []byte("null"), nil
+	case *UnknownMember:
+		return v.MarshalJSON()
+	default:
+		return nil, fmt.Errorf(
+			`unexpected concrete type for RevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsResult: "%T"`, v)
+	}
+}
+
+// RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError includes the requested fields of the GraphQL type ValidationError.
+type RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError struct {
+	Typename                     *string `json:"__typename"`
+	ValidationErrorDefaultFields `json:"-"`
+}
+
+// GetTypename returns RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError.Typename, and is useful for accessing the field via an interface.
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError) GetTypename() *string {
+	return v.Typename
+}
+
+// GetMessage returns RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError.Message, and is useful for accessing the field via an interface.
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError) GetMessage() string {
+	return v.ValidationErrorDefaultFields.Message
+}
+
+// GetCode returns RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError.Code, and is useful for accessing the field via an interface.
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError) GetCode() *string {
+	return v.ValidationErrorDefaultFields.Code
+}
+
+// GetField returns RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError.Field, and is useful for accessing the field via an interface.
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError) GetField() *string {
+	return v.ValidationErrorDefaultFields.Field
+}
+
+// GetConstraint returns RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError.Constraint, and is useful for accessing the field via an interface.
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError) GetConstraint() *string {
+	return v.ValidationErrorDefaultFields.Constraint
+}
+
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.ValidationErrorDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalRevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+
+	Field *string `json:"field"`
+
+	Constraint *string `json:"constraint"`
+}
+
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *RevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError) __premarshalJSON() (*__premarshalRevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError, error) {
+	var retval __premarshalRevokeOtherAuthSessionsRevokeOtherAuthSessionsValidationError
+
+	retval.Typename = v.Typename
+	retval.Message = v.ValidationErrorDefaultFields.Message
+	retval.Code = v.ValidationErrorDefaultFields.Code
+	retval.Field = v.ValidationErrorDefaultFields.Field
+	retval.Constraint = v.ValidationErrorDefaultFields.Constraint
+	return &retval, nil
 }
 
 // RevokeSigningKeyResponse is returned by RevokeSigningKey on success.
@@ -123429,6 +125706,18 @@ type __ChangeBillingTierInput struct {
 // GetTierId returns __ChangeBillingTierInput.TierId, and is useful for accessing the field via an interface.
 func (v *__ChangeBillingTierInput) GetTierId() string { return v.TierId }
 
+// __ChangePasswordInput is used internally by genqlient
+type __ChangePasswordInput struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+}
+
+// GetCurrentPassword returns __ChangePasswordInput.CurrentPassword, and is useful for accessing the field via an interface.
+func (v *__ChangePasswordInput) GetCurrentPassword() string { return v.CurrentPassword }
+
+// GetNewPassword returns __ChangePasswordInput.NewPassword, and is useful for accessing the field via an interface.
+func (v *__ChangePasswordInput) GetNewPassword() string { return v.NewPassword }
+
 // __CompleteVodUploadInput is used internally by genqlient
 type __CompleteVodUploadInput struct {
 	Input CompleteVodUploadInput `json:"input"`
@@ -123812,6 +126101,18 @@ func (v *__GetArtifactStatesConnectionInput) GetContentType() *string { return v
 
 // GetStage returns __GetArtifactStatesConnectionInput.Stage, and is useful for accessing the field via an interface.
 func (v *__GetArtifactStatesConnectionInput) GetStage() *string { return v.Stage }
+
+// __GetAuthSessionsConnectionInput is used internally by genqlient
+type __GetAuthSessionsConnectionInput struct {
+	First *int    `json:"first"`
+	After *string `json:"after"`
+}
+
+// GetFirst returns __GetAuthSessionsConnectionInput.First, and is useful for accessing the field via an interface.
+func (v *__GetAuthSessionsConnectionInput) GetFirst() *int { return v.First }
+
+// GetAfter returns __GetAuthSessionsConnectionInput.After, and is useful for accessing the field via an interface.
+func (v *__GetAuthSessionsConnectionInput) GetAfter() *string { return v.After }
 
 // __GetBalanceTransactionsConnectionInput is used internally by genqlient
 type __GetBalanceTransactionsConnectionInput struct {
@@ -125609,6 +127910,18 @@ func (v *__RejectClusterSubscriptionInput) GetSubscriptionId() string { return v
 // GetReason returns __RejectClusterSubscriptionInput.Reason, and is useful for accessing the field via an interface.
 func (v *__RejectClusterSubscriptionInput) GetReason() *string { return v.Reason }
 
+// __RenameAuthSessionInput is used internally by genqlient
+type __RenameAuthSessionInput struct {
+	Id    string `json:"id"`
+	Label string `json:"label"`
+}
+
+// GetId returns __RenameAuthSessionInput.Id, and is useful for accessing the field via an interface.
+func (v *__RenameAuthSessionInput) GetId() string { return v.Id }
+
+// GetLabel returns __RenameAuthSessionInput.Label, and is useful for accessing the field via an interface.
+func (v *__RenameAuthSessionInput) GetLabel() string { return v.Label }
+
 // __ReplayWebhookDeliveriesInput is used internally by genqlient
 type __ReplayWebhookDeliveriesInput struct {
 	EndpointId    string    `json:"endpointId"`
@@ -125686,6 +127999,14 @@ func (v *__ResolveViewerEndpointInput) GetContentId() string { return v.ContentI
 
 // GetProtocol returns __ResolveViewerEndpointInput.Protocol, and is useful for accessing the field via an interface.
 func (v *__ResolveViewerEndpointInput) GetProtocol() *MediaViewerProtocol { return v.Protocol }
+
+// __RevokeAuthSessionInput is used internally by genqlient
+type __RevokeAuthSessionInput struct {
+	Id string `json:"id"`
+}
+
+// GetId returns __RevokeAuthSessionInput.Id, and is useful for accessing the field via an interface.
+func (v *__RevokeAuthSessionInput) GetId() string { return v.Id }
 
 // __RevokeClusterInviteInput is used internally by genqlient
 type __RevokeClusterInviteInput struct {
@@ -126771,6 +129092,62 @@ func ChangeBillingTier(
 	}
 
 	data_ = &ChangeBillingTierResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The mutation executed by ChangePassword.
+const ChangePassword_Operation = `
+mutation ChangePassword ($currentPassword: String!, $newPassword: String!) {
+	changePassword(currentPassword: $currentPassword, newPassword: $newPassword) {
+		__typename
+		... ChangePasswordPayloadDefaultFields
+		... ValidationErrorDefaultFields
+		... AuthErrorDefaultFields
+	}
+}
+fragment ChangePasswordPayloadDefaultFields on ChangePasswordPayload {
+	success
+	revokedCount
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+	message
+	code
+	field
+	constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+	message
+	code
+}
+`
+
+// ChangePassword executes the corresponding GraphQL operation.
+//
+// Change the password and sign out other sessions, retaining this session.
+func ChangePassword(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	currentPassword string,
+	newPassword string,
+) (data_ *ChangePasswordResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "ChangePassword",
+		Query:  ChangePassword_Operation,
+		Variables: &__ChangePasswordInput{
+			CurrentPassword: currentPassword,
+			NewPassword:     newPassword,
+		},
+	}
+
+	data_ = &ChangePasswordResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
@@ -129437,6 +131814,74 @@ func GetArtifactStatesConnection(
 	}
 
 	data_ = &GetArtifactStatesConnectionResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The query executed by GetAuthSessionsConnection.
+const GetAuthSessionsConnection_Operation = `
+query GetAuthSessionsConnection ($first: Int, $after: String) {
+	authSessionsConnection(first: $first, after: $after) {
+		edges {
+			cursor
+			node {
+				... AuthSessionDefaultFields
+			}
+		}
+		pageInfo {
+			... PageInfoDefaultFields
+		}
+		totalCount
+	}
+}
+fragment AuthSessionDefaultFields on AuthSession {
+	id
+	clientKind
+	clientId
+	authMethod
+	label
+	clientVersion
+	ipAddress
+	location
+	createdAt
+	lastActiveAt
+	expiresAt
+	current
+}
+fragment PageInfoDefaultFields on PageInfo {
+	startCursor
+	endCursor
+	hasNextPage
+	hasPreviousPage
+}
+`
+
+// GetAuthSessionsConnection executes the corresponding GraphQL operation.
+//
+// The signed-in user’s own interactive sessions, newest first. Supports first=1..100.
+func GetAuthSessionsConnection(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	first *int,
+	after *string,
+) (data_ *GetAuthSessionsConnectionResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "GetAuthSessionsConnection",
+		Query:  GetAuthSessionsConnection_Operation,
+		Variables: &__GetAuthSessionsConnectionInput{
+			First: first,
+			After: after,
+		},
+	}
+
+	data_ = &GetAuthSessionsConnectionResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
@@ -143977,6 +146422,79 @@ func RejectClusterSubscription(
 	return data_, err_
 }
 
+// The mutation executed by RenameAuthSession.
+const RenameAuthSession_Operation = `
+mutation RenameAuthSession ($id: ID!, $label: String!) {
+	renameAuthSession(id: $id, label: $label) {
+		__typename
+		... AuthSessionDefaultFields
+		... ValidationErrorDefaultFields
+		... NotFoundErrorDefaultFields
+		... AuthErrorDefaultFields
+	}
+}
+fragment AuthSessionDefaultFields on AuthSession {
+	id
+	clientKind
+	clientId
+	authMethod
+	label
+	clientVersion
+	ipAddress
+	location
+	createdAt
+	lastActiveAt
+	expiresAt
+	current
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+	message
+	code
+	field
+	constraint
+}
+fragment NotFoundErrorDefaultFields on NotFoundError {
+	message
+	code
+	resourceType
+	resourceId
+}
+fragment AuthErrorDefaultFields on AuthError {
+	message
+	code
+}
+`
+
+// RenameAuthSession executes the corresponding GraphQL operation.
+//
+// Rename one of the signed-in user’s own sessions.
+func RenameAuthSession(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	id string,
+	label string,
+) (data_ *RenameAuthSessionResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "RenameAuthSession",
+		Query:  RenameAuthSession_Operation,
+		Variables: &__RenameAuthSessionInput{
+			Id:    id,
+			Label: label,
+		},
+	}
+
+	data_ = &RenameAuthSessionResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
 // The mutation executed by ReplayWebhookDeliveries.
 const ReplayWebhookDeliveries_Operation = `
 mutation ReplayWebhookDeliveries ($endpointId: ID!, $createdAfter: Time!, $createdBefore: Time!) {
@@ -144488,6 +147006,67 @@ func ResolveViewerEndpoint(
 	return data_, err_
 }
 
+// The mutation executed by RevokeAuthSession.
+const RevokeAuthSession_Operation = `
+mutation RevokeAuthSession ($id: ID!) {
+	revokeAuthSession(id: $id) {
+		__typename
+		... RevokeAuthSessionPayloadDefaultFields
+		... ValidationErrorDefaultFields
+		... NotFoundErrorDefaultFields
+		... AuthErrorDefaultFields
+	}
+}
+fragment RevokeAuthSessionPayloadDefaultFields on RevokeAuthSessionPayload {
+	success
+	current
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+	message
+	code
+	field
+	constraint
+}
+fragment NotFoundErrorDefaultFields on NotFoundError {
+	message
+	code
+	resourceType
+	resourceId
+}
+fragment AuthErrorDefaultFields on AuthError {
+	message
+	code
+}
+`
+
+// RevokeAuthSession executes the corresponding GraphQL operation.
+//
+// Sign out one of the signed-in user’s own sessions. Idempotent; current=true means this caller was signed out.
+func RevokeAuthSession(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	id string,
+) (data_ *RevokeAuthSessionResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "RevokeAuthSession",
+		Query:  RevokeAuthSession_Operation,
+		Variables: &__RevokeAuthSessionInput{
+			Id: id,
+		},
+	}
+
+	data_ = &RevokeAuthSessionResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
 // The mutation executed by RevokeClusterInvite.
 const RevokeClusterInvite_Operation = `
 mutation RevokeClusterInvite ($inviteId: ID!) {
@@ -144590,6 +147169,55 @@ func RevokeDeveloperToken(
 	}
 
 	data_ = &RevokeDeveloperTokenResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The mutation executed by RevokeOtherAuthSessions.
+const RevokeOtherAuthSessions_Operation = `
+mutation RevokeOtherAuthSessions {
+	revokeOtherAuthSessions {
+		__typename
+		... RevokeOtherAuthSessionsPayloadDefaultFields
+		... ValidationErrorDefaultFields
+		... AuthErrorDefaultFields
+	}
+}
+fragment RevokeOtherAuthSessionsPayloadDefaultFields on RevokeOtherAuthSessionsPayload {
+	revokedCount
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+	message
+	code
+	field
+	constraint
+}
+fragment AuthErrorDefaultFields on AuthError {
+	message
+	code
+}
+`
+
+// RevokeOtherAuthSessions executes the corresponding GraphQL operation.
+//
+// Sign out every other session while retaining the presented named session.
+func RevokeOtherAuthSessions(
+	ctx_ context.Context,
+	client_ graphql.Client,
+) (data_ *RevokeOtherAuthSessionsResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "RevokeOtherAuthSessions",
+		Query:  RevokeOtherAuthSessions_Operation,
+	}
+
+	data_ = &RevokeOtherAuthSessionsResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
@@ -146661,6 +149289,8 @@ func (v *UnknownMember) implementsGraphQLInterfaceBootstrapEdgeBootstrapEdgeBoot
 }
 func (v *UnknownMember) implementsGraphQLInterfaceChangeBillingTierChangeBillingTierChangeBillingTierResult() {
 }
+func (v *UnknownMember) implementsGraphQLInterfaceChangePasswordChangePasswordChangePasswordResult() {
+}
 func (v *UnknownMember) implementsGraphQLInterfaceCompleteVodUploadCompleteVodUploadCompleteVodUploadResult() {
 }
 func (v *UnknownMember) implementsGraphQLInterfaceCreateClipCreateClipCreateClipResult() {
@@ -146749,6 +149379,8 @@ func (v *UnknownMember) implementsGraphQLInterfaceRefreshStreamKeyRefreshStreamK
 }
 func (v *UnknownMember) implementsGraphQLInterfaceRejectClusterSubscriptionRejectClusterSubscriptionClusterSubscriptionResult() {
 }
+func (v *UnknownMember) implementsGraphQLInterfaceRenameAuthSessionRenameAuthSessionRenameAuthSessionResult() {
+}
 func (v *UnknownMember) implementsGraphQLInterfaceReplayWebhookDeliveriesReplayWebhookDeliveriesReplayWebhookDeliveriesResult() {
 }
 func (v *UnknownMember) implementsGraphQLInterfaceReplayWebhookDeliveryReplayWebhookDeliveryReplayWebhookDeliveryResult() {
@@ -146759,9 +149391,13 @@ func (v *UnknownMember) implementsGraphQLInterfaceResetMediaRetentionOverrideRes
 }
 func (v *UnknownMember) implementsGraphQLInterfaceResolveIncidentResolveIncidentIncidentMutationResult() {
 }
+func (v *UnknownMember) implementsGraphQLInterfaceRevokeAuthSessionRevokeAuthSessionRevokeAuthSessionResult() {
+}
 func (v *UnknownMember) implementsGraphQLInterfaceRevokeClusterInviteRevokeClusterInviteRevokeClusterInviteResult() {
 }
 func (v *UnknownMember) implementsGraphQLInterfaceRevokeDeveloperTokenRevokeDeveloperTokenRevokeDeveloperTokenResult() {
+}
+func (v *UnknownMember) implementsGraphQLInterfaceRevokeOtherAuthSessionsRevokeOtherAuthSessionsRevokeOtherAuthSessionsResult() {
 }
 func (v *UnknownMember) implementsGraphQLInterfaceRevokeSigningKeyRevokeSigningKeyRevokeSigningKeyResult() {
 }

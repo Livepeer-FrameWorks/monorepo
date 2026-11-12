@@ -8,79 +8,81 @@ const types: CompressedTypeMap<number> = {
         4,
         7,
         9,
-        55,
-        57,
-        67,
-        83,
-        89,
+        31,
+        33,
+        60,
+        62,
+        74,
         90,
-        101,
-        136,
-        139,
-        145,
-        147,
-        165,
-        166,
-        167,
-        168,
-        170,
-        171,
+        96,
+        97,
+        108,
+        143,
+        146,
+        152,
+        154,
         172,
+        173,
+        174,
+        175,
+        177,
+        178,
         179,
-        180,
-        189,
-        192,
-        193,
-        194,
+        186,
+        187,
+        196,
+        199,
         200,
-        203,
-        204,
-        212,
-        214,
-        230,
+        201,
+        207,
+        210,
+        211,
+        219,
+        221,
         237,
-        238,
+        244,
         245,
         252,
-        256,
-        268,
-        273,
-        276,
-        278,
-        279,
+        259,
+        263,
+        275,
+        280,
         283,
+        285,
         286,
-        287,
         290,
-        298,
-        299,
-        318,
-        322,
-        337,
-        338,
-        339,
-        340,
-        351,
-        391,
-        423,
-        425,
+        293,
+        294,
+        297,
+        305,
+        306,
+        325,
+        329,
+        344,
+        345,
+        346,
+        347,
+        358,
+        399,
+        435,
         437,
-        445,
-        446,
-        451,
-        455,
+        449,
         457,
-        485,
-        486,
-        503,
-        504,
-        532,
-        566,
-        586,
-        606,
-        607,
-        609,
-        613
+        458,
+        463,
+        467,
+        469,
+        497,
+        498,
+        515,
+        516,
+        544,
+        578,
+        598,
+        618,
+        619,
+        621,
+        625
     ],
     "types": {
         "APIUsage": {
@@ -88,7 +90,7 @@ const types: CompressedTypeMap<number> = {
                 3,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "authType": [
                         1
@@ -97,7 +99,7 @@ const types: CompressedTypeMap<number> = {
                         1
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -118,7 +120,7 @@ const types: CompressedTypeMap<number> = {
                 8
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -174,7 +176,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "timestamp": [
-                532
+                544
             ],
             "authType": [
                 1
@@ -210,7 +212,7 @@ const types: CompressedTypeMap<number> = {
         "ID": {},
         "APIUsageSummary": {
             "date": [
-                532
+                544
             ],
             "authType": [
                 1
@@ -239,16 +241,16 @@ const types: CompressedTypeMap<number> = {
         },
         "AbortVodUploadResult": {
             "on_DeleteSuccess": [
-                154
+                161
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -256,7 +258,7 @@ const types: CompressedTypeMap<number> = {
         },
         "AccountSuspended": {
             "reason": [
-                172
+                179
             ],
             "__typename": [
                 1
@@ -264,10 +266,10 @@ const types: CompressedTypeMap<number> = {
         },
         "Analytics": {
             "overview": [
-                341,
+                348,
                 {
                     "timeRange": [
-                        534
+                        546
                     ]
                 }
             ],
@@ -289,16 +291,16 @@ const types: CompressedTypeMap<number> = {
         },
         "AnalyticsHealth": {
             "streamHealthConnection": [
-                493,
+                505,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -306,17 +308,17 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "streamHealth5mConnection": [
-                489,
+                501,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9,
                         "ID!"
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -324,10 +326,10 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "rebufferingEventsConnection": [
-                381,
+                388,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9
@@ -336,7 +338,7 @@ const types: CompressedTypeMap<number> = {
                         1
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -344,10 +346,10 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "clientQoeConnection": [
-                63,
+                70,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9
@@ -356,7 +358,7 @@ const types: CompressedTypeMap<number> = {
                         1
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -364,13 +366,13 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "streamHealthSummary": [
-                494,
+                506,
                 {
                     "streamId": [
                         9
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -378,13 +380,13 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "clientQoeSummary": [
-                65,
+                72,
                 {
                     "streamId": [
                         9
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -392,7 +394,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "playerBootSummary": [
-                355,
+                362,
                 {
                     "streamId": [
                         9
@@ -401,7 +403,7 @@ const types: CompressedTypeMap<number> = {
                         1
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -409,7 +411,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "sessionQoeSummary": [
-                411,
+                423,
                 {
                     "streamId": [
                         9
@@ -418,7 +420,7 @@ const types: CompressedTypeMap<number> = {
                         1
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -426,14 +428,14 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "vodRetention": [
-                587,
+                599,
                 {
                     "artifactHash": [
                         1,
                         "String!"
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -441,7 +443,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "playerBootTimeSeries": [
-                356,
+                363,
                 {
                     "streamId": [
                         9
@@ -450,7 +452,7 @@ const types: CompressedTypeMap<number> = {
                         1
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "interval": [
                         1
@@ -461,7 +463,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "sessionQoeTimeSeries": [
-                412,
+                424,
                 {
                     "streamId": [
                         9
@@ -470,7 +472,7 @@ const types: CompressedTypeMap<number> = {
                         1
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "interval": [
                         1
@@ -481,13 +483,13 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "vodRetentionAssets": [
-                589,
+                601,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -495,10 +497,10 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "topAssets": [
-                535,
+                547,
                 {
                     "timeRange": [
-                        534
+                        546
                     ],
                     "limit": [
                         4
@@ -520,16 +522,16 @@ const types: CompressedTypeMap<number> = {
         },
         "AnalyticsInfra": {
             "routingEventsConnection": [
-                402,
+                414,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "subjectTenantId": [
                         9
@@ -543,16 +545,16 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "nodeMetricsConnection": [
-                317,
+                324,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "nodeId": [
                         1
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -560,13 +562,13 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "nodeMetrics1hConnection": [
-                315,
+                322,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "nodeId": [
                         1
@@ -577,10 +579,10 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "nodeMetricsAggregated": [
-                316,
+                323,
                 {
                     "timeRange": [
-                        534
+                        546
                     ],
                     "nodeId": [
                         1
@@ -591,16 +593,16 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "nodePerformance5mConnection": [
-                320,
+                327,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "nodeId": [
                         1
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -608,10 +610,10 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "serviceInstancesConnection": [
-                410,
+                422,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "clusterId": [
                         1
@@ -620,12 +622,12 @@ const types: CompressedTypeMap<number> = {
                         1
                     ],
                     "status": [
-                        204
+                        211
                     ]
                 }
             ],
             "serviceInstancesHealth": [
-                409,
+                421,
                 {
                     "serviceId": [
                         1
@@ -633,13 +635,13 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "routingEfficiency": [
-                399,
+                411,
                 {
                     "streamId": [
                         9
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -647,10 +649,10 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "clusterTrafficMatrix": [
-                82,
+                89,
                 {
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -658,13 +660,13 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "clusterBootOps": [
-                75,
+                82,
                 {
                     "clusterId": [
                         9
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -672,13 +674,13 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "clusterQoeOps": [
-                84,
+                91,
                 {
                     "clusterId": [
                         9
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -686,13 +688,13 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "clusterWorkload": [
-                91,
+                98,
                 {
                     "clusterId": [
                         9
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -700,10 +702,10 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "federationEventsConnection": [
-                176,
+                183,
                 {
                     "timeRange": [
-                        534,
+                        546,
                         "TimeRangeInput!"
                     ],
                     "first": [
@@ -718,10 +720,10 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "federationSummary": [
-                177,
+                184,
                 {
                     "timeRange": [
-                        534,
+                        546,
                         "TimeRangeInput!"
                     ],
                     "noCache": [
@@ -735,17 +737,17 @@ const types: CompressedTypeMap<number> = {
         },
         "AnalyticsLifecycle": {
             "streamEventsConnection": [
-                487,
+                499,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9,
                         "ID!"
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -753,17 +755,17 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "bufferEventsConnection": [
-                54,
+                59,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9,
                         "ID!"
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -774,7 +776,7 @@ const types: CompressedTypeMap<number> = {
                 24,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9
@@ -786,7 +788,7 @@ const types: CompressedTypeMap<number> = {
                         1
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -794,10 +796,10 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "storageEventsConnection": [
-                463,
+                475,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "assetType": [
                         1
@@ -806,7 +808,7 @@ const types: CompressedTypeMap<number> = {
                         9
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -814,16 +816,16 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "connectionEventsConnection": [
-                97,
+                104,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -831,16 +833,16 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "viewerSessionsConnection": [
-                583,
+                595,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -848,17 +850,17 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "trackListConnection": [
-                539,
+                551,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9,
                         "ID!"
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -869,7 +871,7 @@ const types: CompressedTypeMap<number> = {
                 27,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9
@@ -888,13 +890,13 @@ const types: CompressedTypeMap<number> = {
         },
         "AnalyticsUsage": {
             "streaming": [
-                509
+                521
             ],
             "storage": [
-                465
+                477
             ],
             "processing": [
-                360
+                367
             ],
             "api": [
                 0
@@ -914,7 +916,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "expiresAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -959,7 +961,7 @@ const types: CompressedTypeMap<number> = {
         },
         "ApplyMediaPlacementChangeInput": {
             "scope": [
-                272
+                279
             ],
             "expectedRevision": [
                 1
@@ -968,7 +970,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "updates": [
-                281
+                288
             ],
             "reviewToken": [
                 1
@@ -988,13 +990,13 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "timestamp": [
-                532
+                544
             ],
             "streamId": [
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "playbackId": [
                 1
@@ -1055,7 +1057,7 @@ const types: CompressedTypeMap<number> = {
                 22
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -1069,7 +1071,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "playbackId": [
                 1
@@ -1087,13 +1089,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "requestedAt": [
-                532
+                544
             ],
             "startedAt": [
-                532
+                544
             ],
             "completedAt": [
-                532
+                544
             ],
             "clipStartUnix": [
                 4
@@ -1120,7 +1122,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "expiresAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -1145,7 +1147,7 @@ const types: CompressedTypeMap<number> = {
                 25
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -1226,18 +1228,89 @@ const types: CompressedTypeMap<number> = {
                 7
             ],
             "updatedAt": [
-                532
+                544
             ],
             "__typename": [
                 1
             ]
         },
+        "AuthClientKind": {},
         "AuthError": {
             "message": [
                 1
             ],
             "code": [
                 1
+            ],
+            "__typename": [
+                1
+            ]
+        },
+        "AuthMethod": {},
+        "AuthSession": {
+            "id": [
+                9
+            ],
+            "clientKind": [
+                31
+            ],
+            "clientId": [
+                1
+            ],
+            "authMethod": [
+                33
+            ],
+            "label": [
+                1
+            ],
+            "clientVersion": [
+                1
+            ],
+            "ipAddress": [
+                1
+            ],
+            "location": [
+                1
+            ],
+            "createdAt": [
+                544
+            ],
+            "lastActiveAt": [
+                544
+            ],
+            "expiresAt": [
+                544
+            ],
+            "current": [
+                2
+            ],
+            "__typename": [
+                1
+            ]
+        },
+        "AuthSessionConnection": {
+            "edges": [
+                36
+            ],
+            "nodes": [
+                34
+            ],
+            "pageInfo": [
+                341
+            ],
+            "totalCount": [
+                4
+            ],
+            "__typename": [
+                1
+            ]
+        },
+        "AuthSessionEdge": {
+            "cursor": [
+                1
+            ],
+            "node": [
+                34
             ],
             "__typename": [
                 1
@@ -1262,13 +1335,13 @@ const types: CompressedTypeMap<number> = {
         },
         "AvailableClusterConnection": {
             "edges": [
-                34
+                39
             ],
             "nodes": [
-                32
+                37
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -1282,7 +1355,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                32
+                37
             ],
             "__typename": [
                 1
@@ -1314,7 +1387,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "createdAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -1325,7 +1398,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                35
+                40
             ],
             "__typename": [
                 1
@@ -1333,13 +1406,13 @@ const types: CompressedTypeMap<number> = {
         },
         "BalanceTransactionsConnection": {
             "edges": [
-                36
+                41
             ],
             "nodes": [
-                35
+                40
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -1399,7 +1472,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "expiresAt": [
-                532
+                544
             ],
             "fallbackTierName": [
                 1
@@ -1428,7 +1501,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "address": [
-                38
+                43
             ],
             "isComplete": [
                 2
@@ -1437,10 +1510,10 @@ const types: CompressedTypeMap<number> = {
                 2
             ],
             "updatedAt": [
-                532
+                544
             ],
             "presentmentCurrency": [
-                139
+                146
             ],
             "__typename": [
                 1
@@ -1482,28 +1555,28 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "operatorGrant": [
-                40
+                45
             ],
             "freeFallback": [
-                178
+                185
             ],
             "pendingTier": [
-                46
+                51
             ],
             "pendingEffectiveAt": [
-                532
+                544
             ],
             "pendingReason": [
-                339
+                346
             ],
             "pendingTierState": [
-                340
+                347
             ],
             "downgradeEffectiveAt": [
-                532
+                544
             ],
             "freeMoveFinalAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -1511,16 +1584,16 @@ const types: CompressedTypeMap<number> = {
         },
         "BillingStatus": {
             "currentTier": [
-                46
+                51
             ],
             "subscription": [
-                526
+                538
             ],
             "billingStatus": [
                 1
             ],
             "paymentMethods": [
-                337
+                344
             ],
             "collectionReady": [
                 2
@@ -1532,13 +1605,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "recentPayments": [
-                209
+                216
             ],
             "nextBillingDate": [
-                532
+                544
             ],
             "trialEndsAt": [
-                532
+                544
             ],
             "outstandingAmount": [
                 7
@@ -1547,10 +1620,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "liveUsage": [
-                221
+                228
             ],
             "invoicePreview": [
-                205
+                212
             ],
             "__typename": [
                 1
@@ -1582,13 +1655,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "features": [
-                43
+                48
             ],
             "pricingRules": [
-                359
+                366
             ],
             "entitlements": [
-                162
+                169
             ],
             "supportLevel": [
                 1
@@ -1663,7 +1736,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "telemetry": [
-                160
+                167
             ],
             "__typename": [
                 1
@@ -1671,19 +1744,19 @@ const types: CompressedTypeMap<number> = {
         },
         "BootstrapEdgeResult": {
             "on_BootstrapEdgeResponse": [
-                49
+                54
             ],
             "on_BootstrapEdgePending": [
-                48
+                53
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -1709,7 +1782,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "metadata": [
-                214
+                221
             ],
             "usageLimit": [
                 4
@@ -1718,16 +1791,16 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "expiresAt": [
-                532
+                544
             ],
             "usedAt": [
-                532
+                544
             ],
             "createdBy": [
                 1
             ],
             "createdAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -1741,19 +1814,19 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "timestamp": [
-                532
+                544
             ],
             "nodeId": [
                 1
             ],
             "bufferState": [
-                55
+                60
             ],
             "eventData": [
                 1
             ],
             "payload": [
-                214
+                221
             ],
             "__typename": [
                 1
@@ -1764,7 +1837,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                52
+                57
             ],
             "__typename": [
                 1
@@ -1772,13 +1845,13 @@ const types: CompressedTypeMap<number> = {
         },
         "BufferEventsConnection": {
             "edges": [
-                53
+                58
             ],
             "nodes": [
-                52
+                57
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -1790,13 +1863,13 @@ const types: CompressedTypeMap<number> = {
         "BufferState": {},
         "Capabilities": {
             "tenant": [
-                522
+                534
             ],
             "clusters": [
-                76
+                83
             ],
             "observedAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -1811,16 +1884,16 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "expiresAt": [
-                532
+                544
             ],
             "amountCents": [
                 4
             ],
             "currency": [
-                139
+                146
             ],
             "conversion": [
-                140
+                147
             ],
             "__typename": [
                 1
@@ -1834,13 +1907,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "appliedTier": [
-                46
+                51
             ],
             "pendingTier": [
-                46
+                51
             ],
             "effectiveAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -1848,16 +1921,44 @@ const types: CompressedTypeMap<number> = {
         },
         "ChangeBillingTierResult": {
             "on_ChangeBillingTierPayload": [
-                59
+                64
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
+            ],
+            "__typename": [
+                1
+            ]
+        },
+        "ChangePasswordPayload": {
+            "success": [
+                2
+            ],
+            "revokedCount": [
+                4
+            ],
+            "__typename": [
+                1
+            ]
+        },
+        "ChangePasswordResult": {
+            "on_ChangePasswordPayload": [
+                66
+            ],
+            "on_ValidationError": [
+                577
+            ],
+            "on_AuthError": [
+                32
+            ],
+            "on_Error": [
+                170
             ],
             "__typename": [
                 1
@@ -1891,13 +1992,13 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "timestamp": [
-                532
+                544
             ],
             "streamId": [
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "nodeId": [
                 1
@@ -1923,13 +2024,13 @@ const types: CompressedTypeMap<number> = {
         },
         "ClientMetrics5mConnection": {
             "edges": [
-                64
+                71
             ],
             "nodes": [
-                62
+                69
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -1943,7 +2044,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                62
+                69
             ],
             "__typename": [
                 1
@@ -1989,7 +2090,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "stream": [
-                469
+                481
             ],
             "title": [
                 1
@@ -2016,16 +2117,16 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "createdAt": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "clipMode": [
                 1
             ],
             "requestedParams": [
-                214
+                221
             ],
             "storageLocation": [
                 1
@@ -2043,22 +2144,22 @@ const types: CompressedTypeMap<number> = {
                 2
             ],
             "expiresAt": [
-                532
+                544
             ],
             "isExpired": [
                 2
             ],
             "playbackPolicy": [
-                349
+                356
             ],
             "thumbnailAssets": [
-                531
+                543
             ],
             "effectiveRetention": [
-                161
+                168
             ],
             "storageCost": [
-                460
+                472
             ],
             "__typename": [
                 1
@@ -2067,10 +2168,10 @@ const types: CompressedTypeMap<number> = {
         "ClipCreationMode": {},
         "ClipFailed": {
             "artifact": [
-                164
+                171
             ],
             "reason": [
-                168
+                175
             ],
             "__typename": [
                 1
@@ -2078,7 +2179,7 @@ const types: CompressedTypeMap<number> = {
         },
         "ClipReady": {
             "artifact": [
-                164
+                171
             ],
             "durationMs": [
                 4
@@ -2092,7 +2193,7 @@ const types: CompressedTypeMap<number> = {
         },
         "ClipRequested": {
             "artifact": [
-                164
+                171
             ],
             "durationMs": [
                 4
@@ -2157,19 +2258,19 @@ const types: CompressedTypeMap<number> = {
                 2
             ],
             "createdAt": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "ownerTenantId": [
                 9
             ],
             "visibility": [
-                90
+                97
             ],
             "pricingModel": [
-                83
+                90
             ],
             "monthlyPriceCents": [
                 4
@@ -2181,10 +2282,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "nodesConnection": [
-                323,
+                330,
                 {
                     "page": [
-                        98
+                        105
                     ]
                 }
             ],
@@ -2203,7 +2304,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "resourceLimits": [
-                214
+                221
             ],
             "allowPrivatePullSources": [
                 2
@@ -2214,13 +2315,13 @@ const types: CompressedTypeMap<number> = {
         },
         "ClusterAccessConnection": {
             "edges": [
-                74
+                81
             ],
             "nodes": [
-                72
+                79
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -2234,7 +2335,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                72
+                79
             ],
             "__typename": [
                 1
@@ -2280,7 +2381,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "media": [
-                81
+                88
             ],
             "__typename": [
                 1
@@ -2291,7 +2392,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                71
+                78
             ],
             "__typename": [
                 1
@@ -2314,7 +2415,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "resourceLimits": [
-                214
+                221
             ],
             "status": [
                 1
@@ -2323,13 +2424,13 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "createdAt": [
-                532
+                544
             ],
             "expiresAt": [
-                532
+                544
             ],
             "acceptedAt": [
-                532
+                544
             ],
             "invitedTenantName": [
                 1
@@ -2343,13 +2444,13 @@ const types: CompressedTypeMap<number> = {
         },
         "ClusterInviteConnection": {
             "edges": [
-                80
+                87
             ],
             "nodes": [
-                78
+                85
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -2363,7 +2464,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                78
+                85
             ],
             "__typename": [
                 1
@@ -2468,16 +2569,16 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "subscriptionStatus": [
-                89
+                96
             ],
             "resourceLimits": [
-                214
+                221
             ],
             "requestedAt": [
-                532
+                544
             ],
             "approvedAt": [
-                532
+                544
             ],
             "approvedBy": [
                 9
@@ -2486,13 +2587,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "expiresAt": [
-                532
+                544
             ],
             "createdAt": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "clusterName": [
                 1
@@ -2506,13 +2607,13 @@ const types: CompressedTypeMap<number> = {
         },
         "ClusterSubscriptionConnection": {
             "edges": [
-                87
+                94
             ],
             "nodes": [
-                85
+                92
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -2526,7 +2627,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                85
+                92
             ],
             "__typename": [
                 1
@@ -2534,19 +2635,19 @@ const types: CompressedTypeMap<number> = {
         },
         "ClusterSubscriptionResult": {
             "on_ClusterSubscription": [
-                85
+                92
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -2571,7 +2672,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "observedAt": [
-                532
+                544
             ],
             "eventCount": [
                 4
@@ -2594,13 +2695,13 @@ const types: CompressedTypeMap<number> = {
         },
         "ClustersConnection": {
             "edges": [
-                77
+                84
             ],
             "nodes": [
-                71
+                78
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -2614,7 +2715,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "parts": [
-                592
+                604
             ],
             "__typename": [
                 1
@@ -2622,22 +2723,22 @@ const types: CompressedTypeMap<number> = {
         },
         "CompleteVodUploadResult": {
             "on_VodAsset": [
-                585
+                597
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Node": [
-                309
+                316
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -2651,13 +2752,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "timestamp": [
-                532
+                544
             ],
             "streamId": [
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "sessionId": [
                 1
@@ -2684,10 +2785,10 @@ const types: CompressedTypeMap<number> = {
                 7
             ],
             "clientBucket": [
-                181
+                188
             ],
             "nodeBucket": [
-                181
+                188
             ],
             "eventType": [
                 1
@@ -2719,7 +2820,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                95
+                102
             ],
             "__typename": [
                 1
@@ -2727,13 +2828,13 @@ const types: CompressedTypeMap<number> = {
         },
         "ConnectionEventsConnection": {
             "edges": [
-                96
+                103
             ],
             "nodes": [
-                95
+                102
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -2767,19 +2868,19 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "status": [
-                101
+                108
             ],
             "lastMessage": [
-                288
+                295
             ],
             "unreadCount": [
                 4
             ],
             "createdAt": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -2787,7 +2888,7 @@ const types: CompressedTypeMap<number> = {
         },
         "ConversationEdge": {
             "node": [
-                99
+                106
             ],
             "cursor": [
                 1
@@ -2799,10 +2900,10 @@ const types: CompressedTypeMap<number> = {
         "ConversationStatus": {},
         "ConversationsConnection": {
             "edges": [
-                100
+                107
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -2855,7 +2956,7 @@ const types: CompressedTypeMap<number> = {
         },
         "CountryTimeSeries": {
             "timestamp": [
-                532
+                544
             ],
             "countryCode": [
                 1
@@ -2872,7 +2973,7 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "provider": [
-                57
+                62
             ],
             "successUrl": [
                 1
@@ -2907,7 +3008,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "mode": [
-                67
+                74
             ],
             "startUnix": [
                 4
@@ -2939,22 +3040,22 @@ const types: CompressedTypeMap<number> = {
         },
         "CreateClipResult": {
             "on_Clip": [
-                66
+                73
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Node": [
-                309
+                316
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -2971,7 +3072,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "resourceLimits": [
-                214
+                221
             ],
             "expiresInDays": [
                 4
@@ -2982,19 +3083,19 @@ const types: CompressedTypeMap<number> = {
         },
         "CreateClusterInviteResult": {
             "on_ClusterInvite": [
-                78
+                85
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -3016,19 +3117,19 @@ const types: CompressedTypeMap<number> = {
         },
         "CreateConversationResult": {
             "on_Conversation": [
-                99
+                106
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Node": [
-                309
+                316
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -3039,7 +3140,7 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "asset": [
-                136
+                143
             ],
             "__typename": [
                 1
@@ -3061,19 +3162,19 @@ const types: CompressedTypeMap<number> = {
         },
         "CreateDeveloperTokenResult": {
             "on_DeveloperToken": [
-                157
+                164
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_RateLimitError": [
-                378
+                385
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -3095,10 +3196,10 @@ const types: CompressedTypeMap<number> = {
         },
         "CreateEdgeClusterResponse": {
             "cluster": [
-                71
+                78
             ],
             "bootstrapToken": [
-                51
+                56
             ],
             "foghornAddr": [
                 1
@@ -3109,16 +3210,16 @@ const types: CompressedTypeMap<number> = {
         },
         "CreateEdgeClusterResult": {
             "on_CreateEdgeClusterResponse": [
-                118
+                125
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -3126,7 +3227,7 @@ const types: CompressedTypeMap<number> = {
         },
         "CreateEnrollmentTokenResponse": {
             "bootstrapToken": [
-                51
+                56
             ],
             "__typename": [
                 1
@@ -3134,16 +3235,16 @@ const types: CompressedTypeMap<number> = {
         },
         "CreateEnrollmentTokenResult": {
             "on_CreateEnrollmentTokenResponse": [
-                120
+                127
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -3154,7 +3255,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "method": [
-                337
+                344
             ],
             "returnUrl": [
                 1
@@ -3165,16 +3266,16 @@ const types: CompressedTypeMap<number> = {
         },
         "CreatePaymentResult": {
             "on_Payment": [
-                335
+                342
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -3207,19 +3308,19 @@ const types: CompressedTypeMap<number> = {
         },
         "CreateSigningKeyResult": {
             "on_CreateSigningKeySuccess": [
-                127
+                134
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_RateLimitError": [
-                378
+                385
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -3227,7 +3328,7 @@ const types: CompressedTypeMap<number> = {
         },
         "CreateSigningKeySuccess": {
             "signingKey": [
-                422
+                434
             ],
             "privateKeyPem": [
                 1
@@ -3250,13 +3351,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "ingestMode": [
-                203
+                210
             ],
             "pullSource": [
-                370
+                377
             ],
             "sourceLocation": [
-                450
+                462
             ],
             "__typename": [
                 1
@@ -3272,19 +3373,19 @@ const types: CompressedTypeMap<number> = {
         },
         "CreateStreamKeyResult": {
             "on_StreamKey": [
-                496
+                508
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -3292,19 +3393,19 @@ const types: CompressedTypeMap<number> = {
         },
         "CreateStreamResult": {
             "on_Stream": [
-                469
+                481
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Node": [
-                309
+                316
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -3332,16 +3433,16 @@ const types: CompressedTypeMap<number> = {
         },
         "CreateVodUploadResult": {
             "on_VodUploadSession": [
-                594
+                606
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -3366,16 +3467,16 @@ const types: CompressedTypeMap<number> = {
         },
         "CreateWebhookEndpointResult": {
             "on_WebhookEndpointSecret": [
-                612
+                624
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -3390,7 +3491,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "asset": [
-                136
+                143
             ],
             "assetSymbol": [
                 1
@@ -3399,7 +3500,7 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "expiresAt": [
-                532
+                544
             ],
             "expectedAmountBaseUnits": [
                 1
@@ -3414,13 +3515,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "quotedAt": [
-                532
+                544
             ],
             "network": [
                 1
             ],
             "conversion": [
-                140
+                147
             ],
             "__typename": [
                 1
@@ -3434,7 +3535,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "asset": [
-                136
+                143
             ],
             "status": [
                 1
@@ -3464,16 +3565,16 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "expiresAt": [
-                532
+                544
             ],
             "detectedAt": [
-                532
+                544
             ],
             "completedAt": [
-                532
+                544
             ],
             "conversion": [
-                140
+                147
             ],
             "__typename": [
                 1
@@ -3485,7 +3586,7 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "originalCurrency": [
-                139
+                146
             ],
             "eurAmountCents": [
                 4
@@ -3508,7 +3609,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "reason": [
-                166
+                173
             ],
             "__typename": [
                 1
@@ -3528,13 +3629,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "lastVerifiedAt": [
-                532
+                544
             ],
             "certIssuedAt": [
-                532
+                544
             ],
             "certExpiresAt": [
-                532
+                544
             ],
             "lastError": [
                 1
@@ -3556,7 +3657,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "state": [
-                147
+                154
             ],
             "playbackId": [
                 1
@@ -3592,7 +3693,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "mode": [
-                145
+                152
             ],
             "intervalSeconds": [
                 4
@@ -3607,7 +3708,7 @@ const types: CompressedTypeMap<number> = {
                 2
             ],
             "state": [
-                147
+                154
             ],
             "playbackId": [
                 1
@@ -3628,7 +3729,7 @@ const types: CompressedTypeMap<number> = {
         "DVRChapterState": {},
         "DVRChaptersPage": {
             "chapters": [
-                146
+                153
             ],
             "nextPageToken": [
                 1
@@ -3654,28 +3755,28 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "stream": [
-                469
+                481
             ],
             "title": [
                 1
             ],
             "createdAt": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "expiresAt": [
-                532
+                544
             ],
             "isExpired": [
                 2
             ],
             "effectiveRetention": [
-                161
+                168
             ],
             "storageCost": [
-                460
+                472
             ],
             "storageNodeId": [
                 1
@@ -3684,10 +3785,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "startedAt": [
-                532
+                544
             ],
             "endedAt": [
-                532
+                544
             ],
             "durationSeconds": [
                 4
@@ -3717,13 +3818,13 @@ const types: CompressedTypeMap<number> = {
                 2
             ],
             "frozenAt": [
-                532
+                544
             ],
             "s3Url": [
                 1
             ],
             "thumbnailAssets": [
-                531
+                543
             ],
             "__typename": [
                 1
@@ -3731,16 +3832,16 @@ const types: CompressedTypeMap<number> = {
         },
         "DeleteClipResult": {
             "on_DeleteSuccess": [
-                154
+                161
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -3748,16 +3849,16 @@ const types: CompressedTypeMap<number> = {
         },
         "DeleteDVRResult": {
             "on_DeleteSuccess": [
-                154
+                161
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -3765,16 +3866,16 @@ const types: CompressedTypeMap<number> = {
         },
         "DeleteStreamKeyResult": {
             "on_DeleteSuccess": [
-                154
+                161
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -3782,16 +3883,16 @@ const types: CompressedTypeMap<number> = {
         },
         "DeleteStreamResult": {
             "on_DeleteSuccess": [
-                154
+                161
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -3813,16 +3914,16 @@ const types: CompressedTypeMap<number> = {
         },
         "DeleteVodAssetResult": {
             "on_DeleteSuccess": [
-                154
+                161
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -3830,16 +3931,16 @@ const types: CompressedTypeMap<number> = {
         },
         "DeleteWebhookEndpointResult": {
             "on_DeleteSuccess": [
-                154
+                161
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -3862,13 +3963,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "lastUsedAt": [
-                532
+                544
             ],
             "expiresAt": [
-                532
+                544
             ],
             "createdAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -3879,7 +3980,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                157
+                164
             ],
             "__typename": [
                 1
@@ -3887,13 +3988,13 @@ const types: CompressedTypeMap<number> = {
         },
         "DeveloperTokensConnection": {
             "edges": [
-                158
+                165
             ],
             "nodes": [
-                157
+                164
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -3921,10 +4022,10 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "retentionUntil": [
-                532
+                544
             ],
             "source": [
-                391
+                399
             ],
             "__typename": [
                 1
@@ -3949,16 +4050,16 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_RateLimitError": [
-                378
+                385
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "__typename": [
                 1
@@ -3969,7 +4070,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "kind": [
-                165
+                172
             ],
             "streamId": [
                 9
@@ -4001,7 +4102,7 @@ const types: CompressedTypeMap<number> = {
         "EventSuspensionReason": {},
         "FederationEvent": {
             "timestamp": [
-                532
+                544
             ],
             "eventType": [
                 1
@@ -4092,7 +4193,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                173
+                180
             ],
             "__typename": [
                 1
@@ -4100,10 +4201,10 @@ const types: CompressedTypeMap<number> = {
         },
         "FederationEventsConnection": {
             "edges": [
-                175
+                182
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -4114,7 +4215,7 @@ const types: CompressedTypeMap<number> = {
         },
         "FederationSummary": {
             "eventCounts": [
-                174
+                181
             ],
             "totalEvents": [
                 4
@@ -4131,13 +4232,13 @@ const types: CompressedTypeMap<number> = {
         },
         "FreeFallback": {
             "reason": [
-                179
+                186
             ],
             "at": [
-                532
+                544
             ],
             "stage": [
-                180
+                187
             ],
             "providerCancelled": [
                 2
@@ -4161,19 +4262,19 @@ const types: CompressedTypeMap<number> = {
         },
         "GeographicDistribution": {
             "timeRange": [
-                533
+                545
             ],
             "streamId": [
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "topCountries": [
-                104
+                111
             ],
             "topCities": [
-                61
+                68
             ],
             "uniqueCountries": [
                 4
@@ -4185,7 +4286,7 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "viewersByCountry": [
-                106
+                113
             ],
             "__typename": [
                 1
@@ -4210,19 +4311,19 @@ const types: CompressedTypeMap<number> = {
         },
         "ImportVodAssetResult": {
             "on_VodAsset": [
-                585
+                597
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Node": [
-                309
+                316
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -4233,7 +4334,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "scope": [
-                193
+                200
             ],
             "tenantId": [
                 9
@@ -4251,10 +4352,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "status": [
-                194
+                201
             ],
             "resolution": [
-                192
+                199
             ],
             "title": [
                 1
@@ -4266,13 +4367,13 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "startedAt": [
-                532
+                544
             ],
             "lastAlertAt": [
-                532
+                544
             ],
             "acknowledgedAt": [
-                532
+                544
             ],
             "acknowledgedBy": [
                 9
@@ -4281,16 +4382,16 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "resolvedAt": [
-                532
+                544
             ],
             "resolvedBy": [
                 9
             ],
             "createdAt": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -4304,16 +4405,16 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "labels": [
-                214
+                221
             ],
             "annotations": [
-                214
+                221
             ],
             "startsAt": [
-                532
+                544
             ],
             "endsAt": [
-                532
+                544
             ],
             "generatorUrl": [
                 1
@@ -4324,13 +4425,13 @@ const types: CompressedTypeMap<number> = {
         },
         "IncidentDetail": {
             "incident": [
-                185
+                192
             ],
             "alerts": [
-                186
+                193
             ],
             "timeline": [
-                195
+                202
             ],
             "__typename": [
                 1
@@ -4341,7 +4442,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                185
+                192
             ],
             "__typename": [
                 1
@@ -4350,7 +4451,7 @@ const types: CompressedTypeMap<number> = {
         "IncidentEventKind": {},
         "IncidentFilterInput": {
             "statuses": [
-                194
+                201
             ],
             "clusterId": [
                 1
@@ -4361,19 +4462,19 @@ const types: CompressedTypeMap<number> = {
         },
         "IncidentMutationResult": {
             "on_Incident": [
-                185
+                192
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -4387,13 +4488,13 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "kind": [
-                189
+                196
             ],
             "actorUserId": [
                 9
             ],
             "createdAt": [
-                532
+                544
             ],
             "note": [
                 1
@@ -4408,7 +4509,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "resolution": [
-                192
+                199
             ],
             "alertFingerprint": [
                 1
@@ -4428,7 +4529,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "status": [
-                194
+                201
             ],
             "severity": [
                 1
@@ -4440,7 +4541,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "updatedAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -4448,13 +4549,13 @@ const types: CompressedTypeMap<number> = {
         },
         "IncidentsConnection": {
             "edges": [
-                188
+                195
             ],
             "nodes": [
-                185
+                192
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -4513,50 +4614,50 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "lastHeartbeat": [
-                532
+                544
             ],
             "tags": [
-                214
+                221
             ],
             "metadata": [
-                214
+                221
             ],
             "createdAt": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "metricsConnection": [
-                317,
+                324,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "timeRange": [
-                        534
+                        546
                     ]
                 }
             ],
             "metrics1hConnection": [
-                315,
+                322,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "timeRange": [
-                        534
+                        546
                     ]
                 }
             ],
             "liveState": [
-                220
+                227
             ],
             "effectiveMode": [
-                318
+                325
             ],
             "routingImpactPreview": [
-                403
+                415
             ],
             "__typename": [
                 1
@@ -4585,7 +4686,7 @@ const types: CompressedTypeMap<number> = {
                 7
             ],
             "kind": [
-                200
+                207
             ],
             "clusterId": [
                 1
@@ -4597,13 +4698,13 @@ const types: CompressedTypeMap<number> = {
         "IngestEndpointKind": {},
         "IngestEndpointResponse": {
             "primary": [
-                199
+                206
             ],
             "fallbacks": [
-                199
+                206
             ],
             "metadata": [
-                202
+                209
             ],
             "__typename": [
                 1
@@ -4614,7 +4715,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "streamKey": [
                 1
@@ -4642,22 +4743,22 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "amount": [
-                298
+                305
             ],
             "baseAmount": [
-                298
+                305
             ],
             "meteredAmount": [
-                298
+                305
             ],
             "grossMeteredAmount": [
-                298
+                305
             ],
             "prepaidCreditApplied": [
-                298
+                305
             ],
             "currency": [
-                139
+                146
             ],
             "presentmentAmountCents": [
                 4
@@ -4672,34 +4773,34 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "finalizedAt": [
-                532
+                544
             ],
             "status": [
-                212
+                219
             ],
             "dueDate": [
-                532
+                544
             ],
             "paidAt": [
-                532
+                544
             ],
             "createdAt": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "periodStart": [
-                532
+                544
             ],
             "periodEnd": [
-                532
+                544
             ],
             "usageDetails": [
-                214
+                221
             ],
             "lineItems": [
-                215
+                222
             ],
             "__typename": [
                 1
@@ -4710,16 +4811,16 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "amountDue": [
-                169
+                176
             ],
             "periodStart": [
-                532
+                544
             ],
             "periodEnd": [
-                532
+                544
             ],
             "dueAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -4730,7 +4831,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                205
+                212
             ],
             "__typename": [
                 1
@@ -4741,7 +4842,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "amountPaid": [
-                169
+                176
             ],
             "__typename": [
                 1
@@ -4758,25 +4859,25 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "amount": [
-                298
+                305
             ],
             "currency": [
-                139
+                146
             ],
             "status": [
                 1
             ],
             "confirmedAt": [
-                532
+                544
             ],
             "createdAt": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "conversion": [
-                140
+                147
             ],
             "__typename": [
                 1
@@ -4787,7 +4888,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                209
+                216
             ],
             "__typename": [
                 1
@@ -4795,13 +4896,13 @@ const types: CompressedTypeMap<number> = {
         },
         "InvoicePaymentsConnection": {
             "edges": [
-                210
+                217
             ],
             "nodes": [
-                209
+                216
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -4813,13 +4914,13 @@ const types: CompressedTypeMap<number> = {
         "InvoiceStatus": {},
         "InvoicesConnection": {
             "edges": [
-                207
+                214
             ],
             "nodes": [
-                205
+                212
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -4876,7 +4977,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "dimensions": [
-                214
+                221
             ],
             "__typename": [
                 1
@@ -4909,16 +5010,16 @@ const types: CompressedTypeMap<number> = {
         },
         "LinkEmailResult": {
             "on_LinkEmailPayload": [
-                217
+                224
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -4926,16 +5027,16 @@ const types: CompressedTypeMap<number> = {
         },
         "LinkWalletResult": {
             "on_WalletIdentity": [
-                598
+                610
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -4985,10 +5086,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "metadata": [
-                214
+                221
             ],
             "updatedAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -4999,10 +5100,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "periodStart": [
-                532
+                544
             ],
             "periodEnd": [
-                532
+                544
             ],
             "streamHours": [
                 7
@@ -5080,7 +5181,7 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "geoBreakdown": [
-                105
+                112
             ],
             "clipsCreated": [
                 4
@@ -5153,10 +5254,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "visibility": [
-                90
+                97
             ],
             "pricingModel": [
-                83
+                90
             ],
             "monthlyPriceCents": [
                 4
@@ -5180,7 +5281,7 @@ const types: CompressedTypeMap<number> = {
                 2
             ],
             "subscriptionStatus": [
-                89
+                96
             ],
             "isEligible": [
                 2
@@ -5194,13 +5295,13 @@ const types: CompressedTypeMap<number> = {
         },
         "MarketplaceClusterConnection": {
             "edges": [
-                225
+                232
             ],
             "nodes": [
-                223
+                230
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -5214,7 +5315,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                223
+                230
             ],
             "__typename": [
                 1
@@ -5240,7 +5341,7 @@ const types: CompressedTypeMap<number> = {
                 2
             ],
             "rollout": [
-                267
+                274
             ],
             "__typename": [
                 1
@@ -5260,10 +5361,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "rollout": [
-                267
+                274
             ],
             "createdAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -5271,19 +5372,19 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaCapacityConsentChangeResult": {
             "on_MediaCapacityConsentChange": [
-                227
+                234
             ],
             "on_MediaPlacementError": [
-                244
+                251
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -5291,19 +5392,19 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaCapacityConsentResult": {
             "on_MediaCapacityConsent": [
-                226
+                233
             ],
             "on_MediaPlacementError": [
-                244
+                251
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -5329,7 +5430,7 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaPlacementAllow": {
             "any": [
-                274
+                281
             ],
             "__typename": [
                 1
@@ -5337,7 +5438,7 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaPlacementAllowInput": {
             "any": [
-                275
+                282
             ],
             "__typename": [
                 1
@@ -5369,7 +5470,7 @@ const types: CompressedTypeMap<number> = {
                 2
             ],
             "price": [
-                263
+                270
             ],
             "__typename": [
                 1
@@ -5377,7 +5478,7 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaPlacementChange": {
             "scope": [
-                271
+                278
             ],
             "idempotencyKey": [
                 1
@@ -5392,10 +5493,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "rollout": [
-                267
+                274
             ],
             "createdAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -5403,19 +5504,19 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaPlacementChangeResult": {
             "on_MediaPlacementChange": [
-                235
+                242
             ],
             "on_MediaPlacementError": [
-                244
+                251
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -5425,10 +5526,10 @@ const types: CompressedTypeMap<number> = {
         "MediaPlacementClass": {},
         "MediaPlacementConstraints": {
             "allow": [
-                232
+                239
             ],
             "deny": [
-                274
+                281
             ],
             "__typename": [
                 1
@@ -5436,10 +5537,10 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaPlacementConstraintsInput": {
             "allow": [
-                233
+                240
             ],
             "deny": [
-                275
+                282
             ],
             "__typename": [
                 1
@@ -5481,10 +5582,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "layers": [
-                239
+                246
             ],
             "groups": [
-                248
+                255
             ],
             "__typename": [
                 1
@@ -5492,13 +5593,13 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaPlacementError": {
             "code": [
-                245
+                252
             ],
             "message": [
                 1
             ],
             "fields": [
-                247
+                254
             ],
             "currentRevision": [
                 1
@@ -5550,13 +5651,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "match": [
-                274
+                281
             ],
             "order": [
-                256
+                263
             ],
             "spillover": [
-                276
+                283
             ],
             "maxDistanceKm": [
                 7
@@ -5582,13 +5683,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "match": [
-                275
+                282
             ],
             "order": [
-                256
+                263
             ],
             "spillover": [
-                276
+                283
             ],
             "maxDistanceKm": [
                 7
@@ -5634,10 +5735,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "kind": [
-                252
+                259
             ],
             "clusterClass": [
-                238
+                245
             ],
             "region": [
                 1
@@ -5661,10 +5762,10 @@ const types: CompressedTypeMap<number> = {
         "MediaPlacementOptionKind": {},
         "MediaPlacementOptionsConnection": {
             "nodes": [
-                251
+                258
             ],
             "pageInfo": [
-                334
+                341
             ],
             "__typename": [
                 1
@@ -5675,10 +5776,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "kind": [
-                252
+                259
             ],
             "classes": [
-                238
+                245
             ],
             "clusterId": [
                 9
@@ -5689,19 +5790,19 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaPlacementOptionsResult": {
             "on_MediaPlacementOptionsConnection": [
-                253
+                260
             ],
             "on_MediaPlacementError": [
-                244
+                251
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -5710,19 +5811,19 @@ const types: CompressedTypeMap<number> = {
         "MediaPlacementOrder": {},
         "MediaPlacementPolicyResult": {
             "on_MediaPlacementPolicyState": [
-                258
+                265
             ],
             "on_MediaPlacementError": [
-                244
+                251
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -5730,7 +5831,7 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaPlacementPolicyState": {
             "scope": [
-                271
+                278
             ],
             "revision": [
                 1
@@ -5745,16 +5846,16 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "verbs": [
-                280
+                287
             ],
             "rollout": [
-                267
+                274
             ],
             "actions": [
-                231
+                238
             ],
             "features": [
-                246
+                253
             ],
             "__typename": [
                 1
@@ -5762,7 +5863,7 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaPlacementPreferences": {
             "groups": [
-                248
+                255
             ],
             "__typename": [
                 1
@@ -5770,7 +5871,7 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaPlacementPreferencesInput": {
             "groups": [
-                249
+                256
             ],
             "__typename": [
                 1
@@ -5778,10 +5879,10 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaPlacementPreview": {
             "scope": [
-                271
+                278
             ],
             "verb": [
-                279
+                286
             ],
             "revision": [
                 1
@@ -5796,19 +5897,19 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "selected": [
-                234
+                241
             ],
             "candidates": [
-                234
+                241
             ],
             "transitions": [
-                277
+                284
             ],
             "observedAt": [
-                532
+                544
             ],
             "expiresAt": [
-                532
+                544
             ],
             "complete": [
                 2
@@ -5825,19 +5926,19 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaPlacementPreviewResult": {
             "on_MediaPlacementPreview": [
-                261
+                268
             ],
             "on_MediaPlacementError": [
-                244
+                251
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -5857,7 +5958,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "expiresAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -5871,13 +5972,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "status": [
-                268
+                275
             ],
             "reason": [
                 1
             ],
             "authorityExpiresAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -5891,16 +5992,16 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "expiresAt": [
-                532
+                544
             ],
             "differences": [
-                242
+                249
             ],
             "warnings": [
-                282
+                289
             ],
             "impact": [
-                250
+                257
             ],
             "__typename": [
                 1
@@ -5908,19 +6009,19 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaPlacementReviewResult": {
             "on_MediaPlacementReview": [
-                265
+                272
             ],
             "on_MediaPlacementError": [
-                244
+                251
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -5928,7 +6029,7 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaPlacementRollout": {
             "status": [
-                268
+                275
             ],
             "requiredRecipients": [
                 4
@@ -5937,13 +6038,13 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "pendingRecipients": [
-                264
+                271
             ],
             "existingSessionsRetained": [
                 2
             ],
             "updatedAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -5955,10 +6056,10 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "constraints": [
-                239
+                246
             ],
             "preferences": [
-                259
+                266
             ],
             "__typename": [
                 1
@@ -5969,10 +6070,10 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "constraints": [
-                240
+                247
             ],
             "preferences": [
-                260
+                267
             ],
             "__typename": [
                 1
@@ -5980,7 +6081,7 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaPlacementScope": {
             "kind": [
-                273
+                280
             ],
             "streamId": [
                 9
@@ -5991,7 +6092,7 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaPlacementScopeInput": {
             "kind": [
-                273
+                280
             ],
             "streamId": [
                 9
@@ -6015,10 +6116,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "classes": [
-                238
+                245
             ],
             "charging": [
-                237
+                244
             ],
             "__typename": [
                 1
@@ -6038,10 +6139,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "classes": [
-                238
+                245
             ],
             "charging": [
-                237
+                244
             ],
             "__typename": [
                 1
@@ -6063,16 +6164,16 @@ const types: CompressedTypeMap<number> = {
         "MediaPlacementVerb": {},
         "MediaPlacementVerbPolicy": {
             "verb": [
-                279
+                286
             ],
             "ownRules": [
-                269
+                276
             ],
             "inheritedRules": [
-                269
+                276
             ],
             "requestedEffective": [
-                243
+                250
             ],
             "__typename": [
                 1
@@ -6080,13 +6181,13 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaPlacementVerbUpdateInput": {
             "verb": [
-                279
+                286
             ],
             "kind": [
-                278
+                285
             ],
             "rules": [
-                270
+                277
             ],
             "__typename": [
                 1
@@ -6097,7 +6198,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "severity": [
-                283
+                290
             ],
             "message": [
                 1
@@ -6120,13 +6221,13 @@ const types: CompressedTypeMap<number> = {
         },
         "MediaRetentionPolicy": {
             "bounds": [
-                284
+                291
             ],
             "updatedBy": [
                 1
             ],
             "updatedAt": [
-                532
+                544
             ],
             "defaultVodRetentionDays": [
                 4
@@ -6163,10 +6264,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "sender": [
-                290
+                297
             ],
             "createdAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -6174,7 +6275,7 @@ const types: CompressedTypeMap<number> = {
         },
         "MessageEdge": {
             "node": [
-                288
+                295
             ],
             "cursor": [
                 1
@@ -6186,10 +6287,10 @@ const types: CompressedTypeMap<number> = {
         "MessageSender": {},
         "MessagesConnection": {
             "edges": [
-                289
+                296
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -6228,19 +6329,19 @@ const types: CompressedTypeMap<number> = {
         },
         "MollieFirstPaymentResult": {
             "on_MollieFirstPayment": [
-                293
+                300
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -6260,10 +6361,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "details": [
-                214
+                221
             ],
             "createdAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -6285,19 +6386,19 @@ const types: CompressedTypeMap<number> = {
         },
         "MollieSubscriptionResult": {
             "on_MollieSubscription": [
-                296
+                303
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -6316,40 +6417,78 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "status": [
-                170
+                177
             ],
             "previousStatus": [
-                170
+                177
             ],
             "__typename": [
                 1
             ]
         },
         "Mutation": {
+            "revokeAuthSession": [
+                403,
+                {
+                    "id": [
+                        9,
+                        "ID!"
+                    ]
+                }
+            ],
+            "revokeOtherAuthSessions": [
+                407
+            ],
+            "renameAuthSession": [
+                395,
+                {
+                    "id": [
+                        9,
+                        "ID!"
+                    ],
+                    "label": [
+                        1,
+                        "String!"
+                    ]
+                }
+            ],
+            "changePassword": [
+                67,
+                {
+                    "currentPassword": [
+                        1,
+                        "String!"
+                    ],
+                    "newPassword": [
+                        1,
+                        "String!"
+                    ]
+                }
+            ],
             "createStream": [
-                131,
+                138,
                 {
                     "input": [
-                        128,
+                        135,
                         "CreateStreamInput!"
                     ]
                 }
             ],
             "updateStream": [
-                549,
+                561,
                 {
                     "id": [
                         9,
                         "ID!"
                     ],
                     "input": [
-                        548,
+                        560,
                         "UpdateStreamInput!"
                     ]
                 }
             ],
             "deleteStream": [
-                153,
+                160,
                 {
                     "id": [
                         9,
@@ -6358,7 +6497,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "refreshStreamKey": [
-                549,
+                561,
                 {
                     "id": [
                         9,
@@ -6367,16 +6506,16 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "createClip": [
-                109,
+                116,
                 {
                     "input": [
-                        108,
+                        115,
                         "CreateClipInput!"
                     ]
                 }
             ],
             "deleteClip": [
-                150,
+                157,
                 {
                     "id": [
                         9,
@@ -6385,7 +6524,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "startDVR": [
-                452,
+                464,
                 {
                     "streamId": [
                         9,
@@ -6394,7 +6533,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "stopDVR": [
-                453,
+                465,
                 {
                     "dvrHash": [
                         9,
@@ -6403,7 +6542,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "deleteDVR": [
-                151,
+                158,
                 {
                     "dvrHash": [
                         9,
@@ -6412,28 +6551,28 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "createVodUpload": [
-                133,
+                140,
                 {
                     "input": [
-                        132,
+                        139,
                         "CreateVodUploadInput!"
                     ]
                 }
             ],
             "importVodAsset": [
-                184,
+                191,
                 {
                     "input": [
-                        183,
+                        190,
                         "ImportVodAssetInput!"
                     ]
                 }
             ],
             "completeVodUpload": [
-                94,
+                101,
                 {
                     "input": [
-                        93,
+                        100,
                         "CompleteVodUploadInput!"
                     ]
                 }
@@ -6448,7 +6587,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "deleteVodAsset": [
-                155,
+                162,
                 {
                     "id": [
                         9,
@@ -6457,16 +6596,16 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "createPayment": [
-                123,
+                130,
                 {
                     "input": [
-                        122,
+                        129,
                         "CreatePaymentInput!"
                     ]
                 }
             ],
             "submitX402Payment": [
-                515,
+                527,
                 {
                     "payment": [
                         1,
@@ -6478,7 +6617,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "createStripeCheckout": [
-                513,
+                525,
                 {
                     "tierId": [
                         9,
@@ -6499,7 +6638,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "createStripeBillingPortal": [
-                511,
+                523,
                 {
                     "returnUrl": [
                         1,
@@ -6508,7 +6647,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "createMollieFirstPayment": [
-                294,
+                301,
                 {
                     "tierId": [
                         9,
@@ -6525,7 +6664,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "createMollieSubscription": [
-                297,
+                304,
                 {
                     "tierId": [
                         9,
@@ -6541,25 +6680,25 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "createCardTopup": [
-                58,
+                63,
                 {
                     "input": [
-                        107,
+                        114,
                         "CreateCardTopupInput!"
                     ]
                 }
             ],
             "createCryptoTopup": [
-                137,
+                144,
                 {
                     "input": [
-                        114,
+                        121,
                         "CreateCryptoTopupInput!"
                     ]
                 }
             ],
             "cryptoTopupStatus": [
-                138,
+                145,
                 {
                     "topupId": [
                         9,
@@ -6568,19 +6707,19 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "updateBillingDetails": [
-                41,
+                46,
                 {
                     "input": [
-                        542,
+                        554,
                         "UpdateBillingDetailsInput!"
                     ]
                 }
             ],
             "updateTenant": [
-                551,
+                563,
                 {
                     "input": [
-                        550,
+                        562,
                         "UpdateTenantInput!"
                     ]
                 }
@@ -6604,16 +6743,16 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "createEdgeCluster": [
-                119,
+                126,
                 {
                     "input": [
-                        117,
+                        124,
                         "CreateEdgeClusterInput!"
                     ]
                 }
             ],
             "createEnrollmentToken": [
-                121,
+                128,
                 {
                     "clusterId": [
                         9,
@@ -6628,38 +6767,38 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "bootstrapEdge": [
-                50,
+                55,
                 {
                     "input": [
-                        47,
+                        52,
                         "BootstrapEdgeInput!"
                     ]
                 }
             ],
             "updateClusterMarketplace": [
-                544,
+                556,
                 {
                     "clusterId": [
                         9,
                         "ID!"
                     ],
                     "input": [
-                        543,
+                        555,
                         "UpdateClusterMarketplaceInput!"
                     ]
                 }
             ],
             "createClusterInvite": [
-                111,
+                118,
                 {
                     "input": [
-                        110,
+                        117,
                         "CreateClusterInviteInput!"
                     ]
                 }
             ],
             "revokeClusterInvite": [
-                394,
+                404,
                 {
                     "inviteId": [
                         9,
@@ -6668,7 +6807,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "requestClusterSubscription": [
-                88,
+                95,
                 {
                     "clusterId": [
                         9,
@@ -6680,7 +6819,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "acceptClusterInvite": [
-                88,
+                95,
                 {
                     "inviteToken": [
                         1,
@@ -6689,7 +6828,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "approveClusterSubscription": [
-                88,
+                95,
                 {
                     "subscriptionId": [
                         9,
@@ -6698,7 +6837,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "rejectClusterSubscription": [
-                88,
+                95,
                 {
                     "subscriptionId": [
                         9,
@@ -6710,7 +6849,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "setPreferredCluster": [
-                419,
+                431,
                 {
                     "clusterId": [
                         9,
@@ -6719,16 +6858,16 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "createDeveloperToken": [
-                116,
+                123,
                 {
                     "input": [
-                        115,
+                        122,
                         "CreateDeveloperTokenInput!"
                     ]
                 }
             ],
             "revokeDeveloperToken": [
-                395,
+                405,
                 {
                     "id": [
                         9,
@@ -6737,29 +6876,29 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "createWebhookEndpoint": [
-                135,
+                142,
                 {
                     "input": [
-                        134,
+                        141,
                         "CreateWebhookEndpointInput!"
                     ]
                 }
             ],
             "updateWebhookEndpoint": [
-                553,
+                565,
                 {
                     "id": [
                         9,
                         "ID!"
                     ],
                     "input": [
-                        552,
+                        564,
                         "UpdateWebhookEndpointInput!"
                     ]
                 }
             ],
             "deleteWebhookEndpoint": [
-                156,
+                163,
                 {
                     "id": [
                         9,
@@ -6768,7 +6907,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "enableWebhookEndpoint": [
-                611,
+                623,
                 {
                     "id": [
                         9,
@@ -6777,7 +6916,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "disableWebhookEndpoint": [
-                611,
+                623,
                 {
                     "id": [
                         9,
@@ -6786,7 +6925,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "rotateWebhookEndpointSecret": [
-                397,
+                409,
                 {
                     "id": [
                         9,
@@ -6798,7 +6937,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "testWebhookEndpoint": [
-                530,
+                542,
                 {
                     "id": [
                         9,
@@ -6807,7 +6946,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "replayWebhookDelivery": [
-                389,
+                397,
                 {
                     "id": [
                         9,
@@ -6816,33 +6955,33 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "replayWebhookDeliveries": [
-                388,
+                396,
                 {
                     "endpointId": [
                         9,
                         "ID!"
                     ],
                     "createdAfter": [
-                        532,
+                        544,
                         "Time!"
                     ],
                     "createdBefore": [
-                        532,
+                        544,
                         "Time!"
                     ]
                 }
             ],
             "createSigningKey": [
-                126,
+                133,
                 {
                     "input": [
-                        125,
+                        132,
                         "CreateSigningKeyInput!"
                     ]
                 }
             ],
             "revokeSigningKey": [
-                396,
+                408,
                 {
                     "id": [
                         9,
@@ -6851,29 +6990,29 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "setPlaybackPolicy": [
-                418,
+                430,
                 {
                     "input": [
-                        417,
+                        429,
                         "SetPlaybackPolicyInput!"
                     ]
                 }
             ],
             "createStreamKey": [
-                130,
+                137,
                 {
                     "streamId": [
                         9,
                         "ID!"
                     ],
                     "input": [
-                        129,
+                        136,
                         "CreateStreamKeyInput!"
                     ]
                 }
             ],
             "deleteStreamKey": [
-                152,
+                159,
                 {
                     "streamId": [
                         9,
@@ -6886,33 +7025,33 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "createPushTarget": [
-                372,
+                379,
                 {
                     "streamId": [
                         9,
                         "ID!"
                     ],
                     "input": [
-                        124,
+                        131,
                         "CreatePushTargetInput!"
                     ]
                 }
             ],
             "updatePushTarget": [
-                372,
+                379,
                 {
                     "id": [
                         9,
                         "ID!"
                     ],
                     "input": [
-                        547,
+                        559,
                         "UpdatePushTargetInput!"
                     ]
                 }
             ],
             "deletePushTarget": [
-                154,
+                161,
                 {
                     "id": [
                         9,
@@ -6921,25 +7060,25 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "walletLogin": [
-                601,
+                613,
                 {
                     "input": [
-                        599,
+                        611,
                         "WalletLoginInput!"
                     ]
                 }
             ],
             "linkWallet": [
-                219,
+                226,
                 {
                     "input": [
-                        599,
+                        611,
                         "WalletLoginInput!"
                     ]
                 }
             ],
             "unlinkWallet": [
-                541,
+                553,
                 {
                     "walletId": [
                         9,
@@ -6948,16 +7087,16 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "linkEmail": [
-                218,
+                225,
                 {
                     "input": [
-                        216,
+                        223,
                         "LinkEmailInput!"
                     ]
                 }
             ],
             "promoteToPaid": [
-                366,
+                373,
                 {
                     "tierId": [
                         9,
@@ -6966,7 +7105,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "changeBillingTier": [
-                60,
+                65,
                 {
                     "tierId": [
                         9,
@@ -6984,7 +7123,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "updateSkipperConversation": [
-                432,
+                444,
                 {
                     "id": [
                         9,
@@ -7006,61 +7145,61 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "createConversation": [
-                113,
+                120,
                 {
                     "input": [
-                        112,
+                        119,
                         "CreateConversationInput!"
                     ]
                 }
             ],
             "sendMessage": [
-                405,
+                417,
                 {
                     "input": [
-                        404,
+                        416,
                         "SendMessageInput!"
                     ]
                 }
             ],
             "setNodeMode": [
-                416,
+                428,
                 {
                     "input": [
-                        415,
+                        427,
                         "SetNodeModeInput!"
                     ]
                 }
             ],
             "openMistAdminSession": [
-                326,
+                333,
                 {
                     "input": [
-                        325,
+                        332,
                         "OpenMistAdminSessionInput!"
                     ]
                 }
             ],
             "testPlaybackAccess": [
-                529,
+                541,
                 {
                     "input": [
-                        528,
+                        540,
                         "TestPlaybackAccessInput!"
                     ]
                 }
             ],
             "setMediaRetentionPolicy": [
-                414,
+                426,
                 {
                     "input": [
-                        413,
+                        425,
                         "SetMediaRetentionPolicyInput!"
                     ]
                 }
             ],
             "applyMediaPlacementChange": [
-                236,
+                243,
                 {
                     "input": [
                         21,
@@ -7069,7 +7208,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "applyClusterMediaConsentChange": [
-                228,
+                235,
                 {
                     "input": [
                         20,
@@ -7078,7 +7217,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "acknowledgeIncident": [
-                191,
+                198,
                 {
                     "id": [
                         9,
@@ -7087,7 +7226,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "assignIncident": [
-                191,
+                198,
                 {
                     "id": [
                         9,
@@ -7099,7 +7238,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "resolveIncident": [
-                191,
+                198,
                 {
                     "id": [
                         9,
@@ -7108,7 +7247,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "addIncidentNote": [
-                191,
+                198,
                 {
                     "id": [
                         9,
@@ -7121,28 +7260,28 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "updateMediaRetention": [
-                546,
+                558,
                 {
                     "input": [
-                        545,
+                        557,
                         "UpdateMediaRetentionInput!"
                     ]
                 }
             ],
             "resetMediaRetentionOverride": [
-                546,
+                558,
                 {
                     "input": [
-                        390,
+                        398,
                         "ResetMediaRetentionOverrideInput!"
                     ]
                 }
             ],
             "setStreamRetentionOverrides": [
-                421,
+                433,
                 {
                     "input": [
-                        420,
+                        432,
                         "SetStreamRetentionOverridesInput!"
                     ]
                 }
@@ -7156,7 +7295,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                71
+                78
             ],
             "__typename": [
                 1
@@ -7164,13 +7303,13 @@ const types: CompressedTypeMap<number> = {
         },
         "MySubscriptionsConnection": {
             "edges": [
-                302
+                309
             ],
             "nodes": [
-                71
+                78
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -7303,16 +7442,16 @@ const types: CompressedTypeMap<number> = {
         },
         "NetworkStatus": {
             "clusters": [
-                304
+                311
             ],
             "peerConnections": [
-                306
+                313
             ],
             "nodes": [
-                305
+                312
             ],
             "serviceInstances": [
-                307
+                314
             ],
             "totalNodes": [
                 4
@@ -7321,7 +7460,7 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "updatedAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -7338,88 +7477,88 @@ const types: CompressedTypeMap<number> = {
                 22
             ],
             "on_BufferEvent": [
-                52
+                57
             ],
             "on_ClientMetrics5m": [
-                62
+                69
             ],
             "on_Clip": [
-                66
+                73
             ],
             "on_Cluster": [
-                71
+                78
             ],
             "on_ConnectionEvent": [
-                95
+                102
             ],
             "on_Conversation": [
-                99
+                106
             ],
             "on_InfrastructureNode": [
-                198
+                205
             ],
             "on_Message": [
-                288
+                295
             ],
             "on_NodeMetric": [
-                311
+                318
             ],
             "on_NodeMetricHourly": [
-                313
+                320
             ],
             "on_NodePerformance5m": [
-                319
+                326
             ],
             "on_ProcessingUsageRecord": [
-                363
+                370
             ],
             "on_QualityTierDaily": [
-                373
+                380
             ],
             "on_SigningKey": [
-                422
+                434
             ],
             "on_StorageEvent": [
-                461
+                473
             ],
             "on_StorageUsageRecord": [
-                468
+                480
             ],
             "on_Stream": [
-                469
+                481
             ],
             "on_StreamAnalyticsDaily": [
-                470
+                482
             ],
             "on_StreamConnectionHourly": [
-                477
+                489
             ],
             "on_StreamEvent": [
-                483
+                495
             ],
             "on_StreamHealth5m": [
-                488
+                500
             ],
             "on_StreamHealthMetric": [
-                491
+                503
             ],
             "on_TenantDailyStat": [
-                523
+                535
             ],
             "on_TrackListEvent": [
-                537
+                549
             ],
             "on_ViewerGeoHourly": [
-                571
+                583
             ],
             "on_ViewerHoursHourly": [
-                577
+                589
             ],
             "on_ViewerSession": [
-                581
+                593
             ],
             "on_VodAsset": [
-                585
+                597
             ],
             "__typename": [
                 1
@@ -7430,7 +7569,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                198
+                205
             ],
             "__typename": [
                 1
@@ -7441,7 +7580,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "timestamp": [
-                532
+                544
             ],
             "nodeId": [
                 1
@@ -7501,7 +7640,7 @@ const types: CompressedTypeMap<number> = {
                 7
             ],
             "metadata": [
-                214
+                221
             ],
             "__typename": [
                 1
@@ -7512,7 +7651,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                311
+                318
             ],
             "__typename": [
                 1
@@ -7523,7 +7662,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "timestamp": [
-                532
+                544
             ],
             "nodeId": [
                 1
@@ -7573,7 +7712,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                313
+                320
             ],
             "__typename": [
                 1
@@ -7581,13 +7720,13 @@ const types: CompressedTypeMap<number> = {
         },
         "NodeMetrics1hConnection": {
             "edges": [
-                314
+                321
             ],
             "nodes": [
-                313
+                320
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -7630,13 +7769,13 @@ const types: CompressedTypeMap<number> = {
         },
         "NodeMetricsConnection": {
             "edges": [
-                312
+                319
             ],
             "nodes": [
-                311
+                318
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -7651,7 +7790,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "timestamp": [
-                532
+                544
             ],
             "nodeId": [
                 1
@@ -7683,13 +7822,13 @@ const types: CompressedTypeMap<number> = {
         },
         "NodePerformance5mConnection": {
             "edges": [
-                321
+                328
             ],
             "nodes": [
-                319
+                326
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -7703,7 +7842,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                319
+                326
             ],
             "__typename": [
                 1
@@ -7712,13 +7851,13 @@ const types: CompressedTypeMap<number> = {
         "NodeStatus": {},
         "NodesConnection": {
             "edges": [
-                310
+                317
             ],
             "nodes": [
-                198
+                205
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -7754,19 +7893,19 @@ const types: CompressedTypeMap<number> = {
         },
         "OpenMistAdminSessionResult": {
             "on_MistAdminSession": [
-                292
+                299
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -7780,10 +7919,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "lastSeen": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -7829,7 +7968,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "capabilityPrices": [
-                328
+                335
             ],
             "hardware": [
                 1
@@ -7838,10 +7977,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "lastSeen": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -7849,7 +7988,7 @@ const types: CompressedTypeMap<number> = {
         },
         "OrchestratorPerformancePoint": {
             "timestamp": [
-                532
+                544
             ],
             "gatewayId": [
                 1
@@ -7944,7 +8083,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "geoResolvedAt": [
-                532
+                544
             ],
             "latestLatencyMs": [
                 4
@@ -7956,7 +8095,7 @@ const types: CompressedTypeMap<number> = {
                 2
             ],
             "lastSeen": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -7964,13 +8103,13 @@ const types: CompressedTypeMap<number> = {
         },
         "OrchestratorWithDetails": {
             "orchestrator": [
-                327
+                334
             ],
             "instances": [
-                329
+                336
             ],
             "vantages": [
-                331
+                338
             ],
             "__typename": [
                 1
@@ -7978,7 +8117,7 @@ const types: CompressedTypeMap<number> = {
         },
         "OrchestratorsConnection": {
             "nodes": [
-                327
+                334
             ],
             "totalCount": [
                 4
@@ -8015,19 +8154,19 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "amount": [
-                298
+                305
             ],
             "currency": [
-                139
+                146
             ],
             "method": [
-                337
+                344
             ],
             "status": [
-                338
+                345
             ],
             "expiresAt": [
-                532
+                544
             ],
             "qrCode": [
                 1
@@ -8051,13 +8190,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "quotedAt": [
-                532
+                544
             ],
             "createdAt": [
-                532
+                544
             ],
             "conversion": [
-                140
+                147
             ],
             "__typename": [
                 1
@@ -8071,10 +8210,10 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "amount": [
-                169
+                176
             ],
             "reason": [
-                171
+                178
             ],
             "provider": [
                 1
@@ -8119,7 +8258,7 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "timeRange": [
-                533
+                545
             ],
             "totalUploadBytes": [
                 7
@@ -8146,7 +8285,7 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "dailyStats": [
-                523,
+                535,
                 {
                     "days": [
                         4
@@ -8212,7 +8351,7 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "lastUpdate": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -8248,7 +8387,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "requiredClaimsJson": [
-                344
+                351
             ],
             "__typename": [
                 1
@@ -8262,7 +8401,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "requiredClaimsJson": [
-                345
+                352
             ],
             "__typename": [
                 1
@@ -8282,13 +8421,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "tracks": [
-                352
+                359
             ],
             "protocolHints": [
                 1
             ],
             "instances": [
-                343
+                350
             ],
             "dvrStatus": [
                 1
@@ -8318,10 +8457,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "createdAt": [
-                532
+                544
             ],
             "thumbnailAssets": [
-                531
+                543
             ],
             "telemetryToken": [
                 1
@@ -8332,13 +8471,13 @@ const types: CompressedTypeMap<number> = {
         },
         "PlaybackPolicy": {
             "type": [
-                351
+                358
             ],
             "jwt": [
-                346
+                353
             ],
             "webhook": [
-                353
+                360
             ],
             "allowedOrigins": [
                 1
@@ -8349,13 +8488,13 @@ const types: CompressedTypeMap<number> = {
         },
         "PlaybackPolicyInput": {
             "type": [
-                351
+                358
             ],
             "jwt": [
-                347
+                354
             ],
             "webhook": [
-                354
+                361
             ],
             "allowedOrigins": [
                 1
@@ -8402,7 +8541,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "context": [
-                214
+                221
             ],
             "__typename": [
                 1
@@ -8419,7 +8558,7 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "context": [
-                214
+                221
             ],
             "__typename": [
                 1
@@ -8465,7 +8604,7 @@ const types: CompressedTypeMap<number> = {
         },
         "PlayerBootTimeSeriesBucket": {
             "timestamp": [
-                532
+                544
             ],
             "bootCount": [
                 4
@@ -8512,10 +8651,10 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "createdAt": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -8523,10 +8662,10 @@ const types: CompressedTypeMap<number> = {
         },
         "PreviewMediaPlacementInput": {
             "scope": [
-                272
+                279
             ],
             "verb": [
-                279
+                286
             ],
             "streamId": [
                 9
@@ -8535,10 +8674,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "coordinates": [
-                241
+                248
             ],
             "draftUpdate": [
-                281
+                288
             ],
             "expectedRevision": [
                 1
@@ -8575,10 +8714,10 @@ const types: CompressedTypeMap<number> = {
         },
         "ProcessingUsage": {
             "processingUsageConnection": [
-                361,
+                368,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9
@@ -8587,7 +8726,7 @@ const types: CompressedTypeMap<number> = {
                         1
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -8600,19 +8739,19 @@ const types: CompressedTypeMap<number> = {
         },
         "ProcessingUsageConnection": {
             "edges": [
-                362
+                369
             ],
             "nodes": [
-                363
+                370
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
             ],
             "summaries": [
-                364
+                371
             ],
             "__typename": [
                 1
@@ -8623,7 +8762,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                363
+                370
             ],
             "__typename": [
                 1
@@ -8634,7 +8773,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "timestamp": [
-                532
+                544
             ],
             "nodeId": [
                 1
@@ -8643,7 +8782,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "processType": [
                 1
@@ -8795,7 +8934,7 @@ const types: CompressedTypeMap<number> = {
         },
         "ProcessingUsageSummary": {
             "date": [
-                532
+                544
             ],
             "livepeerSeconds": [
                 7
@@ -8877,16 +9016,16 @@ const types: CompressedTypeMap<number> = {
         },
         "PromoteToPaidResult": {
             "on_PromoteToPaidPayload": [
-                365
+                372
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -8900,13 +9039,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "time": [
-                532
+                544
             ],
             "subject": [
                 1
             ],
             "data": [
-                368
+                375
             ],
             "__typename": [
                 1
@@ -8923,88 +9062,88 @@ const types: CompressedTypeMap<number> = {
                 19
             ],
             "on_BillingDetailsUpdated": [
-                42
+                47
             ],
             "on_InvoiceCreated": [
-                206
+                213
             ],
             "on_InvoicePaid": [
-                208
+                215
             ],
             "on_PaymentFailed": [
-                336
+                343
             ],
             "on_TopupCredited": [
-                536
+                548
             ],
             "on_ClipFailed": [
-                68
+                75
             ],
             "on_ClipReady": [
-                69
+                76
             ],
             "on_ClipRequested": [
-                70
+                77
             ],
             "on_CustomDomainFailed": [
-                141
+                148
             ],
             "on_CustomDomainVerified": [
-                143
+                150
             ],
             "on_MultistreamStatusChanged": [
-                300
+                307
             ],
             "on_RecordingChapterFailed": [
-                382
+                389
             ],
             "on_RecordingFailed": [
-                383
+                390
             ],
             "on_RecordingReady": [
-                384
+                391
             ],
             "on_RecordingStarted": [
-                386
+                393
             ],
             "on_RecordingStopped": [
-                387
+                394
             ],
             "on_StreamConnected": [
-                476
+                488
             ],
             "on_StreamCreated": [
-                480
+                492
             ],
             "on_StreamDeleted": [
-                481
+                493
             ],
             "on_StreamIdle": [
-                495
+                507
             ],
             "on_StreamKeyRotated": [
-                498
+                510
             ],
             "on_StreamLive": [
-                500
+                512
             ],
             "on_StreamUpdated": [
-                506
+                518
             ],
             "on_UploadAborted": [
-                554
+                566
             ],
             "on_UploadCompleted": [
-                555
+                567
             ],
             "on_UploadCreated": [
-                556
+                568
             ],
             "on_UploadFailed": [
-                557
+                569
             ],
             "on_UploadReady": [
-                558
+                570
             ],
             "__typename": [
                 1
@@ -9024,7 +9163,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "createdAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -9087,10 +9226,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "lastPushedAt": [
-                532
+                544
             ],
             "createdAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -9101,13 +9240,13 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "day": [
-                532
+                544
             ],
             "streamId": [
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "tier2160pMinutes": [
                 4
@@ -9154,13 +9293,13 @@ const types: CompressedTypeMap<number> = {
         },
         "QualityTierDailyConnection": {
             "edges": [
-                375
+                382
             ],
             "nodes": [
-                373
+                380
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -9174,7 +9313,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                373
+                380
             ],
             "__typename": [
                 1
@@ -9216,22 +9355,33 @@ const types: CompressedTypeMap<number> = {
             ]
         },
         "Query": {
+            "authSessionsConnection": [
+                35,
+                {
+                    "first": [
+                        4
+                    ],
+                    "after": [
+                        1
+                    ]
+                }
+            ],
             "analytics": [
                 13
             ],
             "incidentsConnection": [
-                197,
+                204,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "filter": [
-                        190
+                        197
                     ]
                 }
             ],
             "incident": [
-                187,
+                194,
                 {
                     "id": [
                         9,
@@ -9240,16 +9390,16 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "serverInfo": [
-                406
+                418
             ],
             "capabilities": [
-                56
+                61
             ],
             "streamsConnection": [
-                510,
+                522,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "search": [
                         1
@@ -9257,7 +9407,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "stream": [
-                469,
+                481,
                 {
                     "id": [
                         9,
@@ -9266,7 +9416,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "validateStreamKey": [
-                507,
+                519,
                 {
                     "streamKey": [
                         1,
@@ -9275,10 +9425,10 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "streamKeysConnection": [
-                499,
+                511,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9,
@@ -9287,7 +9437,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "clip": [
-                66,
+                73,
                 {
                     "id": [
                         9,
@@ -9296,18 +9446,18 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "billingTiers": [
-                46
+                51
             ],
             "invoicesConnection": [
-                213,
+                220,
                 {
                     "page": [
-                        98
+                        105
                     ]
                 }
             ],
             "invoice": [
-                205,
+                212,
                 {
                     "id": [
                         9,
@@ -9316,7 +9466,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "payment": [
-                209,
+                216,
                 {
                     "id": [
                         9,
@@ -9325,10 +9475,10 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "paymentsConnection": [
-                211,
+                218,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "invoiceId": [
                         9
@@ -9342,58 +9492,58 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "billingStatus": [
-                45
+                50
             ],
             "billingLifecycle": [
-                44
+                49
             ],
             "mollieMandates": [
-                295
+                302
             ],
             "prepaidBalance": [
-                357
+                364
             ],
             "billingDetails": [
-                41
+                46
             ],
             "balanceTransactionsConnection": [
-                37,
+                42,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "transactionType": [
                         1
                     ],
                     "timeRange": [
-                        534
+                        546
                     ]
                 }
             ],
             "tenantUsage": [
-                527,
+                539,
                 {
                     "timeRange": [
-                        534
+                        546
                     ]
                 }
             ],
             "usageRecordsConnection": [
-                563,
+                575,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "timeRange": [
-                        534
+                        546
                     ]
                 }
             ],
             "usageAggregates": [
-                559,
+                571,
                 {
                     "timeRange": [
-                        534,
+                        546,
                         "TimeRangeInput!"
                     ],
                     "granularity": [
@@ -9406,18 +9556,18 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "tenant": [
-                518
+                530
             ],
             "clustersConnection": [
-                92,
+                99,
                 {
                     "page": [
-                        98
+                        105
                     ]
                 }
             ],
             "cluster": [
-                71,
+                78,
                 {
                     "id": [
                         9,
@@ -9426,16 +9576,16 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "nodesConnection": [
-                323,
+                330,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "clusterId": [
                         1
                     ],
                     "status": [
-                        322
+                        329
                     ],
                     "type": [
                         1
@@ -9443,7 +9593,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "node": [
-                309,
+                316,
                 {
                     "id": [
                         9,
@@ -9452,10 +9602,10 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "orchestratorsConnection": [
-                333,
+                340,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "orchAddr": [
                         1
@@ -9463,7 +9613,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "orchestrator": [
-                332,
+                339,
                 {
                     "orchAddr": [
                         1,
@@ -9472,7 +9622,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "orchestratorInstances": [
-                329,
+                336,
                 {
                     "orchAddr": [
                         1
@@ -9480,7 +9630,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "orchestratorVantages": [
-                331,
+                338,
                 {
                     "orchAddr": [
                         1
@@ -9488,14 +9638,14 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "orchestratorPerformanceSeries": [
-                330,
+                337,
                 {
                     "orchAddr": [
                         1,
                         "String!"
                     ],
                     "timeRange": [
-                        534,
+                        546,
                         "TimeRangeInput!"
                     ],
                     "interval": [
@@ -9510,10 +9660,10 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "discoverServicesConnection": [
-                410,
+                422,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "type": [
                         1,
@@ -9525,7 +9675,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "clustersAccess": [
-                72,
+                79,
                 {
                     "first": [
                         4
@@ -9536,15 +9686,15 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "clustersAccessConnection": [
-                73,
+                80,
                 {
                     "page": [
-                        98
+                        105
                     ]
                 }
             ],
             "clustersAvailable": [
-                32,
+                37,
                 {
                     "first": [
                         4
@@ -9555,15 +9705,15 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "clustersAvailableConnection": [
-                33,
+                38,
                 {
                     "page": [
-                        98
+                        105
                     ]
                 }
             ],
             "mySubscriptions": [
-                71,
+                78,
                 {
                     "first": [
                         4
@@ -9574,15 +9724,15 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "mySubscriptionsConnection": [
-                303,
+                310,
                 {
                     "page": [
-                        98
+                        105
                     ]
                 }
             ],
             "serviceInstancesHealth": [
-                409,
+                421,
                 {
                     "serviceId": [
                         1
@@ -9590,13 +9740,13 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "networkStatus": [
-                308
+                315
             ],
             "streamingConfig": [
-                508
+                520
             ],
             "marketplaceClusters": [
-                223,
+                230,
                 {
                     "first": [
                         4
@@ -9607,15 +9757,15 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "marketplaceClustersConnection": [
-                224,
+                231,
                 {
                     "page": [
-                        98
+                        105
                     ]
                 }
             ],
             "marketplaceCluster": [
-                223,
+                230,
                 {
                     "clusterId": [
                         1,
@@ -9624,7 +9774,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "pendingSubscriptions": [
-                85,
+                92,
                 {
                     "clusterId": [
                         9,
@@ -9633,10 +9783,10 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "pendingSubscriptionsConnection": [
-                86,
+                93,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "clusterId": [
                         9,
@@ -9645,7 +9795,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "clusterInvites": [
-                78,
+                85,
                 {
                     "clusterId": [
                         9,
@@ -9654,10 +9804,10 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "clusterInvitesConnection": [
-                79,
+                86,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "clusterId": [
                         9,
@@ -9666,26 +9816,26 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "myClusterInvites": [
-                78
+                85
             ],
             "myClusterInvitesConnection": [
-                79,
+                86,
                 {
                     "page": [
-                        98
+                        105
                     ]
                 }
             ],
             "developerTokensConnection": [
-                159,
+                166,
                 {
                     "page": [
-                        98
+                        105
                     ]
                 }
             ],
             "webhookEndpoint": [
-                608,
+                620,
                 {
                     "id": [
                         9,
@@ -9694,21 +9844,21 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "webhookEndpointsConnection": [
-                614,
+                626,
                 {
                     "page": [
-                        98
+                        105
                     ]
                 }
             ],
             "webhookDeliveriesConnection": [
-                602,
+                614,
                 {
                     "endpointId": [
                         9
                     ],
                     "statuses": [
-                        607,
+                        619,
                         "[WebhookDeliveryStatus!]"
                     ],
                     "eventType": [
@@ -9718,18 +9868,18 @@ const types: CompressedTypeMap<number> = {
                         9
                     ],
                     "createdAfter": [
-                        532
+                        544
                     ],
                     "createdBefore": [
-                        532
+                        544
                     ],
                     "page": [
-                        98
+                        105
                     ]
                 }
             ],
             "webhookDelivery": [
-                603,
+                615,
                 {
                     "id": [
                         9,
@@ -9741,7 +9891,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "signingKey": [
-                422,
+                434,
                 {
                     "id": [
                         9,
@@ -9750,25 +9900,25 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "signingKeysConnection": [
-                426,
+                438,
                 {
                     "status": [
                         1
                     ],
                     "page": [
-                        98
+                        105
                     ]
                 }
             ],
             "dvrChapter": [
-                144,
+                151,
                 {
                     "dvrId": [
                         9,
                         "ID!"
                     ],
                     "mode": [
-                        145
+                        152
                     ],
                     "intervalSeconds": [
                         4
@@ -9784,14 +9934,14 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "dvrChapters": [
-                148,
+                155,
                 {
                     "dvrId": [
                         9,
                         "ID!"
                     ],
                     "mode": [
-                        145
+                        152
                     ],
                     "intervalSeconds": [
                         4
@@ -9811,7 +9961,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "vodAsset": [
-                585,
+                597,
                 {
                     "id": [
                         9,
@@ -9820,15 +9970,15 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "storageArtifactsConnection": [
-                458,
+                470,
                 {
                     "input": [
-                        459
+                        471
                     ]
                 }
             ],
             "vodUploadStatus": [
-                596,
+                608,
                 {
                     "uploadId": [
                         9,
@@ -9837,31 +9987,31 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "resolveViewerEndpoint": [
-                570,
+                582,
                 {
                     "contentId": [
                         1,
                         "String!"
                     ],
                     "protocol": [
-                        287
+                        294
                     ]
                 }
             ],
             "resolveIngestEndpoint": [
-                201,
+                208,
                 {
                     "streamKey": [
                         1,
                         "String!"
                     ],
                     "protocol": [
-                        230
+                        237
                     ]
                 }
             ],
             "skipperConversations": [
-                432,
+                444,
                 {
                     "limit": [
                         4
@@ -9872,7 +10022,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "skipperConversation": [
-                431,
+                443,
                 {
                     "id": [
                         9,
@@ -9881,7 +10031,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "skipperReports": [
-                440,
+                452,
                 {
                     "limit": [
                         4
@@ -9892,7 +10042,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "skipperReport": [
-                438,
+                450,
                 {
                     "id": [
                         9,
@@ -9904,15 +10054,15 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "conversationsConnection": [
-                102,
+                109,
                 {
                     "page": [
-                        98
+                        105
                     ]
                 }
             ],
             "conversation": [
-                99,
+                106,
                 {
                     "id": [
                         9,
@@ -9921,38 +10071,38 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "messagesConnection": [
-                291,
+                298,
                 {
                     "conversationId": [
                         9,
                         "ID!"
                     ],
                     "page": [
-                        98
+                        105
                     ]
                 }
             ],
             "mediaRetentionPolicy": [
-                285
+                292
             ],
             "mediaPlacementPolicy": [
-                257,
+                264,
                 {
                     "scope": [
-                        272,
+                        279,
                         "MediaPlacementScopeInput!"
                     ]
                 }
             ],
             "mediaPlacementOptions": [
-                255,
+                262,
                 {
                     "scope": [
-                        272,
+                        279,
                         "MediaPlacementScopeInput!"
                     ],
                     "filter": [
-                        254
+                        261
                     ],
                     "after": [
                         1
@@ -9963,28 +10113,28 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "previewMediaPlacement": [
-                262,
+                269,
                 {
                     "input": [
-                        358,
+                        365,
                         "PreviewMediaPlacementInput!"
                     ]
                 }
             ],
             "reviewMediaPlacementChange": [
-                266,
+                273,
                 {
                     "input": [
-                        393,
+                        401,
                         "ReviewMediaPlacementChangeInput!"
                     ]
                 }
             ],
             "mediaPlacementChange": [
-                236,
+                243,
                 {
                     "scope": [
-                        272,
+                        279,
                         "MediaPlacementScopeInput!"
                     ],
                     "idempotencyKey": [
@@ -9994,7 +10144,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "clusterMediaConsent": [
-                229,
+                236,
                 {
                     "clusterId": [
                         9,
@@ -10003,16 +10153,16 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "reviewClusterMediaConsentChange": [
-                266,
+                273,
                 {
                     "input": [
-                        392,
+                        400,
                         "ReviewMediaCapacityConsentInput!"
                     ]
                 }
             ],
             "clusterMediaConsentChange": [
-                228,
+                235,
                 {
                     "clusterId": [
                         9,
@@ -10044,22 +10194,22 @@ const types: CompressedTypeMap<number> = {
         },
         "RebufferingEvent": {
             "timestamp": [
-                532
+                544
             ],
             "streamId": [
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "nodeId": [
                 1
             ],
             "bufferState": [
-                55
+                60
             ],
             "previousState": [
-                55
+                60
             ],
             "rebufferStart": [
                 2
@@ -10076,7 +10226,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                379
+                386
             ],
             "__typename": [
                 1
@@ -10084,13 +10234,13 @@ const types: CompressedTypeMap<number> = {
         },
         "RebufferingEventsConnection": {
             "edges": [
-                380
+                387
             ],
             "nodes": [
-                379
+                386
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -10101,7 +10251,7 @@ const types: CompressedTypeMap<number> = {
         },
         "RecordingChapterFailed": {
             "artifact": [
-                164
+                171
             ],
             "chapterId": [
                 9
@@ -10113,7 +10263,7 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "reason": [
-                168
+                175
             ],
             "__typename": [
                 1
@@ -10121,10 +10271,10 @@ const types: CompressedTypeMap<number> = {
         },
         "RecordingFailed": {
             "artifact": [
-                164
+                171
             ],
             "reason": [
-                168
+                175
             ],
             "__typename": [
                 1
@@ -10132,7 +10282,7 @@ const types: CompressedTypeMap<number> = {
         },
         "RecordingReady": {
             "artifact": [
-                164
+                171
             ],
             "durationMs": [
                 4
@@ -10157,7 +10307,7 @@ const types: CompressedTypeMap<number> = {
         },
         "RecordingStarted": {
             "artifact": [
-                164
+                171
             ],
             "__typename": [
                 1
@@ -10165,7 +10315,27 @@ const types: CompressedTypeMap<number> = {
         },
         "RecordingStopped": {
             "artifact": [
-                164
+                171
+            ],
+            "__typename": [
+                1
+            ]
+        },
+        "RenameAuthSessionResult": {
+            "on_AuthSession": [
+                34
+            ],
+            "on_ValidationError": [
+                577
+            ],
+            "on_NotFoundError": [
+                331
+            ],
+            "on_AuthError": [
+                32
+            ],
+            "on_Error": [
+                170
             ],
             "__typename": [
                 1
@@ -10173,19 +10343,19 @@ const types: CompressedTypeMap<number> = {
         },
         "ReplayWebhookDeliveriesResult": {
             "on_WebhookReplayResult": [
-                615
+                627
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -10193,19 +10363,19 @@ const types: CompressedTypeMap<number> = {
         },
         "ReplayWebhookDeliveryResult": {
             "on_WebhookDelivery": [
-                603
+                615
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -10213,7 +10383,7 @@ const types: CompressedTypeMap<number> = {
         },
         "ResetMediaRetentionOverrideInput": {
             "targetType": [
-                286
+                293
             ],
             "targetId": [
                 9
@@ -10245,7 +10415,7 @@ const types: CompressedTypeMap<number> = {
         },
         "ReviewMediaPlacementChangeInput": {
             "scope": [
-                272
+                279
             ],
             "expectedRevision": [
                 1
@@ -10254,7 +10424,38 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "updates": [
-                281
+                288
+            ],
+            "__typename": [
+                1
+            ]
+        },
+        "RevokeAuthSessionPayload": {
+            "success": [
+                2
+            ],
+            "current": [
+                2
+            ],
+            "__typename": [
+                1
+            ]
+        },
+        "RevokeAuthSessionResult": {
+            "on_RevokeAuthSessionPayload": [
+                402
+            ],
+            "on_ValidationError": [
+                577
+            ],
+            "on_NotFoundError": [
+                331
+            ],
+            "on_AuthError": [
+                32
+            ],
+            "on_Error": [
+                170
             ],
             "__typename": [
                 1
@@ -10262,16 +10463,16 @@ const types: CompressedTypeMap<number> = {
         },
         "RevokeClusterInviteResult": {
             "on_DeleteSuccess": [
-                154
+                161
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -10279,16 +10480,41 @@ const types: CompressedTypeMap<number> = {
         },
         "RevokeDeveloperTokenResult": {
             "on_DeleteSuccess": [
-                154
+                161
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
+            ],
+            "__typename": [
+                1
+            ]
+        },
+        "RevokeOtherAuthSessionsPayload": {
+            "revokedCount": [
+                4
+            ],
+            "__typename": [
+                1
+            ]
+        },
+        "RevokeOtherAuthSessionsResult": {
+            "on_RevokeOtherAuthSessionsPayload": [
+                406
+            ],
+            "on_ValidationError": [
+                577
+            ],
+            "on_AuthError": [
+                32
+            ],
+            "on_Error": [
+                170
             ],
             "__typename": [
                 1
@@ -10296,19 +10522,19 @@ const types: CompressedTypeMap<number> = {
         },
         "RevokeSigningKeyResult": {
             "on_SigningKey": [
-                422
+                434
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Node": [
-                309
+                316
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -10316,16 +10542,16 @@ const types: CompressedTypeMap<number> = {
         },
         "RotateWebhookEndpointSecretResult": {
             "on_WebhookEndpointSecret": [
-                612
+                624
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -10359,7 +10585,7 @@ const types: CompressedTypeMap<number> = {
                 7
             ],
             "topCountries": [
-                398
+                410
             ],
             "__typename": [
                 1
@@ -10367,13 +10593,13 @@ const types: CompressedTypeMap<number> = {
         },
         "RoutingEvent": {
             "timestamp": [
-                532
+                544
             ],
             "streamId": [
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "selectedNode": [
                 1
@@ -10400,7 +10626,7 @@ const types: CompressedTypeMap<number> = {
                 7
             ],
             "clientBucket": [
-                181
+                188
             ],
             "nodeLatitude": [
                 7
@@ -10412,7 +10638,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "nodeBucket": [
-                181
+                188
             ],
             "routingDistance": [
                 7
@@ -10456,7 +10682,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                400
+                412
             ],
             "__typename": [
                 1
@@ -10464,13 +10690,13 @@ const types: CompressedTypeMap<number> = {
         },
         "RoutingEventsConnection": {
             "edges": [
-                401
+                413
             ],
             "nodes": [
-                400
+                412
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -10503,22 +10729,22 @@ const types: CompressedTypeMap<number> = {
         },
         "SendMessageResult": {
             "on_Message": [
-                288
+                295
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Node": [
-                309
+                316
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -10564,19 +10790,19 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "status": [
-                204
+                211
             ],
             "healthStatus": [
-                322
+                329
             ],
             "startedAt": [
-                532
+                544
             ],
             "stoppedAt": [
-                532
+                544
             ],
             "lastHealthCheck": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -10587,7 +10813,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                407
+                419
             ],
             "__typename": [
                 1
@@ -10619,7 +10845,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "lastHealthCheck": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -10627,13 +10853,13 @@ const types: CompressedTypeMap<number> = {
         },
         "ServiceInstancesConnection": {
             "edges": [
-                408
+                420
             ],
             "nodes": [
-                407
+                419
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -10682,7 +10908,7 @@ const types: CompressedTypeMap<number> = {
         },
         "SessionQoeTimeSeriesBucket": {
             "timestamp": [
-                532
+                544
             ],
             "sessionCount": [
                 4
@@ -10705,7 +10931,7 @@ const types: CompressedTypeMap<number> = {
         },
         "SetMediaRetentionPolicyInput": {
             "targetType": [
-                286
+                293
             ],
             "days": [
                 4
@@ -10719,16 +10945,16 @@ const types: CompressedTypeMap<number> = {
         },
         "SetMediaRetentionPolicyResult": {
             "on_MediaRetentionPolicy": [
-                285
+                292
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -10739,7 +10965,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "mode": [
-                318
+                325
             ],
             "reason": [
                 1
@@ -10750,22 +10976,22 @@ const types: CompressedTypeMap<number> = {
         },
         "SetNodeModeResult": {
             "on_InfrastructureNode": [
-                198
+                205
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Node": [
-                309
+                316
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -10782,7 +11008,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "policy": [
-                350
+                357
             ],
             "__typename": [
                 1
@@ -10790,28 +11016,28 @@ const types: CompressedTypeMap<number> = {
         },
         "SetPlaybackPolicyResult": {
             "on_Stream": [
-                469
+                481
             ],
             "on_VodAsset": [
-                585
+                597
             ],
             "on_Clip": [
-                66
+                73
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Node": [
-                309
+                316
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -10819,22 +11045,22 @@ const types: CompressedTypeMap<number> = {
         },
         "SetPreferredClusterResult": {
             "on_Cluster": [
-                71
+                78
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Node": [
-                309
+                316
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -10862,19 +11088,19 @@ const types: CompressedTypeMap<number> = {
         },
         "SetStreamRetentionOverridesResult": {
             "on_StreamRetentionOverrides": [
-                502
+                514
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -10891,22 +11117,22 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "algorithm": [
-                423
+                435
             ],
             "publicKeyPem": [
                 1
             ],
             "status": [
-                425
+                437
             ],
             "createdAt": [
-                532
+                544
             ],
             "lastUsedAt": [
-                532
+                544
             ],
             "revokedAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -10918,7 +11144,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                422
+                434
             ],
             "__typename": [
                 1
@@ -10927,13 +11153,13 @@ const types: CompressedTypeMap<number> = {
         "SigningKeyStatus": {},
         "SigningKeysConnection": {
             "edges": [
-                424
+                436
             ],
             "nodes": [
-                422
+                434
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -10944,19 +11170,19 @@ const types: CompressedTypeMap<number> = {
         },
         "SkipperChatEvent": {
             "on_SkipperToken": [
-                441
+                453
             ],
             "on_SkipperToolStartEvent": [
-                444
+                456
             ],
             "on_SkipperToolEndEvent": [
-                443
+                455
             ],
             "on_SkipperMeta": [
-                436
+                448
             ],
             "on_SkipperDone": [
-                433
+                445
             ],
             "__typename": [
                 1
@@ -10973,7 +11199,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "mode": [
-                437
+                449
             ],
             "__typename": [
                 1
@@ -10998,7 +11224,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "sources": [
-                429
+                441
             ],
             "__typename": [
                 1
@@ -11012,13 +11238,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "messages": [
-                435
+                447
             ],
             "createdAt": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -11032,10 +11258,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "createdAt": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -11080,13 +11306,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "sources": [
-                214
+                221
             ],
             "toolsUsed": [
-                214
+                221
             ],
             "confidenceBlocks": [
-                214
+                221
             ],
             "tokensInput": [
                 4
@@ -11095,7 +11321,7 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "createdAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -11106,16 +11332,16 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "citations": [
-                429
+                441
             ],
             "externalLinks": [
-                429
+                441
             ],
             "details": [
-                442
+                454
             ],
             "blocks": [
-                430
+                442
             ],
             "__typename": [
                 1
@@ -11139,13 +11365,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "recommendations": [
-                439
+                451
             ],
             "createdAt": [
-                532
+                544
             ],
             "readAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -11164,7 +11390,7 @@ const types: CompressedTypeMap<number> = {
         },
         "SkipperReportsConnection": {
             "nodes": [
-                438
+                450
             ],
             "totalCount": [
                 4
@@ -11189,7 +11415,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "payload": [
-                214
+                221
             ],
             "__typename": [
                 1
@@ -11218,10 +11444,10 @@ const types: CompressedTypeMap<number> = {
         "SortOrder": {},
         "SourceLocation": {
             "mode": [
-                451
+                463
             ],
             "clusters": [
-                448
+                460
             ],
             "avoidNodeIds": [
                 9
@@ -11254,10 +11480,10 @@ const types: CompressedTypeMap<number> = {
         },
         "SourceLocationInput": {
             "mode": [
-                451
+                463
             ],
             "clusters": [
-                449
+                461
             ],
             "avoidNodeIds": [
                 9
@@ -11269,19 +11495,19 @@ const types: CompressedTypeMap<number> = {
         "SourceLocationMode": {},
         "StartDVRResult": {
             "on_DVRRequest": [
-                149
+                156
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -11289,16 +11515,16 @@ const types: CompressedTypeMap<number> = {
         },
         "StopDVRResult": {
             "on_DeleteSuccess": [
-                154
+                161
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -11309,7 +11535,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "kind": [
-                455
+                467
             ],
             "id": [
                 9
@@ -11363,19 +11589,19 @@ const types: CompressedTypeMap<number> = {
                 2
             ],
             "createdAt": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "expiresAt": [
-                532
+                544
             ],
             "effectiveRetention": [
-                161
+                168
             ],
             "storageCost": [
-                460
+                472
             ],
             "deleteId": [
                 9
@@ -11387,7 +11613,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "thumbnailAssets": [
-                531
+                543
             ],
             "durationSeconds": [
                 7
@@ -11423,7 +11649,7 @@ const types: CompressedTypeMap<number> = {
         "StorageArtifactSortField": {},
         "StorageArtifactsConnection": {
             "nodes": [
-                454
+                466
             ],
             "totalCount": [
                 4
@@ -11441,7 +11667,7 @@ const types: CompressedTypeMap<number> = {
                 2
             ],
             "kindCounts": [
-                456
+                468
             ],
             "__typename": [
                 1
@@ -11458,7 +11684,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "kinds": [
-                455
+                467
             ],
             "search": [
                 1
@@ -11470,10 +11696,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "sort": [
-                457
+                469
             ],
             "direction": [
-                445
+                457
             ],
             "__typename": [
                 1
@@ -11498,13 +11724,13 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "timestamp": [
-                532
+                544
             ],
             "streamId": [
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "assetHash": [
                 1
@@ -11554,7 +11780,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                461
+                473
             ],
             "__typename": [
                 1
@@ -11562,13 +11788,13 @@ const types: CompressedTypeMap<number> = {
         },
         "StorageEventsConnection": {
             "edges": [
-                462
+                474
             ],
             "nodes": [
-                461
+                473
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -11594,7 +11820,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "usage": [
-                525
+                537
             ],
             "__typename": [
                 1
@@ -11602,10 +11828,10 @@ const types: CompressedTypeMap<number> = {
         },
         "StorageUsage": {
             "storageUsageConnection": [
-                466,
+                478,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "nodeId": [
                         1
@@ -11614,7 +11840,7 @@ const types: CompressedTypeMap<number> = {
                         1
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -11627,13 +11853,13 @@ const types: CompressedTypeMap<number> = {
         },
         "StorageUsageConnection": {
             "edges": [
-                467
+                479
             ],
             "nodes": [
-                468
+                480
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -11647,7 +11873,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                468
+                480
             ],
             "__typename": [
                 1
@@ -11658,7 +11884,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "timestamp": [
-                532
+                544
             ],
             "nodeId": [
                 1
@@ -11720,43 +11946,43 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "ingestMode": [
-                203
+                210
             ],
             "pullSource": [
-                371
+                378
             ],
             "managedSource": [
-                222
+                229
             ],
             "sourceLocation": [
-                447
+                459
             ],
             "createdAt": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "metrics": [
-                501
+                513
             ],
             "pushTargets": [
-                372
+                379
             ],
             "playbackPolicy": [
-                349
+                356
             ],
             "dvrChapterMode": [
-                145
+                152
             ],
             "dvrChapterIntervalSeconds": [
                 4
             ],
             "monitoring": [
-                299
+                306
             ],
             "recentPullSourceEvents": [
-                369,
+                376,
                 {
                     "limit": [
                         4
@@ -11764,10 +11990,10 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "thumbnailAssets": [
-                531
+                543
             ],
             "retentionOverrides": [
-                502
+                514
             ],
             "__typename": [
                 1
@@ -11778,13 +12004,13 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "day": [
-                532
+                544
             ],
             "streamId": [
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "totalViews": [
                 4
@@ -11807,13 +12033,13 @@ const types: CompressedTypeMap<number> = {
         },
         "StreamAnalyticsDailyConnection": {
             "edges": [
-                472
+                484
             ],
             "nodes": [
-                470
+                482
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -11827,7 +12053,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                470
+                482
             ],
             "__typename": [
                 1
@@ -11838,10 +12064,10 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "timeRange": [
-                533
+                545
             ],
             "rangeAvgViewers": [
                 7
@@ -11898,7 +12124,7 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "rangeQuality": [
-                376
+                383
             ],
             "rangeEgressSharePercent": [
                 7
@@ -11915,13 +12141,13 @@ const types: CompressedTypeMap<number> = {
         },
         "StreamAnalyticsSummaryConnection": {
             "edges": [
-                475
+                487
             ],
             "nodes": [
-                473
+                485
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -11935,7 +12161,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                473
+                485
             ],
             "__typename": [
                 1
@@ -11946,7 +12172,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "protocol": [
-                167
+                174
             ],
             "playbackId": [
                 9
@@ -11960,13 +12186,13 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "hour": [
-                532
+                544
             ],
             "streamId": [
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "totalBytes": [
                 7
@@ -11983,13 +12209,13 @@ const types: CompressedTypeMap<number> = {
         },
         "StreamConnectionHourlyConnection": {
             "edges": [
-                479
+                491
             ],
             "nodes": [
-                477
+                489
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -12003,7 +12229,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                477
+                489
             ],
             "__typename": [
                 1
@@ -12036,7 +12262,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                469
+                481
             ],
             "__typename": [
                 1
@@ -12053,28 +12279,28 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "nodeId": [
                 1
             ],
             "type": [
-                486
+                498
             ],
             "status": [
-                503
+                515
             ],
             "timestamp": [
-                532
+                544
             ],
             "details": [
                 1
             ],
             "payload": [
-                214
+                221
             ],
             "source": [
-                485
+                497
             ],
             "bufferState": [
                 1
@@ -12166,7 +12392,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                483
+                495
             ],
             "__typename": [
                 1
@@ -12176,13 +12402,13 @@ const types: CompressedTypeMap<number> = {
         "StreamEventType": {},
         "StreamEventsConnection": {
             "edges": [
-                484
+                496
             ],
             "nodes": [
-                483
+                495
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -12196,7 +12422,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "timestamp": [
-                532
+                544
             ],
             "nodeId": [
                 1
@@ -12237,13 +12463,13 @@ const types: CompressedTypeMap<number> = {
         },
         "StreamHealth5mConnection": {
             "edges": [
-                490
+                502
             ],
             "nodes": [
-                488
+                500
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -12257,7 +12483,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                488
+                500
             ],
             "__typename": [
                 1
@@ -12268,13 +12494,13 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "timestamp": [
-                532
+                544
             ],
             "streamId": [
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "nodeId": [
                 1
@@ -12331,7 +12557,7 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "bufferState": [
-                55
+                60
             ],
             "bufferHealth": [
                 7
@@ -12352,7 +12578,7 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "trackMetadata": [
-                214
+                221
             ],
             "__typename": [
                 1
@@ -12363,7 +12589,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                491
+                503
             ],
             "__typename": [
                 1
@@ -12371,13 +12597,13 @@ const types: CompressedTypeMap<number> = {
         },
         "StreamHealthMetricsConnection": {
             "edges": [
-                492
+                504
             ],
             "nodes": [
-                491
+                503
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -12434,7 +12660,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "keyValue": [
                 1
@@ -12446,10 +12672,10 @@ const types: CompressedTypeMap<number> = {
                 2
             ],
             "lastUsedAt": [
-                532
+                544
             ],
             "createdAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -12460,7 +12686,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                496
+                508
             ],
             "__typename": [
                 1
@@ -12476,13 +12702,13 @@ const types: CompressedTypeMap<number> = {
         },
         "StreamKeysConnection": {
             "edges": [
-                497
+                509
             ],
             "nodes": [
-                496
+                508
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -12504,7 +12730,7 @@ const types: CompressedTypeMap<number> = {
         },
         "StreamMetrics": {
             "status": [
-                503
+                515
             ],
             "isLive": [
                 2
@@ -12513,10 +12739,10 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "startedAt": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "nodeId": [
                 1
@@ -12652,7 +12878,7 @@ const types: CompressedTypeMap<number> = {
         },
         "StreamValidation": {
             "status": [
-                566
+                578
             ],
             "streamKey": [
                 1
@@ -12725,27 +12951,27 @@ const types: CompressedTypeMap<number> = {
         },
         "StreamingUsage": {
             "viewerGeographicsConnection": [
-                576,
+                588,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9
                     ],
                     "timeRange": [
-                        534
+                        546
                     ]
                 }
             ],
             "geographicDistribution": [
-                182,
+                189,
                 {
                     "streamId": [
                         9
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "topN": [
                         4
@@ -12753,46 +12979,46 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "streamAnalyticsSummary": [
-                473,
+                485,
                 {
                     "streamId": [
                         9,
                         "ID!"
                     ],
                     "timeRange": [
-                        534
+                        546
                     ]
                 }
             ],
             "streamAnalyticsSummariesConnection": [
-                474,
+                486,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "timeRange": [
-                        534,
+                        546,
                         "TimeRangeInput!"
                     ],
                     "sortBy": [
-                        504
+                        516
                     ],
                     "sortOrder": [
-                        446
+                        458
                     ]
                 }
             ],
             "viewerHoursHourlyConnection": [
-                578,
+                590,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -12800,13 +13026,13 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "viewerGeoHourlyConnection": [
-                572,
+                584,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -12814,17 +13040,17 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "viewerTimeSeriesConnection": [
-                584,
+                596,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9,
                         "ID!"
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "interval": [
                         1
@@ -12832,16 +13058,16 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "qualityTierDailyConnection": [
-                374,
+                381,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -12849,16 +13075,16 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "streamConnectionHourlyConnection": [
-                478,
+                490,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -12866,13 +13092,13 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "tenantAnalyticsDailyConnection": [
-                520,
+                532,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -12880,16 +13106,16 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "streamAnalyticsDailyConnection": [
-                471,
+                483,
                 {
                     "page": [
-                        98
+                        105
                     ],
                     "streamId": [
                         9
                     ],
                     "timeRange": [
-                        534
+                        546
                     ],
                     "noCache": [
                         2
@@ -12902,13 +13128,13 @@ const types: CompressedTypeMap<number> = {
         },
         "StreamsConnection": {
             "edges": [
-                482
+                494
             ],
             "nodes": [
-                469
+                481
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -12919,19 +13145,19 @@ const types: CompressedTypeMap<number> = {
         },
         "StripeBillingPortalResult": {
             "on_StripeBillingPortalSession": [
-                512
+                524
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -12947,19 +13173,19 @@ const types: CompressedTypeMap<number> = {
         },
         "StripeCheckoutResult": {
             "on_StripeCheckoutSession": [
-                514
+                526
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -12978,19 +13204,19 @@ const types: CompressedTypeMap<number> = {
         },
         "SubmitX402PaymentResult": {
             "on_X402PaymentResult": [
-                617
+                629
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -12998,7 +13224,7 @@ const types: CompressedTypeMap<number> = {
         },
         "Subscription": {
             "liveStreamEvents": [
-                483,
+                495,
                 {
                     "streamId": [
                         9
@@ -13006,7 +13232,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "liveViewerMetrics": [
-                580,
+                592,
                 {
                     "streamId": [
                         9,
@@ -13015,7 +13241,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "liveConnectionEvents": [
-                95,
+                102,
                 {
                     "streamId": [
                         9
@@ -13023,7 +13249,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "liveTrackListUpdates": [
-                540,
+                552,
                 {
                     "streamId": [
                         9,
@@ -13032,7 +13258,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "tenantEvents": [
-                367,
+                374,
                 {
                     "types": [
                         1,
@@ -13044,7 +13270,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "liveStorageEvents": [
-                461,
+                473,
                 {
                     "streamId": [
                         9
@@ -13052,7 +13278,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "liveProcessingEvents": [
-                363,
+                370,
                 {
                     "streamId": [
                         9
@@ -13060,25 +13286,25 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "liveSystemHealth": [
-                517
+                529
             ],
             "liveIncidentUpdates": [
-                196
+                203
             ],
             "liveFirehose": [
-                524
+                536
             ],
             "skipperChat": [
-                427,
+                439,
                 {
                     "input": [
-                        428,
+                        440,
                         "SkipperChatInput!"
                     ]
                 }
             ],
             "liveMessageReceived": [
-                288,
+                295,
                 {
                     "conversationId": [
                         9,
@@ -13087,7 +13313,7 @@ const types: CompressedTypeMap<number> = {
                 }
             ],
             "liveConversationUpdates": [
-                99,
+                106,
                 {
                     "conversationId": [
                         9
@@ -13109,7 +13335,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "status": [
-                322
+                329
             ],
             "cpuTenths": [
                 4
@@ -13136,7 +13362,7 @@ const types: CompressedTypeMap<number> = {
                 7
             ],
             "timestamp": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -13156,13 +13382,13 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "createdAt": [
-                532
+                544
             ],
             "customDomain": [
                 1
             ],
             "customDomainStatus": [
-                142
+                149
             ],
             "monitoringEnabled": [
                 2
@@ -13176,7 +13402,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "day": [
-                532
+                544
             ],
             "totalStreams": [
                 4
@@ -13196,13 +13422,13 @@ const types: CompressedTypeMap<number> = {
         },
         "TenantAnalyticsDailyConnection": {
             "edges": [
-                521
+                533
             ],
             "nodes": [
-                519
+                531
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -13216,7 +13442,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                519
+                531
             ],
             "__typename": [
                 1
@@ -13227,7 +13453,7 @@ const types: CompressedTypeMap<number> = {
                 2
             ],
             "recordingRetention": [
-                385
+                392
             ],
             "processingCustomizable": [
                 2
@@ -13247,7 +13473,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "date": [
-                532
+                544
             ],
             "egressGb": [
                 7
@@ -13276,40 +13502,40 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "timestamp": [
-                532
+                544
             ],
             "streamEvent": [
-                483
+                495
             ],
             "viewerMetrics": [
-                580
+                592
             ],
             "connectionEvent": [
-                95
+                102
             ],
             "trackListUpdate": [
-                540
+                552
             ],
             "storageEvent": [
-                461
+                473
             ],
             "storageSnapshot": [
-                464
+                476
             ],
             "processingEvent": [
-                363
+                370
             ],
             "routingEvent": [
-                400
+                412
             ],
             "systemHealthEvent": [
-                517
+                529
             ],
             "skipperInvestigation": [
-                434
+                446
             ],
             "incidentUpdated": [
-                196
+                203
             ],
             "__typename": [
                 1
@@ -13364,25 +13590,25 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "startedAt": [
-                532
+                544
             ],
             "trialEndsAt": [
-                532
+                544
             ],
             "nextBillingDate": [
-                532
+                544
             ],
             "cancelledAt": [
-                532
+                544
             ],
             "customFeatures": [
-                43
+                48
             ],
             "pricingOverrides": [
-                359
+                366
             ],
             "entitlementOverrides": [
-                162
+                169
             ],
             "paymentMethod": [
                 1
@@ -13391,22 +13617,22 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "pendingTier": [
-                46
+                51
             ],
             "pendingEffectiveAt": [
-                532
+                544
             ],
             "pendingReason": [
                 1
             ],
             "presentmentCurrency": [
-                139
+                146
             ],
             "createdAt": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -13417,10 +13643,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "usage": [
-                560
+                572
             ],
             "costs": [
-                103
+                110
             ],
             "totalCost": [
                 7
@@ -13429,7 +13655,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "lineItems": [
-                215
+                222
             ],
             "baseAmount": [
                 1
@@ -13478,19 +13704,19 @@ const types: CompressedTypeMap<number> = {
         },
         "TestPlaybackAccessResult": {
             "on_PlaybackAccessDecision": [
-                342
+                349
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -13498,19 +13724,19 @@ const types: CompressedTypeMap<number> = {
         },
         "TestWebhookEndpointResult": {
             "on_WebhookTestResult": [
-                616
+                628
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_RateLimitError": [
-                378
+                385
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -13536,10 +13762,10 @@ const types: CompressedTypeMap<number> = {
         "Time": {},
         "TimeRange": {
             "start": [
-                532
+                544
             ],
             "end": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -13547,10 +13773,10 @@ const types: CompressedTypeMap<number> = {
         },
         "TimeRangeInput": {
             "start": [
-                532
+                544
             ],
             "end": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -13561,7 +13787,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "kind": [
-                455
+                467
             ],
             "totalSessions": [
                 4
@@ -13587,7 +13813,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "amount": [
-                169
+                176
             ],
             "__typename": [
                 1
@@ -13601,7 +13827,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "nodeId": [
                 1
@@ -13613,10 +13839,10 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "timestamp": [
-                532
+                544
             ],
             "tracks": [
-                505
+                517
             ],
             "__typename": [
                 1
@@ -13627,7 +13853,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                537
+                549
             ],
             "__typename": [
                 1
@@ -13635,13 +13861,13 @@ const types: CompressedTypeMap<number> = {
         },
         "TrackListEventsConnection": {
             "edges": [
-                538
+                550
             ],
             "nodes": [
-                537
+                549
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -13655,10 +13881,10 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "tracks": [
-                505
+                517
             ],
             "totalTracks": [
                 4
@@ -13705,16 +13931,16 @@ const types: CompressedTypeMap<number> = {
         },
         "UnlinkWalletResult": {
             "on_DeleteSuccess": [
-                154
+                161
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -13737,7 +13963,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "address": [
-                39
+                44
             ],
             "__typename": [
                 1
@@ -13745,10 +13971,10 @@ const types: CompressedTypeMap<number> = {
         },
         "UpdateClusterMarketplaceInput": {
             "visibility": [
-                90
+                97
             ],
             "pricingModel": [
-                83
+                90
             ],
             "monthlyPriceCents": [
                 4
@@ -13765,22 +13991,22 @@ const types: CompressedTypeMap<number> = {
         },
         "UpdateClusterResult": {
             "on_Cluster": [
-                71
+                78
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Node": [
-                309
+                316
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -13788,7 +14014,7 @@ const types: CompressedTypeMap<number> = {
         },
         "UpdateMediaRetentionInput": {
             "targetType": [
-                286
+                293
             ],
             "targetId": [
                 9
@@ -13797,7 +14023,7 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "retentionUntil": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -13805,19 +14031,19 @@ const types: CompressedTypeMap<number> = {
         },
         "UpdateMediaRetentionResult": {
             "on_EffectiveRetention": [
-                161
+                168
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -13854,22 +14080,22 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "ingestMode": [
-                203
+                210
             ],
             "pullSource": [
-                370
+                377
             ],
             "sourceLocation": [
-                450
+                462
             ],
             "dvrChapterMode": [
-                145
+                152
             ],
             "dvrChapterIntervalSeconds": [
                 4
             ],
             "monitoring": [
-                299
+                306
             ],
             "__typename": [
                 1
@@ -13877,22 +14103,22 @@ const types: CompressedTypeMap<number> = {
         },
         "UpdateStreamResult": {
             "on_Stream": [
-                469
+                481
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Node": [
-                309
+                316
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -13903,7 +14129,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "settings": [
-                214
+                221
             ],
             "customDomain": [
                 1
@@ -13917,16 +14143,16 @@ const types: CompressedTypeMap<number> = {
         },
         "UpdateTenantResult": {
             "on_Tenant": [
-                518
+                530
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -13948,19 +14174,19 @@ const types: CompressedTypeMap<number> = {
         },
         "UpdateWebhookEndpointResult": {
             "on_WebhookEndpoint": [
-                608
+                620
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -13968,7 +14194,7 @@ const types: CompressedTypeMap<number> = {
         },
         "UploadAborted": {
             "artifact": [
-                164
+                171
             ],
             "__typename": [
                 1
@@ -13976,7 +14202,7 @@ const types: CompressedTypeMap<number> = {
         },
         "UploadCompleted": {
             "artifact": [
-                164
+                171
             ],
             "sizeBytes": [
                 4
@@ -13987,7 +14213,7 @@ const types: CompressedTypeMap<number> = {
         },
         "UploadCreated": {
             "artifact": [
-                164
+                171
             ],
             "filename": [
                 1
@@ -14001,10 +14227,10 @@ const types: CompressedTypeMap<number> = {
         },
         "UploadFailed": {
             "artifact": [
-                164
+                171
             ],
             "reason": [
-                168
+                175
             ],
             "__typename": [
                 1
@@ -14012,7 +14238,7 @@ const types: CompressedTypeMap<number> = {
         },
         "UploadReady": {
             "artifact": [
-                164
+                171
             ],
             "durationMs": [
                 4
@@ -14029,10 +14255,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "periodStart": [
-                532
+                544
             ],
             "periodEnd": [
-                532
+                544
             ],
             "usageValue": [
                 7
@@ -14072,19 +14298,19 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "dimensions": [
-                214
+                221
             ],
             "usageValue": [
                 7
             ],
             "createdAt": [
-                532
+                544
             ],
             "periodStart": [
-                532
+                544
             ],
             "periodEnd": [
-                532
+                544
             ],
             "granularity": [
                 1
@@ -14098,7 +14324,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                561
+                573
             ],
             "__typename": [
                 1
@@ -14106,13 +14332,13 @@ const types: CompressedTypeMap<number> = {
         },
         "UsageRecordsConnection": {
             "edges": [
-                562
+                574
             ],
             "nodes": [
-                561
+                573
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -14135,10 +14361,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "createdAt": [
-                532
+                544
             ],
             "wallets": [
-                598
+                610
             ],
             "__typename": [
                 1
@@ -14164,7 +14390,7 @@ const types: CompressedTypeMap<number> = {
         "ValidationStatus": {},
         "ViewerCountBucket": {
             "timestamp": [
-                532
+                544
             ],
             "viewerCount": [
                 4
@@ -14173,7 +14399,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "__typename": [
                 1
@@ -14184,7 +14410,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                567
+                579
             ],
             "__typename": [
                 1
@@ -14210,7 +14436,7 @@ const types: CompressedTypeMap<number> = {
                 7
             ],
             "outputs": [
-                214
+                221
             ],
             "__typename": [
                 1
@@ -14218,13 +14444,13 @@ const types: CompressedTypeMap<number> = {
         },
         "ViewerEndpointResponse": {
             "primary": [
-                569
+                581
             ],
             "fallbacks": [
-                569
+                581
             ],
             "metadata": [
-                348
+                355
             ],
             "__typename": [
                 1
@@ -14235,7 +14461,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "hour": [
-                532
+                544
             ],
             "countryCode": [
                 1
@@ -14255,13 +14481,13 @@ const types: CompressedTypeMap<number> = {
         },
         "ViewerGeoHourlyConnection": {
             "edges": [
-                573
+                585
             ],
             "nodes": [
-                571
+                583
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -14275,7 +14501,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                571
+                583
             ],
             "__typename": [
                 1
@@ -14283,13 +14509,13 @@ const types: CompressedTypeMap<number> = {
         },
         "ViewerGeographic": {
             "timestamp": [
-                532
+                544
             ],
             "streamId": [
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "nodeId": [
                 1
@@ -14336,7 +14562,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                574
+                586
             ],
             "__typename": [
                 1
@@ -14344,13 +14570,13 @@ const types: CompressedTypeMap<number> = {
         },
         "ViewerGeographicsConnection": {
             "edges": [
-                575
+                587
             ],
             "nodes": [
-                574
+                586
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -14364,13 +14590,13 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "hour": [
-                532
+                544
             ],
             "streamId": [
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "countryCode": [
                 1
@@ -14396,13 +14622,13 @@ const types: CompressedTypeMap<number> = {
         },
         "ViewerHoursHourlyConnection": {
             "edges": [
-                579
+                591
             ],
             "nodes": [
-                577
+                589
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -14416,7 +14642,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                577
+                589
             ],
             "__typename": [
                 1
@@ -14430,7 +14656,7 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "action": [
                 1
@@ -14495,13 +14721,13 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "timestamp": [
-                532
+                544
             ],
             "streamId": [
                 9
             ],
             "stream": [
-                469
+                481
             ],
             "nodeId": [
                 1
@@ -14510,10 +14736,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "connectedAt": [
-                532
+                544
             ],
             "disconnectedAt": [
-                532
+                544
             ],
             "connector": [
                 1
@@ -14546,7 +14772,7 @@ const types: CompressedTypeMap<number> = {
                 7
             ],
             "clientBucket": [
-                181
+                188
             ],
             "__typename": [
                 1
@@ -14557,7 +14783,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                581
+                593
             ],
             "__typename": [
                 1
@@ -14565,13 +14791,13 @@ const types: CompressedTypeMap<number> = {
         },
         "ViewerSessionsConnection": {
             "edges": [
-                582
+                594
             ],
             "nodes": [
-                581
+                593
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -14582,13 +14808,13 @@ const types: CompressedTypeMap<number> = {
         },
         "ViewerTimeSeriesConnection": {
             "edges": [
-                568
+                580
             ],
             "nodes": [
-                567
+                579
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -14626,7 +14852,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "status": [
-                586
+                598
             ],
             "storageLocation": [
                 1
@@ -14662,28 +14888,28 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "createdAt": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "expiresAt": [
-                532
+                544
             ],
             "errorMessage": [
                 1
             ],
             "playbackPolicy": [
-                349
+                356
             ],
             "thumbnailAssets": [
-                531
+                543
             ],
             "effectiveRetention": [
-                161
+                168
             ],
             "storageCost": [
-                460
+                472
             ],
             "__typename": [
                 1
@@ -14701,7 +14927,7 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "points": [
-                591
+                603
             ],
             "__typename": [
                 1
@@ -14718,7 +14944,7 @@ const types: CompressedTypeMap<number> = {
                 4
             ],
             "lastSeen": [
-                532
+                544
             ],
             "title": [
                 1
@@ -14732,13 +14958,13 @@ const types: CompressedTypeMap<number> = {
         },
         "VodRetentionAssetConnection": {
             "edges": [
-                590
+                602
             ],
             "nodes": [
-                588
+                600
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -14752,7 +14978,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                588
+                600
             ],
             "__typename": [
                 1
@@ -14811,10 +15037,10 @@ const types: CompressedTypeMap<number> = {
                 7
             ],
             "parts": [
-                593
+                605
             ],
             "expiresAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -14825,16 +15051,16 @@ const types: CompressedTypeMap<number> = {
                 9
             ],
             "state": [
-                586
+                598
             ],
             "expiresAt": [
-                532
+                544
             ],
             "retentionUntil": [
-                532
+                544
             ],
             "uploadedParts": [
-                597
+                609
             ],
             "missingParts": [
                 4
@@ -14854,19 +15080,19 @@ const types: CompressedTypeMap<number> = {
         },
         "VodUploadStatusResult": {
             "on_VodUploadStatus": [
-                595
+                607
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -14894,10 +15120,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "createdAt": [
-                532
+                544
             ],
             "lastAuthAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -14922,10 +15148,10 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "user": [
-                564
+                576
             ],
             "expiresAt": [
-                532
+                544
             ],
             "isNewAccount": [
                 2
@@ -14936,13 +15162,13 @@ const types: CompressedTypeMap<number> = {
         },
         "WalletLoginResult": {
             "on_WalletLoginPayload": [
-                600
+                612
             ],
             "on_ValidationError": [
-                565
+                577
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -14950,13 +15176,13 @@ const types: CompressedTypeMap<number> = {
         },
         "WebhookDeliveriesConnection": {
             "edges": [
-                605
+                617
             ],
             "nodes": [
-                603
+                615
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -14979,16 +15205,16 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "kind": [
-                606
+                618
             ],
             "status": [
-                607
+                619
             ],
             "attempts": [
                 4
             ],
             "nextAttemptAt": [
-                532
+                544
             ],
             "lastStatusCode": [
                 4
@@ -14997,22 +15223,22 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "deliveredAt": [
-                532
+                544
             ],
             "replayCount": [
                 4
             ],
             "lastReplayedAt": [
-                532
+                544
             ],
             "createdAt": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "attemptHistory": [
-                604
+                616
             ],
             "__typename": [
                 1
@@ -15038,7 +15264,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "attemptedAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -15049,7 +15275,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                603
+                615
             ],
             "__typename": [
                 1
@@ -15074,34 +15300,34 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "status": [
-                613
+                625
             ],
             "disabledReason": [
-                609
+                621
             ],
             "disabledAt": [
-                532
+                544
             ],
             "consecutiveFailures": [
                 4
             ],
             "failingSince": [
-                532
+                544
             ],
             "lastSuccessAt": [
-                532
+                544
             ],
             "lastFailureAt": [
-                532
+                544
             ],
             "previousSecretExpiresAt": [
-                532
+                544
             ],
             "createdAt": [
-                532
+                544
             ],
             "updatedAt": [
-                532
+                544
             ],
             "__typename": [
                 1
@@ -15113,7 +15339,7 @@ const types: CompressedTypeMap<number> = {
                 1
             ],
             "node": [
-                608
+                620
             ],
             "__typename": [
                 1
@@ -15121,16 +15347,16 @@ const types: CompressedTypeMap<number> = {
         },
         "WebhookEndpointResult": {
             "on_WebhookEndpoint": [
-                608
+                620
             ],
             "on_NotFoundError": [
-                324
+                331
             ],
             "on_AuthError": [
-                31
+                32
             ],
             "on_Error": [
-                163
+                170
             ],
             "__typename": [
                 1
@@ -15138,7 +15364,7 @@ const types: CompressedTypeMap<number> = {
         },
         "WebhookEndpointSecret": {
             "endpoint": [
-                608
+                620
             ],
             "secret": [
                 1
@@ -15150,13 +15376,13 @@ const types: CompressedTypeMap<number> = {
         "WebhookEndpointStatus": {},
         "WebhookEndpointsConnection": {
             "edges": [
-                610
+                622
             ],
             "nodes": [
-                608
+                620
             ],
             "pageInfo": [
-                334
+                341
             ],
             "totalCount": [
                 4
@@ -15178,10 +15404,10 @@ const types: CompressedTypeMap<number> = {
         },
         "WebhookTestResult": {
             "delivery": [
-                603
+                615
             ],
             "attempt": [
-                604
+                616
             ],
             "__typename": [
                 1
