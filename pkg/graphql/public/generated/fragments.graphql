@@ -346,6 +346,21 @@ fragment AuthErrorDefaultFields on AuthError {
   code
 }
 
+fragment AuthSessionDefaultFields on AuthSession {
+  id
+  clientKind
+  clientId
+  authMethod
+  label
+  clientVersion
+  ipAddress
+  location
+  createdAt
+  lastActiveAt
+  expiresAt
+  current
+}
+
 fragment AvailableClusterDefaultFields on AvailableCluster {
   clusterId
   clusterName
@@ -825,6 +840,11 @@ fragment ChangeBillingTierPayloadDefaultFields on ChangeBillingTierPayload {
     isEnterprise
   }
   effectiveAt
+}
+
+fragment ChangePasswordPayloadDefaultFields on ChangePasswordPayload {
+  success
+  revokedCount
 }
 
 fragment ClientMetrics5mDefaultFields on ClientMetrics5m {
@@ -3208,6 +3228,15 @@ fragment RebufferingEventDefaultFields on RebufferingEvent {
   previousState
   rebufferStart
   rebufferEnd
+}
+
+fragment RevokeAuthSessionPayloadDefaultFields on RevokeAuthSessionPayload {
+  success
+  current
+}
+
+fragment RevokeOtherAuthSessionsPayloadDefaultFields on RevokeOtherAuthSessionsPayload {
+  revokedCount
 }
 
 fragment RoutingEfficiencyDefaultFields on RoutingEfficiency {

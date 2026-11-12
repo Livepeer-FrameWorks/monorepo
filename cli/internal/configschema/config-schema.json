@@ -391,6 +391,12 @@
           "description": "Log level: debug, info, warn, or error. Any other value fails startup."
         },
         {
+          "key": "GEOIP_MMDB_PATH",
+          "type": "string",
+          "introduced": "v0.3.0",
+          "description": "Path to an MMDB city database used for IP geolocation. Empty disables GeoIP lookups; a set path that cannot be opened logs a warning and disables lookups."
+        },
+        {
           "key": "SERVICE_TOKEN",
           "type": "string",
           "required": true,

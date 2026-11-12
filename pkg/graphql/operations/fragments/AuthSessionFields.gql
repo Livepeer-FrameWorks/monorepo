@@ -1,0 +1,14 @@
+fragment AuthSessionFields on AuthSession {
+  id
+  clientKind
+  clientId
+  authMethod
+  label
+  clientVersion
+  ipAddress
+  location
+  createdAt
+  lastActiveAt
+  expiresAt
+  current
+}

@@ -1,0 +1,16 @@
+mutation RevokeOtherAuthSessions {
+  revokeOtherAuthSessions {
+    __typename
+    ... on RevokeOtherAuthSessionsPayload {
+      revokedCount
+    }
+    ... on ValidationError {
+      message
+      field
+      code
+    }
+    ... on AuthError {
+      ...AuthErrorFields
+    }
+  }
+}

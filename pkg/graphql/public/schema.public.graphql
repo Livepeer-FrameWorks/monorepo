@@ -443,9 +443,66 @@ type AssetNodeCopy {
   updatedAt: Time
 }
 
+"""
+The interactive client that created a sign-in session.
+"""
+enum AuthClientKind {
+  BROWSER
+  CLI
+  DESKTOP
+  UNKNOWN
+}
+
 type AuthError implements Error {
   message: String!
   code: String
+}
+
+"""
+The proof used to create a sign-in session.
+"""
+enum AuthMethod {
+  PASSWORD
+  WALLET
+  BROWSER_HANDOFF
+  DEVICE_CODE
+  UNKNOWN
+}
+
+"""
+One of the signed-in user's own interactive sessions.
+"""
+type AuthSession {
+  id: ID!
+  clientKind: AuthClientKind!
+  clientId: String!
+  authMethod: AuthMethod!
+  label: String!
+  clientVersion: String
+  """
+  Masked source IP; full addresses are never returned.
+  """
+  ipAddress: String
+  """
+  City and country when a local GeoIP database is configured.
+  """
+  location: String
+  createdAt: Time!
+  lastActiveAt: Time!
+  expiresAt: Time!
+  current: Boolean!
+}
+
+type AuthSessionConnection {
+  edges: [AuthSessionEdge!]!
+  nodes: [AuthSession!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type AuthSessionEdge {
+  cursor: String!
+  node: AuthSession!
 }
 
 type AvailableCluster {
@@ -1063,6 +1120,13 @@ type ChangeBillingTierPayload {
 }
 
 union ChangeBillingTierResult = ChangeBillingTierPayload | ValidationError | AuthError
+
+type ChangePasswordPayload {
+  success: Boolean!
+  revokedCount: Int!
+}
+
+union ChangePasswordResult = ChangePasswordPayload | ValidationError | AuthError
 
 type CityMetric {
   city: String!
@@ -4465,6 +4529,22 @@ Check the result type to handle success/error cases appropriately.
 """
 type Mutation {
   """
+  Sign out one of the signed-in user’s own sessions. Idempotent; current=true means this caller was signed out.
+  """
+  revokeAuthSession(id: ID!): RevokeAuthSessionResult!
+  """
+  Sign out every other session while retaining the presented named session.
+  """
+  revokeOtherAuthSessions: RevokeOtherAuthSessionsResult!
+  """
+  Rename one of the signed-in user’s own sessions.
+  """
+  renameAuthSession(id: ID!, label: String!): RenameAuthSessionResult!
+  """
+  Change the password and sign out other sessions, retaining this session.
+  """
+  changePassword(currentPassword: String!, newPassword: String!): ChangePasswordResult!
+  """
   Create a new stream for live broadcasting.
   """
   createStream(
@@ -6455,6 +6535,10 @@ Most connection fields are non-null, but some may be nullable when upstream data
 """
 type Query {
   """
+  The signed-in user’s own interactive sessions, newest first. Supports first=1..100.
+  """
+  authSessionsConnection(first: Int, after: String): AuthSessionConnection!
+  """
   Unified analytics surface providing access to all platform metrics.
   Combines data from Periscope (historical) and Signalman (real-time).
   """
@@ -7284,6 +7368,8 @@ type RecordingStopped {
   artifact: EventArtifact
 }
 
+union RenameAuthSessionResult = AuthSession | ValidationError | NotFoundError | AuthError
+
 union ReplayWebhookDeliveriesResult = WebhookReplayResult | ValidationError | NotFoundError | AuthError
 
 union ReplayWebhookDeliveryResult = WebhookDelivery | ValidationError | NotFoundError | AuthError
@@ -7320,9 +7406,25 @@ input ReviewMediaPlacementChangeInput {
   updates: [MediaPlacementVerbUpdateInput!]!
 }
 
+type RevokeAuthSessionPayload {
+  success: Boolean!
+  """
+  True when the presented session was signed out.
+  """
+  current: Boolean!
+}
+
+union RevokeAuthSessionResult = RevokeAuthSessionPayload | ValidationError | NotFoundError | AuthError
+
 union RevokeClusterInviteResult = DeleteSuccess | NotFoundError | AuthError
 
 union RevokeDeveloperTokenResult = DeleteSuccess | NotFoundError | AuthError
+
+type RevokeOtherAuthSessionsPayload {
+  revokedCount: Int!
+}
+
+union RevokeOtherAuthSessionsResult = RevokeOtherAuthSessionsPayload | ValidationError | AuthError
 
 union RevokeSigningKeyResult = SigningKey | NotFoundError | AuthError
 

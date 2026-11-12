@@ -25,6 +25,23 @@ export type ApplyMediaPlacementChangeInput = {
   updates: Array<MediaPlacementVerbUpdateInput>;
 };
 
+/** The interactive client that created a sign-in session. */
+export type AuthClientKind =
+  | 'BROWSER'
+  | 'CLI'
+  | 'DESKTOP'
+  | 'UNKNOWN'
+  | '%future added value';
+
+/** The proof used to create a sign-in session. */
+export type AuthMethod =
+  | 'BROWSER_HANDOFF'
+  | 'DEVICE_CODE'
+  | 'PASSWORD'
+  | 'UNKNOWN'
+  | 'WALLET'
+  | '%future added value';
+
 /** Input for billing address. */
 export type BillingAddressInput = {
   /** City name. */
@@ -1779,6 +1796,11 @@ export type AssetNodeCopiesDefaultFieldsFragment = { truncated: boolean, copies:
 
 export type AuthErrorDefaultFieldsFragment = { message: string, code: string | null };
 
+/** One of the signed-in user's own interactive sessions. */
+export type AuthSessionDefaultFieldsFragment = { id: string, clientKind: AuthClientKind, clientId: string, authMethod: AuthMethod, label: string, clientVersion: string | null, /** Masked source IP; full addresses are never returned. */
+ipAddress: string | null, /** City and country when a local GeoIP database is configured. */
+location: string | null, createdAt: string, lastActiveAt: string, expiresAt: string, current: boolean };
+
 export type AvailableClusterDefaultFieldsFragment = { clusterId: string, clusterName: string, tiers: Array<string>, autoEnroll: boolean };
 
 /** A single balance transaction (top-up, usage deduction, refund, etc.). */
@@ -2015,6 +2037,8 @@ sla: boolean, /** Whether the tenant may override the tier's processing profiles
 processingCustomizable: boolean }, /** Priced behaviors per meter (rating engine input). */
 pricingRules: Array<{ meter: string, model: string, currency: string, includedQuantity: string, unitPrice: string, configJson: string }>, /** Non-billing grants (e.g. recording_retention_days). Values are JSON-encoded strings. */
 entitlements: Array<{ key: string, value: string }> } | null };
+
+export type ChangePasswordPayloadDefaultFieldsFragment = { success: boolean, revokedCount: number };
 
 export type ClientMetrics5mDefaultFieldsFragment = { id: string, timestamp: string, streamId: string, nodeId: string, activeSessions: number, avgBandwidthIn: number, avgBandwidthOut: number, avgConnectionTime: number, packetLossRate: number | null, stream: { /** Global unique identifier for Relay compatibility. */
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
@@ -3067,6 +3091,11 @@ allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for th
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
+
+export type RevokeAuthSessionPayloadDefaultFieldsFragment = { success: boolean, /** True when the presented session was signed out. */
+current: boolean };
+
+export type RevokeOtherAuthSessionsPayloadDefaultFieldsFragment = { revokedCount: number };
 
 /** Pre-aggregated routing efficiency summary (replaces client-side aggregation of raw routing events). */
 export type RoutingEfficiencyDefaultFieldsFragment = { totalDecisions: number, successCount: number, successRate: number, avgRoutingDistance: number, avgLatencyMs: number, topCountries: Array<{ countryCode: string, requestCount: number }> };
@@ -4758,6 +4787,20 @@ entitlements: Array<{ key: string, value: string }> } | null }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
+export type ChangePasswordMutationVariables = Exact<{
+  currentPassword: string;
+  newPassword: string;
+}>;
+
+
+/** Change the password and sign out other sessions, retaining this session. */
+export type ChangePasswordMutation = { /** Change the password and sign out other sessions, retaining this session. */
+changePassword:
+    | { __typename: 'AuthError', message: string, code: string | null }
+    | { __typename: 'ChangePasswordPayload', success: boolean, revokedCount: number }
+    | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
+   };
+
 export type CreateCardTopupMutationVariables = Exact<{
   input: CreateCardTopupInput;
 }>;
@@ -5234,6 +5277,23 @@ rejectClusterSubscription:
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
+export type RenameAuthSessionMutationVariables = Exact<{
+  id: string;
+  label: string;
+}>;
+
+
+/** Rename one of the signed-in user’s own sessions. */
+export type RenameAuthSessionMutation = { /** Rename one of the signed-in user’s own sessions. */
+renameAuthSession:
+    | { __typename: 'AuthError', message: string, code: string | null }
+    | { __typename: 'AuthSession', id: string, clientKind: AuthClientKind, clientId: string, authMethod: AuthMethod, label: string, clientVersion: string | null, /** Masked source IP; full addresses are never returned. */
+ipAddress: string | null, /** City and country when a local GeoIP database is configured. */
+location: string | null, createdAt: string, lastActiveAt: string, expiresAt: string, current: boolean }
+    | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
+    | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
+   };
+
 export type ReplayWebhookDeliveriesMutationVariables = Exact<{
   endpointId: string;
   createdAfter: string;
@@ -5320,6 +5380,21 @@ firingAlertCount: number, startedAt: string, lastAlertAt: string, acknowledgedAt
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
+export type RevokeAuthSessionMutationVariables = Exact<{
+  id: string;
+}>;
+
+
+/** Sign out one of the signed-in user’s own sessions. Idempotent; current=true means this caller was signed out. */
+export type RevokeAuthSessionMutation = { /** Sign out one of the signed-in user’s own sessions. Idempotent; current=true means this caller was signed out. */
+revokeAuthSession:
+    | { __typename: 'AuthError', message: string, code: string | null }
+    | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
+    | { __typename: 'RevokeAuthSessionPayload', success: boolean, /** True when the presented session was signed out. */
+current: boolean }
+    | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
+   };
+
 export type RevokeClusterInviteMutationVariables = Exact<{
   inviteId: string;
 }>;
@@ -5332,6 +5407,17 @@ revokeClusterInvite:
     | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, /** True when the delete was accepted but is NOT yet finalized (e.g. a stream deletion awaiting the serving cell's cleanup-tombstone acknowledgement). The operation converges asynchronously; false means fully deleted. */
 pending: boolean | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
+   };
+
+export type RevokeOtherAuthSessionsMutationVariables = Exact<{ [key: string]: never; }>;
+
+
+/** Sign out every other session while retaining the presented named session. */
+export type RevokeOtherAuthSessionsMutation = { /** Sign out every other session while retaining the presented named session. */
+revokeOtherAuthSessions:
+    | { __typename: 'AuthError', message: string, code: string | null }
+    | { __typename: 'RevokeOtherAuthSessionsPayload', revokedCount: number }
+    | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
 export type RotateWebhookEndpointSecretMutationVariables = Exact<{
@@ -5790,6 +5876,16 @@ export type GetArtifactStatesConnectionQueryVariables = Exact<{
 export type GetArtifactStatesConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
 lifecycle: { artifactStatesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { streamId: string, playbackId: string | null, contentType: string, stage: string, progressPercent: number, errorMessage: string | null, requestedAt: string, startedAt: string | null, completedAt: string | null, clipStartUnix: number | null, clipStopUnix: number | null, segmentCount: number | null, manifestPath: string | null, filePath: string | null, s3Url: string | null, sizeBytes: number | null, processingNodeId: string | null, expiresAt: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+
+export type GetAuthSessionsConnectionQueryVariables = Exact<{
+  first?: number | null | undefined;
+  after?: string | null | undefined;
+}>;
+
+
+/** The signed-in user’s own interactive sessions, newest first. Supports first=1..100. */
+export type GetAuthSessionsConnectionQuery = { /** The signed-in user’s own interactive sessions, newest first. Supports first=1..100. */
+authSessionsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, clientKind: AuthClientKind, clientId: string, authMethod: AuthMethod, label: string, clientVersion: string | null, ipAddress: string | null, location: string | null, createdAt: string, lastActiveAt: string, expiresAt: string, current: boolean } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
 
 export type GetBalanceTransactionsConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -10822,6 +10918,23 @@ export const AuthErrorDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocument
   code
 }
     `, {"fragmentName":"AuthErrorDefaultFields"}) as unknown as TypedDocumentString<AuthErrorDefaultFieldsFragment, unknown>;
+/** One of the signed-in user's own interactive sessions. */
+export const AuthSessionDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
+    fragment AuthSessionDefaultFields on AuthSession {
+  id
+  clientKind
+  clientId
+  authMethod
+  label
+  clientVersion
+  ipAddress
+  location
+  createdAt
+  lastActiveAt
+  expiresAt
+  current
+}
+    `, {"fragmentName":"AuthSessionDefaultFields"}) as unknown as TypedDocumentString<AuthSessionDefaultFieldsFragment, unknown>;
 export const AvailableClusterDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment AvailableClusterDefaultFields on AvailableCluster {
   clusterId
@@ -11325,6 +11438,12 @@ export const ChangeBillingTierPayloadDefaultFieldsFragmentDoc = /*#__PURE__*/ ne
   effectiveAt
 }
     `, {"fragmentName":"ChangeBillingTierPayloadDefaultFields"}) as unknown as TypedDocumentString<ChangeBillingTierPayloadDefaultFieldsFragment, unknown>;
+export const ChangePasswordPayloadDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
+    fragment ChangePasswordPayloadDefaultFields on ChangePasswordPayload {
+  success
+  revokedCount
+}
+    `, {"fragmentName":"ChangePasswordPayloadDefaultFields"}) as unknown as TypedDocumentString<ChangePasswordPayloadDefaultFieldsFragment, unknown>;
 export const ClientMetrics5mDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment ClientMetrics5mDefaultFields on ClientMetrics5m {
   id
@@ -13819,6 +13938,17 @@ export const RebufferingEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedD
   rebufferEnd
 }
     `, {"fragmentName":"RebufferingEventDefaultFields"}) as unknown as TypedDocumentString<RebufferingEventDefaultFieldsFragment, unknown>;
+export const RevokeAuthSessionPayloadDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
+    fragment RevokeAuthSessionPayloadDefaultFields on RevokeAuthSessionPayload {
+  success
+  current
+}
+    `, {"fragmentName":"RevokeAuthSessionPayloadDefaultFields"}) as unknown as TypedDocumentString<RevokeAuthSessionPayloadDefaultFieldsFragment, unknown>;
+export const RevokeOtherAuthSessionsPayloadDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
+    fragment RevokeOtherAuthSessionsPayloadDefaultFields on RevokeOtherAuthSessionsPayload {
+  revokedCount
+}
+    `, {"fragmentName":"RevokeOtherAuthSessionsPayloadDefaultFields"}) as unknown as TypedDocumentString<RevokeOtherAuthSessionsPayloadDefaultFieldsFragment, unknown>;
 /** Pre-aggregated routing efficiency summary (replaces client-side aggregation of raw routing events). */
 export const RoutingEfficiencyDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment RoutingEfficiencyDefaultFields on RoutingEfficiency {
@@ -17624,6 +17754,30 @@ fragment ValidationErrorDefaultFields on ValidationError {
   field
   constraint
 }`) as unknown as TypedDocumentString<ChangeBillingTierMutation, ChangeBillingTierMutationVariables>;
+/** Change the password and sign out other sessions, retaining this session. */
+export const ChangePasswordDocument = /*#__PURE__*/ new TypedDocumentString(`
+    mutation ChangePassword($currentPassword: String!, $newPassword: String!) {
+  changePassword(currentPassword: $currentPassword, newPassword: $newPassword) {
+    __typename
+    ...ChangePasswordPayloadDefaultFields
+    ...ValidationErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+    fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
+}
+fragment ChangePasswordPayloadDefaultFields on ChangePasswordPayload {
+  success
+  revokedCount
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+  message
+  code
+  field
+  constraint
+}`) as unknown as TypedDocumentString<ChangePasswordMutation, ChangePasswordMutationVariables>;
 /** Create a card checkout session for prepaid balance top-up. Returns a URL to redirect the user to Stripe/Mollie checkout. After successful payment, balance is credited automatically via webhook. */
 export const CreateCardTopupDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation CreateCardTopup($input: CreateCardTopupInput!) {
@@ -18377,6 +18531,47 @@ fragment ValidationErrorDefaultFields on ValidationError {
   field
   constraint
 }`) as unknown as TypedDocumentString<RejectClusterSubscriptionMutation, RejectClusterSubscriptionMutationVariables>;
+/** Rename one of the signed-in user’s own sessions. */
+export const RenameAuthSessionDocument = /*#__PURE__*/ new TypedDocumentString(`
+    mutation RenameAuthSession($id: ID!, $label: String!) {
+  renameAuthSession(id: $id, label: $label) {
+    __typename
+    ...AuthSessionDefaultFields
+    ...ValidationErrorDefaultFields
+    ...NotFoundErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+    fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
+}
+fragment AuthSessionDefaultFields on AuthSession {
+  id
+  clientKind
+  clientId
+  authMethod
+  label
+  clientVersion
+  ipAddress
+  location
+  createdAt
+  lastActiveAt
+  expiresAt
+  current
+}
+fragment NotFoundErrorDefaultFields on NotFoundError {
+  message
+  code
+  resourceType
+  resourceId
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+  message
+  code
+  field
+  constraint
+}`) as unknown as TypedDocumentString<RenameAuthSessionMutation, RenameAuthSessionMutationVariables>;
 /** Send again the failed and skipped deliveries of one endpoint created in [createdAfter, createdBefore), oldest first, at most 1000 per call. Call again while hasMore is true. */
 export const ReplayWebhookDeliveriesDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation ReplayWebhookDeliveries($endpointId: ID!, $createdAfter: Time!, $createdBefore: Time!) {
@@ -18591,6 +18786,37 @@ fragment ValidationErrorDefaultFields on ValidationError {
   field
   constraint
 }`) as unknown as TypedDocumentString<ResolveIncidentMutation, ResolveIncidentMutationVariables>;
+/** Sign out one of the signed-in user’s own sessions. Idempotent; current=true means this caller was signed out. */
+export const RevokeAuthSessionDocument = /*#__PURE__*/ new TypedDocumentString(`
+    mutation RevokeAuthSession($id: ID!) {
+  revokeAuthSession(id: $id) {
+    __typename
+    ...RevokeAuthSessionPayloadDefaultFields
+    ...ValidationErrorDefaultFields
+    ...NotFoundErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+    fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
+}
+fragment NotFoundErrorDefaultFields on NotFoundError {
+  message
+  code
+  resourceType
+  resourceId
+}
+fragment RevokeAuthSessionPayloadDefaultFields on RevokeAuthSessionPayload {
+  success
+  current
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+  message
+  code
+  field
+  constraint
+}`) as unknown as TypedDocumentString<RevokeAuthSessionMutation, RevokeAuthSessionMutationVariables>;
 /** Revoke a cluster invite. */
 export const RevokeClusterInviteDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation RevokeClusterInvite($inviteId: ID!) {
@@ -18616,6 +18842,29 @@ fragment NotFoundErrorDefaultFields on NotFoundError {
   resourceType
   resourceId
 }`) as unknown as TypedDocumentString<RevokeClusterInviteMutation, RevokeClusterInviteMutationVariables>;
+/** Sign out every other session while retaining the presented named session. */
+export const RevokeOtherAuthSessionsDocument = /*#__PURE__*/ new TypedDocumentString(`
+    mutation RevokeOtherAuthSessions {
+  revokeOtherAuthSessions {
+    __typename
+    ...RevokeOtherAuthSessionsPayloadDefaultFields
+    ...ValidationErrorDefaultFields
+    ...AuthErrorDefaultFields
+  }
+}
+    fragment AuthErrorDefaultFields on AuthError {
+  message
+  code
+}
+fragment RevokeOtherAuthSessionsPayloadDefaultFields on RevokeOtherAuthSessionsPayload {
+  revokedCount
+}
+fragment ValidationErrorDefaultFields on ValidationError {
+  message
+  code
+  field
+  constraint
+}`) as unknown as TypedDocumentString<RevokeOtherAuthSessionsMutation, RevokeOtherAuthSessionsMutationVariables>;
 /** Replace an endpoint's signing secret and return the new one once. The previous secret keeps signing alongside it for 24 hours, unless revokePrevious is true. */
 export const RotateWebhookEndpointSecretDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation RotateWebhookEndpointSecret($id: ID!, $revokePrevious: Boolean = false) {
@@ -19639,6 +19888,42 @@ fragment PageInfoDefaultFields on PageInfo {
   hasNextPage
   hasPreviousPage
 }`) as unknown as TypedDocumentString<GetArtifactStatesConnectionQuery, GetArtifactStatesConnectionQueryVariables>;
+/** The signed-in user’s own interactive sessions, newest first. Supports first=1..100. */
+export const GetAuthSessionsConnectionDocument = /*#__PURE__*/ new TypedDocumentString(`
+    query GetAuthSessionsConnection($first: Int, $after: String) {
+  authSessionsConnection(first: $first, after: $after) {
+    edges {
+      cursor
+      node {
+        ...AuthSessionDefaultFields
+      }
+    }
+    pageInfo {
+      ...PageInfoDefaultFields
+    }
+    totalCount
+  }
+}
+    fragment AuthSessionDefaultFields on AuthSession {
+  id
+  clientKind
+  clientId
+  authMethod
+  label
+  clientVersion
+  ipAddress
+  location
+  createdAt
+  lastActiveAt
+  expiresAt
+  current
+}
+fragment PageInfoDefaultFields on PageInfo {
+  startCursor
+  endCursor
+  hasNextPage
+  hasPreviousPage
+}`) as unknown as TypedDocumentString<GetAuthSessionsConnectionQuery, GetAuthSessionsConnectionQueryVariables>;
 /** List balance transactions for the tenant with pagination. */
 export const GetBalanceTransactionsConnectionDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetBalanceTransactionsConnection($page: ConnectionInput, $transactionType: String, $timeRange: TimeRangeInput) {

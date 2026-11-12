@@ -121,7 +121,7 @@ func TestRevokeSessionWritesOnlyNamedRevocation(t *testing.T) {
 	expectSessionUserLock(mock)
 	mock.ExpectQuery(`FROM commodore.auth_sessions\s+WHERE tenant_id = \$1 AND user_id = \$2 AND id = \$3 FOR UPDATE`).
 		WithArgs(testTenantID, sessionTestUserID, authSessionTestID).WillReturnRows(sqlmock.NewRows(authSessionColumns).AddRow(sessionValues(authSessionTestID, nil)...))
-	mock.ExpectQuery(`UPDATE commodore.auth_sessions SET revoked_at = NOW\(\), revoke_reason = \$4`).
+	mock.ExpectQuery(`UPDATE commodore.auth_sessions SET revoked_at = clock_timestamp\(\), revoke_reason = \$4`).
 		WithArgs(testTenantID, sessionTestUserID, authSessionTestID, "user").WillReturnRows(sqlmock.NewRows(authSessionColumns).AddRow(sessionValues(authSessionTestID, at)...))
 	expectRefreshFamilyDeletion(mock, authSessionTestID)
 	payload := expectNamedSessionEvent(mock)
@@ -172,7 +172,7 @@ func TestSessionRevocationRollsBackWhenEventCannotPersist(t *testing.T) {
 	defer done()
 	mock.ExpectBegin()
 	expectSessionUserLock(mock)
-	mock.ExpectQuery(`UPDATE commodore.auth_sessions SET revoked_at = NOW\(\), revoke_reason = \$4`).
+	mock.ExpectQuery(`UPDATE commodore.auth_sessions SET revoked_at = clock_timestamp\(\), revoke_reason = \$4`).
 		WithArgs(testTenantID, sessionTestUserID, authSessionTestID, "user").
 		WillReturnRows(sqlmock.NewRows(authSessionColumns).AddRow(sessionValues("50000000-0000-4000-8000-000000000082", time.Now())...))
 	expectRefreshFamilyDeletion(mock, "50000000-0000-4000-8000-000000000082")

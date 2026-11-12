@@ -64,7 +64,7 @@ func TestLinkEmailCommitsCredentialsRevocationAndDeliveryTogether(t *testing.T) 
 				WillReturnResult(sqlmock.NewResult(0, 1))
 			mock.ExpectExec(`UPDATE commodore.users\s+SET password_hash`).WithArgs(testTenantID, sessionTestUserID, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 			otherID := "50000000-0000-4000-8000-000000000082"
-			mock.ExpectQuery(`UPDATE commodore.auth_sessions SET revoked_at = NOW\(\), revoke_reason = \$4`).
+			mock.ExpectQuery(`UPDATE commodore.auth_sessions SET revoked_at = clock_timestamp\(\), revoke_reason = \$4`).
 				WithArgs(testTenantID, sessionTestUserID, authSessionTestID, "password_change").
 				WillReturnRows(sqlmock.NewRows(authSessionColumns).AddRow(sessionValues(otherID, time.Now())...))
 			expectRefreshFamilyDeletion(mock, otherID)

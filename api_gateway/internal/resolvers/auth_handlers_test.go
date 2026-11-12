@@ -252,6 +252,8 @@ func TestDoLinkEmail(t *testing.T) {
 		},
 	}
 	authCtx := context.WithValue(clientstest.AuthedCtx("t1"), ctxkeys.KeyUserID, "u1")
+	authCtx = context.WithValue(authCtx, ctxkeys.KeyAuthType, "jwt")
+	authCtx = context.WithValue(authCtx, ctxkeys.KeySessionID, "current")
 	in := model.LinkEmailInput{Email: "u@x.io", Password: "pw"}
 	res, err := commoB3(commo).DoLinkEmail(authCtx, in)
 	if err != nil {

@@ -33,6 +33,26 @@ token_claims "$WORK/pair.json" >"$WORK/initial-claims.json"
 check "native sign-in has its own named session and auth_time" jq -e \
   '(.sid | type == "string" and length == 36) and (.auth_time > 0)' "$WORK/initial-claims.json" >/dev/null
 
+native_sid=$(jq -r '.sid' "$WORK/initial-claims.json")
+native_access=$(jq -r '.access_token' "$WORK/pair.json")
+code=$(curl -s -m 30 -o "$WORK/security-sessions.json" -w '%{http_code}' \
+  -H 'Content-Type: application/json' -H "Authorization: Bearer $native_access" \
+  --data '{"query":"{ authSessionsConnection(first:100) { nodes { id clientKind authMethod current ipAddress } totalCount } }"}' "$BRIDGE_URL/graphql")
+check "native caller lists its sessions through GraphQL" [ "$code" = 200 ] || finish
+check "GraphQL preserves the native sid, method and current-session flag" jq -e --arg sid "$native_sid" \
+  '(.errors // [] | length) == 0 and any(.data.authSessionsConnection.nodes[]; .id == $sid and .current and .clientKind == "CLI" and .authMethod == "DEVICE_CODE")' \
+  "$WORK/security-sessions.json" >/dev/null || finish
+check "session GraphQL output masks source addresses" jq -e \
+  'all(.data.authSessionsConnection.nodes[]; .ipAddress == null or (.ipAddress | test("^[0-9]+\\.[0-9]+\\.[0-9]+\\.x$|/48$")))' \
+  "$WORK/security-sessions.json" >/dev/null
+jq -cn --arg id "$native_sid" \
+  '{query:"mutation($id:ID!){ renameAuthSession(id:$id,label:\"Native stack CLI\") { __typename ... on AuthSession { id label current } } }",variables:{id:$id}}' |
+  curl -s -m 30 -o "$WORK/security-rename.json" -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer $SESSION" --data-binary @- "$BRIDGE_URL/graphql"
+check "browser renames its other native session through GraphQL" jq -e --arg sid "$native_sid" \
+  '(.errors // [] | length) == 0 and .data.renameAuthSession.__typename == "AuthSession" and .data.renameAuthSession.id == $sid and .data.renameAuthSession.label == "Native stack CLI" and (.data.renameAuthSession.current | not)' \
+  "$WORK/security-rename.json" >/dev/null || finish
+
 for rotation in 1 2; do
   jq '{grant_type:"refresh_token",refresh_token}' "$WORK/pair.json" | curl -s -m 30 \
     -D "$WORK/headers" -o "$WORK/rotated.json" -w '%{http_code}' \
@@ -66,4 +86,11 @@ check "signed-out native credential is invalid_grant" [ "$(cat "$WORK/signed-out
 check "revoked refresh reports definitive rejection" jq -e '.error == "invalid_grant"' "$WORK/signed-out.json" >/dev/null
 code=$(curl -s -m 30 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $SESSION" "$BRIDGE_URL/auth/me")
 check "CLI logout preserves the approving browser session" [ "$code" = 200 ]
+jq -cn --arg id "$native_sid" \
+  '{query:"mutation($id:ID!){ revokeAuthSession(id:$id) { __typename ... on RevokeAuthSessionPayload { success current } } }",variables:{id:$id}}' |
+  curl -s -m 30 -o "$WORK/security-revoke.json" -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer $SESSION" --data-binary @- "$BRIDGE_URL/graphql"
+check "GraphQL revocation is idempotent and keeps the caller signed in" jq -e \
+  '(.errors // [] | length) == 0 and .data.revokeAuthSession.__typename == "RevokeAuthSessionPayload" and .data.revokeAuthSession.success and (.data.revokeAuthSession.current | not)' \
+  "$WORK/security-revoke.json" >/dev/null
 finish

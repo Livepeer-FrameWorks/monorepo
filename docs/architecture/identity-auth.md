@@ -76,6 +76,19 @@ API tokens, wallet handoff bearers and service credentials cannot manage a
 user's interactive sessions. The owner always comes from verified context,
 including for platform operators. Logout revokes the current named session.
 
+GraphQL exposes `authSessionsConnection(first, after)`, `renameAuthSession`,
+`revokeAuthSession`, `revokeOtherAuthSessions` and `changePassword`. The
+connection accepts 1–100 rows and returns only the caller's live sessions.
+Addresses are masked to three IPv4 octets or an IPv6 /48; a configured local
+`GEOIP_MMDB_PATH` supplies optional city/country display. Full addresses and raw
+user agents are not exposed. Revoking the presented session returns
+`current: true` so clients can discard its credentials.
+
+Revoke-others, password change and email linking require the presented named
+session to be preserved. Legacy JWTs without `sid` receive a typed
+`SESSION_REFRESH_REQUIRED` validation result before an RPC; clients renew once
+and retry. Programmatic credentials receive an authentication refusal.
+
 `ChangePassword` requires an interactive named session and proof of the current
 password. It rechecks that proof under the owner lock, changes the password,
 invalidates outstanding password-reset tokens and revokes other sessions in one

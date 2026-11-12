@@ -41,6 +41,9 @@ var operationCalls = map[string]operationCall{
 	"ChangeBillingTier": {ChangeBillingTier_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return ChangeBillingTier(ctx, c, arg[string](v, "tierId"))
 	}},
+	"ChangePassword": {ChangePassword_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return ChangePassword(ctx, c, arg[string](v, "currentPassword"), arg[string](v, "newPassword"))
+	}},
 	"CompleteVodUpload": {CompleteVodUpload_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return CompleteVodUpload(ctx, c, arg[CompleteVodUploadInput](v, "input"))
 	}},
@@ -148,6 +151,9 @@ var operationCalls = map[string]operationCall{
 	}},
 	"GetArtifactStatesConnection": {GetArtifactStatesConnection_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return GetArtifactStatesConnection(ctx, c, arg[*ConnectionInput](v, "page"), arg[*string](v, "streamId"), arg[*string](v, "contentType"), arg[*string](v, "stage"))
+	}},
+	"GetAuthSessionsConnection": {GetAuthSessionsConnection_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return GetAuthSessionsConnection(ctx, c, arg[*int](v, "first"), arg[*string](v, "after"))
 	}},
 	"GetBalanceTransactionsConnection": {GetBalanceTransactionsConnection_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return GetBalanceTransactionsConnection(ctx, c, arg[*ConnectionInput](v, "page"), arg[*string](v, "transactionType"), arg[*TimeRangeInput](v, "timeRange"))
@@ -560,6 +566,9 @@ var operationCalls = map[string]operationCall{
 	"RejectClusterSubscription": {RejectClusterSubscription_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return RejectClusterSubscription(ctx, c, arg[string](v, "subscriptionId"), arg[*string](v, "reason"))
 	}},
+	"RenameAuthSession": {RenameAuthSession_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return RenameAuthSession(ctx, c, arg[string](v, "id"), arg[string](v, "label"))
+	}},
 	"ReplayWebhookDeliveries": {ReplayWebhookDeliveries_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return ReplayWebhookDeliveries(ctx, c, arg[string](v, "endpointId"), arg[time.Time](v, "createdAfter"), arg[time.Time](v, "createdBefore"))
 	}},
@@ -581,11 +590,17 @@ var operationCalls = map[string]operationCall{
 	"ResolveViewerEndpoint": {ResolveViewerEndpoint_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return ResolveViewerEndpoint(ctx, c, arg[string](v, "contentId"), arg[*MediaViewerProtocol](v, "protocol"))
 	}},
+	"RevokeAuthSession": {RevokeAuthSession_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return RevokeAuthSession(ctx, c, arg[string](v, "id"))
+	}},
 	"RevokeClusterInvite": {RevokeClusterInvite_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return RevokeClusterInvite(ctx, c, arg[string](v, "inviteId"))
 	}},
 	"RevokeDeveloperToken": {RevokeDeveloperToken_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return RevokeDeveloperToken(ctx, c, arg[string](v, "id"))
+	}},
+	"RevokeOtherAuthSessions": {RevokeOtherAuthSessions_Operation, func(ctx context.Context, c *Client, _ vars) (any, error) {
+		return RevokeOtherAuthSessions(ctx, c)
 	}},
 	"RevokeSigningKey": {RevokeSigningKey_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return RevokeSigningKey(ctx, c, arg[string](v, "id"))

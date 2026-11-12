@@ -187,6 +187,29 @@ export const scalarFields = {
         "code",
         "__typename"
     ],
+    "AuthSession": [
+        "id",
+        "clientKind",
+        "clientId",
+        "authMethod",
+        "label",
+        "clientVersion",
+        "ipAddress",
+        "location",
+        "createdAt",
+        "lastActiveAt",
+        "expiresAt",
+        "current",
+        "__typename"
+    ],
+    "AuthSessionConnection": [
+        "totalCount",
+        "__typename"
+    ],
+    "AuthSessionEdge": [
+        "cursor",
+        "__typename"
+    ],
     "AvailableCluster": [
         "clusterId",
         "clusterName",
@@ -388,6 +411,14 @@ export const scalarFields = {
         "__typename"
     ],
     "ChangeBillingTierResult": [
+        "__typename"
+    ],
+    "ChangePasswordPayload": [
+        "success",
+        "revokedCount",
+        "__typename"
+    ],
+    "ChangePasswordResult": [
         "__typename"
     ],
     "CityMetric": [
@@ -2514,6 +2545,9 @@ export const scalarFields = {
     "RecordingStopped": [
         "__typename"
     ],
+    "RenameAuthSessionResult": [
+        "__typename"
+    ],
     "ReplayWebhookDeliveriesResult": [
         "__typename"
     ],
@@ -2538,10 +2572,25 @@ export const scalarFields = {
         "expectedParentRevision",
         "__typename"
     ],
+    "RevokeAuthSessionPayload": [
+        "success",
+        "current",
+        "__typename"
+    ],
+    "RevokeAuthSessionResult": [
+        "__typename"
+    ],
     "RevokeClusterInviteResult": [
         "__typename"
     ],
     "RevokeDeveloperTokenResult": [
+        "__typename"
+    ],
+    "RevokeOtherAuthSessionsPayload": [
+        "revokedCount",
+        "__typename"
+    ],
+    "RevokeOtherAuthSessionsResult": [
         "__typename"
     ],
     "RevokeSigningKeyResult": [
@@ -4042,6 +4091,7 @@ export interface PossibleTypes {
     AbortVodUploadResult: 'AuthError' | 'DeleteSuccess' | 'NotFoundError'
     BootstrapEdgeResult: 'AuthError' | 'BootstrapEdgePending' | 'BootstrapEdgeResponse' | 'ValidationError'
     ChangeBillingTierResult: 'AuthError' | 'ChangeBillingTierPayload' | 'ValidationError'
+    ChangePasswordResult: 'AuthError' | 'ChangePasswordPayload' | 'ValidationError'
     ClusterSubscriptionResult: 'AuthError' | 'ClusterSubscription' | 'NotFoundError' | 'ValidationError'
     CompleteVodUploadResult: 'AuthError' | 'NotFoundError' | 'ValidationError' | 'VodAsset'
     CreateClipResult: 'AuthError' | 'Clip' | 'NotFoundError' | 'ValidationError'
@@ -4080,10 +4130,13 @@ export interface PossibleTypes {
     OpenMistAdminSessionResult: 'AuthError' | 'MistAdminSession' | 'NotFoundError' | 'ValidationError'
     PromoteToPaidResult: 'AuthError' | 'PromoteToPaidPayload' | 'ValidationError'
     PublicEventData: 'AccountSuspended' | 'ApiTokenCreated' | 'ApiTokenRevoked' | 'BillingDetailsUpdated' | 'ClipFailed' | 'ClipReady' | 'ClipRequested' | 'CustomDomainFailed' | 'CustomDomainVerified' | 'InvoiceCreated' | 'InvoicePaid' | 'MultistreamStatusChanged' | 'PaymentFailed' | 'RecordingChapterFailed' | 'RecordingFailed' | 'RecordingReady' | 'RecordingStarted' | 'RecordingStopped' | 'StreamConnected' | 'StreamCreated' | 'StreamDeleted' | 'StreamIdle' | 'StreamKeyRotated' | 'StreamLive' | 'StreamUpdated' | 'TopupCredited' | 'UploadAborted' | 'UploadCompleted' | 'UploadCreated' | 'UploadFailed' | 'UploadReady'
+    RenameAuthSessionResult: 'AuthError' | 'AuthSession' | 'NotFoundError' | 'ValidationError'
     ReplayWebhookDeliveriesResult: 'AuthError' | 'NotFoundError' | 'ValidationError' | 'WebhookReplayResult'
     ReplayWebhookDeliveryResult: 'AuthError' | 'NotFoundError' | 'ValidationError' | 'WebhookDelivery'
+    RevokeAuthSessionResult: 'AuthError' | 'NotFoundError' | 'RevokeAuthSessionPayload' | 'ValidationError'
     RevokeClusterInviteResult: 'AuthError' | 'DeleteSuccess' | 'NotFoundError'
     RevokeDeveloperTokenResult: 'AuthError' | 'DeleteSuccess' | 'NotFoundError'
+    RevokeOtherAuthSessionsResult: 'AuthError' | 'RevokeOtherAuthSessionsPayload' | 'ValidationError'
     RevokeSigningKeyResult: 'AuthError' | 'NotFoundError' | 'SigningKey'
     RotateWebhookEndpointSecretResult: 'AuthError' | 'NotFoundError' | 'WebhookEndpointSecret'
     SendMessageResult: 'AuthError' | 'Message' | 'NotFoundError' | 'ValidationError'
