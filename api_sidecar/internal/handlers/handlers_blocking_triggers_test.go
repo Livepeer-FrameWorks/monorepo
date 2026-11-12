@@ -90,8 +90,8 @@ func TestHandlePushOutStart(t *testing.T) {
 		ctx, rec := newWebhookContext(body)
 		HandlePushOutStart(ctx)
 		assertOK(t, rec, "rtmp://rewritten/app")
-		if got.GetTenantId() != "tenant-blk" {
-			t.Fatalf("tenant not applied: %q", got.GetTenantId())
+		if got.TenantId != nil {
+			t.Fatalf("node owner asserted as resource tenant: %q", got.GetTenantId())
 		}
 	})
 
@@ -340,8 +340,8 @@ func TestHandleStreamSourceForwardBranches(t *testing.T) {
 		ctx, rec := newWebhookContext("live+stream-1")
 		HandleStreamSource(ctx)
 		assertOK(t, rec, "dtsc://origin/live+stream-1")
-		if got.GetTenantId() != "tenant-blk" {
-			t.Fatalf("tenant not applied: %q", got.GetTenantId())
+		if got.TenantId != nil {
+			t.Fatalf("node owner asserted as resource tenant: %q", got.GetTenantId())
 		}
 	})
 

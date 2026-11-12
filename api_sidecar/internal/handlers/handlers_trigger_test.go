@@ -38,7 +38,7 @@ func applyTriggerSeed(seed *ipcpb.ConfigSeed) {
 	config.ApplySeed(seed, nil)
 }
 
-// setupTriggerTest applies a seed for tenantID to the package's manager, with
+// setupTriggerTest applies a node-owner seed to the package's manager, with
 // durable state in a per-test directory.
 func setupTriggerTest(t *testing.T, tenantID string) {
 	t.Helper()
@@ -167,7 +167,7 @@ func TestForwardDurableAcceptsRegisteredTriggerTypes(t *testing.T) {
 	}
 }
 
-func TestTriggerHandlersApplyTenantContext(t *testing.T) {
+func TestTriggerHandlersLeaveResourceTenantUnasserted(t *testing.T) {
 	setupTriggerTest(t, "tenant-39b")
 
 	tests := []struct {
@@ -230,8 +230,8 @@ func TestTriggerHandlersApplyTenantContext(t *testing.T) {
 			if got == nil {
 				t.Fatalf("expected mist trigger to be sent")
 			}
-			if got.TenantId == nil || got.GetTenantId() != "tenant-39b" {
-				t.Fatalf("expected tenant id to be applied, got %v", got.GetTenantId())
+			if got.TenantId != nil {
+				t.Fatalf("node owner asserted as resource tenant: %q", got.GetTenantId())
 			}
 		})
 	}

@@ -124,8 +124,8 @@ func TestNonBlockingDurableTriggersHappyPath(t *testing.T) {
 			if got.GetTriggerType() != tt.wantType {
 				t.Fatalf("trigger_type = %q, want %q", got.GetTriggerType(), tt.wantType)
 			}
-			if got.GetTenantId() != "tenant-life" {
-				t.Fatalf("tenant not applied: %q", got.GetTenantId())
+			if got.TenantId != nil {
+				t.Fatalf("node owner asserted as resource tenant: %q", got.GetTenantId())
 			}
 			if tt.wantStream != "" && tt.streamField(got) != tt.wantStream {
 				t.Fatalf("stream = %q, want %q", tt.streamField(got), tt.wantStream)
@@ -286,8 +286,8 @@ func TestHandleStreamBufferFireAndForget(t *testing.T) {
 		if sb.HasIssues == nil || !sb.GetHasIssues() {
 			t.Fatal("expected enrichment to flag issues from MistIssues")
 		}
-		if got.GetTenantId() != "tenant-life" {
-			t.Fatalf("tenant not applied: %q", got.GetTenantId())
+		if got.TenantId != nil {
+			t.Fatalf("node owner asserted as resource tenant: %q", got.GetTenantId())
 		}
 	})
 
