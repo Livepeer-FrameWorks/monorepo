@@ -453,20 +453,28 @@ func (s *Service) ProcessStripeWebhookGRPC(body []byte, headers map[string]strin
 }
 
 func (s *Service) processStripeWebhookPayload(ctx context.Context, payload StripeWebhookPayload, signature string, body []byte) (bool, string, int) {
+	ok, message, status, cause := s.processStripeWebhookDetailed(ctx, payload, signature, body)
+	if cause != nil {
+		return false, message, status
+	}
+	return ok, message, status
+}
+
+func (s *Service) processStripeWebhookDetailed(ctx context.Context, payload StripeWebhookPayload, signature string, body []byte) (bool, string, int, error) {
 	if payload.Created > 0 {
 		ctx = subscriptions.WithProviderCompletion(ctx, time.Unix(payload.Created, 0))
 	}
 	claim, claimErr := s.claimWebhookEvent(ctx, "stripe", payload.ID, payload.Type, signature, body)
 	if claimErr != nil {
 		s.logger.WithError(claimErr).Error("Failed to claim Stripe webhook event")
-		return false, "Failed to claim webhook", 500
+		return false, "Failed to claim webhook", 500, claimErr
 	}
 	if !claim.claimed {
 		s.logger.WithFields(logging.Fields{
 			"event_id": payload.ID,
 			"status":   claim.previous,
 		}).Debug("Stripe webhook already claimed or terminal, skipping")
-		return true, "", 200
+		return true, "", 200, nil
 	}
 
 	var err error
@@ -499,7 +507,7 @@ func (s *Service) processStripeWebhookPayload(ctx context.Context, payload Strip
 	case payload.Type == "charge.refunded":
 		err = s.handleStripeChargeRefunded(payload)
 	case payload.Type == "charge.updated":
-		err = s.handleStripeChargeUpdated(payload)
+		err = s.handleStripeChargeUpdatedContext(ctx, payload)
 	case strings.HasPrefix(payload.Type, "charge.dispute."):
 		err = s.handleStripeChargeDispute(payload)
 	default:
@@ -512,14 +520,14 @@ func (s *Service) processStripeWebhookPayload(ctx context.Context, payload Strip
 			s.logger.WithError(markErr).Warn("Failed to mark Stripe webhook failed")
 		}
 		s.logger.WithError(err).WithField("event_type", payload.Type).Error("Failed to process Stripe webhook")
-		return false, "Failed to process webhook", 500
+		return false, "Failed to process webhook", 500, err
 	}
 
 	if markErr := s.markWebhookSucceeded(ctx, "stripe", payload.ID, ""); markErr != nil {
 		s.logger.WithError(markErr).Error("Failed to mark Stripe webhook processed")
-		return false, "Failed to record webhook completion", 500
+		return false, "Failed to record webhook completion", 500, markErr
 	}
-	return true, "", 200
+	return true, "", 200, nil
 }
 
 // webhookClaim is the outcome of attempting to claim a provider event for
@@ -1407,6 +1415,14 @@ func (s *Service) ProcessMollieWebhookGRPC(body []byte, headers map[string]strin
 }
 
 func (s *Service) processMollieWebhookPayload(ctx context.Context, paymentID string, body []byte) (bool, string, int) {
+	ok, message, status, cause := s.processMollieWebhookDetailed(ctx, paymentID, body)
+	if cause != nil {
+		return false, message, status
+	}
+	return ok, message, status
+}
+
+func (s *Service) processMollieWebhookDetailed(ctx context.Context, paymentID string, body []byte) (bool, string, int, error) {
 	// Mollie does not sign its webhook bodies, so the only safe pattern is
 	// to fetch the payment authoritatively from the Mollie API and
 	// reconcile on (mollie_payment_id, status). The synthesized event id
@@ -1416,7 +1432,10 @@ func (s *Service) processMollieWebhookPayload(ctx context.Context, paymentID str
 	eventID, err := s.handleMolliePaymentWebhook(ctx, paymentID, body)
 	if errors.Is(err, errMollieUnknownPayment) {
 		s.logger.WithField("payment_id", paymentID).Warn("Mollie webhook references unknown payment id")
-		return true, "", 200
+		return true, "", 200, nil
+	}
+	if bindErr := s.bindSettlementWebhookOwner(ctx, "mollie", paymentID); bindErr != nil {
+		return false, "Failed to bind webhook owner", 500, bindErr
 	}
 	if err != nil {
 		// eventID may be empty when the failure occurred before we could
@@ -1429,17 +1448,17 @@ func (s *Service) processMollieWebhookPayload(ctx context.Context, paymentID str
 			}
 		}
 		s.logger.WithError(err).Error("Failed to process Mollie webhook")
-		return false, "Failed to process webhook", 500
+		return false, "Failed to process webhook", 500, err
 	}
 
 	if eventID != "" {
 		if markErr := s.markWebhookSucceeded(ctx, "mollie", eventID, paymentID); markErr != nil {
 			s.logger.WithError(markErr).Error("Failed to mark Mollie webhook processed")
-			return false, "Failed to record webhook completion", 500
+			return false, "Failed to record webhook completion", 500, markErr
 		}
 	}
 
-	return true, "", 200
+	return true, "", 200, nil
 }
 
 // parseMollieWebhookID extracts the `id` parameter from a Mollie webhook body.

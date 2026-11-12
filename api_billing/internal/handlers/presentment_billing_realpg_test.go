@@ -510,7 +510,7 @@ func TestStripeSettlementFromChargeUpdatedAndRetry_RealPG(t *testing.T) { //noli
 	}
 	payload := StripeWebhookPayload{ID: "evt_charge_updated", Type: "charge.updated"}
 	payload.Data.Object = charge
-	if err := service.handleStripeChargeUpdated(payload); err != nil {
+	if err := service.handleStripeChargeUpdatedContext(context.Background(), payload); err != nil {
 		t.Fatalf("charge.updated: %v", err)
 	}
 	queries.assertSettled(t, "stripe", "pi_webhook", "txn_webhook", 1000, 59, 941, "0.8333000000")

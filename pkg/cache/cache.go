@@ -20,6 +20,10 @@ type Options struct {
 	// positive and negative writes to that key. Used to enforce a hold-down
 	// after invalidation so an in-flight loader cannot repopulate stale data.
 	SkipStore func(key string) bool
+	// SkipStoreValue can fence an owner's values when identity is independent
+	// of the cache key. It runs under the publication lock and must not call
+	// back into the cache. It applies to loads and explicit positive writes.
+	SkipStoreValue func(key string, value interface{}) bool
 }
 
 type MetricsHooks struct {
@@ -265,6 +269,9 @@ func (c *Cache) storeFenced(key string, fence *loadFence, val interface{}, ok bo
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.opts.SkipStoreValue != nil && c.opts.SkipStoreValue(key, val) {
+		return
+	}
 	if c.activeLoads[key] != fence {
 		return
 	}
@@ -318,6 +325,10 @@ func (c *Cache) Set(key string, val interface{}, ttl time.Duration) {
 	now := time.Now()
 	e := &entry{value: val, expiresAt: now.Add(ttl), staleAt: now.Add(ttl).Add(c.opts.StaleWhileRevalidate), lastUsed: now}
 	c.mu.Lock()
+	if c.opts.SkipStoreValue != nil && c.opts.SkipStoreValue(key, val) {
+		c.mu.Unlock()
+		return
+	}
 	if _, exists := c.items[key]; !exists {
 		c.order = append(c.order, key)
 	}
@@ -334,6 +345,10 @@ func (c *Cache) SetDefault(key string, val interface{}) {
 	now := time.Now()
 	e := &entry{value: val, expiresAt: now.Add(ttl), staleAt: now.Add(ttl).Add(swr), lastUsed: now}
 	c.mu.Lock()
+	if c.opts.SkipStoreValue != nil && c.opts.SkipStoreValue(key, val) {
+		c.mu.Unlock()
+		return
+	}
 	if _, exists := c.items[key]; !exists {
 		c.order = append(c.order, key)
 	}

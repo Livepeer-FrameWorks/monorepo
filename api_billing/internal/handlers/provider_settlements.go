@@ -13,8 +13,6 @@ import (
 	billingmollie "frameworks/api_billing/internal/mollie"
 	billingstripe "frameworks/api_billing/internal/stripe"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/VictorAvelar/mollie-api-go/v4/mollie"
 	"github.com/shopspring/decimal"
 )
@@ -35,10 +33,6 @@ const (
 	mollieBalanceMaxPages = 40
 )
 
-// errSettlementCurrency means the provider settled a charge into a balance
-// that is not in the EUR ledger currency.
-var errSettlementCurrency = errors.New("provider settlement is not in the ledger currency")
-
 // runProviderSettlementRetry fills pending provider settlement rows every
 // providerSettlementRetryInterval.
 func (jm *JobManager) runProviderSettlementRetry(ctx context.Context) {
@@ -55,6 +49,9 @@ func (jm *JobManager) runProviderSettlementRetry(ctx context.Context) {
 				continue
 			}
 			now := time.Now()
+			if err := jm.billing.retryRecordedProviderSettlements(ctx, now); err != nil {
+				jm.logger.WithError(err).Warn("Recorded provider settlement valuation failed")
+			}
 			if err := jm.billing.retryStripeSettlements(ctx, now); err != nil {
 				jm.logger.WithError(err).Warn("Stripe settlement retry failed")
 			}
@@ -67,7 +64,7 @@ func (jm *JobManager) runProviderSettlementRetry(ctx context.Context) {
 
 // handleStripeChargeUpdated fills a charge's settlement row once Stripe has
 // attached the charge's balance transaction.
-func (s *Service) handleStripeChargeUpdated(payload StripeWebhookPayload) error {
+func (s *Service) handleStripeChargeUpdatedContext(ctx context.Context, payload StripeWebhookPayload) error {
 	var charge StripeChargeObject
 	if err := json.Unmarshal(payload.Data.Object, &charge); err != nil {
 		return fmt.Errorf("failed to parse charge: %w", err)
@@ -75,7 +72,9 @@ func (s *Service) handleStripeChargeUpdated(payload StripeWebhookPayload) error 
 	if charge.PaymentIntent == "" || charge.BalanceTxn == "" || s.stripeClient == nil {
 		return nil
 	}
-	ctx := context.Background()
+	if err := s.bindSettlementWebhookOwner(ctx, "stripe", charge.PaymentIntent); err != nil {
+		return err
+	}
 	balanceTransaction, err := s.stripeClient.GetBalanceTransaction(ctx, charge.BalanceTxn)
 	if err != nil {
 		return err
@@ -107,7 +106,12 @@ func (s *Service) retryStripeSettlements(ctx context.Context, now time.Time) err
 			}
 		}
 		if getErr != nil {
-			s.logger.WithError(getErr).WithField("payment_intent_id", row.ProviderPaymentID).Warn("Stripe settlement not available yet")
+			entry := s.logger.WithError(getErr).WithFields(map[string]any{"payment_intent_id": row.ProviderPaymentID, "tenant_id": row.TenantID, "outcome": settlementOutcome(getErr)})
+			if settlementOutcome(getErr) == "waiting" {
+				entry.Debug("Stripe settlement awaits provider evidence or EUR reference rate")
+			} else {
+				entry.Warn("Stripe settlement reconciliation failed")
+			}
 		}
 		if touchErr := queries.TouchPendingProviderSettlement(ctx, purserdb.TouchPendingProviderSettlementParams{
 			Provider: "stripe", ProviderPaymentID: row.ProviderPaymentID,
@@ -132,47 +136,18 @@ func (s *Service) settleStripePayment(ctx context.Context, paymentIntentID strin
 	if err != nil {
 		return false, fmt.Errorf("load Stripe settlement %s: %w", paymentIntentID, err)
 	}
-	if row.Status != "pending" {
+	if row.Status == "settled" {
 		return false, nil
 	}
-	if !strings.EqualFold(bt.Currency, billing.LedgerCurrency) {
-		return false, fmt.Errorf("%w: Stripe balance transaction %s is in %s", errSettlementCurrency, bt.ID, bt.Currency)
-	}
+	currency := strings.ToUpper(strings.TrimSpace(bt.Currency))
 	exchangeRate := sql.NullString{}
-	if !strings.EqualFold(row.ChargeCurrency, billing.LedgerCurrency) {
+	if !strings.EqualFold(row.ChargeCurrency, currency) {
 		if bt.ExchangeRate == nil {
 			return false, fmt.Errorf("stripe balance transaction %s converts %s without an exchange rate", bt.ID, row.ChargeCurrency)
 		}
 		exchangeRate = sql.NullString{String: bt.ExchangeRate.String(), Valid: true}
 	}
-	return s.settleProviderPayment(ctx, "stripe", paymentIntentID, bt.ID, bt.Amount, bt.Fee, bt.Net, exchangeRate, bt.Created)
-}
-
-func (s *Service) settleProviderPayment(ctx context.Context, provider, providerPaymentID, balanceTransactionID string, settled, fee, net int64, exchangeRate sql.NullString, settledAt time.Time) (bool, error) {
-	rows, err := purserdb.New(s.db).SettleProviderSettlement(ctx, purserdb.SettleProviderSettlementParams{
-		BalanceTransactionID: sql.NullString{String: balanceTransactionID, Valid: true},
-		SettledAmountCents:   settled,
-		FeeCents:             fee,
-		NetCents:             net,
-		SettlementCurrency:   billing.LedgerCurrency,
-		ExchangeRate:         exchangeRate,
-		SettledAt:            settledAt,
-		Provider:             provider,
-		ProviderPaymentID:    providerPaymentID,
-	})
-	if err != nil {
-		return false, fmt.Errorf("settle %s payment %s: %w", provider, providerPaymentID, err)
-	}
-	if rows == 1 {
-		s.logger.WithFields(logging.Fields{
-			"provider":            provider,
-			"provider_payment_id": providerPaymentID,
-			"balance_transaction": balanceTransactionID,
-			"settled_eur_cents":   settled,
-			"fee_eur_cents":       fee,
-		}).Info("Recorded provider settlement")
-	}
-	return rows == 1, nil
+	return s.settleProviderPayment(ctx, row.TenantID, "stripe", paymentIntentID, bt.ID, currency, bt.Amount, bt.Fee, bt.Net, exchangeRate, bt.Created)
 }
 
 // readMollieSettlements reads the primary Mollie balance's transactions,
@@ -234,6 +209,10 @@ func (s *Service) readMollieSettlements(ctx context.Context, now time.Time) erro
 				continue
 			}
 			if _, settleErr := s.settleMolliePayment(ctx, tx); settleErr != nil {
+				if nativeSettlementRecorded(settleErr) {
+					s.logger.WithError(settleErr).WithField("balance_transaction", tx.ID).Warn("Mollie settlement evidence recorded; EUR valuation pending")
+					continue
+				}
 				return fmt.Errorf("settle Mollie balance transaction %s: %w", tx.ID, settleErr)
 			}
 		}
@@ -279,7 +258,7 @@ func (s *Service) rewindMollieSettlementCursor(ctx context.Context, tenantID str
 }
 
 // settleMolliePayment records a Mollie payment balance transaction on the
-// payment's pending settlement row: the initial amount is the settled EUR, the
+// payment's settlement row: the initial amount is the native settled amount, the
 // deductions the fee, and the result the net.
 func (s *Service) settleMolliePayment(ctx context.Context, tx billingmollie.BalanceTransaction) (bool, error) {
 	paymentID := tx.PaymentID()
@@ -290,26 +269,27 @@ func (s *Service) settleMolliePayment(ctx context.Context, tx billingmollie.Bala
 	if err != nil {
 		return false, fmt.Errorf("load Mollie settlement %s: %w", paymentID, err)
 	}
-	if row.Status != "pending" {
+	if row.Status == "settled" {
 		return false, nil
 	}
 	if tx.InitialAmount == nil || tx.ResultAmount == nil {
 		return false, fmt.Errorf("mollie balance transaction %s has no amounts", tx.ID)
 	}
-	if !strings.EqualFold(tx.InitialAmount.Currency, billing.LedgerCurrency) || !strings.EqualFold(tx.ResultAmount.Currency, billing.LedgerCurrency) {
-		return false, fmt.Errorf("%w: Mollie balance transaction %s is in %s", errSettlementCurrency, tx.ID, tx.InitialAmount.Currency)
+	currency := strings.ToUpper(strings.TrimSpace(tx.InitialAmount.Currency))
+	if !strings.EqualFold(tx.ResultAmount.Currency, currency) || (tx.Deductions != nil && !strings.EqualFold(tx.Deductions.Currency, currency)) {
+		return false, fmt.Errorf("mollie balance transaction %s has inconsistent native currencies", tx.ID)
 	}
-	settled, _, err := mollieAmountToCents(tx.InitialAmount.Value, billing.LedgerCurrency)
+	settled, _, err := mollieAmountToCents(tx.InitialAmount.Value, currency)
 	if err != nil {
 		return false, err
 	}
-	net, _, err := mollieAmountToCents(tx.ResultAmount.Value, billing.LedgerCurrency)
+	net, _, err := mollieAmountToCents(tx.ResultAmount.Value, currency)
 	if err != nil {
 		return false, err
 	}
 	fee := settled - net
 	if tx.Deductions != nil && tx.Deductions.Value != "" {
-		deductions, _, deductionErr := mollieAmountToCents(tx.Deductions.Value, billing.LedgerCurrency)
+		deductions, _, deductionErr := mollieAmountToCents(tx.Deductions.Value, currency)
 		if deductionErr != nil {
 			return false, deductionErr
 		}
@@ -318,12 +298,12 @@ func (s *Service) settleMolliePayment(ctx context.Context, tx billingmollie.Bala
 		}
 	}
 	exchangeRate := sql.NullString{}
-	if !strings.EqualFold(row.ChargeCurrency, billing.LedgerCurrency) {
+	if !strings.EqualFold(row.ChargeCurrency, currency) {
 		if row.ChargeAmountCents <= 0 {
 			return false, fmt.Errorf("mollie settlement %s has no charge amount", paymentID)
 		}
 		rate := decimal.NewFromInt(settled).DivRound(decimal.NewFromInt(row.ChargeAmountCents), 10)
 		exchangeRate = sql.NullString{String: rate.String(), Valid: true}
 	}
-	return s.settleProviderPayment(ctx, "mollie", paymentID, tx.ID, settled, fee, net, exchangeRate, tx.CreatedAt)
+	return s.settleProviderPayment(ctx, row.TenantID, "mollie", paymentID, tx.ID, currency, settled, fee, net, exchangeRate, tx.CreatedAt)
 }

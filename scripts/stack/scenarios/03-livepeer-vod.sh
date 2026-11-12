@@ -17,6 +17,7 @@ GATEWAY=${STACK_LIVEPEER_GATEWAY_A:-livepeer-gateway-a}
 MISSING_URL=${STACK_MISSING_VOD_URL:-https://test-videos.co.uk/vids/does-not-exist-404.mp4}
 need ffmpeg jq curl python3 || finish
 SINCE=$(date +%s)
+LOG_SINCE=$(utc_now)
 webhook_endpoint >/dev/null || fail "webhook endpoint at $RECEIVER_HOOK_URL"
 trap 'stack_ctl start "$GATEWAY" >/dev/null 2>&1' EXIT
 
@@ -34,6 +35,13 @@ ready_or_failed() { # ready_or_failed <vod id>: 0 ready, 2 failed, 1 pending
   [ "$s" = READY ] && return 0
   [ "$s" = FAILED ] && return 2
   return 1
+}
+
+processing_billed_to_owner() {
+  local n
+  n=$(ch "SELECT count() FROM periscope.processing_segments_final_v
+    WHERE tenant_id='$STACK_TENANT_ID' AND position(stream_name,'$1')>0 AND media_seconds>0") || return 1
+  [ "${n:-0}" -gt 0 ] 2>/dev/null
 }
 
 log "VOD through Livepeer"
@@ -67,6 +75,7 @@ if [ -n "$VID" ]; then
     eventually 30 "uploaded-VOD viewer sessions carry the artifact" vod_sessions_current
     full_30() { full_length "$1" "$2" 30; }
     every_replica "Livepeer VOD renditions span the whole 30s source" "$VPB" full_30
+    eventually 90 "shared-edge processing is billed to the VOD owner" processing_billed_to_owner "$VHASH"
   fi
 else
   fail "upload: $V"
@@ -127,6 +136,7 @@ if stack_ctl stop "$GATEWAY"; then
       every_replica "fallback VOD plays" "$FPB" media_at
       full_30() { full_length "$1" "$2" 30; }
       every_replica "fallback VOD renditions span the whole 30s source" "$FPB" full_30
+      eventually 90 "CPU fallback processing is billed to the VOD owner" processing_billed_to_owner "$FHASH"
     fi
   else
     fail "upload: $F"
@@ -150,4 +160,6 @@ else
   fail "importVodAsset: $R"
 fi
 eventually 60 "upload.ready webhook for the Livepeer VOD" saw_event "$SINCE" upload.ready
+check "node ownership does not conflict with processing media ownership" log_absent "$LOG_SINCE" \
+  'Trigger tenant assertion conflicts with server-resolved resource owner; using resolved owner' foghorn foghorn-2 foghorn-b foghorn-b-2
 finish

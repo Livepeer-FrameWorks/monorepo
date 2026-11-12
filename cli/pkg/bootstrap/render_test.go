@@ -52,6 +52,43 @@ func minimalManifest() *inventory.Manifest {
 	}
 }
 
+func TestManifestRegistryScopeCannotBeWidenedByOverlay(t *testing.T) {
+	m := minimalManifest()
+	m.RegistryOwner = "production"
+	derived, err := Derive(m, DeriveOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := derived.Quartermaster.RegistryScope
+	if scope == nil || scope.Owner != "production" || !scope.Complete || !slices.Equal(scope.Clusters, []string{"core-central-primary"}) {
+		t.Fatalf("manifest did not declare its complete ownership scope: %+v", scope)
+	}
+	for _, changed := range []ServiceRegistryScope{
+		{Owner: "another", Clusters: scope.Clusters, Complete: true},
+		{Owner: scope.Owner, Clusters: []string{"another"}, Complete: true},
+		{Owner: scope.Owner, Clusters: scope.Clusters, Complete: false},
+	} {
+		if _, mergeErr := mergeQuartermaster(derived.Quartermaster, QuartermasterSection{RegistryScope: &changed}); mergeErr == nil {
+			t.Fatalf("overlay replaced the manifest scope: %+v", changed)
+		}
+	}
+	adoption := ServiceRegistryAdoption{InstanceID: "opaque-history", ServiceName: "postgres", ClusterID: scope.Clusters[0], NodeID: "core-eu-1", Protocol: "tcp", Port: 5432}
+	overlayScope := *scope
+	overlayScope.Adopt = []ServiceRegistryAdoption{adoption}
+	merged, err := mergeQuartermaster(derived.Quartermaster, QuartermasterSection{RegistryScope: &overlayScope})
+	if err != nil || len(merged.RegistryScope.Adopt) != 1 || merged.RegistryScope.Adopt[0] != adoption {
+		t.Fatalf("exact adoption lost: %+v %v", merged.RegistryScope, err)
+	}
+	m.RegistryOwner = ""
+	unowned, err := Derive(m, DeriveOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, mergeErr := mergeQuartermaster(unowned.Quartermaster, QuartermasterSection{RegistryScope: &overlayScope}); mergeErr == nil {
+		t.Fatal("overlay granted ownership absent from the manifest")
+	}
+}
+
 func TestDeriveProducesSystemTenantAndCluster(t *testing.T) {
 	m := minimalManifest()
 	d, err := Derive(m, DeriveOptions{})

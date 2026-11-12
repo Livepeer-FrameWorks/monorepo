@@ -3,10 +3,11 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
-	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -77,24 +78,47 @@ func runClusterStatus(cmd *cobra.Command, rc *resolvedCluster, jsonOutput bool) 
 	channel := manifest.ResolvedChannel()
 	gitopsChannel, gitopsVersion := gitops.ResolveVersion(channel)
 
-	gitopsManifest, err := gitops.FetchFromRepositories(gitops.FetchOptions{}, rc.ReleaseRepos, gitopsChannel, gitopsVersion)
+	gitopsManifest, err := gitops.FetchFromRepositoriesContext(cmd.Context(), gitops.FetchOptions{}, rc.ReleaseRepos, gitopsChannel, gitopsVersion)
 	if err != nil {
-		return fmt.Errorf("failed to fetch gitops manifest (channel: %s): %w", channel, err)
+		if errors.Is(err, context.Canceled) {
+			return &ExitCodeError{Code: 130, Message: "cluster status interrupted"}
+		}
+		return &ExitCodeError{Code: 2, Message: fmt.Sprintf("failed to fetch gitops manifest (channel: %s): %v", channel, err)}
 	}
 
+	return runClusterStatusWithRelease(cmd, rc, jsonOutput, gitopsManifest, nil)
+}
+
+type statusDetector func(context.Context, inventory.Host, string) (*detect.ServiceState, error)
+
+func runClusterStatusWithRelease(cmd *cobra.Command, rc *resolvedCluster, jsonOutput bool, gitopsManifest *gitops.Manifest, inspect statusDetector) error {
+	manifest := rc.Manifest
+	channel := manifest.ResolvedChannel()
 	if !jsonOutput {
 		fmt.Fprintf(cmd.OutOrStdout(), "Cluster: %s-%s (channel: %s)\n", manifest.Type, manifest.Profile, channel)
 		fmt.Fprintf(cmd.OutOrStdout(), "Platform version: %s\n\n", gitopsManifest.PlatformVersion)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
+	ctx := cmd.Context()
 
 	sshKey := stringFlag(cmd, "ssh-key").Value
 	sshPool := fwssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
+	sshPool.LimitPerHost(doctorSSHPerHost)
+	if inspect == nil {
+		inspect = func(ctx context.Context, host inventory.Host, service string) (*detect.ServiceState, error) {
+			return detect.NewDetector(sshPool, host).Detect(ctx, service)
+		}
+	}
 
 	var results []serviceStatus
+	var checks []doctorCheck
+	type serviceCollection struct {
+		name, mode, available string
+		hosts                 []string
+		replies               []chan serviceReplicaStatus
+	}
+	var collections []serviceCollection
 
 	collectStatus := func(name string, svc inventory.ServiceConfig) {
 		if !svc.Enabled {
@@ -123,40 +147,36 @@ func runClusterStatus(cmd *cobra.Command, rc *resolvedCluster, jsonOutput bool) 
 			}
 		}
 
-		replicas := make([]serviceReplicaStatus, len(hostNames))
-		var wg sync.WaitGroup
+		replies := make([]chan serviceReplicaStatus, len(hostNames))
 		for i, hostName := range hostNames {
 			i, hostName := i, hostName
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			replies[i] = make(chan serviceReplicaStatus, 1)
+			probe := func(parent context.Context) serviceReplicaStatus {
+				probeCtx, cancel := context.WithTimeout(parent, 60*time.Second)
+				defer cancel()
 				replica := serviceReplicaStatus{Host: hostName, Mode: svc.Mode, Status: "not installed"}
 				host, ok := manifest.GetHost(hostName)
 				if !ok {
 					replica.Status = "configuration error"
 					replica.Error = "host is not declared in the manifest"
-					replicas[i] = replica
-					return
+					return replica
 				}
 
-				state, detectErr := detect.NewDetector(sshPool, host).Detect(ctx, deployName)
+				state, detectErr := inspect(probeCtx, host, deployName)
 				if detectErr != nil {
 					replica.Status = "inspection failed"
 					replica.Error = detectErr.Error()
-					replicas[i] = replica
-					return
+					return replica
 				}
 				if state == nil || !state.Exists {
-					replicas[i] = replica
-					return
+					return replica
 				}
 
 				replica.Deployed = state.Version
 				replica.Mode = state.Mode
 				replica.ArtifactDigest = dockerImageDigest(state.Metadata["image"])
 				if pinnedDependency != nil {
-					replicas[i] = pinnedDependencyReplicaStatus(replica, state, pinnedDependency)
-					return
+					return pinnedDependencyReplicaStatus(replica, state, pinnedDependency)
 				}
 				switch {
 				case !state.Running:
@@ -169,12 +189,11 @@ func runClusterStatus(cmd *cobra.Command, rc *resolvedCluster, jsonOutput bool) 
 				default:
 					replica.Status = "up to date"
 				}
-				replicas[i] = replica
-			}()
+				return replica
+			}
+			checks = append(checks, doctorCheck{name: name + "@" + hostName, run: func(ctx context.Context) doctorOutcome { replies[i] <- probe(ctx); return doctorOutcome{} }})
 		}
-		wg.Wait()
-
-		results = append(results, summarizeServiceReplicas(name, svc.Mode, available, replicas))
+		collections = append(collections, serviceCollection{name, svc.Mode, available, hostNames, replies})
 	}
 
 	// Collect from each service group in deterministic order.
@@ -205,10 +224,27 @@ func runClusterStatus(cmd *cobra.Command, rc *resolvedCluster, jsonOutput bool) 
 		collectStatus(n, manifest.Observability[n])
 	}
 
+	_, _ = runDoctorSections(ctx, io.Discard, []doctorSection{{checks: checks}}, doctorCheckWorkers, func(string, doctorOutcome) {})
+	for _, collection := range collections {
+		replicas := make([]serviceReplicaStatus, len(collection.replies))
+		for i, reply := range collection.replies {
+			select {
+			case replicas[i] = <-reply:
+			default:
+				replicas[i] = serviceReplicaStatus{Host: collection.hosts[i], Status: "inspection incomplete", Error: "command cancelled before inspection completed"}
+			}
+		}
+		results = append(results, summarizeServiceReplicas(collection.name, collection.mode, collection.available, replicas))
+	}
+	resultErr := clusterStatusResult(ctx, results)
+
 	if jsonOutput {
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
-		return enc.Encode(results)
+		if err := enc.Encode(results); err != nil {
+			return err
+		}
+		return resultErr
 	}
 
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
@@ -229,8 +265,10 @@ func runClusterStatus(cmd *cobra.Command, rc *resolvedCluster, jsonOutput bool) 
 	}
 	printReplicaDiscrepancies(cmd, results)
 
-	printStatusControlPlaneSection(cmd, rc)
-	return nil
+	if ctx.Err() == nil {
+		printStatusControlPlaneSection(cmd, rc)
+	}
+	return resultErr
 }
 
 // pinnedDependencyReplicaStatus classifies a replica of a managed dependency
@@ -325,6 +363,8 @@ func summarizeServiceReplicas(name, configuredMode, available string, replicas [
 		result.Status = "not configured"
 	case statusCounts["configuration error"] > 0:
 		result.Status = fmt.Sprintf("configuration error (%d/%d)", statusCounts["configuration error"], len(replicas))
+	case statusCounts["inspection incomplete"] > 0:
+		result.Status = fmt.Sprintf("inspection incomplete (%d/%d)", statusCounts["inspection incomplete"], len(replicas))
 	case statusCounts["inspection failed"] > 0:
 		result.Status = fmt.Sprintf("inspection failed (%d/%d)", statusCounts["inspection failed"], len(replicas))
 	case statusCounts["not installed"] == len(replicas):
@@ -434,4 +474,34 @@ func statusControlPlaneFallbacks() []ux.NextStep {
 		{Cmd: "frameworks cluster provision", Why: "Re-run provisioning with SOPS access if the control plane needs reconciliation."},
 		{Cmd: "frameworks admin clusters list", Why: "Any admin command that touches Quartermaster reads the service token and will succeed or fail explicitly."},
 	}
+}
+
+// Incomplete inspection takes precedence over observed drift so automation never
+// treats an unread host as a known stopped service.
+func clusterStatusResult(ctx context.Context, results []serviceStatus) error {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return &ExitCodeError{Code: 130, Message: "cluster status interrupted"}
+	}
+	code := 0
+	if ctx.Err() != nil {
+		code = 2
+	}
+	for _, result := range results {
+		if strings.HasPrefix(result.Status, "mixed") {
+			code = max(code, 1)
+		}
+		for _, replica := range result.Replicas {
+			switch replica.Status {
+			case "up to date", "upgrade available":
+			case "inspection failed", "inspection incomplete", "configuration error", "unverified":
+				code = 2
+			default:
+				code = max(code, 1)
+			}
+		}
+	}
+	if code == 0 {
+		return nil
+	}
+	return &ExitCodeError{Code: code, Message: "cluster status found unavailable or incomplete replicas"}
 }

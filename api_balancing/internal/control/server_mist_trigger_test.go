@@ -40,6 +40,19 @@ type captureMistTriggerProcessor struct {
 	calls            int
 }
 
+func TestProcessMistTriggerDiscardsNodeOwnerTenantHint(t *testing.T) {
+	previous := mistTriggerProcessor
+	t.Cleanup(func() { mistTriggerProcessor = previous })
+	capture := &captureMistTriggerProcessor{}
+	mistTriggerProcessor = capture
+	tenant := "node-owner-is-not-resource-owner"
+	processMistTrigger(&ipcpb.MistTrigger{TriggerType: "PROCESS_BILLING", TenantId: &tenant},
+		NodeSession{CanonicalNodeID: "node-owner-test", ClusterID: "cluster-1"}, &captureStream{}, logging.Logger(logrus.New()))
+	if capture.last == nil || capture.last.GetTenantId() != "" {
+		t.Fatalf("authenticated edge tenant was forwarded as resource owner: %+v", capture.last)
+	}
+}
+
 func (c *captureMistTriggerProcessor) ProcessTrigger(_ string, _ []byte, _ string) (string, bool, error) {
 	return "", false, nil
 }

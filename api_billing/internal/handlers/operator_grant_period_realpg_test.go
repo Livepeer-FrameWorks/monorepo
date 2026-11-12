@@ -669,6 +669,14 @@ func tierDowngradeProviderCases() []providerReservationCase {
 
 func providerReservationCases() []providerReservationCase {
 	return append(tierDowngradeProviderCases(), []providerReservationCase{
+		{"ProviderNativeSettlementValuation", TestProviderNativeSettlementValuation_RealPG},
+		{"ProviderNativeEvidenceSurvivesMissingValuation", TestProviderNativeEvidenceSurvivesMissingValuation_RealPG},
+		{"ProviderNativeValuationConcurrentReplay", TestProviderNativeValuationConcurrentReplay_RealPG},
+		{"ProviderNativeSettlementConstraints", TestProviderNativeSettlementConstraints_RealPG},
+		{"ProviderNativeSettlementRoundingUsesUTCReferenceDate", TestProviderNativeSettlementRoundingUsesUTCReferenceDate_RealPG},
+		{"ProviderSettlementRecoveryPreservesCauseAndOwner", TestProviderSettlementRecoveryPreservesCauseAndOwner_RealPG},
+		{"PolledBlockedSettlementRemainsVisibleWithoutWebhook", TestPolledBlockedSettlementRemainsVisibleWithoutWebhook_RealPG},
+
 		{"AdvanceActivationStartsOneCappedCalendarMonth", TestAdvanceActivationStartsOneCappedCalendarMonth_RealPG},
 		{"AdvanceSetupRefusesMidPeriodTierChange", TestAdvanceSetupRefusesMidPeriodTierChange_RealPG},
 		{"IneligibleCheckoutCompensates", TestIneligibleCheckoutCompensates_RealPG},

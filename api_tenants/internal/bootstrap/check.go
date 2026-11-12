@@ -20,6 +20,9 @@ import (
 // Cross-service references (e.g. a Purser cluster_pricing.cluster_id) are
 // validated on their respective service's check pass, not here.
 func Check(qm QuartermasterSection) error {
+	if err := validateRegistryScope(qm.RegistryScope, qm.Clusters); err != nil {
+		return err
+	}
 	tenantAliases := make(map[string]struct{})
 	if qm.SystemTenant != nil {
 		alias := qm.SystemTenant.Alias

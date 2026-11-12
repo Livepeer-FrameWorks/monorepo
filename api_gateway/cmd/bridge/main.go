@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"os"
@@ -218,25 +219,7 @@ func main() {
 	// Add query depth limit to prevent deeply nested queries
 	maxDepth := cfg.GraphQLMaxDepth
 	if maxDepth > 0 {
-		gqlHandler.AroundOperations(func(ctx context.Context, next graphql.OperationHandler) graphql.ResponseHandler {
-			if !graphql.HasOperationContext(ctx) {
-				return next(ctx)
-			}
-			opCtx := graphql.GetOperationContext(ctx)
-			if opCtx.Doc == nil {
-				return next(ctx)
-			}
-			if isIntrospectionOperation(opCtx.Operation) {
-				return next(ctx)
-			}
-			depth := calculateQueryDepth(opCtx.Doc.Operations, opCtx.Doc.Fragments)
-			if depth > maxDepth {
-				return func(ctx context.Context) *graphql.Response {
-					return graphql.ErrorResponse(ctx, "query exceeds maximum depth of %d (got %d)", maxDepth, depth)
-				}
-			}
-			return next(ctx)
-		})
+		gqlHandler.AroundOperations(queryDepthLimit(maxDepth))
 		logger.WithField("max_depth", maxDepth).Info("GraphQL depth limit enabled")
 	}
 
@@ -868,6 +851,23 @@ func isIntrospectionOperation(op *ast.OperationDefinition) bool {
 	return true
 }
 
+func queryDepthLimit(maxDepth int) graphql.OperationMiddleware {
+	return func(ctx context.Context, next graphql.OperationHandler) graphql.ResponseHandler {
+		if maxDepth <= 0 || !graphql.HasOperationContext(ctx) {
+			return next(ctx)
+		}
+		opCtx := graphql.GetOperationContext(ctx)
+		if opCtx.Doc == nil || isIntrospectionOperation(opCtx.Operation) {
+			return next(ctx)
+		}
+		depth := calculateQueryDepth(opCtx.Doc.Operations, opCtx.Doc.Fragments)
+		if depth > maxDepth {
+			return middleware.TerminalGraphQLError(ctx, fmt.Sprintf("query exceeds maximum depth of %d (got %d)", maxDepth, depth), "")
+		}
+		return next(ctx)
+	}
+}
+
 func recoverOperation(ctx context.Context, next graphql.OperationHandler, logger logging.Logger) (handler graphql.ResponseHandler) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -875,9 +875,7 @@ func recoverOperation(ctx context.Context, next graphql.OperationHandler, logger
 				"panic":      r,
 				"stacktrace": string(debug.Stack()),
 			}).Error("Panic recovered in GraphQL operation")
-			handler = func(ctx context.Context) *graphql.Response {
-				return graphql.ErrorResponse(ctx, "internal error")
-			}
+			handler = middleware.TerminalGraphQLError(ctx, "internal error", "")
 		}
 	}()
 	return next(ctx)

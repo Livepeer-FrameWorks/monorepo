@@ -50,8 +50,9 @@ function createMockCompressor() {
 }
 
 function createMockAudioContext() {
+  const outputTrack = { kind: "audio", stop: vi.fn() };
   const destinationNode = {
-    stream: { getAudioTracks: () => [{ kind: "audio" }] },
+    stream: { getAudioTracks: () => [outputTrack], getTracks: () => [outputTrack] },
     channelCount: 0,
   };
 
@@ -440,6 +441,14 @@ describe("AudioMixer", () => {
   // destroy
   // ===========================================================================
   describe("destroy", () => {
+    it("stops its destination track exactly once", async () => {
+      const mixer = new AudioMixer();
+      await mixer.initialize();
+      const track = mixer.getOutputTrack()!;
+      mixer.destroy();
+      mixer.destroy();
+      expect(track.stop).toHaveBeenCalledTimes(1);
+    });
     it("removes all sources and closes context", async () => {
       const mixer = new AudioMixer();
       await mixer.initialize();

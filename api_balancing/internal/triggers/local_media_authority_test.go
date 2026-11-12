@@ -758,7 +758,7 @@ func TestPlayRewriteLocalDriverErrorUsesConnectedResolver(t *testing.T) {
 			TenantId: "tenant-id", IngestMode: "push", BillingModel: "postpaid",
 		},
 	}
-	p.streamCache.Set("tenant-id:stream-internal", streamContext{
+	p.streamCache.Set("source:stream-internal", streamContext{
 		TenantID: "tenant-id", StreamID: "stream-id", BillingModel: "postpaid",
 	}, time.Minute)
 

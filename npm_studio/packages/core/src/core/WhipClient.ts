@@ -72,6 +72,33 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
 
   // WHIP resource URL returned in Location header (for DELETE on disconnect)
   private resourceUrl: string | null = null;
+  private destroyed = false;
+  private connectionGeneration = 0;
+
+  private assertConnection(generation: number): void {
+    if (this.destroyed || generation !== this.connectionGeneration) {
+      throw new DOMException("WHIP connection disposed", "AbortError");
+    }
+  }
+
+  private async deleteResource(resource: string | null): Promise<void> {
+    if (!resource) return;
+    try {
+      await fetch(resource, { method: "DELETE" });
+    } catch (error) {
+      this.log("Failed to delete WHIP resource (non-fatal)", error);
+    }
+  }
+
+  private async acceptResource(response: Response, generation: number): Promise<void> {
+    const location = response.headers.get("Location");
+    const resource = location ? new URL(location, this.config.whipUrl).href : null;
+    if (this.destroyed || generation !== this.connectionGeneration) {
+      await this.deleteResource(resource);
+      this.assertConnection(generation);
+    }
+    this.resourceUrl = resource;
+  }
 
   constructor(config: WhipClientConfig) {
     super();
@@ -286,6 +313,8 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
    * Connect to WHIP endpoint with a MediaStream
    */
   async connect(stream: MediaStream): Promise<void> {
+    const generation = ++this.connectionGeneration;
+    this.assertConnection(generation);
     try {
       this.log("Starting WHIP connection");
       this.setState("connecting");
@@ -365,8 +394,10 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
         offerToReceiveVideo: false,
       });
 
+      this.assertConnection(generation);
       this.log("Setting local description");
       await pc.setLocalDescription(offer);
+      this.assertConnection(generation);
 
       this.log("Local SDP offer created", {
         type: offer.type,
@@ -396,13 +427,14 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
 
       // Store WHIP resource URL from Location header (per RFC 9725)
       // This URL is used for DELETE on disconnect
-      this.resourceUrl = response.headers.get("Location");
+      await this.acceptResource(response, generation);
       if (this.resourceUrl) {
         this.log("WHIP resource URL:", this.resourceUrl);
       }
 
       // Get and set remote description
       const answerSdp = await response.text();
+      this.assertConnection(generation);
       this.log("Received SDP answer", {
         length: answerSdp.length,
       });
@@ -412,6 +444,7 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
         sdp: answerSdp,
       });
 
+      this.assertConnection(generation);
       this.log("Remote description set successfully");
 
       // Verify negotiated codecs for WebCodecs alignment
@@ -419,6 +452,8 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
 
       this.log("WHIP connection established, waiting for ICE connection...");
     } catch (error) {
+      this.assertConnection(generation);
+      void this.deleteResource(this.resourceUrl);
       this.logError("Failed to connect", error instanceof Error ? error : new Error(String(error)));
       this.setState("failed");
       this.cleanup();
@@ -433,6 +468,8 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
     videoGenerator: MediaStreamTrackGenerator;
     audioGenerator: MediaStreamTrackGenerator;
   }> {
+    const generation = ++this.connectionGeneration;
+    this.assertConnection(generation);
     try {
       this.log("Starting WHIP connection with track generators");
       this.setState("connecting");
@@ -524,8 +561,10 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
         offerToReceiveVideo: false,
       });
 
+      this.assertConnection(generation);
       this.log("Setting local description");
       await pc.setLocalDescription(offer);
+      this.assertConnection(generation);
 
       // Send offer to WHIP endpoint
       this.log(`Sending offer to WHIP endpoint: ${this.config.whipUrl}`);
@@ -550,13 +589,14 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
 
       // Store WHIP resource URL from Location header (per RFC 9725)
       // This URL is used for DELETE on disconnect
-      this.resourceUrl = response.headers.get("Location");
+      await this.acceptResource(response, generation);
       if (this.resourceUrl) {
         this.log("WHIP resource URL:", this.resourceUrl);
       }
 
       // Get and set remote description
       const answerSdp = await response.text();
+      this.assertConnection(generation);
       this.log("Received SDP answer", { length: answerSdp.length });
 
       await pc.setRemoteDescription({
@@ -564,6 +604,7 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
         sdp: answerSdp,
       });
 
+      this.assertConnection(generation);
       this.log("Remote description set successfully");
 
       // Verify negotiated codecs
@@ -573,6 +614,8 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
 
       return { videoGenerator, audioGenerator };
     } catch (error) {
+      this.assertConnection(generation);
+      void this.deleteResource(this.resourceUrl);
       this.logError(
         "Failed to connect with generators",
         error instanceof Error ? error : new Error(String(error))
@@ -1092,29 +1135,23 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
    * Disconnect from WHIP endpoint
    */
   async disconnect(): Promise<void> {
-    this.log("Disconnecting WHIP");
-
-    // Send DELETE to WHIP resource URL per RFC 9725
-    if (this.resourceUrl) {
-      try {
-        this.log("Sending DELETE to WHIP resource:", this.resourceUrl);
-        await fetch(this.resourceUrl, { method: "DELETE" });
-      } catch (error) {
-        // Don't block disconnect on DELETE failure
-        this.log("Failed to delete WHIP resource (non-fatal)", error);
-      }
-      this.resourceUrl = null;
-    }
-
+    this.connectionGeneration++;
+    const resource = this.resourceUrl;
     this.cleanup();
-    this.setState("disconnected");
+    if (!this.destroyed) this.setState("disconnected");
+    await this.deleteResource(resource);
   }
 
   /**
    * Destroy the client
    */
   destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.connectionGeneration++;
+    const resource = this.resourceUrl;
     this.cleanup();
+    void this.deleteResource(resource);
     this.removeAllListeners();
   }
 }

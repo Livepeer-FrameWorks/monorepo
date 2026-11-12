@@ -44,8 +44,6 @@ SELECT 'ingest_stop_tenant:' || tenant_id::text || '=' || count(*) FROM commodor
 const (
 	// Purser's HeldDowngradeGrace.
 	purserHeldDowngradeGraceHours = 26
-	// The unresolved age in Purser's ProviderWebhookInboxRepeatedFailures.
-	purserRecoveryUnresolvedDays = 14
 	// Purser's suspensionThresholdCents: a prepaid balance below it suspends.
 	purserSuspensionThresholdCents = -1000
 )
@@ -64,25 +62,11 @@ SELECT 'held_downgrade_tenant:' || tenant_id::text || '=' || EXTRACT(EPOCH FROM 
     AND pending_provider_tier_id = pending_tier_id AND pending_effective_at < NOW() - INTERVAL '%[1]d hours'
   ORDER BY pending_effective_at, tenant_id LIMIT 10;
 SELECT 'recovery_open=' || count(*) FROM purser.provider_webhook_inbox WHERE status <> 'processed';
-WITH stuck AS (
-  SELECT id, headers FROM purser.provider_webhook_inbox
-  WHERE status IN ('pending', 'failed', 'processing') AND attempts > 1
-  UNION
-  SELECT id, headers FROM purser.provider_webhook_inbox
-  WHERE status IN ('pending', 'failed', 'processing') AND unresolved_since < NOW() - INTERVAL '%[2]d days'
-)
-SELECT 'recovery_stuck=' || count(*) FROM stuck;
-WITH stuck AS (
-  SELECT id, headers FROM purser.provider_webhook_inbox
-  WHERE status IN ('pending', 'failed', 'processing') AND attempts > 1
-  UNION
-  SELECT id, headers FROM purser.provider_webhook_inbox
-  WHERE status IN ('pending', 'failed', 'processing') AND unresolved_since < NOW() - INTERVAL '%[2]d days'
-)
-SELECT 'recovery_stuck_tenant:' || tenant || '=' || count(*)
-  FROM (SELECT COALESCE(NULLIF(headers->>'tenant_id', ''), 'unbound') AS tenant FROM stuck) stuck_tenant
-  GROUP BY tenant ORDER BY count(*) DESC, tenant LIMIT 10;
-`, purserHeldDowngradeGraceHours, purserRecoveryUnresolvedDays) + purserSpendHoldDoctorSQL + purserBillingLifecycleDoctorSQL
+SELECT 'recovery_stuck=' || count(*) FROM purser.billing_recovery_failures;
+SELECT 'recovery_stuck_tenant:' || tenant_id || '=' || count(*)
+ FROM purser.billing_recovery_failures
+ GROUP BY tenant_id ORDER BY count(*) DESC, tenant_id LIMIT 10;
+`, purserHeldDowngradeGraceHours) + purserSpendHoldDoctorSQL + purserBillingLifecycleDoctorSQL
 
 // purserSpendHoldDoctorSQL reports the tenants whose signed authority refuses
 // new sessions for a spent balance: Commodore's prepaid_balance_unavailable
@@ -271,7 +255,7 @@ func evaluateAccountRecoveryDoctor(expected []string, values map[string]map[stri
 				report.problems = append(report.problems, fmt.Sprintf("purser: %d confirmed downgrade(s) held past their effective time (%s)", n, listedTenants(state, "held_downgrade_tenant:", func(seconds int64) string { return doctorAge(seconds) + " past effective" })))
 			}
 			if n := count("recovery_stuck"); n > 0 {
-				report.problems = append(report.problems, fmt.Sprintf("purser: %d billing recovery item(s) failing repeatedly or unresolved over %d days (%s)", n, purserRecoveryUnresolvedDays, listedTenants(state, "recovery_stuck_tenant:", countUnit("item"))))
+				report.problems = append(report.problems, fmt.Sprintf("purser: %d billing recovery item(s) blocked, failing repeatedly or overdue (%s)", n, listedTenants(state, "recovery_stuck_tenant:", countUnit("item"))))
 			}
 			if n := count("spend_held_below_limit"); n > 0 {
 				report.problems = append(report.problems, fmt.Sprintf("purser: %d prepaid tenant(s) below the -%s suspension threshold but not suspended; their running sessions continue (%s)", n, wholeEuros(-purserSuspensionThresholdCents), listedTenants(state, "spend_below_limit_tenant:", owed)))

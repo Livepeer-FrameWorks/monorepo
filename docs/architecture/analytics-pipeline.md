@@ -715,3 +715,25 @@ for an acknowledged tenant batch, and retries preserve report IDs and sequences.
 Existing hold expiry still applies to a blocked tenant; skipping it does not
 extend authorization or hold validity. Finalized USER_END facts remain the source
 of invoice usage.
+
+## Edge resource attribution
+
+Authenticated Helmsman sessions establish node, serving-cluster and control-cell
+identity. The node owner's tenant is not a content owner on a shared edge, so
+Helmsman does not stamp it onto resource envelopes and Foghorn removes legacy
+hints at the connection boundary. Resource handlers resolve their own canonical
+owner. Explicit ownership assertions in attribution-bearing payloads still fail
+closed when they conflict. Node lifecycle and storage-provider accounting retain
+their separate node/cluster ownership rules.
+
+Stream context caches use canonical source or artifact namespace keys, independent
+of node tenant hints. Tenant-sensitive readers validate the cached owner. Tenant
+and content invalidation hold the owner before eviction and recheck ownership at
+cache publication, including unknown in-flight keys. Bare content invalidations
+cover every resource namespace while preserving other owners' entries.
+
+Processing billing reports identify delivered work. They may use retained signed
+source identity or local artifact tombstones after admission has been revoked;
+this accounting-only context grants no media permission. A transient ownership
+lookup failure is returned through the durable acknowledgment path so the edge
+keeps its WAL entry. An authoritative missing resource is a terminal disposition.

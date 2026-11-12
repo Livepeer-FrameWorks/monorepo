@@ -29,7 +29,7 @@ func TestLiveLifecycleForwardsOnlyTheSource(t *testing.T) {
 	}
 	send := func(internal, node string, replicated bool) {
 		t.Helper()
-		p.streamCache.Set(tenant+":"+internal, streamContext{TenantID: tenant, StreamID: streamIDs[internal]}, time.Minute)
+		p.streamCache.Set(streamContextCacheKey("live+"+internal), streamContext{TenantID: tenant, StreamID: streamIDs[internal]}, time.Minute)
 		tenantID, inputs := tenant, uint32(1)
 		if _, _, err := p.handleStreamLifecycleUpdate(&ipcpb.MistTrigger{
 			TriggerType: "STREAM_LIFECYCLE_UPDATE",

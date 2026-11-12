@@ -32,27 +32,40 @@ WHERE id = sqlc.arg(id)
 
 -- name: FailProviderWebhook :execresult
 UPDATE purser.provider_webhook_inbox
-SET status = CASE WHEN wake_requested OR sqlc.arg(waiting)::boolean THEN 'pending' ELSE 'failed' END,
+SET status = CASE WHEN sqlc.arg(blocked)::boolean THEN 'blocked'
+                  WHEN wake_requested OR sqlc.arg(waiting)::boolean THEN 'pending' ELSE 'failed' END,
     attempts = attempts + CASE WHEN sqlc.arg(waiting)::boolean THEN 0 ELSE 1 END,
     wait_attempts = wait_attempts + CASE WHEN sqlc.arg(waiting)::boolean THEN 1 ELSE 0 END,
     unresolved_since = COALESCE(unresolved_since, NOW()),
     next_attempt_at = CASE WHEN wake_requested THEN NOW() ELSE NOW() + (sqlc.arg(backoff_milliseconds)::bigint * INTERVAL '1 millisecond') END,
     claimed_at = NULL, lease_token = NULL,
-    last_error = sqlc.arg(last_error)::text, updated_at = NOW()
+    last_error = sqlc.arg(last_error)::text || CASE WHEN provider_payment_id IS NOT NULL
+        THEN ' (payment ' || left(provider_payment_id, 120) || ')' ELSE '' END, updated_at = NOW()
 WHERE id = sqlc.arg(id)
   AND (sqlc.arg(lease_token)::text = '' OR lease_token::text = sqlc.arg(lease_token)::text);
 
 -- name: ProviderWebhookInboxRepeatedFailures :one
 -- Service-wide recovery inventory; tenant filtering would hide stuck work.
-SELECT COUNT(*)::bigint AS items
-FROM (
-    SELECT id FROM purser.provider_webhook_inbox
-    WHERE status IN ('pending', 'failed', 'processing') AND attempts > 1
-    UNION
-    SELECT id FROM purser.provider_webhook_inbox
-    WHERE status IN ('pending', 'failed', 'processing')
-      AND unresolved_since < NOW() - INTERVAL '14 days'
-) unresolved;
+SELECT COUNT(*)::bigint AS items FROM purser.billing_recovery_failures;
+
+-- name: BindProviderWebhookPaymentOwner :execresult
+UPDATE purser.provider_webhook_inbox inbox
+SET tenant_id = payment.tenant_id, provider_payment_id = payment.provider_payment_id, updated_at = NOW()
+FROM purser.provider_settlements payment
+WHERE inbox.id = sqlc.arg(id) AND inbox.status = 'processing'
+  AND inbox.lease_token::text = sqlc.arg(lease_token)::text
+  AND inbox.provider = sqlc.arg(provider)::text AND payment.provider = inbox.provider
+  AND payment.provider_payment_id = sqlc.arg(provider_payment_id)::text
+  AND payment.tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND (inbox.tenant_id IS NULL OR inbox.tenant_id = payment.tenant_id)
+  AND (inbox.provider_payment_id IS NULL OR inbox.provider_payment_id = payment.provider_payment_id);
+
+-- name: WakeValuedProviderWebhooks :exec
+UPDATE purser.provider_webhook_inbox
+SET status='pending', next_attempt_at=NOW(), wake_requested=TRUE, updated_at=NOW()
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid
+  AND provider=sqlc.arg(provider)::text AND provider_payment_id=sqlc.arg(provider_payment_id)::text
+  AND status='blocked';
 
 -- name: ListCheckoutRecovery :many
 -- Platform-operator inventory includes unbound callbacks; a supplied tenant narrows to its reservations.
@@ -66,7 +79,7 @@ WITH selected AS (
     UNION ALL
     (SELECT inbox.* FROM purser.provider_webhook_inbox inbox
      WHERE inbox.status <> 'processed' AND sqlc.arg(tenant_id)::text <> ''
-       AND inbox.headers->>'tenant_id' = sqlc.arg(tenant_id)::text
+       AND COALESCE(inbox.tenant_id::text, inbox.headers->>'tenant_id') = sqlc.arg(tenant_id)::text
      ORDER BY inbox.created_at, inbox.id
      LIMIT (sqlc.arg(row_limit)::bigint + sqlc.arg(row_offset)::bigint))
 ), page AS MATERIALIZED (
@@ -79,7 +92,7 @@ WITH selected AS (
 ), inbox_rows AS (
 SELECT i.id::text AS id, COALESCE(p.provider, i.headers->>'provider', i.provider)::text AS provider,
        i.event_key, i.status, i.attempts, i.last_error, i.next_attempt_at,
-       COALESCE(p.tenant_id::text, i.headers->>'tenant_id', i.internal_payload->>'tenant_id', '')::text AS tenant_id,
+       COALESCE(i.tenant_id::text, p.tenant_id::text, i.headers->>'tenant_id', i.internal_payload->>'tenant_id', '')::text AS tenant_id,
        COALESCE(p.id::text, upgrade.id::text, i.headers->>'reference_id', '')::text AS reservation_id,
        COALESCE(p.expires_at, p.created_at + INTERVAL '24 hours') AS expires_at,
        COALESCE(p.amount_cents, upgrade.base_cents, NULLIF(i.headers->>'amount_cents', '')::bigint, 0)::bigint AS amount_cents,
@@ -171,12 +184,38 @@ LEFT JOIN purser.subscription_tier_upgrades upgrade
            NULL::timestamptz AS expires_at, intent.amount_cents, intent.currency::text AS currency,
            intent.status::text AS reservation_status, intent.created_at AS sort_at
     FROM historical_selected intent
+), settlement_selected AS (
+    (SELECT settlement.* FROM purser.provider_settlements settlement
+     WHERE settlement.status IN ('recorded','blocked') AND sqlc.arg(tenant_id)::text=''
+     ORDER BY settlement.created_at,settlement.id
+     LIMIT (sqlc.arg(row_limit)::bigint+sqlc.arg(row_offset)::bigint))
+    UNION ALL
+    (SELECT settlement.* FROM purser.provider_settlements settlement
+     WHERE settlement.status IN ('recorded','blocked') AND sqlc.arg(tenant_id)::text<>''
+       AND settlement.tenant_id=NULLIF(sqlc.arg(tenant_id)::text,'')::uuid
+     ORDER BY settlement.created_at,settlement.id
+     LIMIT (sqlc.arg(row_limit)::bigint+sqlc.arg(row_offset)::bigint))
+), settlement_rows AS (
+    SELECT ('settlement:'||settlement.id::text)::text AS id, settlement.provider::text AS provider,
+           ('provider-settlement:'||settlement.provider_payment_id)::text AS event_key,
+           settlement.status::text AS status,0::integer AS attempts,
+           (COALESCE(settlement.last_error,'awaiting EUR reference valuation')||
+            ' (payment '||left(settlement.provider_payment_id,120)||', native '||settlement.settlement_currency||')')::text AS last_error,
+           CASE WHEN settlement.status='blocked' THEN NULL::timestamptz
+                ELSE settlement.updated_at+INTERVAL '10 minutes' END AS next_attempt_at,
+           settlement.tenant_id::text AS tenant_id,''::text AS reservation_id,
+           NULL::timestamptz AS expires_at,settlement.charge_amount_cents AS amount_cents,
+           settlement.charge_currency::text AS currency,'provider_settlement'::text AS reservation_status,
+           settlement.created_at AS sort_at
+    FROM settlement_selected settlement
 ), inventory AS (
     SELECT * FROM historical_rows
     UNION ALL
     SELECT * FROM inbox_rows
     UNION ALL
     SELECT * FROM fallback_rows
+    UNION ALL
+    SELECT * FROM settlement_rows
 )
 SELECT id::text AS id, provider, event_key, status, attempts,
        COALESCE(last_error, '')::text AS last_error, next_attempt_at,

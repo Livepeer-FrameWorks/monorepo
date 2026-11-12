@@ -185,7 +185,7 @@ describe("a Go Live that fails", () => {
     await controller.stopStreaming();
     answer(refused(503));
 
-    await expect(started).rejects.toThrow("503");
+    await expect(started).rejects.toMatchObject({ name: "AbortError" });
     expect(errors).toEqual([]);
     expect(controller.getState()).toBe("capturing");
   });
@@ -473,6 +473,7 @@ describe("a microphone reopened during a live session", () => {
       enabled: true,
       stop: vi.fn(),
       addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
       getSettings: () => ({ deviceId }),
     } as unknown as MediaStreamTrack;
   }
@@ -488,7 +489,7 @@ describe("a microphone reopened during a live session", () => {
       .mockResolvedValueOnce(new FakeMediaStream([fakeTrack("video", "rear")]))
       .mockResolvedValueOnce(new FakeMediaStream([newMic]));
     vi.stubGlobal("navigator", {
-      mediaDevices: { getUserMedia, addEventListener: vi.fn() },
+      mediaDevices: { getUserMedia, addEventListener: vi.fn(), removeEventListener: vi.fn() },
     });
     const controller = new IngestControllerV2({
       whipUrl: "https://edge.example/webrtc/key",

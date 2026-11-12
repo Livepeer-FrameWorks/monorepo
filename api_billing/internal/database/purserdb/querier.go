@@ -77,6 +77,7 @@ type Querier interface {
 	BackfillTenantBillingPeriod(ctx context.Context, arg BackfillTenantBillingPeriodParams) error
 	BaseFeeInvoiceExistsForPeriod(ctx context.Context, arg BaseFeeInvoiceExistsForPeriodParams) (bool, error)
 	BindProviderCheckoutReceipt(ctx context.Context, arg BindProviderCheckoutReceiptParams) error
+	BindProviderWebhookPaymentOwner(ctx context.Context, arg BindProviderWebhookPaymentOwnerParams) (sql.Result, error)
 	CancelClosedTenantClusterSubscriptions(ctx context.Context, arg CancelClosedTenantClusterSubscriptionsParams) error
 	// A phase opened after a delayed closure event has no interval before its cutoff.
 	CancelClosedTenantSubscription(ctx context.Context, arg CancelClosedTenantSubscriptionParams) error
@@ -744,6 +745,10 @@ type Querier interface {
 	// the period, with the time they were active from and their cancellation.
 	ListPurserInvoicedClusterSubscriptionsForPeriod(ctx context.Context, arg ListPurserInvoicedClusterSubscriptionsForPeriodParams) ([]ListPurserInvoicedClusterSubscriptionsForPeriodRow, error)
 	ListRecentPayments(ctx context.Context, arg ListRecentPaymentsParams) ([]ListRecentPaymentsRow, error)
+	// Unsupported evidence remains visible but makes no provider calls. A newly
+	// supported currency can resume from the same immutable native evidence.
+	// Service-owned queue deliberately spans tenant IDs; mutations remain tenant fenced.
+	ListRecordedProviderSettlements(ctx context.Context, arg ListRecordedProviderSettlementsParams) ([]ListRecordedProviderSettlementsRow, error)
 	ListRecoverableFailedX402Settlements(ctx context.Context, recoveryWindowHours interface{}) ([]ListRecoverableFailedX402SettlementsRow, error)
 	// The subscription lock excludes activation while unused, locally owned funding
 	// and its unactivated native checkout are handed to durable compensation.
@@ -920,9 +925,11 @@ type Querier interface {
 	RecordFreeFallbackMoveFailure(ctx context.Context, arg RecordFreeFallbackMoveFailureParams) error
 	RecordFreeFallbackNoticeFailure(ctx context.Context, arg RecordFreeFallbackNoticeFailureParams) error
 	RecordNativeMollieInvoicePayment(ctx context.Context, arg RecordNativeMollieInvoicePaymentParams) error
+	RecordNativeProviderSettlement(ctx context.Context, arg RecordNativeProviderSettlementParams) (int64, error)
 	RecordOperatorGrantExpiryFailure(ctx context.Context, arg RecordOperatorGrantExpiryFailureParams) error
 	RecordOperatorGrantNoticeFailure(ctx context.Context, arg RecordOperatorGrantNoticeFailureParams) error
 	RecordPermanentVIESFault(ctx context.Context, arg RecordPermanentVIESFaultParams) error
+	RecordProviderValuationFailure(ctx context.Context, arg RecordProviderValuationFailureParams) error
 	RecordSettledCompensationRefund(ctx context.Context, arg RecordSettledCompensationRefundParams) error
 	RecordStripeMeterEventFailure(ctx context.Context, arg RecordStripeMeterEventFailureParams) error
 	RecordTenantBillingClosure(ctx context.Context, arg RecordTenantBillingClosureParams) error
@@ -1142,6 +1149,7 @@ type Querier interface {
 	// A provider can reverse a chargeback after an earlier bank check completed.
 	// Authenticated provider-payment routing selects the existing scoped work.
 	WakeRefundSettlementOwner(ctx context.Context, arg WakeRefundSettlementOwnerParams) error
+	WakeValuedProviderWebhooks(ctx context.Context, arg WakeValuedProviderWebhooksParams) error
 	X402BalanceTransactionExists(ctx context.Context, arg X402BalanceTransactionExistsParams) (bool, error)
 }
 

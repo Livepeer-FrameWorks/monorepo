@@ -16,17 +16,20 @@ interface ScreenCaptureEvents {
 interface CaptureInfo {
   stream: MediaStream;
   label: string;
+  ended: () => void;
 }
 
 export class ScreenCapture extends TypedEventEmitter<ScreenCaptureEvents> {
   private captures: Map<string, CaptureInfo> = new Map();
   private captureCounter = 0;
+  private destroyed = false;
 
   /**
    * Start a new screen capture
    * Each call creates a new capture - supports multiple simultaneous captures
    */
   async start(options: ScreenCaptureOptions = {}): Promise<MediaStream | null> {
+    if (this.destroyed) return null;
     try {
       // Build video constraints with higher framerate for smooth screen share
       let videoConstraints: MediaTrackConstraints | boolean;
@@ -92,6 +95,10 @@ export class ScreenCapture extends TypedEventEmitter<ScreenCaptureEvents> {
       }
 
       const stream = await navigator.mediaDevices.getDisplayMedia(constraints);
+      if (this.destroyed) {
+        stream.getTracks().forEach((track) => track.stop());
+        return null;
+      }
 
       // Generate a unique ID for this capture
       const captureId = `screen-${++this.captureCounter}-${Date.now()}`;
@@ -101,19 +108,19 @@ export class ScreenCapture extends TypedEventEmitter<ScreenCaptureEvents> {
       const label = videoTrack?.label || `Screen ${this.captureCounter}`;
 
       // Store the capture
-      this.captures.set(captureId, { stream, label });
+      const ended = () => this.handleTrackEnded(captureId, stream);
+      this.captures.set(captureId, { stream, label, ended });
 
       // Listen for track ended events (user stopped sharing)
       stream.getTracks().forEach((track) => {
-        track.addEventListener("ended", () => {
-          this.handleTrackEnded(captureId, stream);
-        });
+        track.addEventListener("ended", ended);
       });
 
       this.emit("started", { stream, captureId });
 
       return stream;
     } catch (error) {
+      if (this.destroyed) return null;
       const err = error instanceof Error ? error : new Error(String(error));
 
       // User cancelled is not an error
@@ -138,6 +145,7 @@ export class ScreenCapture extends TypedEventEmitter<ScreenCaptureEvents> {
     // Check if all tracks have ended
     const activeTracks = stream.getTracks().filter((t) => t.readyState === "live");
     if (activeTracks.length === 0) {
+      this.removeCaptureListeners(captureId);
       this.captures.delete(captureId);
       this.emit("ended", { captureId, stream, reason: "user_stopped" });
     }
@@ -149,6 +157,7 @@ export class ScreenCapture extends TypedEventEmitter<ScreenCaptureEvents> {
   stopByStream(stream: MediaStream): void {
     for (const [captureId, info] of this.captures) {
       if (info.stream === stream) {
+        this.removeCaptureListeners(captureId);
         info.stream.getTracks().forEach((track) => track.stop());
         this.captures.delete(captureId);
         this.emit("ended", { captureId, stream, reason: "stopped" });
@@ -162,10 +171,16 @@ export class ScreenCapture extends TypedEventEmitter<ScreenCaptureEvents> {
    */
   stop(): void {
     for (const [captureId, info] of this.captures) {
+      this.removeCaptureListeners(captureId);
       info.stream.getTracks().forEach((track) => track.stop());
       this.emit("ended", { captureId, stream: info.stream, reason: "stopped" });
     }
     this.captures.clear();
+  }
+
+  private removeCaptureListeners(captureId: string): void {
+    const info = this.captures.get(captureId);
+    info?.stream.getTracks().forEach((track) => track.removeEventListener("ended", info.ended));
   }
 
   /**
@@ -238,6 +253,8 @@ export class ScreenCapture extends TypedEventEmitter<ScreenCaptureEvents> {
    * Clean up resources
    */
   destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
     this.stop();
     this.removeAllListeners();
   }

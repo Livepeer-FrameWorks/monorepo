@@ -158,7 +158,7 @@ func TestBillingCacheDoesNotTrustPartialIdentityContext(t *testing.T) {
 		response: &quartermasterpb.ValidateTenantResponse{Valid: true, IsActive: true, BillingModel: "postpaid"},
 	}
 	p.tenantAdmission = fake
-	p.streamCache.Set("tenant-1:stream-1", streamContext{
+	p.streamCache.Set("source:stream-1", streamContext{
 		TenantID: "tenant-1",
 		StreamID: "stream-id-1",
 		Source:   "resolve_internal_name",

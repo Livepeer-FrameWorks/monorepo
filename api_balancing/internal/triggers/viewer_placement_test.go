@@ -23,7 +23,7 @@ func TestUserNewPlacementPrecedesViewerSideEffects(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			resetStateTrigHandlers(t)
 			p := minimalProcessorTrigHandlers(t)
-			p.streamCache.Set("tenant:stream", streamContext{TenantID: "tenant", MaxViewers: 1, RequiresAuthKnown: true}, time.Minute)
+			p.streamCache.Set("source:stream", streamContext{TenantID: "tenant", MaxViewers: 1, RequiresAuthKnown: true}, time.Minute)
 			calls := 0
 			p.SetViewerPlacementAdmission(func(ctx context.Context, connection ViewerPlacementConnection) (federation.PlacementAdmissionDecision, error) {
 				calls++
@@ -115,7 +115,7 @@ func TestUserNewUsesGlobalPlacementGate(t *testing.T) {
 		t.Run(preferred, func(t *testing.T) {
 			resetStateTrigHandlers(t)
 			p := minimalProcessorTrigHandlers(t)
-			p.streamCache.Set("tenant:stream", streamContext{TenantID: "tenant", MaxViewers: 1, RequiresAuthKnown: true}, time.Minute)
+			p.streamCache.Set("source:stream", streamContext{TenantID: "tenant", MaxViewers: 1, RequiresAuthKnown: true}, time.Minute)
 			now := time.Now()
 			pair := localauthority.PlacementPair{
 				Tenant: localauthority.TenantSnapshot{Version: 1, Ready: true, ValidUntil: now.Add(20 * time.Second), Authority: &mediapb.TenantAuthority{
