@@ -157,6 +157,10 @@ type Agent struct {
 	certIssueTokenExpiresAt time.Time
 	pkiBasePath             string
 	ingressTLSRoot          string
+	ingressReaderGroup      string
+	aliasAppliedPath        string
+	aliasIngressRequired    atomic.Bool
+	aliasIngressApplied     atomic.Bool
 	ingressTrigger          string
 	expectedServices        []string
 	certSyncInterval        time.Duration
@@ -168,12 +172,11 @@ type Agent struct {
 	ingressMu               sync.Mutex
 	ingressVersions         map[string]string
 	cachedIngressIDs        []string
-	// Tenant-alias cert materialization (Foghorn hosts only). aliasVersions
-	// is keyed by alias subdomain and shares ingressMu with the ingress state.
-	aliasClient     aliasedTenantsClient
-	lastAliasSync   atomic.Int64
-	aliasVersions   map[string]string
-	cachedAliasSubs []string
+	// Tenant-alias materialization shares ingressMu with ingress state.
+	// The inventory marker advances only after requesting a reload.
+	aliasClient   aliasedTenantsClient
+	lastAliasSync atomic.Int64
+	aliasVersions map[string]string
 	// Startup substrate inputs and persisted managed cache.
 	staticPeersFile string
 	privateKeyFile  string
@@ -348,40 +351,42 @@ func New(cfg Config) (*Agent, error) {
 	}
 
 	return &Agent{
-		logger:            cfg.Logger,
-		client:            client,
-		quartermasterAddr: cfg.QuartermasterGRPCAddr,
-		wgManager:         wg,
-		dnsServer:         dnsSrv,
-		interfaceName:     cfg.InterfaceName,
-		nodeType:          cfg.NodeType,
-		nodeName:          cfg.NodeName,
-		clusterID:         cfg.ClusterID,
-		externalIP:        cfg.ExternalIP,
-		internalIP:        cfg.InternalIP,
-		listenPort:        cfg.ListenPort,
-		syncInterval:      cfg.SyncInterval,
-		syncTimeout:       cfg.SyncTimeout,
-		stopChan:          make(chan struct{}),
-		nodeID:            resolveNodeID(cfg),
-		metrics:           cfg.Metrics,
-		registryClient:    registry,
-		ingressClient:     ingress,
-		aliasClient:       alias,
-		navigatorClient:   navigatorClient,
-		certIssueToken:    cfg.CertIssueToken,
-		pkiBasePath:       cfg.PKIBasePath,
-		ingressTLSRoot:    pkgingress.TLSRoot,
-		ingressTrigger:    pkgingress.ReloadTrigger,
-		expectedServices:  append([]string(nil), cfg.ExpectedServiceTypes...),
-		certSyncInterval:  cfg.CertSyncInterval,
-		ingressVersions:   make(map[string]string),
-		aliasVersions:     make(map[string]string),
-		staticPeersFile:   cfg.StaticPeersFile,
-		privateKeyFile:    cfg.PrivateKeyFile,
-		wireguardIP:       cfg.WireguardIP,
-		lastKnownPath:     cfg.LastKnownPath,
-		snapshot:          collectResourceSnapshot,
+		logger:             cfg.Logger,
+		client:             client,
+		quartermasterAddr:  cfg.QuartermasterGRPCAddr,
+		wgManager:          wg,
+		dnsServer:          dnsSrv,
+		interfaceName:      cfg.InterfaceName,
+		nodeType:           cfg.NodeType,
+		nodeName:           cfg.NodeName,
+		clusterID:          cfg.ClusterID,
+		externalIP:         cfg.ExternalIP,
+		internalIP:         cfg.InternalIP,
+		listenPort:         cfg.ListenPort,
+		syncInterval:       cfg.SyncInterval,
+		syncTimeout:        cfg.SyncTimeout,
+		stopChan:           make(chan struct{}),
+		nodeID:             resolveNodeID(cfg),
+		metrics:            cfg.Metrics,
+		registryClient:     registry,
+		ingressClient:      ingress,
+		aliasClient:        alias,
+		navigatorClient:    navigatorClient,
+		certIssueToken:     cfg.CertIssueToken,
+		pkiBasePath:        cfg.PKIBasePath,
+		ingressTLSRoot:     pkgingress.TLSRoot,
+		ingressReaderGroup: pkgingress.ReaderGroup,
+		aliasAppliedPath:   pkgingress.TenantAliasAppliedPath,
+		ingressTrigger:     pkgingress.ReloadTrigger,
+		expectedServices:   append([]string(nil), cfg.ExpectedServiceTypes...),
+		certSyncInterval:   cfg.CertSyncInterval,
+		ingressVersions:    make(map[string]string),
+		aliasVersions:      make(map[string]string),
+		staticPeersFile:    cfg.StaticPeersFile,
+		privateKeyFile:     cfg.PrivateKeyFile,
+		wireguardIP:        cfg.WireguardIP,
+		lastKnownPath:      cfg.LastKnownPath,
+		snapshot:           collectResourceSnapshot,
 	}, nil
 }
 
@@ -441,6 +446,13 @@ func (a *Agent) IsInternalPKIHealthy() bool {
 		return true
 	}
 	return a.certSyncFailures.Load() < certSyncFailureThreshold
+}
+
+// IsTenantAliasIngressApplied distinguishes written files from an inventory
+// accepted by the hosted HTTPS terminator. Pending application does not change
+// mesh liveness or internal PKI readiness.
+func (a *Agent) IsTenantAliasIngressApplied() bool {
+	return !a.aliasIngressRequired.Load() || a.aliasIngressApplied.Load()
 }
 
 // Started reports whether Start finished initializing the WireGuard
@@ -898,7 +910,12 @@ func (a *Agent) sync() {
 		a.logger.WithError(err).Warn("Failed to sync ingress TLS materials")
 	}
 	if err := a.syncTenantAliasCertificates(); err != nil {
-		a.logger.WithError(err).Warn("Failed to sync tenant-alias TLS materials")
+		a.aliasIngressApplied.Store(false)
+		if errors.Is(err, ErrTenantAliasIngressPending) {
+			a.logger.Debug("Waiting for hosted ingress to apply tenant-alias certificate inventory")
+		} else {
+			a.logger.WithError(err).Warn("Failed to sync tenant-alias TLS materials")
+		}
 	}
 	a.logger.Info("Successfully applied wireguard config")
 }

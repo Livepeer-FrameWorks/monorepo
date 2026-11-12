@@ -36,6 +36,23 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("recommended ingest controls", () => {
+  it("does not present absent region metadata as a failed destination", async () => {
+    const initial = result();
+    const resolved: ResolvedIngest = {
+      ...initial,
+      primary: { ...initial.primary, region: null },
+    };
+    vi.mocked(resolveIngestDestination).mockResolvedValue(resolved);
+    render(RecommendedIngest, { streamId, streamKey });
+    await fireEvent.click(screen.getByRole("button", { name: "Resolve destination" }));
+    await screen.findByRole("button", { name: "Refresh destination" });
+    expect(screen.queryByText(/Region unavailable/)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText(/Resolved at/).textContent).toContain("Refresh before connecting");
+    expect(screen.getByText(/Resolved at/).textContent).not.toMatch(
+      /admission|reservation|Policy rollout/
+    );
+  });
   it("resolves only on request, masks credentials and splits RTMP server/key", async () => {
     render(RecommendedIngest, { streamId, streamKey });
     expect(resolveIngestDestination).not.toHaveBeenCalled();

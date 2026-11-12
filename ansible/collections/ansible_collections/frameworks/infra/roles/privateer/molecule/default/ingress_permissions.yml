@@ -1,0 +1,42 @@
+---
+- name: Privateer public ingress custody
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Converge public ingress permissions without requiring a service artifact
+      ansible.builtin.include_role:
+        name: frameworks.infra.privateer
+        tasks_from: ingress_permissions
+
+    - name: Inspect the ingress root
+      ansible.builtin.stat:
+        path: /etc/frameworks/ingress/tls
+      register: privateer_ingress_root
+
+    - name: Verify Privateer can create certificate inventory
+      ansible.builtin.command:
+        argv: [runuser, -u, privateer, --, test, -w, /etc/frameworks/ingress/tls]
+      changed_when: false
+
+    - name: Assert public ingress has separate certificate-reader custody
+      ansible.builtin.assert:
+        that:
+          - privateer_ingress_root.stat.pw_name == 'privateer'
+          - privateer_ingress_root.stat.gr_name == 'frameworks-ingress'
+          - privateer_ingress_root.stat.mode == '2750'
+
+    - name: Preview permission changes before the new reader group exists
+      ansible.builtin.include_role:
+        name: frameworks.infra.privateer
+        tasks_from: ingress_permissions
+        apply:
+          check_mode: true
+      vars:
+        privateer_ingress_reader_group: frameworks-ingress-preview
+
+    - name: Confirm the preview did not create the reader group
+      ansible.builtin.command: getent group frameworks-ingress-preview
+      register: privateer_preview_group
+      failed_when: privateer_preview_group.rc != 2
+      changed_when: false

@@ -42,3 +42,21 @@
       ansible.builtin.assert:
         that: idem is not changed
         fail_msg: "compose_stack role not idempotent"
+
+    - name: Read the automatic Docker ingress reload helper
+      ansible.builtin.slurp:
+        src: /usr/local/libexec/frameworks-nginx-reload
+      register: docker_ingress_helper
+
+    - name: Read the automatic Docker ingress reload service
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/frameworks-nginx-reload.service
+      register: docker_ingress_service
+
+    - name: Assert hosted Docker ingress uses its container and apply receipt
+      ansible.builtin.assert:
+        that:
+          - "'docker exec frameworks-nginx nginx -t' in (docker_ingress_helper.content | b64decode)"
+          - "'docker exec frameworks-nginx nginx -s reload' in (docker_ingress_helper.content | b64decode)"
+          - "'After=docker.service' in (docker_ingress_service.content | b64decode)"
+          - "'/run/frameworks-nginx/tenant-alias.applied' in (docker_ingress_helper.content | b64decode)"

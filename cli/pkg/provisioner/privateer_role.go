@@ -10,6 +10,7 @@ import (
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ingress"
 	infra "github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 )
 
@@ -26,9 +27,11 @@ func privateerRoleVars(ctx context.Context, host inventory.Host, config ServiceC
 	}
 
 	vars := map[string]any{
-		"privateer_artifact_url":      art.URL,
-		"privateer_artifact_checksum": art.Checksum,
-		"privateer_version":           firstNonEmpty(art.Version, config.Version),
+		"privateer_artifact_url":         art.URL,
+		"privateer_ingress_reader_group": ingress.ReaderGroup,
+		"privateer_ingress_tls_root":     ingress.TLSRoot,
+		"privateer_artifact_checksum":    art.Checksum,
+		"privateer_version":              firstNonEmpty(art.Version, config.Version),
 	}
 	if p := config.Port; p > 0 {
 		vars["privateer_port"] = p

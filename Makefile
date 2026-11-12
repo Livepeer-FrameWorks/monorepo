@@ -1932,7 +1932,7 @@ explain-audit-budget:
 	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh bash -c 'cd "$(CURDIR)/scripts/explainaudit" && go run . -out "$(EXPLAIN_AUDIT_OUT)" -write-budget $(EXPLAIN_AUDIT_ARGS)'
 
 test-explainaudit:
-	@cd scripts/explainaudit && go test -count=1 ./...
+	@cd scripts/explainaudit && go test -count=1 $(GO_TEST_FLAGS) ./...
 
 .PHONY: benchmark-yugabyte-catalog-preload
 benchmark-yugabyte-catalog-preload:
@@ -2413,3 +2413,7 @@ test-purser-free-fallback:
 test-sdk-go-snippet:
 	@test -n "$(SDK_SNIPPET_FILE)" || { echo "Set SDK_SNIPPET_FILE"; exit 1; }
 	@cd sdk_go && go run "$(SDK_SNIPPET_FILE)"
+
+.PHONY: test-tenant-alias-playback
+test-tenant-alias-playback:
+	@bash scripts/test-tenant-alias-playback.sh
