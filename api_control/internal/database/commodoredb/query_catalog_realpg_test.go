@@ -17,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	commodoremigrations "frameworks/api_control/internal/datamigrations"
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockerpg"
 	_ "github.com/lib/pq"
@@ -415,7 +414,7 @@ INSERT INTO commodore.vod_assets (
 		t.Fatal(err)
 	}
 	var scanned, changed, skipped int64
-	if err := db.QueryRowContext(ctx, commodoremigrations.ChapterPlaybackAuthorityBatchSQL, 100).Scan(&scanned, &changed, &skipped); err != nil {
+	if err := db.QueryRowContext(ctx, chapterBackfillSQL(t), 100).Scan(&scanned, &changed, &skipped); err != nil {
 		t.Fatal(err)
 	}
 	var requiresAuth bool
@@ -517,7 +516,7 @@ INSERT INTO commodore.vod_assets (
 	// committed snapshot, but SKIP LOCKED must prevent that snapshot from
 	// becoming a stale write while the runtime cascade is in flight.
 	var scanned, changed, skipped int64
-	if err := db.QueryRowContext(ctx, commodoremigrations.ChapterPlaybackAuthorityBatchSQL, 100).
+	if err := db.QueryRowContext(ctx, chapterBackfillSQL(t), 100).
 		Scan(&scanned, &changed, &skipped); err != nil {
 		_ = policyTx.Rollback()
 		t.Fatal(err)
@@ -530,7 +529,7 @@ INSERT INTO commodore.vod_assets (
 		t.Fatal(err)
 	}
 
-	if err := db.QueryRowContext(ctx, commodoremigrations.ChapterPlaybackAuthorityBatchSQL, 100).
+	if err := db.QueryRowContext(ctx, chapterBackfillSQL(t), 100).
 		Scan(&scanned, &changed, &skipped); err != nil {
 		t.Fatal(err)
 	}
@@ -588,8 +587,8 @@ func TestGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {
 func prepareCommodoreQueryCatalog(t *testing.T, db *sql.DB) {
 	t.Helper()
 	queries := commodoreGeneratedQueries(t)
-	if len(queries) != 486 {
-		t.Fatalf("found %d generated Commodore queries, want 486", len(queries))
+	if len(queries) != 490 {
+		t.Fatalf("found %d generated Commodore queries, want 490", len(queries))
 	}
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)
@@ -982,4 +981,46 @@ func startCommodoreQueryCatalogRealYugabyte(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	return db
+}
+
+func chapterBackfillSQL(t *testing.T) string {
+	t.Helper()
+	return migrationSQLConstant(t, "chapter_playback_authority.go", "ChapterPlaybackAuthorityBatchSQL")
+}
+
+func migrationSQLConstant(t *testing.T, source, constant string) string {
+	t.Helper()
+	path := filepath.Join("..", "..", "datamigrations", source)
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, declaration := range file.Decls {
+		general, ok := declaration.(*ast.GenDecl)
+		if !ok || general.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range general.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range value.Names {
+				if name.Name != constant || i >= len(value.Values) {
+					continue
+				}
+				literal, ok := value.Values[i].(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					t.Fatalf("%s is not a string literal", constant)
+				}
+				query, decodeErr := strconv.Unquote(literal.Value)
+				if decodeErr != nil {
+					t.Fatal(decodeErr)
+				}
+				return query
+			}
+		}
+	}
+	t.Fatalf("%s constant missing", constant)
+	return ""
 }

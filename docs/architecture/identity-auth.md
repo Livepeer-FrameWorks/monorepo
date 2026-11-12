@@ -44,6 +44,35 @@ The refresh-token foreign key includes the complete owner. Database time bounds
 new deadlines, including when the application clock runs ahead or a transaction
 waits for a lock. Access-token expiry never extends past the session deadline.
 
+Issuance samples at most 120 live rows. At the limit it rolls back the grant
+transaction, then commits owner-locked cleanup steps before replaying the
+credential check and issuance. Each step reads at most 20 unrevoked LRU
+candidates through the owner index. It marks already-expired candidates terminal
+at their original deadline, using the same database clock as the live count,
+without emitting active-session revocations. This progress survives cancellation
+and prevents old expired history from turning a bounded eviction into a scan.
+Live candidates receive named revocation and mixed-version refresh-family cleanup,
+without a user-wide cutoff. A transaction changes at most 20 candidate rows.
+Cancellation preserves the unconsumed grant; retry continues from committed
+cleanup. A legacy refresh that creates a session uses the same cap and cleanup
+budget. The credential being adopted is excluded from eviction, and its original
+sign-in time and absolute expiry remain intact.
+
+After attaching legacy refresh families, the backfill walks users through an
+explicit range index on their IDs and normalizes caps with the same cleanup.
+It checkpoints only completed owners; new unassigned heads reset that pass.
+The shared named revocation and refresh-family finalizer serves RPCs and
+migration work, with the migration recorded as a service actor. Verification
+checks the cap using bounded owner reads, and dry-run reports a bounded
+read-only preview instead of treating “no unassigned heads” as completion.
+
+Device-code grants persist bounded device label, client/platform version, source IP
+and user agent when the native client starts the request. Authenticated lookup
+returns that original metadata and its creation/expiry times for consent.
+Redemption inherits the stored values; later polls and browser approval do not
+replace them. Older pending grants without metadata keep generic client labels
+and unknown addresses rather than attributing the polling request.
+
 Bridge captures request IP using its trusted-proxy configuration. Client labels,
 versions and user agents are bounded display hints and grant no authority.
 Binary gRPC metadata preserves Unicode without using gRPC's own user-agent as

@@ -327,8 +327,8 @@ func TestLookupDeviceAuthorization_ReturnsPendingClientMetadata(t *testing.T) {
 	mock.ExpectQuery("FROM commodore.auth_device_codes").
 		WithArgs("ABCD-EFGH").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "client_id", "scope", "status", "expires_at",
-		}).AddRow("device-row-1", "cli", "account", "pending", expiresAt))
+			"id", "client_id", "scope", "status", "expires_at", "device_label", "client_version", "request_ip", "user_agent", "created_at",
+		}).AddRow("device-row-1", "cli", "account", "pending", expiresAt, "Original workstation", "cli linux/amd64", "203.0.113.14", "original-agent", expiresAt.Add(-5*time.Minute)))
 	mock.ExpectCommit()
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}

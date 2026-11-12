@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	commodoremigrations "frameworks/api_control/internal/datamigrations"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/google/uuid"
 )
@@ -252,7 +251,7 @@ func testAuthSessionBackfill(t *testing.T, db *sql.DB) {
 	}
 	for range 2 {
 		var scanned, changed int64
-		if err := db.QueryRowContext(ctx, commodoremigrations.AuthSessionsBatchSQL, tenantID, 100).Scan(&scanned, &changed); err != nil {
+		if err := db.QueryRowContext(ctx, migrationSQLConstant(t, "auth_sessions.go", "AuthSessionsBatchSQL"), tenantID, 100).Scan(&scanned, &changed); err != nil {
 			t.Fatalf("backfill: %v", err)
 		}
 	}
@@ -275,7 +274,7 @@ func testAuthSessionBackfill(t *testing.T, db *sql.DB) {
 		t.Fatal(err)
 	}
 	var scanned, changed int64
-	if err := db.QueryRowContext(ctx, commodoremigrations.AuthSessionsBatchSQL, tenantID, 100).Scan(&scanned, &changed); err != nil {
+	if err := db.QueryRowContext(ctx, migrationSQLConstant(t, "auth_sessions.go", "AuthSessionsBatchSQL"), tenantID, 100).Scan(&scanned, &changed); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM commodore.refresh_tokens

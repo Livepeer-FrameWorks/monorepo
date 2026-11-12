@@ -11,7 +11,9 @@ import (
 	"unicode"
 
 	"frameworks/api_control/internal/database/commodoredb"
+	"frameworks/api_control/internal/sessionstore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
 	"google.golang.org/grpc/codes"
@@ -20,7 +22,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const maxLiveAuthSessions = 100
+const maxLiveAuthSessions = sessionstore.MaxLive
 
 type SessionContext struct {
 	AuthMethod, ClientID, DeviceLabel, ClientVersion, IP, UserAgent string
@@ -50,11 +52,15 @@ func sessionContextFromRequest(ctx context.Context, method, client string) Sessi
 		}
 		return values[0]
 	}
+	return sessionContextFromClientMetadata(method, client, ctxkeys.AuthClientMetadata{IP: first("x-client-ip"), DeviceLabel: first("x-device-label-bin"), UserAgent: first("x-client-user-agent-bin"), Version: first("x-client-version-bin")})
+}
+
+func sessionContextFromClientMetadata(method, client string, info ctxkeys.AuthClientMetadata) SessionContext {
 	ip := ""
-	if parsed := net.ParseIP(first("x-client-ip")); parsed != nil {
+	if parsed := net.ParseIP(info.IP); parsed != nil {
 		ip = parsed.String()
 	}
-	label := boundedSessionText(first("x-device-label-bin"), 200)
+	label := boundedSessionText(info.DeviceLabel, 200)
 	if label == "" {
 		switch client {
 		case "cli":
@@ -62,12 +68,12 @@ func sessionContextFromRequest(ctx context.Context, method, client string) Sessi
 		case "tray-mac":
 			label = "FrameWorks for Mac"
 		default:
-			label = browserSessionLabel(first("x-client-user-agent-bin"))
+			label = browserSessionLabel(info.UserAgent)
 		}
 	}
 	return SessionContext{AuthMethod: method, ClientID: client, DeviceLabel: label,
-		ClientVersion: boundedSessionText(first("x-client-version-bin"), 100), IP: ip,
-		UserAgent: boundedSessionText(first("x-client-user-agent-bin"), 1024)}
+		ClientVersion: boundedSessionText(info.Version, 100), IP: ip,
+		UserAgent: boundedSessionText(info.UserAgent, 1024)}
 }
 
 func sessionIssueError(err error) error {
@@ -132,26 +138,14 @@ func (s *CommodoreServer) issueUserSessionTx(ctx context.Context, tx *sql.Tx, us
 			return nil, status.Error(codes.Unauthenticated, "credentials changed; sign in again")
 		}
 	}
-	count, err := queries.CountAuthSessions(ctx, commodoredb.CountAuthSessionsParams{TenantID: tenantID, UserID: userID})
+	count, err := queries.CountAuthSessionsForIssuance(ctx, commodoredb.CountAuthSessionsForIssuanceParams{TenantID: tenantID, UserID: userID, RowLimit: sessionstore.CountLimit})
 	if err != nil {
 		return nil, err
 	}
-	if count >= maxLiveAuthSessions {
-		rows, queryErr := queries.ListOldestAuthSessions(ctx, commodoredb.ListOldestAuthSessionsParams{TenantID: tenantID, UserID: userID, Limit: count - maxLiveAuthSessions + 1})
-		if queryErr != nil {
-			return nil, queryErr
-		}
-		for _, row := range rows {
-			revoked, revokeErr := queries.RevokeAuthSession(ctx, commodoredb.RevokeAuthSessionParams{
-				TenantID: tenantID, UserID: userID, ID: row.ID, RevokeReason: sql.NullString{String: "expired", Valid: true}})
-			if revokeErr != nil {
-				return nil, revokeErr
-			}
-			if revokeErr = s.finishAuthSessionRevocationTx(ctx, tx, revoked, internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_LOGOUT); revokeErr != nil {
-				return nil, revokeErr
-			}
-		}
+	if count.LiveCount >= maxLiveAuthSessions {
+		return nil, &sessionstore.Overflow{TenantID: tenantID, UserID: userID}
 	}
+
 	now := time.Now()
 	lifetime := 90 * 24 * time.Hour
 	if info.ClientID == "cli" || info.ClientID == "tray-mac" {
@@ -221,12 +215,15 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.Ref
 		if token.UserID != owner.UserID || token.TenantID != owner.TenantID {
 			return status.Error(codes.Unauthenticated, "invalid refresh owner")
 		}
+		createdSession := false
 		sid, queryErr := queries.GetRefreshTokenSession(ctx, commodoredb.GetRefreshTokenSessionParams{TenantID: owner.TenantID, UserID: owner.UserID, ID: token.ID})
 		if queryErr != nil {
 			return queryErr
 		}
 		if !sid.Valid {
-			sid, queryErr = queries.AdoptAuthSessionRefreshFamily(ctx, commodoredb.AdoptAuthSessionRefreshFamilyParams{TenantID: owner.TenantID, UserID: owner.UserID, ID: token.ID})
+			adopted, adoptErr := queries.AdoptAuthSessionRefreshFamily(ctx, commodoredb.AdoptAuthSessionRefreshFamilyParams{TenantID: owner.TenantID, UserID: owner.UserID, ID: token.ID})
+			sid, queryErr = adopted.SessionID, adoptErr
+			createdSession = adopted.Created
 			if errors.Is(queryErr, sql.ErrNoRows) || queryErr == nil && !sid.Valid {
 				return status.Error(codes.Unauthenticated, "invalid refresh family")
 			}
@@ -288,6 +285,11 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.Ref
 		}
 		if queryErr != nil {
 			return queryErr
+		}
+		if createdSession {
+			if capErr := s.enforceAdoptedSessionCapTx(ctx, tx, row); capErr != nil {
+				return capErr
+			}
 		}
 		if row.DeviceKey != "" {
 			if queryErr = queries.RememberSessionDevice(ctx, commodoredb.RememberSessionDeviceParams{TenantID: row.TenantID, UserID: row.UserID, DeviceKey: row.DeviceKey}); queryErr != nil {

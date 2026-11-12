@@ -42,7 +42,7 @@ WITH RECURSIVE family AS (
            EXISTS (SELECT 1 FROM commodore.auth_sessions s WHERE s.tenant_id = $1 AND s.user_id = $2 AND s.id = o.session_id))
     RETURNING r.session_id
 )
-SELECT session_id FROM attached LIMIT 1
+SELECT session_id, EXISTS(SELECT 1 FROM inserted) AS created FROM attached LIMIT 1
 `
 
 type AdoptAuthSessionRefreshFamilyParams struct {
@@ -51,11 +51,16 @@ type AdoptAuthSessionRefreshFamilyParams struct {
 	ID       string `db:"id" json:"id"`
 }
 
-func (q *Queries) AdoptAuthSessionRefreshFamily(ctx context.Context, arg AdoptAuthSessionRefreshFamilyParams) (sql.NullString, error) {
+type AdoptAuthSessionRefreshFamilyRow struct {
+	SessionID sql.NullString `db:"session_id" json:"session_id"`
+	Created   bool           `db:"created" json:"created"`
+}
+
+func (q *Queries) AdoptAuthSessionRefreshFamily(ctx context.Context, arg AdoptAuthSessionRefreshFamilyParams) (AdoptAuthSessionRefreshFamilyRow, error) {
 	row := q.db.QueryRowContext(ctx, adoptAuthSessionRefreshFamily, arg.TenantID, arg.UserID, arg.ID)
-	var session_id sql.NullString
-	err := row.Scan(&session_id)
-	return session_id, err
+	var i AdoptAuthSessionRefreshFamilyRow
+	err := row.Scan(&i.SessionID, &i.Created)
+	return i, err
 }
 
 const changeSessionPassword = `-- name: ChangeSessionPassword :exec
@@ -91,6 +96,33 @@ func (q *Queries) CountAuthSessions(ctx context.Context, arg CountAuthSessionsPa
 	var column_1 int32
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const countAuthSessionsForIssuance = `-- name: CountAuthSessionsForIssuance :one
+SELECT COUNT(*)::INTEGER AS live_count, NOW()::timestamptz AS checked_at FROM (
+    SELECT 1 FROM commodore.auth_sessions
+    WHERE tenant_id = $1 AND user_id = $2 AND revoked_at IS NULL
+      AND idle_expires_at > NOW() AND absolute_expires_at > NOW()
+    LIMIT $3
+) AS live_sample
+`
+
+type CountAuthSessionsForIssuanceParams struct {
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	UserID   string `db:"user_id" json:"user_id"`
+	RowLimit int32  `db:"row_limit" json:"row_limit"`
+}
+
+type CountAuthSessionsForIssuanceRow struct {
+	LiveCount int32     `db:"live_count" json:"live_count"`
+	CheckedAt time.Time `db:"checked_at" json:"checked_at"`
+}
+
+func (q *Queries) CountAuthSessionsForIssuance(ctx context.Context, arg CountAuthSessionsForIssuanceParams) (CountAuthSessionsForIssuanceRow, error) {
+	row := q.db.QueryRowContext(ctx, countAuthSessionsForIssuance, arg.TenantID, arg.UserID, arg.RowLimit)
+	var i CountAuthSessionsForIssuanceRow
+	err := row.Scan(&i.LiveCount, &i.CheckedAt)
+	return i, err
 }
 
 const deleteOtherLegacyRefreshTokens = `-- name: DeleteOtherLegacyRefreshTokens :exec
@@ -432,7 +464,6 @@ func (q *Queries) ListAuthSessions(ctx context.Context, arg ListAuthSessionsPara
 const listOldestAuthSessions = `-- name: ListOldestAuthSessions :many
 SELECT id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason, device_key FROM commodore.auth_sessions
 WHERE tenant_id = $1 AND user_id = $2 AND revoked_at IS NULL
-  AND idle_expires_at > NOW() AND absolute_expires_at > NOW()
 ORDER BY last_seen_at, created_at, id LIMIT $3 FOR UPDATE
 `
 
@@ -444,6 +475,66 @@ type ListOldestAuthSessionsParams struct {
 
 func (q *Queries) ListOldestAuthSessions(ctx context.Context, arg ListOldestAuthSessionsParams) ([]CommodoreAuthSession, error) {
 	rows, err := q.db.QueryContext(ctx, listOldestAuthSessions, arg.TenantID, arg.UserID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CommodoreAuthSession{}
+	for rows.Next() {
+		var i CommodoreAuthSession
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.UserID,
+			&i.AuthMethod,
+			&i.ClientID,
+			&i.DeviceLabel,
+			&i.ClientVersion,
+			&i.CreatedIp,
+			&i.LastIp,
+			&i.UserAgent,
+			&i.CreatedAt,
+			&i.LastSeenAt,
+			&i.IdleExpiresAt,
+			&i.AbsoluteExpiresAt,
+			&i.RevokedAt,
+			&i.RevokeReason,
+			&i.DeviceKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOldestOtherAuthSessions = `-- name: ListOldestOtherAuthSessions :many
+SELECT id, tenant_id, user_id, auth_method, client_id, device_label, client_version, created_ip, last_ip, user_agent, created_at, last_seen_at, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason, device_key FROM commodore.auth_sessions
+WHERE tenant_id = $1 AND user_id = $2 AND id <> $3::uuid
+  AND revoked_at IS NULL
+ORDER BY last_seen_at, created_at, id LIMIT $4 FOR UPDATE
+`
+
+type ListOldestOtherAuthSessionsParams struct {
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	UserID             string `db:"user_id" json:"user_id"`
+	ProtectedSessionID string `db:"protected_session_id" json:"protected_session_id"`
+	RowLimit           int32  `db:"row_limit" json:"row_limit"`
+}
+
+func (q *Queries) ListOldestOtherAuthSessions(ctx context.Context, arg ListOldestOtherAuthSessionsParams) ([]CommodoreAuthSession, error) {
+	rows, err := q.db.QueryContext(ctx, listOldestOtherAuthSessions,
+		arg.TenantID,
+		arg.UserID,
+		arg.ProtectedSessionID,
+		arg.RowLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -601,6 +692,33 @@ func (q *Queries) LockUserRefreshTokensForRevocation(ctx context.Context, arg Lo
 		return nil, err
 	}
 	return items, nil
+}
+
+const markAuthSessionExpired = `-- name: MarkAuthSessionExpired :execrows
+UPDATE commodore.auth_sessions
+SET revoked_at = LEAST(idle_expires_at, absolute_expires_at), revoke_reason = 'expired'
+WHERE tenant_id = $1 AND user_id = $2 AND id = $3 AND revoked_at IS NULL
+  AND LEAST(idle_expires_at, absolute_expires_at) <= $4::timestamptz
+`
+
+type MarkAuthSessionExpiredParams struct {
+	TenantID  string    `db:"tenant_id" json:"tenant_id"`
+	UserID    string    `db:"user_id" json:"user_id"`
+	ID        string    `db:"id" json:"id"`
+	CheckedAt time.Time `db:"checked_at" json:"checked_at"`
+}
+
+func (q *Queries) MarkAuthSessionExpired(ctx context.Context, arg MarkAuthSessionExpiredParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markAuthSessionExpired,
+		arg.TenantID,
+		arg.UserID,
+		arg.ID,
+		arg.CheckedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const renameAuthSession = `-- name: RenameAuthSession :execrows

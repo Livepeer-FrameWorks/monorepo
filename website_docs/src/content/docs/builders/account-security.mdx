@@ -1,0 +1,105 @@
+---
+title: "Account Security"
+description: "Manage your sign-ins, passwords, linked wallets and security activity."
+sidebar:
+  order: 16
+---
+
+## Signed-in sessions
+
+Use `frameworks auth sessions list` to see your browser, CLI and macOS tray
+sign-ins. The table shows the client, name, last refresh, expiry and current
+session. Add `--output json` for the sign-in method, creation time and, when
+available, approximate location and masked IP address. Last active records a
+credential refresh; it is not a record of every request.
+
+`frameworks auth sessions revoke SESSION_ID` ends that session and its refresh
+credentials. `frameworks auth sessions revoke-others` keeps the CLI session you
+are using and ends your other interactive sign-ins. Signing out from the web
+app's top bar ends only the current browser session. CLI and tray credentials
+are stored separately, so signing out of one does not sign out the other.
+
+The interactive [GraphQL API](/builders/api-reference) also provides
+`authSessionsConnection`, `renameAuthSession`, `revokeAuthSession` and
+`revokeOtherAuthSessions`. These controls are personal. Tenant owners and
+administrators do not get access to members' sessions through them.
+
+## Session lifetimes
+
+| Credential                        | Lifetime                                    |
+| --------------------------------- | ------------------------------------------- |
+| Access token                      | Up to 15 minutes, bounded by session expiry |
+| Refresh inactivity limit          | 30 days since the last successful refresh   |
+| Browser session maximum           | 90 days from the original sign-in           |
+| CLI or macOS tray session maximum | 180 days from the original sign-in          |
+
+Supported clients refresh access credentials automatically. Refreshing retains
+the original sign-in time and cannot extend the maximum age. After the
+inactivity limit or maximum age, sign in again. A revoked session cannot be
+restored by refreshing an old token.
+
+A wallet proof in request headers can return a short-lived MCP bearer for later
+requests. It lasts at most 15 minutes, cannot be refreshed, and does not create
+an entry in the session list. Explicit wallet login creates a refreshable
+interactive session. API tokens are managed separately under
+**Developer → Credentials**.
+
+## Sign in from the CLI or tray
+
+Run `frameworks login` and approve the displayed device code in your browser.
+Use `--no-browser` to open the approval URL yourself. The macOS tray uses a
+browser approval with a local callback. Only approve a sign-in you started;
+check the client and scope before approving.
+
+The CLI keeps its login bound to the Bridge used during sign-in. It renews
+before access expires and retries a rejected access token once after renewal.
+A token passed through `FW_USER_TOKEN`, including a tray token handed to a child
+CLI process, remains owned by its caller and is not refreshed or overwritten.
+
+```bash
+frameworks auth status
+frameworks auth sessions list
+frameworks auth sessions revoke SESSION_ID
+frameworks auth sessions revoke-others
+frameworks logout
+```
+
+`auth status` shows the signed-in identity and session. Session listing supports
+`--first` and `--after` for pagination. `logout` ends the CLI's server session
+before clearing its local credentials. If the server cannot confirm sign-out,
+credentials remain available so the operation can be retried.
+
+## Password and sign-in methods
+
+The interactive GraphQL `changePassword` mutation requires your current
+password and a new password. A successful change keeps this session and ends
+the others. A password reset ends every session, including the one used to
+request it.
+
+Wallet-only accounts can link an email and set a password through **Settings**.
+Linking an email preserves the current session and ends the other sign-ins.
+Verify the email before using password sign-in. Linked wallets can also be
+managed in Settings.
+
+## Security alerts and activity
+
+The interactive GraphQL `securityActivityConnection` query covers your own
+security events from the last 90 days. It includes sign-in attempts, ended
+sessions, password changes
+and resets, and wallet linking or unlinking. Events can take a short time to
+appear while the audit pipeline catches up.
+
+Security emails are always enabled. An unfamiliar device triggers an email
+when its client and original device label have not been used in 90 days.
+Renaming a session does not change that identity. Detected refresh-token theft
+also triggers an email and ends the affected session; other sessions stay
+signed in. A verified linked email address is needed for delivery.
+
+## Lost device or unfamiliar sign-in
+
+From a device you trust, run `frameworks auth sessions list` and revoke the
+missing or unfamiliar session. Use `frameworks auth sessions revoke-others` if
+you cannot identify it. Change your password if someone may know it. If you
+cannot sign in, use
+password reset, which ends every session. If API tokens were stored on the
+missing device, revoke those separately under **Developer → Credentials**.

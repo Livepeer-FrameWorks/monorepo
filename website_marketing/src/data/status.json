@@ -59,6 +59,19 @@
     ]
   },
   "features": {
+    "account-security": {
+      "id": "account-security",
+      "title": "Account security",
+      "status": "partial",
+      "availability": "Expanding",
+      "maturity": null,
+      "horizon": "now",
+      "tier": "Shipping today",
+      "tag": "Shipping",
+      "note": "Session controls are available through the CLI and API. The dashboard security page is still being built.",
+      "roadmap": null,
+      "showcase": null
+    },
     "adjacent-infra-services": {
       "id": "adjacent-infra-services",
       "title": "Adjacent infrastructure services",
@@ -1344,7 +1357,7 @@
       "horizon": "now",
       "tier": "Shipping today",
       "tag": "Shipping",
-      "note": "Teams, notification preferences, custom domains, and account security controls are not there yet.",
+      "note": "Teams, notification preferences and custom domains are not there yet. Personal session controls are tracked under account security.",
       "roadmap": null,
       "showcase": null
     },
