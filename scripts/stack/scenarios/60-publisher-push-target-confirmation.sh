@@ -14,8 +14,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-source=$(create_stream "targets59-source-$(date +%s)" false)
-destination=$(create_stream "targets59-destination-$(date +%s)" false)
+source=$(create_stream "targets60-source-$(date +%s)" false)
+destination=$(create_stream "targets60-destination-$(date +%s)" false)
 source_id=$(echo "$source" | jq -r '.id // empty')
 destination_id=$(echo "$destination" | jq -r '.id // empty')
 source_uuid=$(echo "$source" | jq -r '.streamId // empty')
@@ -37,7 +37,7 @@ target_authority_version() {
 before=$(target_authority_version)
 [ -n "$before" ] || { fail "source authority version is missing"; finish; }
 target=$(gql 'mutation($id:ID!,$input:CreatePushTargetInput!){createPushTarget(streamId:$id,input:$input){id}}' \
-  "$(jq -cn --arg id "$source_id" --arg uri "rtmp://edge:1935/live/$destination_key" '{id:$id,input:{name:"stack59",platform:"custom",targetUri:$uri,videoChoice:"SOURCE_VIDEO"}}')")
+  "$(jq -cn --arg id "$source_id" --arg uri "rtmp://edge:1935/live/$destination_key" '{id:$id,input:{name:"stack60",platform:"custom",targetUri:$uri,videoChoice:"SOURCE_VIDEO"}}')")
 check "create cross-cell restream target" json_has "$target" '.data.createPushTarget.id != null'
 target_authority_ready() {
   local current
@@ -63,7 +63,7 @@ eventually 60 "destination receives real cross-cell restream media" media_at "${
 decode_target() {
   local location
   location=$(location_at "${a_bases[0]}" "$destination_playback")
-  edge_a_location "$location" && timeout 15 ffmpeg -hide_banner -loglevel error -i "$location" -frames:v 1 -f null - >"$STACK_STATE_DIR/target59-decode.log" 2>&1
+  edge_a_location "$location" && timeout 15 ffmpeg -hide_banner -loglevel error -i "$location" -frames:v 1 -f null - >"$STACK_STATE_DIR/target60-decode.log" 2>&1
 }
 check "cross-cell target decodes a video frame" decode_target
 check "exactly one source effect exists" [ "$(pg "$FOGHORN_B_DB" "SELECT count(*) FROM foghorn.ingest_admission_effects WHERE tenant_id='$STACK_TENANT_ID' AND source_generation='$generation'")" = 1 ]
