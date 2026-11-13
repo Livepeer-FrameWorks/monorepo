@@ -47,6 +47,7 @@ func TestHandleStreamEnd_GenuinelyOfflineStillFinalizes(t *testing.T) {
 	projectSourceForTest(t, reg, internal, "node-A", 100, "uuid-gone", "gen-gone", 1)
 
 	p := minimalProcessorForStreamEnd(t)
+	p.streamCache.Set(streamContextCacheKey("live+"+internal), streamContext{TenantID: tenant}, time.Minute)
 	if _, _, err := p.handleStreamEnd(&ipcpb.MistTrigger{
 		NodeId:         "node-A",
 		TenantId:       &tenant,
@@ -188,6 +189,7 @@ func TestHandleStreamEnd_FlipsSourceInactiveOnMatchingNode(t *testing.T) {
 	tenant := "tenant-stream-end"
 
 	p := minimalProcessorForStreamEnd(t)
+	p.streamCache.Set(streamContextCacheKey("live+"+internal), streamContext{TenantID: tenant}, time.Minute)
 	_, _, err := p.handleStreamEnd(&ipcpb.MistTrigger{
 		NodeId:   "node-A",
 		TenantId: &tenant,
@@ -222,6 +224,7 @@ func TestHandleStreamEnd_StaleNodeDoesNotClearLiveOwner(t *testing.T) {
 	projectSourceForTest(t, reg, internal, "node-A", 0, "", "gen-seed", 1)
 
 	p := minimalProcessorForStreamEnd(t)
+	p.streamCache.Set(streamContextCacheKey("live+"+internal), streamContext{TenantID: "tenant-stream-end"}, time.Minute)
 	// STREAM_END from a DIFFERENT node than the recorded owner.
 	_, _, err := p.handleStreamEnd(&ipcpb.MistTrigger{
 		NodeId: "node-B",
@@ -493,6 +496,7 @@ func TestHandleStreamEnd_StreamWideEffectsAreOwnerGated(t *testing.T) {
 	t.Cleanup(func() { untrackPushTargets(streamName) })
 
 	p := minimalProcessorForStreamEnd(t)
+	p.streamCache.Set(streamContextCacheKey("live+"+internal), streamContext{TenantID: tenantID}, time.Minute)
 	endTrigger := func(nodeID string) *ipcpb.MistTrigger {
 		tenant := tenantID
 		return &ipcpb.MistTrigger{
