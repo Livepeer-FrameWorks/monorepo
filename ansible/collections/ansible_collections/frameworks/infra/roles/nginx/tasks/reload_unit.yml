@@ -16,8 +16,9 @@
     path: "{{ nginx_ingress_reload_trigger | dirname }}"
     state: directory
     owner: privateer
-    group: "{{ nginx_ingress_reader_group if nginx_tenant_alias_playback.enabled | default(false) else 'privateer' }}"
+    group: "{{ nginx_ingress_reader_group }}"
     mode: "2750"
+  register: nginx_ingress_parent_custody
   when: not ansible_check_mode
 
 - name: Pre-create ingress reload trigger file

@@ -132,3 +132,27 @@ func TestPlacementAPIIngestGraphFieldPreservesProtocol(t *testing.T) {
 		})
 	}
 }
+
+func TestIngestRegionSurvivesGraphQLResponse(t *testing.T) {
+	region := "North America"
+	fake := &clientstest.FakeCommodore{ResolveIngestEndpointFn: func(context.Context, string, string, sharedpb.IngestProtocol) (*sharedpb.IngestEndpointResponse, error) {
+		return &sharedpb.IngestEndpointResponse{Primary: &sharedpb.IngestEndpoint{NodeId: "edge-us-1", ClusterId: "media-us-1", Region: &region}}, nil
+	}}
+	server := newRealPathTestServer(clientstest.Clients(clientstest.WithCommodore(fake)))
+	response, code := tryExecuteRealPath(server, `query { resolveIngestEndpoint(streamKey:"test-key",protocol:RTMP) { primary { nodeId clusterId region } } }`, nil)
+	if code != 200 || len(response.Errors) != 0 {
+		t.Fatalf("ingest response failed: %s", formatGraphQLErrors(response.Errors))
+	}
+	var data struct {
+		ResolveIngestEndpoint struct {
+			Primary struct{ NodeID, ClusterID, Region string }
+		}
+	}
+	if err := json.Unmarshal(response.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	got := data.ResolveIngestEndpoint.Primary
+	if got.Region != region || got.NodeID != "edge-us-1" || got.ClusterID != "media-us-1" {
+		t.Fatalf("GraphQL lost routing region: %s", response.Data)
+	}
+}

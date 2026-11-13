@@ -2191,6 +2191,7 @@ const (
 	PrepaidService_ChangeBillingTier_FullMethodName              = "/purser.PrepaidService/ChangeBillingTier"
 	PrepaidService_AdminAssignTier_FullMethodName                = "/purser.PrepaidService/AdminAssignTier"
 	PrepaidService_AdminListCheckoutRecovery_FullMethodName      = "/purser.PrepaidService/AdminListCheckoutRecovery"
+	PrepaidService_AdminRetryProviderWebhook_FullMethodName      = "/purser.PrepaidService/AdminRetryProviderWebhook"
 	PrepaidService_AdminRecoverCheckout_FullMethodName           = "/purser.PrepaidService/AdminRecoverCheckout"
 	PrepaidService_AdminRetainDeliveredCheckout_FullMethodName   = "/purser.PrepaidService/AdminRetainDeliveredCheckout"
 	PrepaidService_AdminRecoverTierUpgrade_FullMethodName        = "/purser.PrepaidService/AdminRecoverTierUpgrade"
@@ -2263,6 +2264,8 @@ type PrepaidServiceClient interface {
 	AdminAssignTier(ctx context.Context, in *AdminAssignTierRequest, opts ...grpc.CallOption) (*AdminAssignTierResponse, error)
 	// Lists outstanding provider work without exposing raw webhook payloads. Platform operators only.
 	AdminListCheckoutRecovery(ctx context.Context, in *AdminListCheckoutRecoveryRequest, opts ...grpc.CallOption) (*AdminListCheckoutRecoveryResponse, error)
+	// Retries one reviewed blocked provider callback; never edits payment evidence.
+	AdminRetryProviderWebhook(ctx context.Context, in *AdminRetryProviderWebhookRequest, opts ...grpc.CallOption) (*AdminRetryProviderWebhookResponse, error)
 	// Previews one tenant checkout; confirmed requests durably reconcile it. Platform operators only.
 	AdminRecoverCheckout(ctx context.Context, in *AdminRecoverCheckoutRequest, opts ...grpc.CallOption) (*AdminRecoverCheckoutResponse, error)
 	// Attests delivered historical Mollie service without refund. A separate RPC
@@ -2486,6 +2489,16 @@ func (c *prepaidServiceClient) AdminListCheckoutRecovery(ctx context.Context, in
 	return out, nil
 }
 
+func (c *prepaidServiceClient) AdminRetryProviderWebhook(ctx context.Context, in *AdminRetryProviderWebhookRequest, opts ...grpc.CallOption) (*AdminRetryProviderWebhookResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminRetryProviderWebhookResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_AdminRetryProviderWebhook_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *prepaidServiceClient) AdminRecoverCheckout(ctx context.Context, in *AdminRecoverCheckoutRequest, opts ...grpc.CallOption) (*AdminRecoverCheckoutResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AdminRecoverCheckoutResponse)
@@ -2664,6 +2677,8 @@ type PrepaidServiceServer interface {
 	AdminAssignTier(context.Context, *AdminAssignTierRequest) (*AdminAssignTierResponse, error)
 	// Lists outstanding provider work without exposing raw webhook payloads. Platform operators only.
 	AdminListCheckoutRecovery(context.Context, *AdminListCheckoutRecoveryRequest) (*AdminListCheckoutRecoveryResponse, error)
+	// Retries one reviewed blocked provider callback; never edits payment evidence.
+	AdminRetryProviderWebhook(context.Context, *AdminRetryProviderWebhookRequest) (*AdminRetryProviderWebhookResponse, error)
 	// Previews one tenant checkout; confirmed requests durably reconcile it. Platform operators only.
 	AdminRecoverCheckout(context.Context, *AdminRecoverCheckoutRequest) (*AdminRecoverCheckoutResponse, error)
 	// Attests delivered historical Mollie service without refund. A separate RPC
@@ -2760,6 +2775,9 @@ func (UnimplementedPrepaidServiceServer) AdminAssignTier(context.Context, *Admin
 }
 func (UnimplementedPrepaidServiceServer) AdminListCheckoutRecovery(context.Context, *AdminListCheckoutRecoveryRequest) (*AdminListCheckoutRecoveryResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminListCheckoutRecovery not implemented")
+}
+func (UnimplementedPrepaidServiceServer) AdminRetryProviderWebhook(context.Context, *AdminRetryProviderWebhookRequest) (*AdminRetryProviderWebhookResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminRetryProviderWebhook not implemented")
 }
 func (UnimplementedPrepaidServiceServer) AdminRecoverCheckout(context.Context, *AdminRecoverCheckoutRequest) (*AdminRecoverCheckoutResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminRecoverCheckout not implemented")
@@ -3142,6 +3160,24 @@ func _PrepaidService_AdminListCheckoutRecovery_Handler(srv interface{}, ctx cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PrepaidService_AdminRetryProviderWebhook_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminRetryProviderWebhookRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).AdminRetryProviderWebhook(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_AdminRetryProviderWebhook_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).AdminRetryProviderWebhook(ctx, req.(*AdminRetryProviderWebhookRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PrepaidService_AdminRecoverCheckout_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AdminRecoverCheckoutRequest)
 	if err := dec(in); err != nil {
@@ -3436,6 +3472,10 @@ var PrepaidService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AdminListCheckoutRecovery",
 			Handler:    _PrepaidService_AdminListCheckoutRecovery_Handler,
+		},
+		{
+			MethodName: "AdminRetryProviderWebhook",
+			Handler:    _PrepaidService_AdminRetryProviderWebhook_Handler,
 		},
 		{
 			MethodName: "AdminRecoverCheckout",

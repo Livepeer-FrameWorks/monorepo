@@ -28,10 +28,10 @@
         port: "{{ privateer_port }}"
         timeout: 30
 
-# Runs after the artifact checks because it swaps in a stand-in unit; it needs
-# no Privateer artifact, so it also runs when converge short-circuited.
-- name: Privateer PKI repair gate
-  ansible.builtin.import_playbook: pki_repair.yml
-
 - name: Privateer public ingress permission contract
   ansible.builtin.import_playbook: ingress_permissions.yml
+
+# The PKI fixture replaces and removes the unit. Service continuity assertions
+# must run against the installed artifact before this fixture takes custody.
+- name: Privateer PKI repair gate
+  ansible.builtin.import_playbook: pki_repair.yml

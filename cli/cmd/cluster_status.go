@@ -92,6 +92,10 @@ func runClusterStatus(cmd *cobra.Command, rc *resolvedCluster, jsonOutput bool) 
 type statusDetector func(context.Context, inventory.Host, string) (*detect.ServiceState, error)
 
 func runClusterStatusWithRelease(cmd *cobra.Command, rc *resolvedCluster, jsonOutput bool, gitopsManifest *gitops.Manifest, inspect statusDetector) error {
+	return runClusterStatusWithTimeout(cmd, rc, jsonOutput, gitopsManifest, inspect, 60*time.Second)
+}
+
+func runClusterStatusWithTimeout(cmd *cobra.Command, rc *resolvedCluster, jsonOutput bool, gitopsManifest *gitops.Manifest, inspect statusDetector, timeout time.Duration) error {
 	manifest := rc.Manifest
 	channel := manifest.ResolvedChannel()
 	if !jsonOutput {
@@ -152,7 +156,7 @@ func runClusterStatusWithRelease(cmd *cobra.Command, rc *resolvedCluster, jsonOu
 			i, hostName := i, hostName
 			replies[i] = make(chan serviceReplicaStatus, 1)
 			probe := func(parent context.Context) serviceReplicaStatus {
-				probeCtx, cancel := context.WithTimeout(parent, 60*time.Second)
+				probeCtx, cancel := context.WithTimeout(parent, timeout)
 				defer cancel()
 				replica := serviceReplicaStatus{Host: hostName, Mode: svc.Mode, Status: "not installed"}
 				host, ok := manifest.GetHost(hostName)

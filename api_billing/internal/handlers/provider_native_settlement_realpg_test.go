@@ -42,6 +42,7 @@ func TestProviderNativeSettlementValuation_RealPG(t *testing.T) {
 	}{
 		{name: "USD to USD", charge: "USD", settled: "usd", amount: 1200, fee: 60, grossEUR: 1000, feeEUR: 50},
 		{name: "EUR to USD", charge: "EUR", settled: "usd", amount: 1200, fee: 60, grossEUR: 1000, feeEUR: 50, providerRate: 1.2},
+		{name: "provider precision exceeds storage", charge: "EUR", settled: "usd", amount: 1200, fee: 60, grossEUR: 1000, feeEUR: 50, providerRate: 1.2345678901234567},
 		{name: "GBP to GBP", charge: "GBP", settled: "gbp", amount: 800, fee: 40, grossEUR: 1000, feeEUR: 50},
 	} {
 		t.Run(test.name, func(t *testing.T) {

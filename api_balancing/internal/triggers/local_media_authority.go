@@ -214,7 +214,7 @@ func (p *Processor) readReadyLocalPlayback(ctx context.Context, input string, by
 	// into a question for the control plane.
 	if object.Authority.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_TOMBSTONE {
 		p.observeMediaAuthorityLocalRead(index, "denied")
-		return result, true, errLocalAuthorityDenied
+		return result, true, errors.Join(errLocalAuthorityDenied, errStreamIdentifierNotFound)
 	}
 	if !object.Ready {
 		p.observeMediaAuthorityLocalRead(index, "unready")

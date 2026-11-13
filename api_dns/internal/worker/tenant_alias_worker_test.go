@@ -2,10 +2,13 @@ package worker
 
 import (
 	"context"
+	"crypto/x509"
 	"database/sql"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -377,14 +380,15 @@ func newTestAliasWorker(st *fakeTenantAliasStore, dns *fakeTenantAliasDNS, resol
 	logger := logging.NewLogger()
 	logger.SetOutput(io.Discard)
 	return &AliasApplyStateWorker{
-		store:              st,
-		bunny:              dns,
-		edges:              resolver,
-		logger:             logger,
-		interval:           time.Second,
-		rootDomain:         "frameworks.network",
-		tenantZoneLabel:    "cdn",
-		healthStaleSeconds: 300,
+		store:                  st,
+		hostedCertificateReady: func(context.Context, store.TenantAlias, ServiceAddress) error { return nil },
+		bunny:                  dns,
+		edges:                  resolver,
+		logger:                 logger,
+		interval:               time.Second,
+		rootDomain:             "frameworks.network",
+		tenantZoneLabel:        "cdn",
+		healthStaleSeconds:     300,
 	}
 }
 
@@ -586,6 +590,18 @@ type fakeTenantAliasDNS struct {
 	onReconcile    func()
 	reconcileCalls int
 	records        map[string][]bunny.Record
+	listErr        error
+}
+
+func (d *fakeTenantAliasDNS) ListRecords(context.Context, int64) ([]bunny.Record, error) {
+	var records []bunny.Record
+	for name, set := range d.records {
+		for _, record := range set {
+			record.Name = name
+			records = append(records, record)
+		}
+	}
+	return records, d.listErr
 }
 
 func (d *fakeTenantAliasDNS) FindZone(context.Context, string) (*bunny.Zone, bool, error) {
@@ -741,5 +757,80 @@ func TestAliasWorkerDurableScanVisitsTenantsBeyondWakeQueueCapacity(t *testing.T
 		case <-deadline.C:
 			t.Fatalf("durable scan dropped tenants beyond queue capacity: visited=%d want=600", len(seen))
 		}
+	}
+}
+
+func TestTenantPlaybackDNSRequiresEachHostsCurrentCertificate(t *testing.T) {
+	st := newFakeTenantAliasStore()
+	st.alias = &store.TenantAlias{TenantID: "tenant-1", Subdomain: "acme", Status: "cert_issued"}
+	st.rows = []store.TenantEdgeApplyState{tenantEdge("tenant-1", "cluster", "edge", "in_dns")}
+	dns := &fakeTenantAliasDNS{zoneFound: true}
+	resolver := &fakeTenantEdgeResolver{addrs: map[string][]string{"edge": {"192.0.2.1"}}, serviceAddrs: map[string][]ServiceAddress{
+		"foghorn": {{NodeID: "ready", IP: "192.0.2.2"}, {NodeID: "reload-failed", IP: "192.0.2.3"}},
+	}}
+	w := newTestAliasWorker(st, dns, resolver)
+	w.hostedCertificateReady = func(_ context.Context, alias store.TenantAlias, a ServiceAddress) error {
+		if alias.TenantID != "tenant-1" {
+			t.Fatal("wrong tenant certificate checked")
+		}
+		if a.NodeID == "reload-failed" {
+			return errors.New("old certificate still served")
+		}
+		return nil
+	}
+	if err := w.PublishTenantAlias(t.Context(), "tenant-1"); err != nil {
+		t.Fatal(err)
+	}
+	got := dns.records["foghorn.acme"]
+	if len(got) != 1 || got[0].Value != "192.0.2.2" {
+		t.Fatalf("unready host published: %+v", got)
+	}
+	if len(dns.records["edge.acme"]) != 1 {
+		t.Fatal("playback readiness removed a healthy ingest endpoint")
+	}
+}
+
+func TestTenantPlaybackDNSPreservesPublishedHostsThroughRenewalAndOutage(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+	leaf := server.Certificate()
+	roots := x509.NewCertPool()
+	roots.AddCert(leaf)
+	for _, tc := range []struct {
+		name  string
+		probe func(context.Context) error
+		keep  bool
+	}{
+		{"valid previous revision", func(ctx context.Context) error {
+			return verifyHostedCertificate(ctx, server.Listener.Addr().String(), leaf.DNSNames[0], []byte("renewed certificate"), roots)
+		}, true},
+		{"probe timed out", func(context.Context) error { return context.DeadlineExceeded }, true},
+		{"verified wrong hostname", func(ctx context.Context) error {
+			return verifyHostedCertificate(ctx, server.Listener.Addr().String(), "wrong.example", leaf.Raw, roots)
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeTenantAliasStore()
+			st.alias = &store.TenantAlias{TenantID: "tenant-1", Subdomain: "acme", Status: "cert_issued"}
+			st.rows = []store.TenantEdgeApplyState{tenantEdge("tenant-1", "cluster", "edge", "in_dns")}
+			dns := &fakeTenantAliasDNS{zoneFound: true, records: map[string][]bunny.Record{
+				"foghorn.acme": {{Type: bunny.RecordTypeA, Value: "192.0.2.2"}},
+			}}
+			resolver := &fakeTenantEdgeResolver{addrs: map[string][]string{"edge": {"192.0.2.1"}}, serviceAddrs: map[string][]ServiceAddress{
+				"foghorn": {{NodeID: "published", IP: "192.0.2.2"}, {NodeID: "new", IP: "192.0.2.3"}},
+			}}
+			w := newTestAliasWorker(st, dns, resolver)
+			w.hostedCertificateReady = func(ctx context.Context, _ store.TenantAlias, _ ServiceAddress) error { return tc.probe(ctx) }
+			if err := w.PublishTenantAlias(t.Context(), "tenant-1"); err != nil {
+				t.Fatal(err)
+			}
+			got := dns.records["foghorn.acme"]
+			if tc.keep && (len(got) != 1 || got[0].Value != "192.0.2.2") {
+				t.Fatalf("existing member lost or unverified new member added: %+v", got)
+			}
+			if !tc.keep && len(got) != 0 {
+				t.Fatalf("known invalid certificate retained: %+v", got)
+			}
+		})
 	}
 }

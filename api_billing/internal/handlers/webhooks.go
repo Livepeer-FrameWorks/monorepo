@@ -606,7 +606,7 @@ func (s *Service) markWebhookSucceeded(ctx context.Context, provider, eventID, p
 // transient failure (DB error, downstream call timeout). terminal=true
 // retires the event from further retries (signature mismatch caught after
 // claim, malformed body that survived initial parse, etc.).
-func (s *Service) markWebhookFailed(ctx context.Context, provider, eventID, errMsg string, blocked, terminal bool) error {
+func (s *Service) markWebhookFailed(ctx context.Context, provider, eventID, _ string, blocked, terminal bool) error {
 	if s.db == nil {
 		return fmt.Errorf("db not initialized")
 	}
@@ -617,7 +617,7 @@ func (s *Service) markWebhookFailed(ctx context.Context, provider, eventID, errM
 		target = "blocked"
 	}
 	_, err := purserdb.New(s.db).MarkWebhookEventFailed(ctx, purserdb.MarkWebhookEventFailedParams{
-		Status: target, LastError: sql.NullString{String: errMsg, Valid: errMsg != ""},
+		Status: target, LastError: sql.NullString{String: "provider callback " + target, Valid: true},
 		Terminal: terminal, Provider: provider, EventID: eventID,
 	})
 	if err != nil {

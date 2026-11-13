@@ -404,3 +404,23 @@ Commodore refuses while any registered Foghorn of the cell still answers. A stop
 another unreachable cell keeps waiting for that cell, and a retired cell that comes back still
 receives its stops. `frameworks admin clusters unretire <cluster-id> --reason <reason>` removes a retirement
 made by mistake; stops that already settled are not reopened.
+
+### Retrying a blocked provider callback
+
+After repairing the cause shown in recovery inventory, inspect and retry one
+blocked Stripe or Mollie callback:
+
+```bash
+frameworks admin billing recovery list --tenant-id <uuid>
+frameworks admin billing recovery retry-webhook --tenant-id <uuid> --webhook-id <uuid> --reason "Provider reconciliation repaired"
+```
+
+Use the callback UUID from the list’s `WORK ID` column. The command shows the
+provider, payment identity and error code before asking for
+confirmation. It refuses a callback that changed since preview. Your identity and
+reason are recorded, and the existing callback is queued again. Conflicting
+payment evidence is still refused. This command cannot bind an unknown callback
+to a tenant or authorize a new purchase. Use `--yes` to confirm the displayed
+preview in an operator script.
+
+Polled Mollie callbacks blocked with `evidence_conflict` cannot use `retry-webhook`: the original payment event is already claimed, so replay would not re-check the conflicting settlement. They remain blocked for provider-evidence reconciliation.

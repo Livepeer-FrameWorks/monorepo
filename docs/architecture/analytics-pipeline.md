@@ -87,6 +87,16 @@ Examples of “push” signals:
 
 Helmsman receives these over HTTP, parses them, and forwards to Foghorn as a typed `pb.MistTrigger`.
 
+Foghorn captures the node owner from authenticated Quartermaster enrollment in the
+immutable control session. Typed node telemetry and opaque parse-fallback webhooks
+use that owner. Resource events have their tenant assertion cleared at the boundary
+and resolve their stream or artifact owner independently. Every durable raw fallback,
+including `PUSH_INPUT_CLOSE`, propagates a Decklog delivery failure for retry. Retained signed identity can still attribute a final processing window after
+deleting or expiring its live source or artifact; it grants no permission for new
+work. A definitively absent resource report without retained accounting ownership
+is acknowledged as a terminal discard and increments
+`foghorn_absent_resource_reports_total`; transient resolution failures remain retryable.
+
 For terminal accounting trigger classes (`USER_END`, `STREAM_END`, `PUSH_END`, `PUSH_INPUT_CLOSE`, `RECORDING_END`, `RECORDING_SEGMENT`, `LIVEPEER_SEGMENT_COMPLETE`, `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE`), Helmsman persists a safe parsed record to a local write-ahead log before responding 200 OK to Mist, and a background forwarder retries until Foghorn returns a `MistTriggerAck` once the trigger's effects commit: Decklog's Kafka publish for the triggers Foghorn forwards, and the ingest-session finalize for `PUSH_INPUT_CLOSE`, which never leaves Foghorn. Managed live-restream `PUSH_END` is first correlated to target identity and replaced by a sanitized `RESTREAM_STATUS_FINAL`; its credential-bearing URI and Mist logs never enter the WAL or analytics pipeline. `USER_NEW` is a blocking admission trigger instead: Helmsman gives it the same deterministic identity and Mist is not allowed to establish the connection until Foghorn has synchronously committed the source fact to Kafka. See [trigger-durability.md](trigger-durability.md). The source id used for ack correlation hashes node, trigger type, raw payload, and the preferred Mist natural key (`X-Trigger-UUID` plus `X-Trigger-UnixMillis`) into `MistTrigger.RequestId`; only the derived ID is retained for sanitized restream finals. Decklog derives the typed Kafka `event_id` from that source id as a deterministic UUID so Periscope's UUID-based fact tables stay idempotent.
 
 Once a final/accounting trigger lands in Kafka, Periscope ingests it into `raw_mist_triggers` (durable audit) and then projects it into per-meter `*_final` tables (`viewer_sessions_final`, `stream_sessions_final`, `processing_segments_final`). Those tables are the settlement source for Mist-derived meters. `viewer_sessions_current` plus periodic `CLIENT_LIFECYCLE_UPDATE` samples are only a liveness/reservation overlay: they keep prepaid admission responsive, but never create invoice usage. Missing `USER_END` facts become separately visible anomalies after the stale timeout. Five-minute canonical ledgers (`viewer_usage_5m`, `stream_runtime_5m`, `storage_gb_seconds_5m`, `processing_5m`, `api_usage_5m`) feed analytics and metering. See [finalized-fact-tables.md](finalized-fact-tables.md) and [meter-contracts.md](meter-contracts.md).

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -209,6 +210,21 @@ func (s *Service) readMollieSettlements(ctx context.Context, now time.Time) erro
 				continue
 			}
 			if _, settleErr := s.settleMolliePayment(ctx, tx); settleErr != nil {
+				if errors.Is(settleErr, errProviderSettlementEvidenceConflict) {
+					payment, readErr := queries.GetProviderSettlement(ctx, purserdb.GetProviderSettlementParams{Provider: "mollie", ProviderPaymentID: tx.PaymentID()})
+					if readErr != nil {
+						return fmt.Errorf("read conflicted Mollie settlement: %w", readErr)
+					}
+					_, recordErr := queries.RecordPolledSettlementConflict(ctx, purserdb.RecordPolledSettlementConflictParams{
+						TenantID: payment.TenantID, ProviderPaymentID: tx.PaymentID(),
+						EventKey:   "settlement-conflict:" + tx.ID,
+						RawPayload: []byte(url.Values{"id": {tx.PaymentID()}}.Encode()),
+					})
+					if recordErr != nil {
+						return fmt.Errorf("persist polled Mollie conflict: %w", recordErr)
+					}
+					continue
+				}
 				if nativeSettlementRecorded(settleErr) {
 					s.logger.WithError(settleErr).WithField("balance_transaction", tx.ID).Warn("Mollie settlement evidence recorded; EUR valuation pending")
 					continue

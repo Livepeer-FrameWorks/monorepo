@@ -56,6 +56,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   private whipEndpoints: string[] = [];
   private currentEndpointIndex = 0;
   private connectingClient: WhipClient | null = null;
+  private cancelReconnectWait: (() => void) | null = null;
   private sessionRun = 0;
   private reportedCaptureFailure: string | null = null;
 
@@ -299,6 +300,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    */
   private async releaseSession(): Promise<void> {
     this.sessionRun++;
+    this.cancelReconnectWait?.();
     this.destinationResolution?.abort();
     this.stopStatsPolling();
     this.disableDirectFrameOutput();
@@ -1490,27 +1492,31 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
       // Wait for connection to complete
       await new Promise<void>((resolve, reject) => {
+        const finish = (error?: unknown) => {
+          clearTimeout(timeout);
+          client.off("stateChange", onStateChange);
+          if (this.cancelReconnectWait === cancel) this.cancelReconnectWait = null;
+          if (error) reject(error);
+          else resolve();
+        };
+        const cancel = () => finish(new Error("Reconnection cancelled"));
         const timeout = setTimeout(() => {
-          reject(new Error("Connection timeout"));
+          finish(new Error("Connection timeout"));
         }, 30000);
 
         // One-time listener just to signal reconnection success/failure
         const onStateChange = (event: { state: string }) => {
           if (event.state === "connected") {
-            clearTimeout(timeout);
-            client.off("stateChange", onStateChange);
-            resolve();
+            finish();
           } else if (event.state === "failed" && this.connectingClient !== client) {
-            clearTimeout(timeout);
-            client.off("stateChange", onStateChange);
-            reject(new Error("Connection failed"));
+            finish(new Error("Connection failed"));
           }
         };
 
         client.on("stateChange", onStateChange);
+        this.cancelReconnectWait = cancel;
         this.connectWhipClient(client, stream).catch((error) => {
-          clearTimeout(timeout);
-          reject(error);
+          finish(error);
         });
       });
     });
@@ -2177,6 +2183,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.cancelReconnectWait?.();
     this.destinationResolution?.abort();
     this.log("Destroying IngestControllerV2");
     this.stopStatsPolling();

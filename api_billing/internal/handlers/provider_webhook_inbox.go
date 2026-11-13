@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
@@ -133,10 +134,7 @@ func (s *providerWebhookInboxStore) RecordFailureToken(ctx context.Context, id s
 
 func (s *providerWebhookInboxStore) fail(ctx context.Context, id string, cause error, backoff time.Duration, leaseToken string) error {
 	message := "provider webhook reconciliation failed"
-	errorCode := ""
-	if cause != nil {
-		message = cause.Error()
-	}
+	errorCode := "reconciliation_failed"
 	switch {
 	case errors.Is(cause, errProviderSettlementPersistence):
 		errorCode, message = "settlement_persistence_failed", "provider settlement persistence failed"
@@ -299,6 +297,10 @@ func (d *providerWebhookDispatcher) Dispatch(ctx context.Context, payload provid
 			return []string{"reconciliation"}, fmt.Errorf("decode verified Stripe webhook: %w", err)
 		}
 		ok, message, _, processingErr = d.service.processStripeWebhookDetailed(ctx, event, headerValue(payload.Headers, "Stripe-Signature"), payload.Body)
+		if bindErr := d.service.bindStripeResourceWebhookOwner(ctx, event); bindErr != nil {
+			ok = false
+			processingErr = errors.Join(processingErr, bindErr)
+		}
 	case "mollie":
 		paymentID, err := parseMollieWebhookID(payload.Body, headerValue(payload.Headers, "Content-Type"))
 		if err != nil {
@@ -446,4 +448,47 @@ func providerWebhookWorkerConfig() outbox.Config {
 		PollPeriod: 5 * time.Second, Lease: 2 * time.Minute,
 		SettleTimeout: 30 * time.Second,
 	}
+}
+
+func (s *Service) bindStripeResourceWebhookOwner(ctx context.Context, event StripeWebhookPayload) error {
+	payload, ok := ctx.Value(providerInboxOwnerKey{}).(providerWebhookPayload)
+	if !ok || payload.InboxID == uuid.Nil || (!strings.HasPrefix(event.Type, "payment_intent.") && !strings.HasPrefix(event.Type, "invoice.")) {
+		return nil
+	}
+	var object struct {
+		ID       string          `json:"id"`
+		Customer json.RawMessage `json:"customer"`
+	}
+	if err := json.Unmarshal(event.Data.Object, &object); err != nil {
+		return fmt.Errorf("decode provider ownership identity: %w", err)
+	}
+	customer := ""
+	if len(object.Customer) > 0 && string(object.Customer) != "null" {
+		if err := json.Unmarshal(object.Customer, &customer); err != nil {
+			var expanded struct {
+				ID string `json:"id"`
+			}
+			if err := json.Unmarshal(object.Customer, &expanded); err != nil {
+				return errors.New("invalid Stripe customer identity")
+			}
+			customer = expanded.ID
+		}
+	}
+	kind, payment := "invoice", ""
+	if strings.HasPrefix(event.Type, "payment_intent.") {
+		kind, payment = "payment_intent", object.ID
+	}
+	q := purserdb.New(s.db)
+	owners, err := q.ResolveStripeWebhookOwners(ctx, purserdb.ResolveStripeWebhookOwnersParams{PaymentID: payment, ObjectType: kind, ObjectID: object.ID, CustomerID: customer})
+	if err != nil {
+		return fmt.Errorf("resolve Stripe callback ownership: %w", err)
+	}
+	if len(owners) == 0 {
+		return nil
+	}
+	if len(owners) != 1 {
+		return errors.New("stripe callback ownership is ambiguous")
+	}
+	result, err := q.BindStripeWebhookResourceOwner(ctx, purserdb.BindStripeWebhookResourceOwnerParams{TenantID: owners[0], PaymentID: payment, ID: payload.InboxID, LeaseToken: payload.LeaseToken})
+	return requireWebhookInboxUpdate(result, err)
 }

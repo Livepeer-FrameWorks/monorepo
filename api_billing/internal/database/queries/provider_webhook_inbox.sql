@@ -300,3 +300,83 @@ ON CONFLICT (provider, event_key) DO UPDATE SET
     wait_attempts = CASE WHEN inbox.status = 'processed' THEN 0 ELSE inbox.wait_attempts END,
     unresolved_since = CASE WHEN inbox.status = 'processed' THEN NULL ELSE inbox.unresolved_since END,
     updated_at = NOW();
+
+-- name: RecordPolledSettlementConflict :one
+-- A polled provider conflict is durable operator work before its scan cursor advances.
+WITH inserted AS (
+ INSERT INTO purser.provider_webhook_inbox
+  (provider, tenant_id, provider_payment_id, event_key, headers, raw_payload,
+   status, unresolved_since, last_error_code, last_error)
+ SELECT payment.provider, payment.tenant_id, payment.provider_payment_id,
+  sqlc.arg(event_key)::text, '{"Content-Type":"application/x-www-form-urlencoded"}'::jsonb,
+  sqlc.arg(raw_payload)::bytea, 'blocked', NOW(), 'evidence_conflict',
+  'provider settlement blocked: evidence_conflict'
+ FROM purser.provider_settlements payment
+ WHERE payment.tenant_id=sqlc.arg(tenant_id)::text::uuid
+  AND payment.provider='mollie' AND payment.provider_payment_id=sqlc.arg(provider_payment_id)::text
+ ON CONFLICT(provider,event_key) DO NOTHING
+ RETURNING id
+)
+SELECT id FROM inserted
+UNION ALL
+SELECT id FROM purser.provider_webhook_inbox
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND provider='mollie'
+ AND provider_payment_id=sqlc.arg(provider_payment_id)::text AND event_key=sqlc.arg(event_key)::text
+LIMIT 1;
+
+-- name: GetProviderWebhookRetryState :one
+SELECT id::text AS id, provider, COALESCE(provider_payment_id,'') AS provider_payment_id,
+ status, COALESCE(last_error_code,'') AS last_error_code, attempts, updated_at
+FROM purser.provider_webhook_inbox
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND id=sqlc.arg(webhook_id)::text::uuid
+FOR UPDATE;
+
+-- name: FindProviderWebhookRetryAudit :one
+SELECT id::text AS id FROM purser.provider_webhook_retry_audit
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND webhook_id=sqlc.arg(webhook_id)::text::uuid
+ AND expected_state=sqlc.arg(expected_state)::text;
+
+-- name: InsertProviderWebhookRetryAudit :one
+INSERT INTO purser.provider_webhook_retry_audit
+ (tenant_id,webhook_id,provider,provider_payment_id,previous_error_code,expected_state,actor_id,reason)
+VALUES (sqlc.arg(tenant_id)::text::uuid,sqlc.arg(webhook_id)::text::uuid,sqlc.arg(provider),
+ sqlc.arg(provider_payment_id),sqlc.arg(previous_error_code),sqlc.arg(expected_state),
+ sqlc.arg(actor_id)::text::uuid,sqlc.arg(reason))
+RETURNING id::text AS id;
+
+-- name: RequestProviderWebhookRetry :execrows
+UPDATE purser.provider_webhook_inbox
+SET status='pending',next_attempt_at=NOW(),claimed_at=NULL,lease_token=NULL,
+ wake_requested=FALSE,updated_at=NOW()
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND id=sqlc.arg(webhook_id)::text::uuid
+ AND status='blocked' AND provider IN ('stripe','mollie');
+
+-- name: ResolveStripeWebhookOwners :many
+-- Provider-boundary lookup; tenant is established from retained local ownership,
+-- never from callback headers or customer-supplied metadata.
+SELECT DISTINCT COALESCE(owned.tenant_id::text,'')::text AS tenant_id FROM (
+ (SELECT tenant_id FROM purser.provider_settlements
+  WHERE provider='stripe' AND provider_payment_id=sqlc.arg(payment_id)::text LIMIT 2)
+ UNION ALL
+ (SELECT tenant_id FROM purser.provider_payment_objects
+  WHERE provider='stripe' AND object_type=sqlc.arg(object_type)::text
+   AND provider_object_id=sqlc.arg(object_id)::text AND tenant_id IS NOT NULL LIMIT 2)
+ UNION ALL
+ (SELECT DISTINCT tenant_id FROM purser.tenant_subscriptions
+  WHERE stripe_customer_id=NULLIF(sqlc.arg(customer_id)::text,'') ORDER BY tenant_id LIMIT 2)
+ UNION ALL
+ (SELECT DISTINCT tenant_id FROM purser.cluster_subscriptions
+  WHERE stripe_customer_id=NULLIF(sqlc.arg(customer_id)::text,'') ORDER BY tenant_id LIMIT 2)
+ UNION ALL
+ (SELECT DISTINCT tenant_id FROM purser.payment_provider_intents
+  WHERE provider='stripe' AND provider_customer_id=NULLIF(sqlc.arg(customer_id)::text,'') ORDER BY tenant_id LIMIT 2)
+) owned WHERE tenant_id IS NOT NULL LIMIT 2;
+
+-- name: BindStripeWebhookResourceOwner :execresult
+UPDATE purser.provider_webhook_inbox
+SET tenant_id=sqlc.arg(tenant_id)::text::uuid,
+ provider_payment_id=COALESCE(NULLIF(sqlc.arg(payment_id)::text,''),provider_payment_id), updated_at=NOW()
+WHERE id=sqlc.arg(id)::uuid AND provider='stripe' AND status='processing'
+ AND lease_token::text=sqlc.arg(lease_token)::text
+ AND (tenant_id IS NULL OR tenant_id=sqlc.arg(tenant_id)::text::uuid)
+ AND (sqlc.arg(payment_id)::text='' OR provider_payment_id IS NULL OR provider_payment_id=sqlc.arg(payment_id)::text);

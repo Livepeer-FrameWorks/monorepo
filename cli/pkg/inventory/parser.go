@@ -50,6 +50,44 @@ func ParseManifest(data []byte) (*Manifest, error) {
 	return &manifest, nil
 }
 
+// validateRegistryOwnerFile prevents sibling GitOps manifests from reconciling
+// each other's complete registry inventory. It reads no host or secret files.
+func validateRegistryOwnerFile(path, owner string) error {
+	if owner == "" || filepath.Base(path) != "cluster.yaml" {
+		return nil
+	}
+	if owner != strings.TrimSpace(owner) {
+		return fmt.Errorf("registry_owner must not contain surrounding whitespace")
+	}
+	current, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	files, err := filepath.Glob(filepath.Join(filepath.Dir(filepath.Dir(current)), "*", "cluster.yaml"))
+	if err != nil {
+		return err
+	}
+	for _, other := range files {
+		if filepath.Clean(other) == filepath.Clean(current) {
+			continue
+		}
+		data, err := os.ReadFile(other)
+		if err != nil {
+			return fmt.Errorf("read registry owner in %s: %w", other, err)
+		}
+		var header struct {
+			RegistryOwner string `yaml:"registry_owner"`
+		}
+		if err := yaml.Unmarshal(data, &header); err != nil {
+			return fmt.Errorf("read registry owner in %s: %w", other, err)
+		}
+		if strings.TrimSpace(header.RegistryOwner) == owner {
+			return fmt.Errorf("registry_owner %q is also used by %s; each manifest requires its own owner", owner, other)
+		}
+	}
+	return nil
+}
+
 // Load reads and parses a cluster manifest file
 func Load(path string) (*Manifest, error) {
 	data, err := os.ReadFile(path)
@@ -62,6 +100,9 @@ func Load(path string) (*Manifest, error) {
 		return nil, err
 	}
 
+	if err := validateRegistryOwnerFile(path, manifest.RegistryOwner); err != nil {
+		return nil, err
+	}
 	if err := manifest.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid manifest: %w", err)
 	}
@@ -111,6 +152,12 @@ func loadWithHosts(path, explicitHostsPath, ageKeyFile string, validate bool) (*
 	manifest, err := ParseManifest(data)
 	if err != nil {
 		return nil, err
+	}
+
+	if validate {
+		if err := validateRegistryOwnerFile(path, manifest.RegistryOwner); err != nil {
+			return nil, err
+		}
 	}
 
 	// An explicitly-provided hostsPath is used verbatim — it is already
