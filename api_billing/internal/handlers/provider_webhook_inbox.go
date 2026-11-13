@@ -144,6 +144,8 @@ func (s *providerWebhookInboxStore) fail(ctx context.Context, id string, cause e
 		errorCode, message = "unsupported_currency", "provider settlement blocked: unsupported_currency"
 	case errors.Is(cause, fx.ErrUnavailable):
 		errorCode, message = "fx_unavailable", "provider settlement waiting: fx_unavailable"
+	case errors.Is(cause, billingmollie.ErrHistoricalFundingAmbiguous):
+		errorCode, message = "historical_funding_ambiguous", billingmollie.ErrHistoricalFundingAmbiguous.Error()
 	}
 	inboxID, err := uuid.Parse(id)
 	if err != nil {
