@@ -187,7 +187,8 @@ func TestMolliePolledConflictDoesNotBlockLaterSettlements_RealPG(t *testing.T) {
 	queries := newProviderSettlementQueries(db)
 	queries.insertPending(t, tenant, "mollie", "tr_conflict", 1200, "USD")
 	queries.insertPending(t, tenant, "mollie", "tr_later", 1000, "EUR")
-	now := time.Now().UTC().Truncate(time.Second)
+	// Keep this cutoff after pending writes from the same second.
+	now := time.Now().UTC()
 	if _, err := db.ExecContext(t.Context(), `UPDATE purser.provider_settlements
  SET status='recorded',settlement_currency='USD',provider_balance_transaction_id='bal_original',
  settled_amount_cents=1200,fee_cents=60,net_cents=1140,settled_at=$2
