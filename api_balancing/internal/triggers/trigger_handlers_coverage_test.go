@@ -1,6 +1,7 @@
 package triggers
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -87,6 +88,7 @@ func TestHandlePushInputClose_PersistsOfflineEffect(t *testing.T) {
 	mock.ExpectCommit()
 
 	p := minimalProcessorTrigHandlers(t)
+	p.streamCache.Set(streamContextCacheKey("live+"+internal), streamContext{TenantID: "tenant-x"}, time.Minute)
 	_, abort, err := p.handlePushInputClose(&ipcpb.MistTrigger{
 		NodeId:   "node-A",
 		TenantId: ptrTrigHandlers("tenant-x"),
@@ -216,6 +218,7 @@ func TestHandlePushEnd_DecklogErrorSurfacingContract(t *testing.T) {
 
 	t.Run("surfaced when trigger type is PUSH_END", func(t *testing.T) {
 		p := minimalProcessorTrigHandlers(t)
+		p.streamCache.Set(streamContextCacheKey("live+pe-surface"), streamContext{TenantID: tenantID}, time.Minute)
 		_, _, err := p.handlePushEnd(&ipcpb.MistTrigger{
 			TriggerType: "PUSH_END",
 			TenantId:    &tenantID,
@@ -227,10 +230,14 @@ func TestHandlePushEnd_DecklogErrorSurfacingContract(t *testing.T) {
 		if err == nil {
 			t.Fatal("PUSH_END decklog failure must surface (abort the trigger)")
 		}
+		if !strings.Contains(err.Error(), "decklog client not configured") {
+			t.Fatalf("expected Decklog dispatch failure, got %v", err)
+		}
 	})
 
 	t.Run("swallowed when trigger type is unset", func(t *testing.T) {
 		p := minimalProcessorTrigHandlers(t)
+		p.streamCache.Set(streamContextCacheKey("live+pe-swallow"), streamContext{TenantID: tenantID}, time.Minute)
 		_, _, err := p.handlePushEnd(&ipcpb.MistTrigger{
 			TenantId: &tenantID,
 			TriggerPayload: &ipcpb.MistTrigger_PushEnd{

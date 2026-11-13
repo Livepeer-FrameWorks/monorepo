@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
@@ -198,6 +199,7 @@ func TestPushInputClose_ReleasesPlacementUnderPublishingNodeCluster(t *testing.T
 	p, fake := processorWithPlacementCommodore(t) // process cluster: media-eu
 
 	const internal = "release-me"
+	p.streamCache.Set(streamContextCacheKey("live+"+internal), streamContext{TenantID: "tenant-1", StreamID: "stream-1"}, time.Minute)
 	sm.SetNodeConnectionInfo(context.Background(), "node-A", "node-A:18090", "", "demo-media", nil)
 	seedLivePublisher(t, internal, endedGeneration)
 	expectSessionFinalized(mock, endedGeneration)
@@ -234,6 +236,7 @@ func TestPushInputClose_FencedCloseDoesNotReleaseReplacementPlacement(t *testing
 	p, fake := processorWithPlacementCommodore(t)
 
 	const internal = "still-live"
+	p.streamCache.Set(streamContextCacheKey("live+"+internal), streamContext{TenantID: "tenant-1", StreamID: "stream-1"}, time.Minute)
 	sm.SetNodeConnectionInfo(context.Background(), "node-A", "node-A:18090", "", "demo-media", nil)
 	seedLivePublisher(t, internal, endedGeneration) // replacement holds the current generation
 	expectSessionFenced(mock)
@@ -260,6 +263,7 @@ func TestPushInputClose_EndedSessionReleasesRegardlessOfProjection(t *testing.T)
 	p, fake := processorWithPlacementCommodore(t)
 
 	const internal = "superseded"
+	p.streamCache.Set(streamContextCacheKey("live+"+internal), streamContext{TenantID: "tenant-1", StreamID: "stream-1"}, time.Minute)
 	sm.SetNodeConnectionInfo(context.Background(), "node-A", "node-A:18090", "", "demo-media", nil)
 	seedLivePublisher(t, internal, endedGeneration)
 	// The close finalizes a session whose generation differs from the one the registry currently holds.
