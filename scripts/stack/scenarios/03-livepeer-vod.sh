@@ -122,7 +122,16 @@ fi
 # identified the orchestrator, such a failure belongs to that identity: a
 # URL-keyed resource is invisible to the orchestrator's public history and
 # endpoint availability.
-GW_DISCOVERY="tenant_id='$STACK_TENANT_ID' AND producer_kind='gateway' AND gateway_id='stack-lp-a'
+# Discovery describes the gateway's infrastructure, not the VOD's workload tenant.
+GW_OWNER_TENANT=$(pg quartermaster "SELECT c.owner_tenant_id::text
+  FROM quartermaster.service_instances i
+  JOIN quartermaster.infrastructure_clusters c ON c.cluster_id=i.cluster_id
+  WHERE i.instance_id='stack-livepeer-gateway-a'") || { fail "read the gateway's infrastructure owner"; finish; }
+[[ "$GW_OWNER_TENANT" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || {
+  fail "the registered gateway has a valid infrastructure owner"
+  finish
+}
+GW_DISCOVERY="tenant_id='$GW_OWNER_TENANT' AND producer_kind='gateway' AND gateway_id='stack-lp-a'
   AND kind='discovery' AND endpoint_uri='https://livepeer-orch-a:8935' AND timestamp >= toDateTime($SINCE)"
 # The gateway delivers from its local spool; its rows stop growing once it is idle.
 gateway_discovery_settled() {
