@@ -294,10 +294,17 @@ credentials or the internal-PKI `frameworks` group. Keys remain mode `0640`;
 directories are setgid and group-traversable. Native provisioning and the Docker
 proxy reader setup preserve the same ownership boundary.
 
-`cert_issued` proves issuance, and the alias `dns_ready` flag currently proves
-an edge ACK-gated DNS member. Neither alone proves that hosted Nginx has loaded
-the tenant's certificate. Rollout verification must use system-trust SNI
-handshakes on every published playback address. The automatic reconciliation
+`cert_issued` proves issuance, and the alias `dns_ready` flag proves an edge
+ACK-gated DNS member. Hosted Foghorn membership has a separate check: before
+publishing an address, Navigator connects directly to that public IP with the
+alias as SNI, verifies system trust and hostname, and compares the served leaf
+with the current tenant bundle. A new member that has not applied the bundle is
+withheld from playback DNS. Existing members remain published while serving a
+trusted, unexpired certificate for that alias during renewal. An inconclusive
+connection failure preserves an existing member; a verified certificate failure
+removes it. This probe runs in asynchronous DNS reconciliation,
+not admission or playback resolution. Rollout verification also exercises HLS
+through each published playback address. The automatic reconciliation
 and proxy convergence must both be deployed; a Go gRPC listener change cannot
 repair TLS terminated upstream by Nginx.
 
@@ -345,3 +352,5 @@ reads durable state and waits for bounded queue capacity, so inventory beyond
 the 256-entry hint buffer is still visited. Provider failures and caller
 cancellation do not undo an accepted ACK; service cancellation stops queued
 repair work. Existing alias revision/CAS checks remain authoritative at publish.
+
+Hosted playback DNS distinguishes new members from addresses already published for that alias. A new member requires the current trusted certificate. An existing member stays eligible while serving a valid prior certificate during rotation, or when a transport failure prevents observing its certificate. A completed handshake that proves the certificate invalid for the alias removes that member. Existing service-health eligibility still applies.

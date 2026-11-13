@@ -1339,20 +1339,17 @@ func (p *Processor) sendTriggerToDecklogContext(ctx context.Context, trigger *ip
 	return nil
 }
 
-func shouldSurfaceDecklogError(trigger *ipcpb.MistTrigger) bool {
-	switch trigger.GetTriggerType() {
-	case string(mist.TriggerUserEnd),
-		string(mist.TriggerStreamEnd),
-		string(mist.TriggerPushEnd),
-		string(mist.TriggerRestreamStatusFinal),
-		string(mist.TriggerRecordingEnd),
-		string(mist.TriggerRecordingSegment),
-		string(mist.TriggerLivepeerSegmentComplete),
-		string(mist.TriggerProcessAVSegmentComplete):
-		return true
-	default:
-		return false
+// observeAbsentResource records a terminal discard separately from delivery errors.
+func (p *Processor) observeAbsentResource(trigger *ipcpb.MistTrigger) {
+	if p.metrics != nil && p.metrics.AbsentResourceReports != nil {
+		p.metrics.AbsentResourceReports.Inc()
 	}
+	p.logger.WithFields(logging.Fields{"trigger_type": trigger.GetTriggerType(), "node_id": trigger.GetNodeId()}).
+		Info("Discarding report for an authoritatively absent resource")
+}
+
+func shouldSurfaceDecklogError(trigger *ipcpb.MistTrigger) bool {
+	return mist.IsDurableTriggerType(trigger.GetTriggerType())
 }
 
 // ProcessTypedTrigger processes a typed protobuf MistTrigger directly
@@ -1475,20 +1472,29 @@ func (p *Processor) handleRawMistWebhook(trigger *ipcpb.MistTrigger) (string, bo
 	return "", false, nil
 }
 
-// processingBillingContext resolves delivered work, independently of whether
-// admission is still allowed. Retained ownership is sufficient to attribute a
-// final window; this context never grants playback or ingest permission.
-func (p *Processor) processingBillingContext(ctx context.Context, trigger *ipcpb.MistTrigger, sourceName string) (streamContext, error) {
+// deliveredMediaContext resolves completed work and lifecycle reports independently
+// of admission. Retained identity grants no permission to publish or play more bytes.
+func (p *Processor) deliveredMediaContext(ctx context.Context, trigger *ipcpb.MistTrigger, sourceName string) (streamContext, error) {
 	parsed := streamident.Parse(sourceName)
 	if parsed.Concrete == "" {
 		return streamContext{}, errStreamIdentifierNotFound
 	}
 	var sourceIdentityErr error
-	if !parsed.IsArtifact() && p.mediaAuthorityStore != nil {
+	if p.mediaAuthorityStore != nil {
 		pair, readErr := p.mediaAuthorityStore.ReadPairByInternalName(ctx, mist.ExtractInternalName(sourceName))
-		if readErr == nil && pair.Object.Authority.GetLiveStream() != nil && pair.Object.Authority.GetTenantId() != "" {
-			object := pair.Object.Authority
-			info := streamContext{TenantID: object.GetTenantId(), UserID: object.GetUserId(), StreamID: object.GetLiveStream().GetStreamId(), OriginClusterID: object.GetOriginClusterId(), Source: "local_accounting_identity"}
+		object := pair.Object.Authority
+		if readErr == nil && object.GetTenantId() != "" &&
+			((!parsed.IsArtifact() && object.GetLiveStream() != nil) || (parsed.IsArtifact() && object.GetArtifact() != nil)) {
+			// Delivered work keeps its resource owner after deletion or expiry.
+			// This identity grants no permission to ingest, process or play more bytes.
+			info := streamContext{TenantID: object.GetTenantId(), UserID: object.GetUserId(), OriginClusterID: object.GetOriginClusterId(), Source: "local_accounting_identity"}
+			if live := object.GetLiveStream(); live != nil {
+				info.StreamID = live.GetStreamId()
+			}
+			if artifact := object.GetArtifact(); artifact != nil {
+				info.StreamID = artifact.GetParentStreamId()
+				info.ArtifactHash = artifact.GetArtifactHash()
+			}
 			return p.applyResolvedStreamContext(trigger, sourceName, info), nil
 		}
 		if readErr != nil && !errors.Is(readErr, sql.ErrNoRows) {
@@ -1496,7 +1502,7 @@ func (p *Processor) processingBillingContext(ctx context.Context, trigger *ipcpb
 		}
 	}
 	var artifactErr error
-	if parsed.Kind == streamident.KindArtifactProcessing {
+	if parsed.IsArtifact() {
 		if resolver := identity.Default(); resolver != nil {
 			id, err := resolver.ResolveArtifact(ctx, parsed.Concrete, "")
 			if err == nil && id.TenantID != "" {
@@ -1514,6 +1520,23 @@ func (p *Processor) processingBillingContext(ctx context.Context, trigger *ipcpb
 		return info, artifactErr
 	}
 	return info, err
+}
+
+// finalReportContext distinguishes exhausted identity from an unavailable authority.
+// Durable reports with retained ownership still run their accounting and finalizers.
+func (p *Processor) finalReportContext(trigger *ipcpb.MistTrigger, name string) (streamContext, bool, error) {
+	info, err := p.deliveredMediaContext(context.Background(), trigger, name)
+	if info.TenantID != "" {
+		return info, true, nil
+	}
+	if errors.Is(err, errStreamIdentifierNotFound) {
+		p.observeAbsentResource(trigger)
+		return info, false, nil
+	}
+	if err == nil {
+		err = errors.New("stream owner unavailable")
+	}
+	return info, false, fmt.Errorf("resolve final report owner: %w", err)
 }
 
 // handleProcessBilling forwards ProcessBillingEvent to Decklog
@@ -1536,7 +1559,7 @@ func (p *Processor) handleProcessBilling(trigger *ipcpb.MistTrigger) (string, bo
 	if assertedTenant != "" {
 		trigger.TenantId = &assertedTenant
 	}
-	info, resolveErr := p.processingBillingContext(context.Background(), trigger, sourceName)
+	info, resolveErr := p.deliveredMediaContext(context.Background(), trigger, sourceName)
 	if assertedTenantConflicts(assertedTenant, trigger.GetTenantId()) {
 		p.logger.WithFields(logging.Fields{
 			"trigger_type":    trigger.GetTriggerType(),
@@ -1549,7 +1572,7 @@ func (p *Processor) handleProcessBilling(trigger *ipcpb.MistTrigger) (string, bo
 	}
 	if strings.TrimSpace(info.TenantID) == "" {
 		if errors.Is(resolveErr, errStreamIdentifierNotFound) {
-			p.logger.WithField("internal_name", internalName).Info("Discarding billing report for an authoritatively absent resource")
+			p.observeAbsentResource(trigger)
 			return "", false, nil
 		}
 		if resolveErr == nil {
@@ -4192,7 +4215,10 @@ func (p *Processor) handlePushEnd(trigger *ipcpb.MistTrigger) (string, bool, err
 		return "", false, nil
 	}
 
-	p.applyStreamContext(trigger, internalName)
+	_, reportable, resolveErr := p.finalReportContext(trigger, pushEnd.GetStreamName())
+	if resolveErr != nil || !reportable {
+		return "", false, resolveErr
+	}
 	if streamID := trigger.GetStreamId(); streamID != "" {
 		pushEnd.StreamId = &streamID
 	}
@@ -4463,7 +4489,10 @@ func (p *Processor) handlePushInputClose(trigger *ipcpb.MistTrigger) (string, bo
 
 	// The close stays inside Foghorn: no analytics consumer handles it, and
 	// stream_end / stream_lifecycle_update record the stream going offline.
-	p.applyStreamContext(trigger, internalName)
+	_, reportable, resolveErr := p.finalReportContext(trigger, pic.GetStreamName())
+	if resolveErr != nil || !reportable {
+		return "", false, resolveErr
+	}
 
 	// End the exact ingest generation this publisher held (event-time fenced against PID
 	// reuse). Its recording keeps running through Mist's resume window, so a reconnect to
@@ -4923,7 +4952,10 @@ func (p *Processor) handleStreamEnd(trigger *ipcpb.MistTrigger) (string, bool, e
 
 	// Control-plane stream lifecycle is derived from Decklog events.
 
-	_ = p.applyStreamContext(trigger, internalName)
+	_, reportable, resolveErr := p.finalReportContext(trigger, streamEnd.GetStreamName())
+	if resolveErr != nil || !reportable {
+		return "", false, resolveErr
+	}
 	streamEnd.NodeId = &nodeID
 	if streamID := trigger.GetStreamId(); streamID != "" {
 		streamEnd.StreamId = &streamID
@@ -5695,7 +5727,10 @@ func (p *Processor) handleUserEnd(trigger *ipcpb.MistTrigger) (string, bool, err
 		return "", false, nil
 	}
 
-	info := p.applyStreamContext(trigger, userEnd.GetStreamName())
+	info, reportable, resolveErr := p.finalReportContext(trigger, userEnd.GetStreamName())
+	if resolveErr != nil || !reportable {
+		return "", false, resolveErr
+	}
 	if streamID := trigger.GetStreamId(); streamID != "" {
 		userEnd.StreamId = &streamID
 	}
@@ -5846,7 +5881,10 @@ func (p *Processor) handleRecordingEnd(trigger *ipcpb.MistTrigger) (string, bool
 
 	// Control-plane recording lifecycle is derived from Decklog events.
 
-	_ = p.applyStreamContext(trigger, internalName)
+	_, reportable, resolveErr := p.finalReportContext(trigger, recordingEnd.GetStreamName())
+	if resolveErr != nil || !reportable {
+		return "", false, resolveErr
+	}
 	if streamID := trigger.GetStreamId(); streamID != "" {
 		recordingEnd.StreamId = &streamID
 	}
@@ -5884,7 +5922,10 @@ func (p *Processor) handleRecordingSegment(trigger *ipcpb.MistTrigger) (string, 
 	internalName := mist.ExtractInternalName(seg.GetStreamName())
 
 	// Enrich tenant context before forwarding
-	info := p.applyStreamContext(trigger, internalName)
+	info, reportable, resolveErr := p.finalReportContext(trigger, seg.GetStreamName())
+	if resolveErr != nil || !reportable {
+		return "", false, resolveErr
+	}
 	if streamID := trigger.GetStreamId(); streamID != "" {
 		seg.StreamId = &streamID
 	}
@@ -5936,7 +5977,17 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 	if assertedTenant != "" {
 		trigger.TenantId = &assertedTenant
 	}
-	info := p.applyStreamContext(trigger, slu.GetInternalName())
+	var info streamContext
+	if slu.GetStatus() == "offline" {
+		// Final reports retain accounting identity after admission is denied.
+		var resolveErr error
+		info, resolveErr = p.deliveredMediaContext(context.Background(), trigger, slu.GetInternalName())
+		if resolveErr != nil {
+			p.logger.WithError(resolveErr).WithField("internal_name", internal).Warn("Could not resolve offline lifecycle owner")
+		}
+	} else {
+		info = p.applyStreamContext(trigger, slu.GetInternalName())
+	}
 	if assertedTenantConflicts(assertedTenant, trigger.GetTenantId()) {
 		p.logger.WithFields(logging.Fields{
 			"trigger_type":    trigger.GetTriggerType(),
@@ -6287,7 +6338,16 @@ func (p *Processor) handleClientLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 	if assertedTenant != "" {
 		trigger.TenantId = &assertedTenant
 	}
-	info := p.applyStreamContext(trigger, internal)
+	var info streamContext
+	if clu.GetAction() == "disconnect" {
+		var resolveErr error
+		info, resolveErr = p.deliveredMediaContext(context.Background(), trigger, internal)
+		if resolveErr != nil {
+			p.logger.WithError(resolveErr).WithField("internal_name", internal).Warn("Could not resolve disconnected client owner")
+		}
+	} else {
+		info = p.applyStreamContext(trigger, internal)
+	}
 	if assertedTenantConflicts(assertedTenant, trigger.GetTenantId()) {
 		p.logger.WithFields(logging.Fields{
 			"trigger_type":    trigger.GetTriggerType(),
@@ -6340,7 +6400,7 @@ func (p *Processor) handleClientLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 		}).Warn("Dropping client lifecycle update without tenant_id")
 		return "", false, nil
 	}
-	if sessionID := strings.TrimSpace(clu.GetSessionId()); sessionID != "" {
+	if sessionID := strings.TrimSpace(clu.GetSessionId()); sessionID != "" && clu.GetAction() != "disconnect" {
 		if err := state.DefaultTenantCapacity().RenewViewerSession(clu.GetTenantId(), trigger.GetNodeId(), sessionID, info.MaxViewers); err != nil {
 			p.logger.WithError(err).WithFields(logging.Fields{"tenant_id": clu.GetTenantId(), "session_id": sessionID}).Warn("Failed to renew viewer capacity lease from Mist client inventory")
 		}
@@ -7112,6 +7172,9 @@ func (p *Processor) resolveStreamContext(ctx context.Context, key string, allowC
 	}
 
 	resp, err := p.commodoreClient.ResolveIdentifier(ctx, key)
+	if status.Code(err) == codes.NotFound {
+		return streamContext{}, false, errStreamIdentifierNotFound
+	}
 	if err != nil {
 		atomic.AddUint64(&p.streamCacheResErr, 1)
 		p.streamCacheMetaMu.Lock()

@@ -1,0 +1,40 @@
+rule_files:
+  - ../frameworks.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: purser_fx_rate_reference_age_seconds{currency="USD",instance="a"}
+        values: "475200x61 518400x65"
+      - series: purser_fx_rate_reference_age_seconds{currency="GBP",instance="a"}
+        values: "475200x130"
+    alert_rule_test:
+      - eval_time: 60m
+        groupname: frameworks.rules
+        alertname: PurserFXReferenceRatesStale
+        exp_alerts: []
+      - eval_time: 123m
+        groupname: frameworks.rules
+        alertname: PurserFXReferenceRatesStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              currency: USD
+            exp_annotations:
+              summary: ECB reference rates are stale or missing
+              description: "Purser has no USD reference rate or the newest ECB reference date is over five days and eighteen hours old. Inspect Purser's ECB synchronization errors and restore feed/database access. New conversions refuse references older than five calendar days; this warning allows normal TARGET holiday publication gaps."
+  - interval: 1m
+    input_series:
+      - series: purser_fx_rate_reference_age_seconds{currency="GBP",instance="a"}
+        values: "259200x65"
+    alert_rule_test:
+      - eval_time: 61m
+        groupname: frameworks.rules
+        alertname: PurserFXReferenceRatesStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              currency: USD
+            exp_annotations:
+              summary: ECB reference rates are stale or missing
+              description: "Purser has no USD reference rate or the newest ECB reference date is over five days and eighteen hours old. Inspect Purser's ECB synchronization errors and restore feed/database access. New conversions refuse references older than five calendar days; this warning allows normal TARGET holiday publication gaps."

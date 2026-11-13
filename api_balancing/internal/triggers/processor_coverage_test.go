@@ -414,3 +414,15 @@ func TestHandleRawMistWebhook_ErrorSurfacing(t *testing.T) {
 		}
 	})
 }
+
+func TestRawPublisherCloseDoesNotAcknowledgeFailedDelivery(t *testing.T) {
+	p := newTestProcessor(t)
+	tenant := "authenticated-node-owner"
+	_, _, err := p.handleRawMistWebhook(&ipcpb.MistTrigger{
+		TriggerType: "PUSH_INPUT_CLOSE", TenantId: &tenant,
+		TriggerPayload: &ipcpb.MistTrigger_RawMistWebhook{RawMistWebhook: &ipcpb.RawMistWebhookTrigger{}},
+	})
+	if err == nil {
+		t.Fatal("durable raw close acknowledged without Decklog delivery")
+	}
+}

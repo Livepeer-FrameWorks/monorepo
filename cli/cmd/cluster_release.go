@@ -219,7 +219,7 @@ var (
 // each instance's health endpoint override, the service catalog, clusters)
 // instead of leaving the values the previous release rendered. The returned
 // step is nil when the manifest runs no Quartermaster.
-func prepareReleaseQuartermasterBootstrap(cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool) (func(ctx context.Context, dryRun bool) error, error) {
+func prepareReleaseQuartermasterBootstrap(cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool, targetVersion string) (func(ctx context.Context, dryRun bool) error, error) {
 	manifest := rc.Manifest
 	if _, ok := manifest.Services["quartermaster"]; !ok {
 		return nil, nil
@@ -228,10 +228,17 @@ func prepareReleaseQuartermasterBootstrap(cmd *cobra.Command, rc *resolvedCluste
 	if err != nil {
 		return nil, err
 	}
+	var desired bootstrap.Rendered
+	if err := yaml.Unmarshal(bootstrapYAML, &desired); err != nil {
+		return nil, err
+	}
 	return func(ctx context.Context, dryRun bool) error {
 		if dryRun {
+			if err := writeRegistryRetirementPreview(ctx, cmd, rc, sshPool, desired.Quartermaster); err != nil {
+				return err
+			}
 			fmt.Fprintln(cmd.OutOrStdout(), "  dry-run: quartermaster bootstrap would run with the rendered desired state")
-			return nil
+			return releaseBootstrapPlan(ctx, cmd, manifest, sshPool, "quartermaster", bootstrapYAML, nil, targetVersion)
 		}
 		if err := runServiceBootstrap(ctx, cmd, manifest, sshPool, "quartermaster", bootstrapYAML, nil); err != nil {
 			return fmt.Errorf("quartermaster bootstrap: %w", err)
@@ -539,7 +546,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	if err != nil {
 		return fmt.Errorf("purser billing declarations: %w", err)
 	}
-	reconcileQuartermaster, err := releasePrepareQuartermasterBootstrapFn(cmd, rc, sshPool)
+	reconcileQuartermaster, err := releasePrepareQuartermasterBootstrapFn(cmd, rc, sshPool, releaseServiceVersion(gm, "quartermaster"))
 	if err != nil {
 		return fmt.Errorf("quartermaster bootstrap: %w", err)
 	}

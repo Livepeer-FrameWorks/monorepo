@@ -78,6 +78,7 @@ type Querier interface {
 	BaseFeeInvoiceExistsForPeriod(ctx context.Context, arg BaseFeeInvoiceExistsForPeriodParams) (bool, error)
 	BindProviderCheckoutReceipt(ctx context.Context, arg BindProviderCheckoutReceiptParams) error
 	BindProviderWebhookPaymentOwner(ctx context.Context, arg BindProviderWebhookPaymentOwnerParams) (sql.Result, error)
+	BindStripeWebhookResourceOwner(ctx context.Context, arg BindStripeWebhookResourceOwnerParams) (sql.Result, error)
 	CancelClosedTenantClusterSubscriptions(ctx context.Context, arg CancelClosedTenantClusterSubscriptionsParams) error
 	// A phase opened after a delayed closure event has no interval before its cutoff.
 	CancelClosedTenantSubscription(ctx context.Context, arg CancelClosedTenantSubscriptionParams) error
@@ -279,6 +280,7 @@ type Querier interface {
 	FindOverlappedBaseFeeInvoice(ctx context.Context, arg FindOverlappedBaseFeeInvoiceParams) (string, error)
 	FindProviderBillingDocument(ctx context.Context, arg FindProviderBillingDocumentParams) (FindProviderBillingDocumentRow, error)
 	FindProviderCheckoutReservation(ctx context.Context, arg FindProviderCheckoutReservationParams) (string, error)
+	FindProviderWebhookRetryAudit(ctx context.Context, arg FindProviderWebhookRetryAuditParams) (string, error)
 	// Binding can arrive during provider I/O; only release the exact references reconciled.
 	FinishCheckoutCompensation(ctx context.Context, arg FinishCheckoutCompensationParams) (int64, error)
 	FinishCheckoutRecoveryAudit(ctx context.Context, arg FinishCheckoutRecoveryAuditParams) error
@@ -470,6 +472,7 @@ type Querier interface {
 	// The tier the recurring provider subscription must charge next: a scheduled
 	// downgrade's target, otherwise the current tier.
 	GetProviderTierTarget(ctx context.Context, tenantID string) (GetProviderTierTargetRow, error)
+	GetProviderWebhookRetryState(ctx context.Context, arg GetProviderWebhookRetryStateParams) (GetProviderWebhookRetryStateRow, error)
 	// Local invoice coordinates can advance while native cancellation evidence is
 	// retained; the cancellation identity and deadline fence each prepared close.
 	GetRetainedProviderAssignment(ctx context.Context, tenantID string) (GetRetainedProviderAssignmentRow, error)
@@ -623,6 +626,7 @@ type Querier interface {
 	InsertPreparedX402SettlementAttempt(ctx context.Context, arg InsertPreparedX402SettlementAttemptParams) error
 	InsertProviderBillingPaymentAttempt(ctx context.Context, arg InsertProviderBillingPaymentAttemptParams) error
 	InsertProviderUsageOperatorCredit(ctx context.Context, arg InsertProviderUsageOperatorCreditParams) error
+	InsertProviderWebhookRetryAudit(ctx context.Context, arg InsertProviderWebhookRetryAuditParams) (string, error)
 	InsertReferencedBalanceTransaction(ctx context.Context, arg InsertReferencedBalanceTransactionParams) (uuid.UUID, error)
 	InsertReorgedCryptoInvoiceCreditNote(ctx context.Context, arg InsertReorgedCryptoInvoiceCreditNoteParams) error
 	InsertReorgedCryptoTopupCreditNote(ctx context.Context, arg InsertReorgedCryptoTopupCreditNoteParams) error
@@ -929,6 +933,8 @@ type Querier interface {
 	RecordOperatorGrantExpiryFailure(ctx context.Context, arg RecordOperatorGrantExpiryFailureParams) error
 	RecordOperatorGrantNoticeFailure(ctx context.Context, arg RecordOperatorGrantNoticeFailureParams) error
 	RecordPermanentVIESFault(ctx context.Context, arg RecordPermanentVIESFaultParams) error
+	// A polled provider conflict is durable operator work before its scan cursor advances.
+	RecordPolledSettlementConflict(ctx context.Context, arg RecordPolledSettlementConflictParams) (uuid.UUID, error)
 	RecordProviderValuationFailure(ctx context.Context, arg RecordProviderValuationFailureParams) error
 	RecordSettledCompensationRefund(ctx context.Context, arg RecordSettledCompensationRefundParams) error
 	RecordStripeMeterEventFailure(ctx context.Context, arg RecordStripeMeterEventFailureParams) error
@@ -950,6 +956,7 @@ type Querier interface {
 	// original amounts of confirmed payments in that currency, net of reversals.
 	ReopenUnderpaidBillingInvoice(ctx context.Context, arg ReopenUnderpaidBillingInvoiceParams) (int64, error)
 	RequestCheckoutRecovery(ctx context.Context, arg RequestCheckoutRecoveryParams) error
+	RequestProviderWebhookRetry(ctx context.Context, arg RequestProviderWebhookRetryParams) (int64, error)
 	RequestTierUpgradeRecovery(ctx context.Context, arg RequestTierUpgradeRecoveryParams) (int64, error)
 	RequeueAbandonedFreeFallbackNotice(ctx context.Context, arg RequeueAbandonedFreeFallbackNoticeParams) (int64, error)
 	// Only one of several concurrent confirmations finds the notice abandoned.
@@ -978,6 +985,9 @@ type Querier interface {
 	ResolveProviderTaxReview(ctx context.Context, arg ResolveProviderTaxReviewParams) (int64, error)
 	// Authenticated provider events locate only their existing tenant mapping.
 	ResolveStripeTaxDocumentOwners(ctx context.Context, customerID string) ([]string, error)
+	// Provider-boundary lookup; tenant is established from retained local ownership,
+	// never from callback headers or customer-supplied metadata.
+	ResolveStripeWebhookOwners(ctx context.Context, arg ResolveStripeWebhookOwnersParams) ([]string, error)
 	RetainDeliveredHistoricalMollieCheckout(ctx context.Context, arg RetainDeliveredHistoricalMollieCheckoutParams) (int64, error)
 	// A payment completed while the native cancellation ran still buys its full term.
 	RetainPaidFreeFallbackPeriod(ctx context.Context, arg RetainPaidFreeFallbackPeriodParams) (int64, error)

@@ -46,10 +46,36 @@ func TestProcessMistTriggerDiscardsNodeOwnerTenantHint(t *testing.T) {
 	capture := &captureMistTriggerProcessor{}
 	mistTriggerProcessor = capture
 	tenant := "node-owner-is-not-resource-owner"
-	processMistTrigger(&ipcpb.MistTrigger{TriggerType: "PROCESS_BILLING", TenantId: &tenant},
-		NodeSession{CanonicalNodeID: "node-owner-test", ClusterID: "cluster-1"}, &captureStream{}, logging.Logger(logrus.New()))
+	processMistTrigger(&ipcpb.MistTrigger{TriggerType: "PROCESS_BILLING", TenantId: &tenant, TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{ProcessBilling: &ipcpb.ProcessBillingEvent{}}},
+		NodeSession{CanonicalNodeID: "node-owner-test", ClusterID: "cluster-1", OwnerTenantID: tenant}, &captureStream{}, logging.Logger(logrus.New()))
 	if capture.last == nil || capture.last.GetTenantId() != "" {
 		t.Fatalf("authenticated edge tenant was forwarded as resource owner: %+v", capture.last)
+	}
+}
+
+func TestProcessMistTriggerUsesAuthenticatedOwnerOnlyForNodeEvents(t *testing.T) {
+	previous := mistTriggerProcessor
+	t.Cleanup(func() { mistTriggerProcessor = previous })
+	for _, test := range []struct {
+		name    string
+		trigger *ipcpb.MistTrigger
+		want    string
+	}{
+		{"raw close", &ipcpb.MistTrigger{TriggerType: "PUSH_INPUT_CLOSE", TriggerPayload: &ipcpb.MistTrigger_RawMistWebhook{RawMistWebhook: &ipcpb.RawMistWebhookTrigger{}}}, "trusted-owner"},
+		{"node lifecycle", &ipcpb.MistTrigger{TriggerType: "NODE_LIFECYCLE_UPDATE", TriggerPayload: &ipcpb.MistTrigger_NodeLifecycleUpdate{NodeLifecycleUpdate: &ipcpb.NodeLifecycleUpdate{}}}, "trusted-owner"},
+		{"media with forged node label", &ipcpb.MistTrigger{TriggerType: "NODE_LIFECYCLE_UPDATE", TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{ProcessBilling: &ipcpb.ProcessBillingEvent{}}}, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			capture := &captureMistTriggerProcessor{}
+			mistTriggerProcessor = capture
+			forged := "forged-tenant"
+			test.trigger.TenantId = &forged
+			session := (&conn{canonicalID: "owner-test-node", clusterID: "cluster", ownerTenantID: "trusted-owner"}).session()
+			processMistTrigger(test.trigger, session, &captureStream{}, logging.Logger(logrus.New()))
+			if capture.last == nil || capture.last.GetTenantId() != test.want {
+				t.Fatalf("trusted payload attribution: got %q want %q", capture.last.GetTenantId(), test.want)
+			}
+		})
 	}
 }
 

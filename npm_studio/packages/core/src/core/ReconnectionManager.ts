@@ -21,6 +21,7 @@ export class ReconnectionManager extends TypedEventEmitter<ReconnectionEvents> {
   private countdownInterval: ReturnType<typeof setInterval> | null = null;
   private reconnectCallback: (() => Promise<void>) | null = null;
   private run = 0;
+  private destroyed = false;
 
   constructor(config: Partial<ReconnectionConfig> = {}) {
     super();
@@ -47,6 +48,7 @@ export class ReconnectionManager extends TypedEventEmitter<ReconnectionEvents> {
    * Start reconnection process
    */
   start(reconnectCallback: () => Promise<void>): void {
+    if (this.destroyed) return;
     if (!this.config.enabled) {
       console.log("[ReconnectionManager] Reconnection disabled");
       return;
@@ -72,7 +74,8 @@ export class ReconnectionManager extends TypedEventEmitter<ReconnectionEvents> {
    * Schedule the next reconnection attempt
    */
   private scheduleNextAttempt(): void {
-    if (!this.state.isReconnecting) return;
+    if (this.destroyed || !this.state.isReconnecting) return;
+    const run = this.run;
 
     this.state.attemptNumber++;
 
@@ -92,6 +95,8 @@ export class ReconnectionManager extends TypedEventEmitter<ReconnectionEvents> {
       attempt: this.state.attemptNumber,
       delay,
     });
+
+    if (this.destroyed || run !== this.run || !this.state.isReconnecting) return;
 
     // Start countdown
     this.startCountdown(delay);
@@ -278,8 +283,9 @@ export class ReconnectionManager extends TypedEventEmitter<ReconnectionEvents> {
    * Destroy the manager
    */
   destroy(): void {
-    this.run++;
-    this.cleanup();
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.stop();
     this.removeAllListeners();
   }
 }

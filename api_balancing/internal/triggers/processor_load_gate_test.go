@@ -148,10 +148,13 @@ func TestShouldSurfaceDecklogError(t *testing.T) {
 		string(mist.TriggerUserEnd),
 		string(mist.TriggerStreamEnd),
 		string(mist.TriggerPushEnd),
+		string(mist.TriggerPushInputClose),
 		string(mist.TriggerRecordingEnd),
 		string(mist.TriggerRecordingSegment),
 		string(mist.TriggerLivepeerSegmentComplete),
 		string(mist.TriggerProcessAVSegmentComplete),
+		string(mist.TriggerRestreamStatusFinal),
+		string(mist.TriggerIngestAdmissionAbandoned),
 	}
 	for _, tt := range surface {
 		trig := &ipcpb.MistTrigger{TriggerType: tt}

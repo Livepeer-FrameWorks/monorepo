@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"frameworks/cli/pkg/bootstrap"
+	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 
 	"github.com/spf13/cobra"
@@ -28,7 +30,7 @@ func TestReleaseApplyReconcilesQuartermasterBootstrap(t *testing.T) {
 	installFakeSQLClient(t, "f", `{}`)
 
 	var steps []string
-	releasePrepareQuartermasterBootstrapFn = func(*cobra.Command, *resolvedCluster, *ssh.Pool) (func(context.Context, bool) error, error) {
+	releasePrepareQuartermasterBootstrapFn = func(*cobra.Command, *resolvedCluster, *ssh.Pool, string) (func(context.Context, bool) error, error) {
 		steps = append(steps, "quartermaster:render")
 		return func(_ context.Context, dryRun bool) error {
 			if !dryRun {
@@ -77,7 +79,7 @@ func TestReleaseApplyRefusesWhenQuartermasterBootstrapDoesNotRender(t *testing.T
 	h.install(t)
 	origQuartermaster := releasePrepareQuartermasterBootstrapFn
 	t.Cleanup(func() { releasePrepareQuartermasterBootstrapFn = origQuartermaster })
-	releasePrepareQuartermasterBootstrapFn = func(*cobra.Command, *resolvedCluster, *ssh.Pool) (func(context.Context, bool) error, error) {
+	releasePrepareQuartermasterBootstrapFn = func(*cobra.Command, *resolvedCluster, *ssh.Pool, string) (func(context.Context, bool) error, error) {
 		return nil, errors.New("render bootstrap desired state: missing cluster owner")
 	}
 	_, err := runReleaseApplyForTest(t, releaseApplyOptions{version: "v0.3.11", yes: true})
@@ -101,4 +103,29 @@ func runReleaseApplyForTest(t *testing.T, opts releaseApplyOptions) (string, err
 	}
 	err := runReleaseApply(cmd, &resolvedCluster{Manifest: postExpandReportManifest()}, opts)
 	return out.String(), err
+}
+
+func TestQuartermasterReleaseDryRunInvokesItsRetirementPlan(t *testing.T) {
+	previous := releaseRegistryInstancesFn
+	t.Cleanup(func() { releaseRegistryInstancesFn = previous })
+	releaseRegistryInstancesFn = func(context.Context, *cobra.Command, *resolvedCluster, *ssh.Pool, *bootstrap.ServiceRegistryScope) ([]registryPreviewRow, error) {
+		return nil, nil
+	}
+	plans := stubBootstrapPlans(t)
+	rc := &resolvedCluster{Manifest: &inventory.Manifest{Services: map[string]inventory.ServiceConfig{"quartermaster": {Enabled: true}}}}
+	rc.bootstrapYAMLOnce.Do(func() {
+		rc.bootstrapYAML = []byte("quartermaster:\n  registry_scope:\n    owner: production\n    complete: true\n    clusters: [core]\n")
+	})
+	cmd := &cobra.Command{}
+	cmd.SetOut(&strings.Builder{})
+	step, err := prepareReleaseQuartermasterBootstrap(cmd, rc, nil, "v0.3.15")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := step(t.Context(), true); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(*plans, ",") != "quartermaster at v0.3.15" {
+		t.Fatalf("retirement dry run omitted: %v", *plans)
+	}
 }

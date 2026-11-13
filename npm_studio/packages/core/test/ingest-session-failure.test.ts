@@ -203,6 +203,18 @@ describe("a Go Live that fails", () => {
 });
 
 describe("reconnecting after a lost connection", () => {
+  it("clears a pending reconnect connection timeout when destroyed", async () => {
+    vi.useFakeTimers();
+    const { controller } = create();
+    await goLive(controller);
+    lastPeer().moveTo("failed");
+    fetcher.mockResolvedValueOnce(accepted());
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(controller.getState()).toBe("reconnecting");
+    controller.destroy();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it("reports running out of attempts with the last reason", async () => {
     vi.useFakeTimers();
     const { controller, errors } = create();

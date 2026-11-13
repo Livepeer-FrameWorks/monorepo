@@ -34,6 +34,15 @@ func nativeSettlementRecorded(err error) bool {
 // so missing reference rates cannot lose provider facts or pin its scan cursor.
 func (s *Service) settleProviderPayment(ctx context.Context, tenant, provider, paymentID, transactionID, currency string, gross, fee, net int64, providerRate sql.NullString, at time.Time) (bool, error) {
 	q := purserdb.New(s.db)
+	if providerRate.Valid {
+		rate, parseErr := decimal.NewFromString(providerRate.String)
+		if parseErr != nil || !rate.IsPositive() {
+			return false, errors.New("provider settlement has invalid exchange rate")
+		}
+		// provider_settlements.exchange_rate is NUMERIC(20,10). Normalize before
+		// persistence and replay comparison so database rounding is deterministic.
+		providerRate.String = rate.Round(10).String()
+	}
 	at = at.UTC().Truncate(time.Microsecond)
 	if transactionID == "" || at.IsZero() || fee < 0 || net != gross-fee {
 		return false, errors.New("provider settlement has invalid transaction identity, time or native amounts")
@@ -68,7 +77,7 @@ func equalProviderRate(recorded string, rate sql.NullString) bool {
 		return false
 	}
 	right, err := decimal.NewFromString(rate.String)
-	return err == nil && left.Equal(right)
+	return err == nil && left.Equal(right.Round(10))
 }
 
 func (s *Service) valueRecordedProviderSettlement(ctx context.Context, provider, paymentID string, row purserdb.GetProviderSettlementRow) (bool, error) {

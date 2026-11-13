@@ -10,7 +10,7 @@ FROM docker/compose-bin:v2.39.4 AS compose
 FROM node:24-bookworm-slim
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-    bash ca-certificates curl ffmpeg git jq openssl postgresql-client procps python3 python3-venv \
+    bash ca-certificates curl ffmpeg gcc git jq libc6-dev openssl postgresql-client procps python3 python3-venv util-linux \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=go /usr/local/go /usr/local/go

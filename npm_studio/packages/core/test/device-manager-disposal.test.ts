@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ReconnectionManager } from "../src/core/ReconnectionManager";
 import { DeviceManager } from "../src/core/DeviceManager";
 import { IngestControllerV2 } from "../src/core/IngestControllerV2";
 
@@ -38,6 +39,45 @@ afterEach(() => {
 });
 
 describe("DeviceManager disposal", () => {
+  it("stops a microphone switch superseded while permission was pending", async () => {
+    const media = mediaFixture();
+    const manager = new DeviceManager();
+    const tracks: MediaStreamTrack[] = [];
+    const original = {
+      getTracks: () => tracks,
+      getVideoTracks: () => [],
+      getAudioTracks: () => tracks,
+      addTrack: (track: MediaStreamTrack) => tracks.push(track),
+      removeTrack: (track: MediaStreamTrack) => tracks.splice(tracks.indexOf(track), 1),
+    } as unknown as MediaStream;
+    media.getUserMedia.mockResolvedValueOnce(original);
+    await manager.getUserMedia();
+    const first = deferred<MediaStream>();
+    const second = deferred<MediaStream>();
+    media.getUserMedia.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const obsolete = manager.replaceAudioTrack("first");
+    const obsoleteResult = expect(obsolete).rejects.toMatchObject({ name: "AbortError" });
+    const current = manager.replaceAudioTrack("second");
+    const microphone = () => {
+      const track = { kind: "audio", stop: vi.fn() } as unknown as MediaStreamTrack;
+      return {
+        track,
+        stream: {
+          getTracks: () => [track],
+          getAudioTracks: () => [track],
+        } as unknown as MediaStream,
+      };
+    };
+    const latest = microphone();
+    second.resolve(latest.stream);
+    await current;
+    const late = microphone();
+    first.resolve(late.stream);
+    await obsoleteResult;
+    expect(late.track.stop).toHaveBeenCalledOnce();
+    expect(tracks).toEqual([latest.track]);
+    manager.destroy();
+  });
   it("keeps a controller destroyed when a pending camera is granted", async () => {
     const media = mediaFixture();
     const permission = deferred<MediaStream>();
@@ -61,6 +101,24 @@ describe("DeviceManager disposal", () => {
     expect(controller.getState()).toBe("destroyed");
     expect(controller.getSources()).toEqual([]);
   });
+  it("stops a replacement camera granted after its source was removed", async () => {
+    const media = mediaFixture();
+    const manager = new DeviceManager();
+    const original = capture();
+    const addTrack = vi.fn();
+    Object.assign(original.stream, { addTrack, removeTrack: vi.fn() });
+    const pending = deferred<MediaStream>();
+    media.getUserMedia.mockReturnValueOnce(pending.promise);
+    const switching = manager.replaceVideoTrack("new-camera", "professional", original.stream);
+    manager.releaseStream(original.stream);
+    const late = capture();
+    pending.resolve(late.stream);
+    await expect(switching).rejects.toMatchObject({ name: "AbortError" });
+    expect(late.stop).toHaveBeenCalledOnce();
+    expect(addTrack).not.toHaveBeenCalled();
+    manager.destroy();
+  });
+
   it("removes the exact browser listener once on each mount and teardown", async () => {
     const media = mediaFixture();
     const add = vi.spyOn(media, "addEventListener");
@@ -143,4 +201,21 @@ describe("DeviceManager disposal", () => {
     expect(media.enumerateDevices).not.toHaveBeenCalled();
     expect(emit).not.toHaveBeenCalled();
   });
+});
+
+it("does not install a reconnect timer after a listener destroys the manager", () => {
+  vi.useFakeTimers();
+  try {
+    const manager = new ReconnectionManager();
+    const callback = vi.fn(async () => {});
+    manager.on("attemptStart", () => manager.destroy());
+    manager.start(callback);
+    expect(vi.getTimerCount()).toBe(0);
+    manager.start(callback);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(manager.isReconnecting()).toBe(false);
+    expect(callback).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
 });

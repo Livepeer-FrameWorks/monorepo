@@ -50,7 +50,7 @@ type terminalWSFixture struct {
 	serverURL string
 }
 
-func newTerminalWSFixture(t *testing.T, sc *clients.ServiceClients) *terminalWSFixture {
+func newTerminalWSFixture(t *testing.T, sc *clients.ServiceClients, checks ...BillingChecker) *terminalWSFixture {
 	t.Helper()
 	if sc == nil {
 		baseline := goleak.IgnoreCurrent()
@@ -59,6 +59,7 @@ func newTerminalWSFixture(t *testing.T, sc *clients.ServiceClients) *terminalWSF
 	f := &terminalWSFixture{events: make(chan struct{}), started: make(chan string, 8), finished: make(chan string, 8)}
 	schema := gqlparser.MustLoadSchema(&ast.Source{Input: `
 		type Query { serverInfo: String! }
+        type Mutation { createClip: String! }
 		type Subscription { name: String! }
 	`})
 	srv := handler.New(&graphql.ExecutableSchemaMock{
@@ -67,6 +68,9 @@ func newTerminalWSFixture(t *testing.T, sc *clients.ServiceClients) *terminalWSF
 			return 0, false
 		},
 		ExecFunc: func(ctx context.Context) graphql.ResponseHandler {
+			if graphql.GetOperationContext(ctx).Operation.Operation == ast.Mutation {
+				return graphql.OneShot(&graphql.Response{Data: []byte(`{"createClip":"unexpected"}`)})
+			}
 			if graphql.GetOperationContext(ctx).Operation.Operation == ast.Query {
 				return graphql.OneShot(&graphql.Response{Data: []byte(`{"serverInfo":"ok"}`)})
 			}
@@ -104,6 +108,9 @@ func newTerminalWSFixture(t *testing.T, sc *clients.ServiceClients) *terminalWSF
 		}
 	})
 	srv.AroundOperations(GraphQLOperationAuth())
+	if len(checks) > 0 {
+		srv.AroundOperations(GraphQLOperationAccess(checks[0]))
+	}
 	srv.AddTransport(GraphQLWebsocketTransport(sc, wsInitSecret, nil, websocket.Upgrader{}, 0, nil, 0))
 	httpServer := httptest.NewServer(srv)
 	t.Cleanup(httpServer.Close)
@@ -246,5 +253,41 @@ func TestGraphQLWebSocketHealthySubscriptionStillStreams(t *testing.T) {
 				t.Fatal("healthy subscription retained its producer")
 			}
 		})
+	}
+}
+
+func TestGraphQLWebSocketBillingDenialCompletesAndConnectionRemainsUsable(t *testing.T) {
+	for _, protocol := range terminalWSProtocols {
+		for _, tc := range []struct {
+			name, code string
+			checker    BillingChecker
+		}{
+			{"unfunded", "INSUFFICIENT_BALANCE", fakeBillingChecker{billingModel: "prepaid", isBalanceNegative: true}},
+			{"billing unavailable", "BILLING_STATUS_UNAVAILABLE", fakeBillingChecker{err: context.DeadlineExceeded}},
+		} {
+			t.Run(protocol.name+"/"+tc.name, func(t *testing.T) {
+				sc, _ := switchableClients(t)
+				f := newTerminalWSFixture(t, sc, tc.checker)
+				conn := f.connect(t, protocol, "Bearer fw_api_token_value")
+				sendTerminalWSOperation(t, conn, protocol, "billed", "Billed", `mutation Billed { createClip }`)
+				first := readTerminalWSMessage(t, conn)
+				if first.Type != protocol.result || first.ID != "billed" || len(first.Payload.Errors) != 1 || first.Payload.Errors[0].Extensions["code"] != tc.code {
+					t.Fatalf("billing denial=%+v", first)
+				}
+				if next := readTerminalWSMessage(t, conn); next.Type != "complete" || next.ID != "billed" {
+					t.Fatalf("billing error response repeated: %+v", next)
+				}
+				sendTerminalWSOperation(t, conn, protocol, "public", "Public", `query Public { serverInfo }`)
+				if next := readTerminalWSMessage(t, conn); next.Type != protocol.result || len(next.Payload.Errors) != 0 {
+					t.Fatalf("connection not usable after billing denial: %+v", next)
+				}
+				if next := readTerminalWSMessage(t, conn); next.Type != "complete" {
+					t.Fatalf("public query did not complete: %+v", next)
+				}
+				if f.overflow.Load() || f.active.Load() != 0 {
+					t.Fatal("billing denial retained a response producer")
+				}
+			})
+		}
 	}
 }

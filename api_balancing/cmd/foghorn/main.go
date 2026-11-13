@@ -1251,6 +1251,7 @@ func main() {
 		mediaAuthorityShadow.WithLabelValues(outcome).Add(0)
 	}
 	triggerProcessor.SetMetrics(&triggers.ProcessorMetrics{
+		AbsentResourceReports: metricsCollector.NewCounter("absent_resource_reports_total", "Terminal reports discarded for authoritatively absent resources", nil).WithLabelValues(),
 		BillingCacheEvents: metricsCollector.NewCounter(
 			"billing_cache_events_total",
 			"Tenant billing authority cache outcomes",

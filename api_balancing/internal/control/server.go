@@ -195,11 +195,12 @@ type conn struct {
 	// rawNodeID is the registry key the node heartbeats under (the id it self-asserted at Register). Kept so the
 	// server-owned NodeSession (see nodeSession) can carry BOTH the raw and canonical ids without a registry
 	// reverse-lookup.
-	rawNodeID    string
-	peerAddr     string
-	canonicalID  string // node ID after fingerprint/enrollment resolution (may differ from registry key)
-	clusterID    string
-	relayBaseURL string // base URL Mist on this node uses to reach Helmsman's /internal/artifact/* relay
+	rawNodeID     string
+	peerAddr      string
+	canonicalID   string // node ID after fingerprint/enrollment resolution (may differ from registry key)
+	clusterID     string
+	ownerTenantID string
+	relayBaseURL  string // base URL Mist on this node uses to reach Helmsman's /internal/artifact/* relay
 	// protocolVersion is the control-protocol version this sidecar declared at registration
 	// (Register.control_protocol_version). It gates protocol-dependent dispatch — notably staged freeze —
 	// on an OBSERVED capability rather than a per-request self-asserted flag. 0 = a pre-staged-freeze sidecar.
@@ -226,12 +227,12 @@ type conn struct {
 // connection's lifetime — handlers use it INSTEAD of re-deriving identity from node-reported NodeState (which a
 // reconnect can race) or trusting payload identity fields.
 //
-// It carries NODE + CLUSTER identity only. The cluster may have a Quartermaster owner tenant, but that is a
-// cluster-ownership fact for node-level/provider attribution — it is NEVER media-tenant provenance. Media tenant
-// is always resolved per-resource (job/stream/artifact); see PLAN_MEDIA_AUTHORITY_FOUNDATION.md.
+// The owner tenant is used only for node-scoped telemetry and opaque raw webhooks.
+// Media tenant provenance is always resolved per resource (job/stream/artifact).
 type NodeSession struct {
 	RawNodeID       string // registry key the node heartbeats under
 	CanonicalNodeID string // node id after fingerprint/enrollment resolution
+	OwnerTenantID   string // authenticated node owner; never media provenance
 	ClusterID       string // authoritative virtual cluster (server-resolved at enrollment, never payload)
 	Fence           int64  // monotonic ownership fence for this connection generation
 	ProtocolVersion int32
@@ -256,6 +257,7 @@ func (c *conn) session() NodeSession {
 		RawNodeID:       c.rawNodeID,
 		CanonicalNodeID: c.canonicalID,
 		ClusterID:       c.clusterID,
+		OwnerTenantID:   c.ownerTenantID,
 		Fence:           c.fence,
 		ProtocolVersion: c.protocolVersion,
 	}
@@ -2088,6 +2090,7 @@ receiveLoop:
 			}
 			newConn.canonicalID = canonicalNodeID
 			newConn.clusterID = clusterID
+			newConn.ownerTenantID = strings.TrimSpace(tenantID)
 			connSession = newConn.session()
 
 			// From here the node's IDENTITY is its authenticated CANONICAL id. The self-asserted raw id is
@@ -5651,8 +5654,14 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 		// Origin is resource identity, not connection identity. Nodes cannot assert it;
 		// the trigger processor restores it only from server-owned stream/artifact state.
 		trigger.OriginClusterId = nil
-		// The authenticated node owner is not the owner of shared-edge content.
+		// Only node-scoped events and opaque parse fallbacks use node ownership.
+		// Dispatch by payload, so a media event cannot claim node attribution by
+		// changing its trigger label. Resource handlers resolve their own tenant.
 		trigger.TenantId = nil
+		switch trigger.GetTriggerPayload().(type) {
+		case *ipcpb.MistTrigger_NodeLifecycleUpdate, *ipcpb.MistTrigger_RawMistWebhook:
+			trigger.TenantId = stringPtrIfNotEmpty(strings.TrimSpace(session.OwnerTenantID))
+		}
 		syncMistTriggerPlacement(trigger, cid, controlCellID)
 	}
 

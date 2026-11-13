@@ -471,6 +471,24 @@ func (s *Store) GetTLSBundle(ctx context.Context, bundleID string) (*TLSBundle, 
 	return s.getTLSBundle(ctx, bundleID, false)
 }
 
+// GetTLSBundleCertificate reads serving eligibility and public material without
+// decrypting the private key for a DNS readiness probe.
+func (s *Store) GetTLSBundleCertificate(ctx context.Context, bundleID string) (string, error) {
+	var row navigatordb.NavigatorTlsBundle
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var err error
+		row, err = s.q.GetTLSBundle(ctx, bundleID)
+		return err
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	return row.CertPem, nil
+}
+
 // GetTLSBundleForIssuance is the cache/CA-pinning read. It remains available
 // while active alias authority is issuing or retrying; serving policy is a
 // separate contract even when both currently preserve the last-good bundle.

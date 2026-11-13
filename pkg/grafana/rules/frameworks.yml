@@ -168,6 +168,15 @@ groups:
           summary: "Tenant closure is awaiting synchronization"
           description: 'A closed tenant''s Quartermaster teardown has failed more than once, or Commodore cannot read its closure queue from its database. Commodore retries every minute and logs each failure as "Finish tenant closure" with tenant_id and the Quartermaster error. frameworks cluster doctor --deep names the affected tenants; frameworks admin tenants get <tenant> shows the Quartermaster synchronization as failing, with its attempts and that error. Restore Commodore''s connection to Quartermaster, or Commodore''s database for read failures; the closure completes on the next retry. Access is already revoked locally, so users stay closed while this fires.'
 
+      - alert: PurserFXReferenceRatesStale
+        expr: max by (currency) (purser_fx_rate_reference_age_seconds) > 496800 or absent(purser_fx_rate_reference_age_seconds{currency="USD"}) or absent(purser_fx_rate_reference_age_seconds{currency="GBP"})
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "ECB reference rates are stale or missing"
+          description: "Purser has no {{ $labels.currency }} reference rate or the newest ECB reference date is over five days and eighteen hours old. Inspect Purser's ECB synchronization errors and restore feed/database access. New conversions refuse references older than five calendar days; this warning allows normal TARGET holiday publication gaps."
+
       - alert: PurserProviderWebhookInboxStuck
         expr: max(purser_provider_webhook_inbox_repeatedly_failed_items) > 0 or max(increase(purser_provider_webhook_inbox_read_failures_total[2m])) > 1
         for: 5m

@@ -4,6 +4,9 @@ import "github.com/prometheus/client_golang/prometheus"
 
 // ProcessorMetrics holds optional Prometheus metrics for trigger processing and fan-out.
 type ProcessorMetrics struct {
+	// AbsentResourceReports counts terminal reports discarded after definitive resource absence.
+	AbsentResourceReports prometheus.Counter
+
 	// BillingCacheEvents counts tenant billing cache outcomes. Labels contain
 	// only the bounded outcome enum and never tenant or stream identifiers.
 	BillingCacheEvents *prometheus.CounterVec

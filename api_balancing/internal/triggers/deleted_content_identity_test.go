@@ -30,9 +30,7 @@ func TestUserEndAfterStreamDeletionCarriesTheTombstonedStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	validUntil := time.Now().Add(time.Hour)
-	for range 2 {
-		expectLocalPair(mock, tombstone, tenantBytes, validUntil, validUntil, true)
-	}
+	expectLocalPair(mock, tombstone, tenantBytes, validUntil, validUntil, true)
 	capture, client := startDecklogCapture(t)
 	p.decklogClient = client
 

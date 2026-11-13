@@ -21,4 +21,5 @@
   loop:
     - "{{ privateer_ingress_tls_root | dirname }}"
     - "{{ privateer_ingress_tls_root }}"
+  register: privateer_ingress_custody
   when: not ansible_check_mode

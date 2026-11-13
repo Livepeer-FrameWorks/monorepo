@@ -1,4 +1,9 @@
 ---
+- name: Ensure shared public ingress custody group
+  ansible.builtin.group:
+    name: "{{ nginx_ingress_reader_group }}"
+    system: true
+
 - name: Configure automatic tenant playback certificate access
   ansible.builtin.import_tasks: tenant_alias_permissions.yml
   when: nginx_tenant_alias_playback.enabled | default(false)

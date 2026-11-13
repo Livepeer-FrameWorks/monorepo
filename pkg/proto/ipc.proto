@@ -1085,7 +1085,7 @@ message MistTrigger {
   int64 timestamp = 4;        // When trigger was received
   bool blocking = 5;          // Does this trigger need a response from Foghorn?
   string request_id = 6;      // For correlating responses
-  optional string tenant_id = 7; // Tenant context (enriched by Foghorn)
+  optional string tenant_id = 7; // Foghorn resolves resource owner; node/raw events use authenticated node owner
   optional string user_id = 8;   // User context (enriched by Foghorn)
   optional string stream_id = 9; // Public stream ID (enriched by Foghorn)
 
