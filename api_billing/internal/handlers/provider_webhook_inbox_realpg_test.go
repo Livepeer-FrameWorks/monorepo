@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -17,6 +18,29 @@ import (
 )
 
 func TestProviderWebhookInboxRepository_RealPG(t *testing.T) {
+	t.Run("safe_historical_delivery_reason", func(t *testing.T) {
+		db := startPurserUsageRealPG(t)
+		service := &Service{db: db}
+		if ok, message, status := service.enqueueProviderWebhook(t.Context(), "stripe", "historical-delivery", nil, []byte(`{"id":"historical-delivery"}`)); !ok {
+			t.Fatalf("enqueue = (%v, %q, %d)", ok, message, status)
+		}
+		store := &providerWebhookInboxStore{db: db}
+		claims, err := store.ClaimBatch(t.Context(), 1, time.Minute)
+		if err != nil || len(claims) != 1 {
+			t.Fatalf("claim historical delivery: %v %v", claims, err)
+		}
+		cause := fmt.Errorf("%w: credential=must-not-persist", billingmollie.ErrHistoricalFundingAmbiguous)
+		if err := store.RecordFailureToken(t.Context(), claims[0].ID, 0, nil, cause, 0, claims[0].LeaseToken); err != nil {
+			t.Fatal(err)
+		}
+		var code, message string
+		if err := db.QueryRowContext(t.Context(), `SELECT last_error_code,last_error FROM purser.provider_webhook_inbox WHERE id=$1`, claims[0].ID).Scan(&code, &message); err != nil {
+			t.Fatal(err)
+		}
+		if code != "historical_funding_ambiguous" || message != billingmollie.ErrHistoricalFundingAmbiguous.Error() {
+			t.Fatalf("historical delivery needs a safe classified reason, got (%q, %q)", code, message)
+		}
+	})
 	db := startPurserUsageRealPG(t)
 	ctx := context.Background()
 	assertCheckoutWakePreservesActiveClaim(t, db)
