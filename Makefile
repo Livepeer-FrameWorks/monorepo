@@ -459,7 +459,12 @@ verify-frontend-build:
 # Playwright's `install-deps chromium`.
 verify-marketing-browser:
 	pnpm --dir website_marketing exec playwright install chromium
+	$(MAKE) --no-print-directory test-stack-playback-browser-context
 	pnpm --filter frameworks-website test:browser
+
+.PHONY: test-stack-playback-browser-context
+test-stack-playback-browser-context:
+	node scripts/stack/test_playback_browser_context.mjs
 
 # The CI "Yugabyte database contract" jobs (YUGABYTE_CI_JOBS) on one machine. Needs Docker.
 # verify-schema-yugabyte already runs every service's contracts (verify-yugabyte-service-suites).
