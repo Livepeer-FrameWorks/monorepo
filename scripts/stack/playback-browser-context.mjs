@@ -1,7 +1,8 @@
 export async function createPlaybackBrowserPage(browser) {
-  const origin = "https://customer-player.frameworks.test";
+  // A .localhost page is trustworthy and matches the stack's HTTP transport.
+  const origin = "http://customer-player.localhost";
   const context = await browser.newContext();
-  // Stack media endpoints have private addresses; grant only this secure fixture access.
+  // Keep private-network permission scoped to the synthetic player origin.
   await context.grantPermissions(["local-network-access"], { origin });
   const page = await context.newPage();
   await page.route(`${origin}/`, (route) =>
