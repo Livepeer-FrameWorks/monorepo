@@ -168,13 +168,15 @@ bootstrap_accounts_pass() { # bootstrap_accounts_pass <log>: one pass; its outpu
     stack_compose exec -T purser /app/purser bootstrap --file /dev/stdin < scripts/stack/bootstrap.yaml >>"$1" 2>&1 &&
     stack_compose exec -T commodore /app/commodore bootstrap --accounts-only --file /dev/stdin < scripts/stack/bootstrap.yaml >>"$1" 2>&1
 }
+. "$stack_repo_root/scripts/stack/bootstrap-results.sh"
 bootstrap_log="$(mktemp)"
 bootstrap_accounts_pass "$bootstrap_log" || fail "stack account bootstrap failed: $(tail -5 "$bootstrap_log")"
 grep -Eq '^commodore bootstrap accounts: created=[0-9]+ updated=[0-9]+ noop=[0-9]+$' "$bootstrap_log" ||
   fail "stack account bootstrap printed no accounts result: $(tail -5 "$bootstrap_log")"
+: >"$bootstrap_log"
 bootstrap_accounts_pass "$bootstrap_log" || fail "second stack account bootstrap failed: $(tail -5 "$bootstrap_log")"
 for section in 'quartermaster bootstrap tenants' 'purser bootstrap customer_billing' 'commodore bootstrap accounts'; do
-  grep -Eq "^$section: created=0 updated=0 noop=[1-9][0-9]*\$" "$bootstrap_log" ||
+  bootstrap_section_unchanged "$section" "$bootstrap_log" ||
     fail "second stack account bootstrap changed $section: $(grep "^$section:" "$bootstrap_log")"
 done
 rm -f "$bootstrap_log"

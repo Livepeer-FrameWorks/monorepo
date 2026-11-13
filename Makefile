@@ -737,7 +737,11 @@ build-stack-walletsign:
 build-stack-billing-runner:
 	cd api_billing && go test -tags stack_verify -c -o ../bin/stack-billing-runner ./internal/handlers
 
-verify-stack-fixtures:
+.PHONY: test-stack-bootstrap-results
+test-stack-bootstrap-results:
+	bash scripts/stack/test_bootstrap_results.sh
+
+verify-stack-fixtures: test-stack-bootstrap-results
 	python3 scripts/stack/test_billing_provider.py
 	python3 scripts/stack/test_s3_fault_proxy.py
 	python3 scripts/stack/test_s3_prefix_empty.py
