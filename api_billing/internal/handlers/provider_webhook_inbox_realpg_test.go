@@ -50,8 +50,16 @@ func TestProviderWebhookInboxRepository_RealPG(t *testing.T) {
 	if err := store.MarkCompletedToken(ctx, claims[0].ID, uuid.NewString()); err == nil {
 		t.Fatal("stale completion lease unexpectedly succeeded")
 	}
-	if err := store.RecordFailureToken(ctx, claims[0].ID, 0, nil, errors.New("retry me"), 0, claims[0].LeaseToken); err != nil {
+	if err := store.RecordFailureToken(ctx, claims[0].ID, 0, nil, errors.New("credential=must-not-persist"), 0, claims[0].LeaseToken); err != nil {
 		t.Fatalf("record failure: %v", err)
+	}
+
+	var failureCode, failureMessage string
+	if err := db.QueryRowContext(ctx, `SELECT last_error_code,last_error FROM purser.provider_webhook_inbox WHERE id=$1`, claims[0].ID).Scan(&failureCode, &failureMessage); err != nil {
+		t.Fatal(err)
+	}
+	if failureCode != "reconciliation_failed" || failureMessage != "provider webhook reconciliation failed" {
+		t.Fatalf("raw provider error persisted: %q %q", failureCode, failureMessage)
 	}
 
 	retry, err := store.ClaimBatch(ctx, 10, 0)

@@ -7789,7 +7789,7 @@ type MistTrigger struct {
 	Timestamp   int64                  `protobuf:"varint,4,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                       // When trigger was received
 	Blocking    bool                   `protobuf:"varint,5,opt,name=blocking,proto3" json:"blocking,omitempty"`                         // Does this trigger need a response from Foghorn?
 	RequestId   string                 `protobuf:"bytes,6,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`       // For correlating responses
-	TenantId    *string                `protobuf:"bytes,7,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"`    // Tenant context (enriched by Foghorn)
+	TenantId    *string                `protobuf:"bytes,7,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"`    // Foghorn resolves resource owner; node/raw events use authenticated node owner
 	UserId      *string                `protobuf:"bytes,8,opt,name=user_id,json=userId,proto3,oneof" json:"user_id,omitempty"`          // User context (enriched by Foghorn)
 	StreamId    *string                `protobuf:"bytes,9,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"`    // Public stream ID (enriched by Foghorn)
 	// Typed trigger payloads (one of these will be set based on trigger_type)

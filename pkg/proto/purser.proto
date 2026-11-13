@@ -1268,6 +1268,8 @@ service PrepaidService {
 
   // Lists outstanding provider work without exposing raw webhook payloads. Platform operators only.
   rpc AdminListCheckoutRecovery(AdminListCheckoutRecoveryRequest) returns (AdminListCheckoutRecoveryResponse);
+  // Retries one reviewed blocked provider callback; never edits payment evidence.
+  rpc AdminRetryProviderWebhook(AdminRetryProviderWebhookRequest) returns (AdminRetryProviderWebhookResponse);
   // Previews one tenant checkout; confirmed requests durably reconcile it. Platform operators only.
   rpc AdminRecoverCheckout(AdminRecoverCheckoutRequest) returns (AdminRecoverCheckoutResponse);
   // Attests delivered historical Mollie service without refund. A separate RPC
@@ -2432,4 +2434,23 @@ message BillingDiagnosticInvoice {
   string amount = 4;
   string currency = 5;
   string due_at = 6;
+}
+
+message AdminRetryProviderWebhookRequest {
+  string tenant_id = 1;
+  string webhook_id = 2;
+  string reason = 3;
+  bool confirmed = 4;
+  string expected_state = 5; // Opaque state from the preview, required for confirmation.
+}
+message AdminRetryProviderWebhookResponse {
+  string webhook_id = 1;
+  string provider = 2;
+  string provider_payment_id = 3;
+  string status = 4;
+  string error_code = 5;
+  string expected_state = 6;
+  bool eligible = 7;
+  bool retry_requested = 8;
+  string audit_id = 9;
 }

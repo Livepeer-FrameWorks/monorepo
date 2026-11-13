@@ -54,7 +54,7 @@ func runCheckoutRecoveryList(ctx context.Context, w io.Writer, p checkoutRecover
 		if len(res.GetItems()) == 0 {
 			fmt.Fprintln(w, "No provider recovery work found.")
 		} else {
-			fmt.Fprintln(w, "PROVIDER  TENANT  RESERVATION  STATE  AMOUNT  NEXT ATTEMPT  DETAIL")
+			fmt.Fprintln(w, "WORK ID  PROVIDER  TENANT  RESERVATION  STATE  AMOUNT  NEXT ATTEMPT  DETAIL")
 		}
 		for _, item := range res.GetItems() {
 			next := "-"
@@ -65,7 +65,7 @@ func runCheckoutRecoveryList(ctx context.Context, w io.Writer, p checkoutRecover
 			if item.GetAmountKnown() {
 				amount = recoveryAmount(item.GetAmountCents(), item.GetCurrency())
 			}
-			fmt.Fprintf(w, "%s  %s  %s  %s/%s  %s  %s  %q\n", item.GetProvider(), item.GetTenantId(), item.GetReservationId(), item.GetReservationStatus(), item.GetStatus(), amount, next, item.GetLastError())
+			fmt.Fprintf(w, "%s  %s  %s  %s  %s/%s  %s  %s  %q\n", item.GetId(), item.GetProvider(), item.GetTenantId(), item.GetReservationId(), item.GetReservationStatus(), item.GetStatus(), amount, next, item.GetLastError())
 		}
 		for _, item := range res.GetItems() {
 			if item.GetProvider() == "free_fallback" {
@@ -194,7 +194,7 @@ func newAdminBillingRecoveryCmd() *cobra.Command {
 	recoverCmd.Flags().StringVar(&req.TenantId, "tenant-id", "", "owning tenant UUID (required)")
 	recoverCmd.Flags().StringVar(&req.ReservationId, "reservation-id", "", "checkout reservation UUID (required)")
 	recoverCmd.Flags().StringVar(&req.Reason, "reason", "", "operator reason, retained with the recovery request (required)")
-	parent.AddCommand(list, recoverCmd, newAdminTierUpgradeRecoveryCmd(), newAdminTierDowngradeRecoveryCmd(), newAdminFallbackNoticeRecoveryCmd())
+	parent.AddCommand(list, recoverCmd, newAdminProviderWebhookRetryCmd(), newAdminTierUpgradeRecoveryCmd(), newAdminTierDowngradeRecoveryCmd(), newAdminFallbackNoticeRecoveryCmd())
 	return parent
 }
 

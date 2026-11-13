@@ -178,3 +178,108 @@ func TestProviderSettlementConflictStaysBlockedAfterValuation_RealPG(t *testing.
 		t.Fatalf("permanent conflict re-entered the worker queue: %+v %v", again, err)
 	}
 }
+
+func TestMolliePolledConflictDoesNotBlockLaterSettlements_RealPG(t *testing.T) {
+	db := startProviderReservationDatabase(t)
+	fixture, client := installMollieFixture(t)
+	service := &Service{db: db, logger: logging.NewLogger(), mollieClient: client}
+	tenant := uuid.NewString()
+	queries := newProviderSettlementQueries(db)
+	queries.insertPending(t, tenant, "mollie", "tr_conflict", 1200, "USD")
+	queries.insertPending(t, tenant, "mollie", "tr_later", 1000, "EUR")
+	now := time.Now().UTC().Truncate(time.Second)
+	if _, err := db.ExecContext(t.Context(), `UPDATE purser.provider_settlements
+ SET status='recorded',settlement_currency='USD',provider_balance_transaction_id='bal_original',
+ settled_amount_cents=1200,fee_cents=60,net_cents=1140,settled_at=$2
+ WHERE tenant_id=$1 AND provider='mollie' AND provider_payment_id='tr_conflict'`, tenant, now.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	fixture.route(http.MethodGet, "/v2/balances/primary", func(recordedProviderRequest) (int, any) {
+		return http.StatusOK, map[string]string{"resource": "balance", "id": "bal_primary"}
+	})
+	transaction := func(id, payment, currency, gross, net, fee string, at time.Time) map[string]any {
+		return map[string]any{"resource": "balance_transaction", "id": id, "type": "payment", "createdAt": at.Format(time.RFC3339),
+			"initialAmount": map[string]string{"currency": currency, "value": gross}, "resultAmount": map[string]string{"currency": currency, "value": net},
+			"deductions": map[string]string{"currency": currency, "value": fee}, "context": map[string]any{"paymentId": payment}}
+	}
+	fixture.route(http.MethodGet, "/v2/balances/bal_primary/transactions", func(recordedProviderRequest) (int, any) {
+		return http.StatusOK, map[string]any{"_embedded": map[string]any{"balance_transactions": []map[string]any{
+			transaction("bal_conflict", "tr_conflict", "USD", "13.00", "12.40", "-0.60", now.Add(-2*time.Hour)),
+			transaction("bal_later", "tr_later", "EUR", "10.00", "9.71", "-0.29", now.Add(-3*time.Hour)),
+		}}, "_links": map[string]any{}}
+	})
+	for range 2 {
+		if err := service.readMollieSettlements(t.Context(), now); err != nil {
+			t.Fatalf("conflict pinned balance scan: %v", err)
+		}
+	}
+	queries.assertSettled(t, "mollie", "tr_later", "bal_later", 1000, 29, 971, "")
+	var count int
+	if err := db.QueryRowContext(t.Context(), `SELECT count(*) FROM purser.provider_webhook_inbox WHERE tenant_id=$1 AND provider='mollie'
+ AND provider_payment_id='tr_conflict' AND event_key='settlement-conflict:bal_conflict' AND status='blocked' AND last_error_code='evidence_conflict'`, tenant).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("conflict was not durably recorded exactly once: count=%d err=%v", count, err)
+	}
+	var cursor string
+	if err := db.QueryRowContext(t.Context(), `SELECT last_transaction_id FROM purser.mollie_balance_cursors WHERE balance_id='bal_primary'`).Scan(&cursor); err != nil {
+		t.Fatal(err)
+	}
+	if cursor != "bal_conflict" {
+		t.Fatalf("cursor did not advance past durable conflict: %s", cursor)
+	}
+}
+
+func TestStripeResourceWebhookOwnershipUsesLocalRecords_RealPG(t *testing.T) {
+	db := startProviderReservationDatabase(t)
+	s := &Service{db: db}
+	store := &providerWebhookInboxStore{db: db}
+	owner, forged := uuid.NewString(), uuid.NewString()
+	newProviderSettlementQueries(db).insertPending(t, owner, "stripe", "pi_owned", 1000, "EUR")
+	if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.provider_payment_objects(provider,object_type,provider_object_id,tenant_id) VALUES('stripe','invoice','in_owned',$1)`, owner); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ kind, id, want string }{
+		{"payment_intent.payment_failed", "pi_owned", owner},
+		{"invoice.payment_failed", "in_owned", owner},
+		{"payment_intent.payment_failed", "pi_unknown", ""},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			event := StripeWebhookPayload{ID: "evt_" + tc.id, Type: tc.kind}
+			event.Data.Object = json.RawMessage(`{"id":"` + tc.id + `","metadata":{"tenant_id":"` + forged + `"}}`)
+			body, err := json.Marshal(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok, _, _ := s.enqueueProviderWebhook(t.Context(), "stripe", event.ID, map[string]string{"tenant_id": forged}, body); !ok {
+				t.Fatal("enqueue")
+			}
+			claims, err := store.ClaimBatch(t.Context(), 1, time.Minute)
+			if err != nil || len(claims) != 1 {
+				t.Fatalf("claim: %+v %v", claims, err)
+			}
+			ctx := context.WithValue(t.Context(), providerInboxOwnerKey{}, claims[0].Payload)
+			if err := s.bindStripeResourceWebhookOwner(ctx, event); err != nil {
+				t.Fatal(err)
+			}
+			var got string
+			if err := db.QueryRowContext(t.Context(), `SELECT COALESCE(tenant_id::text,'') FROM purser.provider_webhook_inbox WHERE id=$1`, claims[0].Payload.InboxID).Scan(&got); err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("callback owner=%s want=%s; metadata must not establish ownership", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestProviderWebhookRecovery_RealYugabyte(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		run  func(*testing.T)
+	}{
+		{"native_rate_precision", TestProviderNativeSettlementValuation_RealPG},
+		{"mollie_conflict_cursor", TestMolliePolledConflictDoesNotBlockLaterSettlements_RealPG},
+		{"stripe_retained_ownership", TestStripeResourceWebhookOwnershipUsesLocalRecords_RealPG},
+	} {
+		t.Run(test.name, test.run)
+	}
+}

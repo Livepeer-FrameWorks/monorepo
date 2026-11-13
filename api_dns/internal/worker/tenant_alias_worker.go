@@ -52,6 +52,7 @@ type ClusterControlCellHealth interface {
 
 type tenantAliasDNSProvider interface {
 	FindZone(ctx context.Context, domain string) (*bunny.Zone, bool, error)
+	ListRecords(ctx context.Context, zoneID int64) ([]bunny.Record, error)
 	ReconcileRecordSet(ctx context.Context, zoneID int64, name string, recordType int, desired []bunny.Record) error
 }
 
@@ -87,18 +88,19 @@ var (
 // AliasApplyStateWorker reconciles Bunny smart record sets in cdn.{root}
 // from Navigator's durable per-edge ACK state.
 type AliasApplyStateWorker struct {
-	store              tenantAliasStore
-	bunny              tenantAliasDNSProvider
-	edges              EdgeAddressResolver
-	logger             logging.Logger
-	interval           time.Duration
-	rootDomain         string
-	tenantZoneLabel    string
-	healthStaleSeconds int
-	dnsRecordsDisabled bool
-	wakeMu             sync.Mutex
-	wakes              chan string
-	pending            map[string]struct{}
+	store                  tenantAliasStore
+	bunny                  tenantAliasDNSProvider
+	edges                  EdgeAddressResolver
+	logger                 logging.Logger
+	interval               time.Duration
+	rootDomain             string
+	tenantZoneLabel        string
+	healthStaleSeconds     int
+	dnsRecordsDisabled     bool
+	hostedCertificateReady func(context.Context, store.TenantAlias, ServiceAddress) error
+	wakeMu                 sync.Mutex
+	wakes                  chan string
+	pending                map[string]struct{}
 }
 
 // tenantAliasStore is the subset of store.Store this worker uses.
@@ -557,22 +559,85 @@ func (w *AliasApplyStateWorker) publishTenantSmartRecords(ctx context.Context, a
 			if err != nil {
 				return nil, err
 			}
+			ready := w.hostedCertificateReady
+			published := map[string]bool{}
+			if serviceType == "foghorn" && len(serviceAddrs) > 0 {
+				records, readErr := w.bunny.ListRecords(ctx, zone.ID)
+				if readErr != nil {
+					return nil, fmt.Errorf("read published playback members: %w", readErr)
+				}
+				label, _ := pkgdns.PublicSubdomain("foghorn")
+				for _, record := range records {
+					if record.Type == bunny.RecordTypeA && record.Name == label+"."+alias.Subdomain {
+						published[record.Value] = true
+					}
+				}
+			}
+			if serviceType == "foghorn" && len(serviceAddrs) > 0 && ready == nil {
+				ready, err = w.hostedCertificateChecker(ctx, alias)
+				if err != nil {
+					return nil, err
+				}
+			}
 			out := make([]tenantAliasAddr, 0, len(serviceAddrs))
 			seen := map[string]struct{}{}
-			for _, a := range serviceAddrs {
+			// Probe concurrently within a fixed bound so one unreachable host does
+			// not consume the tenant's entire reconciliation window serially.
+			probeErrors := make([]error, len(serviceAddrs))
+			if serviceType == "foghorn" {
+				var probes sync.WaitGroup
+				limit := make(chan struct{}, 4)
+				for i, a := range serviceAddrs {
+					if a.IP == "" {
+						continue
+					}
+					if _, duplicate := seen[a.IP]; duplicate {
+						continue
+					}
+					seen[a.IP] = struct{}{}
+					probes.Add(1)
+					go func(i int, a ServiceAddress) {
+						defer probes.Done()
+						select {
+						case limit <- struct{}{}:
+							defer func() { <-limit }()
+						case <-ctx.Done():
+							probeErrors[i] = ctx.Err()
+							return
+						}
+						probeErrors[i] = ready(ctx, alias, a)
+					}(i, a)
+				}
+				probes.Wait()
+				clear(seen)
+			}
+			for i, a := range serviceAddrs {
 				if a.IP == "" {
 					continue
+				}
+				key := a.IP
+				if _, dup := seen[key]; dup {
+					continue
+				}
+				seen[key] = struct{}{}
+				if serviceType == "foghorn" {
+					if err := probeErrors[i]; err != nil {
+						if published[a.IP] && !hostedCertificateRejected(err) {
+							// Renewal lag and failed observations do not revoke a
+							// published member. A verified invalid certificate does.
+							w.logger.WithError(err).WithField("node_id", a.NodeID).Debug("Retaining published playback member")
+						} else {
+							w.logger.WithFields(logging.Fields{"tenant_id": alias.TenantID, "node_id": a.NodeID, "error": err}).
+								Warn("Withholding hosted playback DNS until the current alias certificate is served")
+							continue
+						}
+					}
 				}
 				if isTenantEdgeServiceType(serviceType) {
 					if _, applied := appliedNodeIDs[a.NodeID]; !applied {
 						continue
 					}
 				}
-				key := a.NodeID + "\x00" + a.IP
-				if _, dup := seen[key]; dup {
-					continue
-				}
-				seen[key] = struct{}{}
 				out = append(out, tenantAliasAddr{ip: a.IP, nodeID: a.NodeID, geography: bunnyrecords.GeoCoordinates{Latitude: a.Latitude, Longitude: a.Longitude}})
 			}
 			return out, nil

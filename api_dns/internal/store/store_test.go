@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	fieldcrypt "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
 )
 
 func TestStoreGetCertificateTenantScoping(t *testing.T) {
@@ -384,5 +385,30 @@ func TestGetInternalCARootAllowsNullKey(t *testing.T) {
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestPublicBundleReadinessDoesNotDecryptOrParsePrivateInventory(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	enc, err := fieldcrypt.DeriveFieldEncryptor([]byte("navigator-public-certificate-test"), "navigator-store")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(db, enc)
+	now := time.Now()
+	mock.ExpectQuery("FROM navigator\\.tls_bundles AS bundle").WithArgs("tenant:tenant-1").WillReturnRows(
+		sqlmock.NewRows([]string{"id", "bundle_id", "domains", "cert_pem", "key_pem", "expires_at", "created_at", "updated_at", "issuer_ca", "version"}).
+			AddRow("bundle", "tenant:tenant-1", []byte("invalid-unused-domain-data"), "public-certificate", "enc:v1:invalid-private-key", now.Add(time.Hour), now, now, "letsencrypt", "revision"),
+	)
+	certificate, err := store.GetTLSBundleCertificate(t.Context(), "tenant:tenant-1")
+	if err != nil || certificate != "public-certificate" {
+		t.Fatalf("public readiness depended on private key handling: %q %v", certificate, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -69,6 +69,7 @@ type tenantBoundRequest interface {
 }
 
 var privilegedBillingMutationMethods = map[string]struct{}{
+	"/purser.PrepaidService/AdminRetryProviderWebhook":      {},
 	"/purser.PrepaidService/TopupBalance":                   {},
 	"/purser.PrepaidService/DeductBalance":                  {},
 	"/purser.PrepaidService/AdjustBalance":                  {},

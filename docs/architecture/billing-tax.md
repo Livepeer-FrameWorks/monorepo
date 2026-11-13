@@ -130,7 +130,10 @@ and the remaining [close/journal proposal](../rfcs/RFC_billing_documents_operato
 currency, gross, fee, net, transaction ID, timestamp and charge-to-settlement
 exchange rate when conversion occurs. Stripe supplies that rate; for Mollie the
 existing effective ratio is derived from native gross and the recorded charge
-amount. Native evidence is committed before EUR valuation. A same-currency
+amount. The provider exchange rate is normalized to the declared `NUMERIC(20,10)`
+storage precision before insert and immutable-evidence comparison; a longer
+provider float must not manufacture a replay conflict after database rounding.
+Native evidence is committed before EUR valuation. A same-currency
 provider settlement needs no provider exchange rate, regardless of the ledger
 currency.
 
@@ -169,3 +172,28 @@ correlated by payment ID. Blocked records remain visible and normal settlement w
 only after the existing age threshold.
 
 The balance-side amount semantics follow [Mollie's balance transaction contract](https://docs.mollie.com/reference/list-balance-transactions).
+
+A polled Mollie evidence conflict is persisted as a tenant-bound blocked callback
+before the balance scan cursor advances. Later transactions can settle while the
+conflict remains in normal recovery inventory. Persistence failure preserves the
+cursor. The original native settlement is never overwritten to accept the conflict.
+
+`frameworks admin billing recovery retry-webhook --tenant-id <uuid> --webhook-id
+<uuid> --reason <text>` previews one blocked Stripe or Mollie callback before
+confirmation. Its opaque preview state fences changes between inspection and
+confirmation. The confirmed transaction records the operator, reason, prior error
+and callback identity in `provider_webhook_retry_audit` and queues that same
+callback. Confirmation replay returns the existing audit request. It authorizes
+reconciliation, not replacement of payment evidence; continuing conflicts block
+again. Unbound and internal recovery work cannot be assigned to a tenant by this
+command.
+
+Polled Mollie callbacks blocked with `evidence_conflict` cannot use `retry-webhook`: the original payment event is already claimed, so replay would not re-check the conflicting settlement. They remain blocked for provider-evidence reconciliation.
+
+`PurserFXReferenceRatesStale` warns on a missing USD/GBP reference or a stored
+reference over five days and eighteen hours old for an hour. The age window allows
+normal TARGET holiday publication gaps and precedes the six-day boundary at which
+five-calendar-day reference lookup refuses conversion. The
+[ECB publication schedule](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html)
+updates around 16:00 CET on TARGET working days. This warning is separate from the
+fourteen-day unresolved-provider-work alert.

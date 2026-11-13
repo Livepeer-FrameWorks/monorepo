@@ -92,6 +92,9 @@ func (s *Syncer) RefreshAge(ctx context.Context) error {
 	}
 	latest, err := LatestReferenceDates(ctx, s.db)
 	if err != nil {
+		// Missing observations must remain distinguishable from a frozen
+		// last-good age; the missing-rate alert covers database outages too.
+		s.ageGauge.Reset()
 		return err
 	}
 	now := s.now()

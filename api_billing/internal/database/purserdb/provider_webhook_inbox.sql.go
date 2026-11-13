@@ -45,6 +45,32 @@ func (q *Queries) BindProviderWebhookPaymentOwner(ctx context.Context, arg BindP
 	)
 }
 
+const bindStripeWebhookResourceOwner = `-- name: BindStripeWebhookResourceOwner :execresult
+UPDATE purser.provider_webhook_inbox
+SET tenant_id=$1::text::uuid,
+ provider_payment_id=COALESCE(NULLIF($2::text,''),provider_payment_id), updated_at=NOW()
+WHERE id=$3::uuid AND provider='stripe' AND status='processing'
+ AND lease_token::text=$4::text
+ AND (tenant_id IS NULL OR tenant_id=$1::text::uuid)
+ AND ($2::text='' OR provider_payment_id IS NULL OR provider_payment_id=$2::text)
+`
+
+type BindStripeWebhookResourceOwnerParams struct {
+	TenantID   string    `db:"tenant_id" json:"tenant_id"`
+	PaymentID  string    `db:"payment_id" json:"payment_id"`
+	ID         uuid.UUID `db:"id" json:"id"`
+	LeaseToken string    `db:"lease_token" json:"lease_token"`
+}
+
+func (q *Queries) BindStripeWebhookResourceOwner(ctx context.Context, arg BindStripeWebhookResourceOwnerParams) (sql.Result, error) {
+	return q.db.ExecContext(ctx, bindStripeWebhookResourceOwner,
+		arg.TenantID,
+		arg.PaymentID,
+		arg.ID,
+		arg.LeaseToken,
+	)
+}
+
 const claimProviderWebhooks = `-- name: ClaimProviderWebhooks :many
 SELECT id, provider, headers, raw_payload, GREATEST(attempts,wait_attempts)::integer AS attempts, created_at, event_key
 FROM purser.provider_webhook_inbox
@@ -205,6 +231,25 @@ func (q *Queries) FailProviderWebhook(ctx context.Context, arg FailProviderWebho
 	)
 }
 
+const findProviderWebhookRetryAudit = `-- name: FindProviderWebhookRetryAudit :one
+SELECT id::text AS id FROM purser.provider_webhook_retry_audit
+WHERE tenant_id=$1::text::uuid AND webhook_id=$2::text::uuid
+ AND expected_state=$3::text
+`
+
+type FindProviderWebhookRetryAuditParams struct {
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
+	WebhookID     string `db:"webhook_id" json:"webhook_id"`
+	ExpectedState string `db:"expected_state" json:"expected_state"`
+}
+
+func (q *Queries) FindProviderWebhookRetryAudit(ctx context.Context, arg FindProviderWebhookRetryAuditParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, findProviderWebhookRetryAudit, arg.TenantID, arg.WebhookID, arg.ExpectedState)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const finishCheckoutRecoveryAudit = `-- name: FinishCheckoutRecoveryAudit :exec
 UPDATE purser.checkout_recovery_audit
 SET outcome = $1::text, detail = $2::text,
@@ -230,6 +275,44 @@ func (q *Queries) FinishCheckoutRecoveryAudit(ctx context.Context, arg FinishChe
 	return err
 }
 
+const getProviderWebhookRetryState = `-- name: GetProviderWebhookRetryState :one
+SELECT id::text AS id, provider, COALESCE(provider_payment_id,'') AS provider_payment_id,
+ status, COALESCE(last_error_code,'') AS last_error_code, attempts, updated_at
+FROM purser.provider_webhook_inbox
+WHERE tenant_id=$1::text::uuid AND id=$2::text::uuid
+FOR UPDATE
+`
+
+type GetProviderWebhookRetryStateParams struct {
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+	WebhookID string `db:"webhook_id" json:"webhook_id"`
+}
+
+type GetProviderWebhookRetryStateRow struct {
+	ID                string    `db:"id" json:"id"`
+	Provider          string    `db:"provider" json:"provider"`
+	ProviderPaymentID string    `db:"provider_payment_id" json:"provider_payment_id"`
+	Status            string    `db:"status" json:"status"`
+	LastErrorCode     string    `db:"last_error_code" json:"last_error_code"`
+	Attempts          int32     `db:"attempts" json:"attempts"`
+	UpdatedAt         time.Time `db:"updated_at" json:"updated_at"`
+}
+
+func (q *Queries) GetProviderWebhookRetryState(ctx context.Context, arg GetProviderWebhookRetryStateParams) (GetProviderWebhookRetryStateRow, error) {
+	row := q.db.QueryRowContext(ctx, getProviderWebhookRetryState, arg.TenantID, arg.WebhookID)
+	var i GetProviderWebhookRetryStateRow
+	err := row.Scan(
+		&i.ID,
+		&i.Provider,
+		&i.ProviderPaymentID,
+		&i.Status,
+		&i.LastErrorCode,
+		&i.Attempts,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const insertCheckoutRecoveryAudit = `-- name: InsertCheckoutRecoveryAudit :one
 INSERT INTO purser.checkout_recovery_audit (tenant_id, intent_id, actor_id, reason)
 VALUES ($1::text::uuid, $2::text::uuid,
@@ -248,6 +331,42 @@ func (q *Queries) InsertCheckoutRecoveryAudit(ctx context.Context, arg InsertChe
 	row := q.db.QueryRowContext(ctx, insertCheckoutRecoveryAudit,
 		arg.TenantID,
 		arg.IntentID,
+		arg.ActorID,
+		arg.Reason,
+	)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
+const insertProviderWebhookRetryAudit = `-- name: InsertProviderWebhookRetryAudit :one
+INSERT INTO purser.provider_webhook_retry_audit
+ (tenant_id,webhook_id,provider,provider_payment_id,previous_error_code,expected_state,actor_id,reason)
+VALUES ($1::text::uuid,$2::text::uuid,$3,
+ $4,$5,$6,
+ $7::text::uuid,$8)
+RETURNING id::text AS id
+`
+
+type InsertProviderWebhookRetryAuditParams struct {
+	TenantID          string `db:"tenant_id" json:"tenant_id"`
+	WebhookID         string `db:"webhook_id" json:"webhook_id"`
+	Provider          string `db:"provider" json:"provider"`
+	ProviderPaymentID string `db:"provider_payment_id" json:"provider_payment_id"`
+	PreviousErrorCode string `db:"previous_error_code" json:"previous_error_code"`
+	ExpectedState     string `db:"expected_state" json:"expected_state"`
+	ActorID           string `db:"actor_id" json:"actor_id"`
+	Reason            string `db:"reason" json:"reason"`
+}
+
+func (q *Queries) InsertProviderWebhookRetryAudit(ctx context.Context, arg InsertProviderWebhookRetryAuditParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, insertProviderWebhookRetryAudit,
+		arg.TenantID,
+		arg.WebhookID,
+		arg.Provider,
+		arg.ProviderPaymentID,
+		arg.PreviousErrorCode,
+		arg.ExpectedState,
 		arg.ActorID,
 		arg.Reason,
 	)
@@ -621,6 +740,49 @@ func (q *Queries) ProviderWebhookReceivedAt(ctx context.Context, arg ProviderWeb
 	return created_at, err
 }
 
+const recordPolledSettlementConflict = `-- name: RecordPolledSettlementConflict :one
+WITH inserted AS (
+ INSERT INTO purser.provider_webhook_inbox
+  (provider, tenant_id, provider_payment_id, event_key, headers, raw_payload,
+   status, unresolved_since, last_error_code, last_error)
+ SELECT payment.provider, payment.tenant_id, payment.provider_payment_id,
+  $1::text, '{"Content-Type":"application/x-www-form-urlencoded"}'::jsonb,
+  $2::bytea, 'blocked', NOW(), 'evidence_conflict',
+  'provider settlement blocked: evidence_conflict'
+ FROM purser.provider_settlements payment
+ WHERE payment.tenant_id=$3::text::uuid
+  AND payment.provider='mollie' AND payment.provider_payment_id=$4::text
+ ON CONFLICT(provider,event_key) DO NOTHING
+ RETURNING id
+)
+SELECT id FROM inserted
+UNION ALL
+SELECT id FROM purser.provider_webhook_inbox
+WHERE tenant_id=$3::text::uuid AND provider='mollie'
+ AND provider_payment_id=$4::text AND event_key=$1::text
+LIMIT 1
+`
+
+type RecordPolledSettlementConflictParams struct {
+	EventKey          string `db:"event_key" json:"event_key"`
+	RawPayload        []byte `db:"raw_payload" json:"raw_payload"`
+	TenantID          string `db:"tenant_id" json:"tenant_id"`
+	ProviderPaymentID string `db:"provider_payment_id" json:"provider_payment_id"`
+}
+
+// A polled provider conflict is durable operator work before its scan cursor advances.
+func (q *Queries) RecordPolledSettlementConflict(ctx context.Context, arg RecordPolledSettlementConflictParams) (uuid.UUID, error) {
+	row := q.db.QueryRowContext(ctx, recordPolledSettlementConflict,
+		arg.EventKey,
+		arg.RawPayload,
+		arg.TenantID,
+		arg.ProviderPaymentID,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const requestCheckoutRecovery = `-- name: RequestCheckoutRecovery :exec
 INSERT INTO purser.provider_webhook_inbox (
     provider, event_key, headers, raw_payload, next_attempt_at
@@ -657,6 +819,84 @@ type RequestCheckoutRecoveryParams struct {
 func (q *Queries) RequestCheckoutRecovery(ctx context.Context, arg RequestCheckoutRecoveryParams) error {
 	_, err := q.db.ExecContext(ctx, requestCheckoutRecovery, arg.Reason, arg.TenantID, arg.IntentID)
 	return err
+}
+
+const requestProviderWebhookRetry = `-- name: RequestProviderWebhookRetry :execrows
+UPDATE purser.provider_webhook_inbox
+SET status='pending',next_attempt_at=NOW(),claimed_at=NULL,lease_token=NULL,
+ wake_requested=FALSE,updated_at=NOW()
+WHERE tenant_id=$1::text::uuid AND id=$2::text::uuid
+ AND status='blocked' AND provider IN ('stripe','mollie')
+`
+
+type RequestProviderWebhookRetryParams struct {
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+	WebhookID string `db:"webhook_id" json:"webhook_id"`
+}
+
+func (q *Queries) RequestProviderWebhookRetry(ctx context.Context, arg RequestProviderWebhookRetryParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, requestProviderWebhookRetry, arg.TenantID, arg.WebhookID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const resolveStripeWebhookOwners = `-- name: ResolveStripeWebhookOwners :many
+SELECT DISTINCT COALESCE(owned.tenant_id::text,'')::text AS tenant_id FROM (
+ (SELECT tenant_id FROM purser.provider_settlements
+  WHERE provider='stripe' AND provider_payment_id=$1::text LIMIT 2)
+ UNION ALL
+ (SELECT tenant_id FROM purser.provider_payment_objects
+  WHERE provider='stripe' AND object_type=$2::text
+   AND provider_object_id=$3::text AND tenant_id IS NOT NULL LIMIT 2)
+ UNION ALL
+ (SELECT DISTINCT tenant_id FROM purser.tenant_subscriptions
+  WHERE stripe_customer_id=NULLIF($4::text,'') ORDER BY tenant_id LIMIT 2)
+ UNION ALL
+ (SELECT DISTINCT tenant_id FROM purser.cluster_subscriptions
+  WHERE stripe_customer_id=NULLIF($4::text,'') ORDER BY tenant_id LIMIT 2)
+ UNION ALL
+ (SELECT DISTINCT tenant_id FROM purser.payment_provider_intents
+  WHERE provider='stripe' AND provider_customer_id=NULLIF($4::text,'') ORDER BY tenant_id LIMIT 2)
+) owned WHERE tenant_id IS NOT NULL LIMIT 2
+`
+
+type ResolveStripeWebhookOwnersParams struct {
+	PaymentID  string `db:"payment_id" json:"payment_id"`
+	ObjectType string `db:"object_type" json:"object_type"`
+	ObjectID   string `db:"object_id" json:"object_id"`
+	CustomerID string `db:"customer_id" json:"customer_id"`
+}
+
+// Provider-boundary lookup; tenant is established from retained local ownership,
+// never from callback headers or customer-supplied metadata.
+func (q *Queries) ResolveStripeWebhookOwners(ctx context.Context, arg ResolveStripeWebhookOwnersParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, resolveStripeWebhookOwners,
+		arg.PaymentID,
+		arg.ObjectType,
+		arg.ObjectID,
+		arg.CustomerID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var tenant_id string
+		if err := rows.Scan(&tenant_id); err != nil {
+			return nil, err
+		}
+		items = append(items, tenant_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const wakeValuedProviderWebhooks = `-- name: WakeValuedProviderWebhooks :exec

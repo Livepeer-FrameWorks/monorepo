@@ -384,12 +384,12 @@ func TestRecoveryCommandsValidateBeforeRPCAndShowEmptyInventory(t *testing.T) {
 }
 
 func TestCheckoutRecoveryTextShowsMoneyAndHistoryColumns(t *testing.T) {
-	client := &recoveryValidationClient{response: &purserpb.AdminListCheckoutRecoveryResponse{Items: []*purserpb.CheckoutRecoveryItem{{Provider: "mollie", AmountKnown: true, AmountCents: 2900, Currency: "EUR"}, {Provider: "mollie", AmountKnown: false}, {Provider: "free_fallback", Status: "scheduled"}}}}
+	client := &recoveryValidationClient{response: &purserpb.AdminListCheckoutRecoveryResponse{Items: []*purserpb.CheckoutRecoveryItem{{Id: "webhook-identity", Provider: "mollie", AmountKnown: true, AmountCents: 2900, Currency: "EUR"}, {Provider: "mollie", AmountKnown: false}, {Provider: "free_fallback", Status: "scheduled"}}}}
 	var out bytes.Buffer
 	if err := runCheckoutRecoveryList(t.Context(), &out, client, "jwt", &purserpb.AdminListCheckoutRecoveryRequest{Limit: 10}, false); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"29.00 EUR", "unknown", "NEXT ATTEMPT", "free_fallback", "admin billing set-tier", "provider_stopping"} {
+	for _, want := range []string{"WORK ID", "webhook-identity", "29.00 EUR", "unknown", "NEXT ATTEMPT", "free_fallback", "admin billing set-tier", "provider_stopping"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("missing %q in %s", want, out.String())
 		}

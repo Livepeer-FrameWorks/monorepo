@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# tenant: qa
 # staging: unsafe, stops a cell's Livepeer gateway
 # VOD processing through Livepeer, the CPU fallback with its config persisted,
 # and a fail-fast import of a missing source.
@@ -38,10 +39,28 @@ ready_or_failed() { # ready_or_failed <vod id>: 0 ready, 2 failed, 1 pending
 }
 
 processing_billed_to_owner() {
-  local n
-  n=$(ch "SELECT count() FROM periscope.processing_segments_final_v
-    WHERE tenant_id='$STACK_TENANT_ID' AND position(stream_name,'$1')>0 AND media_seconds>0") || return 1
-  [ "${n:-0}" -gt 0 ] 2>/dev/null
+  local matching foreign raw_foreign node node_owner
+  matching=$(ch "SELECT count() FROM periscope.processing_segments_final_v p
+    INNER JOIN periscope.raw_mist_triggers r ON r.node_id=p.node_id AND r.source_request_id=p.source_event_id
+    WHERE p.tenant_id='$STACK_TENANT_ID' AND r.tenant_id='$STACK_TENANT_ID'
+      AND position(p.stream_name,'$1')>0 AND p.media_seconds>0 AND p.billable_at_ms >= $((SINCE * 1000))") || return 1
+  [ "${matching:-0}" -gt 0 ] 2>/dev/null || return 1
+  foreign=$(ch "SELECT count() FROM periscope.processing_segments_final_v
+    WHERE tenant_id!='$STACK_TENANT_ID' AND position(stream_name,'$1')>0
+      AND media_seconds>0 AND billable_at_ms >= $((SINCE * 1000))") || return 1
+  [ "${foreign:-0}" = 0 ] || return 1
+  raw_foreign=$(ch "SELECT count() FROM periscope.processing_segments_final_v p
+    INNER JOIN periscope.raw_mist_triggers r ON r.node_id=p.node_id AND r.source_request_id=p.source_event_id
+    WHERE p.tenant_id='$STACK_TENANT_ID' AND r.tenant_id!='$STACK_TENANT_ID'
+      AND position(p.stream_name,'$1')>0 AND p.media_seconds>0 AND p.billable_at_ms >= $((SINCE * 1000))") || return 1
+  [ "${raw_foreign:-0}" = 0 ] || return 1
+  node=$(ch "SELECT node_id FROM periscope.processing_segments_final_v
+    WHERE tenant_id='$STACK_TENANT_ID' AND position(stream_name,'$1')>0
+      AND media_seconds>0 AND billable_at_ms >= $((SINCE * 1000)) LIMIT 1") || return 1
+  [[ "$node" =~ ^[A-Za-z0-9._:-]+$ ]] || return 1
+  node_owner=$(pg quartermaster "SELECT c.owner_tenant_id::text FROM quartermaster.infrastructure_nodes n
+    JOIN quartermaster.infrastructure_clusters c ON c.cluster_id=n.cluster_id WHERE n.node_id='$node'") || return 1
+  [ -n "$node_owner" ] && [ "$node_owner" != "$STACK_TENANT_ID" ]
 }
 
 log "VOD through Livepeer"

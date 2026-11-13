@@ -38,6 +38,7 @@ distributed_tables:
   # Retained purchase receipts grow with paid tier upgrades.
   - purser.subscription_tier_upgrades
   - purser.checkout_recovery_audit
+  - purser.provider_webhook_retry_audit
   # Append-only pricing history grows with operator changes.
   - purser.subscription_operator_grant_history
   # One row per anomalous deposit reference, so it grows with events.

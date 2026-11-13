@@ -95,20 +95,21 @@ to facts first projected before the cutover are also excluded.
 
 Operational convergence is exposed through bounded labels only:
 
-| Metric                                                                       | Labels                 | Meaning                                                                                           |
-| ---------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------- |
-| `foghorn_restream_reconcile_total`                                           | `operation`, `outcome` | Activation/deactivation dispatch and correlated convergence results                               |
-| `foghorn_restream_final_fence_total`                                         | `outcome`              | Final-fact Mist-ID bind, accepted-unbound compatibility, mismatch, or missing-ID fence outcomes   |
-| `foghorn_offline_effect_dead_letters_total`                                  | `outcome`              | Exhausted offline obligations retained for diagnosis and late acknowledgements that revive them   |
-| `foghorn_rolling_upgrade_fallbacks_total`                                    | `contract`             | Optional-field compatibility branches still used by mixed-version control-plane calls             |
-| `foghorn_push_target_status_outbox_outcomes_total`                           | `outcome`              | Durable status delivery, retry, deleted-target tombstone, supersession, and storage errors        |
-| `periscope_ingest_handler_writes_total{table="restream_sessions_anomalous"}` | `table`, `status`      | Final restream facts quarantined because required trustworthy usage fields were absent or invalid |
-| `periscope_metering_projection_divergence_billing_total`                     | `outcome`, `table`     | Billing-reader duplicate, orphan, and malformed divergence rows skipped without wedging a slice   |
-| `periscope_ingest_handler_writes_total{status="quarantined_span"}`           | `table`, `status`      | A finalized fact exceeded the bounded ledger projection span and was not expanded                 |
-| `periscope_ingest_ledger_rebuild_leader`                                     | `ledger`               | One only while this replica holds the named rebuild lease; zero after release or a lost election  |
-| `periscope_ingest_ledger_rebuild_cursor_lag_seconds`                         | `ledger`               | Age of the rebuild cursor relative to the settled frontier                                        |
-| `periscope_metering_billing_malformed_facts_skipped_total`                   | `fact_kind`, `reason`  | Malformed canonical facts skipped without wedging an otherwise billable slice                     |
-| `commodore_field_decrypt_failures_total`                                     | `purpose`, `format`    | Fail-closed application-field opens grouped by bounded field purpose and envelope version         |
+| Metric                                                                       | Labels                 | Meaning                                                                                                                                                        |
+| ---------------------------------------------------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `foghorn_restream_reconcile_total`                                           | `operation`, `outcome` | Activation/deactivation dispatch and correlated convergence results                                                                                            |
+| `foghorn_restream_final_fence_total`                                         | `outcome`              | Final-fact Mist-ID bind, accepted-unbound compatibility, mismatch, or missing-ID fence outcomes                                                                |
+| `foghorn_absent_resource_reports_total`                                      | none                   | Durable resource reports acknowledged only after definitive identity absence; trigger type is recorded in sanitized logs, never resource identifiers in labels |
+| `foghorn_offline_effect_dead_letters_total`                                  | `outcome`              | Exhausted offline obligations retained for diagnosis and late acknowledgements that revive them                                                                |
+| `foghorn_rolling_upgrade_fallbacks_total`                                    | `contract`             | Optional-field compatibility branches still used by mixed-version control-plane calls                                                                          |
+| `foghorn_push_target_status_outbox_outcomes_total`                           | `outcome`              | Durable status delivery, retry, deleted-target tombstone, supersession, and storage errors                                                                     |
+| `periscope_ingest_handler_writes_total{table="restream_sessions_anomalous"}` | `table`, `status`      | Final restream facts quarantined because required trustworthy usage fields were absent or invalid                                                              |
+| `periscope_metering_projection_divergence_billing_total`                     | `outcome`, `table`     | Billing-reader duplicate, orphan, and malformed divergence rows skipped without wedging a slice                                                                |
+| `periscope_ingest_handler_writes_total{status="quarantined_span"}`           | `table`, `status`      | A finalized fact exceeded the bounded ledger projection span and was not expanded                                                                              |
+| `periscope_ingest_ledger_rebuild_leader`                                     | `ledger`               | One only while this replica holds the named rebuild lease; zero after release or a lost election                                                               |
+| `periscope_ingest_ledger_rebuild_cursor_lag_seconds`                         | `ledger`               | Age of the rebuild cursor relative to the settled frontier                                                                                                     |
+| `periscope_metering_billing_malformed_facts_skipped_total`                   | `fact_kind`, `reason`  | Malformed canonical facts skipped without wedging an otherwise billable slice                                                                                  |
+| `commodore_field_decrypt_failures_total`                                     | `purpose`, `format`    | Fail-closed application-field opens grouped by bounded field purpose and envelope version                                                                      |
 
 The labels never contain tenant, stream, node, target, platform, destination, or
 error text. Target and stream identifiers belong in sanitized logs, not metric
@@ -554,7 +555,7 @@ The remaining edge-hardening signals are likewise bounded:
 | `purser_media_authority_refresh_failures_total`            | `stage`                    | Refresh delivery, reconciliation, completion-fence, or queue-observation failure                                                                                                                     |
 | `purser_media_authority_refresh_completions_total`         | `outcome`                  | Completed refresh attempts (`delivered` or safely `superseded`)                                                                                                                                      |
 | `purser_media_authority_refresh_worker_ready`              | none                       | `1` only while the durable worker has both database and Commodore dependencies                                                                                                                       |
-| `purser_fx_rate_reference_age_seconds`                     | `currency`                 | Seconds since the start of the newest stored ECB reference date; conversions refuse beyond 5 days                                                                                                    |
+| `purser_fx_rate_reference_age_seconds`                     | `currency`                 | Seconds since the start of the newest stored ECB reference date; missing observations remove the series so database outages cannot freeze a healthy value; conversions refuse beyond 5 days          |
 
 Quartermaster's media-authority refresh outbox exposes the same queue signals as
 Purser's: `quartermaster_media_authority_refresh_pending`,

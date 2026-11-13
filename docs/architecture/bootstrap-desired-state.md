@@ -758,6 +758,9 @@ An omitted scope keeps additive reconciliation. `complete: false` permits scoped
 upserts without retirement. Neither form stops runtime registrations, another
 owner's instances, or rows in clusters outside the scope. Owner names must remain
 stable across releases; changing one requires an explicit ownership migration.
+Manifest loading rejects an owner reused by a sibling GitOps `cluster.yaml`
+before reading encrypted host inventory. Separate GitOps repositories must also
+choose distinct owner names when they share a Quartermaster database.
 
 Existing instances start as `legacy`, while runtime registrations default to
 `runtime`. A declared tuple can acquire manifest ownership when it is legacy or

@@ -866,3 +866,8 @@ func (c *GRPCClient) AdminRecoverTierDowngrade(ctx context.Context, r *purserpb.
 func (c *GRPCClient) DiagnoseBilling(ctx context.Context, tenantID string) (*purserpb.DiagnoseBillingResponse, error) {
 	return c.billing.DiagnoseBilling(ctx, &purserpb.DiagnoseBillingRequest{TenantId: tenantID})
 }
+
+// AdminRetryProviderWebhook previews or requests an audited retry of blocked provider work.
+func (c *GRPCClient) AdminRetryProviderWebhook(ctx context.Context, r *purserpb.AdminRetryProviderWebhookRequest) (*purserpb.AdminRetryProviderWebhookResponse, error) {
+	return c.prepaid.AdminRetryProviderWebhook(ctx, r)
+}

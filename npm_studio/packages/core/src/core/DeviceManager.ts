@@ -17,6 +17,9 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
   private devices: DeviceInfo[] = [];
   private currentStream: MediaStream | null = null;
   private destroyed = false;
+  private releasedStreams = new WeakSet<MediaStream>();
+  private videoReplacements = new WeakMap<MediaStream, symbol>();
+  private audioReplacements = new WeakMap<MediaStream, symbol>();
   private mediaDevices: MediaDevices | undefined;
   private readonly handleDeviceChange = async (): Promise<void> => {
     try {
@@ -249,6 +252,8 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
    * Forget a stream whose capture has ended, so nothing reopens a device into it.
    */
   releaseStream(stream: MediaStream): void {
+    this.releasedStreams.add(stream);
+    this.videoReplacements.delete(stream);
     if (this.currentStream === stream) {
       this.currentStream = null;
     }
@@ -259,6 +264,8 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
    */
   stopAllTracks(): void {
     if (this.currentStream) {
+      this.releasedStreams.add(this.currentStream);
+      this.videoReplacements.delete(this.currentStream);
       this.currentStream.getTracks().forEach((track) => {
         track.stop();
       });
@@ -279,6 +286,12 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
       throw new Error("No active stream to replace track in");
     }
 
+    if (this.releasedStreams.has(stream)) {
+      throw new DOMException("Capture stream released", "AbortError");
+    }
+    const replacement = Symbol();
+    this.videoReplacements.set(stream, replacement);
+
     // Stop current video track
     const currentVideoTrack = stream.getVideoTracks()[0];
     if (currentVideoTrack) {
@@ -292,6 +305,11 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
       video: constraints.video,
       audio: false,
     });
+
+    if (this.releasedStreams.has(stream) || this.videoReplacements.get(stream) !== replacement) {
+      newStream.getTracks().forEach((track) => track.stop());
+      throw new DOMException("Capture stream released or superseded", "AbortError");
+    }
 
     const newTrack = newStream.getVideoTracks()[0];
     if (newTrack) {
@@ -315,6 +333,8 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
 
     // Stop current audio track
     const targetStream = this.currentStream;
+    const replacement = Symbol();
+    this.audioReplacements.set(targetStream, replacement);
     const currentAudioTrack = targetStream.getAudioTracks()[0];
     if (currentAudioTrack) {
       currentAudioTrack.stop();
@@ -328,9 +348,13 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
       audio: constraints.audio,
     });
 
-    if (this.currentStream !== targetStream) {
+    if (
+      this.currentStream !== targetStream ||
+      this.releasedStreams.has(targetStream) ||
+      this.audioReplacements.get(targetStream) !== replacement
+    ) {
       newStream.getTracks().forEach((track) => track.stop());
-      throw new DOMException("Capture stream released", "AbortError");
+      throw new DOMException("Capture stream released or superseded", "AbortError");
     }
 
     const newTrack = newStream.getAudioTracks()[0];
