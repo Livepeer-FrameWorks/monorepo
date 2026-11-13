@@ -119,6 +119,11 @@ func (d *countingTenantAliasDNS) FindZone(context.Context, string) (*bunny.Zone,
 	return &bunny.Zone{ID: 1, Domain: "cdn.frameworks.network"}, true, nil
 }
 
+func (d *countingTenantAliasDNS) ListRecords(context.Context, int64) ([]bunny.Record, error) {
+	d.calls.Add(1)
+	return nil, nil
+}
+
 func (d *countingTenantAliasDNS) ReconcileRecordSet(context.Context, int64, string, int, []bunny.Record) error {
 	d.calls.Add(1)
 	return nil
