@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
+import { createPlaybackBrowserPage } from "./playback-browser-context.mjs";
 
 const [base, playbackId] = process.argv.slice(2);
 assert(base && playbackId, "usage: playback-browser.mjs <Foghorn origin> <playback id>");
@@ -14,15 +15,7 @@ const browser = await chromium.launch({
   args: ["--autoplay-policy=no-user-gesture-required"],
 });
 try {
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  await page.route("http://customer-player.frameworks.test/", (route) =>
-    route.fulfill({
-      contentType: "text/html",
-      body: '<!doctype html><video id="video" muted autoplay playsinline></video>',
-    })
-  );
-  await page.goto("http://customer-player.frameworks.test/");
+  const { context, page, origin } = await createPlaybackBrowserPage(browser);
   await page.addScriptTag({ content: await readFile(hlsPath, "utf8") });
   await page.evaluate(
     (url) => {
@@ -58,9 +51,7 @@ try {
     result.frames >= 2 && result.currentTime > 0,
     "external browser did not decode live frames"
   );
-  console.log(
-    JSON.stringify({ origin: "http://customer-player.frameworks.test", base, ...result })
-  );
+  console.log(JSON.stringify({ origin, base, ...result }));
   await page.evaluate(() => {
     window.playbackFixture.player.destroy();
     const video = document.querySelector("video");
