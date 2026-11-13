@@ -97,6 +97,8 @@ jobs:
               - '**/*.yml'
               - '**/*.yaml'
             marketing_browser:
+              - 'scripts/stack/playback-browser*.mjs'
+              - 'scripts/stack/test_playback_browser_context.mjs'
               - 'website_marketing/**'
               - 'packages/site-config/**'
               - 'packages/map-core/**'
@@ -541,6 +543,8 @@ jobs:
       - uses: ./.github/actions/setup-node-pnpm
       - name: Install Chromium for Playwright
         run: pnpm --dir website_marketing exec playwright install --with-deps chromium
+      - name: Public-origin playback fixture network permissions
+        run: make test-stack-playback-browser-context
       - name: Header, landing layout and Skipper fixtures in headless Chromium
         run: pnpm --filter frameworks-website test:browser
 

@@ -68,6 +68,36 @@ validate() { # <dev|stack> <profiles> <compose file>...
   fi
 }
 
+validate_stack_restream_policy() {
+  local profiles=$1 reset=$2 slot=$3 subnet="10.231.$3.0/24" rendered="$work/restream-$3.json"
+  if ! STACK_SUBNET="$subnet" COMPOSE_PROFILES="$profiles" ENV_FILE="$env_file" \
+    docker compose --project-directory "$repo_root" -f "$dev_compose" -f "$stack_compose" -f "$reset" \
+    --env-file "$env_file" config --format json >"$rendered" 2>"$work/restream.err"; then
+    cat "$work/restream.err" >&2
+    failed=1
+    return
+  fi
+  if python3 - "$rendered" "$subnet" <<'PY'
+import json, sys
+with open(sys.argv[1]) as source:
+    config = json.load(source)
+subnet = sys.argv[2]
+assert config['networks']['frameworks']['ipam']['config'][0]['subnet'] == subnet
+for edge in ('edge', 'edge-b'):
+    env = config['services'][edge]['environment']
+    assert env.get('RESTREAM_ALLOWED_PRIVATE_CIDRS') == subnet, (
+        f'{edge}: cross-cell restreams need only this slot subnet {subnet}, '
+        f"got {env.get('RESTREAM_ALLOWED_PRIVATE_CIDRS')!r}")
+    assert str(env.get('RESTREAM_ALLOW_PRIVATE_DESTINATIONS')).lower() == 'false', (
+        f'{edge}: stack must not allow arbitrary private destinations')
+PY
+  then
+    printf 'ok   stack restream destinations limited to slot %s (%s)\n' "$slot" "$subnet"
+  else
+    failed=1
+  fi
+}
+
 for preset in "${presets[@]}"; do
   validate dev "$preset" "$dev_compose"
 done
@@ -91,6 +121,9 @@ for set in "${stack_sets[@]}"; do
     done <<<"$services"
   } >"$reset"
   validate stack "$set" "$dev_compose" "$stack_compose" "$reset"
+  for slot in 1 49; do
+    validate_stack_restream_policy "$set" "$reset" "$slot"
+  done
 done
 
 declared_profiles() { # <compose file>...

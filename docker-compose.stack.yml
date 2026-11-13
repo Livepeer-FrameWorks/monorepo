@@ -382,6 +382,9 @@ services:
     # other one instead of staying without control.
     environment:
       FOGHORN_CONTROL_ADDR: foghorn:18029,foghorn-2:18029
+      # Cross-cell fixtures push only within this isolated slot's network.
+      RESTREAM_ALLOW_PRIVATE_DESTINATIONS: "false"
+      RESTREAM_ALLOWED_PRIVATE_CIDRS: ${STACK_SUBNET:-10.231.1.0/24}
     # The dev edge serves the repo's demo recordings from a bind mount; a stack
     # edge must never write into the source tree, so it gets a slot volume.
     volumes:
@@ -390,6 +393,8 @@ services:
     image: ${STACK_EDGE_IMAGE:-frameworks-edge:dev}
     environment:
       FOGHORN_CONTROL_ADDR: foghorn-b:18029,foghorn-b-2:18029
+      RESTREAM_ALLOW_PRIVATE_DESTINATIONS: "false"
+      RESTREAM_ALLOWED_PRIVATE_CIDRS: ${STACK_SUBNET:-10.231.1.0/24}
   foghorn:
     environment:
       <<: *stack-s3-cell-a
