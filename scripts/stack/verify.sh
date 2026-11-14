@@ -151,8 +151,14 @@ for path in "${scenarios[@]}"; do
     printf '\n==== %s ====\n' "$label"
     scenario_since="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
     window_start=$(date +%s)
-    stack_compose exec -T -e STACK_DVR_WINDOW_SECONDS="${STACK_DVR_WINDOW_SECONDS:-120}" stack-runner \
-      bash /repo/scripts/stack/stack-qa-tenant.sh run "$path"
+    scenario_file="$stack_repo_root/${path#/repo/}"
+    if grep -q '^# stack-runner: host$' "$scenario_file"; then
+      # Docker ingress fixtures share host paths and compile with the host's Go cache.
+      STACK_ENDPOINTS_FILE=/dev/null STACK_REPO="$stack_repo_root" bash "$scenario_file"
+    else
+      stack_compose exec -T -e STACK_DVR_WINDOW_SECONDS="${STACK_DVR_WINDOW_SECONDS:-120}" stack-runner \
+        bash /repo/scripts/stack/stack-qa-tenant.sh run "$path"
+    fi
     rc=$?
     printf '%s\t%s\t%s\n' "$name" "$window_start" "$(date +%s)" >>"$sweep_windows"
     case "$rc" in
