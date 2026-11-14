@@ -747,6 +747,7 @@ test-stack-bootstrap-results:
 	bash scripts/stack/test_bootstrap_results.sh
 
 verify-stack-fixtures: test-stack-bootstrap-results
+	python3 scripts/stack/test_hosted_alias_ingress.py
 	python3 scripts/stack/test_billing_provider.py
 	python3 scripts/stack/test_s3_fault_proxy.py
 	python3 scripts/stack/test_s3_prefix_empty.py
