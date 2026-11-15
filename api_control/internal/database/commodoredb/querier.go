@@ -337,6 +337,7 @@ type Querier interface {
 	InsertPolicyBundle(ctx context.Context, arg InsertPolicyBundleParams) error
 	InsertPullSourceEvent(ctx context.Context, arg InsertPullSourceEventParams) error
 	InsertPushTarget(ctx context.Context, arg InsertPushTargetParams) error
+	// Legacy refresh timestamps store UTC without a time zone.
 	InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) error
 	InsertRegisteredUser(ctx context.Context, arg InsertRegisteredUserParams) error
 	InsertRotatedRefreshToken(ctx context.Context, arg InsertRotatedRefreshTokenParams) (string, error)

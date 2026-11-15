@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/svelte";
 
 vi.mock("$lib/config", () => ({
@@ -7,7 +7,17 @@ vi.mock("$lib/config", () => ({
 
 const { default: ComingSoonModal } = await import("$lib/components/ComingSoonModal.svelte");
 
-afterEach(() => cleanup());
+beforeEach(() => vi.useFakeTimers());
+afterEach(async () => {
+  try {
+    cleanup();
+    // Dialog scroll-lock cleanup must finish before jsdom is disposed.
+    await vi.runAllTimersAsync();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
 describe("coming soon modal", () => {
   it("describes cloud production as server-side work only and links the showcase pipeline", async () => {

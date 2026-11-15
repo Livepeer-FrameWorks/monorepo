@@ -95,10 +95,11 @@ func testAuthSessionsSchema(t *testing.T, db *sql.DB) {
 	if err != nil || time.Until(renewed.IdleExpiresAt) > 30*24*time.Hour || time.Until(renewed.IdleExpiresAt) < 30*24*time.Hour-5*time.Second {
 		t.Fatalf("idle timeout is not a fixed 30-day duration: %+v err=%v", renewed, err)
 	}
-	testAuthSessionBackfill(t, db)
-	testLegacyRefreshLookupAfterSessionRevocation(t, db)
-	testRevocationWaitsForOldIssuerRotation(t, db)
-	testAuthSessionHardMaximum(t, db)
+	t.Run("legacy_refresh_utc", func(t *testing.T) { testLegacyRefreshUTC(t, db) })
+	t.Run("backfill", func(t *testing.T) { testAuthSessionBackfill(t, db) })
+	t.Run("legacy_revocation", func(t *testing.T) { testLegacyRefreshLookupAfterSessionRevocation(t, db) })
+	t.Run("concurrent_rotation", func(t *testing.T) { testRevocationWaitsForOldIssuerRotation(t, db) })
+	t.Run("hard_maximum", func(t *testing.T) { testAuthSessionHardMaximum(t, db) })
 }
 
 func testAuthSessionHardMaximum(t *testing.T, db *sql.DB) {

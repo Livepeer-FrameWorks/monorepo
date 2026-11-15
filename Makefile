@@ -508,10 +508,11 @@ verify-generated-contracts:
 
 # The component-test steps of the CI "Frontend test + coverage" job. $houdini is gitignored, so the components'
 # transitive $houdini imports resolve only after gql:codegen.
+COMPONENT_TEST_FLAGS ?=
 test-frontend-components:
 	pnpm --filter frameworks-frontend exec svelte-kit sync
 	pnpm --filter frameworks-frontend gql:codegen
-	pnpm --filter frameworks-frontend test:components
+	pnpm --filter frameworks-frontend test:components $(COMPONENT_TEST_FLAGS)
 
 .PHONY: build-sdk-ts test-streamcrafter-core test-streamcrafter-adapters test-player-react
 build-sdk-ts:

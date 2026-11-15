@@ -22,7 +22,7 @@ WITH RECURSIVE family AS (
       ON r.tenant_id = $1 AND r.user_id = $2
      AND (r.id = f.replaced_by OR r.replaced_by = f.id)
 ), owner AS (
-    SELECT COALESCE(MIN(session_id::text)::uuid, MIN(id::text) FILTER (WHERE NOT revoked AND expires_at > NOW())::uuid) AS session_id,
+    SELECT COALESCE(MIN(session_id::text)::uuid, MIN(id::text) FILTER (WHERE NOT revoked AND expires_at > (NOW() AT TIME ZONE 'UTC'))::uuid) AS session_id,
            MIN(COALESCE(created_at AT TIME ZONE 'UTC', NOW())) AS created_at,
            MAX(expires_at AT TIME ZONE 'UTC') FILTER (WHERE NOT revoked) AS idle_expires_at
     FROM family HAVING COUNT(DISTINCT session_id) <= 1
@@ -189,7 +189,7 @@ func (q *Queries) GetAuthSession(ctx context.Context, arg GetAuthSessionParams) 
 
 const getRefreshTokenOwnerByHash = `-- name: GetRefreshTokenOwnerByHash :one
 SELECT user_id, tenant_id FROM commodore.refresh_tokens
-WHERE token_hash = $1 AND expires_at > NOW()
+WHERE token_hash = $1 AND expires_at > (NOW() AT TIME ZONE 'UTC')
 `
 
 type GetRefreshTokenOwnerByHashRow struct {
@@ -329,8 +329,8 @@ func (q *Queries) InsertAuthSession(ctx context.Context, arg InsertAuthSessionPa
 }
 
 const insertSessionRefreshToken = `-- name: InsertSessionRefreshToken :one
-INSERT INTO commodore.refresh_tokens (tenant_id, user_id, session_id, token_hash, expires_at)
-VALUES ($1, $2, $3, $4, $5) RETURNING id
+INSERT INTO commodore.refresh_tokens (tenant_id, user_id, session_id, token_hash, expires_at, created_at)
+VALUES ($1, $2, $3, $4, $5::timestamptz AT TIME ZONE 'UTC', NOW() AT TIME ZONE 'UTC') RETURNING id
 `
 
 type InsertSessionRefreshTokenParams struct {

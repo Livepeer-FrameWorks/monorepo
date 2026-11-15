@@ -520,9 +520,9 @@ func ybRoleTaggedSchemaItems(t *testing.T, repo, tag string, names []string) []m
 }
 
 // TestYugabyteRoleMigrationRefusesAbortedConcurrentIndex applies a concurrent index migration item through the role's
-// migrate_item.yml while roles are being created elsewhere on the cluster. The CREATE ROLE aborts the index build and
-// the engine's retry of CREATE INDEX CONCURRENTLY IF NOT EXISTS then reports success over the invalid index, so the
-// item must fail without writing its ledger row; the rerun repairs the index and records the item.
+// migrate_item.yml while roles are being created elsewhere on the cluster. Catalog churn can abort before the index
+// exists or leave an invalid index that the engine's retry skips. Neither outcome may record the migration; the rerun
+// creates the absent index or repairs the invalid one before recording the item.
 func TestYugabyteRoleMigrationRefusesAbortedConcurrentIndex(t *testing.T) {
 	repo := ybRoleRepo(t)
 	container := fmt.Sprintf("fw-yb-role-migrate-%d-%d", os.Getpid(), time.Now().UnixNano())
@@ -574,8 +574,12 @@ func TestYugabyteRoleMigrationRefusesAbortedConcurrentIndex(t *testing.T) {
 	if err == nil {
 		t.Fatalf("the item succeeded while %d roles were created during its index build; index|ledger = %s\n%s", created, state(), ybRoleTail(output, 8000))
 	}
-	if got := state(); got != "false|0" {
-		t.Fatalf("after the refused item, index|ledger = %s, want false|0\n%s", got, ybRoleTail(output, 8000))
+	if got := state(); got != "false|0" && got != "absent|0" {
+		t.Fatalf("after the refused item, index|ledger = %s, want false|0 or absent|0\n%s", got, ybRoleTail(output, 8000))
+	} else if got == "absent|0" && !strings.Contains(output, "SQLSTATE 40001") {
+		t.Fatalf("index creation failed before the expected catalog-conflict refusal:\n%s", ybRoleTail(output, 8000))
+	} else if got == "false|0" && !strings.Contains(output, "SQLSTATE 40001") && !strings.Contains(output, "invalid index verification failed") {
+		t.Fatalf("invalid index survived an unrelated failure:\n%s", ybRoleTail(output, 8000))
 	}
 
 	output, err = ybRoleRunPlaybook(t, repo, container, map[string]any{"item": item}, tasks)
