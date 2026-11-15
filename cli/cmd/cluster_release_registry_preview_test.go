@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -12,6 +13,31 @@ import (
 	"frameworks/cli/pkg/ssh"
 	"github.com/spf13/cobra"
 )
+
+func TestRegistryPreviewReadsDatabaseTimestamps(t *testing.T) {
+	want := time.Date(2026, 11, 15, 17, 49, 35, 49162000, time.UTC)
+	for _, timestamp := range []string{`"2026-11-15T17:49:35.049162"`, `"2026-11-15T17:49:35.049162Z"`, `"2026-11-15T12:49:35.049162-05:00"`} {
+		t.Run(timestamp, func(t *testing.T) {
+			var row registryPreviewRow
+			if err := json.Unmarshal([]byte(`{"instance_id":"live-row","updated_at":`+timestamp+`}`), &row); err != nil {
+				t.Fatalf("registry database timestamp must be readable: %v", err)
+			}
+			if row.InstanceID != "live-row" || row.UpdatedAt == nil || !row.UpdatedAt.Equal(want) {
+				t.Fatalf("decoded registry timestamp = %+v, want %s", row, want)
+			}
+		})
+	}
+	for _, data := range []string{`{"updated_at":null}`, `{}`} {
+		var row registryPreviewRow
+		if err := json.Unmarshal([]byte(data), &row); err != nil || row.UpdatedAt != nil {
+			t.Fatalf("absent database timestamp = %+v, %v", row, err)
+		}
+	}
+	var invalid registryPreviewRow
+	if err := json.Unmarshal([]byte(`{"updated_at":"not-a-timestamp"}`), &invalid); err == nil {
+		t.Fatal("malformed registry timestamp was accepted")
+	}
+}
 
 func TestRegistryRetirementPreviewProtectsUnownedAndRuntimeRows(t *testing.T) {
 	scope := &bootstrap.ServiceRegistryScope{Owner: "production", Clusters: []string{"core"}, Complete: true,
