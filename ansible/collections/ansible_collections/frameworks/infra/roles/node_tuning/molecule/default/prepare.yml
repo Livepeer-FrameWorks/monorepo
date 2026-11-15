@@ -9,7 +9,7 @@
   tasks:
     - name: Install the systemd resolver
       ansible.builtin.apt:
-        name: "{{ 'systemd' if ansible_distribution == 'Ubuntu' and ansible_distribution_major_version | int < 23 else 'systemd-resolved' }}"
+        name: "{{ 'systemd' if ansible_facts.distribution == 'Ubuntu' and ansible_facts.distribution_major_version | int < 23 else 'systemd-resolved' }}"
         state: present
 
     - name: Create the resolver drop-in directory
