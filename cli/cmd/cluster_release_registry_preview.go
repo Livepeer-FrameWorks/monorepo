@@ -29,6 +29,33 @@ type registryPreviewRow struct {
 	UpdatedAt   *time.Time `json:"updated_at"`
 }
 
+func (r *registryPreviewRow) UnmarshalJSON(data []byte) error {
+	type plainRow registryPreviewRow
+	var decoded struct {
+		*plainRow
+		UpdatedAt *string `json:"updated_at"`
+	}
+	decoded.plainRow = (*plainRow)(r)
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	r.UpdatedAt = nil
+	if decoded.UpdatedAt == nil {
+		return nil
+	}
+	updatedAt, err := time.Parse(time.RFC3339Nano, *decoded.UpdatedAt)
+	if err != nil {
+		// Quartermaster's timestamp-without-time-zone columns contain UTC.
+		// PostgreSQL emits those JSON values without an RFC3339 zone suffix.
+		updatedAt, err = time.Parse("2006-01-02T15:04:05", *decoded.UpdatedAt)
+	}
+	if err != nil {
+		return fmt.Errorf("registry updated_at: %w", err)
+	}
+	r.UpdatedAt = &updatedAt
+	return nil
+}
+
 var releaseRegistryInstancesFn = readReleaseRegistryInstances
 
 func registryTuple(service, cluster, node, protocol string, port int) string {

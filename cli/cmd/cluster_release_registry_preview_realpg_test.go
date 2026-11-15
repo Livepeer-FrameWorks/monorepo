@@ -54,9 +54,9 @@ func TestRegistryRetirementPreviewBeforeAndAfterOwnershipExpandRealPG(t *testing
 	defer db.Close()
 	if _, err := db.ExecContext(t.Context(), `CREATE SCHEMA quartermaster;
  CREATE TABLE quartermaster.services(service_id text PRIMARY KEY,name text NOT NULL);
- CREATE TABLE quartermaster.service_instances(instance_id text PRIMARY KEY,service_id text,cluster_id text,node_id text,protocol text,port integer,status text);
+ CREATE TABLE quartermaster.service_instances(instance_id text PRIMARY KEY,service_id text,cluster_id text,node_id text,protocol text,port integer,status text,updated_at timestamp DEFAULT '2026-11-15 17:49:35.049162');
  INSERT INTO quartermaster.services VALUES('clickhouse','clickhouse');
- INSERT INTO quartermaster.service_instances VALUES('legacy-reviewed','clickhouse','core','old','tcp',9000,'running'),('unreviewed','clickhouse','core','other','tcp',9000,'running');`); err != nil {
+ INSERT INTO quartermaster.service_instances(instance_id,service_id,cluster_id,node_id,protocol,port,status) VALUES('legacy-reviewed','clickhouse','core','old','tcp',9000,'running'),('unreviewed','clickhouse','core','other','tcp',9000,'running');`); err != nil {
 		t.Fatal(err)
 	}
 	bin := t.TempDir()
@@ -73,13 +73,19 @@ func TestRegistryRetirementPreviewBeforeAndAfterOwnershipExpandRealPG(t *testing
 	for _, expanded := range []bool{false, true} {
 		if expanded {
 			if _, err := db.ExecContext(t.Context(), `ALTER TABLE quartermaster.service_instances ADD COLUMN registration_source text DEFAULT 'legacy', ADD COLUMN registry_owner text;
-    INSERT INTO quartermaster.service_instances VALUES('managed-removed','clickhouse','core','old-2','tcp',9000,'running','manifest','production');`); err != nil {
+    INSERT INTO quartermaster.service_instances(instance_id,service_id,cluster_id,node_id,protocol,port,status,registration_source,registry_owner) VALUES('managed-removed','clickhouse','core','old-2','tcp',9000,'running','manifest','production');`); err != nil {
 				t.Fatal(err)
 			}
 		}
 		rows, err := readReleaseRegistryInstances(t.Context(), cmd, rc, nil, scope)
 		if err != nil {
 			t.Fatalf("expanded=%v read: %v", expanded, err)
+		}
+		for _, row := range rows {
+			want := time.Date(2026, 11, 15, 17, 49, 35, 49162000, time.UTC)
+			if row.UpdatedAt == nil || !row.UpdatedAt.Equal(want) {
+				t.Fatalf("expanded=%v row %s timestamp=%v, want %s", expanded, row.InstanceID, row.UpdatedAt, want)
+			}
 		}
 		stopped, err := registryRetirementPreview(bootstrap.QuartermasterSection{RegistryScope: scope}, rows)
 		want := 1
