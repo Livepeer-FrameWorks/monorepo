@@ -323,8 +323,8 @@ func (q *Queries) HasUserWallet(ctx context.Context, arg HasUserWalletParams) (b
 }
 
 const insertRefreshToken = `-- name: InsertRefreshToken :exec
-INSERT INTO commodore.refresh_tokens (tenant_id, user_id, token_hash, expires_at)
-VALUES ($1, $2, $3, $4)
+INSERT INTO commodore.refresh_tokens (tenant_id, user_id, token_hash, expires_at, created_at)
+VALUES ($1, $2, $3, $4::timestamptz AT TIME ZONE 'UTC', NOW() AT TIME ZONE 'UTC')
 `
 
 type InsertRefreshTokenParams struct {
@@ -334,6 +334,7 @@ type InsertRefreshTokenParams struct {
 	ExpiresAt time.Time `db:"expires_at" json:"expires_at"`
 }
 
+// Legacy refresh timestamps store UTC without a time zone.
 func (q *Queries) InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) error {
 	_, err := q.db.ExecContext(ctx, insertRefreshToken,
 		arg.TenantID,
@@ -382,8 +383,8 @@ func (q *Queries) InsertRegisteredUser(ctx context.Context, arg InsertRegistered
 }
 
 const insertRotatedRefreshToken = `-- name: InsertRotatedRefreshToken :one
-INSERT INTO commodore.refresh_tokens (tenant_id, user_id, token_hash, expires_at)
-VALUES ($1, $2, $3, $4)
+INSERT INTO commodore.refresh_tokens (tenant_id, user_id, token_hash, expires_at, created_at)
+VALUES ($1, $2, $3, $4::timestamptz AT TIME ZONE 'UTC', NOW() AT TIME ZONE 'UTC')
 RETURNING id
 `
 
@@ -551,7 +552,7 @@ SELECT
     rotated_at,
     replaced_by
 FROM commodore.refresh_tokens
-WHERE token_hash = $1 AND expires_at > NOW()
+WHERE token_hash = $1 AND expires_at > (NOW() AT TIME ZONE 'UTC')
 FOR UPDATE
 `
 
@@ -642,7 +643,7 @@ func (q *Queries) RevokeUserSessions(ctx context.Context, arg RevokeUserSessions
 
 const rotateRefreshToken = `-- name: RotateRefreshToken :exec
 UPDATE commodore.refresh_tokens
-SET revoked = true, rotated_at = NOW(), replaced_by = $2
+SET revoked = true, rotated_at = NOW() AT TIME ZONE 'UTC', replaced_by = $2
 WHERE id = $1
 `
 

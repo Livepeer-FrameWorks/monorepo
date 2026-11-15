@@ -9,7 +9,7 @@
   tasks:
     - name: Install the systemd resolver
       ansible.builtin.apt:
-        name: systemd-resolved
+        name: "{{ 'systemd' if ansible_distribution == 'Ubuntu' and ansible_distribution_major_version | int < 23 else 'systemd-resolved' }}"
         state: present
 
     - name: Create the resolver drop-in directory
@@ -30,4 +30,5 @@
     - name: Start the unconverged resolver
       ansible.builtin.systemd_service:
         name: systemd-resolved
+        masked: false
         state: restarted
