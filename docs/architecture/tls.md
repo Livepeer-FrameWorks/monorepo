@@ -274,6 +274,9 @@ are immutable under:
 The Privateer-owned `tenant-alias/nginx.map` maps SNI hostnames to these
 generations. A single generic Nginx server includes that inventory. Privateer
 writes the complete map atomically and requests the normal ingress reload.
+Native and Docker root configurations set `map_hash_bucket_size 512` so a full
+253-character DNS hostname fits with Nginx's hash metadata. The separate
+`server_names_hash_bucket_size` setting does not size the SNI inventory map.
 The root-owned reload helper pins the inventory with a shared directory lock,
 validates and reloads the native service or Docker container, and records the
 accepted map digest in `/run/frameworks-nginx/tenant-alias.applied`. Privateer

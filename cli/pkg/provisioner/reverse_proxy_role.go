@@ -258,6 +258,8 @@ http {
 
     server_tokens off;
     server_names_hash_bucket_size 128;
+    # Full SNI hostnames need room for 253 bytes plus hash metadata.
+    map_hash_bucket_size 512;
     types_hash_max_size 4096;
     types_hash_bucket_size 128;
 

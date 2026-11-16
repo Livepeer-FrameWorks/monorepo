@@ -53,6 +53,8 @@ nginx_send_timeout: 60s
 nginx_server_tokens: false
 nginx_backup_dir: /var/backups/frameworks/nginx
 nginx_server_names_hash_bucket_size: 128
+# A full SNI hostname can be 253 bytes; map buckets also hold hash metadata.
+nginx_map_hash_bucket_size: 512
 nginx_types_hash_max_size: 4096
 nginx_types_hash_bucket_size: 128
 nginx_systemd_limit_nofile: 200000

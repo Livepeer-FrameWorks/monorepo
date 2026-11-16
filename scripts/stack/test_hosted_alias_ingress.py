@@ -21,8 +21,8 @@ class HostedIngressSelectionTest(unittest.TestCase):
         (self.repo / "config/infrastructure.yaml").write_text(
             "images:\n  - name: nginx\n    image: nginx\n    digest: sha256:fixture\n")
         (self.repo / "Makefile").write_text(
-            "test-privateer:\n"
-            "\t@printf '%s\\n' '$(GO_TEST_FLAGS)' > \"$$FIXTURE_FLAGS\"\n"
+            "test-privateer test-cli:\n"
+            "\t@printf '%s\\n' '$(GO_TEST_FLAGS)' >> \"$$FIXTURE_FLAGS\"\n"
             "\t@cat \"$$FIXTURE_OUTPUT\"\n"
             "\t@exit \"$$FIXTURE_EXIT\"\n")
         self.env = dict(os.environ, MAKE=shutil.which("make"),
@@ -33,6 +33,7 @@ class HostedIngressSelectionTest(unittest.TestCase):
 
     def run_wrapper(self, output, exit_code=0):
         (self.repo / "output").write_text(output + "\n")
+        (self.repo / "flags").write_text("")
         return subprocess.run(["bash", str(self.script)], cwd=self.repo,
                               env=dict(self.env, FIXTURE_EXIT=str(exit_code)),
                               capture_output=True, text=True)
@@ -50,10 +51,16 @@ class HostedIngressSelectionTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout)
 
     def test_named_pass_preserves_the_regex_anchor_through_make(self):
-        result = self.run_wrapper("--- PASS: TestTenantAliasPrivateerDockerIngressLifecycle (0.01s)")
+        result = self.run_wrapper("--- PASS: TestTenantAliasPrivateerDockerIngressLifecycle (0.01s)\n"
+                                  "--- PASS: TestNginxRootConfigAcceptsMaximumLengthAlias (0.01s)")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((self.repo / "flags").read_text().strip(),
-                         "-run ^TestTenantAliasPrivateerDockerIngressLifecycle$ -v -timeout 180s")
+                         "-run ^TestTenantAliasPrivateerDockerIngressLifecycle$ -v -timeout 180s\n"
+                         "-run ^TestNginxRootConfigAcceptsMaximumLengthAlias$ -v -timeout 180s")
+
+    def test_first_test_cannot_hide_missing_root_config_validation(self):
+        result = self.run_wrapper("--- PASS: TestTenantAliasPrivateerDockerIngressLifecycle (0.01s)")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
 
     def test_failed_make_stays_failed_even_with_a_pass_marker(self):
         result = self.run_wrapper("--- PASS: TestTenantAliasPrivateerDockerIngressLifecycle (0.01s)", 1)

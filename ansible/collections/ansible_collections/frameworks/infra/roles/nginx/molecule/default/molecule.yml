@@ -29,7 +29,7 @@ provisioner:
           enabled: true
           service_label: foghorn
           zone_label: cdn
-          root_domain: frameworks.test
+          root_domain: "{{ 'r' * 63 }}.{{ 's' * 63 }}.{{ 't' * 49 }}"
           upstream_port: 18008
 verifier:
   name: ansible
