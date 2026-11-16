@@ -19,6 +19,7 @@ http {
 
     server_tokens {{ 'on' if nginx_server_tokens else 'off' }};
     server_names_hash_bucket_size {{ nginx_server_names_hash_bucket_size }};
+    map_hash_bucket_size {{ nginx_map_hash_bucket_size }};
     types_hash_max_size {{ nginx_types_hash_max_size }};
     types_hash_bucket_size {{ nginx_types_hash_bucket_size }};
 

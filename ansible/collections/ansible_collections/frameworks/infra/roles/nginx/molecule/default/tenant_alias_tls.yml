@@ -5,8 +5,15 @@
   gather_facts: true
   vars:
     alias_tls_root: /etc/frameworks/ingress/tls/tenant-alias
-    alias_tls_host: foghorn.acme.cdn.frameworks.test
+    alias_tls_host: "foghorn.{{ 'a' * 63 }}.cdn.{{ nginx_tenant_alias_playback.root_domain }}"
+    alias_globex_host: "foghorn.globex.cdn.{{ nginx_tenant_alias_playback.root_domain }}"
   tasks:
+    - name: Assert the fixture exercises a maximum-length valid hostname
+      ansible.builtin.assert:
+        that:
+          - alias_tls_host | length == 253
+          - alias_tls_host.split('.') | map('length') | max <= 63
+
     - name: Record the generic proxy configuration before tenant additions
       ansible.builtin.stat:
         path: /etc/nginx/conf.d/frameworks.conf
@@ -34,9 +41,9 @@
           - -days
           - "1"
           - -subj
-          - "/CN=foghorn.{{ item.tenant }}.cdn.frameworks.test"
+          - "/CN=tenant-alias-fixture"
           - -addext
-          - "subjectAltName=DNS:foghorn.{{ item.tenant }}.cdn.frameworks.test"
+          - "subjectAltName=DNS:{{ alias_tls_host if item.tenant == 'acme' else alias_globex_host }}"
           - -keyout
           - "{{ alias_tls_root }}/revisions/{{ item.path }}/tls.key"
           - -out
@@ -63,6 +70,10 @@
         owner: privateer
         group: frameworks-ingress
         mode: "0640"
+
+    - name: Validate the real root config with the maximum-length alias inventory
+      ansible.builtin.command: nginx -t
+      changed_when: false
 
     - name: Ask the normal ingress path unit to activate the inventory
       ansible.builtin.command: touch /etc/frameworks/ingress/reload.trigger
@@ -153,7 +164,7 @@
         dest: "{{ alias_tls_root }}/nginx.map"
         content: |
           {{ alias_tls_host }} revisions/acme/v2;
-          foghorn.globex.cdn.frameworks.test revisions/globex/v1;
+          {{ alias_globex_host }} revisions/globex/v1;
         owner: privateer
         group: frameworks-ingress
         mode: "0640"
@@ -174,10 +185,10 @@
           - --cacert
           - "{{ alias_tls_root }}/revisions/{{ item.path }}/tls.crt"
           - --resolve
-          - "foghorn.{{ item.tenant }}.cdn.frameworks.test:443:127.0.0.1"
+          - "{{ alias_tls_host if item.tenant == 'acme' else alias_globex_host }}:443:127.0.0.1"
           - -o
           - /dev/null
-          - "https://foghorn.{{ item.tenant }}.cdn.frameworks.test/play/probe/hls/index.m3u8"
+          - "https://{{ alias_tls_host if item.tenant == 'acme' else alias_globex_host }}/play/probe/hls/index.m3u8"
       loop:
         - { tenant: acme, path: acme/v2 }
         - { tenant: globex, path: globex/v1 }
@@ -190,7 +201,7 @@
     - name: Withdraw one tenant from the automatic inventory
       ansible.builtin.copy:
         dest: "{{ alias_tls_root }}/nginx.map"
-        content: "foghorn.globex.cdn.frameworks.test revisions/globex/v1;\n"
+        content: "{{ alias_globex_host }} revisions/globex/v1;\n"
         owner: privateer
         group: frameworks-ingress
         mode: "0640"
@@ -238,10 +249,10 @@
           - --cacert
           - "{{ alias_tls_root }}/revisions/globex/v1/tls.crt"
           - --resolve
-          - "foghorn.globex.cdn.frameworks.test:443:127.0.0.1"
+          - "{{ alias_globex_host }}:443:127.0.0.1"
           - -o
           - /dev/null
-          - "https://foghorn.globex.cdn.frameworks.test/play/probe/hls/index.m3u8"
+          - "https://{{ alias_globex_host }}/play/probe/hls/index.m3u8"
       changed_when: false
 
     - name: Check the worker can read a private key without root
