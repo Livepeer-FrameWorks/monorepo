@@ -3,12 +3,48 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
+	fwssh "frameworks/cli/pkg/ssh"
 )
+
+func TestAuthProjectionDoctorUsesHostSSHForLoopbackAlias(t *testing.T) {
+	bin := t.TempDir()
+	called := filepath.Join(bin, "called")
+	script := `#!/usr/bin/env bash
+set -eu
+if [ "${1:-}" = -G ]; then
+  printf 'hostname 127.0.0.1\n'
+  exit 0
+fi
+case "$*" in
+  *projection-host*http://127.0.0.1:18027/metrics*) ;;
+  *) exit 99 ;;
+esac
+touch "$AUTH_PROJECTION_SSH_CALLED"
+printf 'auth_session_revocation_feed_connected 1\nauth_session_revocation_snapshot_synchronized 1\nauth_session_revocation_projection_ready 1\n\n200'
+`
+	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("AUTH_PROJECTION_SSH_CALLED", called)
+	pool := fwssh.NewPool(time.Second, "")
+	t.Cleanup(func() { _ = pool.Close() })
+	result := doctorAuthProjection(context.Background(), pool, inventory.Host{Name: "projection-host", ExternalIP: "127.0.0.1"}, inventory.ServiceConfig{}, "foghorn", 18008)
+	if _, err := os.Stat(called); err != nil {
+		t.Fatalf("projection bypassed the manifest host's SSH transport: %+v", result)
+	}
+	if !result.OK {
+		t.Fatalf("healthy host projection refused: %+v", result)
+	}
+}
 
 func TestAuthProjectionDoctorRejectsFallbackOnlyOrUnhydratedReplica(t *testing.T) {
 	for _, tc := range []struct {
