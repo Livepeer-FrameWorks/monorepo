@@ -153,9 +153,21 @@ curl -L -o last-minute.mp4 "%PLAY_URL%/play/abc123def.mp4?startunix=-60&dl=1"
 
 `/play` passes a fixed set of query parameters on to the edge it redirects to: the time-range
 parameters `startunix`, `stopunix`, `start`, `stop`, and `duration`, plus `dl`, `rate`, `audio`,
-`video`, and `subtitle`, and `jwt` for live and DVR content. A repeated or malformed value returns
+`video`, and `subtitle`. A repeated or malformed value for these parameters returns
 `400 invalid_playback_parameter`. Other parameters are dropped. See
 [ad-hoc cuts](/builders/clips#ad-hoc-cuts-from-a-playback-url) for what each one does.
+
+For JWT-protected live streams, DVR, clips, and VOD, append `?jwt=<viewer-token>` to the
+`/play` URL. Foghorn validates the credential and includes it as `fwjwt` on the edge URLs
+in both 307 redirects and JSON resolver responses. The separate `tkn` parameter identifies
+the playback session. A standard HLS player can follow the redirect directly:
+
+```text
+%PLAY_URL%/play/<playbackId>/hls/index.m3u8?jwt=<viewer-token>
+```
+
+Credentials supplied through a header or cookie stay out of returned URLs. Clients using
+those transports must also attach the credential to their requests to the selected edge.
 
 When `/play` cannot redirect, it answers JSON with a `code` field:
 
