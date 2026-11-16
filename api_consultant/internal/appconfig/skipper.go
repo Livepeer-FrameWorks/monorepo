@@ -26,7 +26,7 @@ type Skipper struct {
 	config.SystemTenant
 	config.ServiceAuth
 	config.GRPCTLS
-	config.SessionRevocationStream
+	config.SessionRevocationProjection
 	config.Postgres
 	config.Registration
 	config.BuildEnvironment

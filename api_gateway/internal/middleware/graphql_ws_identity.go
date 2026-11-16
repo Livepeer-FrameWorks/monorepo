@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"sync"
 	"time"
 
@@ -476,7 +477,7 @@ func (w websocketIdentityWatch) check(ctx context.Context, id websocketIdentity)
 // token. A session token must also still be live in Commodore: a signed-out
 // session's token keeps verifying until it expires, but no longer holds
 // realtime connections. When Commodore cannot answer for a session token,
-// the locally verified result is returned with an error wrapping
+// a still-fresh locally verified result is returned with an error wrapping
 // ErrAuthBackendUnavailable, and callers keep serving on it.
 func authenticateWebsocketBearer(ctx context.Context, token string, serviceClients *clients.ServiceClients, jwtSecret []byte) (*AuthResult, error) {
 	result, err := AuthenticateBearerToken(ctx, token, serviceClients, jwtSecret)
@@ -540,6 +541,9 @@ func (w websocketIdentityWatch) watch(ctx context.Context, id websocketIdentity,
 			cancel()
 			switch {
 			case err == nil:
+			case errors.Is(err, auth.ErrSessionStateUnavailable):
+				closeConn(ErrWebsocketAuthUnavailable)
+				return
 			case errors.Is(err, ErrAuthBackendUnavailable):
 				if w.logger != nil {
 					w.logger.WithError(err).Warn("WebSocket credential re-check could not reach the authentication backend")

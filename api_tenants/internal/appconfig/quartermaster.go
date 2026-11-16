@@ -29,7 +29,7 @@ type Quartermaster struct {
 	config.GeoIP
 	config.ServiceAuth
 	config.GRPCTLS
-	SignalmanGRPCAddr string `env:"SIGNALMAN_GRPC_ADDR" default:"signalman:@port(signalman.grpc)" desc:"Signalman address for background interactive-session revocation events." introduced:"v0.3.15"`
+	config.SessionRevocationProjection
 	config.Postgres
 	config.Registration
 	config.DomainEventActor

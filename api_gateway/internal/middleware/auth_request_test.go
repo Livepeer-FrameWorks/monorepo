@@ -87,6 +87,26 @@ func TestAuthenticateRequestJWT(t *testing.T) {
 	}
 }
 
+func TestUnhydratedSessionIsRetryableWithoutInvalidatingCredential(t *testing.T) {
+	secret := []byte("cold-bridge-projection")
+	previous := enforcedSessionRevocations.Load()
+	defer EnforceSessionRevocations(previous)
+	cache := NewSessionRevocations()
+	cache.RequireSnapshot()
+	EnforceSessionRevocations(cache)
+	token, err := auth.GenerateSessionJWT("user", "tenant", "user@example.test", "member", nil, time.Time{}, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AuthenticateBearerToken(context.Background(), token, nil, secret); !errors.Is(err, ErrAuthBackendUnavailable) {
+		t.Fatalf("cold session classified as invalid credential instead of retryable state: %v", err)
+	}
+	cache.ConfirmSnapshot(time.Now(), time.Minute)
+	if result, err := AuthenticateBearerToken(context.Background(), token, nil, secret); err != nil || result.AuthType != "jwt" {
+		t.Fatalf("same credential failed after projection recovery: result=%v err=%v", result, err)
+	}
+}
+
 func TestAuthenticateRequestAPIToken(t *testing.T) {
 	server := newFakeInternalService(&commodorepb.ValidateAPITokenResponse{
 		Valid:       true,

@@ -4525,7 +4525,11 @@ func privateerInfraPeerHostsForHost(manifest *inventory.Manifest, selfHostName s
 				if dep.Provider == topology.InfraProviderAggregator || isAggregatorPinnedService(serviceID) {
 					kafkaClusters = append(kafkaClusters, aggregatorKafkaClusterView(manifest))
 				} else {
-					for _, clusterID := range serviceProviderClusterIDs(manifest, svc, selfHostName) {
+					clusterIDs := serviceProviderClusterIDs(manifest, svc, selfHostName)
+					if len(clusterIDs) == 0 {
+						clusterIDs = []string{""}
+					}
+					for _, clusterID := range clusterIDs {
 						kafkaClusters = append(kafkaClusters, serviceKafkaCluster(manifest, clusterID, privateerHostRegion(manifest, selfHostName)))
 					}
 				}
@@ -7313,6 +7317,12 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		if prefixes := mirroredSourceAliases(manifest, kafkaClusterAlias(manifest, bound)); len(prefixes) > 0 {
 			env["MIRROR_REGION_PREFIXES"] = strings.Join(prefixes, ",")
 		}
+	}
+
+	if topology.UsesSessionRevocationProjection(baseName) {
+		env["AUTH_REVOCATION_KAFKA_BROKERS"] = env["KAFKA_BROKERS"]
+		bound := kafkaClusterForServiceTask(manifest, task)
+		env["AUTH_REVOCATION_MIRROR_REGION_PREFIXES"] = strings.Join(mirroredSourceAliases(manifest, kafkaClusterAlias(manifest, bound)), ",")
 	}
 
 	// Signalman is a broadcast consumer: N replicas per region, each receiving

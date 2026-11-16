@@ -11,17 +11,26 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
-	signalmanclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/signalman"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
-	internalv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
-	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 type Lister func(context.Context, time.Time) (*commodorepb.ListRecentSessionRevocationsResponse, error)
-type Opener func(context.Context) (signalmanclient.EventStream, error)
+
+// Source delivers to this replica independently of other replicas' consumers.
+type Source interface {
+	Run(context.Context, func(*commodorepb.SessionRevocation)) error
+	CatchUp(context.Context) error
+	Close()
+}
+
+type Opener func(context.Context) (Source, error)
+
+// MaxSnapshotAge is the interactive-auth authority freshness contract. Events
+// accelerate revocation, while complete snapshots bound unseen publication loss.
+const MaxSnapshotAge = 2 * time.Minute
 
 type Config struct {
 	Secret          []byte
@@ -48,6 +57,9 @@ type Feed struct {
 	synchronized atomic.Bool
 	lastSuccess  atomic.Int64
 	failures     atomic.Uint64
+	sourceMu     sync.Mutex
+	source       Source
+	generation   uint64
 }
 
 func Start(ctx context.Context, cfg Config) *Feed {
@@ -68,9 +80,12 @@ func Start(ctx context.Context, cfg Config) *Feed {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	f := &Feed{cfg: cfg, cache: cfg.Cache, trigger: make(chan struct{}, 1), cancel: cancel}
+	f.cache.RequireSnapshot()
 	if cfg.List != nil {
 		f.wg.Go(func() { f.reconcile(ctx) })
-		f.Resume()
+		if cfg.Open == nil {
+			f.Resume()
+		}
 	}
 	if cfg.Open != nil {
 		f.wg.Go(func() { f.follow(ctx) })
@@ -93,6 +108,9 @@ func (f *Feed) Resume() {
 func (f *Feed) CheckSession(_ context.Context, token string) error {
 	_, err := auth.ValidateRevocableSessionJWT(token, f.cfg.Secret, f.cache)
 	if err != nil {
+		if errors.Is(err, auth.ErrSessionStateUnavailable) {
+			return status.Error(codes.Unavailable, "session state unavailable")
+		}
 		return fmt.Errorf("%w: %w", err, status.Error(codes.Unauthenticated, "invalid or signed-out session"))
 	}
 	return nil
@@ -113,53 +131,21 @@ func (f *Feed) Apply(rev *commodorepb.SessionRevocation) bool {
 	return true
 }
 
-// Decode admits only internal revocation payloads from the service-only channel.
-func Decode(tenant string, event *signalmanpb.TenantEvent) *commodorepb.SessionRevocation {
-	if tenant == "" || event == nil {
-		return nil
-	}
-	rev := &commodorepb.SessionRevocation{TenantId: tenant}
-	switch event.GetType() {
-	case "user.sessions_revoked":
-		var payload internalv1.UserSessionsRevoked
-		if err := event.GetData().UnmarshalTo(&payload); err != nil {
-			return nil
-		}
-		rev.UserId, rev.RevokedAt = payload.GetUserId(), payload.GetRevokedAt()
-		rev.AccountDeactivated = payload.GetReason() == internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_OPERATOR_DEACTIVATION
-	case "auth_session.revoked":
-		var payload internalv1.AuthSessionRevoked
-		if err := event.GetData().UnmarshalTo(&payload); err != nil || payload.GetSessionId() == "" {
-			return nil
-		}
-		rev.UserId, rev.SessionId, rev.RevokedAt = payload.GetUserId(), payload.GetSessionId(), payload.GetRevokedAt()
-	default:
-		return nil
-	}
-	if rev.GetUserId() == "" || !rev.GetRevokedAt().IsValid() {
-		return nil
-	}
-	return rev
-}
-
 func (f *Feed) follow(ctx context.Context) {
 	retry := f.cfg.RetryMin
 	for ctx.Err() == nil {
 		stream, err := f.cfg.Open(ctx)
 		if err == nil {
+			f.sourceMu.Lock()
+			f.source, f.generation = stream, f.generation+1
+			f.sourceMu.Unlock()
 			f.connected.Store(true)
 			f.Resume()
 			retry = f.cfg.RetryMin
-			for ctx.Err() == nil {
-				var event *signalmanpb.SignalmanEvent
-				event, err = stream.Recv()
-				if err != nil {
-					break
-				}
-				if event.GetChannel() == signalmanpb.Channel_CHANNEL_SESSIONS && event.GetEventType() == signalmanpb.EventType_EVENT_TYPE_TENANT_EVENT {
-					f.Apply(Decode(event.GetTenantId(), event.GetData().GetTenantEvent()))
-				}
-			}
+			err = stream.Run(ctx, func(rev *commodorepb.SessionRevocation) { f.Apply(rev) })
+			f.sourceMu.Lock()
+			f.source = nil
+			f.sourceMu.Unlock()
 			stream.Close()
 		}
 		f.connected.Store(false)
@@ -188,8 +174,11 @@ func (f *Feed) reconcile(ctx context.Context) {
 		f.cache.Prune()
 		for {
 			readCtx, cancel := context.WithTimeout(ctx, f.cfg.SnapshotTimeout)
+			observedAt := time.Now()
+			f.sourceMu.Lock()
+			source, generation := f.source, f.generation
+			f.sourceMu.Unlock()
 			response, err := f.cfg.List(readCtx, time.Now().Add(-auth.SessionTokenTTL-auth.JWTClockSkewLeeway))
-			cancel()
 			if err == nil {
 				for _, rev := range response.GetRevocations() {
 					f.Apply(rev)
@@ -198,22 +187,52 @@ func (f *Feed) reconcile(ctx context.Context) {
 					err = errors.New("authority does not confirm named revocation snapshot")
 				}
 			}
+			if err == nil && f.cfg.Open != nil {
+				if source == nil {
+					err = errors.New("revocation source not established")
+				} else {
+					err = source.CatchUp(readCtx)
+				}
+			}
+			cancel()
+			f.sourceMu.Lock()
+			if err == nil && generation != f.generation {
+				err = errors.New("revocation source changed during snapshot")
+			}
 			if err == nil {
+				f.cache.ConfirmSnapshot(observedAt, MaxSnapshotAge)
 				f.synchronized.Store(true)
-				f.lastSuccess.Store(time.Now().Unix())
+				f.lastSuccess.Store(observedAt.Unix())
 				retry = f.cfg.RetryMin
+				f.sourceMu.Unlock()
 				break
 			}
+			f.sourceMu.Unlock()
 			f.synchronized.Store(false)
 			if ctx.Err() != nil {
 				return
 			}
 			f.logFailure("Revocation backfill unavailable", err)
-			if !pause(ctx, jitter(retry)) {
+			if !f.waitRecovery(ctx, jitter(retry)) {
 				return
 			}
 			retry = min(retry*2, f.cfg.RetryMax)
 		}
+	}
+}
+
+// Reconnection can repair a failed snapshot immediately instead of waiting for
+// its retry delay. Ordinary failures remain bounded by the recovery backoff.
+func (f *Feed) waitRecovery(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-f.trigger:
+		return true
+	case <-timer.C:
+		return true
 	}
 }
 

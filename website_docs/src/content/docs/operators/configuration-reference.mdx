@@ -28,8 +28,8 @@ Read by `api_webhooks/cmd/bosun`.
 | `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
 | `GRPC_TLS_CERT_PATH` | string |  |  | v0.3.0 | Certificate presented by this service's gRPC listener. |
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
-| `SIGNALMAN_GRPC_ADDR` | string | `signalman:19005` |  | v0.3.15 | Signalman address for background interactive-session revocation events. |
-| `SIGNALMAN_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Signalman revocation feed. |
+| `AUTH_REVOCATION_KAFKA_BROKERS` | list | `kafka:9092` |  | v0.3.15 | Kafka bootstrap brokers for this replica's internal session-revocation projection. |
+| `AUTH_REVOCATION_MIRROR_REGION_PREFIXES` | list |  |  | v0.3.15 | MirrorMaker2 source aliases whose domain.events copies carry Commodore revocations into this replica's Kafka cluster. |
 | `DATABASE_URL` | string |  | required, secret | v0.3.0 | Connection URL for this service's PostgreSQL or YugabyteDB database. |
 | `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
@@ -275,8 +275,8 @@ Read by `api_billing/cmd/purser`.
 | `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
 | `GRPC_TLS_CERT_PATH` | string |  |  | v0.3.0 | Certificate presented by this service's gRPC listener. |
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
-| `SIGNALMAN_GRPC_ADDR` | string | `signalman:19005` |  | v0.3.15 | Signalman address for background interactive-session revocation events. |
-| `SIGNALMAN_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Signalman revocation feed. |
+| `AUTH_REVOCATION_KAFKA_BROKERS` | list | `kafka:9092` |  | v0.3.15 | Kafka bootstrap brokers for this replica's internal session-revocation projection. |
+| `AUTH_REVOCATION_MIRROR_REGION_PREFIXES` | list |  |  | v0.3.15 | MirrorMaker2 source aliases whose domain.events copies carry Commodore revocations into this replica's Kafka cluster. |
 | `DATABASE_URL` | string |  | required, secret | v0.3.0 | Connection URL for this service's PostgreSQL or YugabyteDB database. |
 | `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
@@ -426,7 +426,8 @@ Read by `api_tenants/cmd/quartermaster`.
 | `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
 | `GRPC_TLS_CERT_PATH` | string |  |  | v0.3.0 | Certificate presented by this service's gRPC listener. |
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
-| `SIGNALMAN_GRPC_ADDR` | string | `signalman:19005` |  | v0.3.15 | Signalman address for background interactive-session revocation events. |
+| `AUTH_REVOCATION_KAFKA_BROKERS` | list | `kafka:9092` |  | v0.3.15 | Kafka bootstrap brokers for this replica's internal session-revocation projection. |
+| `AUTH_REVOCATION_MIRROR_REGION_PREFIXES` | list |  |  | v0.3.15 | MirrorMaker2 source aliases whose domain.events copies carry Commodore revocations into this replica's Kafka cluster. |
 | `DATABASE_URL` | string |  | required, secret | v0.3.0 | Connection URL for this service's PostgreSQL or YugabyteDB database. |
 | `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
@@ -690,8 +691,8 @@ Read by `api_analytics_query/cmd/periscope`.
 | `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
 | `GRPC_TLS_CERT_PATH` | string |  |  | v0.3.0 | Certificate presented by this service's gRPC listener. |
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
-| `SIGNALMAN_GRPC_ADDR` | string | `signalman:19005` |  | v0.3.15 | Signalman address for background interactive-session revocation events. |
-| `SIGNALMAN_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Signalman revocation feed. |
+| `AUTH_REVOCATION_KAFKA_BROKERS` | list | `kafka:9092` |  | v0.3.15 | Kafka bootstrap brokers for this replica's internal session-revocation projection. |
+| `AUTH_REVOCATION_MIRROR_REGION_PREFIXES` | list |  |  | v0.3.15 | MirrorMaker2 source aliases whose domain.events copies carry Commodore revocations into this replica's Kafka cluster. |
 | `DATABASE_URL` | string |  | required, secret | v0.3.0 | Connection URL for this service's PostgreSQL or YugabyteDB database. |
 | `CLICKHOUSE_ADDR` | list |  | required | v0.3.0 | Comma-separated ClickHouse native protocol host:port addresses. |
 | `CLICKHOUSE_DB` | string |  | required | v0.3.0 | ClickHouse database that holds the analytics tables. |
@@ -753,8 +754,8 @@ Read by `api_balancing/cmd/foghorn`.
 | `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
 | `GRPC_TLS_CERT_PATH` | string |  |  | v0.3.0 | Certificate presented by this service's gRPC listener. |
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
-| `SIGNALMAN_GRPC_ADDR` | string | `signalman:19005` |  | v0.3.15 | Signalman address for background interactive-session revocation events. |
-| `SIGNALMAN_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Signalman revocation feed. |
+| `AUTH_REVOCATION_KAFKA_BROKERS` | list | `kafka:9092` |  | v0.3.15 | Kafka bootstrap brokers for this replica's internal session-revocation projection. |
+| `AUTH_REVOCATION_MIRROR_REGION_PREFIXES` | list |  |  | v0.3.15 | MirrorMaker2 source aliases whose domain.events copies carry Commodore revocations into this replica's Kafka cluster. |
 | `DATABASE_URL` | string |  | required, secret | v0.3.0 | Connection URL for this service's PostgreSQL or YugabyteDB database. |
 | `BUILD_ENV` | string |  |  | v0.3.0 | Runtime environment selector. Empty, dev, or development enables development-only behavior; production or prod marks a production process. |
 | `REDIS_URL` | string |  | secret | v0.3.0 | Redis URL for state shared between Foghorn replicas. Used when REDIS_MODE is empty; empty with no REDIS_MODE runs without shared state. |
@@ -958,8 +959,8 @@ Read by `api_incidents/cmd/lookout`.
 | `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
 | `GRPC_TLS_CERT_PATH` | string |  |  | v0.3.0 | Certificate presented by this service's gRPC listener. |
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
-| `SIGNALMAN_GRPC_ADDR` | string | `signalman:19005` |  | v0.3.15 | Signalman address for background interactive-session revocation events. |
-| `SIGNALMAN_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Signalman revocation feed. |
+| `AUTH_REVOCATION_KAFKA_BROKERS` | list | `kafka:9092` |  | v0.3.15 | Kafka bootstrap brokers for this replica's internal session-revocation projection. |
+| `AUTH_REVOCATION_MIRROR_REGION_PREFIXES` | list |  |  | v0.3.15 | MirrorMaker2 source aliases whose domain.events copies carry Commodore revocations into this replica's Kafka cluster. |
 | `DATABASE_URL` | string |  | required, secret | v0.3.0 | Connection URL for this service's PostgreSQL or YugabyteDB database. |
 | `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
@@ -1166,8 +1167,8 @@ Read by `api_consultant/cmd/skipper`.
 | `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
 | `GRPC_TLS_CERT_PATH` | string |  |  | v0.3.0 | Certificate presented by this service's gRPC listener. |
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
-| `SIGNALMAN_GRPC_ADDR` | string | `signalman:19005` |  | v0.3.15 | Signalman address for background interactive-session revocation events. |
-| `SIGNALMAN_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.15 | TLS server name override for the Signalman revocation feed. |
+| `AUTH_REVOCATION_KAFKA_BROKERS` | list | `kafka:9092` |  | v0.3.15 | Kafka bootstrap brokers for this replica's internal session-revocation projection. |
+| `AUTH_REVOCATION_MIRROR_REGION_PREFIXES` | list |  |  | v0.3.15 | MirrorMaker2 source aliases whose domain.events copies carry Commodore revocations into this replica's Kafka cluster. |
 | `DATABASE_URL` | string |  | required, secret | v0.3.0 | Connection URL for this service's PostgreSQL or YugabyteDB database. |
 | `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |

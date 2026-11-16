@@ -92,3 +92,33 @@ func TestInternalOperatorIngressRejectsRevokedSession(t *testing.T) {
 		})
 	}
 }
+
+func TestInternalOperatorIngressRefusesUnhydratedProjectionWithoutInvalidatingSession(t *testing.T) {
+	secret := []byte("foghorn-cold-auth")
+	useFoghornConfig(t, &appconfig.Foghorn{JWTSecret: string(secret), ServiceToken: "service-secret"})
+	previous := sessionRevocations.Load()
+	defer SetSessionRevocations(previous)
+	cache := auth.NewSessionRevocations()
+	cache.RequireSnapshot()
+	SetSessionRevocations(cache)
+	token, err := auth.GenerateSessionJWT("operator", "tenant", "operator@example.test", "owner", []string{auth.RolePlatformOperator}, time.Time{}, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.GET("/internal", RequireInternalMutation(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	request := func() int {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/internal", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		return response.Code
+	}
+	if got := request(); got != http.StatusServiceUnavailable {
+		t.Fatalf("cold projection returned %d, want 503", got)
+	}
+	cache.ConfirmSnapshot(time.Now(), time.Minute)
+	if got := request(); got != http.StatusNoContent {
+		t.Fatalf("same session did not recover after hydration: %d", got)
+	}
+}

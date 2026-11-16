@@ -1,7 +1,7 @@
 package config
 
-// SessionRevocationStream configures the background service-only revocation feed.
-type SessionRevocationStream struct {
-	SignalmanGRPCAddr          string `env:"SIGNALMAN_GRPC_ADDR" default:"signalman:@port(signalman.grpc)" desc:"Signalman address for background interactive-session revocation events." introduced:"v0.3.15"`
-	SignalmanGRPCTLSServerName string `env:"SIGNALMAN_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Signalman revocation feed." introduced:"v0.3.15"`
+// SessionRevocationProjection configures internal per-replica auth replication.
+type SessionRevocationProjection struct {
+	RevocationKafkaBrokers         []string `env:"AUTH_REVOCATION_KAFKA_BROKERS" default:"kafka:@port(kafka)" desc:"Kafka bootstrap brokers for this replica's internal session-revocation projection." introduced:"v0.3.15"`
+	RevocationMirrorRegionPrefixes []string `env:"AUTH_REVOCATION_MIRROR_REGION_PREFIXES" desc:"MirrorMaker2 source aliases whose domain.events copies carry Commodore revocations into this replica's Kafka cluster." introduced:"v0.3.15"`
 }

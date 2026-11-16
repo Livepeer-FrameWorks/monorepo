@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"frameworks/api_gateway/internal/clients"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
@@ -287,6 +288,9 @@ func GraphQLWebsocketInit(serviceClients *clients.ServiceClients, jwtSecret []by
 
 		if cookieToken, ok := ctx.Value(ctxkeys.KeyWSCookieToken).(string); ok && cookieToken != "" {
 			result, err := authenticateWebsocketBearer(ctx, cookieToken, serviceClients, jwtSecret)
+			if errors.Is(err, auth.ErrSessionStateUnavailable) {
+				return ctx, nil, ErrWebsocketAuthUnavailable
+			}
 			if result != nil && (err == nil || errors.Is(err, ErrAuthBackendUnavailable)) {
 				ctx = withWebsocketIdentity(ApplyAuthToContext(ctx, result), bearerIdentity(cookieToken, result))
 			}

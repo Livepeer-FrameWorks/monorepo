@@ -679,3 +679,28 @@ cause idempotent replay. Its `billing_reservation_unresolved_tenants` and
 service prefix, describe the last successfully read source snapshot. Query or
 scan failure preserves the previous gauges and fails the worker; it cannot
 turn missing input into zero holds. Neither gauge has tenant labels.
+
+### Interactive session revocation projections
+
+`auth_session_revocation_feed_connected` reports an established event source for
+this replica. Backend sources are independent Kafka partition readers; a consumer
+shared between replicas is insufficient. `auth_session_revocation_snapshot_synchronized`
+reports whether the last recovery read confirmed named and user-wide coverage.
+`auth_session_revocation_snapshot_timestamp_seconds` is the local start time of
+the last successful complete recovery read. `auth_session_revocation_projection_ready`
+reports a hydrated projection within the two-minute authority freshness bound.
+`auth_session_revocation_entries` counts retained named and user-wide revocations;
+`auth_session_revocation_feed_failures_total` counts event and recovery failures.
+These series have no tenant, user, session or token labels.
+
+The shared feed's connectivity gauge describes sources it owns. Bridge and
+Signalman apply events through their existing subscription/consumer adapters;
+their adapter connectivity metrics describe those paths. The backend doctor
+requires connectivity only for the seven projections with owned Kafka readers.
+
+Source connectivity alone does not prove authority freshness or outbox health.
+The doctor requires connected, synchronized and ready backend projections. A
+fresh snapshot can still serve requests briefly through an event outage, but the
+outage is not reported as healthy. Known revocations survive degraded delivery;
+otherwise valid interactive requests return Unavailable when the projection is
+unhydrated or the authority bound expires.

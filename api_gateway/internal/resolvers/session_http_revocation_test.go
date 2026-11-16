@@ -125,8 +125,11 @@ func TestSignedOutSessionTokenIsRefusedOverHTTPByAReplicaThatDidNotSignItOut(t *
 	base := httpReplica(t, broker, sc)
 	signedOut := sessionToken(t, "user-1", tenantID)
 	other := sessionToken(t, "user-2", tenantID)
-	if graphql, me := httpStatuses(t, base, signedOut); graphql != http.StatusOK || me != http.StatusOK {
+	if graphql, me := waitStatuses(t, base, signedOut, http.StatusOK, 2*time.Second); graphql != http.StatusOK || me != http.StatusOK {
 		t.Fatalf("before sign-out the session token answered %d/%d, want 200/200", graphql, me)
+	}
+	if lister.listCalls() == 0 {
+		t.Fatal("replica authenticated before completing its initial authority read")
 	}
 	broker.waitStreams(t, "", signalmanpb.Channel_CHANNEL_SESSIONS, 1)
 

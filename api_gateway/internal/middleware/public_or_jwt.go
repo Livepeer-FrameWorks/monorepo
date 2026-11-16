@@ -44,6 +44,10 @@ func RequireJWTAuth(secret []byte) gin.HandlerFunc {
 		}
 
 		claims, err := validateSessionJWT(token, secret)
+		if errors.Is(err, auth.ErrSessionStateUnavailable) {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "Session state unavailable"})
+			return
+		}
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
 			c.Abort()

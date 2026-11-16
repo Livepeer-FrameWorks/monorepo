@@ -474,6 +474,22 @@ func TestGraphQLWebsocketClosesAtSessionExpiry(t *testing.T) {
 	}
 }
 
+func TestGraphQLWebsocketStaleProjectionClosesRetryably(t *testing.T) {
+	sc, authority := switchableClients(t)
+	authority.setSession(true, nil)
+	cache := NewSessionRevocations()
+	cache.RequireSnapshot()
+	cache.ConfirmSnapshot(time.Now(), time.Minute)
+	previous := enforcedSessionRevocations.Load()
+	EnforceSessionRevocations(cache)
+	t.Cleanup(func() { EnforceSessionRevocations(previous) })
+	conn, _ := openSubscription(t, sc, "Bearer "+sessionJWTExpiringAt(t, time.Now().Add(5*time.Minute)), nil, 10*time.Millisecond)
+	cache.ConfirmSnapshot(time.Now().Add(-time.Minute), time.Second)
+	if got := awaitClose(t, conn, 2*time.Second); got != WebsocketCloseTryAgainLater {
+		t.Fatalf("stale projection socket closed with %d, want retryable %d", got, WebsocketCloseTryAgainLater)
+	}
+}
+
 func TestAPIWebsocketTracksItsOwnerForDeactivation(t *testing.T) {
 	identity := bearerIdentity("fw_token", &AuthResult{AuthType: "api_token", UserID: "user-1", TenantID: "tenant-1", TokenID: "token-1"})
 	if identity.userID != "user-1" {

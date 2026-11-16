@@ -64,17 +64,17 @@
           "description": "Private key for GRPC_TLS_CERT_PATH."
         },
         {
-          "key": "SIGNALMAN_GRPC_ADDR",
-          "type": "string",
-          "default": "signalman:19005",
+          "key": "AUTH_REVOCATION_KAFKA_BROKERS",
+          "type": "list",
+          "default": "kafka:9092",
           "introduced": "v0.3.15",
-          "description": "Signalman address for background interactive-session revocation events."
+          "description": "Kafka bootstrap brokers for this replica's internal session-revocation projection."
         },
         {
-          "key": "SIGNALMAN_GRPC_TLS_SERVER_NAME",
-          "type": "string",
+          "key": "AUTH_REVOCATION_MIRROR_REGION_PREFIXES",
+          "type": "list",
           "introduced": "v0.3.15",
-          "description": "TLS server name override for the Signalman revocation feed."
+          "description": "MirrorMaker2 source aliases whose domain.events copies carry Commodore revocations into this replica's Kafka cluster."
         },
         {
           "key": "DATABASE_URL",
@@ -1498,17 +1498,17 @@
           "description": "Private key for GRPC_TLS_CERT_PATH."
         },
         {
-          "key": "SIGNALMAN_GRPC_ADDR",
-          "type": "string",
-          "default": "signalman:19005",
+          "key": "AUTH_REVOCATION_KAFKA_BROKERS",
+          "type": "list",
+          "default": "kafka:9092",
           "introduced": "v0.3.15",
-          "description": "Signalman address for background interactive-session revocation events."
+          "description": "Kafka bootstrap brokers for this replica's internal session-revocation projection."
         },
         {
-          "key": "SIGNALMAN_GRPC_TLS_SERVER_NAME",
-          "type": "string",
+          "key": "AUTH_REVOCATION_MIRROR_REGION_PREFIXES",
+          "type": "list",
           "introduced": "v0.3.15",
-          "description": "TLS server name override for the Signalman revocation feed."
+          "description": "MirrorMaker2 source aliases whose domain.events copies carry Commodore revocations into this replica's Kafka cluster."
         },
         {
           "key": "DATABASE_URL",
@@ -2304,11 +2304,17 @@
           "description": "Private key for GRPC_TLS_CERT_PATH."
         },
         {
-          "key": "SIGNALMAN_GRPC_ADDR",
-          "type": "string",
-          "default": "signalman:19005",
+          "key": "AUTH_REVOCATION_KAFKA_BROKERS",
+          "type": "list",
+          "default": "kafka:9092",
           "introduced": "v0.3.15",
-          "description": "Signalman address for background interactive-session revocation events."
+          "description": "Kafka bootstrap brokers for this replica's internal session-revocation projection."
+        },
+        {
+          "key": "AUTH_REVOCATION_MIRROR_REGION_PREFIXES",
+          "type": "list",
+          "introduced": "v0.3.15",
+          "description": "MirrorMaker2 source aliases whose domain.events copies carry Commodore revocations into this replica's Kafka cluster."
         },
         {
           "key": "DATABASE_URL",
@@ -3756,17 +3762,17 @@
           "description": "Private key for GRPC_TLS_CERT_PATH."
         },
         {
-          "key": "SIGNALMAN_GRPC_ADDR",
-          "type": "string",
-          "default": "signalman:19005",
+          "key": "AUTH_REVOCATION_KAFKA_BROKERS",
+          "type": "list",
+          "default": "kafka:9092",
           "introduced": "v0.3.15",
-          "description": "Signalman address for background interactive-session revocation events."
+          "description": "Kafka bootstrap brokers for this replica's internal session-revocation projection."
         },
         {
-          "key": "SIGNALMAN_GRPC_TLS_SERVER_NAME",
-          "type": "string",
+          "key": "AUTH_REVOCATION_MIRROR_REGION_PREFIXES",
+          "type": "list",
           "introduced": "v0.3.15",
-          "description": "TLS server name override for the Signalman revocation feed."
+          "description": "MirrorMaker2 source aliases whose domain.events copies carry Commodore revocations into this replica's Kafka cluster."
         },
         {
           "key": "DATABASE_URL",
@@ -4091,17 +4097,17 @@
           "description": "Private key for GRPC_TLS_CERT_PATH."
         },
         {
-          "key": "SIGNALMAN_GRPC_ADDR",
-          "type": "string",
-          "default": "signalman:19005",
+          "key": "AUTH_REVOCATION_KAFKA_BROKERS",
+          "type": "list",
+          "default": "kafka:9092",
           "introduced": "v0.3.15",
-          "description": "Signalman address for background interactive-session revocation events."
+          "description": "Kafka bootstrap brokers for this replica's internal session-revocation projection."
         },
         {
-          "key": "SIGNALMAN_GRPC_TLS_SERVER_NAME",
-          "type": "string",
+          "key": "AUTH_REVOCATION_MIRROR_REGION_PREFIXES",
+          "type": "list",
           "introduced": "v0.3.15",
-          "description": "TLS server name override for the Signalman revocation feed."
+          "description": "MirrorMaker2 source aliases whose domain.events copies carry Commodore revocations into this replica's Kafka cluster."
         },
         {
           "key": "DATABASE_URL",
@@ -5283,17 +5289,17 @@
           "description": "Private key for GRPC_TLS_CERT_PATH."
         },
         {
-          "key": "SIGNALMAN_GRPC_ADDR",
-          "type": "string",
-          "default": "signalman:19005",
+          "key": "AUTH_REVOCATION_KAFKA_BROKERS",
+          "type": "list",
+          "default": "kafka:9092",
           "introduced": "v0.3.15",
-          "description": "Signalman address for background interactive-session revocation events."
+          "description": "Kafka bootstrap brokers for this replica's internal session-revocation projection."
         },
         {
-          "key": "SIGNALMAN_GRPC_TLS_SERVER_NAME",
-          "type": "string",
+          "key": "AUTH_REVOCATION_MIRROR_REGION_PREFIXES",
+          "type": "list",
           "introduced": "v0.3.15",
-          "description": "TLS server name override for the Signalman revocation feed."
+          "description": "MirrorMaker2 source aliases whose domain.events copies carry Commodore revocations into this replica's Kafka cluster."
         },
         {
           "key": "DATABASE_URL",
@@ -6498,17 +6504,17 @@
           "description": "Private key for GRPC_TLS_CERT_PATH."
         },
         {
-          "key": "SIGNALMAN_GRPC_ADDR",
-          "type": "string",
-          "default": "signalman:19005",
+          "key": "AUTH_REVOCATION_KAFKA_BROKERS",
+          "type": "list",
+          "default": "kafka:9092",
           "introduced": "v0.3.15",
-          "description": "Signalman address for background interactive-session revocation events."
+          "description": "Kafka bootstrap brokers for this replica's internal session-revocation projection."
         },
         {
-          "key": "SIGNALMAN_GRPC_TLS_SERVER_NAME",
-          "type": "string",
+          "key": "AUTH_REVOCATION_MIRROR_REGION_PREFIXES",
+          "type": "list",
           "introduced": "v0.3.15",
-          "description": "TLS server name override for the Signalman revocation feed."
+          "description": "MirrorMaker2 source aliases whose domain.events copies carry Commodore revocations into this replica's Kafka cluster."
         },
         {
           "key": "DATABASE_URL",
