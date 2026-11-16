@@ -95,11 +95,13 @@ var serviceDependencies = map[string][]ServiceDependency{
 		{TargetServiceID: "foghorn", EnvKey: "auth_webhook_url", Transport: "http", Purpose: "playback auth webhook"},
 	},
 	"bosun": {
+		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "authoritative session-revocation snapshots"},
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "service bootstrap"},
 		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "billing contact for endpoint auto-disable emails"},
 		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "webhook audit domain events"},
 	},
 	"lookout": {
+		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "authoritative session-revocation snapshots"},
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "cluster owner lookup for incident scope and service bootstrap"},
 		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "tenant incident realtime service events"},
 	},
@@ -115,6 +117,7 @@ var serviceDependencies = map[string][]ServiceDependency{
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "service bootstrap"},
 	},
 	"periscope-query": {
+		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "authoritative session-revocation snapshots"},
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "service bootstrap and billing helpers"},
 	},
 	"periscope-metering": {
@@ -131,17 +134,19 @@ var serviceDependencies = map[string][]ServiceDependency{
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "tenant and cluster access lookups"},
 	},
 	"quartermaster": {
+		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "authoritative session-revocation snapshots"},
 		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "tenant and infrastructure service events"},
 		{TargetServiceID: "navigator", EnvKey: "NAVIGATOR_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "DNS and certificate workflows"},
 		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "billing-tier reconciliation"},
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "self-bootstrap service registration"},
 	},
 	"signalman": {
+		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "authoritative session-revocation snapshots"},
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "service bootstrap"},
 	},
 	"skipper": {
 		{TargetServiceID: "bridge", EnvKey: "GATEWAY_MCP_URL", Transport: "mcp-http", DNSScope: DNSScopeGlobal, Purpose: "platform MCP tools"},
-		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "primary-user notifications"},
+		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "primary-user notifications and session-revocation snapshots"},
 		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Optional: true, Purpose: "consultant usage events and notifications"},
 		{TargetServiceID: "lookout", EnvKey: "LOOKOUT_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Optional: true, Purpose: "attach investigation reports to tenant incidents"},
 		{TargetServiceID: "periscope-query", EnvKey: "PERISCOPE_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "heartbeat and infrastructure diagnostics"},
@@ -168,7 +173,7 @@ var infraDependencies = map[string][]InfraDependency{
 	"bosun":     {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "webhook endpoints, secrets, and the delivery ledger"}, {Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "public domain events from domain.events and its mirrored copies"}},
 	"commodore": {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "control-plane state"}},
 	"decklog":   {{Kind: InfraKafka, Provider: InfraProviderRegional, Purpose: "analytics and service event bus"}},
-	"foghorn":   {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "media control state"}, {Kind: InfraRedis, Provider: InfraProviderNamed, Name: "foghorn", Optional: true, Purpose: "HA relay and federation state"}},
+	"foghorn":   {{Kind: InfraKafka, Provider: InfraProviderRegional, Purpose: "per-replica session-revocation projection"}, {Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "media control state"}, {Kind: InfraRedis, Provider: InfraProviderNamed, Name: "foghorn", Optional: true, Purpose: "HA relay and federation state"}},
 	"lookout":   {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "incident, timeline, and operator notification outbox state"}, {Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "tenant incident publication, cluster ownership changes, and operator activity from service events"}},
 	"navigator": {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "DNS and certificate state"}},
 	"network-observer": {
@@ -181,6 +186,7 @@ var infraDependencies = map[string][]InfraDependency{
 		{Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "analytics and service event ingestion"},
 	},
 	"periscope-query": {
+		{Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "per-replica session-revocation projection"},
 		{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "delegated-token replay fencing"},
 		{Kind: InfraClickHouse, Provider: InfraProviderPrimary, Purpose: "analytics reads"},
 	},
@@ -190,9 +196,9 @@ var infraDependencies = map[string][]InfraDependency{
 		{Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "billing usage report publication"},
 	},
 	"purser":        {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "billing state"}, {Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "billing usage report ingestion"}},
-	"quartermaster": {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "tenant, cluster, node, and service registry state"}},
+	"quartermaster": {{Kind: InfraKafka, Provider: InfraProviderRegional, Purpose: "per-replica session-revocation projection"}, {Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "tenant, cluster, node, and service registry state"}},
 	"signalman":     {{Kind: InfraKafka, Provider: InfraProviderRegional, Purpose: "realtime analytics and service event fanout"}},
-	"skipper":       {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "knowledge and conversation state"}, {Kind: InfraKafka, Provider: InfraProviderAggregator, Optional: true, Purpose: "billing usage report publication"}},
+	"skipper":       {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "knowledge and conversation state"}, {Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "billing usage report publication and session-revocation projection"}},
 }
 
 // ServiceDependencies returns direct service calls made by serviceID.
@@ -371,4 +377,15 @@ func sortedKeys(m map[string]struct{}) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// UsesSessionRevocationProjection identifies consumers of the internal auth
+// event stream. Their Kafka dependency is separate from realtime subscriptions.
+func UsesSessionRevocationProjection(serviceID string) bool {
+	switch serviceID {
+	case "quartermaster", "purser", "periscope-query", "bosun", "lookout", "foghorn", "skipper":
+		return true
+	default:
+		return false
+	}
 }

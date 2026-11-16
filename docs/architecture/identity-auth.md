@@ -184,36 +184,61 @@ its own in-process account/session checks for authoritative operations. Service
 tokens, audience-bound delegation and wallet bearer verification keep their
 credential-specific rules.
 
-The shared `pkg/sessionrevocations` feed receives every tenant's typed revocation
-events over one service-authenticated, tenantless Signalman `CHANNEL_SESSIONS`
-stream per replica. Signalman applies its existing domain-event consumer's
-revocations locally before broadcasting them, without subscribing to itself.
-Bridge reuses its confirmed upstream subscription and applies shared backfill
-results to both its HTTP cache and WebSocket closures.
+The shared `pkg/sessionrevocations` projection receives backend revocations from
+Kafka's typed internal `domain.events` contract. Each backend replica assigns all
+relevant local and mirrored partitions independently; it neither joins a shared
+business consumer group nor resumes another process's committed offsets.
+Commodore remains the authority, and Decklog remains the event publisher.
+Signalman is not a backend authentication dependency. Signalman applies its own
+Kafka revocations locally; Bridge retains its confirmed Signalman subscription
+for client socket closures and its shared recovery snapshot lifecycle.
 
-Background snapshots start at boot, after every confirmed stream reconnection,
-and on a jittered one-minute reconciliation interval. They opt into named
-revocations with `include_auth_sessions`, span access-token lifetime plus clock
-leeway, and merge monotonically with live events. A snapshot includes
-`auth_sessions_included=true` only after Commodore read the named-session state;
-an older response still supplies legacy cutoffs but cannot establish complete
-named coverage. Snapshot failures retry with bounded exponential backoff.
+A backend first captures the live partition boundary, starts applying events,
+and merges a complete Commodore recovery snapshot. It catches up through a
+newly observed partition boundary before confirming that snapshot. Named and
+user-wide revocations merge monotonically, including duplicates from mirrors.
+Reconnection re-establishes the boundary and requests another snapshot. An empty
+process never treats an old committed consumer offset as restored cache state.
 
-Loss of Commodore or the event stream preserves known revocations and serves
-otherwise locally valid access credentials, including before a cold replica
-finishes hydrating. When neither path can deliver a new revocation, that fact
-cannot be enforced until recovery or signed JWT expiry (at most fifteen minutes
-plus clock leeway). Issuance, refresh and account/session mutations still need
-Commodore. Synchronization metrics expose background degradation; it does not
-make ordinary authentication unavailable.
+Snapshots start at boot or source establishment, on reconnection, and on a
+jittered one-minute reconciliation interval. They request named revocations with
+`include_auth_sessions`, cover access-token lifetime plus clock leeway, and require
+`auth_sessions_included=true`. Older authorities cannot establish named-session
+coverage. Failed snapshots retry in the background; confirmed source reconnection
+can wake recovery immediately.
 
-Interactive gRPC streams end at JWT expiry and recheck the same local cache
+An unhydrated interactive projection returns Unavailable without making a
+request-time authority RPC. A successful snapshot authorizes use of that local
+projection for at most two minutes from the start of its read, not its receipt.
+This is the authority-freshness contract, independent of RPC execution deadlines.
+Background failures preserve learned revocations and a still-fresh completed
+snapshot. Once freshness expires, otherwise valid interactive credentials receive
+Unavailable until recovery; known revoked credentials remain Unauthenticated.
+HTTP entrypoints return 503 for unavailable session state, preserving credentials
+rather than treating a transient projection failure as logout. Issuance, refresh
+and identity mutations retain Commodore's authoritative checks. Service and
+delegated credentials retain their separate authentication rules.
+
+GraphQL WebSocket initialization uses retryable close code 1013 when the
+projection is unavailable. An existing socket whose projection becomes stale
+also closes with 1013 at its next credential recheck, preserving the distinction
+between unavailable authority state and revoked credentials. Fresh projections
+continue covering temporary authority RPC errors; known revocations still close
+matching sockets with 4403.
+
+Interactive gRPC streams end at JWT expiry and recheck the same local projection
 every thirty seconds. A known revocation ends a stream with Unauthenticated;
-background synchronization failures do not close it. Signalman's idle Subscribe
-handler observes cancellation without waiting for a message. During rollout,
-upgrade Commodore's named snapshot and Signalman's event contract before the
-consumers. Explicit `ValidateSession` RPC clients still require its additive
-`session_state_checked` proof; downstream access checks no longer invoke it.
+unhydrated or stale authority state ends it with Unavailable. Signalman's idle
+Subscribe handler observes cancellation without waiting for a message. Explicit
+`ValidateSession` clients continue requiring `session_state_checked` proof.
+
+Backend deployments require both Commodore snapshot connectivity and Kafka
+connectivity to their selected regional or aggregator brokers. The CLI derives
+`AUTH_REVOCATION_KAFKA_BROKERS`, mirror prefixes and mesh peers from the manifest;
+use a CLI containing this projection support when deploying these binaries.
+`cluster doctor` checks each backend replica's event-source establishment,
+complete snapshot status and projection readiness separately from ordinary
+service health. A working snapshot fallback cannot hide a disconnected source.
 
 ## Native credential ownership and compatibility
 

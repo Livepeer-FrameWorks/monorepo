@@ -10,7 +10,7 @@ func (f *Feed) Observe(metrics *monitoring.MetricsCollector) {
 		name, help string
 		value      func() float64
 	}{
-		{"auth_session_revocation_feed_connected", "Whether the service-only revocation stream is connected.", func() float64 {
+		{"auth_session_revocation_feed_connected", "Whether this replica's revocation event source is established.", func() float64 {
 			if f.connected.Load() {
 				return 1
 			}
@@ -23,6 +23,12 @@ func (f *Feed) Observe(metrics *monitoring.MetricsCollector) {
 			return 0
 		}},
 		{"auth_session_revocation_snapshot_timestamp_seconds", "Unix time of the last successful complete revocation snapshot.", func() float64 { return float64(f.lastSuccess.Load()) }},
+		{"auth_session_revocation_projection_ready", "Whether this replica has a complete auth projection inside the authority freshness bound.", func() float64 {
+			if f.cache.CheckReady() == nil {
+				return 1
+			}
+			return 0
+		}},
 		{"auth_session_revocation_entries", "Known user-wide and named-session revocation entries.", func() float64 { return float64(f.cache.Len()) }},
 	} {
 		metrics.RegisterCustomMetric(metric.name, prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: metric.name, Help: metric.help}, metric.value))

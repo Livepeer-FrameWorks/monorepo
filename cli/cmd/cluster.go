@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 	"io"
 	"net"
 	"os"
@@ -1246,6 +1247,14 @@ func doctorSections(rc *resolvedCluster, pool *fwssh.Pool, sharedEnv map[string]
 				deploy := svc.Deploy
 				if deploy == "" {
 					deploy = name
+				}
+				if topology.UsesSessionRevocationProjection(deploy) {
+					checks = append(checks, doctorCheck{name: "Session revocation projection (" + label + ")", run: func(ctx context.Context) doctorOutcome {
+						return doctorResultOutcome(doctorAuthProjection(ctx, pool, host, svc, deploy, port), ux.NextStep{
+							Cmd: "frameworks cluster snapshot --since '15 minutes ago'",
+							Why: "Inspect this replica's auth projection, Kafka consumption and authority snapshot failures.",
+						})
+					}})
 				}
 				if deploy == "purser" {
 					checks = append(checks, doctorCheck{name: "Stripe billing webhooks (" + label + ")", run: func(ctx context.Context) doctorOutcome {

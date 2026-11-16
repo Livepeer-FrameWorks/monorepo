@@ -46,6 +46,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/search"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/sessionrevocations"
+	revocationkafka "github.com/Livepeer-FrameWorks/monorepo/pkg/sessionrevocations/kafkasource"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
@@ -163,12 +164,12 @@ func main() {
 	} else {
 		defer func() { _ = commodoreClient.Close() }()
 	}
-	sessionFeed, closeSessionFeed, err := sessionrevocations.Connect(context.Background(), sessionrevocations.Config{
+	sessionFeed, closeSessionFeed, err := revocationkafka.Connect(context.Background(), sessionrevocations.Config{
 		Secret: []byte(appCfg.JWTSecret), List: commodoreClient.ListRecentSessionRevocations, Logger: logger,
-	}, sessionrevocations.Transport{
-		Address: appCfg.SignalmanGRPCAddr, ServiceToken: appCfg.ServiceToken,
-		AllowInsecure: appCfg.AllowInsecure, CAPath: appCfg.CAPath,
-		ServerName: appCfg.SignalmanGRPCTLSServerName, Logger: logger,
+	}, revocationkafka.Transport{
+		Brokers:              appCfg.RevocationKafkaBrokers,
+		MirrorRegionPrefixes: appCfg.RevocationMirrorRegionPrefixes,
+		ClientID:             "skipper-auth",
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Invalid session revocation feed configuration")

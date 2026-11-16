@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"frameworks/api_gateway/internal/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/networkobserver"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -103,6 +104,10 @@ func (h *NetworkHandlers) Diagnostics(c *gin.Context) {
 	allowed := err == nil && claims.HasRole("platform_operator")
 	if h.Logger != nil {
 		h.Logger.WithFields(logging.Fields{"audit": "platform_admin_read", "surface": "network_diagnostics", "operator_id": ctxkeys.GetUserID(c.Request.Context()), "allowed": allowed}).Info("Platform network diagnostics access")
+	}
+	if errors.Is(err, auth.ErrSessionStateUnavailable) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "session state unavailable"})
+		return
 	}
 	if !allowed {
 		c.JSON(403, gin.H{"error": "platform operator access required"})

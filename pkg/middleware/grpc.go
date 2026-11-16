@@ -317,6 +317,9 @@ func checkInteractiveSession(ctx context.Context, token string, claims *auth.Cla
 		if cfg.SessionRevocations.SessionRevoked(claims.TenantID, claims.UserID, claims.SessionID, issuedAt) {
 			return status.Error(codes.Unauthenticated, "session signed out")
 		}
+		if err := cfg.SessionRevocations.CheckReady(); err != nil {
+			return status.Error(codes.Unavailable, "session state unavailable")
+		}
 		return nil
 	}
 	if cfg.ValidateSession == nil {

@@ -185,6 +185,31 @@ func TestNetworkDiagnosticsRejectsRevokedSession(t *testing.T) {
 	}
 }
 
+func TestNetworkDiagnosticsUnhydratedProjectionIsRetryable(t *testing.T) {
+	h, _, _ := networkFixture(t)
+	cache := middleware.NewSessionRevocations()
+	cache.RequireSnapshot()
+	middleware.EnforceSessionRevocations(cache)
+	t.Cleanup(func() { middleware.EnforceSessionRevocations(nil) })
+	token, err := auth.GenerateSessionJWT("operator", "tenant", "operator@example.test", "owner", []string{auth.RolePlatformOperator}, time.Time{}, h.JWTSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.GET("/diagnostics", h.Diagnostics)
+	for _, want := range []int{http.StatusServiceUnavailable, http.StatusOK} {
+		if want == http.StatusOK {
+			cache.ConfirmSnapshot(time.Now(), time.Minute)
+		}
+		ctx := context.WithValue(context.Background(), ctxkeys.KeyJWTToken, token)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequestWithContext(ctx, http.MethodGet, "/diagnostics", nil))
+		if response.Code != want {
+			t.Fatalf("same credential status=%d want=%d", response.Code, want)
+		}
+	}
+}
+
 // Probers reach the observer only through Bridge: the public route maps to the
 // observer's path, the observer authenticates the prober's own secret, and the
 // source address is Bridge's resolved client address, not one the prober sent.

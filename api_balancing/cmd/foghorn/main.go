@@ -61,6 +61,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/sessionrevocations"
+	revocationkafka "github.com/Livepeer-FrameWorks/monorepo/pkg/sessionrevocations/kafkasource"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
@@ -740,15 +741,15 @@ func main() {
 
 	var revocationAuthority atomic.Pointer[commodore.GRPCClient]
 	revocationAuthority.Store(commodoreClient)
-	sessionFeed, closeSessionFeed, err := sessionrevocations.Connect(context.Background(), sessionrevocations.Config{
+	sessionFeed, closeSessionFeed, err := revocationkafka.Connect(context.Background(), sessionrevocations.Config{
 		Secret: []byte(cfg.JWTSecret), Logger: logger,
 		List: func(ctx context.Context, since time.Time) (*commodorepb.ListRecentSessionRevocationsResponse, error) {
 			return revocationAuthority.Load().ListRecentSessionRevocations(ctx, since)
 		},
-	}, sessionrevocations.Transport{
-		Address: cfg.SignalmanGRPCAddr, ServiceToken: cfg.ServiceToken,
-		AllowInsecure: cfg.AllowInsecure, CAPath: cfg.CAPath,
-		ServerName: cfg.SignalmanGRPCTLSServerName, Logger: logger,
+	}, revocationkafka.Transport{
+		Brokers:              cfg.RevocationKafkaBrokers,
+		MirrorRegionPrefixes: cfg.RevocationMirrorRegionPrefixes,
+		ClientID:             "foghorn-auth",
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Invalid session revocation feed configuration")

@@ -21,6 +21,7 @@ func TestPeriscopeInfraDependenciesMatchEntrypoints(t *testing.T) {
 			{Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "analytics and service event ingestion"},
 		},
 		"periscope-query": {
+			{Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "per-replica session-revocation projection"},
 			{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "delegated-token replay fencing"},
 			{Kind: InfraClickHouse, Provider: InfraProviderPrimary, Purpose: "analytics reads"},
 		},

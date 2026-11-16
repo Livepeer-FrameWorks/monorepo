@@ -8,7 +8,8 @@
 need jq curl python3 psql || finish
 WORK=$(mktemp -d)
 chmod 700 "$WORK"
-tenant="" user="" revoked="" other="" extra=""
+tenant="" user="" revoked="" other="" extra="" offline=""
+SIGNALMAN_STOPPED=0
 descriptor=""
 FAULTS=()
 must_check() {
@@ -20,10 +21,11 @@ profile_matches() { jq -e --arg user "$user" '.id == $user' "$1" >/dev/null; }
 rpc_error() { sed -n '1,5p' "$1"; }
 cleanup() {
   local fault
+  if [ "$SIGNALMAN_STOPPED" = 1 ]; then stack_ctl start signalman || fail "restore Signalman"; SIGNALMAN_STOPPED=0; fi
   for fault in "${FAULTS[@]}"; do netfault_stop "$fault"; done
   FAULTS=()
   if [ -n "$tenant" ] && [ -n "$revoked" ]; then
-    pg_fixture commodore "DELETE FROM commodore.auth_sessions WHERE tenant_id='$tenant' AND user_id='$user' AND id IN ('$revoked','$other','$extra')" >/dev/null || fail 'session fixture cleanup'
+    pg_fixture commodore "DELETE FROM commodore.auth_sessions WHERE tenant_id='$tenant' AND user_id='$user' AND id IN ('$revoked','$other','$extra','$offline')" >/dev/null || fail 'session fixture cleanup'
   fi
   if [ -n "$descriptor" ]; then
     for service in commodore commodore-2; do
@@ -52,21 +54,22 @@ key = os.environ['JWT_SECRET'].encode()
 assert key and 'platform_operator' in claims['roles']
 def enc(value):
     return base64.urlsafe_b64encode(value).rstrip(b'=')
-ids = [str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())]
-for name, sid in zip(('revoked', 'other', 'extra'), ids):
+ids = [str(uuid.uuid4()) for _ in range(4)]
+for name, sid in zip(('revoked', 'other', 'extra', 'offline'), ids):
     payload = dict(claims, sid=sid, exp=int(time.time()) + 600)
     body = enc(b'{"alg":"HS256","typ":"JWT"}') + b'.' + enc(json.dumps(payload).encode())
     signed = body + b'.' + enc(hmac.new(key, body, hashlib.sha256).digest())
     (work / (name + '.jwt')).write_bytes(signed)
 (work / 'owner').write_text('\n'.join((tenant, user, *ids)) + '\n')
 PY
-{ read -r tenant; read -r user; read -r revoked; read -r other; read -r extra; } <"$WORK/owner"
+{ read -r tenant; read -r user; read -r revoked; read -r other; read -r extra; read -r offline; } <"$WORK/owner"
 descriptor="/tmp/stack-session-$revoked.pb"
 pg_fixture commodore "INSERT INTO commodore.auth_sessions
   (id,tenant_id,user_id,auth_method,client_id,device_label,idle_expires_at,absolute_expires_at)
   VALUES ('$revoked','$tenant','$user','password','web','Stack validator',NOW()+INTERVAL '1 hour',NOW()+INTERVAL '2 hours'),
          ('$other','$tenant','$user','password','web','Stack other device',NOW()+INTERVAL '1 hour',NOW()+INTERVAL '2 hours'),
-         ('$extra','$tenant','$user','password','web','Stack third device',NOW()+INTERVAL '1 hour',NOW()+INTERVAL '2 hours')" >/dev/null || { fail 'insert session fixtures'; finish; }
+         ('$extra','$tenant','$user','password','web','Stack third device',NOW()+INTERVAL '1 hour',NOW()+INTERVAL '2 hours'),
+         ('$offline','$tenant','$user','password','web','Stack Signalman-independent device',NOW()+INTERVAL '1 hour',NOW()+INTERVAL '2 hours')" >/dev/null || { fail 'insert session fixtures'; finish; }
 
 for service in commodore commodore-2; do
   { cat "$WORK/revoked.jwt"; echo; } | stack_exec "$service" sh -c '
@@ -217,6 +220,35 @@ check 'other device still reaches Skipper MCP' [ "$(mcp_code "$WORK/other.jwt")"
 
 diagnostics_revoked() { [ "$(http_code "$WORK/revoked.jwt" "$BRIDGE_URL/v1/network/livepeer/diagnostics")" = 401 ]; }
 eventually 2 'named revocation event refuses network diagnostics on Bridge' diagnostics_revoked
+# Internal authorization propagation must not depend on the realtime hub.
+stack_ctl stop signalman || { fail 'stop realtime hub for backend isolation'; finish; }
+SIGNALMAN_STOPPED=1
+session_rpc commodore "$WORK/other.jwt" commodore.UserService/RevokeSession \
+  "$(jq -cn --arg id "$offline" '{sessionId:$id}')" >"$WORK/offline-revoke.json" 2>&1
+must_check 'named revoke commits while Signalman is stopped' json_has "$(cat "$WORK/offline-revoke.json")" '.success == true' || finish
+backends_refuse_without_signalman() {
+  local service address method body
+  while IFS='|' read -r service address method body; do
+    [ "$service" != signalman ] || continue
+    ingress_rpc "$service" "$address" "$method" "$body" "$WORK/offline.jwt" >"$WORK/$service.offline" 2>&1
+    grep -q 'Code: Unauthenticated' "$WORK/$service.offline" || return 1
+    ingress_rpc "$service" "$address" "$method" "$body" "$WORK/other.jwt" >"$WORK/$service.other" 2>&1 || return 1
+  done < <(ingress_specs)
+  [ "$(mcp_code "$WORK/offline.jwt")" = 401 ] || return 1
+  [ "$(mcp_code "$WORK/other.jwt")" = 200 ] || return 1
+  for url in $FOGHORN_A_INTERNAL_URLS $FOGHORN_B_INTERNAL_URLS; do
+    [ "$(http_code "$WORK/offline.jwt" "$url/nodes/overview")" = 403 ] || return 1
+    [ "$(http_code "$WORK/other.jwt" "$url/nodes/overview")" = 200 ] || return 1
+  done
+}
+eventually 10 'every backend learns named revocation without Signalman and preserves the other device' backends_refuse_without_signalman || finish
+for authority in "${FAULTS[@]}"; do netfault_stop "$authority"; done
+FAULTS=()
+stack_ctl restart quartermaster purser periscope-query bosun lookout skipper foghorn foghorn-2 foghorn-b foghorn-b-2 || { fail 'restart backend projections'; finish; }
+eventually 90 'fresh backend replicas recover revocation without Signalman' backends_refuse_without_signalman || finish
+stack_ctl start signalman || { fail 'restore realtime hub'; finish; }
+SIGNALMAN_STOPPED=0
+
 session_rpc commodore "$WORK/other.jwt" commodore.UserService/RevokeOtherSessions '{}' >"$WORK/others.json" 2>&1
 others_revoked() { jq -e '(.revokedCount | tonumber) >= 1' "$WORK/others.json" >/dev/null; }
 must_check 'sign out other sessions preserves the presented device' others_revoked || { rpc_error "$WORK/others.json"; finish; }

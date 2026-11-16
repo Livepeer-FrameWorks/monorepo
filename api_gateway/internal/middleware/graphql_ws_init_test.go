@@ -240,6 +240,30 @@ func TestGraphQLWebsocketInitKeepsInvalidCookieAnonymous(t *testing.T) {
 	}
 }
 
+func TestGraphQLWebsocketUnhydratedCookieIsRetryableNotAnonymous(t *testing.T) {
+	cache := NewSessionRevocations()
+	cache.RequireSnapshot()
+	previous := enforcedSessionRevocations.Load()
+	EnforceSessionRevocations(cache)
+	t.Cleanup(func() { EnforceSessionRevocations(previous) })
+	token, err := auth.GenerateJWT("user-1", "tenant-1", "user@example.test", "member", wsInitSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyWSCookieToken, token)
+	initialize := GraphQLWebsocketInit(nil, wsInitSecret, nil)
+	_, _, err = initialize(ctx, nil)
+	var refusal *WebsocketInitError
+	if !errors.As(err, &refusal) || refusal.Code != WebsocketCloseTryAgainLater {
+		t.Fatalf("cold cookie became anonymous instead of retryable: %v", err)
+	}
+	cache.ConfirmSnapshot(time.Now(), time.Minute)
+	verified, _, err := initialize(ctx, nil)
+	if err != nil || ctxkeys.GetUserID(verified) != "user-1" {
+		t.Fatalf("same cookie did not recover: user=%s err=%v", ctxkeys.GetUserID(verified), err)
+	}
+}
+
 func TestGraphQLWebsocketInitAcceptsValidJWT(t *testing.T) {
 	token, err := auth.GenerateJWT("user-1", "tenant-1", "user@example.com", "admin", wsInitSecret)
 	if err != nil {

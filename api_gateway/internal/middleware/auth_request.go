@@ -147,10 +147,13 @@ var (
 
 // AuthenticateBearerToken validates an interactive JWT or, failing that, a
 // developer API token. A token that does not authenticate returns an error
-// wrapping ErrInvalidCredential; a failure of the API-token check itself
-// returns one wrapping ErrAuthBackendUnavailable.
+// wrapping ErrInvalidCredential. An unavailable session projection or API-token
+// authority returns one wrapping ErrAuthBackendUnavailable.
 func AuthenticateBearerToken(ctx context.Context, token string, clients *clients.ServiceClients, jwtSecret []byte) (*AuthResult, error) {
 	claims, err := validateSessionJWT(token, jwtSecret)
+	if errors.Is(err, auth.ErrSessionStateUnavailable) {
+		return nil, fmt.Errorf("%w: %w", ErrAuthBackendUnavailable, err)
+	}
 	if err == nil {
 		result := &AuthResult{
 			SessionID:        claims.SessionID,

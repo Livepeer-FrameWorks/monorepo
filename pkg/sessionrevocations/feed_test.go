@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
-	signalmanclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/signalman"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	internalv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
 	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
@@ -22,6 +21,53 @@ import (
 )
 
 var testSecret = []byte("local-session-revocation-authority")
+
+func TestColdProjectionRefusesInteractiveCredentials(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		feed := Start(context.Background(), Config{Secret: testSecret, List: func(ctx context.Context, _ time.Time) (*commodorepb.ListRecentSessionRevocationsResponse, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}})
+		defer feed.Close()
+		synctest.Wait()
+		if code := status.Code(feed.CheckSession(context.Background(), testToken(t, "unknown"))); code != codes.Unavailable {
+			t.Fatalf("unhydrated projection accepted an unchecked session: got %s, want Unavailable", code)
+		}
+	})
+}
+
+func TestStaleProjectionRefusesUnknownAndRetainsKnownRevocations(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var unavailable atomic.Bool
+		feed := Start(context.Background(), Config{Secret: testSecret, List: func(context.Context, time.Time) (*commodorepb.ListRecentSessionRevocationsResponse, error) {
+			if unavailable.Load() {
+				return nil, errors.New("authority unavailable")
+			}
+			return &commodorepb.ListRecentSessionRevocationsResponse{AuthSessionsIncluded: true}, nil
+		}})
+		defer feed.Close()
+		synctest.Wait()
+		if err := feed.CheckSession(context.Background(), testToken(t, "other")); err != nil {
+			t.Fatal(err)
+		}
+		feed.Apply(testRevocation("revoked"))
+		unavailable.Store(true)
+		time.Sleep(MaxSnapshotAge + time.Second)
+		synctest.Wait()
+		if code := status.Code(feed.CheckSession(context.Background(), testToken(t, "other"))); code != codes.Unavailable {
+			t.Fatalf("stale projection accepted unknown session: %s", code)
+		}
+		if code := status.Code(feed.CheckSession(context.Background(), testToken(t, "revoked"))); code != codes.Unauthenticated {
+			t.Fatalf("stale projection forgot known revocation: %s", code)
+		}
+		unavailable.Store(false)
+		feed.Resume()
+		synctest.Wait()
+		if err := feed.CheckSession(context.Background(), testToken(t, "other")); err != nil {
+			t.Fatalf("recovered projection refused valid device: %v", err)
+		}
+	})
+}
 
 func testToken(t *testing.T, sid string) string {
 	t.Helper()
@@ -52,7 +98,17 @@ func (s *fakeStream) Recv() (*signalmanpb.SignalmanEvent, error) {
 		return event, nil
 	}
 }
-func (s *fakeStream) Close() {}
+func (s *fakeStream) Run(ctx context.Context, apply func(*commodorepb.SessionRevocation)) error {
+	for {
+		event, err := s.Recv()
+		if err != nil {
+			return err
+		}
+		apply(Decode(event.GetTenantId(), event.GetData().GetTenantEvent()))
+	}
+}
+func (s *fakeStream) CatchUp(context.Context) error { return nil }
+func (s *fakeStream) Close()                        {}
 
 func eventFor(t *testing.T, sid string) *signalmanpb.SignalmanEvent {
 	t.Helper()
@@ -64,7 +120,7 @@ func eventFor(t *testing.T, sid string) *signalmanpb.SignalmanEvent {
 		Data: &signalmanpb.EventData{Payload: &signalmanpb.EventData_TenantEvent{TenantEvent: &signalmanpb.TenantEvent{Type: "auth_session.revoked", Data: payload}}}}
 }
 
-func TestColdRequestsNeverWaitForBackfill(t *testing.T) {
+func TestColdRequestsRefuseWithoutWaitingForBackfill(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var calls atomic.Int32
 		feed := Start(context.Background(), Config{Secret: testSecret, List: func(ctx context.Context, _ time.Time) (*commodorepb.ListRecentSessionRevocationsResponse, error) {
@@ -76,8 +132,8 @@ func TestColdRequestsNeverWaitForBackfill(t *testing.T) {
 		synctest.Wait()
 		for _, sid := range []string{"cold-one", "cold-two", "cold-three"} {
 			for range 10 {
-				if err := feed.CheckSession(context.Background(), testToken(t, sid)); err != nil {
-					t.Fatalf("valid cold credential rejected: %v", err)
+				if err := feed.CheckSession(context.Background(), testToken(t, sid)); status.Code(err) != codes.Unavailable {
+					t.Fatalf("unhydrated credential was not refused: %v", err)
 				}
 			}
 		}
@@ -98,7 +154,7 @@ func TestColdRequestsNeverWaitForBackfill(t *testing.T) {
 		if err := feed.CheckSession(context.Background(), testToken(t, "cold-one")); status.Code(err) != codes.Unauthenticated {
 			t.Fatalf("known revoked sid accepted: %v", err)
 		}
-		if err := feed.CheckSession(context.Background(), testToken(t, "cold-two")); err != nil {
+		if err := feed.CheckSession(context.Background(), testToken(t, "cold-two")); status.Code(err) != codes.Unavailable {
 			t.Fatalf("other device rejected: %v", err)
 		}
 	})
@@ -106,16 +162,23 @@ func TestColdRequestsNeverWaitForBackfill(t *testing.T) {
 
 func TestEventsContinueWhileCommodoreUnavailable(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		var unavailable atomic.Bool
 		events := make(chan *signalmanpb.SignalmanEvent, 1)
 		feed := Start(context.Background(), Config{Secret: testSecret,
 			List: func(context.Context, time.Time) (*commodorepb.ListRecentSessionRevocationsResponse, error) {
-				return nil, errors.New("Commodore down")
+				if unavailable.Load() {
+					return nil, errors.New("Commodore down")
+				}
+				return &commodorepb.ListRecentSessionRevocationsResponse{AuthSessionsIncluded: true}, nil
 			},
-			Open: func(ctx context.Context) (signalmanclient.EventStream, error) {
+			Open: func(ctx context.Context) (Source, error) {
 				return &fakeStream{ctx: ctx, events: events}, nil
 			},
 		})
 		defer feed.Close()
+		synctest.Wait()
+		unavailable.Store(true)
+		feed.Resume()
 		events <- eventFor(t, "lost")
 		synctest.Wait()
 		if !feed.connected.Load() {
@@ -156,7 +219,7 @@ func TestReconnectBackfillRepairsMissedEvent(t *testing.T) {
 			List: func(context.Context, time.Time) (*commodorepb.ListRecentSessionRevocationsResponse, error) {
 				return snapshot.Load(), nil
 			},
-			Open: func(ctx context.Context) (signalmanclient.EventStream, error) {
+			Open: func(ctx context.Context) (Source, error) {
 				opens.Add(1)
 				return &fakeStream{ctx: ctx, events: events}, nil
 			},
@@ -193,7 +256,7 @@ func TestLiveEventCannotBeOverwrittenByOlderSnapshot(t *testing.T) {
 				}
 				return &commodorepb.ListRecentSessionRevocationsResponse{AuthSessionsIncluded: true}, nil
 			},
-			Open: func(ctx context.Context) (signalmanclient.EventStream, error) {
+			Open: func(ctx context.Context) (Source, error) {
 				return &fakeStream{ctx: ctx, events: events}, nil
 			},
 		})
@@ -234,7 +297,7 @@ func TestPeriodicBackfillWorksWithoutSignalman(t *testing.T) {
 			List: func(context.Context, time.Time) (*commodorepb.ListRecentSessionRevocationsResponse, error) {
 				return snapshot.Load(), nil
 			},
-			Open: func(context.Context) (signalmanclient.EventStream, error) { return nil, errors.New("Signalman down") },
+			Open: func(context.Context) (Source, error) { return nil, errors.New("Signalman down") },
 		})
 		defer feed.Close()
 		synctest.Wait()

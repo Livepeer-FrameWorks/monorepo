@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -67,6 +68,10 @@ func requireInternalIdentity(mutation bool) gin.HandlerFunc {
 		}
 
 		claims, err := auth.ValidateRevocableSessionJWT(token, []byte(appconfig.Current().JWTSecret), sessionRevocations.Load())
+		if errors.Is(err, auth.ErrSessionStateUnavailable) {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "session state unavailable"})
+			return
+		}
 		if err != nil || !claims.HasRole(auth.RolePlatformOperator) {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "platform operator authorization required"})
 			return

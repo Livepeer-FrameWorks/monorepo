@@ -18,7 +18,7 @@ type Lookout struct {
 	config.Logging
 	config.GRPCMetadataPolicy
 	config.GRPCTLS
-	config.SessionRevocationStream
+	config.SessionRevocationProjection
 	config.Postgres
 	config.Registration
 

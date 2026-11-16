@@ -16,7 +16,7 @@ type PeriscopeQuery struct {
 	config.Logging
 	config.ServiceAuth
 	config.GRPCTLS
-	config.SessionRevocationStream
+	config.SessionRevocationProjection
 	config.Postgres
 	config.ClickHouse
 	config.Registration

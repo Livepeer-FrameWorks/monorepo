@@ -165,10 +165,10 @@ func mirroredSourceAliases(manifest *inventory.Manifest, clusterAlias string) []
 // Central consumers and producers (analytics ingest, billing, federation
 // control) bind the aggregator regardless of where the binary runs, so a
 // regional host placement cannot route them at a local cluster and dual-write
-// ClickHouse or miss billing rows. Every other service binds the cluster of its
-// media cluster or host region.
+// ClickHouse or miss billing rows. Declared aggregator consumers also use that
+// pool; other services bind the cluster of their media cluster or host region.
 func kafkaClusterForServiceTask(manifest *inventory.Manifest, task *orchestrator.Task) *kafkaClusterView {
-	if isAggregatorPinnedService(task.Type) {
+	if isAggregatorPinnedService(task.Type) || usesAggregatorKafka(task.Type) {
 		if kc := aggregatorKafkaClusterView(manifest); kc != nil {
 			return kc
 		}
@@ -215,4 +215,13 @@ func kafkaClusterAliases(manifest *inventory.Manifest) []string {
 		aliases = append(aliases, kafkaClusterAlias(manifest, &views[i]))
 	}
 	return aliases
+}
+
+func usesAggregatorKafka(serviceID string) bool {
+	for _, dep := range topology.InfraDependencies(serviceID) {
+		if dep.Kind == topology.InfraKafka && dep.Provider == topology.InfraProviderAggregator {
+			return true
+		}
+	}
+	return false
 }

@@ -35,6 +35,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/sessionrevocations"
+	revocationkafka "github.com/Livepeer-FrameWorks/monorepo/pkg/sessionrevocations/kafkasource"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
 	"github.com/shopspring/decimal"
@@ -227,12 +228,12 @@ func main() {
 		logger.WithError(err).Fatal("Failed to create Commodore gRPC client")
 	}
 	defer func() { _ = commodoreClient.Close() }()
-	sessionFeed, closeSessionFeed, err := sessionrevocations.Connect(context.Background(), sessionrevocations.Config{
+	sessionFeed, closeSessionFeed, err := revocationkafka.Connect(context.Background(), sessionrevocations.Config{
 		Secret: []byte(cfg.JWTSecret), List: commodoreClient.ListRecentSessionRevocations, Logger: logger,
-	}, sessionrevocations.Transport{
-		Address: cfg.SignalmanGRPCAddr, ServiceToken: cfg.ServiceToken,
-		AllowInsecure: cfg.AllowInsecure, CAPath: cfg.CAPath,
-		ServerName: cfg.SignalmanGRPCTLSServerName, Logger: logger,
+	}, revocationkafka.Transport{
+		Brokers:              cfg.RevocationKafkaBrokers,
+		MirrorRegionPrefixes: cfg.RevocationMirrorRegionPrefixes,
+		ClientID:             "purser-auth",
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Invalid session revocation feed configuration")

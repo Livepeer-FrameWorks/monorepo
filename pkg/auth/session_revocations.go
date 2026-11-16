@@ -3,19 +3,46 @@ package auth
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 var ErrSessionRevoked = errors.New("session signed out")
+
+// ErrSessionStateUnavailable is transient; it must not invalidate a credential.
+var ErrSessionStateUnavailable = errors.New("session revocation state unavailable")
 
 type sessionRevocationKey struct{ tenant, user, session string }
 
 // SessionRevocations retains revocations while an affected access JWT can verify.
 // An empty session identifies the legacy user-wide issue-time cutoff.
 type SessionRevocations struct {
-	mu       sync.RWMutex
-	cutoffs  map[sessionRevocationKey]time.Time
-	prunedAt time.Time
+	mu              sync.RWMutex
+	cutoffs         map[sessionRevocationKey]time.Time
+	prunedAt        time.Time
+	requireSnapshot atomic.Bool
+	freshUntil      atomic.Pointer[time.Time]
+}
+
+// RequireSnapshot distinguishes an uninitialized projection from a complete empty one.
+func (r *SessionRevocations) RequireSnapshot() { r.requireSnapshot.Store(true) }
+
+// ConfirmSnapshot bounds how long an authoritative recovery snapshot can be used.
+func (r *SessionRevocations) ConfirmSnapshot(observedAt time.Time, maxAge time.Duration) {
+	deadline := observedAt.Add(maxAge)
+	r.freshUntil.Store(&deadline)
+}
+
+// CheckReady uses the read's monotonic deadline so a wall-clock adjustment does
+// not extend the authority-freshness allowance.
+func (r *SessionRevocations) CheckReady() error {
+	if r != nil && r.requireSnapshot.Load() {
+		deadline := r.freshUntil.Load()
+		if deadline == nil || !time.Now().Before(*deadline) {
+			return ErrSessionStateUnavailable
+		}
+	}
+	return nil
 }
 
 func NewSessionRevocations() *SessionRevocations {
@@ -117,6 +144,9 @@ func ValidateRevocableSessionJWT(token string, secret []byte, revocations *Sessi
 	}
 	if revocations.SessionRevoked(claims.TenantID, claims.UserID, claims.SessionID, issuedAt) {
 		return nil, ErrSessionRevoked
+	}
+	if err := revocations.CheckReady(); err != nil {
+		return nil, err
 	}
 	return claims, nil
 }
