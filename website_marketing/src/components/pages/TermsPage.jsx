@@ -4,54 +4,46 @@ import { MarketingHero, MarketingScrollProgress, SectionDivider } from "@/compon
 
 const termsSections = [
   {
-    title: "1. Beta Service",
-    paragraphs: [
-      "FrameWorks is currently in public beta. Features, performance, and availability may change without notice while we prepare the platform for general availability.",
-      "Because the service is still maturing, you should not rely on the beta as the sole delivery path for business-critical or revenue-generating streams without an independent fallback. We publish current platform and edge-cluster health on our status page so you can make that judgement before you go live.",
-      "We may suspend, limit, or discontinue the beta at any time. Continuing to use FrameWorks means you accept the most recent version of these terms.",
-    ],
-  },
-  {
-    title: "2. Accounts & Security",
+    title: "1. Accounts & Security",
     paragraphs: [
       "You are responsible for all activity under your account, including keeping your credentials secure and contact details up to date.",
       "API tokens, stream keys, and signing secrets grant access to your infrastructure and content. Treat them like passwords, rotate them if you suspect exposure, and scope them to the minimum access each integration needs.",
-      "Please notify us promptly if you suspect unauthorized access or a security incident involving your account or infrastructure.",
+      "Please notify us promptly if you suspect unauthorized access or a security incident involving your account or infrastructure, so we can take steps to limit impact insofar possible.",
     ],
   },
   {
-    title: "3. Acceptable Use",
+    title: "2. Acceptable Use",
     paragraphs: [
-      "You must comply with all applicable laws, respect third-party rights, and follow the Acceptable Use Policy. Prohibited behaviour includes distributing illegal content, attempting to disrupt FrameWorks services, or interfering with other users.",
-      "You are responsible for holding the rights to everything you ingest, transcode, record, and redistribute through FrameWorks, including any third-party music, footage, or trademarks contained in your streams.",
-      "Violations may result in suspension or termination without refund.",
+      "You must comply with the <a href=\"aup\">Frameworks Acceptable Use Policy</a>.",
     ],
   },
   {
-    title: "4. Fees & Beta Billing",
+    title: "3. Fees & Billing",
     paragraphs: [
-      "During the public beta, metered streaming usage for bandwidth, processing, and storage is provided at no charge while we tune pricing for general availability. Any subscription or add-on fees are billed as described at checkout before you incur them.",
-      "Account balances and top-ups are real and remain yours; they are applied against future usage and are not forfeited when the beta ends. We will give reasonable notice before metered usage becomes billable.",
+      "Recurring fees are charged up-front, and only become active once payment is completed successfully.",
+      "Metered usage is charged the month after usage, and needs to be settled within 30 days after receiving our invoice for your account to remain in good standing.",
+      "If a payment is disputed or fails to go through, we will always reach out to you first. Should you fail to respond within two weeks, we may proceed to limit or suspend your account until settled.",
     ],
   },
   {
-    title: "5. No Warranties & Liability",
+    title: "4. Warranties & Liability",
     paragraphs: [
-      "The beta is provided “as is” and “as available.” We disclaim all warranties, express or implied, including fitness for a particular purpose, merchantability, and non-infringement.",
-      "We do not warrant uninterrupted or error-free delivery during beta, and we are not liable for indirect, incidental, or consequential losses arising from your use of the service. Any liability we have to you is limited to the maximum extent permitted by law.",
+      "We do our best to keep the platform online without interruptions, but it's possible that due to unforeseen circumstances downtime may occur. In such cases, we are not liable for any damages whatsoever.",
+      "For subscription-based services, if there has been significant downtime, please reach out to us and we'll provide additional usage or services at no charge to compensate.",
+      "For metered usage, during downtime no usage should be incurred. If somehow you were charged anyway, please reach out to us and we'll resolve the problem.",
     ],
   },
   {
-    title: "6. Privacy & Data",
+    title: "5. Privacy & Data",
     paragraphs: [
-      "Your use of FrameWorks is also governed by our Privacy Policy, which explains what we collect, how we use it, and the controls available to you. FrameWorks is built so you can keep ownership of your media and operate hosted, hybrid, or fully self-hosted without surrendering control of your pipeline.",
-      "You retain ownership of the content you stream and the data you generate. We process operational telemetry only to run, secure, and improve the platform.",
+      "Your use of FrameWorks is also governed by <a href=\"privacy\">our Privacy Policy</a>, which explains what we collect, how we use it, and the controls available to you.",
+      "You retain ownership of the content you stream and the data you generate. We process your content as well as operational telemetry only provide the service(s) requested by you.",
     ],
   },
   {
-    title: "7. Changes & Contact",
+    title: "6. Changes & Contact",
     paragraphs: [
-      "We may update these terms as FrameWorks evolves. Using the service after updates are published means you agree to the revised version. Material changes will be reflected by an updated revision on this page.",
+      "We may update these terms as FrameWorks evolves. Using the service means you agree to the version of these terms that is published at time of use.",
       `Questions about these terms? Reach out to us at ${config.contactEmail ?? "legal@frameworks.network"}.`,
     ],
   },
