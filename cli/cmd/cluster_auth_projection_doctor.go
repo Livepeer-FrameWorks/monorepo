@@ -20,7 +20,9 @@ func doctorAuthProjection(ctx context.Context, pool *fwssh.Pool, host inventory.
 		result.Error = "auth projection could not be verified: ssh pool is nil"
 		return result
 	}
-	runner, err := getRunner(host, pool)
+	runner, err := pool.Get(&fwssh.ConnectionConfig{
+		Address: host.ExternalIP, Port: 22, User: host.User, HostName: host.Name, Timeout: 30 * time.Second,
+	})
 	if err != nil {
 		result.Status = "unknown"
 		result.Error = fmt.Sprintf("auth projection ssh: %v", err)

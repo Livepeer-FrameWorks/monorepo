@@ -254,11 +254,13 @@ if [ "${1:-}" = -G ]; then
   exit 0
 fi
 case " $* " in
-  *' stack-eu '*) base=${FOGHORN_A_URLS%% *} ;;
-  *' stack-us '*) base=${FOGHORN_B_URLS%% *} ;;
+  *' stack-eu '*) base=${FOGHORN_A_URLS%% *}; internal=${FOGHORN_A_INTERNAL_URLS%% *} ;;
+  *' stack-us '*) base=${FOGHORN_B_URLS%% *}; internal=${FOGHORN_B_INTERNAL_URLS%% *} ;;
   *) echo 'stack SSH adapter: unknown host' >&2; exit 1 ;;
 esac
-if [[ "$*" == *'/health'* || "$*" == *'/ready'* ]]; then
+if [[ "$*" == *'/metrics'* ]]; then
+  curl -sS -m 5 -w '\n%{http_code}' "$internal/metrics"
+elif [[ "$*" == *'/health'* || "$*" == *'/ready'* ]]; then
   if [[ "$*" == *'/ready'* ]]; then path=/ready; else path=/health; fi
   curl -sS -m 5 -o /dev/null -w '%{http_code}' "$base$path"
 else
