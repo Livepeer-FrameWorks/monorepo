@@ -1,0 +1,98 @@
+---
+- name: Verify validation tolerates an overlapping Nginx reload
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Exercise validation during a real systemd reload
+      block:
+        - name: Install a slow reload fixture
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/nginx.service.d/validation-fixture.conf
+            mode: "0644"
+            content: |
+              [Service]
+              ExecReload=/bin/sleep 8
+
+        - name: Load the slow reload fixture
+          ansible.builtin.systemd:
+            daemon_reload: true
+
+        - name: Begin reloading Nginx asynchronously
+          ansible.builtin.command: systemctl reload nginx
+          async: 45
+          poll: 0
+          changed_when: true
+          register: nginx_validation_reload
+
+        - name: Wait until the reload is in progress
+          ansible.builtin.command: systemctl show nginx --property=SubState --value
+          register: nginx_validation_substate
+          changed_when: false
+          until: nginx_validation_substate.stdout == 'reload'
+          retries: 10
+          delay: 1
+
+        - name: Validate while Nginx continues serving during reload
+          ansible.builtin.include_role:
+            name: frameworks.infra.nginx
+            tasks_from: validate
+
+        - name: Confirm validation waited for the reload
+          ansible.builtin.assert:
+            that:
+              - nginx_service_facts.attempts > 1
+
+        - name: Collect the completed reload
+          ansible.builtin.async_status:
+            jid: "{{ nginx_validation_reload.ansible_job_id }}"
+          register: nginx_validation_reload_result
+          until: nginx_validation_reload_result.finished
+          retries: 10
+          delay: 1
+      always:
+        - name: Remove the slow reload fixture
+          ansible.builtin.file:
+            path: /etc/systemd/system/nginx.service.d/validation-fixture.conf
+            state: absent
+
+        - name: Restore the normal reload definition
+          ansible.builtin.systemd:
+            daemon_reload: true
+
+- name: Verify validation still rejects a stopped Nginx service
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Exercise stopped-service validation
+      block:
+        - name: Stop Nginx
+          ansible.builtin.systemd:
+            name: nginx
+            state: stopped
+
+        - name: Start with no validation failure observed
+          ansible.builtin.set_fact:
+            nginx_validation_rejected_stopped: false
+
+        - name: Attempt validation with Nginx stopped
+          block:
+            - name: Validate the stopped service
+              ansible.builtin.include_role:
+                name: frameworks.infra.nginx
+                tasks_from: validate
+          rescue:
+            - name: Record the stopped-service rejection
+              ansible.builtin.set_fact:
+                nginx_validation_rejected_stopped: true
+
+        - name: Assert stopped Nginx was rejected
+          ansible.builtin.assert:
+            that:
+              - nginx_validation_rejected_stopped
+      always:
+        - name: Restore Nginx after the stopped-service check
+          ansible.builtin.systemd:
+            name: nginx
+            state: started
