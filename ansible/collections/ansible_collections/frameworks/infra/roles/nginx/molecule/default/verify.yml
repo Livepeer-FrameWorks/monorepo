@@ -54,3 +54,6 @@
 
 - name: Verify automatic tenant TLS serving as the real Nginx worker
   ansible.builtin.import_playbook: tenant_alias_tls.yml
+
+- name: Verify service validation during reload and failure
+  ansible.builtin.import_playbook: validate_reload.yml

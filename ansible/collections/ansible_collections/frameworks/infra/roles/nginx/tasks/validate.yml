@@ -1,6 +1,14 @@
 ---
 - name: Validate Nginx service state
   ansible.builtin.service_facts:
+  register: nginx_service_facts
+  # service_facts reports a healthy, reloading systemd service as stopped.
+  until: >-
+    nginx_service_facts.ansible_facts.services.get(
+      nginx_service_name ~ '.service', {}
+    ).get('state') == 'running'
+  retries: 10
+  delay: 2
   when: not ansible_check_mode
 
 - name: Assert Nginx running
