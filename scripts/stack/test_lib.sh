@@ -532,6 +532,82 @@ expect 'restart measures one request even when its grant is applied twice' resta
 expect 'restart rejects two requests for one stream' restart_counts_requests_not_applications 2
 expect 'restart refuses unreadable request evidence' restart_counts_requests_not_applications 1 1
 
+tenant_refusal_requires_unclaimed_unchanged_lease() (
+  . "$here/tenant-lifecycle.sh"
+  local tenant=fixture uuid=stream internal=logical
+  local FOGHORN_A_DB=cell-a FOGHORN_B_DB=cell-b
+  local fixture_lease="|7" history=0 unavailable=0
+  pg() {
+    [ "$unavailable" = 0 ] || return 1
+    if [ "$1" = commodore ]; then printf '%s\n' "$fixture_lease"; else printf '%s\n' "$history"; fi
+  }
+  tenant_refusal_clean 7 || return 1
+  fixture_lease='held|7'
+  ! tenant_refusal_clean 7 || return 1
+  fixture_lease='|8'
+  ! tenant_refusal_clean 7 || return 1
+  fixture_lease='|7' history=1
+  ! tenant_refusal_clean 7 || return 1
+  history=0 unavailable=1
+  ! tenant_refusal_clean 7
+)
+expect 'wrong private-ingest target cannot claim ownership, advance epoch or create a session' tenant_refusal_requires_unclaimed_unchanged_lease
+
+tenant_admission_counter_requires_readable_evidence() (
+  . "$here/tenant-lifecycle.sh"
+  local unavailable=0 empty=0
+  docker() {
+    [ "$unavailable" = 0 ] || return 1
+    [ "$empty" = 0 ] || return 0
+    printf '%s\n' 'helmsman_control_stream_connected 1'
+    printf '%s\n' 'helmsman_mist_webhook_requests_total{status="received",trigger_type="PUSH_REWRITE"} 2'
+    printf '%s\n' 'helmsman_mist_webhook_requests_total{status="success",trigger_type="PUSH_REWRITE"} 2'
+    printf '%s\n' 'helmsman_mist_webhook_requests_total{status="received",trigger_type="STREAM_END"} 9'
+  }
+  [ "$(tenant_admission_count edge)" = 2 ] || return 1
+  empty=1
+  ! tenant_admission_count edge || return 1
+  empty=0
+  unavailable=1
+  ! tenant_admission_count edge
+)
+expect 'first private publish counts received admissions and rejects unreadable metrics' tenant_admission_counter_requires_readable_evidence
+
+tenant_flow_rejects_a_second_admission() (
+  . "$here/tenant-lifecycle.sh"
+  local fixture_extra=${1:-0} tenant=fixture run=fixture since=now streams=() publisher=""
+  local FOGHORN_A_URLS=http://cell-a FOGHORN_B_URLS=http://cell-b
+  local calls="$work/private-admission-calls" starts="$work/private-publish-starts"
+  printf '0\n' >"$calls"
+  : >"$starts"
+  refresh_tenant_session() { return 0; }
+  create_stream() { printf '%s\n' '{"id":"stream","streamId":"uuid","playbackId":"playback","streamKey":"fixture-key"}'; }
+  internal_name_of() { printf 'logical\n'; }
+  set_placement() { return 0; }
+  policy_effective() { return 0; }
+  preview_ready() { return 0; }
+  pg() { printf '7\n'; }
+  tenant_start_publisher() { printf '%s\n' "$2" >>"$starts"; publisher=fixture; }
+  tenant_policy_refused() { return 0; }
+  tenant_refusal_clean() { return 0; }
+  tenant_admission_count() {
+    local read_count
+    read_count=$(cat "$calls")
+    printf '%s\n' "$((read_count + 1))" >"$calls"
+    printf '%s\n' "$((read_count * (1 + fixture_extra)))"
+  }
+  kill() { return 0; }
+  eventually() { shift 2; "$@"; }
+  stream_active() { return 0; }
+  private_media_at() { return 0; }
+  stream_ended() { return 0; }
+  PASS=0 FAIL=0
+  stream_flow TENANT_PRIVATE private-edge cell-a private-node private-cluster rtmp http://cell-a admission public-edge >/dev/null || return 1
+  [ "$FAIL" = "$fixture_extra" ] && [ "$(cat "$starts")" = $'public-edge\nprivate-edge' ]
+)
+expect 'the private flow makes one denied and one correct connection' tenant_flow_rejects_a_second_admission
+expect 'a second admission on the correct connection fails the private flow' tenant_flow_rejects_a_second_admission 1
+
 if [ "$failures" -gt 0 ]; then
   echo "lib.sh checks: $failures failed"
   exit 1

@@ -102,13 +102,50 @@ sys.exit(1)
 PY
 }
 
+tenant_start_publisher() {
+  local protocol=$1 host=$2 key=$3
+  if [ "$protocol" = rtmp ]; then
+    publisher=$(publish "rtmp://$host:1935/live" "$key" 320x240 10 600)
+  else
+    ffmpeg -hide_banner -loglevel error -re -f lavfi -i 'testsrc2=size=320x240:rate=10' \
+      -f lavfi -i 'sine=frequency=440:sample_rate=48000' -t 600 -c:v libx264 -preset veryfast -g 20 \
+      -pix_fmt yuv420p -c:a aac -b:a 96k -f mpegts "srt://$host:8889?mode=caller&streamid=$key" \
+      >"$STACK_STATE_DIR/$run-$host-srt.log" 2>&1 &
+    publisher=$!
+  fi
+}
+
+# A hard policy denial must leave even the ownership epoch unchanged, and must
+# not create a session that recovery could hide before the correct publish.
+tenant_refusal_clean() {
+  local db lease
+  lease=$(pg commodore "SELECT COALESCE(active_ingest_claim_id,'') || '|' || publisher_lease_epoch::text FROM commodore.streams WHERE tenant_id='$tenant' AND id='$uuid'") || return 1
+  [ "$lease" = "|$1" ] || return 1
+  for db in "$FOGHORN_A_DB" "$FOGHORN_B_DB"; do
+    [ "$(pg "$db" "SELECT count(*) FROM foghorn.ingest_sessions WHERE tenant_id='$tenant' AND stream_internal_name='$internal'")" = 0 ] || return 1
+  done
+}
+
+tenant_admission_count() {
+  local evidence
+  evidence=$(docker exec "$1" curl -fsS -m 5 http://localhost:18007/metrics) || return 1
+  printf '%s\n' "$evidence" | awk '/^helmsman_control_stream_connected / {readable=1} /^helmsman_mist_webhook_requests_total\{/ && /status="received"/ && /trigger_type="PUSH_REWRITE"/ {sum+=$NF} END {if (!readable) exit 1; printf "%.0f\n",sum}'
+}
+
+tenant_policy_refused() {
+  local evidence
+  evidence=$(log_json "$1" "select(.msg == \"Publisher denied before lease acquisition\" and .stream_id == \"$uuid\" and .reason == \"policy_denied\")" foghorn foghorn-2 foghorn-b foghorn-b-2) || return 1
+  [ -n "$evidence" ]
+}
+
 # stream_flow <class> <ingest host> <foghorn db> <node or empty> <cluster>
-# <protocol> <foghorn base> [admission]: one stream published on the class.
+# <protocol> <foghorn base> [admission|full] [refused host]: one stream on the class.
 # A full flow also records RTMP (DVR, a viewer, a clip, replay), checks its
 # signed lifecycle webhooks and final analytics, and is listed for the run's
 # analytics settlement. "admission" stops after admission, media and cleanup.
 stream_flow() {
-  local class=$1 host=$2 cell=$3 node=$4 cluster=$5 protocol=$6 base=$7 depth=${8:-full} s pb key internal uuid viewer record=false
+  local class=$1 host=$2 cell=$3 node=$4 cluster=$5 protocol=$6 base=$7 depth=${8:-full} refused_host=${9:-} s pb key internal uuid viewer record=false
+  local refused_since epoch admission_before admission_after
   refresh_tenant_session || { fail 'refresh the tenant session'; return 1; }
   [ "$protocol" != rtmp ] || [ "$depth" != full ] || record=true
   s=$(create_stream "stack-$run-$class-$protocol" "$record")
@@ -123,16 +160,22 @@ stream_flow() {
   pass "$class $protocol placement policy applies"
   eventually 90 "$class $protocol placement revision is effective" policy_effective || return 1
   eventually 60 "$class $protocol preview has fresh placement evidence" preview_ready "$protocol" "$class" "$node" || return 1
-  if [ "$protocol" = rtmp ]; then
-    publisher=$(publish "rtmp://$host:1935/live" "$key" 320x240 10 600)
-  else
-    ffmpeg -hide_banner -loglevel error -re -f lavfi -i 'testsrc2=size=320x240:rate=10' \
-      -f lavfi -i 'sine=frequency=440:sample_rate=48000' -t 600 -c:v libx264 -preset veryfast -g 20 \
-      -pix_fmt yuv420p -c:a aac -b:a 96k -f mpegts "srt://$host:8889?mode=caller&streamid=$key" \
-      >"$STACK_STATE_DIR/$run-srt.log" 2>&1 &
-    publisher=$!
+  if [ -n "$refused_host" ]; then
+    epoch=$(pg commodore "SELECT publisher_lease_epoch FROM commodore.streams WHERE tenant_id='$tenant' AND id='$uuid'") || return 1
+    refused_since=$(utc_now)
+    tenant_start_publisher "$protocol" "$refused_host" "$key"
+    eventually 30 "$class $protocol wrong public edge receives a hard policy denial" tenant_policy_refused "$refused_since" || return 1
+    kill "$publisher" 2>/dev/null || true
+    publisher=""
+    check "$class $protocol denied public edge never acquires ownership or creates a session" tenant_refusal_clean "$epoch"
+    admission_before=$(tenant_admission_count "$host") || { fail 'read private edge admission counter'; return 1; }
   fi
+  tenant_start_publisher "$protocol" "$host" "$key"
   eventually 90 "$class $protocol first publisher admits to the expected node and cluster" stream_active "$cell" "$node" "$cluster" || return 1
+  if [ -n "$refused_host" ]; then
+    admission_after=$(tenant_admission_count "$host") || { fail 'read private edge admission counter'; return 1; }
+    check "$class $protocol correct private edge admits on its first PUSH_REWRITE after public denial" test "$admission_after" -eq "$((admission_before + 1))"
+  fi
   if [ "$class" = TENANT_PRIVATE ]; then
     for viewer in $FOGHORN_A_URLS $FOGHORN_B_URLS; do
       eventually 60 "$class $protocol HLS manifests and media via $viewer stay on the private edge" private_media_at "$viewer" "$pb" "$host" || return 1
