@@ -12,9 +12,11 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -139,7 +141,7 @@ func (p *Processor) offerPlaybackGrant(nodeID, requested string, local localPlay
 // A denial by the signed authority is returned as a revoked grant, except a
 // spent prepaid balance, which blocks new sessions and leaves running ones; a
 // cell holding no current authority returns an error and issues nothing.
-func (p *Processor) PlaybackGrantForStream(ctx context.Context, _ string, internalName string) (*ipcpb.PlaybackGrant, error) {
+func (p *Processor) PlaybackGrantForStream(ctx context.Context, nodeID string, internalName string) (*ipcpb.PlaybackGrant, error) {
 	local, found, err := p.resolveReadyLocalPlayback(ctx, internalName, false)
 	if IsLocalAuthorityDenied(err) {
 		if local.object.Authority.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE &&
@@ -147,7 +149,7 @@ func (p *Processor) PlaybackGrantForStream(ctx context.Context, _ string, intern
 			local.target = localStreamTarget(local.object.Authority, local.tenant.Authority)
 			grant := playbackGrantFromLocal(local, "")
 			grant.NewSessionsBlocked = true
-			return grant, nil
+			return bindPlaybackGrantRuntime(ctx, nodeID, local, grant)
 		}
 		return &ipcpb.PlaybackGrant{InternalName: internalName, Revoked: true, RevokedReason: "signed authority denies playback"}, nil
 	}
@@ -157,7 +159,28 @@ func (p *Processor) PlaybackGrantForStream(ctx context.Context, _ string, intern
 	if !found || local.target == nil {
 		return nil, errNoPlaybackGrant
 	}
-	return playbackGrantFromLocal(local, ""), nil
+	return bindPlaybackGrantRuntime(ctx, nodeID, local, playbackGrantFromLocal(local, ""))
+}
+
+// Authority grants and physical source bindings have separate lifetimes. A
+// policy refresh must retain the serving node's current buffer identity.
+func bindPlaybackGrantRuntime(ctx context.Context, nodeID string, local localPlaybackAuthority, grant *ipcpb.PlaybackGrant) (*ipcpb.PlaybackGrant, error) {
+	if local.target.ContentType != "live" {
+		return grant, nil
+	}
+	return bindPlaybackGrantSource(ctx, nodeID, local.target.InternalName, grant)
+}
+
+func bindPlaybackGrantSource(ctx context.Context, nodeID, internal string, grant *ipcpb.PlaybackGrant) (*ipcpb.PlaybackGrant, error) {
+	if nodeID == "" || grant.GetRevoked() || control.StreamRegistryInstance == nil {
+		return grant, nil
+	}
+	runtime, err := control.StreamRegistryInstance.NodeRuntimeName(ctx, grant.GetTenantId(), mist.ExtractInternalName(internal), nodeID)
+	if err != nil {
+		return nil, err
+	}
+	grant.InternalName = runtime
+	return grant, nil
 }
 
 // PlaybackAuthorityBus carries authority announcements between the cell's
@@ -230,13 +253,21 @@ func (p *Processor) pushPlaybackGrantUpdates(change state.PlaybackAuthorityChang
 			if len(holders) == 0 {
 				continue
 			}
-			grant, err := p.PlaybackGrantForStream(ctx, "", name)
+			policyGrant, err := p.PlaybackGrantForStream(ctx, "", name)
 			if err != nil {
-				p.logger.WithError(err).WithField("internal_name", name).
-					Info("Applied authority yields no playback grant; edges keep their grant until it expires")
+				p.logger.WithError(err).WithField("internal_name", name).Info("Applied authority yields no playback grant; edges keep their grant until it expires")
 				continue
 			}
 			for _, nodeID := range holders {
+				grant := proto.CloneOf(policyGrant)
+				if strings.HasPrefix(grant.GetInternalName(), "live+") || strings.HasPrefix(grant.GetInternalName(), "pull+") {
+					grant, err = bindPlaybackGrantSource(ctx, nodeID, grant.GetInternalName(), grant)
+				}
+				if err != nil {
+					p.logger.WithError(err).WithFields(logging.Fields{"internal_name": name, "node_id": nodeID}).
+						Info("Applied authority yields no playback grant; edges keep their grant until it expires")
+					continue
+				}
 				sent, err := delivery.Offer(nodeID, grant)
 				if err != nil {
 					p.logger.WithError(err).WithFields(logging.Fields{

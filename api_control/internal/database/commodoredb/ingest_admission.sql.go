@@ -43,7 +43,7 @@ WHERE s.id = held.id
           AND ($3::text IS NULL OR (held.prev_node IS NULL AND held.prev_cell IS NULL)
             OR (held.prev_node=$3::text AND held.prev_cell=$4::text)))
   )
-RETURNING held.prev_cluster, held.prev_token, held.prev_fresh
+RETURNING held.prev_cluster, held.prev_token, held.prev_fresh, s.publisher_lease_epoch
 `
 
 type AcquireIngestClaimParams struct {
@@ -56,9 +56,10 @@ type AcquireIngestClaimParams struct {
 }
 
 type AcquireIngestClaimRow struct {
-	PrevCluster sql.NullString `db:"prev_cluster" json:"prev_cluster"`
-	PrevToken   sql.NullString `db:"prev_token" json:"prev_token"`
-	PrevFresh   bool           `db:"prev_fresh" json:"prev_fresh"`
+	PrevCluster         sql.NullString `db:"prev_cluster" json:"prev_cluster"`
+	PrevToken           sql.NullString `db:"prev_token" json:"prev_token"`
+	PrevFresh           bool           `db:"prev_fresh" json:"prev_fresh"`
+	PublisherLeaseEpoch int64          `db:"publisher_lease_epoch" json:"publisher_lease_epoch"`
 }
 
 func (q *Queries) AcquireIngestClaim(ctx context.Context, arg AcquireIngestClaimParams) (AcquireIngestClaimRow, error) {
@@ -71,7 +72,12 @@ func (q *Queries) AcquireIngestClaim(ctx context.Context, arg AcquireIngestClaim
 		arg.LookupStreamKey,
 	)
 	var i AcquireIngestClaimRow
-	err := row.Scan(&i.PrevCluster, &i.PrevToken, &i.PrevFresh)
+	err := row.Scan(
+		&i.PrevCluster,
+		&i.PrevToken,
+		&i.PrevFresh,
+		&i.PublisherLeaseEpoch,
+	)
 	return i, err
 }
 

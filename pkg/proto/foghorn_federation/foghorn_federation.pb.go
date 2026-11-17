@@ -227,9 +227,11 @@ type EdgeCandidate struct {
 	// Virtual media cluster of this node, distinct from the responding cell.
 	ClusterId string `protobuf:"bytes,17,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
 	// Media-serving readiness. buffer_state remains the native Mist diagnostic.
-	Playable      bool `protobuf:"varint,18,opt,name=playable,proto3" json:"playable,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Playable          bool   `protobuf:"varint,18,opt,name=playable,proto3" json:"playable,omitempty"`
+	SourceLeaseEpoch  int64  `protobuf:"varint,19,opt,name=source_lease_epoch,json=sourceLeaseEpoch,proto3" json:"source_lease_epoch,omitempty"`
+	SourceRuntimeName string `protobuf:"bytes,20,opt,name=source_runtime_name,json=sourceRuntimeName,proto3" json:"source_runtime_name,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *EdgeCandidate) Reset() {
@@ -388,6 +390,20 @@ func (x *EdgeCandidate) GetPlayable() bool {
 	return false
 }
 
+func (x *EdgeCandidate) GetSourceLeaseEpoch() int64 {
+	if x != nil {
+		return x.SourceLeaseEpoch
+	}
+	return 0
+}
+
+func (x *EdgeCandidate) GetSourceRuntimeName() string {
+	if x != nil {
+		return x.SourceRuntimeName
+	}
+	return ""
+}
+
 type OriginPullNotification struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	StreamName    string                 `protobuf:"bytes,1,opt,name=stream_name,json=streamName,proto3" json:"stream_name,omitempty"`
@@ -402,10 +418,13 @@ type OriginPullNotification struct {
 	AttemptId        string `protobuf:"bytes,9,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
 	// Both fields are required together for exact virtual-cluster source binding.
 	// Such requests must name the source node and cannot auto-select another one.
-	SourceCellId    string `protobuf:"bytes,10,opt,name=source_cell_id,json=sourceCellId,proto3" json:"source_cell_id,omitempty"`
-	SourceClusterId string `protobuf:"bytes,11,opt,name=source_cluster_id,json=sourceClusterId,proto3" json:"source_cluster_id,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	SourceCellId      string `protobuf:"bytes,10,opt,name=source_cell_id,json=sourceCellId,proto3" json:"source_cell_id,omitempty"`
+	SourceClusterId   string `protobuf:"bytes,11,opt,name=source_cluster_id,json=sourceClusterId,proto3" json:"source_cluster_id,omitempty"`
+	SourceLeaseEpoch  int64  `protobuf:"varint,12,opt,name=source_lease_epoch,json=sourceLeaseEpoch,proto3" json:"source_lease_epoch,omitempty"`
+	SourceRuntimeName string `protobuf:"bytes,13,opt,name=source_runtime_name,json=sourceRuntimeName,proto3" json:"source_runtime_name,omitempty"`
+	DestRuntimeName   string `protobuf:"bytes,14,opt,name=dest_runtime_name,json=destRuntimeName,proto3" json:"dest_runtime_name,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *OriginPullNotification) Reset() {
@@ -515,22 +534,46 @@ func (x *OriginPullNotification) GetSourceClusterId() string {
 	return ""
 }
 
+func (x *OriginPullNotification) GetSourceLeaseEpoch() int64 {
+	if x != nil {
+		return x.SourceLeaseEpoch
+	}
+	return 0
+}
+
+func (x *OriginPullNotification) GetSourceRuntimeName() string {
+	if x != nil {
+		return x.SourceRuntimeName
+	}
+	return ""
+}
+
+func (x *OriginPullNotification) GetDestRuntimeName() string {
+	if x != nil {
+		return x.DestRuntimeName
+	}
+	return ""
+}
+
 type OriginPullAck struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	Accepted         bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
-	Reason           string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`                  // Rejection reason or informational message
-	DtscUrl          string                 `protobuf:"bytes,3,opt,name=dtsc_url,json=dtscUrl,proto3" json:"dtsc_url,omitempty"` // DTSC URL to pull from (set when accepted)
-	SourceGeneration string                 `protobuf:"bytes,4,opt,name=source_generation,json=sourceGeneration,proto3" json:"source_generation,omitempty"`
-	SourceRevision   int64                  `protobuf:"varint,5,opt,name=source_revision,json=sourceRevision,proto3" json:"source_revision,omitempty"`
-	AttemptId        string                 `protobuf:"bytes,6,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
-	SourceNodeId     string                 `protobuf:"bytes,7,opt,name=source_node_id,json=sourceNodeId,proto3" json:"source_node_id,omitempty"`
-	TenantId         string                 `protobuf:"bytes,8,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	DestClusterId    string                 `protobuf:"bytes,9,opt,name=dest_cluster_id,json=destClusterId,proto3" json:"dest_cluster_id,omitempty"`
-	DestNodeId       string                 `protobuf:"bytes,10,opt,name=dest_node_id,json=destNodeId,proto3" json:"dest_node_id,omitempty"`
-	SourceCellId     string                 `protobuf:"bytes,11,opt,name=source_cell_id,json=sourceCellId,proto3" json:"source_cell_id,omitempty"`
-	SourceClusterId  string                 `protobuf:"bytes,12,opt,name=source_cluster_id,json=sourceClusterId,proto3" json:"source_cluster_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Accepted          bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	Reason            string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`                  // Rejection reason or informational message
+	DtscUrl           string                 `protobuf:"bytes,3,opt,name=dtsc_url,json=dtscUrl,proto3" json:"dtsc_url,omitempty"` // DTSC URL to pull from (set when accepted)
+	SourceGeneration  string                 `protobuf:"bytes,4,opt,name=source_generation,json=sourceGeneration,proto3" json:"source_generation,omitempty"`
+	SourceRevision    int64                  `protobuf:"varint,5,opt,name=source_revision,json=sourceRevision,proto3" json:"source_revision,omitempty"`
+	AttemptId         string                 `protobuf:"bytes,6,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
+	SourceNodeId      string                 `protobuf:"bytes,7,opt,name=source_node_id,json=sourceNodeId,proto3" json:"source_node_id,omitempty"`
+	TenantId          string                 `protobuf:"bytes,8,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	DestClusterId     string                 `protobuf:"bytes,9,opt,name=dest_cluster_id,json=destClusterId,proto3" json:"dest_cluster_id,omitempty"`
+	DestNodeId        string                 `protobuf:"bytes,10,opt,name=dest_node_id,json=destNodeId,proto3" json:"dest_node_id,omitempty"`
+	SourceCellId      string                 `protobuf:"bytes,11,opt,name=source_cell_id,json=sourceCellId,proto3" json:"source_cell_id,omitempty"`
+	SourceClusterId   string                 `protobuf:"bytes,12,opt,name=source_cluster_id,json=sourceClusterId,proto3" json:"source_cluster_id,omitempty"`
+	SourceLeaseEpoch  int64                  `protobuf:"varint,13,opt,name=source_lease_epoch,json=sourceLeaseEpoch,proto3" json:"source_lease_epoch,omitempty"`
+	SourceRuntimeName string                 `protobuf:"bytes,14,opt,name=source_runtime_name,json=sourceRuntimeName,proto3" json:"source_runtime_name,omitempty"`
+	DestRuntimeName   string                 `protobuf:"bytes,15,opt,name=dest_runtime_name,json=destRuntimeName,proto3" json:"dest_runtime_name,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *OriginPullAck) Reset() {
@@ -643,6 +686,27 @@ func (x *OriginPullAck) GetSourceCellId() string {
 func (x *OriginPullAck) GetSourceClusterId() string {
 	if x != nil {
 		return x.SourceClusterId
+	}
+	return ""
+}
+
+func (x *OriginPullAck) GetSourceLeaseEpoch() int64 {
+	if x != nil {
+		return x.SourceLeaseEpoch
+	}
+	return 0
+}
+
+func (x *OriginPullAck) GetSourceRuntimeName() string {
+	if x != nil {
+		return x.SourceRuntimeName
+	}
+	return ""
+}
+
+func (x *OriginPullAck) GetDestRuntimeName() string {
+	if x != nil {
+		return x.DestRuntimeName
 	}
 	return ""
 }
@@ -1478,15 +1542,17 @@ func (*PeerMessage_CapacitySummary) isPeerMessage_Payload() {}
 // telemetry window (~5s). Receiving clusters write to Redis; any instance can
 // check during PUSH_REWRITE.
 type StreamLifecycleEvent struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	InternalName   string                 `protobuf:"bytes,1,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
-	TenantId       string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	ClusterId      string                 `protobuf:"bytes,3,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
-	IsLive         bool                   `protobuf:"varint,4,opt,name=is_live,json=isLive,proto3" json:"is_live,omitempty"`
-	TimestampUnix  int64                  `protobuf:"varint,5,opt,name=timestamp_unix,json=timestampUnix,proto3" json:"timestamp_unix,omitempty"`
-	SourceRevision int64                  `protobuf:"varint,6,opt,name=source_revision,json=sourceRevision,proto3" json:"source_revision,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	InternalName     string                 `protobuf:"bytes,1,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
+	TenantId         string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	ClusterId        string                 `protobuf:"bytes,3,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	IsLive           bool                   `protobuf:"varint,4,opt,name=is_live,json=isLive,proto3" json:"is_live,omitempty"`
+	TimestampUnix    int64                  `protobuf:"varint,5,opt,name=timestamp_unix,json=timestampUnix,proto3" json:"timestamp_unix,omitempty"`
+	SourceRevision   int64                  `protobuf:"varint,6,opt,name=source_revision,json=sourceRevision,proto3" json:"source_revision,omitempty"`
+	SourceLeaseEpoch int64                  `protobuf:"varint,7,opt,name=source_lease_epoch,json=sourceLeaseEpoch,proto3" json:"source_lease_epoch,omitempty"`
+	SourceGeneration string                 `protobuf:"bytes,8,opt,name=source_generation,json=sourceGeneration,proto3" json:"source_generation,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *StreamLifecycleEvent) Reset() {
@@ -1559,6 +1625,20 @@ func (x *StreamLifecycleEvent) GetSourceRevision() int64 {
 		return x.SourceRevision
 	}
 	return 0
+}
+
+func (x *StreamLifecycleEvent) GetSourceLeaseEpoch() int64 {
+	if x != nil {
+		return x.SourceLeaseEpoch
+	}
+	return 0
+}
+
+func (x *StreamLifecycleEvent) GetSourceGeneration() string {
+	if x != nil {
+		return x.SourceGeneration
+	}
+	return ""
 }
 
 // EdgeTelemetry fed the retired remote-edge scoring path. Nothing sends it and
@@ -2156,8 +2236,16 @@ type StreamAdvertisement struct {
 	// silently strands cross-cell serving. Required: an advertisement without it
 	// is dropped rather than filed under a guessed namespace.
 	ControlCellId string `protobuf:"bytes,9,opt,name=control_cell_id,json=controlCellId,proto3" json:"control_cell_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Retained on withdrawal so an older advertisement cannot restore a source.
+	SourceLeaseEpoch  int64  `protobuf:"varint,10,opt,name=source_lease_epoch,json=sourceLeaseEpoch,proto3" json:"source_lease_epoch,omitempty"`
+	SourceGeneration  string `protobuf:"bytes,11,opt,name=source_generation,json=sourceGeneration,proto3" json:"source_generation,omitempty"`
+	SourceRevision    int64  `protobuf:"varint,12,opt,name=source_revision,json=sourceRevision,proto3" json:"source_revision,omitempty"`
+	SourceNodeId      string `protobuf:"bytes,13,opt,name=source_node_id,json=sourceNodeId,proto3" json:"source_node_id,omitempty"`
+	SourceClusterId   string `protobuf:"bytes,14,opt,name=source_cluster_id,json=sourceClusterId,proto3" json:"source_cluster_id,omitempty"`
+	SourceRuntimeName string `protobuf:"bytes,15,opt,name=source_runtime_name,json=sourceRuntimeName,proto3" json:"source_runtime_name,omitempty"`
+	SourceActive      bool   `protobuf:"varint,16,opt,name=source_active,json=sourceActive,proto3" json:"source_active,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *StreamAdvertisement) Reset() {
@@ -2253,6 +2341,55 @@ func (x *StreamAdvertisement) GetControlCellId() string {
 	return ""
 }
 
+func (x *StreamAdvertisement) GetSourceLeaseEpoch() int64 {
+	if x != nil {
+		return x.SourceLeaseEpoch
+	}
+	return 0
+}
+
+func (x *StreamAdvertisement) GetSourceGeneration() string {
+	if x != nil {
+		return x.SourceGeneration
+	}
+	return ""
+}
+
+func (x *StreamAdvertisement) GetSourceRevision() int64 {
+	if x != nil {
+		return x.SourceRevision
+	}
+	return 0
+}
+
+func (x *StreamAdvertisement) GetSourceNodeId() string {
+	if x != nil {
+		return x.SourceNodeId
+	}
+	return ""
+}
+
+func (x *StreamAdvertisement) GetSourceClusterId() string {
+	if x != nil {
+		return x.SourceClusterId
+	}
+	return ""
+}
+
+func (x *StreamAdvertisement) GetSourceRuntimeName() string {
+	if x != nil {
+		return x.SourceRuntimeName
+	}
+	return ""
+}
+
+func (x *StreamAdvertisement) GetSourceActive() bool {
+	if x != nil {
+		return x.SourceActive
+	}
+	return false
+}
+
 // PeerStreamEdge describes a single edge node serving a specific stream.
 type PeerStreamEdge struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
@@ -2280,9 +2417,11 @@ type PeerStreamEdge struct {
 	DtscObservedAt   int64 `protobuf:"varint,16,opt,name=dtsc_observed_at,json=dtscObservedAt,proto3" json:"dtsc_observed_at,omitempty"`
 	SourceObservedAt int64 `protobuf:"varint,17,opt,name=source_observed_at,json=sourceObservedAt,proto3" json:"source_observed_at,omitempty"`
 	// Media-serving readiness. buffer_state remains the native Mist diagnostic.
-	Playable      bool `protobuf:"varint,18,opt,name=playable,proto3" json:"playable,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Playable          bool   `protobuf:"varint,18,opt,name=playable,proto3" json:"playable,omitempty"`
+	SourceLeaseEpoch  int64  `protobuf:"varint,19,opt,name=source_lease_epoch,json=sourceLeaseEpoch,proto3" json:"source_lease_epoch,omitempty"`
+	SourceRuntimeName string `protobuf:"bytes,20,opt,name=source_runtime_name,json=sourceRuntimeName,proto3" json:"source_runtime_name,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *PeerStreamEdge) Reset() {
@@ -2439,6 +2578,20 @@ func (x *PeerStreamEdge) GetPlayable() bool {
 		return x.Playable
 	}
 	return false
+}
+
+func (x *PeerStreamEdge) GetSourceLeaseEpoch() int64 {
+	if x != nil {
+		return x.SourceLeaseEpoch
+	}
+	return 0
+}
+
+func (x *PeerStreamEdge) GetSourceRuntimeName() string {
+	if x != nil {
+		return x.SourceRuntimeName
+	}
+	return ""
 }
 
 // PeerHeartbeat carried session liveness and capability exchange. Peer liveness
@@ -3573,7 +3726,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\n" +
 	"candidates\x18\x01 \x03(\v2!.foghorn_federation.EdgeCandidateR\n" +
 	"candidates\x12*\n" +
-	"\x11origin_cluster_id\x18\x02 \x01(\tR\x0foriginClusterId\"\xb4\x04\n" +
+	"\x11origin_cluster_id\x18\x02 \x01(\tR\x0foriginClusterId\"\x92\x05\n" +
 	"\rEdgeCandidate\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x19\n" +
 	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12\x19\n" +
@@ -3595,7 +3748,9 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x0fsource_revision\x18\x10 \x01(\x03R\x0esourceRevision\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x11 \x01(\tR\tclusterId\x12\x1a\n" +
-	"\bplayable\x18\x12 \x01(\bR\bplayable\"\xae\x03\n" +
+	"\bplayable\x18\x12 \x01(\bR\bplayable\x12,\n" +
+	"\x12source_lease_epoch\x18\x13 \x01(\x03R\x10sourceLeaseEpoch\x12.\n" +
+	"\x13source_runtime_name\x18\x14 \x01(\tR\x11sourceRuntimeName\"\xb8\x04\n" +
 	"\x16OriginPullNotification\x12\x1f\n" +
 	"\vstream_name\x18\x01 \x01(\tR\n" +
 	"streamName\x12$\n" +
@@ -3612,7 +3767,10 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"attempt_id\x18\t \x01(\tR\tattemptId\x12$\n" +
 	"\x0esource_cell_id\x18\n" +
 	" \x01(\tR\fsourceCellId\x12*\n" +
-	"\x11source_cluster_id\x18\v \x01(\tR\x0fsourceClusterId\"\xb2\x03\n" +
+	"\x11source_cluster_id\x18\v \x01(\tR\x0fsourceClusterId\x12,\n" +
+	"\x12source_lease_epoch\x18\f \x01(\x03R\x10sourceLeaseEpoch\x12.\n" +
+	"\x13source_runtime_name\x18\r \x01(\tR\x11sourceRuntimeName\x12*\n" +
+	"\x11dest_runtime_name\x18\x0e \x01(\tR\x0fdestRuntimeName\"\xbc\x04\n" +
 	"\rOriginPullAck\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x19\n" +
@@ -3628,7 +3786,10 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	" \x01(\tR\n" +
 	"destNodeId\x12$\n" +
 	"\x0esource_cell_id\x18\v \x01(\tR\fsourceCellId\x12*\n" +
-	"\x11source_cluster_id\x18\f \x01(\tR\x0fsourceClusterId\"\xed\x01\n" +
+	"\x11source_cluster_id\x18\f \x01(\tR\x0fsourceClusterId\x12,\n" +
+	"\x12source_lease_epoch\x18\r \x01(\x03R\x10sourceLeaseEpoch\x12.\n" +
+	"\x13source_runtime_name\x18\x0e \x01(\tR\x11sourceRuntimeName\x12*\n" +
+	"\x11dest_runtime_name\x18\x0f \x01(\tR\x0fdestRuntimeName\"\xed\x01\n" +
 	"\x16PrepareArtifactRequest\x12\x1f\n" +
 	"\vartifact_id\x18\x01 \x01(\tR\n" +
 	"artifactId\x12\x1b\n" +
@@ -3708,7 +3869,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"artifactAd\x12J\n" +
 	"\x0epeer_heartbeat\x18\b \x01(\v2!.foghorn_federation.PeerHeartbeatH\x00R\rpeerHeartbeat\x12P\n" +
 	"\x10capacity_summary\x18\t \x01(\v2#.foghorn_federation.CapacitySummaryH\x00R\x0fcapacitySummaryB\t\n" +
-	"\apayload\"\xe0\x01\n" +
+	"\apayload\"\xbb\x02\n" +
 	"\x14StreamLifecycleEvent\x12#\n" +
 	"\rinternal_name\x18\x01 \x01(\tR\finternalName\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1d\n" +
@@ -3716,7 +3877,9 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"cluster_id\x18\x03 \x01(\tR\tclusterId\x12\x17\n" +
 	"\ais_live\x18\x04 \x01(\bR\x06isLive\x12%\n" +
 	"\x0etimestamp_unix\x18\x05 \x01(\x03R\rtimestampUnix\x12'\n" +
-	"\x0fsource_revision\x18\x06 \x01(\x03R\x0esourceRevision\"\xb1\x02\n" +
+	"\x0fsource_revision\x18\x06 \x01(\x03R\x0esourceRevision\x12,\n" +
+	"\x12source_lease_epoch\x18\a \x01(\x03R\x10sourceLeaseEpoch\x12+\n" +
+	"\x11source_generation\x18\b \x01(\tR\x10sourceGeneration\"\xb1\x02\n" +
 	"\rEdgeTelemetry\x12\x1f\n" +
 	"\vstream_name\x18\x01 \x01(\tR\n" +
 	"streamName\x12\x17\n" +
@@ -3771,7 +3934,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\ageo_lat\x18\b \x01(\x01R\x06geoLat\x12\x17\n" +
 	"\ageo_lon\x18\t \x01(\x01R\x06geoLon\x12\x1b\n" +
 	"\ttenant_id\x18\n" +
-	" \x01(\tR\btenantId\"\xf0\x02\n" +
+	" \x01(\tR\btenantId\"\x9b\x05\n" +
 	"\x13StreamAdvertisement\x12#\n" +
 	"\rinternal_name\x18\x01 \x01(\tR\finternalName\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1f\n" +
@@ -3782,7 +3945,15 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x05edges\x18\x06 \x03(\v2\".foghorn_federation.PeerStreamEdgeR\x05edges\x12\x1c\n" +
 	"\ttimestamp\x18\a \x01(\x03R\ttimestamp\x121\n" +
 	"\x15dvr_recording_node_id\x18\b \x01(\tR\x12dvrRecordingNodeId\x12&\n" +
-	"\x0fcontrol_cell_id\x18\t \x01(\tR\rcontrolCellId\"\xd5\x04\n" +
+	"\x0fcontrol_cell_id\x18\t \x01(\tR\rcontrolCellId\x12,\n" +
+	"\x12source_lease_epoch\x18\n" +
+	" \x01(\x03R\x10sourceLeaseEpoch\x12+\n" +
+	"\x11source_generation\x18\v \x01(\tR\x10sourceGeneration\x12'\n" +
+	"\x0fsource_revision\x18\f \x01(\x03R\x0esourceRevision\x12$\n" +
+	"\x0esource_node_id\x18\r \x01(\tR\fsourceNodeId\x12*\n" +
+	"\x11source_cluster_id\x18\x0e \x01(\tR\x0fsourceClusterId\x12.\n" +
+	"\x13source_runtime_name\x18\x0f \x01(\tR\x11sourceRuntimeName\x12#\n" +
+	"\rsource_active\x18\x10 \x01(\bR\fsourceActive\"\xb3\x05\n" +
 	"\x0ePeerStreamEdge\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x19\n" +
 	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12\x19\n" +
@@ -3804,7 +3975,9 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"cluster_id\x18\x0f \x01(\tR\tclusterId\x12(\n" +
 	"\x10dtsc_observed_at\x18\x10 \x01(\x03R\x0edtscObservedAt\x12,\n" +
 	"\x12source_observed_at\x18\x11 \x01(\x03R\x10sourceObservedAt\x12\x1a\n" +
-	"\bplayable\x18\x12 \x01(\bR\bplayable\"\x89\x03\n" +
+	"\bplayable\x18\x12 \x01(\bR\bplayable\x12,\n" +
+	"\x12source_lease_epoch\x18\x13 \x01(\x03R\x10sourceLeaseEpoch\x12.\n" +
+	"\x13source_runtime_name\x18\x14 \x01(\tR\x11sourceRuntimeName\"\x89\x03\n" +
 	"\rPeerHeartbeat\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12!\n" +
 	"\fstream_count\x18\x02 \x01(\rR\vstreamCount\x12,\n" +

@@ -6,6 +6,7 @@ WHERE a.artifact_type = 'dvr'
   AND a.dvr_start_dispatch IS NOT NULL
   AND a.updated_at < NOW() - sqlc.arg(stale_seconds)::bigint * INTERVAL '1 second'
   AND ((a.status IN ('requested', 'starting') AND a.dvr_start_dispatch->>'state' = 'pending')
+       OR (a.status = 'recording' AND a.dvr_start_dispatch->>'state' = 'source_handoff_pending')
        OR a.dvr_start_dispatch->>'state' = 'stop_pending')
 ORDER BY a.updated_at
 LIMIT sqlc.arg(batch_limit);

@@ -831,6 +831,18 @@ verify-mist-protocols:
 verify-mist-push-connector:
 	@$(MAKE) --no-print-directory test-pkg GO_TAG_FLAGS=-tags=media_verify GO_TEST_PACKAGES=./mist GO_TEST_FLAGS='-run TestPushRewriteConnector_RealMist -v -timeout 180s'
 
+.PHONY: build-mist-publisher-contract verify-mist-publisher-handoff
+build-mist-publisher-contract:
+	@test -n "$(MIST_CONTRACT_BASE_IMAGE)" -a -n "$(MIST_CONTRACT_IMAGE)" || { echo 'Set MIST_CONTRACT_BASE_IMAGE to the exact staged edge image and MIST_CONTRACT_IMAGE to an owned test tag'; exit 1; }
+	@docker build --build-arg MIST_CONTRACT_BASE_IMAGE="$(MIST_CONTRACT_BASE_IMAGE)" -f pkg/mist/testdata/Dockerfile.publisher-contract -t "$(MIST_CONTRACT_IMAGE)" pkg/mist/testdata
+
+verify-mist-publisher-handoff:
+	@$(MAKE) --no-print-directory test-pkg GO_TAG_FLAGS=-tags=media_verify GO_TEST_PACKAGES=./mist GO_TEST_FLAGS='-run TestPublisherRuntimeIsolation_RealMist -v -count=1 -timeout 240s'
+
+.PHONY: verify-mist-recording-rollover
+verify-mist-recording-rollover:
+	@$(MAKE) --no-print-directory test-pkg GO_TAG_FLAGS=-tags=media_verify GO_TEST_PACKAGES=./mist GO_TEST_FLAGS='-run TestRecordingSourceRolloverPrunedPlaylist_RealMist -v -timeout 180s'
+
 verify-mist-finite-source:
 	@$(MAKE) --no-print-directory test-pkg GO_TAG_FLAGS=-tags=media_verify GO_TEST_PACKAGES=./mist GO_TEST_FLAGS='-run TestFiniteLiveSource_RealMist -v -timeout 180s'
 
@@ -1528,6 +1540,7 @@ verify-schema-migrations-core: verify-foghorn-test-selection test-purser-free-fa
 	@$(CONTRACT_GO_TEST) api_analytics_query postgres/periscope-metering -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestMeteringStateTransitions_RealPG' -count=1 -timeout 600s ./internal/database/meteringdb/
 	@$(CONTRACT_GO_TEST) pkg postgres/domain-event-outbox -tags schema_verify -run '$(DOMAIN_EVENT_OUTBOX_REALPG_TESTS)' -count=1 -timeout 600s ./events/outbox/
 	@$(CONTRACT_GO_TEST) pkg postgres/session-lock -tags schema_verify -run '$(PKG_DATABASE_REALPG_TESTS)' -count=1 -timeout 600s ./database/
+	@$(MAKE) --no-print-directory verify-datamigrate-schema
 	@$(CONTRACT_GO_TEST) api_webhooks postgres/bosun -tags schema_verify -run '$(BOSUN_REALPG_TESTS)' -count=1 -timeout 900s ./internal/...
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-bootstrap -tags schema_verify -run 'TestBootstrapAccountsRepository_RealPG|TestBootstrapPullStreamsRepository_RealPG|TestBootstrapMistNativeRepository_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-query-catalog -tags schema_verify -run '$(COMMODORE_QUERY_CATALOG_REALPG_TESTS)' -count=1 -timeout 600s ./internal/database/commodoredb/
@@ -2071,6 +2084,7 @@ verify-session-lock-engines:
 
 verify-yugabyte-session-lock-engine: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) pkg yugabyte/session-lock -tags schema_verify -run '^($(PKG_DATABASE_REALYB_TESTS))$$' -count=1 -timeout 600s ./database/
+	@$(MAKE) --no-print-directory verify-datamigrate-schema-yugabyte
 
 verify-yugabyte-bosun-contracts: verify-yugabyte-shared-fixture verify-yugabyte-domain-outbox-engine
 	@$(CONTRACT_GO_TEST) api_webhooks yugabyte/bosun-ledger -tags schema_verify -run '^($(BOSUN_REALYB_TESTS))$$' -count=1 -timeout 1200s ./internal/integration/
@@ -2446,3 +2460,14 @@ test-tenant-alias-playback:
 .PHONY: verify-hosted-alias-ingress
 verify-hosted-alias-ingress:
 	@./scripts/test-hosted-alias-ingress.sh
+
+.PHONY: verify-datamigrate-schema
+verify-datamigrate-schema:
+	@$(CONTRACT_GO_TEST) pkg postgres/data-migration-schema -tags schema_verify -run 'TestConcurrentLedgerInitialization_RealPG' -count=1 -timeout 120s ./datamigrate/
+
+.PHONY: verify-datamigrate-schema-engines verify-datamigrate-schema-yugabyte
+verify-datamigrate-schema-engines: verify-datamigrate-schema
+	@$(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory verify-datamigrate-schema-yugabyte
+
+verify-datamigrate-schema-yugabyte: verify-yugabyte-shared-fixture
+	@$(CONTRACT_GO_TEST) pkg yugabyte/data-migration-schema -tags schema_verify -run 'TestConcurrentLedgerInitialization_RealYugabyte' -count=1 -timeout 120s ./datamigrate/

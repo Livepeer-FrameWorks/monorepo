@@ -1381,8 +1381,11 @@ type PublisherLeaseResponse struct {
 	// order. A stale exact-pair claim takes no lease; these let the caller verify
 	// current policy and credentials before a bounded version exchange.
 	SignedAuthorities [][]byte `protobuf:"bytes,5,rep,name=signed_authorities,json=signedAuthorities,proto3" json:"signed_authorities,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Monotonic per-stream ownership term from the global lease row. Replaying
+	// or renewing the same execution retains it; a successor advances it.
+	LeaseEpoch    int64 `protobuf:"varint,6,opt,name=lease_epoch,json=leaseEpoch,proto3" json:"lease_epoch,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PublisherLeaseResponse) Reset() {
@@ -1448,6 +1451,13 @@ func (x *PublisherLeaseResponse) GetSignedAuthorities() [][]byte {
 		return x.SignedAuthorities
 	}
 	return nil
+}
+
+func (x *PublisherLeaseResponse) GetLeaseEpoch() int64 {
+	if x != nil {
+		return x.LeaseEpoch
+	}
+	return 0
 }
 
 type ValidateStreamKeyRequest struct {
@@ -1551,13 +1561,16 @@ type ValidateStreamKeyResponse struct {
 	// client-cached admission served during an outage, which took no claim at all.
 	ClaimAcquired bool `protobuf:"varint,32,opt,name=claim_acquired,json=claimAcquired,proto3" json:"claim_acquired,omitempty"`
 	// Confirms that node/cell execution abandonment fenced this claiming call.
-	PublisherExecutionFenced bool   `protobuf:"varint,38,opt,name=publisher_execution_fenced,json=publisherExecutionFenced,proto3" json:"publisher_execution_fenced,omitempty"`
-	UserId                   string `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                                        // json:"user_id,omitempty"
-	TenantId                 string `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                                  // json:"tenant_id,omitempty"
-	InternalName             string `protobuf:"bytes,4,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                      // json:"internal_name,omitempty"
-	Error                    string `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`                                                        // json:"error,omitempty"
-	IsRecordingEnabled       bool   `protobuf:"varint,6,opt,name=is_recording_enabled,json=isRecordingEnabled,proto3" json:"is_recording_enabled,omitempty"` // json:"is_recording_enabled,omitempty"
-	StreamId                 string `protobuf:"bytes,7,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                  // Public stream ID (UUID)
+	PublisherExecutionFenced bool `protobuf:"varint,38,opt,name=publisher_execution_fenced,json=publisherExecutionFenced,proto3" json:"publisher_execution_fenced,omitempty"`
+	// Present on a globally acquired publisher lease; zero retains legacy or
+	// signed-outage admission without claiming a globally ordered term.
+	PublisherLeaseEpoch int64  `protobuf:"varint,39,opt,name=publisher_lease_epoch,json=publisherLeaseEpoch,proto3" json:"publisher_lease_epoch,omitempty"`
+	UserId              string `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                                        // json:"user_id,omitempty"
+	TenantId            string `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                                  // json:"tenant_id,omitempty"
+	InternalName        string `protobuf:"bytes,4,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                      // json:"internal_name,omitempty"
+	Error               string `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`                                                        // json:"error,omitempty"
+	IsRecordingEnabled  bool   `protobuf:"varint,6,opt,name=is_recording_enabled,json=isRecordingEnabled,proto3" json:"is_recording_enabled,omitempty"` // json:"is_recording_enabled,omitempty"
+	StreamId            string `protobuf:"bytes,7,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                  // Public stream ID (UUID)
 	// rejection_reason is set when Valid=false. Foghorn admission consults
 	// this for structured logging and metrics labels; the `error` field
 	// remains the human-readable detail.
@@ -1675,6 +1688,13 @@ func (x *ValidateStreamKeyResponse) GetPublisherExecutionFenced() bool {
 		return x.PublisherExecutionFenced
 	}
 	return false
+}
+
+func (x *ValidateStreamKeyResponse) GetPublisherLeaseEpoch() int64 {
+	if x != nil {
+		return x.PublisherLeaseEpoch
+	}
+	return 0
 }
 
 func (x *ValidateStreamKeyResponse) GetUserId() string {
@@ -2937,10 +2957,11 @@ type ActiveIngestStream struct {
 	// recorded owner. Outage admission uses the separate re-assertion contract.
 	RequireExistingOwner bool `protobuf:"varint,5,opt,name=require_existing_owner,json=requireExistingOwner,proto3" json:"require_existing_owner,omitempty"`
 	// Present together on execution-aware renewals, including outage adoption.
-	NodeId        string `protobuf:"bytes,6,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	ControlCellId string `protobuf:"bytes,7,opt,name=control_cell_id,json=controlCellId,proto3" json:"control_cell_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	NodeId              string `protobuf:"bytes,6,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	ControlCellId       string `protobuf:"bytes,7,opt,name=control_cell_id,json=controlCellId,proto3" json:"control_cell_id,omitempty"`
+	PublisherLeaseEpoch int64  `protobuf:"varint,8,opt,name=publisher_lease_epoch,json=publisherLeaseEpoch,proto3" json:"publisher_lease_epoch,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *ActiveIngestStream) Reset() {
@@ -3020,6 +3041,13 @@ func (x *ActiveIngestStream) GetControlCellId() string {
 		return x.ControlCellId
 	}
 	return ""
+}
+
+func (x *ActiveIngestStream) GetPublisherLeaseEpoch() int64 {
+	if x != nil {
+		return x.PublisherLeaseEpoch
+	}
+	return 0
 }
 
 type SyncActiveIngestPlacementRequest struct {
@@ -17854,14 +17882,16 @@ const file_commodore_proto_rawDesc = "" +
 	"\x1cAbandonPublisherLeaseRequest\x12&\n" +
 	"\x0fcontrol_cell_id\x18\x01 \x01(\tR\rcontrolCellId\x12\x17\n" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12'\n" +
-	"\x0fexecution_token\x18\x03 \x01(\tR\x0eexecutionToken\"\x88\x02\n" +
+	"\x0fexecution_token\x18\x03 \x01(\tR\x0eexecutionToken\"\xa9\x02\n" +
 	"\x16PublisherLeaseResponse\x12:\n" +
 	"\aoutcome\x18\x01 \x01(\x0e2 .commodore.PublisherLeaseOutcomeR\aoutcome\x129\n" +
 	"\n" +
 	"expires_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x120\n" +
 	"\x14held_execution_token\x18\x03 \x01(\tR\x12heldExecutionToken\x12\x16\n" +
 	"\x06reason\x18\x04 \x01(\tR\x06reason\x12-\n" +
-	"\x12signed_authorities\x18\x05 \x03(\fR\x11signedAuthorities\"\xba\x01\n" +
+	"\x12signed_authorities\x18\x05 \x03(\fR\x11signedAuthorities\x12\x1f\n" +
+	"\vlease_epoch\x18\x06 \x01(\x03R\n" +
+	"leaseEpoch\"\xba\x01\n" +
 	"\x18ValidateStreamKeyRequest\x12\x1d\n" +
 	"\n" +
 	"stream_key\x18\x01 \x01(\tR\tstreamKey\x12\x1d\n" +
@@ -17870,11 +17900,12 @@ const file_commodore_proto_rawDesc = "" +
 	"\vclaim_token\x18\x03 \x01(\tR\n" +
 	"claimToken\x12\x17\n" +
 	"\anode_id\x18\x04 \x01(\tR\x06nodeId\x12&\n" +
-	"\x0fcontrol_cell_id\x18\x05 \x01(\tR\rcontrolCellId\"\xd8\v\n" +
+	"\x0fcontrol_cell_id\x18\x05 \x01(\tR\rcontrolCellId\"\x8c\f\n" +
 	"\x19ValidateStreamKeyResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12%\n" +
 	"\x0eclaim_acquired\x18  \x01(\bR\rclaimAcquired\x12<\n" +
-	"\x1apublisher_execution_fenced\x18& \x01(\bR\x18publisherExecutionFenced\x12\x17\n" +
+	"\x1apublisher_execution_fenced\x18& \x01(\bR\x18publisherExecutionFenced\x122\n" +
+	"\x15publisher_lease_epoch\x18' \x01(\x03R\x13publisherLeaseEpoch\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1b\n" +
 	"\ttenant_id\x18\x03 \x01(\tR\btenantId\x12#\n" +
 	"\rinternal_name\x18\x04 \x01(\tR\finternalName\x12\x14\n" +
@@ -18008,7 +18039,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\x13expected_cluster_id\x18\x02 \x01(\tR\x11expectedClusterId\x12\x1b\n" +
 	"\ttenant_id\x18\x03 \x01(\tR\btenantId\"<\n" +
 	" ClearStreamActiveClusterResponse\x12\x18\n" +
-	"\acleared\x18\x01 \x01(\bR\acleared\"\x8d\x02\n" +
+	"\acleared\x18\x01 \x01(\bR\acleared\"\xc1\x02\n" +
 	"\x12ActiveIngestStream\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12#\n" +
 	"\rinternal_name\x18\x02 \x01(\tR\finternalName\x12\x1d\n" +
@@ -18018,7 +18049,8 @@ const file_commodore_proto_rawDesc = "" +
 	"claimToken\x124\n" +
 	"\x16require_existing_owner\x18\x05 \x01(\bR\x14requireExistingOwner\x12\x17\n" +
 	"\anode_id\x18\x06 \x01(\tR\x06nodeId\x12&\n" +
-	"\x0fcontrol_cell_id\x18\a \x01(\tR\rcontrolCellId\"\xaf\x01\n" +
+	"\x0fcontrol_cell_id\x18\a \x01(\tR\rcontrolCellId\x122\n" +
+	"\x15publisher_lease_epoch\x18\b \x01(\x03R\x13publisherLeaseEpoch\"\xaf\x01\n" +
 	" SyncActiveIngestPlacementRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x123\n" +

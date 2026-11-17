@@ -1403,7 +1403,7 @@ func HandlePushEnd(c *gin.Context) {
 	// Signal local processing handler if this is a processing+ push
 	if pushEnd := mistTrigger.GetPushEnd(); pushEnd != nil {
 		if !strings.HasPrefix(pushEnd.GetStreamName(), "processing+") {
-			control.NoteDVRWriterEnded(pushEnd.GetStreamName(), pushEnd.GetTargetUriBefore(), pushEnd.GetTargetUriAfter())
+			control.NoteDVRWriterEndedAt(pushEnd.GetStreamName(), time.UnixMilli(mistTrigger.GetTriggerUnixMillis()), pushEnd.GetTargetUriBefore(), pushEnd.GetTargetUriAfter())
 		}
 		if strings.HasPrefix(pushEnd.GetStreamName(), "processing+") {
 			SignalProcessingPushEnd(ProcessingPushEndEvent{
@@ -2019,7 +2019,7 @@ func HandleRecordingEnd(c *gin.Context) {
 		if strings.HasPrefix(rec.GetStreamName(), "processing+") {
 			SignalProcessingRecordingEnd(processingRecordingEndEvent(rec))
 		} else {
-			control.NoteDVRWriterEnded(rec.GetStreamName(), rec.GetFilePath())
+			control.NoteDVRWriterEndedAt(rec.GetStreamName(), time.UnixMilli(mistTrigger.GetTriggerUnixMillis()), rec.GetFilePath())
 		}
 	}
 

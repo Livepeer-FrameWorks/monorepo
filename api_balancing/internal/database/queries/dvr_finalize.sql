@@ -4,7 +4,8 @@
 -- is recording.started, so revision > 0 means capture was confirmed and
 -- published.
 SELECT COALESCE(status, '')::text AS status, revision,
-       COALESCE(stream_id::text, '')::text AS stream_id
+       COALESCE(stream_id::text, '')::text AS stream_id,
+       COALESCE(dvr_start_dispatch->>'source_runtime_name', '')::text AS source_runtime_name
 FROM foghorn.artifacts
 WHERE artifact_hash = sqlc.arg(artifact_hash) AND artifact_type = 'dvr'
 FOR UPDATE;
@@ -17,6 +18,13 @@ WHERE artifact_hash = sqlc.arg(artifact_hash) AND artifact_type = 'dvr'
        OR (status = 'finalizing' AND updated_at < NOW() - (sqlc.arg(stale_seconds)::double precision * INTERVAL '1 second')))
 RETURNING status, tenant_id::text AS tenant_id,
           COALESCE(FLOOR(EXTRACT(EPOCH FROM ended_at) * 1000), 0)::bigint AS ended_at_ms;
+
+-- name: RecordDVRSourceHandoffInterrupted :exec
+UPDATE foghorn.artifacts
+SET error_message = 'recording_source_handoff_interrupted'
+WHERE artifact_hash = sqlc.arg(artifact_hash)
+  AND tenant_id = sqlc.arg(tenant_id)::uuid
+  AND artifact_type = 'dvr' AND status IN ('requested','starting','recording','stopping');
 
 -- name: CompleteDVRFinalization :execrows
 -- Settles the parent's durable state from the segment counts: any uploaded
@@ -44,7 +52,7 @@ SET status = sqlc.arg(final_status)::text,
     dvr_start_dispatch = CASE
         WHEN sqlc.arg(retain_stop_obligation)::boolean THEN dvr_start_dispatch
         WHEN COALESCE(dvr_start_dispatch->>'node_id', '') <> ''
-            THEN jsonb_build_object('node_id', dvr_start_dispatch->>'node_id')
+            THEN jsonb_build_object('node_id', dvr_start_dispatch->>'node_id', 'source_runtime_name', dvr_start_dispatch->>'source_runtime_name')
         ELSE NULL END
 WHERE artifact_hash = sqlc.arg(artifact_hash) AND artifact_type = 'dvr'
   AND status = 'finalizing' AND tenant_id::text = sqlc.arg(tenant_id);
@@ -75,7 +83,7 @@ SET status = 'failed', error_message = sqlc.arg(error_message)::text,
     dvr_start_dispatch = CASE
         WHEN sqlc.arg(retain_stop_obligation)::boolean THEN dvr_start_dispatch
         WHEN COALESCE(dvr_start_dispatch->>'node_id', '') <> ''
-            THEN jsonb_build_object('node_id', dvr_start_dispatch->>'node_id')
+            THEN jsonb_build_object('node_id', dvr_start_dispatch->>'node_id', 'source_runtime_name', dvr_start_dispatch->>'source_runtime_name')
         ELSE NULL END
 WHERE artifact_hash = sqlc.arg(artifact_hash) AND artifact_type = 'dvr'
   AND status = 'finalizing' AND tenant_id::text = sqlc.arg(tenant_id);
@@ -88,7 +96,7 @@ WHERE artifact_hash = $1 AND artifact_type = 'dvr';
 UPDATE foghorn.artifacts
 SET dvr_start_dispatch = CASE
         WHEN COALESCE(dvr_start_dispatch->>'node_id', '') <> ''
-            THEN jsonb_build_object('node_id', dvr_start_dispatch->>'node_id')
+            THEN jsonb_build_object('node_id', dvr_start_dispatch->>'node_id', 'source_runtime_name', dvr_start_dispatch->>'source_runtime_name')
         ELSE NULL END,
     updated_at = NOW()
 WHERE artifact_hash = $1 AND tenant_id::text = $2 AND artifact_type = 'dvr'

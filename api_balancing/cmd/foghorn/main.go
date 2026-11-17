@@ -2334,12 +2334,13 @@ func main() {
 			out := make([]jobs.LiveIngest, 0, len(live))
 			for _, s := range live {
 				out = append(out, jobs.LiveIngest{
-					TenantID:         s.TenantID,
-					InternalName:     s.InternalName,
-					ClusterID:        s.ClusterID,
-					ClaimToken:       s.ClaimToken,
-					StrictLeaseOwner: s.StrictLeaseOwner,
-					NodeID:           s.OwnerNodeID, ControlCellID: controlCellID,
+					TenantID:            s.TenantID,
+					InternalName:        s.InternalName,
+					ClusterID:           s.ClusterID,
+					ClaimToken:          s.ClaimToken,
+					StrictLeaseOwner:    s.StrictLeaseOwner,
+					PublisherLeaseEpoch: s.PublisherLeaseEpoch,
+					NodeID:              s.OwnerNodeID, ControlCellID: controlCellID,
 				})
 			}
 			return out, nil
@@ -2349,9 +2350,14 @@ func main() {
 			if err != nil || !retired {
 				return err
 			}
+			binding, runtimeErr := control.PublisherRuntimeBindingForClaim(ctx, refused.GetTenantId(), refused.GetInternalName(), nodeID, refused.GetClaimToken())
+			if runtimeErr != nil {
+				return runtimeErr
+			}
 			return control.SendDrainStream(ctx, nodeID, &ipcpb.DrainStreamRequest{
-				RuntimeName: control.RuntimeNameForStream(control.StreamRegistryInstance, refused.GetInternalName()),
-				Reason:      "placement_claim_lost",
+				RuntimeName:                binding.RuntimeName,
+				Reason:                     "placement_claim_lost",
+				PriorOwnerSourceGeneration: binding.Generation,
 			})
 		},
 	}

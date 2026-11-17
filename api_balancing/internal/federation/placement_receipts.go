@@ -36,13 +36,16 @@ var (
 // PlacementPullBinding authorizes a destination connection to use a physical
 // pull. Fresh authorization can reuse the pull without relabeling its attempt.
 type PlacementPullBinding struct {
-	AttemptID        string `json:"attempt_id"`
-	SourceCellID     string `json:"source_cell_id"`
-	SourceClusterID  string `json:"source_cluster_id"`
-	SourceNodeID     string `json:"source_node_id"`
-	SourceGeneration string `json:"source_generation"`
-	SourceRevision   int64  `json:"source_revision"`
-	DestinationFence int64  `json:"destination_fence"`
+	AttemptID         string `json:"attempt_id"`
+	SourceCellID      string `json:"source_cell_id"`
+	SourceClusterID   string `json:"source_cluster_id"`
+	SourceNodeID      string `json:"source_node_id"`
+	SourceGeneration  string `json:"source_generation"`
+	SourceLeaseEpoch  int64  `json:"source_lease_epoch,omitempty"`
+	SourceRuntimeName string `json:"source_runtime_name,omitempty"`
+	DestRuntimeName   string `json:"dest_runtime_name,omitempty"`
+	SourceRevision    int64  `json:"source_revision"`
+	DestinationFence  int64  `json:"destination_fence"`
 }
 
 type PlacementReceipt struct {
@@ -398,7 +401,7 @@ func (store *PlacementReceiptStore) now() time.Time {
 
 func validPlacementPullBinding(req *placementpb.PreparePlacementRequest, pull *PlacementPullBinding) bool {
 	if req == nil || req.Query == nil || req.Query.Verb != placementpb.Verb_VERB_SERVE || pull == nil ||
-		pull.SourceGeneration != req.Query.SourceGeneration || !validPullGeneration(pull.SourceGeneration, pull.SourceRevision) {
+		pull.SourceGeneration != req.Query.SourceGeneration || !validPullGeneration(pull.SourceGeneration, pull.SourceRevision) || pull.SourceLeaseEpoch < 0 {
 		return false
 	}
 	if !canonicalPullAttempt(pull.AttemptID) || pull.DestinationFence <= 0 {

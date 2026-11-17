@@ -143,6 +143,9 @@ type InboundPull struct {
 	SourceMediaClusterID string
 	SourceNodeID         string
 	SourceGeneration     string
+	SourceLeaseEpoch     int64
+	SourceRuntimeName    string
+	DestRuntimeName      string
 	SourceRevision       int64
 	DestClusterID        string
 	DestNodeID           string
@@ -278,8 +281,14 @@ func (r *StreamRegistry) recordInboundPull(ctx context.Context, internalName str
 	if (pull.SourceGeneration != "") != (pull.SourceRevision > 0) || pull.SourceRevision < 0 {
 		return InboundPull{}, ErrReplicationConflict
 	}
+	if pull.SourceLeaseEpoch < 0 || (pull.SourceLeaseEpoch > 0 && (pull.SourceGeneration == "" || allowEquivalentSourceReplacement)) {
+		return InboundPull{}, ErrReplicationConflict
+	}
 	if pull.AttemptID == "" {
 		pull.AttemptID = uuid.NewString()
+	}
+	if !ValidPublisherPullRuntimes(internalName, pull.SourceGeneration, pull.AttemptID, pull.SourceRuntimeName, pull.DestRuntimeName, pull.SourceLeaseEpoch) {
+		return InboundPull{}, ErrReplicationConflict
 	}
 	if pull.CreatedAt.IsZero() {
 		pull.CreatedAt = time.Now()
@@ -290,6 +299,20 @@ func (r *StreamRegistry) recordInboundPull(ctx context.Context, internalName str
 		if exists {
 			if (current.TenantID != "" && current.TenantID != pull.TenantID) || (current.DestClusterID != "" && current.DestClusterID != pull.DestClusterID) {
 				return InboundPull{}, ErrReplicationConflict
+			}
+			if current.SourceLeaseEpoch > 0 || pull.SourceLeaseEpoch > 0 {
+				if pull.SourceLeaseEpoch < current.SourceLeaseEpoch {
+					return InboundPull{}, ErrReplicationConflict
+				}
+				if pull.SourceLeaseEpoch > current.SourceLeaseEpoch {
+					if pull.AttemptID == current.AttemptID {
+						return InboundPull{}, ErrReplicationConflict
+					}
+					return pull, nil
+				}
+				if current.SourceClusterID != pull.SourceClusterID || current.SourceNodeID != pull.SourceNodeID || current.SourceGeneration != pull.SourceGeneration {
+					return InboundPull{}, ErrReplicationConflict
+				}
 			}
 			// Revocation retains the source fence. A delayed acceptance cannot
 			// restore an older generation or reopen the cleared attempt.
@@ -322,6 +345,7 @@ func (r *StreamRegistry) recordInboundPull(ctx context.Context, internalName str
 			// and a secret rotation changes outright; comparing the credentialed
 			// form would wedge an otherwise identical pull as a conflict.
 			if current.SourceNodeID != pull.SourceNodeID || current.SourceGeneration != pull.SourceGeneration || current.SourceRevision != pull.SourceRevision ||
+				current.SourceLeaseEpoch != pull.SourceLeaseEpoch || current.SourceRuntimeName != pull.SourceRuntimeName || current.DestRuntimeName != pull.DestRuntimeName ||
 				SourcePullBaseURL(current.DTSCURL) != SourcePullBaseURL(pull.DTSCURL) {
 				return InboundPull{}, ErrReplicationConflict
 			}

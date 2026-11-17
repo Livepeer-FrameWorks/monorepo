@@ -4,6 +4,7 @@ package control
 
 import (
 	"database/sql"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"testing"
 	"time"
 )
@@ -38,17 +39,17 @@ func TestDVRStartTimeAnchorsChapters_RealPG(t *testing.T) {
 		{tenant, "replica", start.Unix()},
 		{tenant, "owner", 0},
 	} {
-		if err := recordDVRStartTime(t.Context(), hash, tc.tenant, tc.node, tc.start); err != nil {
+		if err := recordDVRStartTime(t.Context(), foghorndb.New(db), hash, tc.tenant, tc.node, tc.start); err != nil {
 			t.Fatal(err)
 		}
 		if readStart().Valid {
 			t.Fatal("untrusted or absent start time was persisted")
 		}
 	}
-	if err := recordDVRStartTime(t.Context(), hash, tenant, "owner", start.Unix()); err != nil {
+	if err := recordDVRStartTime(t.Context(), foghorndb.New(db), hash, tenant, "owner", start.Unix()); err != nil {
 		t.Fatal(err)
 	}
-	if err := recordDVRStartTime(t.Context(), hash, tenant, "owner", start.Add(time.Hour).Unix()); err != nil {
+	if err := recordDVRStartTime(t.Context(), foghorndb.New(db), hash, tenant, "owner", start.Add(time.Hour).Unix()); err != nil {
 		t.Fatal(err)
 	}
 	if got := readStart(); !got.Valid || !got.Time.Equal(start) {
@@ -101,7 +102,7 @@ func TestDVRStartTimeAnchorsChapters_RealPG(t *testing.T) {
 		if _, err := conn.ExecContext(t.Context(), `UPDATE foghorn.artifacts SET status=$1, started_at=NULL WHERE tenant_id=$2 AND artifact_hash=$3`, status, tenant, hash); err != nil {
 			t.Fatal(err)
 		}
-		if err := recordDVRStartTime(t.Context(), hash, tenant, "owner", start.Unix()); err != nil {
+		if err := recordDVRStartTime(t.Context(), foghorndb.New(db), hash, tenant, "owner", start.Unix()); err != nil {
 			t.Fatal(err)
 		}
 		want := status == "completed" || status == "completed_partial"

@@ -116,7 +116,7 @@ func releasePublisherLeases(ctx context.Context, client PublisherLeaseReleaser, 
 	batch := make([]*pb.ActiveIngestStream, 0, len(releases))
 	for _, release := range releases {
 		if release.IngestClusterID.String != "" {
-			batch = append(batch, &pb.ActiveIngestStream{TenantId: release.TenantID, InternalName: release.StreamInternalName, ClusterId: release.IngestClusterID.String, ClaimToken: release.StartTriggerUuid, NodeId: release.NodeID, ControlCellId: localControlCellID})
+			batch = append(batch, &pb.ActiveIngestStream{TenantId: release.TenantID, InternalName: release.StreamInternalName, ClusterId: release.IngestClusterID.String, ClaimToken: release.StartTriggerUuid, NodeId: release.NodeID, ControlCellId: localControlCellID, PublisherLeaseEpoch: release.PublisherLeaseEpoch})
 		}
 	}
 	acknowledged := len(batch) == 0

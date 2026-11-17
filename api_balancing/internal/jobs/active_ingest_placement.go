@@ -86,6 +86,7 @@ type LiveIngest struct {
 	// stamped with the live session rather than left ownerless.
 	ClaimToken            string
 	StrictLeaseOwner      bool
+	PublisherLeaseEpoch   int64
 	NodeID, ControlCellID string
 }
 
@@ -226,6 +227,7 @@ func (j *ActiveIngestPlacementJob) renew() {
 			ClaimToken:           live.ClaimToken,
 			ClusterId:            live.ClusterID,
 			RequireExistingOwner: live.StrictLeaseOwner,
+			PublisherLeaseEpoch:  live.PublisherLeaseEpoch,
 			NodeId:               live.NodeID, ControlCellId: live.ControlCellID,
 		})
 	}

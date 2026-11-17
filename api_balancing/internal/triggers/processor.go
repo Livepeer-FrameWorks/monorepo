@@ -2078,6 +2078,10 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY, "stream is not authorized for outage ingest on this cluster")
 	}
 
+	if !usedLocalAdmission && streamValidation.GetValid() && streamValidation.GetPublisherExecutionFenced() && streamValidation.GetPublisherLeaseEpoch() > 0 {
+		publishedLease = true
+	}
+
 	// Compatibility admissions return their own newly acquired lease on denial.
 	// Atomic admissions settle through the edge WAL and durable recovery, so an
 	// unknown acquisition or confirmation cannot delay the edge response.
@@ -2181,8 +2185,10 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_FREE_TIER_EXHAUSTED, reason)
 	}
 
-	// Cross-cluster dedup: reject if stream is already live on a peer cluster
-	if p.peerNotifier != nil {
+	// Legacy admissions use the peer hint as a duplicate backstop. A strict
+	// global lease already serialized ownership across cells: an old peer
+	// advertisement must not veto the publisher that now holds that lease.
+	if p.peerNotifier != nil && (!publishedLease || streamValidation.GetPublisherLeaseEpoch() <= 0) {
 		if remoteCluster, ok := p.peerNotifier.IsStreamLiveOnPeer(admissionCtx, streamValidation.InternalName, streamValidation.TenantId); ok {
 			p.logger.WithFields(logging.Fields{
 				"internal_name":  streamValidation.InternalName,
@@ -2218,6 +2224,8 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 	}
 	recording := streamValidation.IsRecordingEnabled
 	var ingestGeneration string
+	publisherRuntime := "live+" + streamValidation.GetInternalName()
+	var runtimeBinding control.PublisherRuntimeBinding
 	var preparedPublisher control.PreparedPublisherAdmission
 	var publisherRequest control.IngestSessionRequest
 	var dvrReq *sharedpb.StartDVRRequest
@@ -2394,10 +2402,14 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 			}
 			mintCtx := admissionCtx
 			mintReq := control.IngestSessionRequest{
-				TenantID: streamValidation.TenantId, NodeID: trigger.GetNodeId(), InternalName: streamValidation.InternalName,
+				PublisherLeaseEpoch: streamValidation.GetPublisherLeaseEpoch(),
+				TenantID:            streamValidation.TenantId, NodeID: trigger.GetNodeId(), InternalName: streamValidation.InternalName,
 				StreamID: streamValidation.StreamId, PlaybackID: streamValidation.GetPlaybackId(), Protocol: domainevents.IngestProtocol(protocol),
 				ConnectorPID: connectorPID, TriggerUUID: pushRewrite.GetTriggerUuid(), StartedAtMillis: pushRewrite.GetTriggerUnixMillis(),
 				DVRIntent: dvrIntent, IngestClusterID: ingestClusterID, StrictLeaseOwner: publishedLease, DecisionExpiresAt: placementDecision.ExpiresAt,
+			}
+			if publishedLease && mintReq.PublisherLeaseEpoch > 0 {
+				mintReq.RuntimeLayoutVersion = control.PublisherRuntimeLayout(admissionCtx)
 			}
 			if len(authoritySnapshot) > 0 {
 				mintReq.Authority = &authoritySnapshot[0]
@@ -2472,6 +2484,25 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 					retErr = errors.Join(retErr, fmt.Errorf("release pending ingest session: %w", cleanupErr))
 				}
 			}()
+			if admissionRepository != nil {
+				runtimeBinding = control.PublisherRuntimeBinding{TenantID: streamValidation.GetTenantId(), RuntimeName: preparedPublisher.RuntimeName, LayoutVersion: preparedPublisher.RuntimeLayoutVersion,
+					LeaseEpoch: preparedPublisher.PublisherLeaseEpoch, ClusterID: ingestClusterID}
+			} else if streamValidation.GetPublisherLeaseEpoch() > 0 {
+				var bindingErr error
+				runtimeBinding, bindingErr = control.PublisherRuntimeBindingForGeneration(admissionCtx, streamValidation.GetTenantId(), streamValidation.GetInternalName(), trigger.GetNodeId(), ingestGeneration)
+				if bindingErr != nil {
+					return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "publisher runtime binding unavailable")
+				}
+			} else {
+				runtimeBinding = control.PublisherRuntimeBinding{TenantID: streamValidation.GetTenantId(), RuntimeName: publisherRuntime, ClusterID: ingestClusterID}
+			}
+			if runtimeBinding.LayoutVersion > control.PublisherRuntimeLayout(admissionCtx) {
+				return "", true, ingesterrors.NewTerminal(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "edge must be upgraded to resume this publisher")
+			}
+			if runtimeBinding.RuntimeName != "" {
+				publisherRuntime = runtimeBinding.RuntimeName
+			}
+			pushRewrite.StreamName = publisherRuntime
 			// PROJECT the confirmed DB winner onto the registry — but ONLY if this session is STILL the
 			// active one under the (tenant, stream) advisory lock. This goroutine can be descheduled
 			// between MintIngestSession and here; if in that window this session's own close ended it
@@ -2519,7 +2550,7 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 							continue
 						}
 						message := "push-target credentials could not be decrypted"
-						if statusErr := p.updatePushTargetStatusByID(target.GetId(), streamValidation.GetTenantId(), "live+"+streamValidation.GetInternalName(), "failed", pushstatusoutbox.ReasonConfigurationError, &message, time.Now().UnixMilli()); statusErr != nil {
+						if statusErr := p.updatePushTargetStatusByID(target.GetId(), streamValidation.GetTenantId(), publisherRuntime, "failed", pushstatusoutbox.ReasonConfigurationError, &message, time.Now().UnixMilli()); statusErr != nil {
 							p.logger.WithError(statusErr).WithField("target_id", target.GetId()).Error("Failed to persist incomplete push-target status")
 						}
 					}
@@ -2533,7 +2564,7 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 					}
 					targetRevision := pushTargetActivationRevision(localAuthority.object.Version)
 					if raw, marshalErr := p.marshalAdmissionEffectMessage(&ipcpb.ActivatePushTargets{
-						StreamName: "live+" + streamValidation.GetInternalName(), Targets: specs,
+						StreamName: publisherRuntime, Targets: specs,
 						TenantId: streamValidation.GetTenantId(), StreamId: streamValidation.GetStreamId(),
 						TargetRevision: targetRevision, MaxViewers: streamValidation.GetTenantResourceLimits().GetMaxViewers(),
 						ActivationAttempt: uuid.NewString(),
@@ -2552,7 +2583,7 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 				if admissionRepository != nil {
 					applied, resumed, projErr = admissionRepository.Project(admissionCtx, registry, publisherRequest, preparedPublisher, intent)
 				} else {
-					applied, resumed, projErr = control.ProjectSourceIfCurrent(admissionCtx, registry, streamValidation.TenantId, trigger.GetNodeId(), streamValidation.InternalName, connectorPID, pushRewrite.GetTriggerUuid(), ingestGeneration, intent)
+					applied, resumed, projErr = control.ProjectSourceIfCurrent(admissionCtx, registry, streamValidation.TenantId, trigger.GetNodeId(), streamValidation.InternalName, connectorPID, pushRewrite.GetTriggerUuid(), ingestGeneration, intent, runtimeBinding)
 				}
 				if resumed {
 					// The DB generation was already active before any repair attempt.
@@ -2593,11 +2624,13 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 		// it before the first STREAM_BUFFER arrives at Foghorn. Otherwise
 		// viewers landing in that ~poll-cadence window see no eligible
 		// node and the balancer returns "no suitable nodes".
-		state.DefaultManager().SetStreamInstanceInputs(
-			streamValidation.GetInternalName(),
-			trigger.GetNodeId(),
-			1,
-		)
+		if runtimeBinding.LayoutVersion == 1 {
+			if !control.StreamRegistryInstance.BeginNodeRuntime(streamValidation.GetInternalName(), trigger.GetNodeId(), streamValidation.GetTenantId(), publisherRuntime) {
+				return "", true, ingesterrors.NewTerminal(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "publisher runtime superseded before readiness projection")
+			}
+		} else {
+			state.DefaultManager().SetStreamInstanceInputs(streamValidation.GetInternalName(), trigger.GetNodeId(), 1)
+		}
 		// The prior-owner drain is NOT run here: the node the projection replaced is persisted on the
 		// durable admission-effect obligation at confirmation time and drained by the
 		// admission-effects worker (ApplyAdmissionEffect) — a crash between projection and drain can
@@ -2668,7 +2701,7 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 		p.streamCacheLastErr = ""
 		p.streamCacheMetaMu.Unlock()
 	}
-	if trigger.GetNodeId() != "" && streamValidation.GetInternalName() != "" {
+	if runtimeBinding.LayoutVersion == 0 && trigger.GetNodeId() != "" && streamValidation.GetInternalName() != "" {
 		state.DefaultManager().UpdateNodeStats(streamValidation.GetInternalName(), trigger.GetNodeId(), 0, 1, 0, 0, false)
 	}
 
@@ -2736,7 +2769,7 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 
 	// Return wildcard stream name for MistServer routing (live+ format)
 	admitted = true
-	return fmt.Sprintf("live+%s", streamValidation.InternalName), false, nil
+	return publisherRuntime, false, nil
 }
 
 func pushTargetActivationRevision(localAuthorityVersion int64) int64 {
@@ -2970,6 +3003,16 @@ func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 		}(trigger, playbackID)
 	}
 
+	if target.ContentType == "live" && control.StreamRegistryInstance != nil {
+		runtimeName, runtimeErr := control.StreamRegistryInstance.NodeRuntimeName(requestCtx, target.TenantID, resolvedName, trigger.GetNodeId())
+		if runtimeErr != nil {
+			return "", false, runtimeErr
+		}
+		if runtimeName != "" {
+			target.InternalName = runtimeName
+		}
+	}
+
 	// A viewer admitted on signed authority lets the edge answer the rest of
 	// this session's requests itself; the grant goes out before this answer.
 	if local.target != nil && !acceptedPull && mist.IsPlaybackViewerRequest(playRewrite.GetOutputType(), playRewrite.GetRequestUrl()) {
@@ -3053,11 +3096,14 @@ func (p *Processor) federationOriginPullDTSC(ctx context.Context, streamName, no
 	if err != nil {
 		return control.OfflineUnavailable, true
 	}
-	if strings.HasPrefix(streamName, "live+") && location.SourceActive && location.OwnerNodeID == nodeID && location.SourceGeneration != "" && location.SourceRevision > 0 {
+	if strings.HasPrefix(streamName, "live+") && location.SourceActive && location.OwnerNodeID == nodeID && location.SourceGeneration != "" && location.SourceRevision > 0 && (location.SourceRuntimeName == "" || location.SourceRuntimeName == streamName) {
 		return "", false
 	}
 	pulls := location.InboundPulls
 	pull, found := pulls[nodeID]
+	if pull.DestRuntimeName != "" && pull.DestRuntimeName != streamName {
+		return control.OfflineNotPlaced, true
+	}
 	if pull.Cleared {
 		return control.OfflineNotPlaced, true
 	}
@@ -3100,6 +3146,22 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 	requestCtx := control.MediaRequestContext(context.Background(), "mist_stream_source")
 	requestCtx, cancelRequest := context.WithTimeout(requestCtx, 3*time.Second)
 	defer cancelRequest()
+	if binding, ok := streamident.ParseRuntimeBinding(streamName); ok {
+		allowed, err := runtimeObservationAllowed(requestCtx, trigger.GetNodeId(), streamName)
+		if err != nil {
+			return control.OfflineUnavailable, false, nil
+		}
+		if !allowed {
+			return control.OfflineNotPlaced, false, nil
+		}
+		if binding.Role == streamident.RuntimePublisher {
+			return "push://", false, nil
+		}
+		if dtsc, handled := p.federationOriginPullDTSC(requestCtx, streamName, trigger.GetNodeId()); handled {
+			return dtsc, false, nil
+		}
+		return control.OfflineNotPlaced, false, nil
+	}
 
 	p.logger.WithFields(logging.Fields{
 		"stream_name": streamName,
@@ -3984,6 +4046,15 @@ func (p *Processor) managedSourceHeldOnNode(ctx context.Context, streamName, nod
 func (p *Processor) handleStreamProcess(trigger *ipcpb.MistTrigger) (string, bool, error) {
 	streamName := trigger.GetStreamProcess().GetStreamName()
 	internalName := mist.ExtractInternalName(streamName)
+	if binding, ok := streamident.ParseRuntimeBinding(streamName); ok {
+		allowed, err := runtimeObservationAllowed(context.Background(), trigger.GetNodeId(), streamName)
+		if err != nil {
+			return "", true, err
+		}
+		if !allowed || binding.Role == streamident.RuntimeRelay {
+			return "[]", false, nil
+		}
+	}
 	cachedConfig := ""
 	if p.streamCache != nil {
 		if val, ok := p.streamCache.Peek("process:" + internalName); ok {
@@ -4866,6 +4937,9 @@ func (p *Processor) handleStreamBuffer(trigger *ipcpb.MistTrigger) (string, bool
 		return "", false, fmt.Errorf("unexpected payload type for StreamBuffer: %T", trigger.GetTriggerPayload())
 	}
 	streamBuffer := payload.StreamBuffer
+	if allowed, err := runtimeObservationAllowed(context.Background(), trigger.GetNodeId(), streamBuffer.GetStreamName()); err != nil || !allowed {
+		return "", false, err
+	}
 
 	p.logger.WithFields(logging.Fields{
 		"internal_name":    streamBuffer.GetStreamName(),
@@ -4918,7 +4992,13 @@ func (p *Processor) handleStreamBuffer(trigger *ipcpb.MistTrigger) (string, bool
 	// session's own node. STREAM_BUFFER is best-effort, so a failed write loses this session's
 	// stream.live rather than blocking the trigger.
 	if state.NativeBufferStatePlayable(streamBuffer.GetBufferState()) {
-		p.markIngestSessionPlayable(info.TenantID, trigger.GetNodeId(), internalName, trigger.GetTriggerUnixMillis())
+		if binding, bound := streamident.ParseRuntimeBinding(streamBuffer.GetStreamName()); bound {
+			if binding.Role == streamident.RuntimePublisher {
+				p.markIngestSessionPlayable(info.TenantID, trigger.GetNodeId(), internalName, trigger.GetTriggerUnixMillis(), binding.ExecutionID)
+			}
+		} else {
+			p.markIngestSessionPlayable(info.TenantID, trigger.GetNodeId(), internalName, trigger.GetTriggerUnixMillis())
+		}
 	}
 
 	// A processing+ stream is an artifact's internal transcode input with no
@@ -4983,7 +5063,20 @@ func (p *Processor) handleStreamEnd(trigger *ipcpb.MistTrigger) (string, bool, e
 	// EndIngestSessionsForStreamEnd). Node-scoped and idempotent, so it runs
 	// regardless of streamWide; on a query failure it surfaces a retryable error (STREAM_END is
 	// durable) via reapErr below. When Mist supplies no event time it is a no-op.
-	reaped, reapErr := control.EndIngestSessionsForStreamEnd(context.Background(), trigger.GetTenantId(), nodeID, internalName, streamEnd.GetTriggerUnixMillis(), p.logger)
+	var reaped int
+	var reapErr error
+	if _, bound := streamident.ParseRuntimeBinding(streamEnd.GetStreamName()); bound {
+		reaped, reapErr = control.EndBoundPublisherRuntime(context.Background(), trigger.GetTenantId(), nodeID, streamEnd.GetStreamName(), offlineEventUnixMillis(trigger), p.logger)
+		if reapErr != nil {
+			return "", false, reapErr
+		}
+		allowed, err := runtimeTerminalObservationAllowed(context.Background(), nodeID, streamEnd.GetStreamName())
+		if err != nil || !allowed {
+			return "", false, err
+		}
+	} else {
+		reaped, reapErr = control.EndIngestSessionsForStreamEnd(context.Background(), trigger.GetTenantId(), nodeID, internalName, streamEnd.GetTriggerUnixMillis(), p.logger)
+	}
 	if reapErr != nil {
 		p.logger.WithError(reapErr).WithFields(logging.Fields{
 			"internal_name": internalName,
@@ -5046,7 +5139,7 @@ func (p *Processor) handleStreamEnd(trigger *ipcpb.MistTrigger) (string, bool, e
 	// state on THIS node is not zeroed. (FenceOfflineBackstop above already performed the registry
 	// source flip when it returned proceed=true.)
 	if !streamWide {
-		state.DefaultManager().SetOffline(internalName, nodeID)
+		state.DefaultManager().SetOfflineForRuntime(internalName, nodeID, streamEnd.GetStreamName())
 	}
 
 	// Backstop DVR stop, node-locally — runs REGARDLESS of the offline fence above (a stale
@@ -5089,11 +5182,21 @@ func (p *Processor) handleStreamEnd(trigger *ipcpb.MistTrigger) (string, bool, e
 // for would leave push targets, federation and DVR state
 // stale. Every effect is idempotent, so a late real STREAM_END re-running
 // them is a no-op.
-func (p *Processor) finalizeStreamWideOffline(ctx context.Context, internalName, nodeID, _ string, sourceGeneration string, _ int64) error {
+func (p *Processor) finalizeStreamWideOffline(ctx context.Context, internalName, nodeID, tenantID string, sourceGeneration string, _ int64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Deactivate multistream push targets. Keep the identities current until
 	// Helmsman's STOPPING/IDLE reports arrive; retiring before dispatch drops
 	// the only truthful terminal status transition.
 	pushStreamName := "live+" + internalName
+	if sourceGeneration != "" {
+		var err error
+		pushStreamName, err = control.PublisherRuntimeForGeneration(ctx, tenantID, internalName, nodeID, sourceGeneration)
+		if err != nil {
+			return err
+		}
+	}
 	return p.deactivatePushTargets(ctx, nodeID, pushStreamName, sourceGeneration)
 }
 
@@ -5454,9 +5557,9 @@ func (p *Processor) ApplyAdmissionEffect(ctx context.Context, effect control.Adm
 	if !effect.DrainDone {
 		if prior := strings.TrimSpace(effect.PriorOwnerNodeID); prior != "" && prior != effect.NodeID {
 			state.DefaultManager().SetStreamInstanceInputs(effect.InternalName, prior, 0)
-			runtimeName := effect.InternalName
-			if registry := control.StreamRegistryInstance; registry != nil {
-				runtimeName = control.RuntimeNameForStream(registry, effect.InternalName)
+			runtimeName, runtimeErr := control.PublisherRuntimeForGeneration(ctx, effect.TenantID, effect.InternalName, prior, effect.PriorOwnerSourceGeneration)
+			if runtimeErr != nil {
+				return legs, fmt.Errorf("resolve prior publisher runtime: %w", runtimeErr)
 			}
 			if p.drainStream == nil {
 				effectErr = errors.Join(effectErr, errors.New("drain dispatcher unavailable"))
@@ -5821,6 +5924,9 @@ func (p *Processor) handleLiveTrackList(trigger *ipcpb.MistTrigger) (string, boo
 		return "", false, fmt.Errorf("unexpected payload type for TrackList: %T", trigger.GetTriggerPayload())
 	}
 	liveTrackList := payload.TrackList
+	if allowed, err := runtimeObservationAllowed(context.Background(), trigger.GetNodeId(), liveTrackList.GetStreamName()); err != nil || !allowed {
+		return "", false, err
+	}
 	// CRITICAL: Extract internal name to match state keys
 	internalName := mist.ExtractInternalName(liveTrackList.GetStreamName())
 	nodeID := trigger.GetNodeId()
@@ -5977,6 +6083,15 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 		return "", false, fmt.Errorf("stream lifecycle node identity mismatch: trigger=%q payload=%q", nodeID, payloadNodeID)
 	}
 	slu.NodeId = nodeID
+	runtimeName := slu.GetProcessObservation().GetRuntimeName()
+	if runtimeName == "" {
+		runtimeName = slu.GetInternalName()
+	}
+	if slu.GetStatus() != "offline" {
+		if allowed, err := runtimeObservationAllowed(context.Background(), nodeID, runtimeName); err != nil || !allowed {
+			return "", false, err
+		}
+	}
 
 	// Enrich tenant context before forwarding (same pattern as handleStreamEnd). The tenant is resource-bound:
 	// seed the sidecar's asserted value for verification, resolve the authoritative owner, then drop
@@ -6039,6 +6154,20 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 			return "", false, fmt.Errorf("acknowledged offline lifecycle could not resolve stream identity for %q", internal)
 		}
 		return "", false, nil
+	}
+
+	if slu.GetStatus() == "offline" {
+		if binding, bound := streamident.ParseRuntimeBinding(runtimeName); bound {
+			if generation := slu.GetIngestGeneration(); generation != "" && generation != binding.ExecutionID {
+				return "", false, errors.New("offline runtime generation differs")
+			}
+			if _, err := control.EndBoundPublisherRuntime(context.Background(), trigger.GetTenantId(), nodeID, runtimeName, offlineEventUnixMillis(trigger), p.logger); err != nil {
+				return "", false, err
+			}
+		}
+		if allowed, err := runtimeTerminalObservationAllowed(context.Background(), nodeID, runtimeName); err != nil || !allowed {
+			return "", false, err
+		}
 	}
 
 	// Mist reports this NODE's viewer count; capture it before the Decklog
@@ -6171,7 +6300,7 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 		// Per-node state: for a replica (non-owner) always; for the owner only when the fence says
 		// the source is genuinely gone (so a live reconnect's input/viewer state is not zeroed).
 		if !isStreamWide {
-			state.DefaultManager().SetOffline(internal, nodeID)
+			state.DefaultManager().SetOfflineForRuntime(internal, nodeID, runtimeName)
 		}
 
 		// Stop this node's DVR recordings node-locally (node-keyed, generation-fenced backstop),
@@ -6228,7 +6357,7 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 	up := int64(slu.GetUploadedBytes())
 	down := int64(slu.GetDownloadedBytes())
 	replicated := slu.GetReplicated()
-	state.DefaultManager().UpdateNodeStats(internal, nodeID, total, inputs, up, down, replicated)
+	state.DefaultManager().UpdateRuntimeNodeStats(internal, nodeID, runtimeName, total, inputs, up, down, replicated)
 	// A restarted Foghorn rebuilds this instance from reports that carry no verified
 	// identity; the resolved stream context (registry/Commodore, not the node's
 	// assertion) restores the owner tenant the publisher claim compares against.
@@ -6239,7 +6368,7 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 	// The report's playability level heals a missed STREAM_BUFFER transition
 	// without overwriting Mist's native buffer-state diagnostic.
 	if slu.BufferPlayable != nil && slu.GetBufferSampledUnixMillis() > 0 {
-		if state.DefaultManager().ObserveStreamPlayabilityLevel(internal, nodeID, slu.GetBufferPlayable(), slu.GetBufferSampledUnixMillis()) {
+		if state.DefaultManager().ObserveStreamPlayabilityLevel(internal, nodeID, slu.GetBufferPlayable(), slu.GetBufferSampledUnixMillis(), runtimeName) {
 			p.logger.WithFields(logging.Fields{"internal_name": internal, "node_id": nodeID, "buffer_playable": slu.GetBufferPlayable()}).Debug("Applied buffer playability level from periodic report")
 		}
 		// Mist fires STREAM_BUFFER FULL once per buffer process, so a
@@ -6247,7 +6376,13 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 		// edge. A playable buffer fed by a connected input, sampled after the
 		// session started, is the new session's first playable buffer.
 		if slu.GetBufferPlayable() && slu.GetTotalInputs() > 0 && !slu.GetReplicated() && !suppressUnverifiedForward {
-			p.markIngestSessionPlayable(info.TenantID, nodeID, internal, slu.GetBufferSampledUnixMillis())
+			if binding, bound := streamident.ParseRuntimeBinding(runtimeName); bound {
+				if binding.Role == streamident.RuntimePublisher {
+					p.markIngestSessionPlayable(info.TenantID, nodeID, internal, slu.GetBufferSampledUnixMillis(), binding.ExecutionID)
+				}
+			} else {
+				p.markIngestSessionPlayable(info.TenantID, nodeID, internal, slu.GetBufferSampledUnixMillis())
+			}
 		}
 	}
 	return "", false, nil
@@ -6256,10 +6391,10 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 // markIngestSessionPlayable records the first playable buffer of the node's
 // active ingest session; a failed write loses that session's stream.live
 // rather than blocking the trigger.
-func (p *Processor) markIngestSessionPlayable(tenantID, nodeID, internalName string, eventMillis int64) {
+func (p *Processor) markIngestSessionPlayable(tenantID, nodeID, internalName string, eventMillis int64, generation ...string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if _, err := control.MarkIngestSessionPlayable(ctx, tenantID, nodeID, internalName, eventMillis); err != nil {
+	if _, err := control.MarkIngestSessionPlayable(ctx, tenantID, nodeID, internalName, eventMillis, generation...); err != nil {
 		p.logger.WithError(err).WithFields(logging.Fields{
 			"internal_name": internalName, "node_id": nodeID,
 		}).Warn("Failed to record the ingest session's first playable buffer")
@@ -6505,6 +6640,9 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *ipcpb.MistTrigger) (strin
 	observedStreams := make(map[string]struct{}, len(nu.GetStreams()))
 	for streamName, s := range nu.GetStreams() {
 		internalName := mist.ExtractInternalName(streamName)
+		if allowed, err := runtimeObservationAllowed(context.Background(), nu.GetNodeId(), streamName); err != nil || !allowed {
+			continue
+		}
 		observedStreams[internalName] = struct{}{}
 		replicated := s.GetReplicated()
 		if !replicated && control.StreamRegistryInstance != nil {
@@ -6512,7 +6650,7 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *ipcpb.MistTrigger) (strin
 				replicated = true
 			}
 		}
-		state.DefaultManager().ObserveNodeSnapshotStream(internalName, nu.GetNodeId(), int(s.GetTotal()), int(s.GetInputs()), int64(s.GetBytesUp()), int64(s.GetBytesDown()), replicated)
+		state.DefaultManager().ObserveRuntimeNodeSnapshotStream(internalName, nu.GetNodeId(), streamName, int(s.GetTotal()), int(s.GetInputs()), int64(s.GetBytesUp()), int64(s.GetBytesDown()), replicated)
 	}
 	// Absence clears only a pull the node was seen carrying with no arrangement
 	// or viewer hand-out since: the destination has not started such a pull

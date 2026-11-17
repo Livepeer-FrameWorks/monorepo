@@ -152,6 +152,9 @@ func TestUpdatePendingOffline(t *testing.T) {
 
 func TestBuildOfflineLifecycleTrigger(t *testing.T) {
 	trigger := buildOfflineLifecycleTrigger("node-1", "demo")
+	if trigger.GetTriggerUnixMillis() <= 0 || trigger.GetTriggerUnixMillis()/1000 != trigger.GetTimestamp() {
+		t.Fatalf("offline observation lost its event-time fence: millis=%d seconds=%d", trigger.GetTriggerUnixMillis(), trigger.GetTimestamp())
+	}
 
 	if trigger.TriggerType != "STREAM_LIFECYCLE_UPDATE" {
 		t.Fatalf("expected STREAM_LIFECYCLE_UPDATE, got %s", trigger.TriggerType)

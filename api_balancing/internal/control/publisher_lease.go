@@ -75,10 +75,13 @@ func (c *publishedClaimClient) ValidateStreamKeyForClaim(ctx context.Context, _ 
 	}
 	response := proto.CloneOf(c.identity)
 	response.ClaimAcquired = false
+	response.PublisherLeaseEpoch = 0
 	switch lease.GetOutcome() {
 	case pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_ACQUIRED:
 		response.ClaimAcquired = true
+		response.PublisherLeaseEpoch = lease.GetLeaseEpoch()
 	case pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_SAME_EXECUTION:
+		response.PublisherLeaseEpoch = lease.GetLeaseEpoch()
 	case pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_HELD_BY_OTHER:
 		response.Valid = false
 		response.RejectionReason = pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_DUPLICATE_INGEST

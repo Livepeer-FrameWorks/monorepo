@@ -43,7 +43,8 @@ type LivePushPlacementPaths struct {
 	SourceCellReachable func(cellID string) bool
 	// DestinationFence reads a destination's current control-connection fence;
 	// nil reads control.DestinationConnectionFence.
-	DestinationFence func(ctx context.Context, nodeID, clusterID string) (int64, error)
+	DestinationFence         func(ctx context.Context, nodeID, clusterID string) (int64, error)
+	IsolatedDestinationFence func(context.Context, string, string) (int64, error)
 }
 
 // PlacementDetailControlDisconnected marks a relay destination whose control
@@ -53,10 +54,16 @@ const PlacementDetailControlDisconnected = "control_disconnected"
 // destinationFence returns the destination's current control-connection
 // fence. Arranging a relay on a destination needs that connection, so
 // discovery and preparation both read it here.
-func (reader *LivePushPlacementPaths) destinationFence(ctx context.Context, nodeID, clusterID string) (int64, error) {
+func (reader *LivePushPlacementPaths) destinationFence(ctx context.Context, nodeID, clusterID string, source ...*placementPublisher) (int64, error) {
 	var read func(context.Context, string, string) (int64, error)
 	if reader != nil {
 		read = reader.DestinationFence
+		if len(source) == 1 && source[0] != nil && source[0].runtimeName != "" {
+			read = reader.IsolatedDestinationFence
+			if read == nil {
+				read = control.DestinationPublisherRuntimeFence
+			}
+		}
 	}
 	return readDestinationFence(ctx, read, nodeID, clusterID)
 }
@@ -91,6 +98,8 @@ func relayDestinationPath(ctx context.Context, read func(context.Context, string
 
 type placementPublisher struct {
 	cellID, clusterID, nodeID, generation string
+	runtimeName                           string
+	leaseEpoch                            int64
 	revision                              int64
 	present                               bool
 	// starting marks a claim whose owner says it is live while the playable
@@ -172,7 +181,9 @@ func (reader *LivePushPlacementPaths) ObservePlacementPaths(ctx context.Context,
 			// connection (an announced Helmsman restart holds node health while
 			// the connection is gone), so discovery does not offer it.
 			var known bool
-			if path, known = relayDestinationPath(ctx, reader.DestinationFence, node, path); !known {
+			if path, known = relayDestinationPath(ctx, func(ctx context.Context, node, cluster string) (int64, error) {
+				return reader.destinationFence(ctx, node, cluster, source)
+			}, node, path); !known {
 				delete(result.Paths, node.NodeID)
 				continue
 			}
@@ -304,32 +315,36 @@ func (reader *LivePushPlacementPaths) publisherState(ctx context.Context, source
 	var claims []placementPublisher
 	var fence int64
 	var withdrawnRevision int64
+	var localEpoch int64
+	var withdrawnEpoch int64
 	registryCell := reader.RegistryCellID
 	if registryCell == "" {
 		registryCell = reader.CellID
 	}
 	if loc, ok := entry.LocalLocation(registryCell); ok {
+		localEpoch = loc.SourceLeaseEpoch
 		// The ownership revision is durable, not a periodically refreshed metric.
 		// A newer local withdrawal also fences an older peer advertisement.
 		fence = loc.SourceRevision
 		if !loc.SourceActive {
 			withdrawnRevision = loc.SourceRevision
+			withdrawnEpoch = loc.SourceLeaseEpoch
 		}
 		if loc.SourceActive && validPullGeneration(loc.SourceGeneration, loc.SourceRevision) && loc.SourceGeneration != "" {
 			node, known := localNodes[loc.OwnerNodeID]
 			grant := sourceContext.grants[node.ClusterID]
 			claim := placementPublisher{cellID: reader.CellID, clusterID: node.ClusterID, nodeID: loc.OwnerNodeID,
-				generation: loc.SourceGeneration, revision: loc.SourceRevision, starting: true}
+				generation: loc.SourceGeneration, revision: loc.SourceRevision, leaseEpoch: loc.SourceLeaseEpoch, runtimeName: loc.SourceRuntimeName, starting: true}
 			claim.absence = localClaimAbsence(loc.OwnerNodeID, known, grant.CellID == reader.CellID && grant.AllowIngest, entry.IngestMode == control.IngestPush,
 				node, node.Streams[sourceContext.internalName], sourceContext.tenantID, now)
 			if known && grant.CellID == reader.CellID && grant.AllowIngest && entry.IngestMode == control.IngestPush {
 				stream := node.Streams[sourceContext.internalName]
-				if node.IsActive && stream.TenantID == sourceContext.tenantID && stream.Status == "live" && stream.Playable && stream.Inputs > 0 && !stream.Replicated &&
+				if (loc.SourceRuntimeName == "" || stream.RuntimeName == loc.SourceRuntimeName) && node.IsActive && stream.TenantID == sourceContext.tenantID && stream.Status == "live" && stream.Playable && stream.Inputs > 0 && !stream.Replicated &&
 					freshPlacementEvidence(node.LastHeartbeat, now) && freshPlacementEvidence(stream.ObservedAt, now) {
 					claim.present = true
 					claim.expiresAt = minPlacementExpiry(node.LastHeartbeat.Add(30*time.Second), stream.ObservedAt.Add(30*time.Second))
 					if freshPlacementEvidence(node.OutputsObservedAt, now) {
-						claim.dtscURL = mist.ResolvePlaybackURL(node.Outputs, node.Host, "dtsc", runtimeName)
+						claim.dtscURL = mist.ResolvePlaybackURL(node.Outputs, node.Host, "dtsc", publisherRuntimeName(claim, sourceContext.internalName))
 						if claim.dtscURL != "" {
 							claim.expiresAt = minPlacementExpiry(claim.expiresAt, node.OutputsObservedAt.Add(30*time.Second))
 						}
@@ -344,12 +359,47 @@ func (reader *LivePushPlacementPaths) publisherState(ctx context.Context, source
 	}
 	totalEdges := 0
 	for cellID, loc := range entry.Locations {
-		if cellID == reader.CellID || cellID == registryCell || !freshPlacementEvidence(time.Unix(loc.AdTimestamp, 0), now) {
+		if cellID == reader.CellID || cellID == registryCell {
 			continue
 		}
 		totalEdges += len(loc.EdgeCandidates)
 		if totalEdges > 4096 {
 			return nil, false, "", errors.New("push source advertisements exceed bound")
+		}
+		if loc.SourceLeaseEpoch > 0 {
+			grant := sourceContext.grants[loc.SourceClusterID]
+			if grant.CellID != cellID || !grant.AllowIngest || loc.OwnerNodeID == "" || loc.SourceGeneration == "" || !validPullGeneration(loc.SourceGeneration, loc.SourceRevision) {
+				continue
+			}
+			claim := placementPublisher{cellID: cellID, clusterID: loc.SourceClusterID, nodeID: loc.OwnerNodeID,
+				generation: loc.SourceGeneration, revision: loc.SourceRevision, leaseEpoch: loc.SourceLeaseEpoch, runtimeName: loc.SourceRuntimeName,
+				absence: "cell " + cellID + " has no fresh playable evidence for its publisher"}
+			freshAd := freshPlacementEvidence(time.Unix(loc.AdTimestamp, 0), now)
+			claim.starting = loc.SourceActive && freshAd
+			claim.expiresAt = time.Unix(loc.AdTimestamp, 0).Add(30 * time.Second)
+			for _, edge := range loc.EdgeCandidates {
+				if edge.IsOrigin && edge.NodeID == loc.OwnerNodeID && edge.ClusterID == loc.SourceClusterID &&
+					edge.SourceLeaseEpoch == loc.SourceLeaseEpoch && edge.SourceGeneration == loc.SourceGeneration && edge.SourceRevision == loc.SourceRevision {
+					claim.present = loc.SourceActive && loc.IsLiveNow && freshAd && edge.Playable && freshPlacementEvidence(time.Unix(edge.SourceObservedAt, 0), now)
+					claim.expiresAt = minPlacementExpiry(claim.expiresAt, time.Unix(edge.SourceObservedAt, 0).Add(30*time.Second))
+					name := runtimeName
+					if loc.SourceRuntimeName != "" {
+						name = loc.SourceRuntimeName
+					}
+					if claim.present && freshPlacementEvidence(time.Unix(edge.DTSCObservedAt, 0), now) && validPlacementDTSC(edge.DTSCURL, name) {
+						claim.dtscURL = edge.DTSCURL
+						claim.expiresAt = minPlacementExpiry(claim.expiresAt, time.Unix(edge.DTSCObservedAt, 0).Add(30*time.Second))
+					}
+				}
+			}
+			if !loc.SourceActive {
+				withdrawnEpoch = max(withdrawnEpoch, loc.SourceLeaseEpoch)
+			}
+			claims = append(claims, claim)
+			continue
+		}
+		if !freshPlacementEvidence(time.Unix(loc.AdTimestamp, 0), now) {
+			continue
 		}
 		for _, edge := range loc.EdgeCandidates {
 			grant := sourceContext.grants[edge.ClusterID]
@@ -357,7 +407,7 @@ func (reader *LivePushPlacementPaths) publisherState(ctx context.Context, source
 				continue
 			}
 			claim := placementPublisher{cellID: cellID, clusterID: edge.ClusterID, nodeID: edge.NodeID,
-				generation: edge.SourceGeneration, revision: edge.SourceRevision, expiresAt: time.Unix(loc.AdTimestamp, 0).Add(30 * time.Second)}
+				generation: edge.SourceGeneration, revision: edge.SourceRevision, leaseEpoch: edge.SourceLeaseEpoch, runtimeName: edge.SourceRuntimeName, expiresAt: time.Unix(loc.AdTimestamp, 0).Add(30 * time.Second)}
 			claim.present = loc.IsLiveNow && edge.Playable
 			claim.starting = loc.IsLiveNow
 			claim.present = claim.present && freshPlacementEvidence(time.Unix(edge.SourceObservedAt, 0), now)
@@ -370,7 +420,7 @@ func (reader *LivePushPlacementPaths) publisherState(ctx context.Context, source
 				claim.absence = "cell " + cellID + " advertised source evidence is stale"
 			}
 			claim.expiresAt = minPlacementExpiry(claim.expiresAt, time.Unix(edge.SourceObservedAt, 0).Add(30*time.Second))
-			if claim.present && freshPlacementEvidence(time.Unix(edge.DTSCObservedAt, 0), now) && validPlacementDTSC(edge.DTSCURL, runtimeName) {
+			if claim.present && freshPlacementEvidence(time.Unix(edge.DTSCObservedAt, 0), now) && validPlacementDTSC(edge.DTSCURL, publisherRuntimeName(claim, sourceContext.internalName)) {
 				claim.dtscURL = edge.DTSCURL
 				claim.expiresAt = minPlacementExpiry(claim.expiresAt, time.Unix(edge.DTSCObservedAt, 0).Add(30*time.Second))
 			}
@@ -380,26 +430,51 @@ func (reader *LivePushPlacementPaths) publisherState(ctx context.Context, source
 	if err := ctx.Err(); err != nil {
 		return nil, false, "", err
 	}
-	for _, claim := range claims {
-		if claim.revision > fence {
-			fence = claim.revision
-		}
-	}
 	var source *placementPublisher
-	for i := range claims {
-		claim := &claims[i]
-		if claim.revision != fence {
-			continue
+	epoch := max(localEpoch, withdrawnEpoch)
+	for _, claim := range claims {
+		epoch = max(epoch, claim.leaseEpoch)
+	}
+	if epoch > 0 {
+		for i := range claims {
+			claim := &claims[i]
+			if claim.leaseEpoch == 0 && (claim.present || claim.starting) {
+				return nil, false, "", errors.New("publisher ownership mixes fenced and legacy sources")
+			}
+			if claim.leaseEpoch != epoch {
+				continue
+			}
+			if source != nil && (source.cellID != claim.cellID || source.clusterID != claim.clusterID || source.nodeID != claim.nodeID || source.generation != claim.generation || source.runtimeName != claim.runtimeName) {
+				return nil, false, "", errors.New("publisher ownership epoch names conflicting sources")
+			}
+			if source == nil || claim.revision > source.revision {
+				source = claim
+			}
 		}
-		if source != nil {
-			return nil, false, "", errors.New("push source ownership is ambiguous")
+		if withdrawnEpoch == epoch {
+			return nil, false, "the publisher ownership epoch was withdrawn", nil
 		}
-		source = claim
+	} else {
+		// Legacy peers have no ownership term. Retain their compatibility path;
+		// cell-local revisions cannot order a fenced cross-cell handoff.
+		for _, claim := range claims {
+			fence = max(fence, claim.revision)
+		}
+		for i := range claims {
+			claim := &claims[i]
+			if claim.revision != fence {
+				continue
+			}
+			if source != nil {
+				return nil, false, "", errors.New("push source ownership is ambiguous")
+			}
+			source = claim
+		}
 	}
 	if source == nil {
 		return nil, false, "no current publisher claim in this cell or a fresh peer advertisement", nil
 	}
-	if source.revision <= withdrawnRevision {
+	if epoch == 0 && source.revision <= withdrawnRevision {
 		return nil, false, fmt.Sprintf("the publisher session (revision %d) ended", withdrawnRevision), nil
 	}
 	if !source.present {
@@ -489,4 +564,11 @@ func destinationUnavailableReason(node *state.EnhancedBalancerNodeSnapshot, verb
 func destinationEvidenceUntil(node state.EnhancedBalancerNodeSnapshot, now time.Time) time.Time {
 	until, _ := balancer.PlacementNodeEvidence(node, now)
 	return until
+}
+
+func publisherRuntimeName(source placementPublisher, internal string) string {
+	if source.runtimeName != "" {
+		return source.runtimeName
+	}
+	return control.RuntimeNameFor(control.IngestPush, internal)
 }

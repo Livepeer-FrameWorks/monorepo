@@ -124,6 +124,8 @@ message EdgeCandidate {
   string cluster_id = 17;
   // Media-serving readiness. buffer_state remains the native Mist diagnostic.
   bool playable = 18;
+  int64 source_lease_epoch = 19;
+  string source_runtime_name = 20;
 }
 
 message OriginPullNotification {
@@ -141,6 +143,9 @@ message OriginPullNotification {
   // Such requests must name the source node and cannot auto-select another one.
   string source_cell_id = 10;
   string source_cluster_id = 11;
+  int64 source_lease_epoch = 12;
+  string source_runtime_name = 13;
+  string dest_runtime_name = 14;
 }
 
 message OriginPullAck {
@@ -156,6 +161,9 @@ message OriginPullAck {
   string dest_node_id = 10;
   string source_cell_id = 11;
   string source_cluster_id = 12;
+  int64 source_lease_epoch = 13;
+  string source_runtime_name = 14;
+  string dest_runtime_name = 15;
 }
 
 message PrepareArtifactRequest {
@@ -295,6 +303,8 @@ message StreamLifecycleEvent {
   bool is_live = 4;
   int64 timestamp_unix = 5;
   int64 source_revision = 6;
+  int64 source_lease_epoch = 7;
+  string source_generation = 8;
 }
 
 // EdgeTelemetry fed the retired remote-edge scoring path. Nothing sends it and
@@ -406,6 +416,14 @@ message StreamAdvertisement {
   // silently strands cross-cell serving. Required: an advertisement without it
   // is dropped rather than filed under a guessed namespace.
   string control_cell_id = 9;
+  // Retained on withdrawal so an older advertisement cannot restore a source.
+  int64 source_lease_epoch = 10;
+  string source_generation = 11;
+  int64 source_revision = 12;
+  string source_node_id = 13;
+  string source_cluster_id = 14;
+  string source_runtime_name = 15;
+  bool source_active = 16;
 }
 
 // PeerStreamEdge describes a single edge node serving a specific stream.
@@ -435,6 +453,8 @@ message PeerStreamEdge {
   int64 source_observed_at = 17;
   // Media-serving readiness. buffer_state remains the native Mist diagnostic.
   bool playable = 18;
+  int64 source_lease_epoch = 19;
+  string source_runtime_name = 20;
 }
 
 // PeerHeartbeat carried session liveness and capability exchange. Peer liveness

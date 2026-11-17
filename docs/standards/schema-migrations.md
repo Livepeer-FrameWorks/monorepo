@@ -191,6 +191,22 @@ paths and exact contents are pinned in `migrate_shipped_upserts.go`; edits or co
 into a new release receive no exception. This preserves shipped checksums without
 allowing the same rewrites in new migrations.
 
+## Runtime data-migration ledger initialization
+
+Services install `_data_migrations` and `_data_migration_runs` through
+`datamigrate.EnsureSchema`. Creation is serialized under a database session lock;
+`IF NOT EXISTS` alone does not serialize concurrent first starts. The DDL runs
+on the same pinned connection that holds the lock, including with a one-connection
+pool. Cancellation releases or discards that session through the shared database
+lock helper.
+
+This uses a session lock because transactional DDL is disabled in the pinned
+Yugabyte release. It does not require enabling an early-access engine flag.
+See [Yugabyte transactional DDL](https://docs.yugabyte.com/stable/architecture/transactions/transactional-ddl/).
+`make verify-datamigrate-schema-engines` checks concurrent initialization on
+PostgreSQL and Yugabyte and checks cancellation while waiting on PostgreSQL.
+These tests also run in the ordinary migration and Yugabyte release gates.
+
 ## Dry-run safety
 
 Migration dry-runs inspect the live `_migrations` ledgers and report pending files,

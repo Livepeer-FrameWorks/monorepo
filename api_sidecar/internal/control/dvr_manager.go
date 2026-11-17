@@ -22,6 +22,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -115,7 +116,11 @@ type DVRJob struct {
 	// and commits a new PushID only if it is unchanged; a bumped generation
 	// means another writer (a stop or a concurrent recreate) won the race, so
 	// the freshly-created push is stale and must be stopped.
-	pushGeneration uint64
+	pushGeneration          uint64
+	handoffMu               sync.Mutex
+	handoff                 *dvrSourceHandoff
+	writerControllerID      string
+	writerConfirmedAtMillis int64
 }
 
 // DVRMistClient abstracts MistServer push operations so tests can inject fakes.
@@ -127,12 +132,13 @@ type DVRMistClient interface {
 
 // DVRManager manages active DVR recording sessions
 type DVRManager struct {
-	logger      logging.Logger
-	jobs        map[string]*DVRJob // DVR hash -> job
-	mutex       sync.RWMutex
-	storagePath string
-	storageCap  uint64
-	mistClient  DVRMistClient
+	handoffIssuerID string
+	logger          logging.Logger
+	jobs            map[string]*DVRJob // DVR hash -> job
+	mutex           sync.RWMutex
+	storagePath     string
+	storageCap      uint64
+	mistClient      DVRMistClient
 	// diskCheck is the precondition called before starting/continuing a recording.
 	// Tests inject a stub so they don't depend on host disk pressure.
 	// Nil means use the production storage admission check.
@@ -773,10 +779,16 @@ func (dm *DVRManager) HandleNewSegment(streamName, filePath string) {
 
 	// Find job matching the stream name
 	var targetJob *DVRJob
+	cleanPath := filepath.Clean(filePath)
 	for _, job := range dm.jobs {
 		if job.StreamName == streamName {
-			targetJob = job
-			break
+			if targetJob == nil {
+				targetJob = job
+			}
+			if strings.HasPrefix(cleanPath, filepath.Clean(job.OutputDir)+string(filepath.Separator)) {
+				targetJob = job
+				break
+			}
 		}
 	}
 
@@ -1112,6 +1124,7 @@ func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceRunt
 		removeIfCreated()
 		return fmt.Errorf("failed to start DVR push: %w", err)
 	}
+	dm.persistDVRWriterProof(job)
 
 	// Store job
 	dm.jobs[dvrHash] = job
@@ -1149,13 +1162,19 @@ const dvrJobMetaVersion = 1
 // is legitimately empty for a local (non-remote) source, and the config fields
 // fall back to defaults.
 type dvrJobMeta struct {
-	Version           int    `json:"version"`
-	InternalName      string `json:"internal_name"`
-	SourceRuntimeName string `json:"source_runtime_name"`
-	SourceURL         string `json:"source_url,omitempty"`
-	SegmentDuration   int32  `json:"segment_duration,omitempty"`
-	DvrWindowSeconds  int32  `json:"dvr_window_seconds,omitempty"`
-	MaxEntries        int32  `json:"max_entries,omitempty"`
+	Version                 int               `json:"version"`
+	InternalName            string            `json:"internal_name"`
+	SourceRuntimeName       string            `json:"source_runtime_name"`
+	SourceURL               string            `json:"source_url,omitempty"`
+	SegmentDuration         int32             `json:"segment_duration,omitempty"`
+	DvrWindowSeconds        int32             `json:"dvr_window_seconds,omitempty"`
+	MaxEntries              int32             `json:"max_entries,omitempty"`
+	WriterControllerID      string            `json:"writer_controller_id,omitempty"`
+	WriterID                int               `json:"writer_id,omitempty"`
+	WriterTarget            string            `json:"writer_target,omitempty"`
+	WriterEnded             bool              `json:"writer_ended,omitempty"`
+	WriterConfirmedAtMillis int64             `json:"writer_confirmed_at_millis,omitempty"`
+	Handoff                 *dvrSourceHandoff `json:"source_handoff,omitempty"`
 }
 
 // dvrConfig reconstructs the DVRConfig from the persisted descriptor.
@@ -1182,11 +1201,18 @@ func writeDVRJobMeta(outputDir string, meta dvrJobMeta) error {
 		return fmt.Errorf("refusing to persist DVR job metadata with an empty output dir")
 	}
 	meta.Version = dvrJobMetaVersion // stamp the current format; callers need not set it
+	if meta.Handoff != nil {
+		meta.Version = 2
+	}
 	data, err := json.Marshal(meta)
 	if err != nil {
 		return fmt.Errorf("marshal DVR job metadata: %w", err)
 	}
-	tmp, err := os.CreateTemp(outputDir, dvrJobMetaFile+".tmp-*")
+	return writeDVRMetadataFile(outputDir, dvrJobMetaFile, data)
+}
+
+func writeDVRMetadataFile(outputDir, name string, data []byte) error {
+	tmp, err := os.CreateTemp(outputDir, name+".tmp-*")
 	if err != nil {
 		return fmt.Errorf("create DVR job metadata temp file: %w", err)
 	}
@@ -1205,7 +1231,7 @@ func writeDVRJobMeta(outputDir string, meta dvrJobMeta) error {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("close DVR job metadata: %w", err)
 	}
-	if err = os.Rename(tmpName, filepath.Join(outputDir, dvrJobMetaFile)); err != nil {
+	if err = os.Rename(tmpName, filepath.Join(outputDir, name)); err != nil {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("rename DVR job metadata into place: %w", err)
 	}
@@ -1331,7 +1357,7 @@ func readDVRJobMeta(outputDir string) (dvrJobMeta, bool) {
 	// Require the current format and both source-identity fields. Incomplete metadata is rejected:
 	// the job stays unresolved
 	// (degraded protection) rather than resolving without its source identity.
-	if meta.Version != dvrJobMetaVersion ||
+	if (meta.Version != dvrJobMetaVersion && meta.Version != 2) ||
 		strings.TrimSpace(meta.InternalName) == "" ||
 		strings.TrimSpace(meta.SourceRuntimeName) == "" {
 		return dvrJobMeta{}, false
@@ -1484,6 +1510,10 @@ func (dm *DVRManager) recoverOneDVRDir(dir localDVRDirectory, pushes []mist.Push
 	if !ok {
 		return
 	}
+	if meta.Handoff != nil {
+		dm.restoreDVRHandoffJob(dir, meta)
+		return
+	}
 	// Match ONLY a push under the descriptor's exact runtime — never a foreign push
 	// that merely contains the DVR hash string under a different runtime.
 	push, found := findExactDVRPush(pushes, meta.SourceRuntimeName, "", dir.dvrHash)
@@ -1503,17 +1533,19 @@ func (dm *DVRManager) recoverOneDVRDir(dir localDVRDirectory, pushes []mist.Push
 		startTime = startTime.Add(-duration)
 	}
 	job := &DVRJob{
-		DVRHash:           dir.dvrHash,
-		InternalName:      meta.InternalName,
-		SourceRuntimeName: meta.SourceRuntimeName,
-		SourceURL:         meta.SourceURL,
-		StreamName:        push.StreamName,
-		Config:            meta.dvrConfig(),
-		StartTime:         startTime,
-		PushID:            push.ID,
-		OutputDir:         dir.outputDir,
-		ManifestPath:      dir.manifestPath,
-		TargetURI:         push.TargetURI,
+		DVRHash:                 dir.dvrHash,
+		InternalName:            meta.InternalName,
+		SourceRuntimeName:       meta.SourceRuntimeName,
+		SourceURL:               meta.SourceURL,
+		writerControllerID:      meta.WriterControllerID,
+		writerConfirmedAtMillis: meta.WriterConfirmedAtMillis,
+		StreamName:              push.StreamName,
+		Config:                  meta.dvrConfig(),
+		StartTime:               startTime,
+		PushID:                  push.ID,
+		OutputDir:               dir.outputDir,
+		ManifestPath:            dir.manifestPath,
+		TargetURI:               push.TargetURI,
 		SendFunc: func(msg *ipcpb.ControlMessage) {
 			if err := sendControlMessage(msg); err != nil {
 				logger.WithError(err).WithField("dvr_hash", dir.dvrHash).Warn("Recovered DVR report was not delivered immediately")
@@ -1700,6 +1732,13 @@ func (dm *DVRManager) StopRecordingWithSender(dvrHash string, sendFunc func(*ipc
 // unconfirmed stop still terminalizes; authoritative=false keeps the job open on an
 // unconfirmed stop so a live writer is never falsely reported complete.
 func (dm *DVRManager) stopRecording(dvrHash string, sendFunc func(*ipcpb.ControlMessage), authoritative bool) error {
+	dm.mutex.RLock()
+	guarded := dm.jobs[dvrHash]
+	dm.mutex.RUnlock()
+	if guarded != nil {
+		guarded.handoffMu.Lock()
+		defer guarded.handoffMu.Unlock()
+	}
 	dm.mutex.Lock()
 	job, exists := dm.jobs[dvrHash]
 	if !exists {
@@ -1708,6 +1747,19 @@ func (dm *DVRManager) stopRecording(dvrHash string, sendFunc func(*ipcpb.Control
 	}
 	if sendFunc != nil {
 		job.SendFunc = sendFunc
+	}
+	if job.handoff != nil {
+		copy := *job.handoff
+		copy.Cancelled = true
+		job.handoff = &copy
+		if err := dm.persistJobMeta(job.OutputDir, dvrMetaForJob(job)); err != nil {
+			dm.mutex.Unlock()
+			return err
+		}
+		if copy.NewIssued {
+			job.StreamName, job.SourceRuntimeName, job.SourceURL, job.PushID = copy.NewRuntime, copy.NewRuntime, copy.NewURL, 0
+			job.TargetURI = dvrTargetURI(job.OutputDir, job.DVRHash, job.Config, copy.NewRuntime)
+		}
 	}
 	// Mark the job finalizing and bump the generation under the lock before
 	// releasing it for the Mist call: maintainPushStatus skips finalizing jobs,
@@ -1826,6 +1878,20 @@ func (dm *DVRManager) stopRecoveredRecording(dvrHash string, sendFunc func(*ipcp
 		Status:           "finalizing",
 		SyncedSegments:   make(map[string]bool),
 		UnmarkedSegments: make(map[string]uint64),
+	}
+	if meta, ok := readDVRJobMeta(outputDir); ok {
+		job.InternalName, job.SourceRuntimeName, job.StreamName = meta.InternalName, meta.SourceRuntimeName, meta.SourceRuntimeName
+		if meta.Handoff != nil {
+			copy := *meta.Handoff
+			copy.Cancelled = true
+			meta.Handoff, job.handoff = &copy, &copy
+			if err := dm.persistJobMeta(outputDir, meta); err != nil {
+				return err
+			}
+			if copy.NewIssued {
+				job.StreamName = copy.NewRuntime
+			}
+		}
 	}
 
 	dm.logger.WithFields(logging.Fields{
@@ -2010,7 +2076,7 @@ func dvrDirectorySize(outputDir string) uint64 {
 // dvrTargetURI builds the Mist push target for a DVR recording from its output
 // dir, hash, and config. It is deterministic, so recovery and monitor recreate
 // can rebuild the exact same target as the original start.
-func dvrTargetURI(outputDir, dvrHash string, config *ipcpb.DVRConfig) string {
+func dvrTargetURI(outputDir, dvrHash string, config *ipcpb.DVRConfig, sourceRuntime ...string) string {
 	segmentDuration := int(config.GetSegmentDuration())
 	if segmentDuration <= 0 {
 		segmentDuration = 6 // Default 6 seconds
@@ -2037,14 +2103,22 @@ func dvrTargetURI(outputDir, dvrHash string, config *ipcpb.DVRConfig) string {
 	// only source A/V tracks — derived renditions make MistInHLS reject the playlist.
 	// Push options follow '?' (upstream Mist push-target syntax); Mist strips them
 	// from the segment filename it writes.
-	return fmt.Sprintf("%s/%s/$minute_$segmentCounter.ts?m3u8=../%s.m3u8&audio=source&video=source&subtitle=none&meta=none&split=%d&targetAge=%d&maxEntries=%d&append=1&noendlist=1&nounlink=1",
-		outputDir, "segments", dvrHash, segmentDuration, windowSeconds, maxEntries,
+	// Mist's append mode recovers the counter from retained playlist entries.
+	// A pruned playlist cannot fence a previous writer's segment filenames.
+	prefix := ""
+	if len(sourceRuntime) == 1 {
+		if binding, isolated := streamident.ParseRuntimeBinding(sourceRuntime[0]); isolated {
+			prefix = strings.ReplaceAll(binding.ExecutionID, "-", "") + "_"
+		}
+	}
+	return fmt.Sprintf("%s/%s/%s$minute_$segmentCounter.ts?m3u8=../%s.m3u8&audio=source&video=source&subtitle=none&meta=none&split=%d&targetAge=%d&maxEntries=%d&append=1&noendlist=1&nounlink=1",
+		outputDir, "segments", prefix, dvrHash, segmentDuration, windowSeconds, maxEntries,
 	)
 }
 
 // startDVRPush starts DVR recording via MistServer push API
 func (dm *DVRManager) startDVRPush(job *DVRJob) error {
-	targetURI := dvrTargetURI(job.OutputDir, job.DVRHash, job.Config)
+	targetURI := dvrTargetURI(job.OutputDir, job.DVRHash, job.Config, job.SourceRuntimeName)
 
 	// Foghorn is the sole authority for the source runtime name —
 	// resolved from the stream registry's RuntimeNameFor(ingest_mode,
@@ -2324,19 +2398,25 @@ func (dm *DVRManager) updateProgress(job *DVRJob) {
 	job.SegmentCount = segmentCount
 	job.TotalSizeBytes = totalSize
 	status := job.Status
+	if status == "rebinding" {
+		dm.mutex.Unlock()
+		return
+	}
 	dvrHash := job.DVRHash
+	sourceRuntime := job.SourceRuntimeName
 	startedAt := job.StartTime.Unix()
 	sendFunc := job.SendFunc
 	dm.mutex.Unlock()
 
 	if sendFunc != nil {
 		progress := &ipcpb.DVRProgress{
-			DvrHash:      dvrHash,
-			StartedAt:    startedAt,
-			Status:       status,
-			SegmentCount: int32(segmentCount),
-			SizeBytes:    totalSize,
-			Message:      fmt.Sprintf("Recording %d segments", segmentCount),
+			SourceRuntimeName: sourceRuntime,
+			DvrHash:           dvrHash,
+			StartedAt:         startedAt,
+			Status:            status,
+			SegmentCount:      int32(segmentCount),
+			SizeBytes:         totalSize,
+			Message:           fmt.Sprintf("Recording %d segments", segmentCount),
 		}
 
 		msg := &ipcpb.ControlMessage{
@@ -2373,6 +2453,9 @@ func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
 	dm.mutex.RUnlock()
 
 	switch status {
+	case "rebinding":
+		dm.reconcileDVRSourceHandoff(job)
+		return
 	case "finalizing", "completed", "completed_partial", "failed":
 		return // Don't maintain finalizing/terminal jobs
 	}
@@ -2446,7 +2529,7 @@ func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
 	// a fresh append/noendlist writer against a stopped source.
 	if !pushFound && segmentCount > 0 {
 		dm.mutex.Lock()
-		exists := dm.jobs[job.DVRHash] == job
+		exists := dm.jobs[job.DVRHash] == job && job.pushGeneration == snap.generation && job.Status != "rebinding" && job.Status != "finalizing"
 		if exists {
 			job.Status = "completed"
 			job.pushGeneration++
@@ -2549,7 +2632,7 @@ func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
 		// Identity guard: only terminate if the map still holds THIS job. A
 		// stop+restart for the same hash during the unlocked PushList above
 		// would otherwise make this stale monitor kill the fresh job.
-		exists := dm.jobs[job.DVRHash] == job
+		exists := dm.jobs[job.DVRHash] == job && job.pushGeneration == snap.generation && job.Status != "rebinding" && job.Status != "finalizing"
 		if exists {
 			job.Status = "failed"
 			job.pushGeneration++
@@ -2767,19 +2850,26 @@ type dvrWriterEnd struct {
 // one of targets (RECORDING_END's file path, PUSH_END's target). Mist is the
 // authority on its own writers: once it reports the end, the push is gone.
 func NoteDVRWriterEnded(streamName string, targets ...string) {
+	NoteDVRWriterEndedAt(streamName, time.Now(), targets...)
+}
+
+func NoteDVRWriterEndedAt(streamName string, at time.Time, targets ...string) {
 	if dvrManager == nil {
 		return
 	}
-	dvrManager.noteWriterEnded(streamName, time.Now(), targets...)
+	dvrManager.noteWriterEnded(streamName, at, targets...)
 }
 
 func (dm *DVRManager) noteWriterEnded(streamName string, at time.Time, targets ...string) {
+	proofAt := at
+	if at.UnixMilli() <= 0 {
+		at = time.Now()
+	}
 	streamName = strings.TrimSpace(streamName)
 	if streamName == "" {
 		return
 	}
 	dm.writerEndsMu.Lock()
-	defer dm.writerEndsMu.Unlock()
 	kept := dm.writerEnds[:0]
 	for _, end := range dm.writerEnds {
 		if at.Sub(end.at) < dvrWriterEndTTL {
@@ -2792,6 +2882,8 @@ func (dm *DVRManager) noteWriterEnded(streamName string, at time.Time, targets .
 			dm.writerEnds = append(dm.writerEnds, dvrWriterEnd{streamName: streamName, target: target, at: at})
 		}
 	}
+	dm.writerEndsMu.Unlock()
+	dm.persistEndedDVRWriter(streamName, proofAt, targets)
 }
 
 // writerEndedSince reports whether Mist reported the end of this identity's
@@ -2859,7 +2951,7 @@ func (dm *DVRManager) calculateRetryDelay(retryCount int) time.Duration {
 }
 
 // sendCompletion sends DVR completion notification
-func (dm *DVRManager) sendCompletion(job *DVRJob, status string, errorMsg string) {
+func (dm *DVRManager) sendCompletion(job *DVRJob, status string, errorMsg string, writerUnknown ...bool) {
 	// SendFunc and TotalSizeBytes are mutated by other goroutines under the
 	// lock (StopRecordingWithSender / updateProgress); snapshot them here so the
 	// terminal payload can't tear against an in-flight progress write. All
@@ -2867,6 +2959,12 @@ func (dm *DVRManager) sendCompletion(job *DVRJob, status string, errorMsg string
 	dm.mutex.RLock()
 	sendFunc := job.SendFunc
 	sizeBytes := job.TotalSizeBytes
+	sourceRuntime := job.SourceRuntimeName
+	streamName := job.StreamName
+	if job.handoff != nil {
+		sourceRuntime = job.handoff.NewRuntime
+		streamName = job.handoff.NewRuntime
+	}
 	dm.mutex.RUnlock()
 	if sendFunc == nil {
 		return
@@ -2875,19 +2973,21 @@ func (dm *DVRManager) sendCompletion(job *DVRJob, status string, errorMsg string
 	durationSeconds := int32(time.Since(job.StartTime).Seconds())
 	sourceState := ipcpb.DVRSourceState_DVR_SOURCE_STATE_UNSPECIFIED
 	if dm.sourceState != nil {
-		sourceState = dm.sourceState(job.StreamName)
+		sourceState = dm.sourceState(streamName)
 	}
 
 	stopped := &ipcpb.DVRStopped{
-		SourceState:     sourceState,
-		DvrHash:         job.DVRHash,
-		StartedAt:       job.StartTime.Unix(),
-		EndedAt:         time.Now().Unix(),
-		Status:          status,
-		Error:           errorMsg,
-		ManifestPath:    job.ManifestPath,
-		DurationSeconds: durationSeconds,
-		SizeBytes:       sizeBytes,
+		WriterOutcomeUnknown: len(writerUnknown) == 1 && writerUnknown[0],
+		SourceRuntimeName:    sourceRuntime,
+		SourceState:          sourceState,
+		DvrHash:              job.DVRHash,
+		StartedAt:            job.StartTime.Unix(),
+		EndedAt:              time.Now().Unix(),
+		Status:               status,
+		Error:                errorMsg,
+		ManifestPath:         job.ManifestPath,
+		DurationSeconds:      durationSeconds,
+		SizeBytes:            sizeBytes,
 	}
 
 	msg := &ipcpb.ControlMessage{

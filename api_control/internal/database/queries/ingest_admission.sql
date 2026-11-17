@@ -40,7 +40,7 @@ WHERE s.id = held.id
           AND (sqlc.narg(node_id)::text IS NULL OR (held.prev_node IS NULL AND held.prev_cell IS NULL)
             OR (held.prev_node=sqlc.narg(node_id)::text AND held.prev_cell=sqlc.narg(control_cell_id)::text)))
   )
-RETURNING held.prev_cluster, held.prev_token, held.prev_fresh;
+RETURNING held.prev_cluster, held.prev_token, held.prev_fresh, s.publisher_lease_epoch;
 
 -- name: GetActiveIngestClaim :one
 SELECT active_ingest_cluster_id, active_ingest_claim_id

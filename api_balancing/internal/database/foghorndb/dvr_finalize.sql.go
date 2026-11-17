@@ -64,7 +64,7 @@ const clearDVRStopObligation = `-- name: ClearDVRStopObligation :exec
 UPDATE foghorn.artifacts
 SET dvr_start_dispatch = CASE
         WHEN COALESCE(dvr_start_dispatch->>'node_id', '') <> ''
-            THEN jsonb_build_object('node_id', dvr_start_dispatch->>'node_id')
+            THEN jsonb_build_object('node_id', dvr_start_dispatch->>'node_id', 'source_runtime_name', dvr_start_dispatch->>'source_runtime_name')
         ELSE NULL END,
     updated_at = NOW()
 WHERE artifact_hash = $1 AND tenant_id::text = $2 AND artifact_type = 'dvr'
@@ -105,7 +105,7 @@ SET status = $1::text,
     dvr_start_dispatch = CASE
         WHEN $11::boolean THEN dvr_start_dispatch
         WHEN COALESCE(dvr_start_dispatch->>'node_id', '') <> ''
-            THEN jsonb_build_object('node_id', dvr_start_dispatch->>'node_id')
+            THEN jsonb_build_object('node_id', dvr_start_dispatch->>'node_id', 'source_runtime_name', dvr_start_dispatch->>'source_runtime_name')
         ELSE NULL END
 WHERE artifact_hash = $7 AND artifact_type = 'dvr'
   AND status = 'finalizing' AND tenant_id::text = $12
@@ -177,7 +177,7 @@ SET status = 'failed', error_message = $1::text,
     dvr_start_dispatch = CASE
         WHEN $4::boolean THEN dvr_start_dispatch
         WHEN COALESCE(dvr_start_dispatch->>'node_id', '') <> ''
-            THEN jsonb_build_object('node_id', dvr_start_dispatch->>'node_id')
+            THEN jsonb_build_object('node_id', dvr_start_dispatch->>'node_id', 'source_runtime_name', dvr_start_dispatch->>'source_runtime_name')
         ELSE NULL END
 WHERE artifact_hash = $5 AND artifact_type = 'dvr'
   AND status = 'finalizing' AND tenant_id::text = $6
@@ -381,16 +381,18 @@ func (q *Queries) LockDVRDispatchOwner(ctx context.Context, arg LockDVRDispatchO
 
 const lockDVRFinalizationPrior = `-- name: LockDVRFinalizationPrior :one
 SELECT COALESCE(status, '')::text AS status, revision,
-       COALESCE(stream_id::text, '')::text AS stream_id
+       COALESCE(stream_id::text, '')::text AS stream_id,
+       COALESCE(dvr_start_dispatch->>'source_runtime_name', '')::text AS source_runtime_name
 FROM foghorn.artifacts
 WHERE artifact_hash = $1 AND artifact_type = 'dvr'
 FOR UPDATE
 `
 
 type LockDVRFinalizationPriorRow struct {
-	Status   string `db:"status" json:"status"`
-	Revision int64  `db:"revision" json:"revision"`
-	StreamID string `db:"stream_id" json:"stream_id"`
+	Status            string `db:"status" json:"status"`
+	Revision          int64  `db:"revision" json:"revision"`
+	StreamID          string `db:"stream_id" json:"stream_id"`
+	SourceRuntimeName string `db:"source_runtime_name" json:"source_runtime_name"`
 }
 
 // Locks the recording and reads what the finalization claim replaces. Before
@@ -400,6 +402,29 @@ type LockDVRFinalizationPriorRow struct {
 func (q *Queries) LockDVRFinalizationPrior(ctx context.Context, artifactHash string) (LockDVRFinalizationPriorRow, error) {
 	row := q.db.QueryRowContext(ctx, lockDVRFinalizationPrior, artifactHash)
 	var i LockDVRFinalizationPriorRow
-	err := row.Scan(&i.Status, &i.Revision, &i.StreamID)
+	err := row.Scan(
+		&i.Status,
+		&i.Revision,
+		&i.StreamID,
+		&i.SourceRuntimeName,
+	)
 	return i, err
+}
+
+const recordDVRSourceHandoffInterrupted = `-- name: RecordDVRSourceHandoffInterrupted :exec
+UPDATE foghorn.artifacts
+SET error_message = 'recording_source_handoff_interrupted'
+WHERE artifact_hash = $1
+  AND tenant_id = $2::uuid
+  AND artifact_type = 'dvr' AND status IN ('requested','starting','recording','stopping')
+`
+
+type RecordDVRSourceHandoffInterruptedParams struct {
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) RecordDVRSourceHandoffInterrupted(ctx context.Context, arg RecordDVRSourceHandoffInterruptedParams) error {
+	_, err := q.db.ExecContext(ctx, recordDVRSourceHandoffInterrupted, arg.ArtifactHash, arg.TenantID)
+	return err
 }

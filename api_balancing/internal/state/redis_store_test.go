@@ -337,3 +337,42 @@ func TestConnOwnerRedisUnavailable(t *testing.T) {
 
 	_ = client.Close()
 }
+
+func TestConnOwnerProtocolIsFencedAndExpiresWithOwner(t *testing.T) {
+	store, mr, _ := newRedisStateStore(t)
+	ctx := t.Context()
+	protocol := ConnProtocol{ProtocolVersion: 11, ClusterID: "media"}
+	if acquired, err := store.AcquireConnOwnerFenced(ctx, "node", "owner", "addr", 1, protocol); err != nil || !acquired {
+		t.Fatalf("acquire: %v %v", acquired, err)
+	}
+	owner, got, err := store.GetConnOwnerProtocol(ctx, "node")
+	if err != nil || owner.Fence != 1 || got.ProtocolVersion != 11 || got.ClusterID != "media" || got.Fence != 1 {
+		t.Fatalf("capable owner not visible: %+v %+v %v", owner, got, err)
+	}
+	mr.FastForward(45 * time.Second)
+	if refreshErr := store.RefreshConnOwnerFenced(ctx, "node", "owner", "addr", 1, protocol); refreshErr != nil {
+		t.Fatal(refreshErr)
+	}
+	mr.FastForward(30 * time.Second)
+	if _, got, err = store.GetConnOwnerProtocol(ctx, "node"); err != nil || got.ProtocolVersion != 11 {
+		t.Fatalf("renewal lost protocol: %+v %v", got, err)
+	}
+	// An old replica writes only the legacy owner value. Its new connection
+	// must not inherit the previous capable connection's metadata.
+	mr.Set(store.keyConnOwner("node"), encodeConnOwner("old-replica", "addr2", 2))
+	owner, got, err = store.GetConnOwnerProtocol(ctx, "node")
+	if err != nil || owner.Fence != 2 || got.ProtocolVersion != 0 {
+		t.Fatalf("successor inherited stale protocol: %+v %+v %v", owner, got, err)
+	}
+	if refreshErr := store.RefreshConnOwnerFenced(ctx, "node", "owner", "addr", 1, protocol); !errors.Is(refreshErr, ErrConnOwnerLost) {
+		t.Fatalf("stale protocol refresh succeeded: %v", refreshErr)
+	}
+	if acquired, acquireErr := store.AcquireConnOwnerFenced(ctx, "node", "new-owner", "addr3", 3, protocol); acquireErr != nil || !acquired {
+		t.Fatalf("new capable owner: %v %v", acquired, acquireErr)
+	}
+	mr.FastForward(61 * time.Second)
+	owner, got, err = store.GetConnOwnerProtocol(ctx, "node")
+	if err != nil || owner.InstanceID != "" || got.ProtocolVersion != 0 {
+		t.Fatalf("expired capability survived: %+v %+v %v", owner, got, err)
+	}
+}

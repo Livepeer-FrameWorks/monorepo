@@ -33,6 +33,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -147,6 +148,8 @@ type grant struct {
 	lastFetch    time.Time
 }
 
+type grantFetch struct{ superseded bool }
+
 // Store is safe for concurrent use.
 type Store struct {
 	logger logging.Logger
@@ -157,13 +160,14 @@ type Store struct {
 	async  func(func())
 
 	mu          sync.Mutex
+	policyMu    sync.Mutex
 	grants      map[string]*grant
 	names       map[string]string
 	sessions    map[sessionKey]*session
 	rebuilt     map[string]*rebuiltSession
 	refused     map[string]refusal
 	rechecks    map[string]time.Time
-	fetching    map[string]bool
+	fetching    map[string]*grantFetch
 	lastFetchAt map[string]time.Time
 	rebuiltOnce bool
 	// liveStreams is Mist's latest authoritative active-stream list.
@@ -177,7 +181,7 @@ func NewStore(opts Options) *Store {
 		logger: opts.Logger, mist: opts.Mist, fetch: opts.Fetch, now: opts.Now, jitter: opts.Jitter, async: opts.Async,
 		grants: map[string]*grant{}, names: map[string]string{}, sessions: map[sessionKey]*session{},
 		rebuilt: map[string]*rebuiltSession{}, refused: map[string]refusal{}, rechecks: map[string]time.Time{},
-		fetching: map[string]bool{}, lastFetchAt: map[string]time.Time{},
+		fetching: map[string]*grantFetch{}, lastFetchAt: map[string]time.Time{},
 	}
 	if s.now == nil {
 		s.now = time.Now
@@ -459,9 +463,41 @@ func (s *Store) EndSession(sessionID string) {
 // every Mist session of the stream, including the ones this store never tied
 // to a Mist session id.
 func (s *Store) ApplyGrant(msg *ipcpb.PlaybackGrant) {
+	s.applyPolicyGrant(msg, "")
+}
+
+func (s *Store) applyPolicyGrant(msg *ipcpb.PlaybackGrant, fetchedRuntime string) {
 	if msg == nil || strings.TrimSpace(msg.GetInternalName()) == "" {
 		return
 	}
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
+	// Policy belongs to the logical stream, including generations still draining.
+	// Each copy keeps its physical name so a policy refresh cannot move viewers
+	// back to a superseded publisher.
+	s.mu.Lock()
+	if fetchedRuntime != "" {
+		if fetch := s.fetching[fetchedRuntime]; fetch == nil || fetch.superseded {
+			s.mu.Unlock()
+			return
+		}
+	}
+	s.supersedeFetchesLocked(msg.GetInternalName(), true)
+	related := s.policyRuntimesLocked(msg.GetInternalName())
+	s.mu.Unlock()
+	s.applyGrant(msg, true)
+	for _, internal := range related {
+		if internal == msg.GetInternalName() {
+			continue
+		}
+		copied := proto.CloneOf(msg)
+		copied.InternalName = internal
+		copied.RequestedNames = nil
+		s.applyGrant(copied, false)
+	}
+}
+
+func (s *Store) applyGrant(msg *ipcpb.PlaybackGrant, publishNames bool) {
 	now := s.now()
 	internal := msg.GetInternalName()
 	var invalidate []string
@@ -510,7 +546,9 @@ func (s *Store) ApplyGrant(msg *ipcpb.PlaybackGrant) {
 	}
 	s.grants[internal] = g
 	for name := range g.names {
-		s.names[name] = internal
+		if mapped, exists := s.names[name]; publishNames || !exists || mapped == internal {
+			s.names[name] = internal
+		}
 	}
 	policyChanged := old != nil && old.policyDigest != g.policyDigest
 	connected := g.msg.GetPolicy().GetKind() == ipcpb.PlaybackGrantPolicyKind_PLAYBACK_GRANT_POLICY_KIND_CONNECTED
@@ -560,23 +598,28 @@ func (s *Store) ApplyGrant(msg *ipcpb.PlaybackGrant) {
 // Foghorn stopped (tenant suspension): nothing of them is answered locally
 // any more.
 func (s *Store) StopStreams(names []string, reason string) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 	now := s.now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, name := range names {
-		internal := s.resolveStreamLocked(name)
-		s.dropGrantLocked(internal)
-		for key, sess := range s.sessions {
-			if key.stream == internal {
-				delete(s.sessions, key)
-				if sess.sessionID != "" {
-					s.refused[sess.sessionID] = refusal{reason: "sessions stopped by Foghorn: " + reason, until: now.Add(refusalHold)}
+		_, bound := streamident.ParseRuntimeBinding(name)
+		s.supersedeFetchesLocked(name, !bound)
+		for _, internal := range s.commandRuntimesLocked(name) {
+			s.dropGrantLocked(internal)
+			for key, sess := range s.sessions {
+				if key.stream == internal {
+					delete(s.sessions, key)
+					if sess.sessionID != "" {
+						s.refused[sess.sessionID] = refusal{reason: "sessions stopped by Foghorn: " + reason, until: now.Add(refusalHold)}
+					}
 				}
 			}
-		}
-		for id, rb := range s.rebuilt {
-			if rb.stream == internal {
-				delete(s.rebuilt, id)
+			for id, rb := range s.rebuilt {
+				if rb.stream == internal {
+					delete(s.rebuilt, id)
+				}
 			}
 		}
 	}
@@ -593,26 +636,27 @@ func (s *Store) RecheckStreams(names []string) []string {
 	var untracked, fetch []string
 	s.mu.Lock()
 	for _, name := range names {
-		internal := s.resolveStreamLocked(name)
-		g := s.grants[internal]
-		if g == nil {
-			untracked = append(untracked, name)
-			continue
-		}
-		if g.msg.GetPolicy().GetKind() == ipcpb.PlaybackGrantPolicyKind_PLAYBACK_GRANT_POLICY_KIND_CONNECTED {
-			for key, sess := range s.sessions {
-				if key.stream == internal {
-					s.scheduleRecheckLocked(sess.sessionID, now)
-				}
+		for _, internal := range s.commandRuntimesLocked(name) {
+			g := s.grants[internal]
+			if g == nil {
+				untracked = append(untracked, name)
+				continue
 			}
-			for id, rb := range s.rebuilt {
-				if rb.stream == internal {
-					s.scheduleRecheckLocked(id, now)
+			if g.msg.GetPolicy().GetKind() == ipcpb.PlaybackGrantPolicyKind_PLAYBACK_GRANT_POLICY_KIND_CONNECTED {
+				for key, sess := range s.sessions {
+					if key.stream == internal {
+						s.scheduleRecheckLocked(sess.sessionID, now)
+					}
 				}
+				for id, rb := range s.rebuilt {
+					if rb.stream == internal {
+						s.scheduleRecheckLocked(id, now)
+					}
+				}
+				continue
 			}
-			continue
+			fetch = append(fetch, internal)
 		}
-		fetch = append(fetch, internal)
 	}
 	s.mu.Unlock()
 	for _, internal := range fetch {
@@ -774,11 +818,11 @@ func (s *Store) fetchGrant(internal string, force bool) error {
 	}
 	now := s.now()
 	s.mu.Lock()
-	if s.fetching[internal] || (!force && !s.needsFetchLocked(internal, now)) {
+	if s.fetching[internal] != nil || (!force && !s.needsFetchLocked(internal, now)) {
 		s.mu.Unlock()
 		return nil
 	}
-	s.fetching[internal] = true
+	s.fetching[internal] = &grantFetch{}
 	s.lastFetchAt[internal] = now
 	s.mu.Unlock()
 	defer func() {
@@ -796,7 +840,7 @@ func (s *Store) fetchGrant(internal string, force bool) error {
 		}
 		return err
 	}
-	s.ApplyGrant(msg)
+	s.applyPolicyGrant(msg, internal)
 	return nil
 }
 
@@ -822,24 +866,59 @@ func (s *Store) validGrantForNameLocked(requested string, now time.Time) *grant 
 	return g
 }
 
-// resolveStreamLocked maps a stream name as Foghorn names it in a command
-// (runtime or bare internal name) to the Mist stream a grant is held under.
-func (s *Store) resolveStreamLocked(name string) string {
-	if _, ok := s.grants[name]; ok {
-		return name
+// Physical drain commands affect one execution; logical policy and suspension
+// commands cover every retained execution of the stream.
+func (s *Store) commandRuntimesLocked(name string) []string {
+	if _, bound := streamident.ParseRuntimeBinding(name); bound {
+		return []string{name}
 	}
-	bare := mist.ExtractInternalName(name)
-	for internal := range s.grants {
-		if mist.ExtractInternalName(internal) == bare {
-			return internal
+	return s.policyRuntimesLocked(name)
+}
+
+// A response obtained before a policy update cannot repopulate old permissions
+// after that update. Only active fetches are retained, so this fence needs no
+// per-stream tombstone cache.
+func (s *Store) supersedeFetchesLocked(name string, logical bool) {
+	for runtime, fetch := range s.fetching {
+		if runtime == name || (logical && playbackPolicyFamily(runtime) == playbackPolicyFamily(name)) {
+			fetch.superseded = true
 		}
+	}
+}
+
+func playbackPolicyFamily(name string) string {
+	if strings.HasPrefix(name, "live+") || strings.HasPrefix(name, "pull+") || !strings.Contains(name, "+") {
+		return "stream:" + mist.ExtractInternalName(name)
+	}
+	return "exact:" + name
+}
+
+func (s *Store) policyRuntimesLocked(name string) []string {
+	family := playbackPolicyFamily(name)
+	runtimes := map[string]struct{}{}
+	add := func(internal string) {
+		if playbackPolicyFamily(internal) == family {
+			runtimes[internal] = struct{}{}
+		}
+	}
+	for internal := range s.grants {
+		add(internal)
 	}
 	for key := range s.sessions {
-		if mist.ExtractInternalName(key.stream) == bare {
-			return key.stream
-		}
+		add(key.stream)
 	}
-	return name
+	for _, rb := range s.rebuilt {
+		add(rb.stream)
+	}
+	if len(runtimes) == 0 {
+		return []string{name}
+	}
+	out := make([]string, 0, len(runtimes))
+	for internal := range runtimes {
+		out = append(out, internal)
+	}
+	slices.Sort(out)
+	return out
 }
 
 func (s *Store) dropGrantLocked(internal string) {

@@ -16,6 +16,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 )
@@ -29,33 +30,39 @@ func NewPublisherAdmissionRepository(database *sql.DB) *PublisherAdmissionReposi
 }
 
 type PreparedPublisherAdmission struct {
-	Generation          string               `json:"generation"`
-	Outcome             IngestSessionOutcome `json:"outcome"`
-	SourceRevision      int64                `json:"source_revision"`
-	Resumed             bool                 `json:"resumed"`
-	IncumbentGeneration string               `json:"incumbent_generation"`
-	IncumbentNode       string               `json:"incumbent_node"`
-	StopClaims          []DVRStopClaim       `json:"stop_claims"`
+	Generation           string               `json:"generation"`
+	Outcome              IngestSessionOutcome `json:"outcome"`
+	SourceRevision       int64                `json:"source_revision"`
+	PublisherLeaseEpoch  int64                `json:"publisher_lease_epoch"`
+	RuntimeName          string               `json:"runtime_name"`
+	RuntimeLayoutVersion int32                `json:"runtime_layout_version"`
+	Resumed              bool                 `json:"resumed"`
+	IncumbentGeneration  string               `json:"incumbent_generation"`
+	IncumbentNode        string               `json:"incumbent_node"`
+	StopClaims           []DVRStopClaim       `json:"stop_claims"`
 }
 
 type preparePublisherRequest struct {
-	DecisionExpiresAt  *time.Time               `json:"decision_expires_at,omitempty"`
-	StrictLeaseOwner   bool                     `json:"strict_lease_owner"`
-	TenantID           string                   `json:"tenant_id"`
-	NodeID             string                   `json:"node_id"`
-	InternalName       string                   `json:"internal_name"`
-	StreamID           string                   `json:"stream_id"`
-	ConnectorPID       int64                    `json:"connector_pid"`
-	TriggerUUID        string                   `json:"trigger_uuid"`
-	StartedAtMillis    int64                    `json:"started_at_millis"`
-	DVRIntent          json.RawMessage          `json:"dvr_intent"`
-	IngestClusterID    string                   `json:"ingest_cluster_id"`
-	Authority          *IngestAuthoritySnapshot `json:"authority"`
-	Generation         string                   `json:"generation"`
-	AdmissionWindowMS  int64                    `json:"admission_window_ms"`
-	TakeoverGeneration string                   `json:"takeover_generation"`
-	ConnectedEvent     *events.Event            `json:"connected_event"`
-	IdleEvent          *events.Event            `json:"idle_event"`
+	DecisionExpiresAt    *time.Time               `json:"decision_expires_at,omitempty"`
+	StrictLeaseOwner     bool                     `json:"strict_lease_owner"`
+	PublisherLeaseEpoch  int64                    `json:"publisher_lease_epoch"`
+	RuntimeName          string                   `json:"runtime_name"`
+	RuntimeLayoutVersion int32                    `json:"runtime_layout_version"`
+	TenantID             string                   `json:"tenant_id"`
+	NodeID               string                   `json:"node_id"`
+	InternalName         string                   `json:"internal_name"`
+	StreamID             string                   `json:"stream_id"`
+	ConnectorPID         int64                    `json:"connector_pid"`
+	TriggerUUID          string                   `json:"trigger_uuid"`
+	StartedAtMillis      int64                    `json:"started_at_millis"`
+	DVRIntent            json.RawMessage          `json:"dvr_intent"`
+	IngestClusterID      string                   `json:"ingest_cluster_id"`
+	Authority            *IngestAuthoritySnapshot `json:"authority"`
+	Generation           string                   `json:"generation"`
+	AdmissionWindowMS    int64                    `json:"admission_window_ms"`
+	TakeoverGeneration   string                   `json:"takeover_generation"`
+	ConnectedEvent       *events.Event            `json:"connected_event"`
+	IdleEvent            *events.Event            `json:"idle_event"`
 }
 
 func (r *PublisherAdmissionRepository) Prepare(ctx context.Context, request IngestSessionRequest, _ logging.Logger) (prepared PreparedPublisherAdmission, resultErr error) {
@@ -80,7 +87,22 @@ func (r *PublisherAdmissionRepository) Prepare(ctx context.Context, request Inge
 		TenantID: request.TenantID, NodeID: request.NodeID, InternalName: request.InternalName, StreamID: request.StreamID,
 		ConnectorPID: request.ConnectorPID, TriggerUUID: request.TriggerUUID, StartedAtMillis: request.StartedAtMillis,
 		DVRIntent: request.DVRIntent, IngestClusterID: request.IngestClusterID, Authority: request.Authority, StrictLeaseOwner: request.StrictLeaseOwner,
-		Generation: uuid.NewString(), AdmissionWindowMS: IngestAdmissionWindow.Milliseconds(),
+		Generation: uuid.NewString(), AdmissionWindowMS: IngestAdmissionWindow.Milliseconds(), PublisherLeaseEpoch: request.PublisherLeaseEpoch,
+	}
+	if request.RuntimeLayoutVersion < 0 || request.RuntimeLayoutVersion > 1 {
+		return PreparedPublisherAdmission{}, errors.New("unsupported publisher runtime layout")
+	}
+	payload.RuntimeLayoutVersion = request.RuntimeLayoutVersion
+	payload.RuntimeName = "live+" + request.InternalName
+	if payload.RuntimeLayoutVersion == 1 {
+		if request.PublisherLeaseEpoch <= 0 || !request.StrictLeaseOwner {
+			return PreparedPublisherAdmission{}, errors.New("isolated publisher runtime requires a global ownership fence")
+		}
+		var err error
+		payload.RuntimeName, err = streamident.BoundRuntimeName(request.InternalName, streamident.RuntimePublisher, payload.Generation)
+		if err != nil {
+			return PreparedPublisherAdmission{}, err
+		}
 	}
 	if !request.DecisionExpiresAt.IsZero() {
 		expiry := request.DecisionExpiresAt.UTC()
@@ -136,19 +158,27 @@ func (r *PublisherAdmissionRepository) Prepare(ctx context.Context, request Inge
 	return PreparedPublisherAdmission{Outcome: IngestSessionRejectedDuplicate}, nil
 }
 
+func publisherSourceIdentityFor(request IngestSessionRequest, prepared PreparedPublisherAdmission) publisherSourceIdentity {
+	identity := publisherSourceIdentity{TenantID: request.TenantID, LeaseEpoch: prepared.PublisherLeaseEpoch, ClusterID: request.IngestClusterID, LayoutVersion: prepared.RuntimeLayoutVersion}
+	if prepared.RuntimeLayoutVersion == 1 {
+		identity.RuntimeName = prepared.RuntimeName
+	}
+	return identity
+}
+
 // Project confirms only the generation that won the revisioned Redis CAS.
 func (r *PublisherAdmissionRepository) Project(ctx context.Context, registry *StreamRegistry, request IngestSessionRequest, prepared PreparedPublisherAdmission, intent AdmissionEffectIntent) (applied bool, resumed bool, resultErr error) {
 	if r == nil || r.database == nil || registry == nil || prepared.Generation == "" || prepared.SourceRevision <= 0 {
 		return false, prepared.Resumed, errors.New("publisher projection has no prepared generation")
 	}
 	casStarted := time.Now()
-	prior, priorGeneration, applied, err := registry.projectSourceWithPriorGenerationContext(ctx, request.InternalName, request.NodeID, request.ConnectorPID, request.TriggerUUID, prepared.Generation, prepared.SourceRevision)
+	prior, priorGeneration, applied, err := registry.projectSourceWithPriorGenerationContext(ctx, request.InternalName, request.NodeID, request.ConnectorPID, request.TriggerUUID, prepared.Generation, prepared.SourceRevision, publisherSourceIdentityFor(request, prepared))
 	ObservePublisherAdmissionPhase("redis_cas", casStarted, err)
 	if err != nil || !applied {
 		if !prepared.Resumed || err != nil {
 			return false, prepared.Resumed, errors.Join(errors.New("publisher source projection refused"), err)
 		}
-		repaired, repairErr := repairResumedSourceProjection(ctx, registry, request.TenantID, request.NodeID, request.InternalName, request.ConnectorPID, request.TriggerUUID, prepared.Generation)
+		repaired, repairErr := repairResumedSourceProjection(ctx, registry, request.TenantID, request.NodeID, request.InternalName, request.ConnectorPID, request.TriggerUUID, prepared.Generation, publisherSourceIdentityFor(request, prepared))
 		if repairErr != nil || !repaired {
 			return false, true, errors.Join(errors.New("resumed publisher source repair refused"), repairErr)
 		}

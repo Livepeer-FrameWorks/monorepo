@@ -9,10 +9,8 @@ import (
 
 // RuntimeNameForStream returns the registry-resolved Mist runtime name
 // for a source stream identified by its internal name. Returns the bare
-// internal name when no entry is hydrated yet — admission-time callers
-// pass freshly-validated streams that may not have hit the registry yet,
-// and a replaced-source drain target must still have a usable runtime name
-// rather than fail closed.
+// internal name when no entry is hydrated yet. Historical cleanup uses the
+// persisted generation binding rather than this current logical-stream alias.
 func RuntimeNameForStream(r *StreamRegistry, internalName string) string {
 	internalName = strings.TrimSpace(internalName)
 	if internalName == "" || r == nil {
@@ -63,7 +61,12 @@ func (r *StreamRegistry) sharedSourceRevision(ctx context.Context, internalName 
 	return max(localRevision, durableRevision), nil
 }
 
-func (r *StreamRegistry) projectSourceWithPriorGenerationContext(ctx context.Context, internalName, nodeID string, connectorPID int64, triggerUUID, generation string, revision int64) (priorOwnerNodeID, priorOwnerSourceGeneration string, applied bool, err error) {
+type publisherSourceIdentity = PublisherRuntimeBinding
+
+func (r *StreamRegistry) projectSourceWithPriorGenerationContext(ctx context.Context, internalName, nodeID string, connectorPID int64, triggerUUID, generation string, revision int64, source ...publisherSourceIdentity) (priorOwnerNodeID, priorOwnerSourceGeneration string, applied bool, err error) {
+	if len(source) > 1 || (len(source) == 1 && source[0].LeaseEpoch < 0) {
+		return "", "", false, errors.New("publisher lease epoch is invalid")
+	}
 	if contextErr := ctx.Err(); contextErr != nil {
 		return "", "", false, contextErr
 	}
@@ -97,6 +100,17 @@ func (r *StreamRegistry) projectSourceWithPriorGenerationContext(ctx context.Con
 	}
 	loc := ce.entry.Locations[r.clusterID]
 	before, beforePresent = loc, loc.ClusterID != "" || loc.OwnerNodeID != "" || loc.SourceRevision != 0
+	epoch := loc.SourceLeaseEpoch
+	if loc.SourceGeneration != generation {
+		epoch = 0
+	}
+	if len(source) == 1 {
+		epoch = source[0].LeaseEpoch
+	}
+	if loc.SourceGeneration == generation && loc.SourceLeaseEpoch > 0 && epoch != loc.SourceLeaseEpoch {
+		r.mu.Unlock()
+		return "", "", false, errors.New("publisher generation changed ownership epoch")
+	}
 	triggerUUID = strings.TrimSpace(triggerUUID)
 	generation = strings.TrimSpace(generation)
 	if loc.SourceRevision > revision {
@@ -110,6 +124,13 @@ func (r *StreamRegistry) projectSourceWithPriorGenerationContext(ctx context.Con
 		loc.SourceTriggerUUID != triggerUUID || loc.SourceGeneration != generation) {
 		r.mu.Unlock()
 		return "", "", false, nil
+	}
+	if len(source) == 1 && source[0].TenantID != "" {
+		if ce.entry.TenantID != "" && ce.entry.TenantID != source[0].TenantID {
+			r.mu.Unlock()
+			return "", "", false, errors.New("publisher projection tenant differs")
+		}
+		ce.entry.TenantID = source[0].TenantID
 	}
 	if prior := strings.TrimSpace(loc.OwnerNodeID); prior != "" && prior != nodeID {
 		priorOwnerNodeID = prior
@@ -125,6 +146,16 @@ func (r *StreamRegistry) projectSourceWithPriorGenerationContext(ctx context.Con
 	loc.SourceConnectorPID = connectorPID
 	loc.SourceTriggerUUID = triggerUUID
 	loc.SourceGeneration = generation
+	loc.SourceLeaseEpoch = epoch
+	loc.SourceClusterID = ce.entry.OriginClusterID
+	if len(source) == 1 {
+		loc.SourceClusterID = source[0].ClusterID
+		if source[0].LayoutVersion == 1 {
+			loc.SourceRuntimeName = source[0].RuntimeName
+		} else {
+			loc.SourceRuntimeName = ""
+		}
+	}
 	loc.SourceRevision = revision
 	loc.UpdatedAt = time.Now()
 	ce.entry.Locations[r.clusterID] = loc

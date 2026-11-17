@@ -376,9 +376,10 @@ type LocallyPublishedStream struct {
 	// ClusterID and ClaimToken come from the durable ingest session, so renewal
 	// re-asserts the claim the session was admitted under and owns, rather than
 	// the node's present registration.
-	ClusterID        string
-	ClaimToken       string
-	StrictLeaseOwner bool
+	ClusterID           string
+	ClaimToken          string
+	StrictLeaseOwner    bool
+	PublisherLeaseEpoch int64
 }
 
 // sessionClaimKey identifies a claim by the exact publisher session that holds
@@ -412,7 +413,7 @@ func activeIngestSessionClaims(ctx context.Context) (map[string]LocallyPublished
 	claims := make(map[string]LocallyPublishedStream)
 	for _, row := range rows {
 		claim := LocallyPublishedStream{TenantID: row.TenantID, InternalName: row.StreamInternalName,
-			OwnerNodeID: row.NodeID, ClusterID: row.IngestClusterID, ClaimToken: row.StartTriggerUuid, StrictLeaseOwner: row.PublisherLeaseStrictOwner}
+			OwnerNodeID: row.NodeID, ClusterID: row.IngestClusterID, ClaimToken: row.StartTriggerUuid, StrictLeaseOwner: row.PublisherLeaseStrictOwner, PublisherLeaseEpoch: row.PublisherLeaseEpoch}
 		claims[sessionClaimKey(claim.TenantID, claim.InternalName, claim.OwnerNodeID, claim.ClaimToken, row.Generation)] = claim
 	}
 	return claims, nil

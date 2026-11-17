@@ -252,6 +252,12 @@ func mergeLocationRevisioned(cur, incoming Location) Location {
 	// Source-ownership winner: higher revision, else (equal) the UpdatedAt winner.
 	src := cur
 	switch {
+	case incoming.SourceLeaseEpoch > cur.SourceLeaseEpoch:
+		src = incoming
+	case incoming.SourceLeaseEpoch < cur.SourceLeaseEpoch:
+		src = cur
+	case incoming.SourceLeaseEpoch > 0 && !acceptPublisherAdvertisement(cur, incoming):
+		src = cur
 	case incoming.SourceRevision > cur.SourceRevision:
 		src = incoming
 	case incoming.SourceRevision < cur.SourceRevision:
@@ -268,6 +274,13 @@ func mergeLocationRevisioned(cur, incoming Location) Location {
 	base.SourceConnectorPID = src.SourceConnectorPID
 	base.SourceTriggerUUID = src.SourceTriggerUUID
 	base.SourceGeneration = src.SourceGeneration
+	base.SourceLeaseEpoch = src.SourceLeaseEpoch
+	base.SourceRuntimeName = src.SourceRuntimeName
+	base.SourceClusterID = src.SourceClusterID
+	base.AdvertisedSource = src.AdvertisedSource
+	if src.AdvertisedSource && src.SourceLeaseEpoch > 0 {
+		base.IsLiveNow, base.EdgeCandidates, base.AdTimestamp = src.IsLiveNow, src.EdgeCandidates, src.AdTimestamp
+	}
 	base.SourceRevision = src.SourceRevision
 	if cur.InboundPulls != nil || incoming.InboundPulls != nil {
 		base.InboundPulls = mergeInboundPulls(cur, incoming)

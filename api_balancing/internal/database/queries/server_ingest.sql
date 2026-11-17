@@ -112,6 +112,7 @@ SELECT COALESCE(ingest_cluster_id, '')::text FROM foghorn.ingest_sessions WHERE 
 UPDATE foghorn.ingest_sessions SET ended_at  =  NOW(), ended_at_unix_millis  =  sqlc.narg(ended_at_unix_millis), ended_reason  =  'stream_end_reaped'
 WHERE tenant_id  =  sqlc.arg(tenant_id)::uuid AND node_id  =  sqlc.arg(node_id) AND stream_internal_name  =  sqlc.arg(stream_internal_name) AND ended_at IS NULL AND started_at_unix_millis <= sqlc.narg(ended_at_unix_millis)
   AND playable_at_unix_millis < sqlc.narg(ended_at_unix_millis)
+  AND runtime_layout_version = 0
 RETURNING id::text AS session_id, start_trigger_uuid, COALESCE(stream_id::text, '')::text AS stream_id;
 -- name: ListStreamEndSparedIngestSessions :many
 -- Open sessions of (tenant, node, stream) left by the STREAM_END reaper, so the refusal is logged.
@@ -233,3 +234,36 @@ SELECT EXISTS (
     WHERE marker.node_id = sqlc.arg(node_id) AND marker.start_trigger_uuid = sqlc.arg(start_trigger_uuid)
       AND marker.connector_pid <> sqlc.arg(connector_pid)
 );
+
+-- name: InsertIsolatedIngestSession :one
+WITH request AS (SELECT sqlc.arg(request)::jsonb AS p)
+INSERT INTO foghorn.ingest_sessions
+ (id,tenant_id,node_id,stream_internal_name,connector_pid,start_trigger_uuid,started_at_unix_millis,
+  dvr_intent,ingest_cluster_id,projection_state,stream_id,media_authority_id,media_authority_version,
+  tenant_authority_version,processes_json,capacity_max_streams,publisher_lease_strict_owner,
+  publisher_lease_epoch,runtime_layout_version,runtime_name)
+SELECT (p->>'generation')::uuid,(p->>'tenant_id')::uuid,p->>'node_id',p->>'internal_name',
+ (p->>'connector_pid')::bigint,p->>'trigger_uuid',(p->>'started_at_millis')::bigint,
+ NULLIF(p->'dvr_intent','null'::jsonb),NULLIF(p->>'ingest_cluster_id',''),'pending',NULLIF(p->>'stream_id','')::uuid,
+ NULLIF(p->'authority'->>'MediaAuthorityID',''),NULLIF((p->'authority'->>'MediaAuthorityVersion')::bigint,0),
+ NULLIF((p->'authority'->>'TenantAuthorityVersion')::bigint,0),COALESCE(p->'authority'->>'ProcessesJSON',''),
+ COALESCE((p->'authority'->>'CapacityMaxStreams')::integer,0),true,(p->>'publisher_lease_epoch')::bigint,1,p->>'runtime_name'
+FROM request RETURNING id::text;
+
+-- name: MarkBoundIngestSessionPlayable :one
+-- First playable buffer of the active session, from the session's own node only.
+-- The playable_at IS NULL guard makes a repeated or replayed buffer trigger match
+-- nothing; the start fence keeps a delayed trigger of an earlier session on the
+-- same node from marking a newer one. Sessions without a public stream ID are
+-- marked too: the STREAM_END reaper orders against playable_at_unix_millis.
+UPDATE foghorn.ingest_sessions
+SET playable_at = NOW(),
+    playable_at_unix_millis = NULLIF(GREATEST(sqlc.arg(event_unix_millis)::bigint, 0), 0)
+WHERE tenant_id = sqlc.arg(tenant_id)::uuid
+  AND stream_internal_name = sqlc.arg(stream_internal_name)
+  AND node_id = sqlc.arg(node_id)
+  AND id=sqlc.arg(generation)::uuid
+  AND ended_at IS NULL
+  AND playable_at IS NULL
+  AND (sqlc.arg(event_unix_millis)::bigint <= 0 OR started_at_unix_millis <= sqlc.arg(event_unix_millis)::bigint)
+RETURNING id::text AS session_id, COALESCE(stream_id::text, '')::text AS stream_id;

@@ -78,7 +78,7 @@ func (s *Server) AdmitPublisher(ctx context.Context, req *ipcpb.AdmitPublisherRe
 	trigger.ClusterId = stringPtrIfNotEmpty(c.clusterID)
 	trigger.ControlCellId = stringPtrIfNotEmpty(localControlCellID)
 	trigger.TenantId, trigger.UserId, trigger.StreamId, trigger.OriginClusterId = nil, nil, nil, nil
-	text, abort, err := processor.ProcessPublisher(ctx, trigger)
+	text, abort, err := processor.ProcessPublisher(publisherRuntimeContext(ctx, c.protocolVersion), trigger)
 	if !publisherConnectionCurrent(req.GetNodeId(), c) {
 		return nil, status.Error(codes.Unavailable, "publisher connection replaced")
 	}
@@ -129,4 +129,23 @@ func LegacyPublisherContext(parent context.Context, trigger *ipcpb.MistTrigger) 
 	}
 	parent = context.WithValue(parent, publisherSettlementCompatibilityKey{}, !capable)
 	return context.WithDeadline(parent, deadline)
+}
+
+type publisherRuntimeLayoutKey struct{}
+
+func publisherRuntimeContext(ctx context.Context, protocolVersion int32) context.Context {
+	version := int32(0)
+	if ControlFeaturesForProtocol(protocolVersion).IsolatedPublisherRuntime {
+		version = 1
+	}
+	return context.WithValue(ctx, publisherRuntimeLayoutKey{}, version)
+}
+
+// PublisherRuntimeLayout comes only from the authenticated control session.
+func PublisherRuntimeLayout(ctx context.Context) int32 {
+	version, ok := ctx.Value(publisherRuntimeLayoutKey{}).(int32)
+	if !ok {
+		return 0
+	}
+	return version
 }

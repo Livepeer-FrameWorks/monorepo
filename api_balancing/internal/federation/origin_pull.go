@@ -13,6 +13,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/google/uuid"
 )
 
@@ -167,6 +168,9 @@ type ArrangeOriginPullRequest struct {
 	RemoteCluster     string
 	TenantID          string
 	SourceGeneration  string
+	SourceLeaseEpoch  int64
+	SourceRuntimeName string
+	DestRuntimeName   string
 	SourceRevision    int64
 	AttemptID         string
 	DestinationFence  int64
@@ -202,6 +206,9 @@ type ArrangeOriginPullResult struct {
 	SourceMediaClusterID string
 	SourceNodeID         string
 	SourceGeneration     string
+	SourceLeaseEpoch     int64
+	SourceRuntimeName    string
+	DestRuntimeName      string
 	SourceRevision       int64
 	DestNodeID           string
 	DestNodeBaseURL      string
@@ -216,7 +223,19 @@ type ArrangeOriginPullResult struct {
 // ReplicatingFrom + PullDTSCURL + DestNodeID, and a source-cluster
 // OutboundPullers entry mirroring it. Loop prevention, single-flight
 // per destination, and NotifyOriginPull rejection are uniformly handled.
-func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req ArrangeOriginPullRequest) (*ArrangeOriginPullResult, error) {
+func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req ArrangeOriginPullRequest) (result *ArrangeOriginPullResult, resultErr error) {
+	defer func() {
+		if resultErr == nil && result != nil && result.DestRuntimeName != "" {
+			registry := d.Registry
+			if registry == nil {
+				registry = control.StreamRegistryInstance
+			}
+			if !registry.BeginNodeRuntime(req.InternalName, result.DestNodeID, req.TenantID, result.DestRuntimeName) {
+				result = nil
+				resultErr = ErrOriginPullSourceBinding
+			}
+		}
+	}()
 	ctx, cancelArrange := context.WithTimeout(ctx, 5*time.Second)
 	defer cancelArrange()
 	if err := ctx.Err(); err != nil {
@@ -342,13 +361,14 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 		return reused, reuseErr
 	}
 
-	// Loop prevention: refuse to pull from a cluster that's already
-	// pulling THIS stream from us.
+	// Legacy pulls use conservative loop hints. Receipt-bound publisher pulls
+	// instead require exact origin acceptance below: hints carry no generation
+	// and may describe the reverse direction before a publisher moved cells.
 	replications, replicationErr := d.Cache.GetRemoteReplications(ctx, req.InternalName)
 	if replicationErr != nil {
 		return nil, fmt.Errorf("%w: read loop prevention: %w", ErrOriginPullStateUnavailable, replicationErr)
 	}
-	if len(replications) > 0 {
+	if len(replications) > 0 && !requiresPublisherOriginAcceptance(req) {
 		for _, r := range replications {
 			// RemoteCluster is not one namespace across callers: the placement
 			// and DVR paths name a cell, while the legacy /source path names the
@@ -389,6 +409,7 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 		// Revalidate missing metadata using the existing physical attempt so
 		// source and destination do not end up tracking different attempts.
 		req.AttemptID = current.AttemptID
+		req.DestRuntimeName = current.DestRuntimeName
 		revalidatedExisting = true
 	}
 
@@ -420,10 +441,18 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 			return nil, ErrOriginPullPeerUnreachable
 		}
 	}
+	if req.SourceRuntimeName != "" {
+		name, err := streamident.BoundRuntimeName(req.InternalName, streamident.RuntimeRelay, req.AttemptID)
+		if err != nil || (req.DestRuntimeName != "" && req.DestRuntimeName != name) {
+			return nil, ErrOriginPullSourceBinding
+		}
+		req.DestRuntimeName = name
+	}
 	if err := bindArrangedPull(ctx, req, PlacementPullBinding{
 		DestinationFence: req.DestinationFence,
 		AttemptID:        req.AttemptID, SourceCellID: req.RemoteCluster, SourceClusterID: req.Remote.GetClusterId(),
 		SourceNodeID: req.Remote.GetNodeId(), SourceGeneration: req.SourceGeneration, SourceRevision: req.SourceRevision,
+		SourceLeaseEpoch: req.SourceLeaseEpoch, SourceRuntimeName: req.SourceRuntimeName, DestRuntimeName: req.DestRuntimeName,
 	}); err != nil {
 		return nil, err
 	}
@@ -436,8 +465,9 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 		DestNodeId:       destNodeID,
 		TenantId:         req.TenantID,
 		SourceGeneration: req.SourceGeneration,
-		SourceRevision:   req.SourceRevision,
-		AttemptId:        req.AttemptID,
+		SourceLeaseEpoch: req.SourceLeaseEpoch, SourceRuntimeName: req.SourceRuntimeName, DestRuntimeName: req.DestRuntimeName,
+		SourceRevision: req.SourceRevision,
+		AttemptId:      req.AttemptID,
 	}
 	if req.Remote.GetClusterId() != "" {
 		notification.SourceCellId, notification.SourceClusterId = req.RemoteCluster, req.Remote.GetClusterId()
@@ -488,6 +518,7 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 		TenantID: req.TenantID, AttemptID: req.AttemptID, SourceClusterID: req.RemoteCluster, SourceNodeID: req.Remote.NodeId,
 		SourceMediaClusterID: ack.GetSourceClusterId(),
 		SourceGeneration:     req.SourceGeneration, SourceRevision: req.SourceRevision, DestClusterID: destClusterID,
+		SourceLeaseEpoch: req.SourceLeaseEpoch, SourceRuntimeName: req.SourceRuntimeName, DestRuntimeName: req.DestRuntimeName,
 		DestNodeID: destNodeID, DestNodeBaseURL: destNodeBaseURL, DTSCURL: ack.DtscUrl,
 		SourceAcceptedAt:  d.now(),
 		PlacementRequired: req.BindPull != nil,
@@ -526,6 +557,7 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 		AttemptID:    pull.AttemptID,
 		SourceCellID: pull.SourceClusterID, SourceMediaClusterID: pull.SourceMediaClusterID, SourceNodeID: pull.SourceNodeID,
 		SourceGeneration: pull.SourceGeneration, SourceRevision: pull.SourceRevision,
+		SourceLeaseEpoch: pull.SourceLeaseEpoch, SourceRuntimeName: pull.SourceRuntimeName, DestRuntimeName: pull.DestRuntimeName,
 		DestNodeID:      destNodeID,
 		DestNodeBaseURL: destNodeBaseURL,
 		PullDTSCURL:     ack.DtscUrl,
@@ -553,11 +585,7 @@ func lookupExistingReplication(ctx context.Context, registry *control.StreamRegi
 		(req.BindPull != nil && (pull.TenantID != req.TenantID || pull.DestClusterID != destClusterID)) {
 		return nil, nil
 	}
-	if err := bindArrangedPull(ctx, req, PlacementPullBinding{
-		DestinationFence: req.DestinationFence,
-		AttemptID:        pull.AttemptID, SourceCellID: pull.SourceClusterID, SourceClusterID: pull.SourceMediaClusterID,
-		SourceNodeID: pull.SourceNodeID, SourceGeneration: pull.SourceGeneration, SourceRevision: pull.SourceRevision,
-	}); err != nil {
+	if err := bindArrangedPull(ctx, req, placementInboundPullBinding(pull, req.DestinationFence)); err != nil {
 		return nil, err
 	}
 	if req.BindPull != nil && !pull.PlacementRequired {
@@ -575,6 +603,7 @@ func lookupExistingReplication(ctx context.Context, registry *control.StreamRegi
 		SourceCellID: pull.SourceClusterID, SourceMediaClusterID: pull.SourceMediaClusterID, SourceNodeID: pull.SourceNodeID,
 		DestNodeID:       pull.DestNodeID,
 		SourceGeneration: pull.SourceGeneration, SourceRevision: pull.SourceRevision,
+		SourceLeaseEpoch: pull.SourceLeaseEpoch, SourceRuntimeName: pull.SourceRuntimeName, DestRuntimeName: pull.DestRuntimeName,
 		DestNodeBaseURL: pull.DestNodeBaseURL,
 		PullDTSCURL:     pull.DTSCURL,
 		Reused:          true,
@@ -599,5 +628,7 @@ func bindArrangedPull(ctx context.Context, req ArrangeOriginPullRequest, pull Pl
 func originPullRecordMatches(req ArrangeOriginPullRequest, destClusterID string, pull control.InboundPull) bool {
 	return (pull.TenantID == "" || pull.TenantID == req.TenantID) && pull.SourceClusterID == req.RemoteCluster &&
 		pull.SourceNodeID == req.Remote.GetNodeId() && pull.SourceGeneration == req.SourceGeneration && pull.SourceRevision == req.SourceRevision &&
+		pull.SourceLeaseEpoch == req.SourceLeaseEpoch && pull.SourceRuntimeName == req.SourceRuntimeName && (req.DestRuntimeName == "" || pull.DestRuntimeName == req.DestRuntimeName) &&
+		control.ValidPublisherPullRuntimes(req.InternalName, pull.SourceGeneration, pull.AttemptID, pull.SourceRuntimeName, pull.DestRuntimeName, pull.SourceLeaseEpoch) &&
 		(pull.DestClusterID == "" || pull.DestClusterID == destClusterID)
 }

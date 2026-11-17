@@ -69,3 +69,28 @@ func sourceConnectionSessionCurrent(session NodeSession, stream ipcpb.HelmsmanCo
 	return c != nil && c.stream == stream && !c.superseded.Load() && c.fence == session.Fence &&
 		c.clusterID == session.ClusterID && c.session().NodeID() == session.NodeID()
 }
+
+// DestinationPublisherRuntimeFence refuses nodes whose current authenticated
+// session cannot interpret isolated runtime names. Unknown is not compatible.
+func DestinationPublisherRuntimeFence(ctx context.Context, nodeID, clusterID string) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if nodeID == "" || clusterID == "" {
+		return 0, ErrDestinationNotConnected
+	}
+	if store := GetRedisStore(); store != nil {
+		owner, protocol, err := store.GetConnOwnerProtocol(ctx, nodeID)
+		if err != nil {
+			return 0, err
+		}
+		if owner.InstanceID != "" && owner.Fence > 0 && protocol.ClusterID == clusterID && ControlFeaturesForProtocol(protocol.ProtocolVersion).IsolatedPublisherRuntime {
+			return owner.Fence, nil
+		}
+	} else if session, ok := currentNodeSession(nodeID); ok && session.ClusterID == clusterID && ControlFeaturesForProtocol(session.ProtocolVersion).IsolatedPublisherRuntime {
+		if fence, ok := LocalSourceConnectionFence(nodeID, clusterID); ok {
+			return fence, nil
+		}
+	}
+	return 0, ErrDestinationNotConnected
+}

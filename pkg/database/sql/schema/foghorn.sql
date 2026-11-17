@@ -747,6 +747,7 @@ CREATE TABLE IF NOT EXISTS foghorn.ingest_sessions (
     stream_internal_name   VARCHAR(255) NOT NULL,
     connector_pid          BIGINT NOT NULL CHECK (connector_pid > 0),
     start_trigger_uuid     VARCHAR(64) NOT NULL CHECK (start_trigger_uuid <> ''),
+    publisher_lease_epoch BIGINT NOT NULL DEFAULT 0 CONSTRAINT chk_ingest_publisher_lease_epoch CHECK (publisher_lease_epoch >= 0),
     started_at_unix_millis BIGINT NOT NULL CHECK (started_at_unix_millis > 0),
     started_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     ended_at               TIMESTAMPTZ,
@@ -2121,6 +2122,27 @@ BEGIN
 END;
 $$;
 
+-- A session's media process name is fixed for its entire lifetime.
+ALTER TABLE foghorn.ingest_sessions ADD COLUMN IF NOT EXISTS runtime_layout_version SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE foghorn.ingest_sessions ADD COLUMN IF NOT EXISTS runtime_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE foghorn.ingest_sessions DROP CONSTRAINT IF EXISTS chk_ingest_runtime_binding;
+ALTER TABLE foghorn.ingest_sessions ADD CONSTRAINT chk_ingest_runtime_binding CHECK (
+ runtime_layout_version=0 OR (runtime_layout_version=1 AND publisher_lease_epoch>0 AND runtime_name='live+'||stream_internal_name||'_fw1p_'||replace(id::text,'-','') AND length(runtime_name)<=100));
+CREATE OR REPLACE FUNCTION foghorn.guard_ingest_runtime_binding()
+RETURNS TRIGGER LANGUAGE plpgsql SET search_path = pg_catalog, foghorn AS $$
+BEGIN
+ IF (OLD.runtime_layout_version=1 OR NEW.runtime_layout_version=1) AND
+    ROW(NEW.runtime_layout_version,NEW.runtime_name,NEW.id,NEW.node_id,NEW.stream_internal_name,NEW.tenant_id)
+    IS DISTINCT FROM ROW(OLD.runtime_layout_version,OLD.runtime_name,OLD.id,OLD.node_id,OLD.stream_internal_name,OLD.tenant_id) THEN
+  RAISE EXCEPTION 'publisher runtime binding is immutable' USING ERRCODE = '23514';
+ END IF;
+ RETURN NEW;
+END;
+$$;
+CREATE OR REPLACE TRIGGER trg_ingest_runtime_binding
+BEFORE UPDATE OF runtime_layout_version,runtime_name,id,node_id,stream_internal_name,tenant_id ON foghorn.ingest_sessions
+FOR EACH ROW EXECUTE FUNCTION foghorn.guard_ingest_runtime_binding();
+
 CREATE OR REPLACE FUNCTION foghorn.prepare_publisher_admission_v1(p jsonb)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SET search_path = pg_catalog, foghorn AS $$
 DECLARE
@@ -2132,6 +2154,9 @@ DECLARE
     pid bigint := (p->>'connector_pid')::bigint;
     fired bigint := (p->>'started_at_millis')::bigint;
     cap integer := COALESCE((p->'authority'->>'CapacityMaxStreams')::integer, 0);
+    lease_epoch bigint := COALESCE((p->>'publisher_lease_epoch')::bigint, 0);
+    layout_version smallint := COALESCE((p->>'runtime_layout_version')::smallint,0);
+    bound_runtime text := COALESCE(p->>'runtime_name','');
     current_row foghorn.ingest_sessions%ROWTYPE;
     incumbent foghorn.ingest_sessions%ROWTYPE;
     generation uuid;
@@ -2141,7 +2166,7 @@ DECLARE
     result_outcome integer := 1;
 BEGIN
     IF tid IS NULL OR node IS NULL OR btrim(node) = '' OR stream IS NULL OR btrim(stream) = ''
-       OR execution IS NULL OR btrim(execution) = '' OR pid <= 0 OR fired <= 0 OR cap < 0 THEN
+       OR execution IS NULL OR btrim(execution) = '' OR pid <= 0 OR fired <= 0 OR cap < 0 OR lease_epoch < 0 OR layout_version NOT IN (0,1) THEN
         RAISE EXCEPTION 'publisher admission identity missing' USING ERRCODE = '22023';
     END IF;
     PERFORM pg_advisory_xact_lock(hashtext('push-admission:' || octet_length(node) || ':' || node || ':' || octet_length(execution) || ':' || execution)::bigint);
@@ -2158,6 +2183,12 @@ BEGIN
         END IF;
         IF current_row.ended_at IS NOT NULL THEN
             RETURN jsonb_build_object('outcome', 2, 'generation', current_row.id);
+        END IF;
+        IF current_row.runtime_layout_version=1 AND layout_version<>1 THEN
+            RETURN jsonb_build_object('outcome',6,'generation',current_row.id);
+        END IF;
+        IF current_row.publisher_lease_epoch > 0 AND current_row.publisher_lease_epoch <> lease_epoch THEN
+            RETURN jsonb_build_object('outcome',6,'generation',current_row.id);
         END IF;
         IF current_row.projection_state='pending' AND (
              current_row.media_authority_version IS DISTINCT FROM NULLIF((p->'authority'->>'MediaAuthorityVersion')::bigint,0)
@@ -2234,12 +2265,16 @@ BEGIN
             RETURN jsonb_build_object('outcome',result_outcome,'stop_claims',stop_claims);
         END IF;
         generation := (p->>'generation')::uuid;
+        IF layout_version=1 AND (lease_epoch<=0 OR NOT COALESCE((p->>'strict_lease_owner')::boolean,false)
+          OR bound_runtime<>'live+'||stream||'_fw1p_'||replace(generation::text,'-','') OR length(bound_runtime)>100) THEN
+            RAISE EXCEPTION 'invalid isolated publisher runtime' USING ERRCODE = '22023';
+        END IF;
         INSERT INTO foghorn.ingest_sessions(id,tenant_id,node_id,stream_internal_name,connector_pid,start_trigger_uuid,
           started_at_unix_millis,dvr_intent,ingest_cluster_id,stream_id,media_authority_id,media_authority_version,
-          tenant_authority_version,processes_json,capacity_max_streams,publisher_admission_version,publisher_lease_strict_owner)
+          tenant_authority_version,processes_json,capacity_max_streams,publisher_admission_version,publisher_lease_strict_owner,publisher_lease_epoch,runtime_layout_version,runtime_name)
         VALUES(generation,tid,node,stream,pid,execution,fired,NULLIF(p->'dvr_intent','null'::jsonb),NULLIF(p->>'ingest_cluster_id',''),sid,
           NULLIF(p->'authority'->>'MediaAuthorityID',''),NULLIF((p->'authority'->>'MediaAuthorityVersion')::bigint,0),
-          NULLIF((p->'authority'->>'TenantAuthorityVersion')::bigint,0),COALESCE(p->'authority'->>'ProcessesJSON',''),cap,1,COALESCE((p->>'strict_lease_owner')::boolean,false));
+          NULLIF((p->'authority'->>'TenantAuthorityVersion')::bigint,0),COALESCE(p->'authority'->>'ProcessesJSON',''),cap,1,COALESCE((p->>'strict_lease_owner')::boolean,false),lease_epoch,layout_version,bound_runtime);
         PERFORM foghorn.enqueue_publisher_event_v1(tid,sid,p->'connected_event');
         SELECT * INTO current_row FROM foghorn.ingest_sessions s WHERE s.id=generation AND s.tenant_id=tid;
     END IF;
@@ -2255,7 +2290,8 @@ BEGIN
         RAISE EXCEPTION 'publisher placement decision expired' USING ERRCODE='22023';
     END IF;
     RETURN jsonb_build_object('outcome',1,'generation',generation,'source_revision',revision,
-      'resumed',current_row.projection_state='active','stop_claims',stop_claims);
+      'publisher_lease_epoch',current_row.publisher_lease_epoch,
+      'runtime_layout_version',current_row.runtime_layout_version,'runtime_name',COALESCE(NULLIF(current_row.runtime_name,''),'live+'||stream),'resumed',current_row.projection_state='active','stop_claims',stop_claims);
 END;
 $$;
 

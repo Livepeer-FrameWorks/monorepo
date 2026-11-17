@@ -154,6 +154,13 @@ func (r *dvrRepositoryDB) UpdateDVRProgressByHash(ctx context.Context, dvrHash s
 		streamID := row.StreamID
 		internalName := row.StreamInternalName
 		dispatchNode := row.DispatchNode
+		if !dvrWriterReportMatches(ctx, row.SourceRuntimeName) {
+			return errStaleDVRWriter
+		}
+		if row.DispatchState == "source_handoff_pending" && status != "recording" {
+			currentStatus = prevStatus
+			return nil
+		}
 
 		// A report for a terminal/finalizing row is a no-op: progress must never overwrite a terminal or
 		// 'finalizing' status. applied=false so callers leave downstream sinks untouched; the current

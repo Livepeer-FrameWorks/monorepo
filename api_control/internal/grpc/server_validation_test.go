@@ -1031,8 +1031,8 @@ func TestSelectActiveIngestCluster(t *testing.T) {
 // against a real Postgres in active_ingest_claim_realpg_test.go — sqlmock can be
 // told what to return, it cannot show what the SQL would do.
 func claimReserved() *sqlmock.Rows {
-	return sqlmock.NewRows([]string{"prev_cluster", "prev_token", "prev_fresh"}).
-		AddRow(nil, nil, false)
+	return sqlmock.NewRows([]string{"prev_cluster", "prev_token", "prev_fresh", "publisher_lease_epoch"}).
+		AddRow(nil, nil, false, 1)
 }
 
 // admittingRoute is a cached route that admits each named cluster: entitled by

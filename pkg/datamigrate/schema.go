@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 // SchemaSQL is the table set every adopting service installs in its own
@@ -46,11 +47,15 @@ CREATE TABLE IF NOT EXISTS _data_migration_runs (
 );
 `
 
-// EnsureSchema installs the data-migration tables in db. Idempotent — uses
-// CREATE TABLE IF NOT EXISTS. Mutating data-migration commands call this
-// before recording state; status treats an absent ledger as pending.
+// EnsureSchema serializes ledger DDL on its locked database session. IF NOT
+// EXISTS alone can race an uncommitted CREATE on another replica. A session
+// lock also spans DDL on engines without transactional DDL.
 func EnsureSchema(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx, SchemaSQL); err != nil {
+	err := database.WithSessionLockConn(ctx, db, "datamigrate.schema", func(conn *sql.Conn) error {
+		_, schemaErr := conn.ExecContext(ctx, SchemaSQL)
+		return schemaErr
+	})
+	if err != nil {
 		return fmt.Errorf("datamigrate: ensure schema: %w", err)
 	}
 	return nil

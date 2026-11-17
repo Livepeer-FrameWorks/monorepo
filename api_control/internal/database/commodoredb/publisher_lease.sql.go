@@ -33,6 +33,7 @@ FROM held WHERE s.id=held.id AND s.tenant_id=$5::uuid
   AND (NOT held.prev_fresh OR (held.prev_cluster=$1 AND held.prev_token=$2
     AND ((held.prev_node IS NULL AND held.prev_cell IS NULL) OR (held.prev_node=$3 AND held.prev_cell=$4))))
 RETURNING held.prev_fresh, held.prev_cluster, held.prev_token,
+          s.publisher_lease_epoch,
           (s.active_ingest_cluster_updated_at + ($6::bigint * INTERVAL '1 second'))::timestamptz AS expires_at
 `
 
@@ -48,10 +49,11 @@ type AcquirePublisherLeaseParams struct {
 }
 
 type AcquirePublisherLeaseRow struct {
-	PrevFresh   bool           `db:"prev_fresh" json:"prev_fresh"`
-	PrevCluster sql.NullString `db:"prev_cluster" json:"prev_cluster"`
-	PrevToken   sql.NullString `db:"prev_token" json:"prev_token"`
-	ExpiresAt   time.Time      `db:"expires_at" json:"expires_at"`
+	PrevFresh           bool           `db:"prev_fresh" json:"prev_fresh"`
+	PrevCluster         sql.NullString `db:"prev_cluster" json:"prev_cluster"`
+	PrevToken           sql.NullString `db:"prev_token" json:"prev_token"`
+	PublisherLeaseEpoch int64          `db:"publisher_lease_epoch" json:"publisher_lease_epoch"`
+	ExpiresAt           time.Time      `db:"expires_at" json:"expires_at"`
 }
 
 func (q *Queries) AcquirePublisherLease(ctx context.Context, arg AcquirePublisherLeaseParams) (AcquirePublisherLeaseRow, error) {
@@ -70,13 +72,14 @@ func (q *Queries) AcquirePublisherLease(ctx context.Context, arg AcquirePublishe
 		&i.PrevFresh,
 		&i.PrevCluster,
 		&i.PrevToken,
+		&i.PublisherLeaseEpoch,
 		&i.ExpiresAt,
 	)
 	return i, err
 }
 
 const getPublisherLease = `-- name: GetPublisherLease :one
-SELECT active_ingest_cluster_id, active_ingest_claim_id,
+SELECT active_ingest_cluster_id, active_ingest_claim_id, active_ingest_node_id, active_ingest_control_cell_id, publisher_lease_epoch,
        COALESCE(active_ingest_cluster_updated_at + ($1::bigint * INTERVAL '1 second'), NOW())::timestamptz AS expires_at
 FROM commodore.streams
 WHERE tenant_id=$2::uuid AND id=$3::uuid
@@ -91,9 +94,12 @@ type GetPublisherLeaseParams struct {
 }
 
 type GetPublisherLeaseRow struct {
-	ActiveIngestClusterID sql.NullString `db:"active_ingest_cluster_id" json:"active_ingest_cluster_id"`
-	ActiveIngestClaimID   sql.NullString `db:"active_ingest_claim_id" json:"active_ingest_claim_id"`
-	ExpiresAt             time.Time      `db:"expires_at" json:"expires_at"`
+	ActiveIngestClusterID     sql.NullString `db:"active_ingest_cluster_id" json:"active_ingest_cluster_id"`
+	ActiveIngestClaimID       sql.NullString `db:"active_ingest_claim_id" json:"active_ingest_claim_id"`
+	ActiveIngestNodeID        sql.NullString `db:"active_ingest_node_id" json:"active_ingest_node_id"`
+	ActiveIngestControlCellID sql.NullString `db:"active_ingest_control_cell_id" json:"active_ingest_control_cell_id"`
+	PublisherLeaseEpoch       int64          `db:"publisher_lease_epoch" json:"publisher_lease_epoch"`
+	ExpiresAt                 time.Time      `db:"expires_at" json:"expires_at"`
 }
 
 func (q *Queries) GetPublisherLease(ctx context.Context, arg GetPublisherLeaseParams) (GetPublisherLeaseRow, error) {
@@ -104,7 +110,14 @@ func (q *Queries) GetPublisherLease(ctx context.Context, arg GetPublisherLeasePa
 		arg.InternalName,
 	)
 	var i GetPublisherLeaseRow
-	err := row.Scan(&i.ActiveIngestClusterID, &i.ActiveIngestClaimID, &i.ExpiresAt)
+	err := row.Scan(
+		&i.ActiveIngestClusterID,
+		&i.ActiveIngestClaimID,
+		&i.ActiveIngestNodeID,
+		&i.ActiveIngestControlCellID,
+		&i.PublisherLeaseEpoch,
+		&i.ExpiresAt,
+	)
 	return i, err
 }
 

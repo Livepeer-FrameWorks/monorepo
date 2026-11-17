@@ -63,7 +63,11 @@ type FinalizeOptions struct {
 	// (dvr_start_dispatch.node_id) of an active recording — so a node that merely knows the DVR hash
 	// cannot finalize another node's live recording. Empty for control-plane-internal callers
 	// (RECORDING_END, StopDVR, the recovery worker), which are authoritative and skip the node bind.
-	ReportingNodeID string
+	ReportingNodeID        string
+	reportingTenantID      string
+	WriterEndedSourceState ipcpb.DVRSourceState
+	DetachedSession        *string
+	WriterOutcomeUnknown   bool
 	// RetainStopObligation keeps the dvr_start_dispatch stop obligation (state='stop_pending' and the
 	// re-dispatch fields) in place across this terminal transition. Default (false): a terminal DVR has no
 	// live recording, so the obligation is cleared while the immutable recording owner is RETAINED
@@ -88,13 +92,42 @@ type FinalizeResult struct {
 // enqueues recording.stopped in the same transaction. A stale 'finalizing'
 // reclaim and a recording that never captured emit nothing, so stopped follows
 // started exactly once. sql.ErrNoRows means nothing was claimable.
-func claimDVRFinalization(ctx context.Context, dvrHash string) (foghorndb.ClaimDVRFinalizationRow, error) {
+func claimDVRFinalization(ctx context.Context, dvrHash string, options ...FinalizeOptions) (foghorndb.ClaimDVRFinalizationRow, error) {
 	var claimed foghorndb.ClaimDVRFinalizationRow
 	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		if len(options) > 0 && options[0].DetachedSession != nil {
+			*options[0].DetachedSession = ""
+		}
 		q := foghorndb.New(tx)
 		prior, err := q.LockDVRFinalizationPrior(ctx, dvrHash)
 		if err != nil {
 			return err
+		}
+		if !dvrWriterReportMatches(ctx, prior.SourceRuntimeName) {
+			return errStaleDVRWriter
+		}
+		if len(options) > 0 && options[0].ReportingNodeID != "" {
+			opts := options[0]
+			if opts.StartedAtUnix > 0 {
+				if startErr := recordDVRStartTime(ctx, q, dvrHash, opts.reportingTenantID, opts.ReportingNodeID, opts.StartedAtUnix); startErr != nil {
+					return startErr
+				}
+			}
+			if (opts.WriterOutcomeUnknown || opts.WriterEndedSourceState != ipcpb.DVRSourceState_DVR_SOURCE_STATE_ENDED) && opts.DetachedSession != nil {
+				row, detachErr := q.DetachEndedWriterFromLiveSession(ctx, dvrHash)
+				if detachErr != nil && !errors.Is(detachErr, sql.ErrNoRows) {
+					return detachErr
+				}
+				*opts.DetachedSession = row.SessionID
+			}
+			if opts.WriterOutcomeUnknown {
+				if stopErr := q.MarkDVRStopPending(ctx, foghorndb.MarkDVRStopPendingParams{ArtifactHash: dvrHash, TenantID: opts.reportingTenantID}); stopErr != nil {
+					return stopErr
+				}
+				if interruptedErr := q.RecordDVRSourceHandoffInterrupted(ctx, foghorndb.RecordDVRSourceHandoffInterruptedParams{ArtifactHash: dvrHash, TenantID: opts.reportingTenantID}); interruptedErr != nil {
+					return interruptedErr
+				}
+			}
 		}
 		claimed, err = q.ClaimDVRFinalization(ctx, foghorndb.ClaimDVRFinalizationParams{
 			ArtifactHash: dvrHash, StaleSeconds: staleDVRFinalizingAfter.Seconds(),
@@ -141,6 +174,7 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 			// no row to claim, so return NoOp rather than falling through to a "dvr not found" error.
 			return FinalizeResult{NoOp: true}, nil
 		}
+		opts.reportingTenantID = tenantID
 		ok, chkErr := dvrReportNodeAuthorized(ctx, dvrHash, tenantID, opts.ReportingNodeID, dvrAuthIdempotentStop)
 		if chkErr != nil {
 			return FinalizeResult{}, fmt.Errorf("verify dvr stop reporting node: %w", chkErr)
@@ -150,15 +184,15 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 				Warn("FinalizeDVR: rejecting stop from a node that is not the dispatched recording owner")
 			return FinalizeResult{NoOp: true}, fmt.Errorf("dvr stop for %s rejected: reporting node %q is not the dispatched recording node", dvrHash, opts.ReportingNodeID)
 		}
-		if err := recordDVRStartTime(ctx, dvrHash, tenantID, opts.ReportingNodeID, opts.StartedAtUnix); err != nil {
-			return FinalizeResult{}, fmt.Errorf("record dvr start time: %w", err)
-		}
 	}
 
 	// Atomic claim of the active/stopping->finalizing transition. A stale
 	// finalizing row is also reclaimable: a previous finalizer may have crashed
 	// or failed after the claim but before writing the terminal status.
-	claimed, err := claimDVRFinalization(ctx, dvrHash)
+	claimed, err := claimDVRFinalization(ctx, dvrHash, opts)
+	if errors.Is(err, errStaleDVRWriter) {
+		return FinalizeResult{NoOp: true}, err
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		// Already terminal or in flight. Read current status and return NoOp.
 		current, readErr := readArtifactStatus(ctx, dvrHash)
@@ -280,7 +314,7 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 	}
 
 	finalStatus := "completed"
-	if lostCount > 0 {
+	if lostCount > 0 || opts.WriterOutcomeUnknown {
 		finalStatus = "completed_partial"
 	}
 

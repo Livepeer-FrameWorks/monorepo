@@ -19,7 +19,8 @@ import (
 const (
 	// DVRDispatchStatePending marks a DVR start that was dispatched to a node and is awaiting the
 	// node's first progress ack (which promotes the row 'starting'->'recording').
-	DVRDispatchStatePending = "pending"
+	DVRDispatchStatePending              = "pending"
+	DVRDispatchStateSourceHandoffPending = "source_handoff_pending"
 	// DVRDispatchStateStopPending marks a DVR whose compensating stop failed and must be drained: the
 	// recovery worker re-sends the stop until the node accepts it (then the node's DVRStopped finalizes
 	// the row) or finalizes the row failed once unrecoverable.
@@ -31,11 +32,12 @@ const (
 // DVRStartRequest, so DVRStartingRecoveryJob can idempotently re-dispatch a start whose node ack was
 // lost — without re-resolving live source/storage routing.
 type DVRStartDispatch struct {
-	State             string `json:"state"`
-	NodeID            string `json:"node_id"`
-	NodeBaseURL       string `json:"node_base_url"`
-	SourceRuntimeName string `json:"source_runtime_name"`
-	SourceBaseURL     string `json:"source_base_url"`
+	State                     string `json:"state"`
+	NodeID                    string `json:"node_id"`
+	NodeBaseURL               string `json:"node_base_url"`
+	SourceRuntimeName         string `json:"source_runtime_name"`
+	PreviousSourceRuntimeName string `json:"previous_source_runtime_name,omitempty"`
+	SourceBaseURL             string `json:"source_base_url"`
 	// SourceNodeID is the ingest node that accepted this recording's session. An
 	// ingest session is node-bound, so a later StartDVR resolving a DIFFERENT live
 	// source node for the same stream is a new session: startDVR records it fresh
@@ -332,13 +334,14 @@ func (j *DVRStartingRecoveryJob) reconcileOne(ctx context.Context, r startingDVR
 		return
 	}
 	startReq := &ipcpb.DVRStartRequest{
-		DvrHash:           r.artifactHash,
-		InternalName:      d.InternalName,
-		SourceRuntimeName: d.SourceRuntimeName,
-		SourceBaseUrl:     d.SourceBaseURL,
-		RequestId:         r.artifactHash,
-		StreamId:          d.StreamID,
-		CommandGeneration: control.DVRStartCommandGeneration,
+		DvrHash:                   r.artifactHash,
+		InternalName:              d.InternalName,
+		SourceRuntimeName:         d.SourceRuntimeName,
+		PreviousSourceRuntimeName: d.PreviousSourceRuntimeName,
+		SourceBaseUrl:             d.SourceBaseURL,
+		RequestId:                 r.artifactHash,
+		StreamId:                  d.StreamID,
+		CommandGeneration:         control.DVRStartCommandGeneration,
 		Config: &ipcpb.DVRConfig{
 			Enabled:          true,
 			Format:           "ts",

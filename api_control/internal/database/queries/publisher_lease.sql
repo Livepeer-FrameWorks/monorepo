@@ -39,10 +39,11 @@ FROM held WHERE s.id=held.id AND s.tenant_id=sqlc.arg(tenant_id)::uuid
   AND (NOT held.prev_fresh OR (held.prev_cluster=sqlc.arg(cluster_id) AND held.prev_token=sqlc.arg(execution_token)
     AND ((held.prev_node IS NULL AND held.prev_cell IS NULL) OR (held.prev_node=sqlc.arg(node_id) AND held.prev_cell=sqlc.arg(control_cell_id)))))
 RETURNING held.prev_fresh, held.prev_cluster, held.prev_token,
+          s.publisher_lease_epoch,
           (s.active_ingest_cluster_updated_at + (sqlc.arg(lease_seconds)::bigint * INTERVAL '1 second'))::timestamptz AS expires_at;
 
 -- name: GetPublisherLease :one
-SELECT active_ingest_cluster_id, active_ingest_claim_id,
+SELECT active_ingest_cluster_id, active_ingest_claim_id, active_ingest_node_id, active_ingest_control_cell_id, publisher_lease_epoch,
        COALESCE(active_ingest_cluster_updated_at + (sqlc.arg(lease_seconds)::bigint * INTERVAL '1 second'), NOW())::timestamptz AS expires_at
 FROM commodore.streams
 WHERE tenant_id=sqlc.arg(tenant_id)::uuid AND id=sqlc.arg(stream_id)::uuid

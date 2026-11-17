@@ -14,6 +14,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/google/uuid"
 )
 
@@ -740,6 +741,9 @@ func ParseTriggerToProtobufWithHeaders(triggerType TriggerType, rawPayload []byt
 // playback uses the chapter VOD artifact's playback_id (resolved
 // through Commodore) and never produces a dvr+ token.
 func ExtractInternalName(streamName string) string {
+	if binding, ok := streamident.ParseRuntimeBinding(streamName); ok {
+		return binding.InternalName
+	}
 	for _, prefix := range wildcardPrefixes {
 		if rest, ok := strings.CutPrefix(streamName, prefix); ok {
 			return rest

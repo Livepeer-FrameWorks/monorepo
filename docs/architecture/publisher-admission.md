@@ -73,6 +73,95 @@ hints wake the existing DVR recovery worker immediately after commit; network
 sends occur on that worker. Lost hints or a crashed process retain the durable
 periodic recovery path.
 
+## Publisher ownership across cells
+
+Commodore allocates `publisher_lease_epoch` on the stream row whenever the
+cluster, cell, node or execution owning its lease changes. The counter survives
+release. Replaying the same execution or refreshing its signed configuration
+retains the epoch. Renewal and release of a fenced session compare its epoch as
+well as its exact execution tuple; a refused release cannot abandon the current
+execution. Existing clients without an epoch retain their execution-token
+contract during rollout.
+
+Foghorn persists that epoch on the admitted generation and transports it with
+source advertisements, accepted pulls and placement receipts. Epochs order
+owners across cells. `source_revision` orders transitions within one cell and
+owner; counters allocated by different cell databases cannot order a handoff.
+Conflicting identities in one epoch are refused. A withdrawal retains the owner
+fence so a delayed live advertisement cannot restore it. A legacy peer hint is
+not allowed to veto admission already serialized by a current global lease.
+
+Before accepting a new source pull or its physical DTSC connection, the source
+cell verifies its active session and reads the exact current Commodore lease.
+An expired, replaced or unverifiable lease refuses the new connection. This
+check is per source admission, never per media frame. Advertisements and signed
+configuration grant no right to extend an ownership lease.
+
+Lease expiry alone cannot fence an isolated media process. Existing media
+connections may drain their old generation; source identity and media-process
+isolation must prevent that generation from overwriting or cleaning up its
+successor. The lease/leader distinction is also explicit in
+[client-go's leader election contract](https://github.com/kubernetes/client-go/blob/master/tools/leaderelection/leaderelection.go).
+
+Protocol 11 separates logical stream identity from physical Mist buffers. Each
+publisher uses `live+<internal>_fw1p_<generation UUID without hyphens>`; each
+accepted relay uses `live+<internal>_fw1r_<pull attempt UUID without hyphens>`.
+The persisted session and receipt authorize those exact names. Names alone
+confer no authority. Existing sessions retain their recorded layout. Unknown
+or older destinations cannot consume an isolated source. Registry and authority
+lookups normalize physical names to their logical key; source admission reads
+current shared ownership even when a replica has an older cached entry.
+
+Completed source receipts carry the lease epoch, source runtime and destination
+runtime through creation, consumption and acceptance renewal. Playback grants
+combine signed policy with the serving node's current runtime, so a policy
+refresh cannot redirect a viewer to a generic or superseded buffer. Delayed
+observations and cleanup affect only their recorded generation. Policy changes
+and revocations cover all retained live generations, while a physical drain
+command continues to target exactly one runtime.
+
+### Rollout and rollback
+
+Apply the Commodore and Foghorn expand migrations before their new binaries.
+An upgraded edge declares control protocol11; older edges retain their existing
+layout0 sessions and cannot accept an isolated relay. Complete the edge upgrade
+before claiming the physical handoff fix for that edge. Existing generation
+bindings are never rewritten by a reconnect or heartbeat.
+
+The release catalog disables automatic rollback of Commodore, Foghorn and
+Helmsman across this runtime contract. Previous binaries cannot interpret the
+new physical identities or a persisted version2 recording handoff. Recover a
+failed rollout by repairing the new version; do not automatically restore an
+older binary over an active isolated execution.
+
+### Recording continuation
+
+A short reconnect on the same source node retains its recording through an
+explicit source handoff. Under the artifact lock, Foghorn persists the new
+ingest generation and a `source_handoff_pending` descriptor containing both
+runtime names before dispatching. Progress and terminal reports are checked
+against that writer binding under the same row lock. Old reports cannot
+acknowledge or finalize the replacement. Only confirmed replacement progress
+clears the handoff obligation; the recording.started event is not repeated.
+
+Helmsman fsyncs the local transition before stopping the old writer. It starts
+the replacement only after the exact writer has exited the same Mist
+controller incarnation, or an exact writer-end proof establishes completion.
+Writer-end proofs are persisted independently of the manager lock. Append
+retains the parent manifest and uses generation-specific segment filenames:
+Mist reconstructs its counter from retained playlist entries, which cannot
+protect filenames pruned from a rolling playlist. A lost start reply is
+reconciled by exact writer identity and never blindly reissued.
+
+If a sidecar restart or an ambiguous native call leaves replacement issuance
+unknown and no writer can be confirmed, continuation is cancelled durably. The partial recording is
+settled with a retained stop obligation, and the still-live publisher is handed
+to recording-intent recovery to start a fresh recording. A late old writer
+cannot alter that fresh recording's files. This interrupted case can create a
+recording boundary; it must not silently stop capture or reopen the old writer.
+Clean native rejections remain retryable; unknown results do not become clean
+rejections. Stops serialize with the local handoff and cancel it before draining.
+
 ## Request lifetime and shared work
 
 Helmsman starts the request lifetime before its causal queue. The shared

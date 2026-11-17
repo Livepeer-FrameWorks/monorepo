@@ -8,6 +8,7 @@ package foghorndb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 )
 
 const abortPendingSourceProjection = `-- name: AbortPendingSourceProjection :one
@@ -710,6 +711,29 @@ func (q *Queries) InsertIngestSessionWithAuthority(ctx context.Context, arg Inse
 	return id, err
 }
 
+const insertIsolatedIngestSession = `-- name: InsertIsolatedIngestSession :one
+WITH request AS (SELECT $1::jsonb AS p)
+INSERT INTO foghorn.ingest_sessions
+ (id,tenant_id,node_id,stream_internal_name,connector_pid,start_trigger_uuid,started_at_unix_millis,
+  dvr_intent,ingest_cluster_id,projection_state,stream_id,media_authority_id,media_authority_version,
+  tenant_authority_version,processes_json,capacity_max_streams,publisher_lease_strict_owner,
+  publisher_lease_epoch,runtime_layout_version,runtime_name)
+SELECT (p->>'generation')::uuid,(p->>'tenant_id')::uuid,p->>'node_id',p->>'internal_name',
+ (p->>'connector_pid')::bigint,p->>'trigger_uuid',(p->>'started_at_millis')::bigint,
+ NULLIF(p->'dvr_intent','null'::jsonb),NULLIF(p->>'ingest_cluster_id',''),'pending',NULLIF(p->>'stream_id','')::uuid,
+ NULLIF(p->'authority'->>'MediaAuthorityID',''),NULLIF((p->'authority'->>'MediaAuthorityVersion')::bigint,0),
+ NULLIF((p->'authority'->>'TenantAuthorityVersion')::bigint,0),COALESCE(p->'authority'->>'ProcessesJSON',''),
+ COALESCE((p->'authority'->>'CapacityMaxStreams')::integer,0),true,(p->>'publisher_lease_epoch')::bigint,1,p->>'runtime_name'
+FROM request RETURNING id::text
+`
+
+func (q *Queries) InsertIsolatedIngestSession(ctx context.Context, request json.RawMessage) (string, error) {
+	row := q.db.QueryRowContext(ctx, insertIsolatedIngestSession, request)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const listOpenIngestSessionsByTrigger = `-- name: ListOpenIngestSessionsByTrigger :many
 SELECT id::text AS session_id, tenant_id::text AS tenant_id, stream_internal_name FROM foghorn.ingest_sessions
 WHERE node_id  =  $1 AND start_trigger_uuid  =  $2 AND ended_at IS NULL
@@ -902,6 +926,51 @@ func (q *Queries) LockIngestStream(ctx context.Context, hashtext string) error {
 	return err
 }
 
+const markBoundIngestSessionPlayable = `-- name: MarkBoundIngestSessionPlayable :one
+UPDATE foghorn.ingest_sessions
+SET playable_at = NOW(),
+    playable_at_unix_millis = NULLIF(GREATEST($1::bigint, 0), 0)
+WHERE tenant_id = $2::uuid
+  AND stream_internal_name = $3
+  AND node_id = $4
+  AND id=$5::uuid
+  AND ended_at IS NULL
+  AND playable_at IS NULL
+  AND ($1::bigint <= 0 OR started_at_unix_millis <= $1::bigint)
+RETURNING id::text AS session_id, COALESCE(stream_id::text, '')::text AS stream_id
+`
+
+type MarkBoundIngestSessionPlayableParams struct {
+	EventUnixMillis    int64  `db:"event_unix_millis" json:"event_unix_millis"`
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	NodeID             string `db:"node_id" json:"node_id"`
+	Generation         string `db:"generation" json:"generation"`
+}
+
+type MarkBoundIngestSessionPlayableRow struct {
+	SessionID string `db:"session_id" json:"session_id"`
+	StreamID  string `db:"stream_id" json:"stream_id"`
+}
+
+// First playable buffer of the active session, from the session's own node only.
+// The playable_at IS NULL guard makes a repeated or replayed buffer trigger match
+// nothing; the start fence keeps a delayed trigger of an earlier session on the
+// same node from marking a newer one. Sessions without a public stream ID are
+// marked too: the STREAM_END reaper orders against playable_at_unix_millis.
+func (q *Queries) MarkBoundIngestSessionPlayable(ctx context.Context, arg MarkBoundIngestSessionPlayableParams) (MarkBoundIngestSessionPlayableRow, error) {
+	row := q.db.QueryRowContext(ctx, markBoundIngestSessionPlayable,
+		arg.EventUnixMillis,
+		arg.TenantID,
+		arg.StreamInternalName,
+		arg.NodeID,
+		arg.Generation,
+	)
+	var i MarkBoundIngestSessionPlayableRow
+	err := row.Scan(&i.SessionID, &i.StreamID)
+	return i, err
+}
+
 const markIngestSessionPlayable = `-- name: MarkIngestSessionPlayable :one
 UPDATE foghorn.ingest_sessions
 SET playable_at = NOW(),
@@ -1085,6 +1154,7 @@ const reapStreamEndIngestSessions = `-- name: ReapStreamEndIngestSessions :many
 UPDATE foghorn.ingest_sessions SET ended_at  =  NOW(), ended_at_unix_millis  =  $1, ended_reason  =  'stream_end_reaped'
 WHERE tenant_id  =  $2::uuid AND node_id  =  $3 AND stream_internal_name  =  $4 AND ended_at IS NULL AND started_at_unix_millis <= $1
   AND playable_at_unix_millis < $1
+  AND runtime_layout_version = 0
 RETURNING id::text AS session_id, start_trigger_uuid, COALESCE(stream_id::text, '')::text AS stream_id
 `
 

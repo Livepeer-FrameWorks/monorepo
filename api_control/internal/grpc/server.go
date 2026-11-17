@@ -2335,6 +2335,9 @@ func (s *CommodoreServer) validateStreamKey(ctx context.Context, req *commodorep
 			s.logger.WithError(claimErr).WithField("stream_key", logging.RedactSecret(streamKey)).Warn("Failed to record ingest cluster")
 		case claimErr == nil:
 			resp.PublisherExecutionFenced = boundExecution
+			if boundExecution {
+				resp.PublisherLeaseEpoch = claim.PublisherLeaseEpoch
+			}
 			// Reserved rather than refreshed when nothing live held it, or when
 			// the live claim was in another cluster's name or ownerless.
 			reserved := !claim.PrevFresh ||
@@ -2963,6 +2966,7 @@ func (s *CommodoreServer) applyActiveIngestPlacement(ctx context.Context, defaul
 	claimTokens := make([]string, 0, len(streams))
 	clusterIDs := make([]string, 0, len(streams))
 	strictOwners := make([]bool, 0, len(streams))
+	leaseEpochs := make([]int64, 0, len(streams))
 	nodeIDs, cellIDs := make([]string, 0, len(streams)), make([]string, 0, len(streams))
 	var executionKeys []string
 	for _, stream := range streams {
@@ -2985,6 +2989,9 @@ func (s *CommodoreServer) applyActiveIngestPlacement(ctx context.Context, defaul
 		if clusterID == "" {
 			return 0, nil, status.Error(codes.InvalidArgument, "each stream requires cluster_id (or a request-level default)")
 		}
+		if stream.GetPublisherLeaseEpoch() < 0 || (stream.GetPublisherLeaseEpoch() > 0 && (stream.GetNodeId() == "" || stream.GetControlCellId() == "")) {
+			return 0, nil, status.Error(codes.InvalidArgument, "publisher lease epoch requires exact execution identity")
+		}
 		if stream.GetNodeId() != "" || stream.GetControlCellId() != "" {
 			if err := validatePublisherExecutionIdentity(stream.GetNodeId(), stream.GetControlCellId()); err != nil {
 				return 0, nil, err
@@ -3001,6 +3008,7 @@ func (s *CommodoreServer) applyActiveIngestPlacement(ctx context.Context, defaul
 		claimTokens = append(claimTokens, claimToken)
 		clusterIDs = append(clusterIDs, clusterID)
 		strictOwners = append(strictOwners, stream.GetRequireExistingOwner())
+		leaseEpochs = append(leaseEpochs, stream.GetPublisherLeaseEpoch())
 	}
 	if len(tenantIDs) == 0 {
 		return 0, nil, nil
@@ -3029,6 +3037,7 @@ func (s *CommodoreServer) applyActiveIngestPlacement(ctx context.Context, defaul
 				ClaimTokens:   claimTokens,
 				ClusterIDs:    clusterIDs,
 				StrictOwners:  strictOwners,
+				LeaseEpochs:   leaseEpochs,
 				NodeIDs:       nodeIDs, ControlCellIDs: cellIDs,
 				LeaseSeconds: int64(activeIngestLease.Seconds()),
 				Renew:        renew,

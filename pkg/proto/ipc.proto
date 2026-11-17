@@ -1077,6 +1077,10 @@ message Heartbeat {
   // retract-completion on the next heartbeat's snapshot rather than
   // assuming the wire-send means Mist actually landed the config.
   repeated AppliedManagedStream applied_managed_streams = 2;
+  // Retries exact-generation cleanup while the sidecar still owns the process.
+  // Absence from this live snapshot does not retire an open admission.
+  repeated LiveIngestGeneration live_ingest_generations = 3;
+  bool live_ingest_generations_reported = 4;
 }
 
 message MistTrigger {
@@ -1329,6 +1333,10 @@ message DVRStartRequest {
   // is lost. A stop always carries a strictly higher generation than the start it
   // supersedes; a DVR hash is never reused (time-seeded + UNIQUE), so start=1 < stop=2 holds.
   int64 command_generation = 10;
+  // Exact old writer binding being replaced while retaining this recording.
+  // Empty starts a recording; a replacement must durably retire this writer
+  // before opening source_runtime_name against the same manifest.
+  string previous_source_runtime_name = 11;
 }
 
 // DVRConfig is the resolved per-session DVR configuration Foghorn passes to
@@ -1358,6 +1366,7 @@ message DVRProgress {
   int32 segment_count = 5;       // Number of segments recorded so far
   uint64 size_bytes = 6;         // Total size of recording so far
   string message = 7;            // Optional progress message
+  string source_runtime_name = 8;
 }
 
 message DVRStopped {
@@ -1372,6 +1381,10 @@ message DVRStopped {
   string manifest_path = 9;      // Path to the m3u8 manifest for playback
   // The recording's source stream on this node as Mist reported it when the stop was reported.
   DVRSourceState source_state = 10;
+  string source_runtime_name = 11;
+  // A source handoff has an unknown issuance outcome without a confirmed writer.
+  // Finalize the partial recording while retaining its exact stop obligation.
+  bool writer_outcome_unknown = 12;
 }
 
 // DVRSourceState is whether the stream a stopped recording read from still had a live buffer

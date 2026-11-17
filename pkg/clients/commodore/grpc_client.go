@@ -1731,6 +1731,11 @@ func (c *GRPCClient) AcquirePublisherLease(ctx context.Context, request *commodo
 	return c.internal.AcquirePublisherLease(withServiceAuth(ctx), request)
 }
 
+// GetPublisherLease checks an exact execution without acquiring or renewing it.
+func (c *GRPCClient) GetPublisherLease(ctx context.Context, request *commodorepb.PublisherLeaseRequest) (*commodorepb.PublisherLeaseResponse, error) {
+	return c.internal.GetPublisherLease(withServiceAuth(ctx), request)
+}
+
 // RenewPublisherLeases never falls back to the claim-establishing legacy RPC.
 func (c *GRPCClient) RenewPublisherLeases(ctx context.Context, streams []*commodorepb.ActiveIngestStream) (*commodorepb.SyncActiveIngestPlacementResponse, error) {
 	response, err := c.internal.RenewPublisherLeases(withServiceAuth(ctx), &commodorepb.SyncActiveIngestPlacementRequest{Renew: streams})

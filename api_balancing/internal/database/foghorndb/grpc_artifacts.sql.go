@@ -28,14 +28,20 @@ WHERE a.artifact_hash = (
     SELECT c.artifact_hash
     FROM foghorn.artifacts c
     JOIN foghorn.ingest_sessions s ON s.id = c.ingest_generation
-    WHERE c.tenant_id = $2::uuid
-      AND c.stream_internal_name = $3
+    JOIN foghorn.ingest_sessions resumed ON resumed.id = $1::uuid
+      AND resumed.tenant_id = c.tenant_id AND resumed.node_id = $2::text
+      AND resumed.stream_internal_name = c.stream_internal_name
+      AND resumed.ended_at IS NULL
+    WHERE c.tenant_id = $3::uuid
+      AND c.stream_internal_name = $4
       AND c.artifact_type = 'dvr'
       AND c.status IN ('requested', 'starting', 'recording')
       AND c.federated_pointer = false
-      AND c.dvr_start_dispatch->>'source_node_id' = $4::text
+      AND c.dvr_start_dispatch->>'source_node_id' = $2::text
       AND c.ingest_generation <> $1::uuid
       AND s.ended_at IS NOT NULL
+      AND (resumed.runtime_layout_version = 0 OR
+           c.dvr_start_dispatch->>'source_runtime_name' = resumed.runtime_name)
     ORDER BY c.created_at DESC
     LIMIT 1
     FOR UPDATE OF c
@@ -45,9 +51,9 @@ RETURNING a.artifact_hash, a.status
 
 type AdoptResumedDVRParams struct {
 	NewGeneration      string         `db:"new_generation" json:"new_generation"`
+	SourceNodeID       string         `db:"source_node_id" json:"source_node_id"`
 	TenantID           string         `db:"tenant_id" json:"tenant_id"`
 	StreamInternalName sql.NullString `db:"stream_internal_name" json:"stream_internal_name"`
-	SourceNodeID       string         `db:"source_node_id" json:"source_node_id"`
 }
 
 type AdoptResumedDVRRow struct {
@@ -62,9 +68,9 @@ type AdoptResumedDVRRow struct {
 func (q *Queries) AdoptResumedDVR(ctx context.Context, arg AdoptResumedDVRParams) (AdoptResumedDVRRow, error) {
 	row := q.db.QueryRowContext(ctx, adoptResumedDVR,
 		arg.NewGeneration,
+		arg.SourceNodeID,
 		arg.TenantID,
 		arg.StreamInternalName,
-		arg.SourceNodeID,
 	)
 	var i AdoptResumedDVRRow
 	err := row.Scan(&i.ArtifactHash, &i.Status)
@@ -1447,6 +1453,55 @@ func (q *Queries) PersistVodCompletionContract(ctx context.Context, arg PersistV
 		arg.S3UploadID,
 	)
 	return err
+}
+
+const prepareDVRSourceHandoff = `-- name: PrepareDVRSourceHandoff :one
+UPDATE foghorn.artifacts a
+SET ingest_generation = $1::uuid,
+    dvr_start_dispatch = $2::text::jsonb,
+    updated_at = NOW()
+WHERE a.artifact_hash = $3
+  AND a.tenant_id = $4::uuid
+  AND a.artifact_type = 'dvr' AND a.status = 'recording'
+  AND a.federated_pointer = false
+  AND a.ingest_generation = $5::uuid
+  AND a.dvr_start_dispatch->>'source_runtime_name' = $6::text
+  AND COALESCE(a.dvr_start_dispatch->>'state', '') <> 'source_handoff_pending'
+  AND EXISTS (SELECT 1 FROM foghorn.ingest_sessions old
+      WHERE old.id = a.ingest_generation AND old.tenant_id = a.tenant_id AND old.ended_at IS NOT NULL)
+  AND EXISTS (SELECT 1 FROM foghorn.ingest_sessions resumed
+      WHERE resumed.id = $1::uuid AND resumed.tenant_id = a.tenant_id
+        AND resumed.stream_internal_name = a.stream_internal_name AND resumed.node_id = $7::text
+        AND resumed.ended_at IS NULL AND resumed.runtime_layout_version = 1
+        AND resumed.runtime_name = $8::text)
+RETURNING a.artifact_hash
+`
+
+type PrepareDVRSourceHandoffParams struct {
+	NewGeneration string `db:"new_generation" json:"new_generation"`
+	DispatchJson  string `db:"dispatch_json" json:"dispatch_json"`
+	ArtifactHash  string `db:"artifact_hash" json:"artifact_hash"`
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
+	OldGeneration string `db:"old_generation" json:"old_generation"`
+	OldRuntime    string `db:"old_runtime" json:"old_runtime"`
+	SourceNodeID  string `db:"source_node_id" json:"source_node_id"`
+	NewRuntime    string `db:"new_runtime" json:"new_runtime"`
+}
+
+func (q *Queries) PrepareDVRSourceHandoff(ctx context.Context, arg PrepareDVRSourceHandoffParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, prepareDVRSourceHandoff,
+		arg.NewGeneration,
+		arg.DispatchJson,
+		arg.ArtifactHash,
+		arg.TenantID,
+		arg.OldGeneration,
+		arg.OldRuntime,
+		arg.SourceNodeID,
+		arg.NewRuntime,
+	)
+	var artifact_hash string
+	err := row.Scan(&artifact_hash)
+	return artifact_hash, err
 }
 
 const softDeleteVodArtifact = `-- name: SoftDeleteVodArtifact :execrows

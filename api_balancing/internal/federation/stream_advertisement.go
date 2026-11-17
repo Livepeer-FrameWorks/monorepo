@@ -36,9 +36,16 @@ func applyRegistryStreamAdvertisement(ad *foghornfederationpb.StreamAdvertisemen
 	if controlCellID == registry.LocalLocationKey() {
 		return false
 	}
+	if ad.GetSourceLeaseEpoch() < 0 || (ad.GetSourceLeaseEpoch() > 0 &&
+		(ad.GetSourceNodeId() == "" || ad.GetSourceClusterId() == "" || ad.GetSourceGeneration() == "" ||
+			!validPullGeneration(ad.GetSourceGeneration(), ad.GetSourceRevision()))) {
+		return false
+	}
 	edges := make([]control.EdgeCandidate, 0, len(ad.GetEdges()))
 	for _, edge := range ad.GetEdges() {
-		if edge == nil || !validPullGeneration(edge.GetSourceGeneration(), edge.GetSourceRevision()) ||
+		if edge == nil || edge.GetSourceLeaseEpoch() < 0 || (ad.GetSourceLeaseEpoch() > 0 && edge.GetIsOrigin() &&
+			(edge.GetSourceLeaseEpoch() != ad.GetSourceLeaseEpoch() || edge.GetSourceGeneration() != ad.GetSourceGeneration() ||
+				edge.GetSourceRevision() != ad.GetSourceRevision() || edge.GetNodeId() != ad.GetSourceNodeId() || edge.GetClusterId() != ad.GetSourceClusterId() || !ad.GetSourceActive())) || !validPullGeneration(edge.GetSourceGeneration(), edge.GetSourceRevision()) ||
 			(edge.GetSourceGeneration() != "" && !edge.GetIsOrigin()) {
 			continue
 		}
@@ -47,6 +54,7 @@ func applyRegistryStreamAdvertisement(ad *foghornfederationpb.StreamAdvertisemen
 			IsOrigin: edge.GetIsOrigin(), BWAvailable: int64(edge.GetBwAvailable()), CPUPercent: edge.GetCpuPercent(),
 			ViewerCount: int32(edge.GetViewerCount()), GeoLat: edge.GetGeoLat(), GeoLon: edge.GetGeoLon(), BufferState: edge.GetBufferState(), Playable: edge.GetPlayable(),
 			RAMUsed: edge.GetRamUsed(), RAMMax: edge.GetRamMax(), SourceGeneration: edge.GetSourceGeneration(), SourceRevision: edge.GetSourceRevision(),
+			SourceLeaseEpoch: edge.GetSourceLeaseEpoch(), SourceRuntimeName: edge.GetSourceRuntimeName(),
 			SourceObservedAt: edge.GetSourceObservedAt(), DTSCObservedAt: edge.GetDtscObservedAt(),
 		})
 	}
@@ -57,6 +65,9 @@ func applyRegistryStreamAdvertisement(ad *foghornfederationpb.StreamAdvertisemen
 		TenantID: ad.GetTenantId(), PlaybackID: ad.GetPlaybackId(), InternalName: ad.GetInternalName(),
 		OriginClusterID: ad.GetOriginClusterId(),
 	}, control.Location{
+		SourceLeaseEpoch: ad.GetSourceLeaseEpoch(), SourceGeneration: ad.GetSourceGeneration(), SourceRevision: ad.GetSourceRevision(),
+		SourceActive: ad.GetSourceActive(), OwnerNodeID: ad.GetSourceNodeId(), SourceClusterID: ad.GetSourceClusterId(),
+		SourceRuntimeName: ad.GetSourceRuntimeName(), AdvertisedSource: true,
 		IsLiveNow: ad.GetIsLive(), AdTimestamp: ad.GetTimestamp(), EdgeCandidates: edges, RecordingNodeID: ad.GetDvrRecordingNodeId(),
 	})
 	return true

@@ -3,6 +3,7 @@
 package control
 
 import (
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"testing"
 	"time"
 )
@@ -37,7 +38,7 @@ func TestDVRChapterGridAnchorsAtFirstMedia_RealPG(t *testing.T) {
 		firstMediaMs+6_000, firstMediaMs+12_000, 6_000, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := recordDVRStartTime(t.Context(), hash, tenant, "owner", recorderStart.Unix()); err != nil {
+	if err := recordDVRStartTime(t.Context(), foghorndb.New(db), hash, tenant, "owner", recorderStart.Unix()); err != nil {
 		t.Fatal(err)
 	}
 

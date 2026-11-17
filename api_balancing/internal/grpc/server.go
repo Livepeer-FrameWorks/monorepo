@@ -1334,7 +1334,7 @@ resolve:
 	switch dispatch.kind {
 	case ipcpb.ClipPullRequest_SOURCE_KIND_LIVE:
 		var sourceErr error
-		sourceStreamName, sourceErr = clipLiveSourceStreamName(ctx, req)
+		sourceStreamName, sourceErr = clipLiveSourceStreamName(ctx, req, sourceNodeID)
 		if sourceErr != nil {
 			return nil, status.Errorf(codes.FailedPrecondition, "clip source route unavailable: %v", sourceErr)
 		}
@@ -1867,6 +1867,11 @@ func (s *FoghornGRPCServer) respondExistingActiveDVR(ctx context.Context, req *s
 	}
 	storageNodeID = d.NodeID
 	storageHost = d.NodeBaseURL
+	if d.State == jobs.DVRDispatchStateSourceHandoffPending {
+		s.dispatchDVRSourceHandoff(existingHash, d)
+		return &sharedpb.StartDVRResponse{Status: "starting", DvrHash: existingHash, IngestHost: ingestHost,
+			StorageHost: storageHost, StorageNodeId: storageNodeID, PlaybackId: playbackID}, nil
+	}
 	if existingStatus == "starting" || existingStatus == "requested" {
 		reconciledStatus, recErr := s.reconcileStartingDVR(ctx, req, existingHash)
 		if recErr != nil {
@@ -1971,6 +1976,13 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 	}
 
 	if existingHash != "" && req.GetIngestGeneration() != "" {
+		prepared, handoffErr := s.prepareDVRSourceHandoff(ctx, req, sourceNodeID, existingHash, existingDispatch)
+		if handoffErr != nil {
+			return nil, status.Errorf(codes.Unavailable, "recording source transition unavailable: %v", handoffErr)
+		}
+		if prepared {
+			return s.respondExistingActiveDVR(ctx, req, existingHash, existingStatus, baseURL)
+		}
 		// A reconnect to the same Mist buffer continues the recording its previous
 		// session left running there (the publisher's close does not stop it).
 		hash, recordingStatus, adopted, adoptErr := s.adoptResumedDVR(ctx, req, sourceNodeID)
@@ -2106,7 +2118,10 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 	// worker can find and resume — there is no window where a 'requested' row exists without one. These
 	// resolutions can fail; because nothing is persisted yet, a failure just expires the Commodore
 	// registry row we minted and returns, with no artifact row to finalize.
-	sourceStreamName := dvrSourceStreamName(req.InternalName)
+	sourceStreamName, sourceErr := dvrBoundSourceStreamName(ctx, req, sourceNodeID)
+	if sourceErr != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "DVR source binding unavailable: %v", sourceErr)
+	}
 	fullDTSC := control.BuildDTSCURI(sourceNodeID, sourceStreamName, s.logger)
 	if fullDTSC == "" {
 		// No artifact row was written; the deferred finalizer records 'rejected' and
@@ -2464,7 +2479,27 @@ func dvrSourceStreamName(internalName string) string {
 	return internalName
 }
 
-func clipLiveSourceStreamName(ctx context.Context, req *sharedpb.CreateClipRequest) (string, error) {
+func dvrBoundSourceStreamName(ctx context.Context, req *sharedpb.StartDVRRequest, node string) (string, error) {
+	if generation := req.GetIngestGeneration(); generation != "" {
+		return control.PublisherRuntimeForGeneration(ctx, req.GetTenantId(), req.GetInternalName(), node, generation)
+	}
+	if registry := control.StreamRegistryInstance; registry != nil {
+		entry, found, err := registry.SourceSnapshot(ctx, req.GetTenantId(), req.GetInternalName())
+		if err != nil {
+			return "", err
+		}
+		if found {
+			for _, loc := range entry.Locations {
+				if loc.SourceRuntimeName != "" {
+					return registry.NodeRuntimeName(ctx, req.GetTenantId(), req.GetInternalName(), node)
+				}
+			}
+		}
+	}
+	return dvrSourceStreamName(req.GetInternalName()), nil
+}
+
+func clipLiveSourceStreamName(ctx context.Context, req *sharedpb.CreateClipRequest, sourceNode ...string) (string, error) {
 	internalName := strings.TrimSpace(req.GetStreamInternalName())
 	if internalName == "" {
 		return "", fmt.Errorf("stream_internal_name is required")
@@ -2472,6 +2507,14 @@ func clipLiveSourceStreamName(ctx context.Context, req *sharedpb.CreateClipReque
 	if control.StreamRegistryInstance != nil {
 		entry, err := control.StreamRegistryInstance.ResolveSourceByInternalName(ctx, internalName)
 		if err == nil && entry.IngestMode != 0 {
+			for _, loc := range entry.Locations {
+				if loc.SourceRuntimeName != "" {
+					if len(sourceNode) == 0 || sourceNode[0] == "" {
+						return "", fmt.Errorf("isolated live clip requires its selected source node")
+					}
+					return control.StreamRegistryInstance.NodeRuntimeName(ctx, req.GetTenantId(), internalName, sourceNode[0])
+				}
+			}
 			return control.RuntimeNameFor(entry.IngestMode, entry.InternalName), nil
 		}
 	}

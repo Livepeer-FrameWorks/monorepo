@@ -413,7 +413,20 @@ func (s *FederationServer) QueryStream(ctx context.Context, req *foghornfederati
 		if instance.TenantID == req.TenantId && instance.Status == "live" && !instance.Replicated && (instance.Inputs > 0 || instance.Playable) {
 			sourceGeneration, sourceRevision = confirmedPublisherBinding(sourceEntry, n.NodeID, req.TenantId, s.clusterID)
 		}
-		dtscURL := control.BuildDTSCURI(n.NodeID, sourceStreamName, s.logger)
+		var leaseEpoch int64
+		var publisherRuntime string
+		if sourceGeneration != "" {
+			leaseEpoch = confirmedPublisherEpoch(sourceEntry, n.NodeID, req.TenantId, s.clusterID)
+			publisherRuntime = confirmedPublisherRuntimeName(sourceEntry, n.NodeID, req.TenantId, s.clusterID)
+			if publisherRuntime != "" && instance.RuntimeName != publisherRuntime {
+				continue
+			}
+		}
+		nodeSourceName := sourceStreamName
+		if sourceEntry.IngestMode != 0 {
+			nodeSourceName = control.RuntimeNameForEntryNode(sourceEntry, s.controlCellID, n.NodeID)
+		}
+		dtscURL := control.BuildDTSCURI(n.NodeID, nodeSourceName, s.logger)
 
 		var bufferState string
 		var playable bool
@@ -431,24 +444,26 @@ func (s *FederationServer) QueryStream(ctx context.Context, req *foghornfederati
 		isOrigin := instance.TenantID == req.TenantId && instance.Status == "live" && instance.Inputs > 0 && !instance.Replicated
 
 		candidate := &foghornfederationpb.EdgeCandidate{
-			NodeId:           n.NodeID,
-			BaseUrl:          ns.BaseURL,
-			DtscUrl:          dtscURL,
-			BwScore:          n.Score,
-			GeoScore:         0, // geo is baked into the composite score
-			IsOrigin:         isOrigin,
-			BufferState:      bufferState,
-			Playable:         playable,
-			GeoLat:           n.GeoLatitude,
-			GeoLon:           n.GeoLongitude,
-			ViewerCount:      viewerCount,
-			CpuPercent:       ns.CPU,
-			BwAvailable:      AvailBandwidthFromNodeState(ns),
-			RamUsed:          uint64(ns.RAMCurrent),
-			RamMax:           uint64(ns.RAMMax),
-			SourceGeneration: sourceGeneration,
-			SourceRevision:   sourceRevision,
-			ClusterId:        ns.ClusterID,
+			NodeId:            n.NodeID,
+			BaseUrl:           ns.BaseURL,
+			DtscUrl:           dtscURL,
+			BwScore:           n.Score,
+			GeoScore:          0, // geo is baked into the composite score
+			IsOrigin:          isOrigin,
+			BufferState:       bufferState,
+			Playable:          playable,
+			GeoLat:            n.GeoLatitude,
+			GeoLon:            n.GeoLongitude,
+			ViewerCount:       viewerCount,
+			CpuPercent:        ns.CPU,
+			BwAvailable:       AvailBandwidthFromNodeState(ns),
+			RamUsed:           uint64(ns.RAMCurrent),
+			RamMax:            uint64(ns.RAMMax),
+			SourceGeneration:  sourceGeneration,
+			SourceLeaseEpoch:  leaseEpoch,
+			SourceRuntimeName: publisherRuntime,
+			SourceRevision:    sourceRevision,
+			ClusterId:         ns.ClusterID,
 		}
 		candidates = append(candidates, candidate)
 	}
@@ -618,7 +633,7 @@ func (s *FederationServer) prepareOriginPull(ctx context.Context, req *foghornfe
 		}
 		if control.StreamRegistryInstance != nil {
 			if entry, err := control.StreamRegistryInstance.ResolveSourceByInternalName(ctx, req.StreamName); err == nil && entry.IngestMode != 0 {
-				sourceStreamName = control.RuntimeNameFor(entry.IngestMode, entry.InternalName)
+				sourceStreamName = control.RuntimeNameForEntryNode(entry, s.controlCellID, sourceNodeID)
 				configuredOrigin = entry.IngestMode == control.IngestPull || entry.IngestMode == control.IngestMistNative
 			} else if strings.Contains(ss.StreamName, "+") {
 				sourceStreamName = control.MistSourceNameFromObservedStream(ss.StreamName)
@@ -646,10 +661,16 @@ func (s *FederationServer) prepareOriginPull(ctx context.Context, req *foghornfe
 			Reason:   "origin-pull temporarily unavailable",
 		}, nil
 	}
+	if req.GetSourceLeaseEpoch() > 0 {
+		if err := control.StreamRegistryInstance.VerifyPublisherSourceLease(ctx, req.TenantId, req.StreamName, sourceNodeID, req.GetSourceGeneration(), req.GetSourceLeaseEpoch()); err != nil {
+			return &foghornfederationpb.OriginPullAck{Accepted: false, Reason: "publisher ownership could not be verified"}, nil
+		}
+	}
 	outbound := control.OutboundPull{
 		TenantID:             req.TenantId,
 		SourceMediaClusterID: sourceMediaClusterID,
 		SourceGeneration:     req.GetSourceGeneration(), SourceRevision: req.GetSourceRevision(), AttemptID: req.GetAttemptId(),
+		SourceLeaseEpoch: req.GetSourceLeaseEpoch(), SourceRuntimeName: req.GetSourceRuntimeName(), DestRuntimeName: req.GetDestRuntimeName(),
 		DestClusterID: req.DestClusterId,
 		DestNodeID:    req.DestNodeId,
 		SourceNodeID:  sourceNodeID,
@@ -679,6 +700,7 @@ func (s *FederationServer) prepareOriginPull(ctx context.Context, req *foghornfe
 		Accepted:         true,
 		DtscUrl:          dtscURL,
 		SourceGeneration: recorded.SourceGeneration, SourceRevision: recorded.SourceRevision, AttemptId: recorded.AttemptID,
+		SourceLeaseEpoch: recorded.SourceLeaseEpoch, SourceRuntimeName: recorded.SourceRuntimeName, DestRuntimeName: recorded.DestRuntimeName,
 		SourceNodeId: recorded.SourceNodeID, TenantId: recorded.TenantID, DestClusterId: recorded.DestClusterID, DestNodeId: recorded.DestNodeID,
 	}
 	ack.DtscUrl, err = control.SourcePullURL(dtscURL, req.StreamName, recorded)

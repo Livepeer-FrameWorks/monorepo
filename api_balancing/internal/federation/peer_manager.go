@@ -2222,10 +2222,6 @@ func (pm *PeerManager) currentStreamAds(sm *state.StreamStateManager) (messages 
 		}
 	}
 
-	if len(streamNames) == 0 {
-		return nil, 0, true
-	}
-
 	// Look up the recording node for any stream that has an active
 	// DVR. One query per ad batch — cheaper than per-stream. Receiver
 	// clusters stash this on the federated Location so cross-cluster
@@ -2241,6 +2237,16 @@ func (pm *PeerManager) currentStreamAds(sm *state.StreamStateManager) (messages 
 			continue
 		}
 		ad.DvrRecordingNodeId = dvrRecordingNodes[name]
+		messages = append(messages, pm.streamAdMessage(ad))
+	}
+	for name, entry := range sources {
+		loc, found := entry.LocalLocation(pm.controlCellID)
+		if !found || loc.SourceLeaseEpoch <= 0 || seen[name] {
+			continue
+		}
+		ad := &foghornfederationpb.StreamAdvertisement{InternalName: name, TenantId: entry.TenantID, PlaybackId: entry.PlaybackID,
+			OriginClusterId: entry.OriginClusterID, ControlCellId: pm.controlCellID, Timestamp: now.Unix()}
+		stampPublisherAdvertisement(ad, entry, pm.controlCellID)
 		messages = append(messages, pm.streamAdMessage(ad))
 	}
 	return messages, len(streamNames), true
@@ -2278,7 +2284,7 @@ func (pm *PeerManager) buildStreamAd(sm *state.StreamStateManager, snapshot *sta
 		isOrigin := instance.Inputs > 0 && !instance.Replicated
 		sourceStreamName := internalName
 		if entry.TenantID == ss.TenantID && entry.IngestMode != 0 {
-			sourceStreamName = control.RuntimeNameFor(entry.IngestMode, entry.InternalName)
+			sourceStreamName = control.RuntimeNameForEntryNode(entry, pm.controlCellID, snap.NodeID)
 		} else if strings.Contains(ss.StreamName, "+") {
 			sourceStreamName = control.MistSourceNameFromObservedStream(ss.StreamName)
 		}
@@ -2289,6 +2295,15 @@ func (pm *PeerManager) buildStreamAd(sm *state.StreamStateManager, snapshot *sta
 		var revision int64
 		if isOrigin {
 			generation, revision = confirmedPublisherBinding(entry, snap.NodeID, ss.TenantID, pm.clusterID)
+		}
+		var leaseEpoch int64
+		var publisherRuntime string
+		if generation != "" {
+			leaseEpoch = confirmedPublisherEpoch(entry, snap.NodeID, ss.TenantID, pm.clusterID)
+			publisherRuntime = confirmedPublisherRuntimeName(entry, snap.NodeID, ss.TenantID, pm.clusterID)
+			if publisherRuntime != "" && instance.RuntimeName != publisherRuntime {
+				continue
+			}
 		}
 		var dtscURL string
 		var dtscObservedAt int64
@@ -2304,30 +2319,32 @@ func (pm *PeerManager) buildStreamAd(sm *state.StreamStateManager, snapshot *sta
 			sourceObservedSeconds = sourceObservedAt.Unix()
 		}
 		edges = append(edges, &foghornfederationpb.PeerStreamEdge{
-			NodeId:           snap.NodeID,
-			BaseUrl:          ns.BaseURL,
-			DtscUrl:          dtscURL,
-			DtscObservedAt:   dtscObservedAt,
-			SourceObservedAt: sourceObservedSeconds,
-			IsOrigin:         isOrigin,
-			BwAvailable:      snap.BWAvailable,
-			CpuPercent:       snap.CPU,
-			ViewerCount:      uint32(sm.GetNodeActiveViewers(snap.NodeID)),
-			GeoLat:           snap.GeoLatitude,
-			GeoLon:           snap.GeoLongitude,
-			BufferState:      instance.BufferState,
-			Playable:         instance.Playable,
-			RamUsed:          uint64(ns.RAMCurrent),
-			RamMax:           uint64(ns.RAMMax),
-			SourceGeneration: generation,
-			SourceRevision:   revision,
-			ClusterId:        snap.ClusterID,
+			NodeId:            snap.NodeID,
+			BaseUrl:           ns.BaseURL,
+			DtscUrl:           dtscURL,
+			DtscObservedAt:    dtscObservedAt,
+			SourceObservedAt:  sourceObservedSeconds,
+			IsOrigin:          isOrigin,
+			BwAvailable:       snap.BWAvailable,
+			CpuPercent:        snap.CPU,
+			ViewerCount:       uint32(sm.GetNodeActiveViewers(snap.NodeID)),
+			GeoLat:            snap.GeoLatitude,
+			GeoLon:            snap.GeoLongitude,
+			BufferState:       instance.BufferState,
+			Playable:          instance.Playable,
+			RamUsed:           uint64(ns.RAMCurrent),
+			RamMax:            uint64(ns.RAMMax),
+			SourceGeneration:  generation,
+			SourceLeaseEpoch:  leaseEpoch,
+			SourceRuntimeName: publisherRuntime,
+			SourceRevision:    revision,
+			ClusterId:         snap.ClusterID,
 		})
 	}
 	if len(edges) == 0 {
 		return nil
 	}
-	return &foghornfederationpb.StreamAdvertisement{
+	ad := &foghornfederationpb.StreamAdvertisement{
 		InternalName:    ss.InternalName,
 		TenantId:        ss.TenantID,
 		PlaybackId:      ss.PlaybackID,
@@ -2336,6 +2353,20 @@ func (pm *PeerManager) buildStreamAd(sm *state.StreamStateManager, snapshot *sta
 		IsLive:          true,
 		Edges:           edges,
 		Timestamp:       now.Unix(),
+	}
+	stampPublisherAdvertisement(ad, entry, pm.controlCellID)
+	return ad
+}
+
+func stampPublisherAdvertisement(ad *foghornfederationpb.StreamAdvertisement, entry control.StreamEntry, cellID string) {
+	loc, found := entry.LocalLocation(cellID)
+	if !found || loc.SourceLeaseEpoch <= 0 || loc.SourceGeneration == "" || loc.SourceRevision <= 0 || loc.OwnerNodeID == "" {
+		return
+	}
+	ad.SourceLeaseEpoch, ad.SourceGeneration, ad.SourceRevision = loc.SourceLeaseEpoch, loc.SourceGeneration, loc.SourceRevision
+	ad.SourceNodeId, ad.SourceClusterId, ad.SourceRuntimeName, ad.SourceActive = loc.OwnerNodeID, loc.SourceClusterID, loc.SourceRuntimeName, loc.SourceActive
+	if ad.SourceClusterId == "" {
+		ad.SourceClusterId = entry.OriginClusterID
 	}
 }
 
