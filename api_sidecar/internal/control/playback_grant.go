@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/google/uuid"
@@ -67,6 +68,9 @@ func RequestPlaybackGrant(ctx context.Context, internalName string) (*ipcpb.Play
 		Payload: &ipcpb.ControlMessage_PlaybackGrantRequest{PlaybackGrantRequest: &ipcpb.PlaybackGrantRequest{
 			RequestId: requestID, InternalName: internalName,
 		}},
+	}
+	if pkgLogger != nil {
+		pkgLogger.WithFields(logging.Fields{"internal_name": internalName, "request_id": requestID}).Info("Playback grant requested")
 	}
 	if err := stream.Send(msg); err != nil {
 		return nil, fmt.Errorf("send playback grant request: %w", err)

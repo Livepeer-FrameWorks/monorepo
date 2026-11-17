@@ -467,7 +467,7 @@ runtime_log_evidence_is_exact() (
   logs_since() {
     printf '{"msg":"Playback grant applied","internal_name":"%s","tenant_authority_version":2,"object_authority_version":7}\n' "$runtime"
   }
-  for runtime in live+fixture pull+fixture \
+  for runtime in fixture live+fixture pull+fixture \
     live+fixture_fw1p_10000000000040008000000000000002 \
     live+fixture_fw1r_10000000000040008000000000000003; do
     rows=$(log_runtime_json now fixture '.internal_name' edge) || return 1
@@ -498,6 +498,39 @@ runtime_log_failure_discards_partial_evidence() (
   [ -z "$rows" ]
 )
 expect 'a failed runtime-log read cannot prove a grant even after partial output' runtime_log_failure_discards_partial_evidence
+
+restart_counts_requests_not_applications() (
+  INS=(fixture) RESTART_TS=now STACK_EDGE_A_SERVICE=edge
+  local fixture_requests=${1:-1} unreadable=${2:-0}
+  logs_since() {
+    local i
+    for i in 1 2; do
+      printf '%s\n' '{"msg":"Playback grant applied","internal_name":"live+fixture","tenant_authority_version":2,"object_authority_version":7}'
+    done
+    for ((i=1; i<=fixture_requests; i++)); do
+      printf '{"msg":"Playback grant requested","internal_name":"live+fixture","request_id":"request-%s"}\n' "$i"
+    done
+    [ "$unreadable" = 0 ]
+  }
+  eval "$(sed -n '/^grant_fetches() {$/,/^}$/p' "$here/scenarios/19-helmsman-restart-grants.sh")"
+  python3 - "$here/scenarios/19-helmsman-restart-grants.sh" "$work/restart-fetch-check.sh" <<'RESTART'
+import pathlib,sys
+source=pathlib.Path(sys.argv[1]).read_text()
+start=source.rindex('for in in "${INS[@]}"; do')
+end=source.index('\nforwarded=',start)
+pathlib.Path(sys.argv[2]).write_text(source[start:end])
+RESTART
+  PASS=0 FAIL=0
+  . "$work/restart-fetch-check.sh" >/dev/null
+  if [ "$fixture_requests" = 1 ] && [ "$unreadable" = 0 ]; then
+    [ "$PASS" = 1 ] && [ "$FAIL" = 0 ]
+  else
+    [ "$PASS" = 0 ] && [ "$FAIL" = 1 ]
+  fi
+)
+expect 'restart measures one request even when its grant is applied twice' restart_counts_requests_not_applications
+expect 'restart rejects two requests for one stream' restart_counts_requests_not_applications 2
+expect 'restart refuses unreadable request evidence' restart_counts_requests_not_applications 1 1
 
 if [ "$failures" -gt 0 ]; then
   echo "lib.sh checks: $failures failed"

@@ -205,7 +205,7 @@ log_runtime_json() {
   quoted=$(jq -cn --arg internal "$internal" '$internal') || return 1
   rows=$(log_json "$since" "objects | $quoted as \$logical |
     .internal_name as \$runtime | select((\$runtime | type) == \"string\") |
-    select(\$runtime == (\"live+\" + \$logical) or \$runtime == (\"pull+\" + \$logical) or
+    select(\$runtime == \$logical or \$runtime == (\"live+\" + \$logical) or \$runtime == (\"pull+\" + \$logical) or
       ([\"p\",\"r\"] | any(. as \$role |
         (\"live+\" + \$logical + \"_fw1\" + \$role + \"_\") as \$prefix |
         (\$runtime | startswith(\$prefix)) and
