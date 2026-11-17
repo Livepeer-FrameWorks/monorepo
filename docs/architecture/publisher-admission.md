@@ -120,6 +120,11 @@ observations and cleanup affect only their recorded generation. Policy changes
 and revocations cover all retained live generations, while a physical drain
 command continues to target exactly one runtime.
 
+Confirmed account stops include the publisher runtime identified by the captured
+generation even when Mist lists no viewers. The edge checks that generation and
+verifies the same exact runtime's input, output and viewer counts before
+acknowledging termination; a different publisher generation stays outside scope.
+
 ### Rollout and rollback
 
 Apply the Commodore and Foghorn expand migrations before their new binaries.

@@ -13,6 +13,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 )
 
 func handleConfirmedStopSessions(logger logging.Logger, req *ipcpb.StopSessionsRequest, connection *streamConn) {
@@ -95,6 +96,20 @@ func stopSessionsEffectWithAuthorization(ctx context.Context, logger logging.Log
 		}
 		if len(expected) != len(req.StreamNames) {
 			return errors.New("session termination is missing generation scope")
+		}
+		// Input sessions are absent from the viewer inventory. The requested
+		// generation identifies their exact runtime even with no viewers.
+		for name, generation := range expected {
+			if generation == "" || mist.ExtractInternalName(name) != name {
+				continue
+			}
+			runtime, err := streamident.BoundRuntimeName(name, streamident.RuntimePublisher, generation)
+			if err != nil {
+				return fmt.Errorf("session termination publisher runtime: %w", err)
+			}
+			if !slices.Contains(names, runtime) {
+				names = append(names, runtime)
+			}
 		}
 		sort.Strings(names)
 		for _, name := range names {
