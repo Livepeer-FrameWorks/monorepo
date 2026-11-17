@@ -20,7 +20,7 @@ type publisherFixture struct {
 
 func publisherFixtureFor(queryID string, now time.Time) *publisherFixture {
 	switch queryID {
-	case "foghorn:PreparePublisherAdmission", "foghorn:ConfirmPublisherAdmission", "foghorn:SettlePublisherAdmission", "foghorn:MarkPublisherLeasesReleased":
+	case "foghorn:PreparePublisherAdmission", "foghorn:ConfirmPublisherAdmission", "foghorn:SettlePublisherAdmission", "foghorn:MarkPublisherLeasesReleased", "foghorn:InsertIsolatedIngestSession":
 	default:
 		return nil
 	}
@@ -73,6 +73,10 @@ func publisherJSON(value any) string {
 
 func (f *publisherFixture) request() string {
 	switch f.name {
+	case "InsertIsolatedIngestSession":
+		p := f.prepareRequest()
+		p["publisher_lease_epoch"], p["runtime_name"] = int64(19), f.isolatedRuntime()
+		return publisherJSON(p)
 	case "PreparePublisherAdmission":
 		return publisherJSON(f.prepareRequest())
 	case "ConfirmPublisherAdmission":
@@ -87,8 +91,12 @@ func (f *publisherFixture) request() string {
 	}
 }
 
+func (f *publisherFixture) isolatedRuntime() string {
+	return "live+audit-" + f.streamID + "_fw1p_" + strings.ReplaceAll(f.generation, "-", "")
+}
+
 func (f *publisherFixture) setup(ctx context.Context, conn *sql.Conn) error {
-	if f.name == "PreparePublisherAdmission" {
+	if f.name == "PreparePublisherAdmission" || f.name == "InsertIsolatedIngestSession" {
 		return nil
 	}
 	var prepared string
@@ -124,6 +132,9 @@ WHERE tenant_id=$1::uuid AND id=$2::uuid`, f.tenant, f.generation); err != nil {
 func (f *publisherFixture) verify(ctx context.Context, conn *sql.Conn) error {
 	var condition string
 	switch f.name {
+	case "InsertIsolatedIngestSession":
+		condition = `s.projection_state='pending' AND s.ended_at IS NULL AND s.runtime_layout_version=1
+AND s.publisher_lease_strict_owner AND s.publisher_lease_epoch=19 AND s.runtime_name=$3`
 	case "PreparePublisherAdmission":
 		condition = `s.projection_state='pending' AND s.source_revision IS NOT NULL AND s.ended_at IS NULL
 AND EXISTS(SELECT 1 FROM foghorn.domain_event_outbox e WHERE e.tenant_id=s.tenant_id AND e.event_id=$3::uuid)`
@@ -139,6 +150,8 @@ AND EXISTS(SELECT 1 FROM foghorn.domain_event_outbox e WHERE e.tenant_id=s.tenan
 	}
 	args := []any{f.tenant, f.generation}
 	switch f.name {
+	case "InsertIsolatedIngestSession":
+		args = append(args, f.isolatedRuntime())
 	case "PreparePublisherAdmission":
 		args = append(args, f.eventID)
 	case "SettlePublisherAdmission":
