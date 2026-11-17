@@ -196,6 +196,24 @@ log_json() {
   shift 2
   logs_since "$since" "$@" | jq -Rrc "fromjson? | $filter" 2>/dev/null
 }
+# log_runtime_json <since> <logical stream> <jq filter> <service...>: match
+# exact legacy names or canonical publisher/relay bindings, not a shared prefix.
+log_runtime_json() {
+  local since=$1 internal=$2 filter=$3 quoted rows
+  shift 3
+  [ -n "$internal" ] || return 1
+  quoted=$(jq -cn --arg internal "$internal" '$internal') || return 1
+  rows=$(log_json "$since" "objects | $quoted as \$logical |
+    .internal_name as \$runtime | select((\$runtime | type) == \"string\") |
+    select(\$runtime == (\"live+\" + \$logical) or \$runtime == (\"pull+\" + \$logical) or
+      ([\"p\",\"r\"] | any(. as \$role |
+        (\"live+\" + \$logical + \"_fw1\" + \$role + \"_\") as \$prefix |
+        (\$runtime | startswith(\$prefix)) and
+        (\$runtime | ltrimstr(\$prefix) |
+          (test(\"^[a-f0-9]{32}$\") and . != \"00000000000000000000000000000000\"))))) |
+    $filter" "$@") || return 1
+  printf '%s\n' "$rows"
+}
 # log_json_at <since> <jq filter> <service...>: log_json with each line's
 # receive time added as .at, from Docker at a fixed nanosecond width, so .at
 # values order lines across services by string comparison. The services' own

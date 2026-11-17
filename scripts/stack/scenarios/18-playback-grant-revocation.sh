@@ -110,7 +110,7 @@ done
 for n in 1 2 3; do
   echo "    viewer $n on ${EDGE[$n]}; cell replicas ${CELL_REPLICAS[$n]}"
 done
-granted() { [ -n "$(log_json 10m "select(.msg == \"Playback grant applied\" and .internal_name == \"live+$IN\") | .time" "$1")" ]; }
+granted() { [ -n "$(log_runtime_json 10m "$IN" 'select(.msg == "Playback grant applied") | .time' "$1")" ]; }
 for edge in $(printf '%s\n' "${EDGE[@]}" | sort -u); do
   check "$edge, serving a viewer, holds the stream's playback grant" granted "$edge"
 done
@@ -150,7 +150,7 @@ for n in 1 2; do
   eventually 30 "viewer $n (revoked key) no longer gets media" gone
   kill "${POLLER[$n]}" 2>/dev/null
   check "viewer 3 (active key) kept playing through the revocation" playing 3 "$SINCE_S"
-  pushes=$(log_json "$SINCE" "select(.msg == \"Playback grant pushed on an authority change\" and .internal_name == \"live+$IN\") | \"\\(.node_id) \\(.authority_apply) \\(.object_authority_version)\"" "${FOGHORNS[@]}" | sort -u)
+  pushes=$(log_runtime_json "$SINCE" "$IN" 'select(.msg == "Playback grant pushed on an authority change") | "\(.node_id) \(.authority_apply) \(.object_authority_version)"' "${FOGHORNS[@]}" | sort -u)
   printf '%s\n' "$pushes" | awk 'NF { printf "    grant pushed to %s after a %s apply (object v%s)\n", $1, $2, $3 }'
 done
 finish

@@ -1020,6 +1020,9 @@ SET transcode_degraded_at = COALESCE(transcode_degraded_at, NOW()),
 WHERE tenant_id = $2::uuid
   AND stream_internal_name = $3
   AND node_id = $4
+  AND (runtime_name = $5::text
+    OR (runtime_layout_version = 0 AND $5::text IN
+      ('live+' || stream_internal_name, 'pull+' || stream_internal_name)))
   AND ended_at IS NULL
 `
 
@@ -1028,16 +1031,19 @@ type MarkIngestSessionTranscodeDegradedParams struct {
 	TenantID           string `db:"tenant_id" json:"tenant_id"`
 	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
 	NodeID             string `db:"node_id" json:"node_id"`
+	RuntimeName        string `db:"runtime_name" json:"runtime_name"`
 }
 
 // Records the first transcode degradation of the reporting node's active session;
-// later reports for the same session keep the first time and reason.
+// isolated sessions require the exact runtime; legacy live/pull names remain valid.
+// Later reports for the same session keep the first time and reason.
 func (q *Queries) MarkIngestSessionTranscodeDegraded(ctx context.Context, arg MarkIngestSessionTranscodeDegradedParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, markIngestSessionTranscodeDegraded,
 		arg.Reason,
 		arg.TenantID,
 		arg.StreamInternalName,
 		arg.NodeID,
+		arg.RuntimeName,
 	)
 	if err != nil {
 		return 0, err

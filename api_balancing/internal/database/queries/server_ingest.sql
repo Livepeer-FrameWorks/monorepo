@@ -213,13 +213,17 @@ RETURNING u.id::text AS id, u.tenant_id::text AS tenant_id, u.stream_internal_na
 UPDATE foghorn.ingest_sessions SET dvr_intent_error  =  sqlc.narg(dvr_intent_error), dvr_intent_lease_until  =  NULL WHERE id  =  sqlc.arg(session_id)::uuid AND tenant_id  =  sqlc.arg(tenant_id)::uuid AND dvr_intent_error IS NULL;
 -- name: MarkIngestSessionTranscodeDegraded :execrows
 -- Records the first transcode degradation of the reporting node's active session;
--- later reports for the same session keep the first time and reason.
+-- isolated sessions require the exact runtime; legacy live/pull names remain valid.
+-- Later reports for the same session keep the first time and reason.
 UPDATE foghorn.ingest_sessions
 SET transcode_degraded_at = COALESCE(transcode_degraded_at, NOW()),
     transcode_degraded_reason = COALESCE(transcode_degraded_reason, sqlc.arg(reason)::text)
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid
   AND stream_internal_name = sqlc.arg(stream_internal_name)
   AND node_id = sqlc.arg(node_id)
+  AND (runtime_name = sqlc.arg(runtime_name)::text
+    OR (runtime_layout_version = 0 AND sqlc.arg(runtime_name)::text IN
+      ('live+' || stream_internal_name, 'pull+' || stream_internal_name)))
   AND ended_at IS NULL;
 
 -- name: IngestAdmissionExecutionPIDMismatch :one
