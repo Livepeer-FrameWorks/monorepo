@@ -51,6 +51,7 @@ fi
 # Deployed Purser talks to isolated external provider simulators. This driver
 # uses public RPCs and real request signatures; it cannot issue invoices itself.
 [ -x "$STACK_REPO/bin/stack-billing-runner" ] || { blocked 'billing test driver missing'; finish; }
+check 'crypto advance checks retained native tax and FX exactly' "$STACK_REPO/bin/stack-billing-runner" -test.run '^TestStackCryptoTaxRetainedNativeMoney$' -test.v -test.timeout 30s
 STACK_BILLING_DATABASE_URL=$(PG_HOST="$PG_HOST" PG_PORT="$PG_PORT" python3 - <<'PYDSN'
 import os,urllib.parse
 print('postgresql://purser:'+urllib.parse.quote(os.environ.get('POSTGRES_PASSWORD',''),safe='')+'@'+os.environ['PG_HOST']+':'+os.environ['PG_PORT']+'/purser?sslmode=disable')

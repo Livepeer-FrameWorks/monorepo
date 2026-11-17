@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"os"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	billingtax "frameworks/api_billing/internal/tax"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	x402pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
 	"github.com/ethereum/go-ethereum/common/math"
@@ -122,7 +124,27 @@ func TestStackDeployedCryptoTax(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 1 || status != "ready" || net <= 0 || vat != (net*rate+5000)/10000 || gross != net+vat || credit != net || settled.CreditedCents != net {
+	var originalCurrency, units string
+	var originalGross, quotedGross, quotedCredit int64
+	var snapshot []byte
+	err = db.QueryRowContext(ctx, `SELECT original_currency,original_amount_cents,eur_amount_cents,credit_amount_cents,fx_units_per_eur::text,tax_profile_snapshot FROM purser.x402_payment_quotes WHERE tenant_id=$1 AND id=$2`, tenant, q.QuoteId).
+		Scan(&originalCurrency, &originalGross, &quotedGross, &quotedCredit, &units, &snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retained billingtax.BillingProfile
+	if err = json.Unmarshal(snapshot, &retained); err != nil || retained.TaxAssessment == nil || retained.TaxAssessment.Advance == nil {
+		t.Fatalf("missing retained advance assessment: %v", err)
+	}
+	money := retained.TaxAssessment.Advance
+	if err = checkStackCryptoTaxMoney(net, vat, gross, money, units, rate); err != nil {
+		t.Fatal(err)
+	}
+	atomic := new(big.Int).Mul(big.NewInt(originalGross), big.NewInt(10000)).String()
+	if originalCurrency != "USD" || originalCurrency != money.Currency || originalGross != money.GrossOriginal || quotedGross != money.GrossEUR || quotedCredit != money.NetEUR || q.Amount != atomic {
+		t.Fatalf("accepted payment differs from retained advance: currency=%s original=%d EUR=%d credit=%d atomic=%s advance=%+v", originalCurrency, originalGross, quotedGross, quotedCredit, q.Amount, money)
+	}
+	if count != 1 || status != "ready" || net <= 0 || credit != net || settled.CreditedCents != net {
 		t.Fatalf("document/credit count=%d status=%s net=%d vat=%d gross=%d credit=%d settlement=%+v", count, status, net, vat, gross, credit, settled)
 	}
 	err = db.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM purser.simplified_invoices WHERE tenant_id=$1 AND reference_id=$2)+(SELECT count(*) FROM purser.crypto_invoices WHERE tenant_id=$1 AND reference_id=$2)`, tenant, settled.TxHash).Scan(&count)
@@ -133,4 +155,48 @@ func TestStackDeployedCryptoTax(t *testing.T) {
 		t.Fatalf("duplicate SI/CI tax documents: %d", count)
 	}
 	t.Logf("deployed quote/verify/settle/retry: %s net=%d VAT=%d gross=%d credited=%d", settled.InvoiceNumber, net, vat, gross, credit)
+}
+
+func checkStackCryptoTaxMoney(net, vat, gross int64, money *billingtax.AdvanceMoney, units string, rate int64) error {
+	fxRate, valid := new(big.Rat).SetString(units)
+	if money == nil || !valid || fxRate.Sign() <= 0 || rate < 0 || rate > 10000 {
+		return fmt.Errorf("missing retained advance or valid conversion rate")
+	}
+	if money.Currency == "" || money.NetOriginal <= 0 || money.RateBPS != int(rate) {
+		return fmt.Errorf("retained native currency, net or VAT rate differs")
+	}
+	round := func(numerator, denominator *big.Int) (int64, error) {
+		twice := new(big.Int).Lsh(new(big.Int).Set(numerator), 1)
+		twice.Add(twice, denominator)
+		result := twice.Quo(twice, new(big.Int).Lsh(new(big.Int).Set(denominator), 1))
+		if !result.IsInt64() {
+			return 0, fmt.Errorf("retained money exceeds minor-unit range")
+		}
+		return result.Int64(), nil
+	}
+	wantNativeVAT, err := round(new(big.Int).Mul(big.NewInt(money.NetOriginal), big.NewInt(rate)), big.NewInt(10000))
+	nativeGross := new(big.Int).Add(big.NewInt(money.NetOriginal), big.NewInt(wantNativeVAT))
+	if err != nil || !nativeGross.IsInt64() || money.VATOriginal != wantNativeVAT || money.GrossOriginal != nativeGross.Int64() {
+		return fmt.Errorf("retained native VAT or gross differs from its accepted rate")
+	}
+	toEUR := func(original int64) (int64, error) {
+		return round(new(big.Int).Mul(big.NewInt(original), fxRate.Denom()), fxRate.Num())
+	}
+	wantGross, err := toEUR(money.GrossOriginal)
+	if err != nil {
+		return err
+	}
+	wantVAT, err := toEUR(money.VATOriginal)
+	if err != nil {
+		return err
+	}
+	// Native VAT is rounded before conversion. The EUR net retains the
+	// conversion remainder so invoice cash, VAT and service credit reconcile.
+	if money.GrossEUR != wantGross || money.VATEUR != wantVAT || money.NetEUR != wantGross-wantVAT || money.NetEUR <= 0 {
+		return fmt.Errorf("retained EUR totals differ from the locked conversion")
+	}
+	if net != money.NetEUR || vat != money.VATEUR || gross != money.GrossEUR || gross != net+vat {
+		return fmt.Errorf("invoice differs from retained native tax and FX: net=%d vat=%d gross=%d advance=%+v", net, vat, gross, money)
+	}
+	return nil
 }
