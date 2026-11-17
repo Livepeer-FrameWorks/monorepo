@@ -39,8 +39,16 @@ lock, including when the caller waited behind another publisher.
 A signed permission is reusable configuration, not exclusive ownership. The
 ready path does not call `ValidateStreamKey`, Purser, or Quartermaster to rebuild
 configuration. Commodore checks its own current publication; it does not accept
-caller-supplied configuration as permission. A stale publication returns a
-refresh outcome, starts bounded shared filling, and refuses this attempt.
+caller-supplied configuration as permission. A stale publication takes no lease
+and can return the current cell-specific signed tenant/object pair. Foghorn
+checks both identities, applies the envelopes through its normal trust,
+audience, expiry and restore fences, and revalidates the presented credential,
+current configuration, limits and hard placement constraints. Only a newer
+verified pair permits one more exact-pair lease call, with the same execution
+identity and original deadline. The installed pair remains useful to the next
+attempt even if authority changes again. Missing deliveries or an older server
+without the pair still require bounded shared filling and refusal. Normal
+matching admission retains one lease call.
 Denials remain denials. Capable edges' cold validating claims also carry node/cell/execution
 identity, serialize against the same global abandonment fence, and require an
 explicit server acknowledgement of fencing support. Outage admission retains the signed deterministic owner
@@ -98,6 +106,12 @@ correctness roles. See [gRPC deadlines](https://grpc.io/docs/guides/deadlines/)
 and [cancellation](https://grpc.io/docs/guides/cancellation/). Lost acknowledgements
 can hide committed side effects; [AWS's retry guidance](https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/)
 explains why retrying needs an idempotency identity rather than an assumed rollback.
+
+Only an actual local or gRPC deadline expiry is reported as an ingest timeout.
+Authority churn or an unavailable dependency has its own explanation, rather
+than implying that the caller exhausted its deadline. A proven hard placement
+denial is checked before taking a lease; final current-policy, capacity and
+ownership validation still decides admission.
 
 ## Unknown results and settlement
 

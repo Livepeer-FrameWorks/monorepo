@@ -201,7 +201,7 @@ func (q *ChapterFinalizationQueue) finalizeProcessesJSON(processesJSON string) s
 	}
 	processesJSON = mist.DisableProcessRestarts(processesJSON)
 	if q.gatewayResolver != nil {
-		processesJSON = q.gatewayResolver.ApplyLivepeerBroadcasters(processesJSON, nil)
+		processesJSON = q.gatewayResolver.ApplyLivepeerBroadcasters(processesJSON)
 		processesJSON = q.gatewayResolver.ApplyLivepeerWorkload(processesJSON, mist.WorkloadVOD)
 	}
 	return processesJSON

@@ -248,6 +248,16 @@ stream's thumbnail upload only while its job is active. The result carries no ou
 completing the job, its progress and its failure never touch the asset's media, placement
 or lifecycle.
 
+Thumbnail publication recovery separates SQL settlement from object-store
+projection and deletion. The partial ascending
+`superseded_at` index lets superseded-version selection find a small GC batch
+without scanning and sorting all published history before checking active pointers. The transaction still rechecks eligibility
+under the asset lock before deleting a version or queuing its objects for cleanup.
+Recovery failures identify the publishing, expired or superseded phase and whether
+selection or settlement failed. `frameworks cluster diagnose thumbnails` measures
+the selection plans and database waits per cell with bounded read-only probes;
+these database results do not measure S3 projection latency.
+
 ### Helmsman execution
 
 `ProcessingJobHandler.Handle` (`api_sidecar/internal/handlers/processing.go`) branches by

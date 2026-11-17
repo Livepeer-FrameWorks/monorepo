@@ -6,7 +6,7 @@ dependency:
 driver:
   name: docker
 platforms:
-  - name: prometheus-instance
+  - name: "${MOLECULE_INSTANCE_NAME:-prometheus-instance}"
     image: geerlingguy/docker-ubuntu2404-ansible:latest
     pre_build_image: true
     privileged: true

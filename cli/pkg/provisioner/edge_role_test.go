@@ -7,6 +7,7 @@ import (
 
 	"frameworks/cli/internal/configschema"
 	"frameworks/cli/internal/templates"
+	"frameworks/cli/pkg/gitops"
 
 	fwversion "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 )
@@ -71,6 +72,9 @@ func TestEdgeRoleVarsPassHelmsmanEnvContract(t *testing.T) {
 	if !ok || !maps.Equal(imageEnv, templates.EdgeImageEnv()) {
 		t.Fatalf("edge_image_env = %#v, want %v", vars["edge_image_env"], templates.EdgeImageEnv())
 	}
+	if vars["edge_manage_docker"] != false {
+		t.Fatal("edge installation must reuse the Docker runtime checked by preflight, not replace its package provider")
+	}
 }
 
 // The role stamps this CLI's release into the provisioned-config marker
@@ -97,12 +101,12 @@ func TestEdgeRoleVarsCarryCLIVersionForConfigMarker(t *testing.T) {
 func TestEdgeRoleVarsPrivateTelemetryResolution(t *testing.T) {
 	restore := stubEdgeManifest(t)
 	defer restore()
-	vars, err := edgeRoleVars(&EdgeProvisionConfig{
+	vars, err := edgeRoleVarsFrom(&EdgeProvisionConfig{
 		Mode:             "container",
 		Version:          "vtest",
 		TelemetryURL:     "https://telemetry.media-eu.example.com/api/v1/write",
 		TelemetryAddress: "192.168.10.17",
-	}, "linux", "amd64")
+	}, "linux", "amd64", edgeTelemetryTestSources())
 	if err != nil {
 		t.Fatalf("edgeRoleVars returned error: %v", err)
 	}
@@ -111,6 +115,36 @@ func TestEdgeRoleVarsPrivateTelemetryResolution(t *testing.T) {
 	}
 	if got := vars["edge_telemetry_hostname"]; got != "telemetry.media-eu.example.com" {
 		t.Fatalf("edge_telemetry_hostname = %#v", got)
+	}
+}
+
+func edgeTelemetryTestSources() edgeRoleSources {
+	return edgeRoleSources{
+		manifest: func(string) (*gitops.Manifest, error) { return edgeRenderFixtureManifest(), nil },
+		infraArtifact: func(name, arch, _ string) (*gitops.Artifact, error) {
+			return &gitops.Artifact{Arch: arch, URL: "https://artifacts.example.invalid/" + name + ".tar.gz", Checksum: "sha256:" + name}, nil
+		},
+	}
+}
+
+func TestEdgeRoleVarsResolveHostExporterForLinuxTelemetry(t *testing.T) {
+	for _, mode := range []string{"container", "native"} {
+		t.Run(mode, func(t *testing.T) {
+			config := edgeRenderFixtureConfig(mode)
+			config.TelemetryURL = "https://telemetry.example.invalid/api/v1/write"
+			vars, err := edgeRoleVarsFrom(config, "linux", "amd64", edgeTelemetryTestSources())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if vars["edge_node_exporter_artifact_url"] != "https://artifacts.example.invalid/node-exporter.tar.gz" || vars["edge_node_exporter_artifact_checksum"] != "sha256:node-exporter" || vars["edge_node_exporter_port"] != NodeExporterPort {
+				t.Fatalf("%s telemetry cannot provision its pinned host exporter: %#v / %#v / %#v", mode, vars["edge_node_exporter_artifact_url"], vars["edge_node_exporter_artifact_checksum"], vars["edge_node_exporter_port"])
+			}
+			if mode == "container" {
+				if _, ok := vars["edge_vmagent_artifact_url"]; ok {
+					t.Fatal("container telemetry unexpectedly installs a native vmagent")
+				}
+			}
+		})
 	}
 }
 

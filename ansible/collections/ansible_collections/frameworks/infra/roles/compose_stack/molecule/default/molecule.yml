@@ -6,7 +6,7 @@ dependency:
 driver:
   name: docker
 platforms:
-  - name: compose-stack-instance
+  - name: "${MOLECULE_INSTANCE_NAME:-compose-stack-instance}"
     image: geerlingguy/docker-ubuntu2404-ansible:latest
     pre_build_image: true
     privileged: true
@@ -22,6 +22,8 @@ platforms:
       - /tmp
 provisioner:
   name: ansible
+  options:
+    tags: all,install,configure,service,validate
   inventory:
     group_vars:
       all:

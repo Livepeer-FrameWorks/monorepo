@@ -103,6 +103,22 @@ Physical identity DNS is gated by desired ingress and active-node state, not by
 the result of the probe that depends on that DNS record. Pooled `livepeer.*`
 discovery remains gated on a fresh healthy result.
 
+Livepeer gateway discovery uses the cell that owns the admitted ingest session
+or assigned processing job. Media placement chooses that owner; gateway lookup
+does not make another placement decision from tenant origin, official or
+preferred-cluster metadata. Every selected gateway must send authorization to
+a Foghorn serving the owning cell's durable job state. Healthy gateway replicas
+in that cell form the broadcaster failover set. An instance in another cell is
+ineligible even when healthy: that cell's local database cannot validate this
+job's session. Missing eligible gateways retain the existing local AV fallback.
+Playback may still federate independently to another cell.
+
+Accepted generations retain their processing snapshot. Deploying a corrected
+discovery implementation does not rewrite an already-running job's gateway
+assignment; the next admitted generation or processing dispatch uses the new
+discovery result. Cross-cell transcode-job movement requires an explicit
+ownership/authorization protocol rather than a gateway-list fallback.
+
 ## Not built
 
 - Per-cluster protocol allowlists do not exist; a cluster accepts every ingest protocol its edges support.

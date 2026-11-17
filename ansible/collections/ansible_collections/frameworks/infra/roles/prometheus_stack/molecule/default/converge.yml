@@ -7,3 +7,43 @@
     - name: Apply frameworks.infra.prometheus_stack
       ansible.builtin.include_role:
         name: frameworks.infra.prometheus_stack
+
+    - name: Finish configuring the existing host exporter
+      ansible.builtin.meta: flush_handlers
+
+    - name: Read the existing host exporter unit
+      ansible.builtin.stat:
+        path: /etc/systemd/system/node_exporter.service
+        checksum_algorithm: sha256
+      register: original_exporter_unit
+
+    - name: Record the existing exporter unit identity
+      ansible.builtin.copy:
+        dest: /tmp/original-node-exporter-unit.sha256
+        content: "{{ original_exporter_unit.stat.checksum }}\n"
+        mode: "0600"
+
+    - name: Read the existing exporter process
+      ansible.builtin.command: systemctl show --property=MainPID --value node_exporter.service
+      changed_when: false
+      register: original_exporter_pid
+
+    - name: Record the existing exporter process identity
+      ansible.builtin.copy:
+        dest: /tmp/original-node-exporter.pid
+        content: "{{ original_exporter_pid.stdout }}\n"
+        mode: "0600"
+
+    - name: Install an independent edge exporter beside the existing exporter
+      ansible.builtin.include_role:
+        name: frameworks.infra.prometheus_stack
+        tasks_from: node_exporter.yml
+      vars:
+        node_exporter_service_name: frameworks-edge-node-exporter
+        node_exporter_binary_dir: /opt/frameworks/node-exporter
+        node_exporter_user: frameworks-edge-metrics
+        node_exporter_textfile_dir: /var/lib/node_exporter/textfile
+        node_exporter_port: 19110
+
+    - name: Finish edge exporter configuration
+      ansible.builtin.meta: flush_handlers

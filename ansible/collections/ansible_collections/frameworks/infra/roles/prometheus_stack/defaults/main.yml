@@ -19,6 +19,8 @@ prometheus_external_labels: {}
 node_exporter_artifact_url: ""
 node_exporter_artifact_checksum: ""
 node_exporter_version: ""
+node_exporter_service_name: node_exporter
+node_exporter_binary_dir: /usr/local/bin
 node_exporter_port: 9110
 node_exporter_listen_address: 127.0.0.1
 node_exporter_user: node-exporter

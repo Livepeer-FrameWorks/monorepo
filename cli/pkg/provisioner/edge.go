@@ -275,7 +275,7 @@ func (e *EdgeProvisioner) provision(ctx context.Context, host inventory.Host, co
 		if timeout == 0 {
 			timeout = 3 * time.Minute
 		}
-		if err := e.verifyHTTPS(domain, host.ExternalIP, timeout); err != nil {
+		if err := e.verifyHTTPS(domain, host, timeout); err != nil {
 			return EdgeInspection{}, fmt.Errorf("HTTPS verification failed: %w", err)
 		}
 	} else {
@@ -525,7 +525,11 @@ func listenerLooksDockerManaged(listenerOutput string) bool {
 // propagation. Application routes are intentionally not checked here: the edge
 // Caddyfile ultimately proxies most paths to MistServer, which does not expose
 // a conventional /health endpoint.
-func (e *EdgeProvisioner) verifyHTTPS(domain, dialAddress string, timeout time.Duration) error {
+func (e *EdgeProvisioner) verifyHTTPS(domain string, host inventory.Host, timeout time.Duration) error {
+	dialAddress := host.ExternalIP
+	if host.User != "" && net.ParseIP(edgeHTTPSDialHost(dialAddress)) == nil {
+		dialAddress = host.User + "@" + dialAddress
+	}
 	return VerifyEdgeTLS(domain, dialAddress, timeout, nil)
 }
 
@@ -542,6 +546,16 @@ func VerifyEdgeTLS(domain, dialAddress string, timeout time.Duration, rootCAs *x
 	if dialPort == "" {
 		dialPort = "443"
 	}
+	deadline := time.Now().Add(timeout)
+	if strings.TrimSpace(dialAddress) != "" && net.ParseIP(dialHost) == nil {
+		ctx, cancel := context.WithDeadline(context.Background(), deadline)
+		resolvedHost, err := (&ssh.DefaultResolver{}).ConfiguredHostname(ctx, dialHost)
+		cancel()
+		if err != nil {
+			return err
+		}
+		dialHost = resolvedHost
+	}
 	endpoint := net.JoinHostPort(dialHost, dialPort)
 	displayURL := "https://" + serverName
 	tlsConfig := &tls.Config{
@@ -549,7 +563,6 @@ func VerifyEdgeTLS(domain, dialAddress string, timeout time.Duration, rootCAs *x
 		RootCAs:    rootCAs,
 		ServerName: serverName,
 	}
-	deadline := time.Now().Add(timeout)
 	var lastErr error
 	var lastTLS string
 

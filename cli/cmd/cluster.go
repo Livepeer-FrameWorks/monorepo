@@ -958,12 +958,20 @@ func detectService(ctx context.Context, cmd *cobra.Command, sshPool *fwssh.Pool,
 // a role-level diff of what would change on apply, use
 // `cluster provision --dry-run` (ansible-playbook --check --diff).
 func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
+	return runDoctorWithControlPlane(cmd, rc, deep, doctorControlPlane)
+}
+
+func runDoctorWithControlPlane(cmd *cobra.Command, rc *resolvedCluster, deep bool, checkControlPlane func(*cobra.Command, *resolvedCluster, string, map[string]string, bool) (readiness.Report, []ux.NextStep)) error {
 	manifest := rc.Manifest
 	doctorTarget, targetErr := resolveMigrationTarget(rc, "")
 	if targetErr != nil {
 		doctorTarget = ""
 	}
 	out := cmd.OutOrStdout()
+	jsonOutput := fwcfg.GetRuntimeOverrides().OutputJSON
+	if jsonOutput {
+		out = io.Discard
+	}
 	ux.Heading(out, "Running cluster health checks")
 	fmt.Fprintf(out, "Manifest: %s (type: %s, profile: %s)\n", rc.ManifestPath, manifest.Type, manifest.Profile)
 	if deep {
@@ -1004,6 +1012,11 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 		}
 	})
 	if interrupted {
+		if jsonOutput {
+			if err := writeDoctorJSON(cmd.OutOrStdout(), rc, deep, sections, outcomes, true, readiness.Report{}); err != nil {
+				return err
+			}
+		}
 		return &ExitCodeError{Code: 130, Message: "cluster doctor interrupted"}
 	}
 
@@ -1022,7 +1035,17 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 		}
 	}
 
-	cpReport, cpSteps := doctorControlPlane(cmd, rc, serviceToken, sharedEnv, deep)
+	cpReport, cpSteps := checkControlPlane(cmd, rc, serviceToken, sharedEnv, deep)
+	if cmd.Context().Err() != nil {
+		if jsonOutput {
+			if err := writeDoctorJSON(cmd.OutOrStdout(), rc, deep, sections, outcomes, true, cpReport); err != nil {
+				return err
+			}
+		} else {
+			ux.Warn(out, "interrupted; control-plane checks were abandoned")
+		}
+		return &ExitCodeError{Code: 130, Message: "cluster doctor interrupted"}
+	}
 
 	ux.Result(out, []ux.ResultField{
 		{Key: "infrastructure + services", OK: passedChecks == totalChecks, Detail: fmt.Sprintf("%d/%d healthy", passedChecks, totalChecks)},
@@ -1038,6 +1061,11 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 		})
 	}
 	ux.PrintNextSteps(out, steps)
+	if jsonOutput {
+		if err := writeDoctorJSON(cmd.OutOrStdout(), rc, deep, sections, outcomes, false, cpReport); err != nil {
+			return err
+		}
+	}
 
 	if passedChecks != totalChecks || (cpReport.Checked && !cpReport.OK()) {
 		return fmt.Errorf("cluster health checks did not pass")
@@ -2013,6 +2041,9 @@ func doctorResolveSystemTenantID(saved string, viaQuartermaster func() (string, 
 
 func renderDoctorControlPlane(cmd *cobra.Command, systemTenantID, qmAddr string, report readiness.Report) (readiness.Report, []ux.NextStep) {
 	out := cmd.OutOrStdout()
+	if fwcfg.GetRuntimeOverrides().OutputJSON {
+		out = io.Discard
+	}
 
 	fmt.Fprintln(out, "")
 	ux.Subheading(out, "Control Plane:")
@@ -2121,6 +2152,10 @@ func renderReadinessBlock(cmd *cobra.Command, report readiness.Report, notChecke
 }
 
 func printHealthResult(cmd *cobra.Command, serviceName string, result *health.CheckResult) {
+	if fwcfg.GetRuntimeOverrides().OutputJSON {
+		return
+	}
+
 	statusStr := result.Status
 	if result.Message != "" {
 		statusStr = result.Message

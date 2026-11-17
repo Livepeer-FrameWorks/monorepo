@@ -46,6 +46,15 @@ func (q *Queries) DiscoverServicesPage(ctx context.Context, filter ServiceDiscov
 		clusterCol = "sca.cluster_id"
 		extraJoin = "JOIN quartermaster.service_cluster_assignments sca ON sca.service_instance_id = si.id AND sca.is_active = TRUE JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = sca.cluster_id"
 	}
+	metadataColumn := "COALESCE(si.metadata, '{}'::jsonb)"
+	if filter.Physical && filter.ServiceType == "livepeer-gateway" {
+		extraJoin += " LEFT JOIN quartermaster.infrastructure_clusters physical_cluster ON physical_cluster.cluster_id = si.cluster_id"
+		// Pool assignment is not physical ownership. These reserved facts replace
+		// registrant metadata and come only from canonical cluster inventory.
+		metadataColumn = `(COALESCE(si.metadata, '{}'::jsonb) - 'physical_cluster_id' - 'auth_control_cell_id') || jsonb_build_object(
+			'physical_cluster_id', COALESCE(physical_cluster.cluster_id, ''),
+			'auth_control_cell_id', COALESCE(NULLIF(physical_cluster.control_cell_id, ''), NULLIF(physical_cluster.cell_id, ''), physical_cluster.cluster_id, ''))`
+	}
 	args := []any{filter.ServiceType}
 	where := "WHERE s.type = $1 AND si.status IN ('running','starting','active')"
 	if filter.ServiceType == "foghorn" {
@@ -74,9 +83,9 @@ func (q *Queries) DiscoverServicesPage(ctx context.Context, filter ServiceDiscov
 		where += fmt.Sprintf(" AND (si.created_at, si.id) %s ($%d, $%d)", op, len(args)+1, len(args)+2)
 		args = append(args, *filter.CursorTime, filter.CursorID)
 	}
-	selectClause := `si.id, si.instance_id, si.service_id, si.cluster_id, si.node_id, si.protocol, si.advertise_host, si.port, si.health_endpoint_override, si.status, si.health_status, COALESCE(si.metadata, '{}'::jsonb), si.last_health_check, si.created_at, si.updated_at`
+	selectClause := fmt.Sprintf(`si.id, si.instance_id, si.service_id, si.cluster_id, si.node_id, si.protocol, si.advertise_host, si.port, si.health_endpoint_override, si.status, si.health_status, %s, si.last_health_check, si.created_at, si.updated_at`, metadataColumn)
 	if filter.Pool {
-		selectClause = `si.id, si.instance_id, si.service_id, sca.cluster_id, si.node_id, si.protocol, si.advertise_host, si.port, si.health_endpoint_override, si.status, si.health_status, COALESCE(si.metadata, '{}'::jsonb), si.last_health_check, si.created_at, si.updated_at, c.cluster_name, c.base_url`
+		selectClause = fmt.Sprintf(`si.id, si.instance_id, si.service_id, sca.cluster_id, si.node_id, si.protocol, si.advertise_host, si.port, si.health_endpoint_override, si.status, si.health_status, %s, si.last_health_check, si.created_at, si.updated_at, c.cluster_name, c.base_url`, metadataColumn)
 	}
 	if filter.Physical {
 		selectClause += fmt.Sprintf(", (si.last_health_check IS NOT NULL AND si.last_health_check > NOW() - INTERVAL '%d seconds') AS health_fresh", filter.StaleThreshold)

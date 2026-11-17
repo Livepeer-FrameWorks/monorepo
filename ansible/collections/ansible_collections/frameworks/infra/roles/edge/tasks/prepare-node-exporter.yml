@@ -1,0 +1,19 @@
+---
+- name: Detect a legacy FrameWorks host exporter installation
+  ansible.builtin.find:
+    paths: /usr/local/bin
+    patterns: .frameworks-node-exporter-installed-*
+    hidden: true
+    file_type: file
+  register: edge_legacy_exporter_install
+
+- name: Select the edge exporter identity without taking over host monitoring
+  ansible.builtin.set_fact:
+    edge_exporter_service_name: "{{ 'node_exporter' if edge_exporter_legacy_owned else 'frameworks-edge-node-exporter' }}"
+    edge_exporter_binary_dir: "{{ '/usr/local/bin' if edge_exporter_legacy_owned else '/opt/frameworks/node-exporter' }}"
+    edge_exporter_user: "{{ 'node-exporter' if edge_exporter_legacy_owned else 'frameworks-edge-metrics' }}"
+    edge_exporter_textfile_dir: >-
+      {{ '/var/lib/node_exporter/textfile' if edge_exporter_legacy_owned
+         else '/var/lib/frameworks-edge-node-exporter/textfile' }}
+  vars:
+    edge_exporter_legacy_owned: "{{ edge_legacy_exporter_install.matched | int > 0 }}"

@@ -65,18 +65,19 @@ REQUIRED_OK=0
 run_sql() {
   db="$1"
   sql="$2"
+  shift 2
   if [ -z "$SQL_BIN" ]; then
     echo "$BINARY not found"
     return 127
   fi
   if [ "$PEER" = "1" ]; then
     if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
-      sudo -u "$USER_NAME" "$SQL_BIN" -X -p "$PORT" -d "$db" -A -F '	' -P pager=off -c "$sql" 2>&1
+      sudo -u "$USER_NAME" "$SQL_BIN" -X -p "$PORT" -d "$db" -A -F '	' -P pager=off "$@" -c "$sql" 2>&1
     else
-      "$SQL_BIN" -X -p "$PORT" -d "$db" -A -F '	' -P pager=off -c "$sql" 2>&1
+      "$SQL_BIN" -X -p "$PORT" -d "$db" -A -F '	' -P pager=off "$@" -c "$sql" 2>&1
     fi
   else
-    PGPASSWORD="$PASSWORD" "$SQL_BIN" -X -h "$(fw_ysql_host "$PORT")" -p "$PORT" -U "$USER_NAME" -d "$db" -A -F '	' -P pager=off -c "$sql" 2>&1
+    PGPASSWORD="$PASSWORD" "$SQL_BIN" -X -h "$(fw_ysql_host "$PORT")" -p "$PORT" -U "$USER_NAME" -d "$db" -A -F '	' -P pager=off "$@" -c "$sql" 2>&1
   fi
 }
 run_section() {
@@ -97,6 +98,31 @@ run_section() {
     fi
   fi
 }
+run_ledger() {
+  ledger_db="$1"
+  ledger_table="$2"
+  ledger_title="$3"
+  ledger_columns="$4"
+  ledger_order="$5"
+  # The catalog quotes identifiers so service schemas need not be on search_path.
+  ledger_relations="$(run_sql "$ledger_db" "SELECT pg_catalog.quote_ident(n.nspname) || '.' || pg_catalog.quote_ident(c.relname) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE c.relname='$ledger_table' AND c.relkind IN ('r','p','v') AND n.nspname NOT IN ('pg_catalog','information_schema') ORDER BY n.nspname;" -t)"
+  if [ "$?" -ne 0 ]; then
+    echo "== ${ledger_db}: ${ledger_title} discovery failed =="
+    echo "$ledger_relations"
+    REQUIRED_FAILED=1
+    return
+  fi
+  if [ -z "$ledger_relations" ]; then
+    echo "== ${ledger_db}: ${ledger_title}: ledger table not present =="
+    return
+  fi
+  while IFS= read -r ledger_relation; do
+    [ -n "$ledger_relation" ] || continue
+    run_section "$ledger_title ($ledger_relation)" "$ledger_db" "SELECT $ledger_columns FROM $ledger_relation ORDER BY $ledger_order LIMIT 200;" 1
+  done <<LEDGER_RELATIONS
+$ledger_relations
+LEDGER_RELATIONS
+}
 echo "== postgres target =="
 echo "host='molecule'"
 echo "port=$PORT"
@@ -105,8 +131,8 @@ echo "binary=${SQL_BIN:-$BINARY}"
 for db in $DATABASES; do
   run_section "version" "$db" "SELECT current_database() AS database, version() AS version;" 1
   run_section "largest user tables" "$db" "SELECT schemaname, relname, n_live_tup, pg_size_pretty(pg_total_relation_size(relid)) AS total_size FROM pg_stat_user_tables ORDER BY pg_total_relation_size(relid) DESC LIMIT 80;" 1
-  run_section "migration ledger" "$db" "SELECT version, phase, seq, checksum FROM _migrations ORDER BY version, phase, seq LIMIT 200;" 0
-  run_section "recent data migrations" "$db" "SELECT id, status, updated_at FROM data_migrations ORDER BY updated_at DESC LIMIT 80;" 0
+  run_ledger "$db" "_migrations" "migration ledger" "version, phase, seq, checksum" "version, phase, seq"
+  run_ledger "$db" "_data_migrations" "recent data migrations" "id, status, updated_at" "updated_at DESC"
   if [ "$BINARY" = "ysqlsh" ]; then
     run_section "yugabyte layout: database colocation" "$db" "SELECT yb_is_database_colocated() AS colocated;" 0
     run_section "yugabyte layout: relation placement" "$db" "$PLACEMENT_SQL" 0

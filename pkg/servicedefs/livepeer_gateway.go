@@ -6,4 +6,6 @@ const (
 	LivepeerGatewayMetadataPublicInstanceHost = "public_instance_host"
 	LivepeerGatewayMetadataPublicPort         = "public_port"
 	LivepeerGatewayMetadataPublicScheme       = "public_scheme"
+	LivepeerGatewayMetadataPhysicalClusterID  = "physical_cluster_id"
+	LivepeerGatewayMetadataAuthControlCellID  = "auth_control_cell_id"
 )

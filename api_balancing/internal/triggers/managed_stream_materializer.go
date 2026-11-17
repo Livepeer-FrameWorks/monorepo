@@ -116,12 +116,7 @@ func (m *ManagedStreamMaterializer) PopulateStreamContext(streamCtx *commodorepb
 	}
 	m.p.streamCache.Set(streamContextCacheKey("live+"+internalName), info, cacheTTL)
 	if info.ProcessesJSON != "" {
-		candidates := []string{
-			streamCtx.GetOriginClusterId(),
-			streamCtx.GetOfficialClusterId(),
-			m.p.clusterID,
-		}
-		processes := m.p.ApplyLivepeerBroadcasters(info.ProcessesJSON, candidates)
+		processes := m.p.ApplyLivepeerBroadcasters(info.ProcessesJSON)
 		processes = m.p.ApplyLivepeerWorkload(processes, mist.WorkloadLive)
 		m.p.streamCache.Set("process:"+internalName, processes, cacheTTL)
 	}

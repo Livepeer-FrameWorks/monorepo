@@ -6,7 +6,7 @@ dependency:
 driver:
   name: docker
 platforms:
-  - name: edge-instance
+  - name: "${MOLECULE_INSTANCE_NAME:-edge-instance}"
     image: geerlingguy/docker-ubuntu2404-ansible:latest
     pre_build_image: true
     privileged: true
@@ -23,7 +23,7 @@ platforms:
 provisioner:
   name: ansible
   playbooks:
-    prepare: ../../../../molecule/prepare-apt.yml
+    prepare: prepare.yml
   inventory:
     group_vars:
       all:
@@ -49,6 +49,10 @@ provisioner:
           {{ lookup('env', 'EDGE_MISTSERVER_ARTIFACT_URL') | default('', true) }}
         edge_mistserver_artifact_checksum: >-
           {{ lookup('env', 'EDGE_MISTSERVER_ARTIFACT_CHECKSUM') | default('', true) }}
+        edge_mistserver_runtime_packages: >-
+          {{ lookup('env', 'EDGE_MISTSERVER_RUNTIME_PACKAGES') | default('[]', true) | from_json }}
+        edge_mistserver_runtime_package_manager: >-
+          {{ lookup('env', 'EDGE_MISTSERVER_RUNTIME_PACKAGE_MANAGER') | default('', true) }}
         edge_helmsman_artifact_url: >-
           {{ lookup('env', 'EDGE_HELMSMAN_ARTIFACT_URL') | default('', true) }}
         edge_helmsman_artifact_checksum: >-

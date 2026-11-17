@@ -7,7 +7,7 @@ import (
 
 type recordingGatewayResolver struct{ broadcasters, workload int }
 
-func (r *recordingGatewayResolver) ApplyLivepeerBroadcasters(processesJSON string, _ []string) string {
+func (r *recordingGatewayResolver) ApplyLivepeerBroadcasters(processesJSON string) string {
 	r.broadcasters++
 	return processesJSON
 }

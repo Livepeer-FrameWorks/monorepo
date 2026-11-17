@@ -2,13 +2,18 @@ package triggers
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
+	"frameworks/api_balancing/internal/balancer"
+	"frameworks/api_balancing/internal/control"
 	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
@@ -20,6 +25,67 @@ type localIngestAuthority struct {
 	tenant           localauthority.TenantSnapshot
 	sessionClusterID string
 	sessionChecked   bool
+}
+
+var errPublisherHardPolicyDenied = errors.New("publisher destination denied by current hard placement constraints")
+
+// publisherHardPolicyDenied only refuses proven hard denials. It neither elects
+// a destination nor replaces the post-lease current-version admission check.
+func publisherHardPolicyDenied(local localIngestAuthority, cluster, node string, now time.Time) bool {
+	authority, err := balancer.CompilePlacementAuthority(localauthority.PlacementPair{Tenant: local.tenant, Object: local.object}, placement.Ingest, now)
+	if err != nil {
+		return false
+	}
+	facts, entitled := authority.Clusters[cluster]
+	if !entitled {
+		return true
+	}
+	reason, err := placement.CheckConstraints(placement.Request{TenantID: authority.TenantID, Verb: placement.Ingest, Policy: authority.Policy, Now: now}, placement.Candidate{
+		TenantID: authority.TenantID, ClusterID: cluster, NodeID: node, OwnerTenantID: facts.OwnerTenantID, Official: facts.Official,
+		Region: facts.Region, AllowedVerbs: facts.AllowedVerbs, Charging: facts.Charging, ChargingUntil: facts.ChargingUntil,
+	})
+	return err == nil && (reason == placement.PolicyDenied || reason == placement.NotEntitled)
+}
+
+func publisherLeaseRequest(local localIngestAuthority, identity *commodorepb.ValidateStreamKeyResponse, cell, cluster, node, execution string) (*commodorepb.PublisherLeaseRequest, error) {
+	tenant, err := proto.MarshalOptions{Deterministic: true}.Marshal(local.tenant.Authority)
+	if err != nil {
+		return nil, err
+	}
+	object, err := proto.MarshalOptions{Deterministic: true}.Marshal(local.object.Authority)
+	if err != nil {
+		return nil, err
+	}
+	tenantDigest, objectDigest := sha256.Sum256(tenant), sha256.Sum256(object)
+	return &commodorepb.PublisherLeaseRequest{TenantId: identity.GetTenantId(), StreamId: identity.GetStreamId(), InternalName: identity.GetInternalName(),
+		ClusterId: cluster, ControlCellId: cell, ExecutionToken: execution, NodeId: node,
+		TenantAuthorityVersion: local.tenant.Version, ObjectAuthorityVersion: local.object.Version,
+		TenantPayloadSha256: tenantDigest[:], ObjectPayloadSha256: objectDigest[:]}, nil
+}
+
+func (p *Processor) applyPublisherAuthorityPair(ctx context.Context, encoded [][]byte, tenant, stream string) error {
+	if len(encoded) != 2 || p.mediaAuthorityStore == nil {
+		return control.ErrPublisherAuthorityStale
+	}
+	for i, wire := range encoded {
+		var signed mediaauthoritypb.SignedAuthorityEnvelope
+		if err := proto.Unmarshal(wire, &signed); err != nil {
+			return err
+		}
+		envelope := signed.GetEnvelope()
+		if (i == 0 && (envelope.GetKind() != mediaauthoritypb.AuthorityKind_AUTHORITY_KIND_TENANT || envelope.GetAuthorityId() != tenant)) ||
+			(i == 1 && (envelope.GetKind() != mediaauthoritypb.AuthorityKind_AUTHORITY_KIND_MEDIA_OBJECT || envelope.GetAuthorityId() != sharedauthority.LiveStreamAuthorityID(stream))) {
+			return errors.New("publisher authority response identity differs")
+		}
+	}
+	for _, wire := range encoded {
+		// Apply retains signature, audience, expiry, restore and revival fences.
+		// A newer already-installed version is read again before any lease CAS.
+		if _, err := p.mediaAuthorityStore.Apply(ctx, wire); err != nil && !errors.Is(err, localauthority.ErrRollback) {
+			return err
+		}
+	}
+	return nil
 }
 
 // ResolveLocalIngestContext exposes the signed credential projection to the

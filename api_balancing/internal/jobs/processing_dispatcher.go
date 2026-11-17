@@ -95,12 +95,10 @@ type ProcessConfigCacher interface {
 	CacheProcessConfig(internalName, processesJSON string)
 }
 
-// GatewayResolver fills the Livepeer hardcoded_broadcasters list in process
-// config JSON with the registered gateway instances. Implemented by
-// triggers.Processor. Candidates is an ordered list of cluster IDs to try;
-// empty candidates falls back to the resolver's local cluster.
+// GatewayResolver resolves the job-owning cell's gateway replicas. Media
+// placement already selected the job's owner; this lookup cannot move the job.
 type GatewayResolver interface {
-	ApplyLivepeerBroadcasters(processesJSON string, candidates []string) string
+	ApplyLivepeerBroadcasters(processesJSON string) string
 	ApplyLivepeerWorkload(processesJSON, workload string) string
 }
 
@@ -529,7 +527,7 @@ func (d *ProcessingDispatcher) resolveStoredProcesses(stored string) string {
 	if d.gatewayResolver != nil {
 		// nil candidates resolve against the resolver's local cluster, the cell
 		// whose Foghorn dispatches jobs for the artifact's origin cluster.
-		resolved = d.gatewayResolver.ApplyLivepeerBroadcasters(resolved, nil)
+		resolved = d.gatewayResolver.ApplyLivepeerBroadcasters(resolved)
 		resolved = d.gatewayResolver.ApplyLivepeerWorkload(resolved, mist.WorkloadVOD)
 	}
 	return mist.StripLivepeerJobToken(resolved)

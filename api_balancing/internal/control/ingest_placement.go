@@ -12,6 +12,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	"golang.org/x/sync/errgroup"
 )
 
 // IngestPlacementRequest contains validated publisher identity, never its key.
@@ -45,14 +46,35 @@ func resolvePreparedIngestEndpoints(ctx context.Context, deps *IngestDependencie
 	if deps.Protocol != "" {
 		protocols = []string{deps.Protocol}
 	}
+	type protocolPreparation struct {
+		prepared balancer.PlacementPreparationResult
+		err      error
+	}
+	preparations := make([]protocolPreparation, len(protocols))
+	pending, prepareCtx := errgroup.WithContext(ctx)
+	// Protocol recommendations are independent. Their network waits share one
+	// request deadline; serial waits would spend that deadline once per protocol.
+	for i, protocol := range protocols {
+		pending.Go(func() error {
+			protocolRequest := request
+			protocolRequest.Protocol = protocol
+			preparations[i].prepared, preparations[i].err = deps.Placement.PrepareIngest(prepareCtx, protocolRequest)
+			if errors.Is(preparations[i].err, balancer.ErrPlacementUnavailable) && deps.Protocol == "" {
+				return nil
+			}
+			return preparations[i].err
+		})
+	}
+	if err := pending.Wait(); err != nil {
+		return nil, err
+	}
 	var endpoints []*sharedpb.IngestEndpoint
 	var expiresAt time.Time
-	for _, protocol := range protocols {
+	for i, protocol := range protocols {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		request.Protocol = protocol
-		prepared, err := deps.Placement.PrepareIngest(ctx, request)
+		prepared, err := preparations[i].prepared, preparations[i].err
 		// Unqualified discovery may omit a protocol with no permitted destination.
 		// Unknown/ambiguous preparation errors are not evidence for trying elsewhere.
 		if errors.Is(err, balancer.ErrPlacementUnavailable) && deps.Protocol == "" {

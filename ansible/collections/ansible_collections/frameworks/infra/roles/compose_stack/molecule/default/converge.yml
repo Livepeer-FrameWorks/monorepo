@@ -11,6 +11,9 @@
         create_home: false
         shell: /usr/sbin/nologin
 
-    - name: Apply frameworks.infra.compose_stack
-      ansible.builtin.include_role:
+    # Edge imports its install tasks with these tags. They must not activate
+    # the role's explicit restart, stop or cleanup operations.
+    - name: Apply frameworks.infra.compose_stack with inherited deployment tags
+      ansible.builtin.import_role:
         name: frameworks.infra.compose_stack
+      tags: [install, configure, service, validate]
