@@ -6,7 +6,9 @@
 # billing grant or synthetic publisher trigger may supply admission. RTMP and
 # SRT on the private edge record and replay (RTMP), check signed lifecycle
 # webhooks and final analytics, and their playback stays on the private edge
-# through every Foghorn replica. Scenario 47 covers the platform-capacity
+# through every Foghorn replica. Each private publish follows a hard denial on
+# a public edge; the correct edge must admit its first PUSH_REWRITE, with no
+# lease-expiry wait or encoder retry. Scenario 47 covers the platform-capacity
 # lifecycle as the run's tenant.
 . "$(dirname "$0")/../lib.sh"
 
@@ -116,7 +118,7 @@ private_ready() {
 }
 eventually 180 'fresh private edge reports ready without a health override' private_ready || end_scenario
 for protocol in rtmp srt; do
-  stream_flow TENANT_PRIVATE "$edge" "$FOGHORN_A_DB" "$node" "$cluster" "$protocol" "${FOGHORN_A_URLS%% *}" || end_scenario
+  stream_flow TENANT_PRIVATE "$edge" "$FOGHORN_A_DB" "$node" "$cluster" "$protocol" "${FOGHORN_A_URLS%% *}" full "$EDGE_A_HOST" || end_scenario
 done
 check 'streaming did not change the Free plan' free_plan
 # Ledger workers run every five minutes with a two-minute settlement lag and
