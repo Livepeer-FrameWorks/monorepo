@@ -57,6 +57,50 @@ func testPublisherAdmissionOperations(t *testing.T, conn *sql.DB, dsn string) {
 		}
 		return got
 	}
+	t.Run("degradation is fenced to the reporting publisher runtime", func(t *testing.T) {
+		req := request()
+		req.PublisherLeaseEpoch, req.StrictLeaseOwner, req.RuntimeLayoutVersion = 19, true, 1
+		old := prepare(t, req)
+		if _, err := conn.ExecContext(ctx, `UPDATE foghorn.ingest_sessions SET ended_at=NOW(),ended_reason='stream_end' WHERE tenant_id=$1::uuid AND id=$2::uuid`, req.TenantID, old.Generation); err != nil {
+			t.Fatal(err)
+		}
+		req.TriggerUUID, req.ConnectorPID, req.PublisherLeaseEpoch = uuid.NewString(), 101, 20
+		current := prepare(t, req)
+		relay, err := streamident.BoundRuntimeName(req.InternalName, streamident.RuntimeRelay, uuid.NewString())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, runtimeName := range []string{old.RuntimeName, "live+" + req.InternalName, "pull+" + req.InternalName, relay} {
+			marked, err := markIngestSessionTranscodeDegraded(ctx, req.TenantID, req.NodeID, req.InternalName, runtimeName, "stale report")
+			if err != nil || marked != 0 {
+				t.Fatalf("foreign runtime %s marked the successor: rows=%d error=%v", runtimeName, marked, err)
+			}
+		}
+		for _, tenantNode := range [][2]string{{uuid.NewString(), req.NodeID}, {req.TenantID, "another-node"}} {
+			marked, err := markIngestSessionTranscodeDegraded(ctx, tenantNode[0], tenantNode[1], req.InternalName, current.RuntimeName, "foreign owner")
+			if err != nil || marked != 0 {
+				t.Fatalf("foreign owner marked degradation: rows=%d error=%v", marked, err)
+			}
+		}
+		for _, reason := range []string{"first failure", "later failure"} {
+			marked, err := markIngestSessionTranscodeDegraded(ctx, req.TenantID, req.NodeID, req.InternalName, current.RuntimeName, reason)
+			if err != nil || marked != 1 {
+				t.Fatalf("current runtime not marked: rows=%d error=%v", marked, err)
+			}
+		}
+		var reason string
+		if err := conn.QueryRowContext(ctx, `SELECT transcode_degraded_reason FROM foghorn.ingest_sessions WHERE tenant_id=$1::uuid AND id=$2::uuid AND transcode_degraded_at IS NOT NULL`, req.TenantID, current.Generation).Scan(&reason); err != nil || reason != "first failure" {
+			t.Fatalf("first degradation was not retained: reason=%q error=%v", reason, err)
+		}
+		legacy := request()
+		prepare(t, legacy)
+		for _, runtimeName := range []string{"live+" + legacy.InternalName, "pull+" + legacy.InternalName} {
+			marked, err := markIngestSessionTranscodeDegraded(ctx, legacy.TenantID, legacy.NodeID, legacy.InternalName, runtimeName, "legacy failure")
+			if err != nil || marked != 1 {
+				t.Fatalf("legacy runtime not marked: rows=%d error=%v", marked, err)
+			}
+		}
+	})
 	t.Run("isolated runtime is durable and legacy replay stays legacy", func(t *testing.T) {
 		req := request()
 		req.PublisherLeaseEpoch = 19

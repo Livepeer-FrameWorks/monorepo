@@ -658,7 +658,8 @@ type Querier interface {
 	// marked too: the STREAM_END reaper orders against playable_at_unix_millis.
 	MarkIngestSessionPlayable(ctx context.Context, arg MarkIngestSessionPlayableParams) (MarkIngestSessionPlayableRow, error)
 	// Records the first transcode degradation of the reporting node's active session;
-	// later reports for the same session keep the first time and reason.
+	// isolated sessions require the exact runtime; legacy live/pull names remain valid.
+	// Later reports for the same session keep the first time and reason.
 	MarkIngestSessionTranscodeDegraded(ctx context.Context, arg MarkIngestSessionTranscodeDegradedParams) (int64, error)
 	MarkMediaObjectAuthorityLocalIngestReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalIngestReadyParams) (int64, error)
 	MarkMediaObjectAuthorityLocalReadReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalReadReadyParams) (int64, error)

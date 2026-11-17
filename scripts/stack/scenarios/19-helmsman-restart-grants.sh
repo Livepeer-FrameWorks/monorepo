@@ -72,7 +72,7 @@ eventually 60 "the restarted Helmsman rebuilt its sessions from Mist" rebuilt ||
 fetched() {
   local in
   for in in "${INS[@]}"; do
-    [ -n "$(log_json "$RESTART_TS" "select(.msg == \"Playback grant applied\" and .internal_name == \"live+$in\") | .time" "$STACK_EDGE_A_SERVICE")" ] || return 1
+    [ -n "$(log_runtime_json "$RESTART_TS" "$in" 'select(.msg == "Playback grant applied") | .time' "$STACK_EDGE_A_SERVICE")" ] || return 1
   done
 }
 eventually 30 "a grant arrived for each stream" fetched
@@ -84,7 +84,7 @@ check "every viewer session keeps playing after the rebuild" all_play "$SERVE_S"
 # pushes a grant when the tenant's authority is renewed, which carries a new
 # authority version; a repeated fetch carries the same versions as the first.
 for in in "${INS[@]}"; do
-  versions=$(log_json "$RESTART_TS" "select(.msg == \"Playback grant applied\" and .internal_name == \"live+$in\") | \"\(.tenant_authority_version)/\(.object_authority_version)\"" "$STACK_EDGE_A_SERVICE")
+  versions=$(log_runtime_json "$RESTART_TS" "$in" 'select(.msg == "Playback grant applied") | "\(.tenant_authority_version)/\(.object_authority_version)"' "$STACK_EDGE_A_SERVICE")
   applied=0
   [ -z "$versions" ] || applied=$(printf '%s\n' "$versions" | grep -cxF "$(printf '%s\n' "$versions" | head -n 1)")
   one_grant() { [ "$applied" = 1 ]; }

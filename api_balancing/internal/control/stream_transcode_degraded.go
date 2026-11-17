@@ -9,7 +9,9 @@ import (
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 )
 
 // transcodeDegradedStreamKind maps a Mist stream name to the bounded metric label.
@@ -36,12 +38,13 @@ var ingestSessionTenantForStream = func(internalName string) string {
 
 // markIngestSessionTranscodeDegraded records the degradation on the node's active
 // ingest session; replaceable in tests.
-var markIngestSessionTranscodeDegraded = func(ctx context.Context, tenantID, nodeID, internalName, reason string) (int64, error) {
+var markIngestSessionTranscodeDegraded = func(ctx context.Context, tenantID, nodeID, internalName, runtimeName, reason string) (int64, error) {
 	if db == nil {
 		return 0, nil
 	}
 	return foghorndb.New(db).MarkIngestSessionTranscodeDegraded(ctx, foghorndb.MarkIngestSessionTranscodeDegradedParams{
 		Reason: reason, TenantID: tenantID, StreamInternalName: internalName, NodeID: nodeID,
+		RuntimeName: runtimeName,
 	})
 }
 
@@ -72,7 +75,10 @@ func processStreamTranscodeDegraded(msg *ipcpb.StreamTranscodeDegraded, nodeID s
 	if kind != "live" && kind != "pull" {
 		return
 	}
-	internalName := strings.TrimPrefix(strings.TrimPrefix(stream, "live+"), "pull+")
+	if binding, bound := streamident.ParseRuntimeBinding(stream); bound && binding.Role != streamident.RuntimePublisher {
+		return
+	}
+	internalName := mist.ExtractInternalName(stream)
 	tenantID := ingestSessionTenantForStream(internalName)
 	if tenantID == "" || nodeID == "" || internalName == "" {
 		logger.WithFields(fields).Debug("No tenant known for degraded stream; ingest session not marked")
@@ -80,7 +86,7 @@ func processStreamTranscodeDegraded(msg *ipcpb.StreamTranscodeDegraded, nodeID s
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	marked, err := markIngestSessionTranscodeDegraded(ctx, tenantID, nodeID, internalName, msg.GetReason())
+	marked, err := markIngestSessionTranscodeDegraded(ctx, tenantID, nodeID, internalName, stream, msg.GetReason())
 	if err != nil {
 		logger.WithError(err).WithFields(fields).Warn("Failed to record transcode degradation on the ingest session")
 		return

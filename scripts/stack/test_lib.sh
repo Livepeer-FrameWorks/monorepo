@@ -452,6 +452,53 @@ expect 'json_has never matches empty output' json_has_refuses_empty_input
 json_has_matches_json() { json_has '{"items":[]}' '(.items // []) | length == 0' && ! json_has '{"items":[1]}' '.items | length == 0'; }
 expect 'json_has still decides real JSON' json_has_matches_json
 
+bound_playback_grant_evidence() (
+  IN=fixture START=now SERVING=edge
+  logs_since() {
+    printf '%s\n' '{"msg":"Playback grant applied","internal_name":"live+fixture_fw1p_10000000000040008000000000000002","time":"now"}'
+  }
+  eval "$(sed -n '/^grant_applied() {/p' "$here/scenarios/17-playback-grants.sh")"
+  grant_applied
+)
+expect 'playback grant evidence accepts the served publisher generation' bound_playback_grant_evidence
+
+runtime_log_evidence_is_exact() (
+  local runtime rows
+  logs_since() {
+    printf '{"msg":"Playback grant applied","internal_name":"%s","tenant_authority_version":2,"object_authority_version":7}\n' "$runtime"
+  }
+  for runtime in live+fixture pull+fixture \
+    live+fixture_fw1p_10000000000040008000000000000002 \
+    live+fixture_fw1r_10000000000040008000000000000003; do
+    rows=$(log_runtime_json now fixture '.internal_name' edge) || return 1
+    [ "$rows" = "$runtime" ] || return 1
+    rows=$(log_runtime_json now fixture '"\(.tenant_authority_version)/\(.object_authority_version)"' edge) || return 1
+    [ "$rows" = 2/7 ] || return 1
+  done
+  for runtime in live+fixture-other \
+    live+other_fw1p_10000000000040008000000000000002 \
+    live+fixture_fw1p_10000000000040008000000000000002_extra \
+    live+fixture_fw1p_00000000000000000000000000000000 \
+    live+fixture_fw1p_10000000-0000-4000-8000-000000000002 \
+    live+fixture_fw1p_A0000000000040008000000000000002 \
+    live+fixture_fw1z_10000000000040008000000000000002; do
+    rows=$(log_runtime_json now fixture '.internal_name' edge) || return 1
+    [ -z "$rows" ] || return 1
+  done
+)
+expect 'runtime log evidence accepts canonical bindings and rejects other streams or malformed names' runtime_log_evidence_is_exact
+
+runtime_log_failure_discards_partial_evidence() (
+  local rows
+  logs_since() {
+    printf '%s\n' '{"msg":"Playback grant applied","internal_name":"live+fixture"}'
+    return 1
+  }
+  if rows=$(log_runtime_json now fixture '.internal_name' edge); then return 1; fi
+  [ -z "$rows" ]
+)
+expect 'a failed runtime-log read cannot prove a grant even after partial output' runtime_log_failure_discards_partial_evidence
+
 if [ "$failures" -gt 0 ]; then
   echo "lib.sh checks: $failures failed"
   exit 1
