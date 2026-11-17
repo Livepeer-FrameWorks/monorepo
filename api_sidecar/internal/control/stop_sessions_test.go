@@ -9,6 +9,7 @@ import (
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -36,7 +37,7 @@ func TestConfirmedSessionStopRechecksGenerationAfterAuthorization(t *testing.T) 
 	m := &sessionMist{sessions: map[string]string{"Irevoked": "live+revoked"}}
 	withConfig(t, &sidecarcfg.HelmsmanConfig{MistServerURL: m.serve(t)})
 	request := relativeStopFixtureRequest(t)
-	request.Targets[0].SourceGeneration = "original"
+	request.Targets[0].SourceGeneration = "10000000-0000-4000-8000-000000000002"
 	t.Cleanup(func() {
 		fence, _ := lockIngestFence("live+revoked", false)
 		if fence != nil {
@@ -46,7 +47,7 @@ func TestConfirmedSessionStopRechecksGenerationAfterAuthorization(t *testing.T) 
 	})
 	err := stopSessionsEffectWithAuthorization(t.Context(), logging.NewLogger(), request, func() bool { return true }, func(context.Context) (time.Duration, error) {
 		fence, _ := lockIngestFence("live+revoked", true)
-		fence.generation, fence.active = "replacement", true
+		fence.generation, fence.active = "10000000-0000-4000-8000-000000000003", true
 		fence.Unlock()
 		return 5 * time.Second, nil
 	})
@@ -61,6 +62,41 @@ func stopFixtureRequest() *ipcpb.StopSessionsRequest {
 		ExpiresAt:          timestamppb.New(time.Now().Add(time.Minute)),
 		RemainingTimeoutMs: 10_000,
 		StreamNames:        []string{"revoked"}, Targets: []*ipcpb.StopSessionsTarget{{InternalName: "revoked"}},
+	}
+}
+
+func TestConfirmedSessionStopFindsPublisherWithoutViewers(t *testing.T) {
+	const generation = "10000000-0000-4000-8000-000000000002"
+	const replacement = "10000000-0000-4000-8000-000000000003"
+	runtime, err := streamident.BoundRuntimeName("revoked", streamident.RuntimePublisher, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextRuntime, err := streamident.BoundRuntimeName("revoked", streamident.RuntimePublisher, replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &sessionMist{sessions: map[string]string{"Irevoked": runtime, "Ireplacement": nextRuntime, "Vother": "live+other"}}
+	withConfig(t, &sidecarcfg.HelmsmanConfig{MistServerURL: m.serve(t)})
+	for name, owner := range map[string]string{runtime: generation, nextRuntime: replacement} {
+		fence, _ := lockIngestFence(name, true)
+		fence.generation, fence.active = owner, true
+		fence.Unlock()
+		t.Cleanup(func() {
+			fence, _ := lockIngestFence(name, false)
+			if fence != nil {
+				fence.active, fence.evictPending = false, true
+				fence.Unlock()
+			}
+		})
+	}
+	req := stopFixtureRequest()
+	req.Targets[0].SourceGeneration = generation
+	if err := stopFixtureEffect(t.Context(), logging.NewLogger(), req, func() bool { return true }); err != nil {
+		t.Fatalf("stop publisher without viewers: %v", err)
+	}
+	if got := m.remaining(); !slices.Equal(got, []string{"Ireplacement", "Vother"}) {
+		t.Fatalf("publisher without viewers survived or replacement scope changed: %v", got)
 	}
 }
 
@@ -114,14 +150,14 @@ func TestConfirmedSessionStopRejectsMissingBudgetAndReplacementGeneration(t *tes
 	}
 	req = stopFixtureRequest()
 	fence, _ := lockIngestFence("live+revoked", true)
-	fence.generation, fence.active = "replacement", true
+	fence.generation, fence.active = "10000000-0000-4000-8000-000000000003", true
 	fence.Unlock()
 	t.Cleanup(func() {
 		fence, _ := lockIngestFence("live+revoked", false)
 		fence.active, fence.evictPending = false, true
 		fence.Unlock()
 	})
-	req.Targets[0].SourceGeneration = "original"
+	req.Targets[0].SourceGeneration = "10000000-0000-4000-8000-000000000002"
 	if err := stopFixtureEffect(t.Context(), logging.NewLogger(), req, func() bool { return true }); err == nil {
 		t.Fatal("old generation stopped a replacement publisher")
 	}
