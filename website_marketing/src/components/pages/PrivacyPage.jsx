@@ -16,9 +16,9 @@ const privacySections = [
   {
     title: "What we do not collect",
     items: [
-      "We do not inspect or mine the contents of your live or recorded media for advertising or profiling.",
-      "We do not sell, rent, or trade your personal data or your viewers' data to anyone.",
-      "Self-hosted and hybrid deployments keep your media and much of your operational data on infrastructure you control. We do not need a copy to deliver the service.",
+      "We do not inspect or mine the contents of your live or recorded media for any purpose not directly related to providing the service you request from us.",
+      "We do not sell, rent, or trade your personal data, media content or metadata, or your viewers' data to anyone.",
+      "Self-hosted and hybrid deployments keep your media and much of your operational data on infrastructure you control. We do not need access to anything you exclusively host yourself to operate our service, and do not have any way to access such data.",
     ],
   },
   {
@@ -26,24 +26,23 @@ const privacySections = [
     items: [
       "To operate and secure FrameWorks, troubleshoot issues, and improve performance.",
       "To produce the analytics and routing visibility you see in your own dashboards.",
-      "To send product or policy updates you opt into during beta.",
+      "To send product or policy updates you opt into.",
       "To enforce our terms and acceptable use policy, and to detect and prevent abuse.",
     ],
   },
   {
     title: "How we share it",
     items: [
-      "We do not sell personal data.",
-      "We may share it with trusted vendors who help us run FrameWorks (for example hosting, analytics, email) under confidentiality agreements, limited to what they need to provide their service.",
+      "We do not sell personal data to anyone.",
+      "We may share it with vendors that help us run FrameWorks (for example hosting, analytics, email) under confidentiality agreements, limited only to what they need to provide their service.",
       "We may disclose it if required by law or to protect the safety and rights of our users.",
     ],
   },
   {
     title: "Cookies & analytics",
     items: [
-      "We use a small number of strictly necessary cookies to keep you signed in and to remember your preferences.",
+      "We use a small number of strictly necessary cookies to keep you signed in and to remember your preferences. We have no cookie banner because these are all the cookies we use, and they require no permission.",
       "Any product analytics we collect are aggregated and used to understand how features are used, not to build advertising profiles.",
-      "You can block non-essential cookies in your browser; the core application will continue to work.",
     ],
   },
   {
@@ -59,7 +58,7 @@ const privacySections = [
     items: [
       "We protect data in transit and at rest, scope internal access to what each role needs, and follow the principle of least privilege across our services.",
       "FrameWorks is built around sovereignty: you can run hosted, hybrid, or fully self-hosted, choosing where your media and control plane live so your data stays under your jurisdiction and ownership.",
-      "We will update this policy as the product evolves; continuing to use FrameWorks means you accept the latest version.",
+      "We will update this policy as the product evolves; continuing to use FrameWorks means you accept the latest version at time of use.",
     ],
   },
 ];
