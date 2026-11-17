@@ -80,15 +80,19 @@ eventually 30 "a grant arrived for each stream" fetched
 SERVE_TS=$(utc_now) SERVE_S=$(date +%s)
 sleep 12
 check "every viewer session keeps playing after the rebuild" all_play "$SERVE_S"
-# Each grant the restarted Helmsman fetched is applied once. Foghorn also
-# pushes a grant when the tenant's authority is renewed, which carries a new
-# authority version; a repeated fetch carries the same versions as the first.
+# A pushed grant and a fetch response can apply the same policy. Count the
+# actual outgoing requests, including failed sends, rather than applications.
+grant_fetches() {
+  log_runtime_json "$RESTART_TS" "$1" 'select(.msg == "Playback grant requested") | .request_id // empty' "$STACK_EDGE_A_SERVICE"
+}
 for in in "${INS[@]}"; do
-  versions=$(log_runtime_json "$RESTART_TS" "$in" 'select(.msg == "Playback grant applied") | "\(.tenant_authority_version)/\(.object_authority_version)"' "$STACK_EDGE_A_SERVICE")
-  applied=0
-  [ -z "$versions" ] || applied=$(printf '%s\n' "$versions" | grep -cxF "$(printf '%s\n' "$versions" | head -n 1)")
-  one_grant() { [ "$applied" = 1 ]; }
-  check "one grant fetch for stream $in after the restart (got $applied)" one_grant
+  if ! requests=$(grant_fetches "$in"); then
+    fail "cannot read grant requests for stream $in after the restart"
+    continue
+  fi
+  fetched=0
+  [ -z "$requests" ] || fetched=$(printf '%s\n' "$requests" | wc -l | tr -d ' ')
+  check "one grant request for stream $in after the restart (got $fetched)" test "$fetched" -eq 1
 done
 forwarded=$(log_json "$SERVE_TS" 'select(.msg == "PLAY_REWRITE resolved by Foghorn") | .time' "$STACK_EDGE_A_SERVICE" | grep -c .)
 echo "    PLAY_REWRITE forwarded to Foghorn after the rebuild: $forwarded for ${#SESSIONS[@]} viewers polling for 12 s"
