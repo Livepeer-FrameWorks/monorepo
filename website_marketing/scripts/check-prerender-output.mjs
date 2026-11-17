@@ -51,7 +51,15 @@ const routes = [
   ],
   ["status/index.html", "FrameWorks Status - Live Streaming Network Health"],
   ["privacy/index.html", "FrameWorks Privacy Policy"],
-  ["terms/index.html", "FrameWorks Terms of Service"],
+  [
+    "terms/index.html",
+    "FrameWorks Terms of Service",
+    "Terms governing your use of FrameWorks.",
+    'href="/aup" class="text-accent underline">FrameWorks Acceptable Use Policy</a>',
+    'href="/privacy" class="text-accent underline">our Privacy Policy</a>',
+    "For prepaid accounts, metered usage is deducted from your prepaid balance as usage is reported.",
+    "For postpaid accounts, metered usage is invoiced after each billing period, with payment due 14 days after that period ends.",
+  ],
   ["aup/index.html", "FrameWorks Acceptable Use Policy"],
   // Snippet stops before "& Responsible" because the built title HTML-encodes the ampersand.
   ["security/index.html", "FrameWorks Security"],
