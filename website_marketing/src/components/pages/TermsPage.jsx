@@ -14,14 +14,20 @@ const termsSections = [
   {
     title: "2. Acceptable Use",
     paragraphs: [
-      "You must comply with the <a href=\"aup\">Frameworks Acceptable Use Policy</a>.",
+      <>
+        You must comply with the{" "}
+        <a href="/aup" className="text-accent underline">
+          FrameWorks Acceptable Use Policy
+        </a>
+        .
+      </>,
     ],
   },
   {
     title: "3. Fees & Billing",
     paragraphs: [
       "Recurring fees are charged up-front, and only become active once payment is completed successfully.",
-      "Metered usage is charged the month after usage, and needs to be settled within 30 days after receiving our invoice for your account to remain in good standing.",
+      "For prepaid accounts, metered usage is deducted from your prepaid balance as usage is reported. For postpaid accounts, metered usage is invoiced after each billing period, with payment due 14 days after that period ends.",
       "If a payment is disputed or fails to go through, we will always reach out to you first. Should you fail to respond within two weeks, we may proceed to limit or suspend your account until settled.",
     ],
   },
@@ -36,8 +42,14 @@ const termsSections = [
   {
     title: "5. Privacy & Data",
     paragraphs: [
-      "Your use of FrameWorks is also governed by <a href=\"privacy\">our Privacy Policy</a>, which explains what we collect, how we use it, and the controls available to you.",
-      "You retain ownership of the content you stream and the data you generate. We process your content as well as operational telemetry only provide the service(s) requested by you.",
+      <>
+        Your use of FrameWorks is also governed by{" "}
+        <a href="/privacy" className="text-accent underline">
+          our Privacy Policy
+        </a>
+        , which explains what we collect, how we use it, and the controls available to you.
+      </>,
+      "You retain ownership of the content you stream and the data you generate. We process your content as well as operational telemetry only to provide the service(s) requested by you.",
     ],
   },
   {
@@ -80,7 +92,7 @@ const TermsPage = () => (
       seed="/terms"
       eyebrow="Legal"
       title="Terms of Service"
-      description="Beta terms outlining how you can use FrameWorks today."
+      description="Terms governing your use of FrameWorks."
       align="center"
       accents={termsHeroAccents}
     />
