@@ -800,6 +800,14 @@ func (r *StreamRegistry) StartSweeper(ctx context.Context, interval, maxAge time
 	}()
 }
 
+// CachedSourceByInternalName returns a locally known source without issuing a
+// control-plane request. Blocking Mist triggers use it after materialization
+// has installed the source identity in this registry.
+func (r *StreamRegistry) CachedSourceByInternalName(internalName string) (StreamEntry, bool) {
+	entry, fresh, stale := r.lookupEntry(r.byInt, strings.TrimSpace(internalName))
+	return entry, fresh || stale
+}
+
 // ResolveSourceByInternalName resolves a concrete Mist source internal_name
 // to its canonical StreamEntry. Bare names from Mist triggers (STREAM_SOURCE,
 // USER_NEW, thumbnails) feed in here.

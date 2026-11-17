@@ -989,6 +989,19 @@ func txObjectKeys(ctx context.Context, tx *sql.Tx, attemptID, columns string) ([
 	return keys, nil
 }
 
+// ThumbnailRecoveryError identifies the SQL recovery phase without losing its cause.
+type ThumbnailRecoveryError struct {
+	Phase     string
+	Operation string
+	Elapsed   time.Duration
+	Cause     error
+}
+
+func (e *ThumbnailRecoveryError) Error() string {
+	return fmt.Sprintf("thumbnail recovery %s %s after %s: %v", e.Phase, e.Operation, e.Elapsed, e.Cause)
+}
+func (e *ThumbnailRecoveryError) Unwrap() error { return e.Cause }
+
 // RecoverStuckThumbnailAttempts is the crash-recovery reconciler pass (DB-only). It (1) RE-DRIVES every attempt
 // left in 'publishing' — the idempotent pointer CAS completes a crash between promote and commit — and (2)
 // FAILS + SWEEPS every attempt still in an earlier non-terminal state (assigned/uploading/verifying) past its
@@ -1016,10 +1029,14 @@ func RecoverStuckThumbnailAttempts(ctx context.Context, dbh *sql.DB, now time.Ti
 	// token, so the re-drive MUST carry that same token (the no-token wrapper would match zero rows and silently
 	// leave the attempt to expire+fail — a lost thumbnail). The objects were promoted to v/{token}/…, so re-driving
 	// under the persisted token also serves the objects that actually exist.
+	started := time.Now()
+	phaseError := func(phase, operation string, cause error) error {
+		return &ThumbnailRecoveryError{Phase: phase, Operation: operation, Elapsed: time.Since(started), Cause: cause}
+	}
 	q := foghorndb.New(dbh)
 	pubRows, qErr := q.ListPublishingThumbnailAttempts(ctx, int32(limit))
 	if qErr != nil {
-		return 0, 0, 0, qErr
+		return 0, 0, 0, phaseError("publishing", "select", qErr)
 	}
 	type publishingAttempt struct{ id, token string }
 	var publishing []publishingAttempt
@@ -1028,7 +1045,7 @@ func RecoverStuckThumbnailAttempts(ctx context.Context, dbh *sql.DB, now time.Ti
 	}
 	for _, pa := range publishing {
 		if _, pErr := PublishThumbnailAttemptToken(ctx, dbh, pa.id, pa.token); pErr != nil {
-			return redriven, failed, gced, pErr
+			return redriven, failed, gced, phaseError("publishing", "settle", pErr)
 		}
 		redriven++
 	}
@@ -1037,12 +1054,12 @@ func RecoverStuckThumbnailAttempts(ctx context.Context, dbh *sql.DB, now time.Ti
 	// that crashed after entering publishing but before committing the CAS). expiry < NOW() (DB-owned boundary).
 	stuck, qErr2 := q.ListExpiredThumbnailAttemptIDs(ctx, int32(limit))
 	if qErr2 != nil {
-		return redriven, failed, gced, qErr2
+		return redriven, failed, gced, phaseError("expired", "select", qErr2)
 	}
 	for _, id := range stuck {
 		didFail, fErr := failAndSweepThumbnailAttempt(ctx, dbh, id)
 		if fErr != nil {
-			return redriven, failed, gced, fErr
+			return redriven, failed, gced, phaseError("expired", "settle", fErr)
 		}
 		if didFail {
 			failed++
@@ -1063,11 +1080,11 @@ func RecoverStuckThumbnailAttempts(ctx context.Context, dbh *sql.DB, now time.Ti
 		SupersededAt: sql.NullTime{Time: supersededHorizon, Valid: true}, Limit: int32(limit),
 	})
 	if qErr3 != nil {
-		return redriven, failed, gced, qErr3
+		return redriven, failed, gced, phaseError("superseded", "select", qErr3)
 	}
 	for _, id := range superseded {
 		if gcErr := gcSupersededThumbnailAttempt(ctx, dbh, id, supersededHorizon); gcErr != nil {
-			return redriven, failed, gced, gcErr
+			return redriven, failed, gced, phaseError("superseded", "settle", gcErr)
 		}
 		gced++
 	}

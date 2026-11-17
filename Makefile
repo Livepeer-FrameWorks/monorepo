@@ -1315,6 +1315,8 @@ FOGHORN_CONTROL_REALPG_TESTS := $(FOGHORN_CONTROL_REALPG_TESTS)|TestAdoptResumed
 FOGHORN_CONTROL_REALPG_TESTS := $(FOGHORN_CONTROL_REALPG_TESTS)|TestProjectSourceIfCurrentEndsConfirmationWhoseCommitAckWasLost_RealPG
 FOGHORN_CONTROL_REALPG_TESTS := $(FOGHORN_CONTROL_REALPG_TESTS)|TestThumbnailJobLeavesPublishedAssetUntouched_RealPG
 FOGHORN_CONTROL_REALPG_TESTS := $(FOGHORN_CONTROL_REALPG_TESTS)|TestAbandonIngestAdmission_EndsSessionConfirmedAfterHelmsmanGaveUp_RealPG|TestAbandonIngestAdmission_RefusesLaterMintOfTheExecution_RealPG|TestAbandonIngestAdmission_EndsPendingAdmissionBeforeConfirmation_RealPG|TestRepairResumedSourceProjectionReplaysSerializationFailure_RealPG
+FOGHORN_CONTROL_REALPG_TESTS := $(FOGHORN_CONTROL_REALPG_TESTS)|TestThumbnailGCSelectionBoundsHistoryBeforePointerLookups_RealPG
+FOGHORN_CONTROL_REALYB_TESTS := TestPublisherRecoveryQueueAgeUsesEligibility_RealYugabyte|TestPublisherAdmissionOperations_RealYugabyte|TestPublisherRecoveryDispatch_RealYugabyte|TestThumbnailGCSelectionBoundsHistoryBeforePointerLookups_RealYugabyte
 FOGHORN_JOBS_REALPG_TESTS := TestStaleFreezeCleanup_RealPG|TestPurgeOwnershipFilter_RealPG|TestFederatedPointerPurgeDefersActiveRestoreUntilCleanupSettlement_RealPG|TestFederatedPointerRecoveryDoesNotSerializeBehindSlowDestination_RealPG|TestDailyFederatedPointerPurgeDoesNotSerializeBehindSlowDestination_RealPG|TestStreamCleanupDrainer_ConvergesFromDurableRow_RealPG|TestStreamCleanupDrainer_DrainsPastFullBatch_RealPG|TestStreamCleanupDrainer_LocallyBackedAliasSweepsLocally_RealPG|TestThumbnailLifecycleIntegration_RealPG|TestStreamCleanupDrainer_RepointGuardFailsClosed_RealPG|TestStreamCleanupDrainer_DelayedResweep_RealPG|TestStreamCleanupDrainer_FinalizeAtomicOnControlCleanupFailure_RealPG
 FOGHORN_JOBS_REALPG_TESTS := $(FOGHORN_JOBS_REALPG_TESTS)|TestProcessingProgressWatchdogFailsHeartbeatingStall_RealPG|TestReconcileNodeJobInventoryRedispatchesUnreportedWork_RealPG|TestReconcileNodeJobInventoryRequeuesRunningJob_RealPG|TestRequeueSilentNodeJobsRequeuesWorkLostBeforeRegistration_RealPG|TestIngestSessionReaperJobKeepsAbsentNodeSession_RealPG|TestIngestSessionReaperJobEndsLostNodeSession_RealPG|TestIngestSessionReaperJobLostNodeNeedsLease_RealPG
 FOGHORN_JOBS_REALPG_TESTS := $(FOGHORN_JOBS_REALPG_TESTS)|TestCatalogProjectionRetriesRegistrationLagPromptly_RealPG|TestTriggeredProjectionRetriesWhenPeerReplicaHoldsLock_RealPG
@@ -1416,7 +1418,7 @@ verify-foghorn-test-selection: verify-commodore-placement-test-selection verify-
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/grpc '$(FOGHORN_GRPC_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/triggers '$(FOGHORN_TRIGGERS_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/triggers 'TestPublisherAdmissionWAN_RealYugabyte' '^TestPublisherAdmissionWAN_RealYugabyte$$'
-	@./scripts/check-go-test-selection.sh api_balancing ./internal/control 'TestPublisherRecoveryQueueAgeUsesEligibility_RealYugabyte|TestPublisherAdmissionOperations_RealYugabyte|TestPublisherRecoveryDispatch_RealYugabyte' '^(TestPublisherRecoveryQueueAgeUsesEligibility_RealYugabyte|TestPublisherAdmissionOperations_RealYugabyte|TestPublisherRecoveryDispatch_RealYugabyte)$$'
+	@./scripts/check-go-test-selection.sh api_balancing ./internal/control '$(FOGHORN_CONTROL_REALYB_TESTS)' 'RealYugabyte$$'
 	@./scripts/check-go-test-selection.sh api_control ./internal/grpc 'TestPublisherLease_RealYugabyte' '^TestPublisherLease_RealYugabyte$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/jobs '$(FOGHORN_JOBS_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/jobs '$(FOGHORN_JOBS_REALYB_TESTS)' 'RealYugabyte$$'
@@ -1717,7 +1719,7 @@ verify-publisher-admission:
 	@$(CONTRACT_GO_TEST) api_control postgres/publisher-lease -tags schema_verify -run '^TestPublisherLease_RealPG$$' -count=1 -timeout 180s ./internal/grpc/
 	@$(YUGABYTE_FIXTURE) $(CONTRACT_GO_TEST) api_control yugabyte/publisher-lease -tags schema_verify -run '^TestPublisherLease_RealYugabyte$$' -count=1 -timeout 300s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_balancing postgres/publisher-admission -tags schema_verify -run '^(TestPublisherRecoveryQueueAgeUsesEligibility_RealPG|TestPublisherAdmissionOperations_RealPG|TestPublisherRecoveryDispatch_RealPG)$$' -count=1 -timeout 180s ./internal/control/
-	@$(YUGABYTE_FIXTURE) $(CONTRACT_GO_TEST) api_balancing yugabyte/publisher-admission -tags schema_verify -run '^(TestPublisherRecoveryQueueAgeUsesEligibility_RealYugabyte|TestPublisherAdmissionOperations_RealYugabyte|TestPublisherRecoveryDispatch_RealYugabyte)$$' -count=1 -timeout 300s ./internal/control/
+	@$(YUGABYTE_FIXTURE) $(CONTRACT_GO_TEST) api_balancing yugabyte/publisher-admission -tags schema_verify -run '^($(FOGHORN_CONTROL_REALYB_TESTS))$$' -count=1 -timeout 300s ./internal/control/
 
 .PHONY: verify-ingest-admission-wan
 verify-ingest-admission-wan:
@@ -2077,7 +2079,7 @@ verify-yugabyte-periscope-metering-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_analytics_query yugabyte/periscope-metering -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealYugabyte|TestMeteringStateTransitions_RealYugabyte' -count=1 -timeout 1200s ./internal/database/meteringdb/
 
 verify-yugabyte-foghorn-contracts-a: verify-yugabyte-shared-fixture
-	@$(CONTRACT_GO_TEST) api_balancing yugabyte/publisher-admission -tags schema_verify -run '^(TestPublisherRecoveryQueueAgeUsesEligibility_RealYugabyte|TestPublisherAdmissionOperations_RealYugabyte|TestPublisherRecoveryDispatch_RealYugabyte)$$' -count=1 -timeout 300s ./internal/control/
+	@$(CONTRACT_GO_TEST) api_balancing yugabyte/publisher-admission -tags schema_verify -run '^($(FOGHORN_CONTROL_REALYB_TESTS))$$' -count=1 -timeout 300s ./internal/control/
 	@$(CONTRACT_GO_TEST) api_balancing yugabyte/foghorn-query-catalog-a -tags schema_verify -run '$(FOGHORN_QUERY_CATALOG_REALYB_TESTS_A)' -count=1 -timeout 1200s ./internal/database/foghorndb/
 
 verify-yugabyte-foghorn-contracts-b: verify-yugabyte-shared-fixture

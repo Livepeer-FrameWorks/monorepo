@@ -12,6 +12,44 @@
         that:
           - ansible_facts.services['prometheus.service'].state == 'running'
           - ansible_facts.services['node_exporter.service'].state == 'running'
+          - ansible_facts.services['frameworks-edge-node-exporter.service'].state == 'running'
+
+    - name: Read the existing exporter unit after edge installation
+      ansible.builtin.stat:
+        path: /etc/systemd/system/node_exporter.service
+        checksum_algorithm: sha256
+      register: host_exporter_unit
+
+    - name: Read the recorded host exporter identity
+      ansible.builtin.slurp:
+        src: /tmp/original-node-exporter-unit.sha256
+      register: original_exporter_checksum
+
+    - name: Assert edge installation preserved the existing exporter
+      ansible.builtin.assert:
+        that:
+          - host_exporter_unit.stat.checksum == (original_exporter_checksum.content | b64decode | trim)
+
+    - name: Read the existing exporter process after edge installation
+      ansible.builtin.command: systemctl show --property=MainPID --value node_exporter.service
+      changed_when: false
+      register: host_exporter_pid
+
+    - name: Read the recorded host exporter process identity
+      ansible.builtin.slurp:
+        src: /tmp/original-node-exporter.pid
+      register: original_exporter_pid
+
+    - name: Assert edge installation did not restart the existing exporter
+      ansible.builtin.assert:
+        that:
+          - host_exporter_pid.stdout == (original_exporter_pid.content | b64decode | trim)
+
+    - name: Wait for the independent edge exporter listener
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 19110
+        timeout: 30
 
     - name: Assert the host crash scan timer is active
       ansible.builtin.command: systemctl is-active frameworks-host-crash-scan.timer

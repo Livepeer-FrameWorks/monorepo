@@ -75,6 +75,27 @@ func (s *CommodoreServer) AcquirePublisherLease(ctx context.Context, req *pb.Pub
 		}
 		now := time.Now()
 		if pair.ObjectVersion != req.GetObjectAuthorityVersion() || pair.TenantVersion != req.GetTenantAuthorityVersion() || !bytes.Equal(pair.ObjectDigest, req.GetObjectPayloadSha256()) || !bytes.Equal(pair.TenantDigest, req.GetTenantPayloadSha256()) || !now.Before(pair.ObjectValidUntil) || !now.Before(pair.TenantValidUntil) {
+			response.Reason = "published authority pair differs or has expired"
+			if now.Before(pair.ObjectValidUntil) && now.Before(pair.TenantValidUntil) {
+				object, tenant := &media.MediaObjectAuthority{}, &media.TenantAuthority{}
+				if decodeErr := proto.Unmarshal(pair.ObjectPayload, object); decodeErr != nil {
+					return decodeErr
+				}
+				if decodeErr := proto.Unmarshal(pair.TenantPayload, tenant); decodeErr != nil {
+					return decodeErr
+				}
+				if object.GetTenantId() == req.GetTenantId() && tenant.GetTenantId() == req.GetTenantId() && object.GetLiveStream().GetStreamId() == req.GetStreamId() && object.GetInternalName() == req.GetInternalName() {
+					// The shared current-pointer locks remain held, so this read
+					// cannot return a pair published after the comparison above.
+					rows, readErr := q.ListCurrentMediaAuthorityEnvelopesForCell(ctx, commodoredb.ListCurrentMediaAuthorityEnvelopesForCellParams{TenantID: req.GetTenantId(), ObjectAuthorityID: authority.LiveStreamAuthorityID(req.GetStreamId()), CellID: req.GetControlCellId()})
+					if readErr != nil {
+						return readErr
+					}
+					if len(rows) == 2 && rows[0].AuthorityKind == "tenant" && rows[0].AuthorityVersion == pair.TenantVersion && rows[1].AuthorityKind == "media_object" && rows[1].AuthorityVersion == pair.ObjectVersion {
+						response.SignedAuthorities = [][]byte{rows[0].SignedEnvelope, rows[1].SignedEnvelope}
+					}
+				}
+			}
 			return nil
 		}
 		object, tenant := &media.MediaObjectAuthority{}, &media.TenantAuthority{}

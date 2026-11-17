@@ -99,6 +99,13 @@
 # same host-installed node_exporter a native edge runs. The host-networked
 # vmagent container scrapes it on loopback. Docker Desktop on macOS has no
 # host systemd and no Linux kernel log to scan.
+- name: Select host exporter ownership for the edge
+  ansible.builtin.include_tasks: prepare-node-exporter.yml
+  when:
+    - edge_telemetry_url | length > 0
+    - ansible_facts.os_family != 'Darwin'
+    - ansible_facts.service_mgr == 'systemd'
+
 - name: Install node_exporter and the host crash scan (when telemetry enabled)
   ansible.builtin.include_role:
     name: frameworks.infra.prometheus_stack
@@ -107,6 +114,10 @@
     node_exporter_artifact_url: "{{ edge_node_exporter_artifact_url }}"
     node_exporter_artifact_checksum: "{{ edge_node_exporter_artifact_checksum }}"
     node_exporter_port: "{{ edge_node_exporter_port }}"
+    node_exporter_service_name: "{{ edge_exporter_service_name }}"
+    node_exporter_binary_dir: "{{ edge_exporter_binary_dir }}"
+    node_exporter_user: "{{ edge_exporter_user }}"
+    node_exporter_textfile_dir: "{{ edge_exporter_textfile_dir }}"
   when:
     - edge_telemetry_url | length > 0
     - ansible_facts.os_family != 'Darwin'
@@ -221,8 +232,7 @@
     compose_stack_name: edge
     compose_stack_project_dir: "{{ edge_base_dir }}"
     compose_stack_compose_content: "{{ lookup('template', 'compose.yml.j2') }}"
-    # Docker Desktop/OrbStack own the engine on macOS — no Linux packages.
-    compose_stack_manage_docker: "{{ ansible_facts.os_family != 'Darwin' }}"
+    compose_stack_manage_docker: "{{ edge_manage_docker }}"
 
 # ./state is HELMSMAN_STATE_DIR (/data/state) inside the edge container.
 - name: Record provisioned edge config

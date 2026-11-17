@@ -334,7 +334,7 @@ func verifyLivepeerJobToken(manifestID, token string, now time.Time) (control.Tr
 		logger.WithFields(fields).WithField("check", tokenCheckManifestMismatch).Warn("livepeer auth: job token is bound to another manifest")
 		return control.TranscodeJobClaims{}, authRejectInvalidToken + "_" + tokenCheckManifestMismatch
 	}
-	if !livepeerGatewayCellAllowed(claims, clusterID) {
+	if !livepeerGatewayCellAllowed(claims, clusterID, controlCellID) {
 		logger.WithFields(fields).WithField("check", tokenCheckGatewayCluster).Warn("livepeer auth: job token does not allow this Foghorn's cluster as the gateway cell")
 		return control.TranscodeJobClaims{}, authRejectInvalidToken + "_" + tokenCheckGatewayCluster
 	}
@@ -513,12 +513,13 @@ func livepeerSourceMatches(observed, expected livepeerSource) bool {
 	return expected.Codec == "" || canonicalCodec(observed.Codec) == canonicalCodec(expected.Codec)
 }
 
-// livepeerGatewayCellAllowed reports whether this Foghorn may answer the job's
-// auth webhook. The token names the media cluster whose gateway was selected;
-// Quartermaster discovery reports a pool-assigned gateway under that assigned
-// cluster, which for a virtual cluster is served by this cell's Foghorn rather
-// than being its own CLUSTER_ID.
-func livepeerGatewayCellAllowed(claims control.TranscodeJobClaims, localClusterID string) bool {
+// livepeerGatewayCellAllowed accepts this cell's opaque authority identity.
+// Physical and served cluster audiences remain valid for older signed jobs
+// whose gateway auth endpoint is routed to this same Foghorn cell.
+func livepeerGatewayCellAllowed(claims control.TranscodeJobClaims, localClusterID, localControlCellID string) bool {
+	if localControlCellID != "" && control.TranscodeJobTokenAllowsGatewayCluster(claims, localControlCellID) {
+		return true
+	}
 	if control.TranscodeJobTokenAllowsGatewayCluster(claims, localClusterID) {
 		return true
 	}

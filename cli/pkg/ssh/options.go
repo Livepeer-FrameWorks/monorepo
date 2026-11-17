@@ -108,6 +108,19 @@ func (r *DefaultResolver) sshGHostname(ctx context.Context, alias string) (strin
 	return parseSSHGHostname(string(out)), nil
 }
 
+// ConfiguredHostname resolves the network address OpenSSH uses for a target.
+// Callers opening a separate connection must not send an SSH alias to DNS.
+func (r *DefaultResolver) ConfiguredHostname(ctx context.Context, target string) (string, error) {
+	host, err := r.sshGHostname(ctx, target)
+	if err != nil {
+		return "", fmt.Errorf("resolve SSH target %s: %w", target, err)
+	}
+	if host == "" {
+		return "", fmt.Errorf("resolve SSH target %s: empty HostName", target)
+	}
+	return host, nil
+}
+
 func (r *DefaultResolver) lookupHost(ctx context.Context, name string) ([]string, error) {
 	if r.LookupHost != nil {
 		return r.LookupHost(ctx, name)

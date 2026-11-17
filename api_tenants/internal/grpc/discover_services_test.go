@@ -224,7 +224,7 @@ func TestDiscoverServices_ServiceAuthNonDefaultClusterAndIngressGate(t *testing.
 		WithArgs("livepeer-gateway", "media-eu-1", int32(51)).
 		WillReturnRows(sqlmock.NewRows(instanceCols).
 			AddRow("uuid-1", "inst-1", "livepeer-gateway", "media-eu-1", "core-eu-1",
-				"http", "203.0.113.10", int32(8935), nil, "running", "healthy", []byte(`{}`),
+				"http", "203.0.113.10", int32(8935), nil, "running", "healthy", []byte(`{"physical_cluster_id":"physical-us","auth_control_cell_id":"opaque-us"}`),
 				now, now, now, "Media EU 1", "frameworks.network", true))
 
 	resp, err := server.DiscoverServices(serviceCtx(), &quartermasterpb.ServiceDiscoveryRequest{
@@ -239,6 +239,9 @@ func TestDiscoverServices_ServiceAuthNonDefaultClusterAndIngressGate(t *testing.
 	}
 	if got := resp.GetInstances()[0].GetMetadata()["public_instance_host"]; got != fqdn {
 		t.Fatalf("public_instance_host = %q, want %q (ingress-gated, synthesized from node + platform root)", got, fqdn)
+	}
+	if resp.GetInstances()[0].GetMetadata()["physical_cluster_id"] != "physical-us" || resp.GetInstances()[0].GetMetadata()["auth_control_cell_id"] != "opaque-us" {
+		t.Fatalf("service discovery lost canonical physical gateway ownership: %v", resp.GetInstances()[0].GetMetadata())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)

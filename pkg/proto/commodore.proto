@@ -507,6 +507,10 @@ message PublisherLeaseResponse {
   // Returned only when the owner belongs to the requesting cluster.
   string held_execution_token = 3;
   string reason = 4;
+  // Current tenant/object envelopes signed for the requesting cell, in that
+  // order. A stale exact-pair claim takes no lease; these let the caller verify
+  // current policy and credentials before a bounded version exchange.
+  repeated bytes signed_authorities = 5;
 }
 
 message ValidateStreamKeyRequest {

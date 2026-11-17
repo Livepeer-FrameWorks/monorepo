@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"sync"
 	"time"
 
@@ -193,7 +194,14 @@ func (j *ThumbnailRecoveryJob) reconcile() {
 		r, f, g, err := control.RecoverStuckThumbnailAttempts(drainCtx, j.db, time.Now(), j.batch)
 		drainCancel()
 		if err != nil {
-			j.logger.WithError(err).Warn("Thumbnail recovery pass failed")
+			fields := logging.Fields{}
+			var phaseError *control.ThumbnailRecoveryError
+			if errors.As(err, &phaseError) {
+				fields["phase"] = phaseError.Phase
+				fields["operation"] = phaseError.Operation
+				fields["duration_ms"] = phaseError.Elapsed.Milliseconds()
+			}
+			j.logger.WithError(err).WithFields(fields).Warn("Thumbnail recovery pass failed")
 			break
 		}
 		redriven += r

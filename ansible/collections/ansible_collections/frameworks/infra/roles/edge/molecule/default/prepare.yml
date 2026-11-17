@@ -1,0 +1,24 @@
+---
+- name: Prepare native runtime packages
+  ansible.builtin.import_playbook: ../../../../molecule/prepare-apt.yml
+
+- name: Stage optional source-built native edge artifacts
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Copy source-built artifacts into the disposable node
+      ansible.builtin.copy:
+        src: "{{ item.source }}"
+        dest: "/tmp/frameworks-molecule-{{ item.name }}.tar.gz"
+        mode: "0644"
+      loop:
+        - name: mistserver
+          source: "{{ lookup('ansible.builtin.env', 'EDGE_MISTSERVER_ARTIFACT_PATH') }}"
+        - name: helmsman
+          source: "{{ lookup('ansible.builtin.env', 'EDGE_HELMSMAN_ARTIFACT_PATH') }}"
+        - name: caddy
+          source: "{{ lookup('ansible.builtin.env', 'EDGE_CADDY_ARTIFACT_PATH') }}"
+      when: item.source | length > 0
+      loop_control:
+        label: "{{ item.name }}"

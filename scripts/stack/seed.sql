@@ -39,8 +39,8 @@ ON CONFLICT (instance_id) DO UPDATE SET
     port = EXCLUDED.port, health_endpoint_override = EXCLUDED.health_endpoint_override, metadata = EXCLUDED.metadata,
     status = 'running', stopped_at = NULL, updated_at = NOW();
 
--- Each gateway serves its cell's platform and media clusters; Foghorn asks for
--- the stream's origin cluster first, then its own cluster.
+-- Each gateway is assigned to its cell's platform and media clusters. Foghorn
+-- discovers in the job-owning cell and verifies physical authorization ownership.
 INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id) VALUES
     ('5eedf0e1-00a1-da7a-f0e1-00a1da7a00a1', 'central-primary'),
     ('5eedf0e1-00a1-da7a-f0e1-00a1da7a00a1', 'demo-media'),

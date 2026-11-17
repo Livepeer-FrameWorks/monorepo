@@ -2486,7 +2486,7 @@ type fakeGatewayDiscoverer struct {
 	hosts   map[string][]string // cluster_id -> instance hosts (empty/absent => not registered)
 	calls   map[string]int      // cluster_id -> DiscoverServices call count
 	errOnce map[string]error    // cluster_id -> error to return ONCE then clear
-	cells   map[string]string   // instance host -> physical cluster it runs in (absent => none reported)
+	cells   map[string]string   // instance host -> authoritative auth control cell (absent => unknown)
 }
 
 func newFakeGatewayDiscoverer(hosts map[string][]string) *fakeGatewayDiscoverer {
@@ -2520,13 +2520,14 @@ func (f *fakeGatewayDiscoverer) DiscoverServices(_ context.Context, serviceType,
 		// public_instance_host carries the physical per-instance endpoint that
 		// the broadcaster fanout prefers; mirror Quartermaster's metadata.
 		resp.Instances = append(resp.Instances, &quartermasterpb.ServiceInstance{
-			ClusterId:    f.cells[host],
+			ClusterId:    clusterID,
 			Host:         &host,
 			Port:         &port,
 			Protocol:     "https",
 			HealthStatus: "healthy",
 			Metadata: map[string]string{
 				servicedefs.LivepeerGatewayMetadataPublicInstanceHost: host,
+				servicedefs.LivepeerGatewayMetadataAuthControlCellID:  f.cells[host],
 			},
 		})
 	}
@@ -2544,6 +2545,20 @@ func newGatewayProcessor(t *testing.T, disc livepeerGatewayDiscoverer, localClus
 	p := newTestProcessor(t)
 	p.clusterID = localCluster
 	p.gatewayDiscoverer = disc
+	if fake, ok := disc.(*fakeGatewayDiscoverer); ok {
+		// Ordinary fixtures model gateway assignments served by this cell;
+		// cross-cell cases explicitly set the instance's physical cluster.
+		if fake.cells == nil {
+			fake.cells = make(map[string]string)
+		}
+		for _, hosts := range fake.hosts {
+			for _, host := range hosts {
+				if _, specified := fake.cells[host]; !specified {
+					fake.cells[host] = p.livepeerJobCellID()
+				}
+			}
+		}
+	}
 	return p
 }
 
@@ -2584,23 +2599,19 @@ func broadcasterAddresses(t *testing.T, processesJSON string) []string {
 	return nil
 }
 
-func TestApplyLivepeerBroadcasters_OriginWins(t *testing.T) {
+func TestApplyLivepeerBroadcasters_UsesOwnerInsteadOfTenantMetadata(t *testing.T) {
 	disc := newFakeGatewayDiscoverer(map[string][]string{
 		"selfhost-cluster": {"gw.selfhost.example.com"},
 		"platform-cluster": {"gw.platform.example.com"},
+		"foghorn-pool-1":   {"gw.owner.example.com"},
 	})
 	p := newGatewayProcessor(t, disc, "foghorn-pool-1")
-
-	got := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"selfhost-cluster", "platform-cluster", p.clusterID})
-
-	if !strings.Contains(got, "gw.selfhost.example.com") {
-		t.Fatalf("expected origin (selfhost) gateway URL, got %q", got)
+	got := p.ApplyLivepeerBroadcasters(gatewayTemplate)
+	if hosts := broadcasterAddresses(t, got); len(hosts) != 1 || hosts[0] != "https://gw.owner.example.com" {
+		t.Fatalf("gateway lookup moved the job away from its admitted cell: %v", hosts)
 	}
-	if strings.Contains(got, "gw.platform.example.com") {
-		t.Fatalf("origin had a gateway, official should not have been used: %q", got)
-	}
-	if disc.callCount("platform-cluster") != 0 {
-		t.Fatalf("origin won; should not have queried official cluster, got %d calls", disc.callCount("platform-cluster"))
+	if disc.callCount("selfhost-cluster") != 0 || disc.callCount("platform-cluster") != 0 {
+		t.Fatal("gateway lookup consulted another tenant cluster instead of the job-owning cell")
 	}
 }
 
@@ -2608,9 +2619,9 @@ func TestApplyLivepeerBroadcasters_FansOutAllInstances(t *testing.T) {
 	disc := newFakeGatewayDiscoverer(map[string][]string{
 		"platform-cluster": {"gw1.platform.example.com", "gw2.platform.example.com"},
 	})
-	p := newGatewayProcessor(t, disc, "foghorn-pool-1")
+	p := newGatewayProcessor(t, disc, "platform-cluster")
 
-	got := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"platform-cluster"})
+	got := p.ApplyLivepeerBroadcasters(gatewayTemplate)
 
 	addrs := broadcasterAddresses(t, got)
 	if len(addrs) != 2 {
@@ -2650,12 +2661,12 @@ func TestApplyLivepeerBroadcasters_ExcludesUnhealthyInstances(t *testing.T) {
 	unhealthy := "gw-unhealthy.example.com"
 	port := int32(443)
 	disc := &staticDiscoverer{instances: []*quartermasterpb.ServiceInstance{
-		{Host: &healthy, Port: &port, Protocol: "https", HealthStatus: "healthy", Metadata: map[string]string{servicedefs.LivepeerGatewayMetadataPublicInstanceHost: healthy}},
-		{Host: &unhealthy, Port: &port, Protocol: "https", HealthStatus: "unhealthy", Metadata: map[string]string{servicedefs.LivepeerGatewayMetadataPublicInstanceHost: unhealthy}},
+		{Host: &healthy, Port: &port, Protocol: "https", HealthStatus: "healthy", Metadata: map[string]string{servicedefs.LivepeerGatewayMetadataPublicInstanceHost: healthy, servicedefs.LivepeerGatewayMetadataAuthControlCellID: "cluster-x"}},
+		{Host: &unhealthy, Port: &port, Protocol: "https", HealthStatus: "unhealthy", Metadata: map[string]string{servicedefs.LivepeerGatewayMetadataPublicInstanceHost: unhealthy, servicedefs.LivepeerGatewayMetadataAuthControlCellID: "cluster-x"}},
 	}}
 	p := newGatewayProcessor(t, disc, "cluster-x")
 
-	got := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"cluster-x"})
+	got := p.ApplyLivepeerBroadcasters(gatewayTemplate)
 
 	addrs := broadcasterAddresses(t, got)
 	if len(addrs) != 1 || !strings.Contains(addrs[0], "gw-healthy") {
@@ -2676,7 +2687,7 @@ func TestApplyLivepeerBroadcasters_PooledOnlyInstanceFallsBackToLocalAV(t *testi
 	}}
 	p := newGatewayProcessor(t, disc, "cluster-x")
 
-	got := p.ApplyLivepeerBroadcasters(gatewayProfileTemplate, []string{"cluster-x"})
+	got := p.ApplyLivepeerBroadcasters(gatewayProfileTemplate)
 
 	if strings.Contains(got, "Livepeer") {
 		t.Fatalf("expected pooled-only instance to be excluded and Livepeer replaced with local AV, got %q", got)
@@ -2694,9 +2705,9 @@ func TestApplyLivepeerBroadcasters_DoesNotCacheDiscoveryErrors(t *testing.T) {
 	p := newGatewayProcessor(t, disc, "cluster-x")
 
 	// First call hits the transient error → empty result, which must NOT cache.
-	_ = p.ApplyLivepeerBroadcasters(gatewayProfileTemplate, []string{"cluster-x"})
+	_ = p.ApplyLivepeerBroadcasters(gatewayProfileTemplate)
 	// Second call must re-resolve (error not cached) and now succeed.
-	got := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"cluster-x"})
+	got := p.ApplyLivepeerBroadcasters(gatewayTemplate)
 
 	if !strings.Contains(got, "gw.x.example.com") {
 		t.Fatalf("expected re-query to resolve after a transient error, got %q", got)
@@ -2706,112 +2717,76 @@ func TestApplyLivepeerBroadcasters_DoesNotCacheDiscoveryErrors(t *testing.T) {
 	}
 }
 
-func TestApplyLivepeerBroadcasters_OfficialFallbackWhenOriginLacksGateway(t *testing.T) {
+func TestApplyLivepeerBroadcasters_DoesNotMoveJobWhenOwnerGatewayAbsent(t *testing.T) {
 	disc := newFakeGatewayDiscoverer(map[string][]string{
-		"selfhost-cluster": nil, // origin advertises no gateway
-		"platform-cluster": {"gw.platform.example.com"},
+		"platform-cluster": {"gw.foreign.example.com"},
 	})
 	p := newGatewayProcessor(t, disc, "foghorn-pool-1")
-
-	got := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"selfhost-cluster", "platform-cluster", p.clusterID})
-
-	if !strings.Contains(got, "gw.platform.example.com") {
-		t.Fatalf("expected official gateway URL after origin miss, got %q", got)
+	got := p.ApplyLivepeerBroadcasters(gatewayProfileTemplate)
+	if mist.HasLivepeerProcesses(got) || !strings.Contains(got, `"process":"AV"`) {
+		t.Fatalf("missing owner gateway must use existing local AV fallback: %s", got)
 	}
-	if disc.callCount("selfhost-cluster") != 1 || disc.callCount("platform-cluster") != 1 {
-		t.Fatalf("expected one call each: selfhost=%d platform=%d", disc.callCount("selfhost-cluster"), disc.callCount("platform-cluster"))
+	if disc.callCount("platform-cluster") != 0 || disc.callCount("foghorn-pool-1") != 1 {
+		t.Fatal("lookup attempted an implicit cross-cell job move")
 	}
 }
 
-func TestApplyLivepeerBroadcasters_FallsBackToLocalAVWhenNoCandidateHasGateway(t *testing.T) {
-	disc := newFakeGatewayDiscoverer(map[string][]string{
-		"selfhost-cluster": nil,
-		"platform-cluster": nil,
-		"foghorn-pool-1":   nil,
-	})
+func TestApplyLivepeerBroadcasters_FallsBackToLocalAVWhenOwnerHasNoGateway(t *testing.T) {
+	disc := newFakeGatewayDiscoverer(map[string][]string{"foghorn-pool-1": nil})
 	p := newGatewayProcessor(t, disc, "foghorn-pool-1")
+	got := p.ApplyLivepeerBroadcasters(gatewayProfileTemplate)
+	if mist.HasLivepeerProcesses(got) || !strings.Contains(got, `"process":"AV"`) {
+		t.Fatalf("expected local AV fallback: %s", got)
+	}
+	if disc.callCount("foghorn-pool-1") != 1 {
+		t.Fatal("owner discovery was not attempted exactly once")
+	}
+}
 
-	got := p.ApplyLivepeerBroadcasters(gatewayProfileTemplate, []string{"selfhost-cluster", "platform-cluster", p.clusterID})
-
-	if strings.Contains(got, "Livepeer") {
-		t.Fatalf("expected Livepeer process to be converted to local AV, still present: %q", got)
-	}
-	if !strings.Contains(got, `"process":"AV"`) {
-		t.Fatalf("expected local AV fallback process, got %q", got)
-	}
-	if !strings.Contains(got, `"resolution":"x360"`) {
-		t.Fatalf("expected target profile to become local AV resolution, got %q", got)
-	}
-	// Each candidate cluster should have been queried exactly once before falling back.
-	for _, c := range []string{"selfhost-cluster", "platform-cluster", "foghorn-pool-1"} {
-		if disc.callCount(c) != 1 {
-			t.Fatalf("expected exactly 1 discovery call for %s, got %d", c, disc.callCount(c))
+func TestApplyLivepeerBroadcasters_PerOwnerCacheSeparation(t *testing.T) {
+	disc := newFakeGatewayDiscoverer(map[string][]string{
+		"cluster-a": {"gw.a.example.com"}, "cluster-b": {"gw.b.example.com"},
+	})
+	disc.cells = map[string]string{"gw.a.example.com": "cluster-a", "gw.b.example.com": "cluster-b"}
+	a := newGatewayProcessor(t, disc, "cluster-a")
+	b := newGatewayProcessor(t, disc, "cluster-b")
+	for _, p := range []*Processor{a, b, a} {
+		got := p.ApplyLivepeerBroadcasters(gatewayTemplate)
+		want := "https://gw.a.example.com"
+		if p == b {
+			want = "https://gw.b.example.com"
+		}
+		if hosts := broadcasterAddresses(t, got); len(hosts) != 1 || hosts[0] != want {
+			t.Fatalf("owner cache leaked another cell: %v want %s", hosts, want)
 		}
 	}
-}
-
-func TestApplyLivepeerBroadcasters_PerClusterCacheSeparation(t *testing.T) {
-	disc := newFakeGatewayDiscoverer(map[string][]string{
-		"cluster-a": {"gw.a.example.com"},
-		"cluster-b": {"gw.b.example.com"},
-	})
-	p := newGatewayProcessor(t, disc, "foghorn-pool-1")
-
-	// First injection against cluster-a populates that cache entry.
-	gotA := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"cluster-a"})
-	if !strings.Contains(gotA, "gw.a.example.com") {
-		t.Fatalf("expected cluster-a gateway, got %q", gotA)
-	}
-
-	// Injection against cluster-b must NOT be served from cluster-a's cache.
-	gotB := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"cluster-b"})
-	if !strings.Contains(gotB, "gw.b.example.com") {
-		t.Fatalf("expected cluster-b gateway (separate cache), got %q", gotB)
-	}
-	if strings.Contains(gotB, "gw.a.example.com") {
-		t.Fatalf("cluster-b lookup leaked cluster-a's cached URL: %q", gotB)
-	}
-
-	// Repeated injection against cluster-a within TTL must hit the cache.
-	gotA2 := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"cluster-a"})
-	if !strings.Contains(gotA2, "gw.a.example.com") {
-		t.Fatalf("expected cluster-a gateway on repeat, got %q", gotA2)
-	}
-
-	if disc.callCount("cluster-a") != 1 {
-		t.Fatalf("expected cluster-a to be discovered exactly once (cache hit on repeat), got %d", disc.callCount("cluster-a"))
-	}
-	if disc.callCount("cluster-b") != 1 {
-		t.Fatalf("expected cluster-b to be discovered exactly once, got %d", disc.callCount("cluster-b"))
+	if disc.callCount("cluster-a") != 1 || disc.callCount("cluster-b") != 1 {
+		t.Fatal("owner discovery did not reuse its cache")
 	}
 }
 
-func TestApplyLivepeerBroadcasters_DeduplicatesRepeatedCandidates(t *testing.T) {
-	disc := newFakeGatewayDiscoverer(map[string][]string{
-		"cluster-x": nil, // no gateway
-	})
+func TestApplyLivepeerBroadcasters_ReusesOwnerDiscovery(t *testing.T) {
+	disc := newFakeGatewayDiscoverer(map[string][]string{"cluster-x": nil})
 	p := newGatewayProcessor(t, disc, "cluster-x")
-
-	// origin == official == p.clusterID; resolver should de-duplicate.
-	got := p.ApplyLivepeerBroadcasters(gatewayProfileTemplate, []string{"cluster-x", "cluster-x", "cluster-x"})
-
-	if !strings.Contains(got, `"process":"AV"`) {
-		t.Fatalf("expected local AV fallback on full miss, got %q", got)
+	for i := 0; i < 2; i++ {
+		got := p.ApplyLivepeerBroadcasters(gatewayProfileTemplate)
+		if !strings.Contains(got, `"process":"AV"`) {
+			t.Fatalf("expected local AV: %s", got)
+		}
 	}
 	if disc.callCount("cluster-x") != 1 {
-		t.Fatalf("expected cluster-x to be discovered exactly once despite being passed three times, got %d", disc.callCount("cluster-x"))
+		t.Fatal("negative discovery was not cached")
 	}
 }
 
-func TestApplyLivepeerBroadcasters_NilCandidatesFallsBackToLocalCluster(t *testing.T) {
+func TestApplyLivepeerBroadcasters_UsesOwnerCluster(t *testing.T) {
 	disc := newFakeGatewayDiscoverer(map[string][]string{
 		"foghorn-pool-1": {"gw.local.example.com"},
 	})
 	p := newGatewayProcessor(t, disc, "foghorn-pool-1")
 
-	// Nil candidates path is the queue-driven dispatcher's contract; preserves
-	// today's single-cluster behavior using p.clusterID.
-	got := p.ApplyLivepeerBroadcasters(gatewayTemplate, nil)
+	// Queue-driven jobs use their owning cell without a separate cluster choice.
+	got := p.ApplyLivepeerBroadcasters(gatewayTemplate)
 
 	if !strings.Contains(got, "gw.local.example.com") {
 		t.Fatalf("expected local-cluster gateway via p.clusterID fallback, got %q", got)
@@ -2831,21 +2806,21 @@ func TestApplyLivepeerBroadcasters_LocalFallbackIncrementsServiceUnavailableCoun
 	}, []string{"reason", "service"})
 	p.SetMetrics(&ProcessorMetrics{ServiceResolutionRejected: counter})
 
-	// Hit path: official has gateway; counter must NOT increment.
+	// A registered owner-cell gateway does not increment the fallback counter.
 	discHit := newFakeGatewayDiscoverer(map[string][]string{
 		"selfhost-cluster": nil,
 		"platform-cluster": {"gw.platform.example.com"},
 	})
-	pHit := newGatewayProcessor(t, discHit, "foghorn-pool-1")
+	pHit := newGatewayProcessor(t, discHit, "platform-cluster")
 	pHit.SetMetrics(&ProcessorMetrics{ServiceResolutionRejected: counter})
-	_ = pHit.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"selfhost-cluster", "platform-cluster"})
+	_ = pHit.ApplyLivepeerBroadcasters(gatewayTemplate)
 
 	if got := counterValue(t, counter.WithLabelValues("service_unavailable", "livepeer-gateway")); got != 0 {
 		t.Fatalf("hit path should not increment service_unavailable counter, got %v", got)
 	}
 
-	// Miss path: every candidate empty; counter must increment exactly once.
-	_ = p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"selfhost-cluster", "platform-cluster"})
+	// Missing owner-cell gateways increment the fallback counter exactly once.
+	_ = p.ApplyLivepeerBroadcasters(gatewayTemplate)
 
 	if got := counterValue(t, counter.WithLabelValues("service_unavailable", "livepeer-gateway")); got != 1 {
 		t.Fatalf("miss path should increment service_unavailable counter exactly once, got %v", got)
@@ -2859,7 +2834,7 @@ func TestApplyLivepeerBroadcasters_NoLivepeerProcessIsNoop(t *testing.T) {
 	p := newGatewayProcessor(t, disc, "any-cluster")
 
 	const noLivepeer = `[{"process":"AV","codec":"opus","track_select":"audio=all&video=none&subtitle=none"}]`
-	got := p.ApplyLivepeerBroadcasters(noLivepeer, []string{"any-cluster"})
+	got := p.ApplyLivepeerBroadcasters(noLivepeer)
 
 	if got != noLivepeer {
 		t.Fatalf("expected Livepeer-free JSON to pass through unchanged, got %q", got)
@@ -2889,25 +2864,30 @@ func TestApplyLivepeerBroadcasters_StampsGatewayCellNotMediaCluster(t *testing.T
 		"tenant-virtual": {"gw.cell-a.example.com"},
 	})
 	disc.cells = map[string]string{"gw.cell-a.example.com": "cell-a"}
-	p := newGatewayProcessor(t, disc, "cell-a")
+	useFoghornConfig(t, &appconfig.Foghorn{MediaAuthorityCellID: "cell-a"})
+	p := newGatewayProcessor(t, disc, "tenant-virtual")
 
-	got := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"tenant-virtual"})
+	got := p.ApplyLivepeerBroadcasters(gatewayTemplate)
 
 	cells := mist.LivepeerGatewayClusters(got)
 	if len(cells) != 1 || cells[0] != "cell-a" {
 		t.Fatalf("job capability must name the gateway cell [cell-a], got %v in %q", cells, got)
 	}
+	if disc.callCount("tenant-virtual") != 1 || disc.callCount("cell-a") != 0 {
+		t.Fatal("gateway lookup must use the registry cluster and validate the distinct control cell")
+	}
 }
 
-func TestApplyLivepeerBroadcasters_GatewayWithoutCellFallsBackToRequestedCluster(t *testing.T) {
+func TestApplyLivepeerBroadcasters_UnknownAuthCellCannotUseAssignmentAsOwnership(t *testing.T) {
 	disc := newFakeGatewayDiscoverer(map[string][]string{
 		"platform-cluster": {"gw.platform.example.com"},
 	})
+	disc.cells = map[string]string{"gw.platform.example.com": ""}
 	p := newGatewayProcessor(t, disc, "platform-cluster")
 
-	got := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"platform-cluster"})
+	got := p.ApplyLivepeerBroadcasters(gatewayTemplate)
 
-	if cells := mist.LivepeerGatewayClusters(got); len(cells) != 1 || cells[0] != "platform-cluster" {
-		t.Fatalf("an instance without a reported cell keeps the requested cluster, got %v", cells)
+	if mist.HasLivepeerProcesses(got) || !strings.Contains(got, `"process":"AV"`) {
+		t.Fatalf("unknown physical authorization identity must not inherit the pool assignment: %s", got)
 	}
 }

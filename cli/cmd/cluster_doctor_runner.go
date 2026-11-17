@@ -24,11 +24,12 @@ const (
 // doctorOutcome is what one check reports. A check with a result or a miss counts toward the healthy total; a note is
 // printed as a warning without counting; an empty outcome prints nothing.
 type doctorOutcome struct {
-	result *health.CheckResult
-	miss   string
-	note   string
-	passed bool
-	steps  []ux.NextStep
+	completed bool
+	result    *health.CheckResult
+	miss      string
+	note      string
+	passed    bool
+	steps     []ux.NextStep
 }
 
 func (o doctorOutcome) counted() bool { return o.result != nil || o.miss != "" }
@@ -114,6 +115,7 @@ render:
 			}
 			finished[d.index] = true
 			remaining--
+			d.outcome.completed = true
 			outcomes[s][d.index] = d.outcome
 			render(section.checks[d.index].name, d.outcome)
 			return true

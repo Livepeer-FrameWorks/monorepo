@@ -1377,8 +1377,12 @@ type PublisherLeaseResponse struct {
 	// Returned only when the owner belongs to the requesting cluster.
 	HeldExecutionToken string `protobuf:"bytes,3,opt,name=held_execution_token,json=heldExecutionToken,proto3" json:"held_execution_token,omitempty"`
 	Reason             string `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Current tenant/object envelopes signed for the requesting cell, in that
+	// order. A stale exact-pair claim takes no lease; these let the caller verify
+	// current policy and credentials before a bounded version exchange.
+	SignedAuthorities [][]byte `protobuf:"bytes,5,rep,name=signed_authorities,json=signedAuthorities,proto3" json:"signed_authorities,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *PublisherLeaseResponse) Reset() {
@@ -1437,6 +1441,13 @@ func (x *PublisherLeaseResponse) GetReason() string {
 		return x.Reason
 	}
 	return ""
+}
+
+func (x *PublisherLeaseResponse) GetSignedAuthorities() [][]byte {
+	if x != nil {
+		return x.SignedAuthorities
+	}
+	return nil
 }
 
 type ValidateStreamKeyRequest struct {
@@ -17843,13 +17854,14 @@ const file_commodore_proto_rawDesc = "" +
 	"\x1cAbandonPublisherLeaseRequest\x12&\n" +
 	"\x0fcontrol_cell_id\x18\x01 \x01(\tR\rcontrolCellId\x12\x17\n" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12'\n" +
-	"\x0fexecution_token\x18\x03 \x01(\tR\x0eexecutionToken\"\xd9\x01\n" +
+	"\x0fexecution_token\x18\x03 \x01(\tR\x0eexecutionToken\"\x88\x02\n" +
 	"\x16PublisherLeaseResponse\x12:\n" +
 	"\aoutcome\x18\x01 \x01(\x0e2 .commodore.PublisherLeaseOutcomeR\aoutcome\x129\n" +
 	"\n" +
 	"expires_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x120\n" +
 	"\x14held_execution_token\x18\x03 \x01(\tR\x12heldExecutionToken\x12\x16\n" +
-	"\x06reason\x18\x04 \x01(\tR\x06reason\"\xba\x01\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\x12-\n" +
+	"\x12signed_authorities\x18\x05 \x03(\fR\x11signedAuthorities\"\xba\x01\n" +
 	"\x18ValidateStreamKeyRequest\x12\x1d\n" +
 	"\n" +
 	"stream_key\x18\x01 \x01(\tR\tstreamKey\x12\x1d\n" +

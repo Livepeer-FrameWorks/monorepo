@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/x509"
 	"encoding/base64"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -161,6 +162,36 @@ func TestVerifyEdgeTLSDoesNotDependOnHealthRoute(t *testing.T) {
 	}
 	if routeHit {
 		t.Fatal("VerifyEdgeTLS made an HTTP request instead of stopping after certificate validation")
+	}
+}
+
+func TestVerifyEdgeTLSResolvesSSHAddressAndRetainsServerIdentity(t *testing.T) {
+	server := httptest.NewTLSServer(http.NotFoundHandler())
+	defer server.Close()
+	roots := x509.NewCertPool()
+	roots.AddCert(server.Certificate())
+	_, port, err := net.SplitHostPort(server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	probe := filepath.Join(bin, "ssh-args")
+	t.Setenv("FRAMEWORKS_TLS_TEST_SSH_PROBE", probe)
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$FRAMEWORKS_TLS_TEST_SSH_PROBE\"\nprintf 'hostname 127.0.0.1\\n'\n"
+	if writeErr := os.WriteFile(filepath.Join(bin, "ssh"), []byte(script), 0o700); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	address := net.JoinHostPort("qa-user@qa-edge-alias.invalid", port)
+	if verifyErr := VerifyEdgeTLS("127.0.0.1", address, time.Second, roots); verifyErr != nil {
+		t.Fatalf("SSH alias must reach its configured host: %v", verifyErr)
+	}
+	args, err := os.ReadFile(probe)
+	if err != nil || !strings.Contains(string(args), "qa-user@qa-edge-alias.invalid") {
+		t.Fatalf("SSH configuration was not consulted: %q, %v", args, err)
+	}
+	if verifyErr := VerifyEdgeTLS("wrong-identity.invalid", address, time.Second, roots); verifyErr == nil {
+		t.Fatal("resolving the transport address must not change the verified certificate identity")
 	}
 }
 

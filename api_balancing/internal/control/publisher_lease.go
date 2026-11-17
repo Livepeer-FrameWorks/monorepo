@@ -1,6 +1,7 @@
 package control
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -24,16 +25,53 @@ type PublisherLeaseClient interface {
 
 type publishedClaimClient struct {
 	PublisherLeaseClient
-	request  *pb.PublisherLeaseRequest
-	identity *pb.ValidateStreamKeyResponse
+	request            *pb.PublisherLeaseRequest
+	identity           *pb.ValidateStreamKeyResponse
+	refresh            PublisherAuthorityRefresh
+	authorityExchanged bool
 }
 
-func (c publishedClaimClient) ValidateStreamKeyForClaim(ctx context.Context, _ string, clusterID, token string) (*pb.ValidateStreamKeyResponse, error) {
+// PublisherAuthorityRefresh verifies and persists a returned pair, revalidates
+// the presented credential and rebuilds configuration before another exact CAS.
+type PublisherAuthorityRefresh func(context.Context, [][]byte) (*pb.PublisherLeaseRequest, *pb.ValidateStreamKeyResponse, error)
+
+func (c *publishedClaimClient) ValidateStreamKeyForClaim(ctx context.Context, _ string, clusterID, token string) (*pb.ValidateStreamKeyResponse, error) {
 	req := proto.CloneOf(c.request)
 	req.ClusterId, req.ExecutionToken = clusterID, token
-	lease, err := c.AcquirePublisherLease(ctx, req)
-	if err != nil {
-		return nil, err
+	var lease *pb.PublisherLeaseResponse
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		var err error
+		lease, err = c.AcquirePublisherLease(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		if lease == nil {
+			return nil, errors.New("publisher lease response missing")
+		}
+		if lease.GetOutcome() != pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_AUTHORITY_STALE {
+			break
+		}
+		if c.authorityExchanged || c.refresh == nil || len(lease.GetSignedAuthorities()) != 2 {
+			return nil, ErrPublisherAuthorityStale
+		}
+		c.authorityExchanged = true
+		current, identity, refreshErr := c.refresh(ctx, lease.GetSignedAuthorities())
+		if refreshErr != nil {
+			return nil, fmt.Errorf("refresh publisher authority: %w", refreshErr)
+		}
+		if identity != nil && !identity.GetValid() {
+			denial := proto.CloneOf(identity)
+			denial.ClaimAcquired = false
+			return denial, nil
+		}
+		if identity == nil || !publisherAuthorityExchangeMatches(req, current) || identity.GetTenantId() != current.GetTenantId() || identity.GetStreamId() != current.GetStreamId() || identity.GetInternalName() != current.GetInternalName() {
+			return nil, ErrPublisherAuthorityStale
+		}
+		req = proto.CloneOf(current)
+		c.request, c.identity = proto.CloneOf(current), proto.CloneOf(identity)
 	}
 	response := proto.CloneOf(c.identity)
 	response.ClaimAcquired = false
@@ -56,10 +94,26 @@ func (c publishedClaimClient) ValidateStreamKeyForClaim(ctx context.Context, _ s
 	return response, nil
 }
 
+func publisherAuthorityExchangeMatches(before, after *pb.PublisherLeaseRequest) bool {
+	if after == nil || before.GetTenantId() != after.GetTenantId() || before.GetStreamId() != after.GetStreamId() || before.GetInternalName() != after.GetInternalName() || before.GetNodeId() != after.GetNodeId() || before.GetControlCellId() != after.GetControlCellId() || before.GetClusterId() != after.GetClusterId() || before.GetExecutionToken() != after.GetExecutionToken() {
+		return false
+	}
+	if after.GetTenantAuthorityVersion() < before.GetTenantAuthorityVersion() || after.GetObjectAuthorityVersion() < before.GetObjectAuthorityVersion() || len(after.GetTenantPayloadSha256()) != 32 || len(after.GetObjectPayloadSha256()) != 32 {
+		return false
+	}
+	if (after.GetTenantAuthorityVersion() == before.GetTenantAuthorityVersion() && !bytes.Equal(before.GetTenantPayloadSha256(), after.GetTenantPayloadSha256())) || (after.GetObjectAuthorityVersion() == before.GetObjectAuthorityVersion() && !bytes.Equal(before.GetObjectPayloadSha256(), after.GetObjectPayloadSha256())) {
+		return false
+	}
+	return after.GetTenantAuthorityVersion() != before.GetTenantAuthorityVersion() || after.GetObjectAuthorityVersion() != before.GetObjectAuthorityVersion()
+}
+
 // ClaimPublishedIngestPlacement retains ended-owner recovery while the normal
 // path performs exactly one lease mutation and no configuration validation.
-func ClaimPublishedIngestPlacement(ctx context.Context, client PublisherLeaseClient, request *pb.PublisherLeaseRequest, identity *pb.ValidateStreamKeyResponse, nodeID string, logger logging.Logger) (*pb.ValidateStreamKeyResponse, error) {
-	adapter := publishedClaimClient{PublisherLeaseClient: client, request: request, identity: identity}
+func ClaimPublishedIngestPlacement(ctx context.Context, client PublisherLeaseClient, request *pb.PublisherLeaseRequest, identity *pb.ValidateStreamKeyResponse, nodeID string, logger logging.Logger, refresh ...PublisherAuthorityRefresh) (*pb.ValidateStreamKeyResponse, error) {
+	adapter := &publishedClaimClient{PublisherLeaseClient: client, request: request, identity: identity}
+	if len(refresh) == 1 {
+		adapter.refresh = refresh[0]
+	}
 	return ClaimIngestPlacement(ctx, adapter, "", request.GetTenantId(), request.GetInternalName(), nodeID, request.GetClusterId(), request.GetExecutionToken(), logger)
 }
 
@@ -121,7 +175,7 @@ func releaseEndedPublisherClaims(ctx context.Context, client ingestPlacementSync
 	return client.SyncActiveIngestPlacement(ctx, clusterID, renew, fenced)
 }
 
-func (c publishedClaimClient) SyncActiveIngestPlacement(ctx context.Context, clusterID string, renew, releases []*pb.ActiveIngestStream) (*pb.SyncActiveIngestPlacementResponse, error) {
+func (c *publishedClaimClient) SyncActiveIngestPlacement(ctx context.Context, clusterID string, renew, releases []*pb.ActiveIngestStream) (*pb.SyncActiveIngestPlacementResponse, error) {
 	return releaseEndedPublisherClaims(ctx, c.PublisherLeaseClient, c.request.GetControlCellId(), clusterID, renew, releases)
 }
 

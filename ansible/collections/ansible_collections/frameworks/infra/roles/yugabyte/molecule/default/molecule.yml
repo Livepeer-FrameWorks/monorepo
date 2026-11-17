@@ -9,7 +9,7 @@ driver:
   name: docker
 
 platforms:
-  - name: yugabyte-instance
+  - name: "${MOLECULE_INSTANCE_NAME:-yugabyte-instance}"
     image: geerlingguy/docker-ubuntu2404-ansible:latest
     platform: linux/amd64
     pull: true

@@ -135,6 +135,9 @@ edge_vmagent_artifact_checksum: ""
 edge_node_exporter_artifact_url: ""
 edge_node_exporter_artifact_checksum: ""
 edge_node_exporter_port: 9110
+# The CLI validates Docker/Compose before invoking the edge role. Installing a
+# different distribution package provider could replace that working runtime.
+edge_manage_docker: false
 edge_config_schema_version: ""
 
 # CLI release that renders this config; stamped into the provisioned-config

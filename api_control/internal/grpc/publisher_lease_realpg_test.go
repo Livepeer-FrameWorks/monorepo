@@ -4,13 +4,17 @@ package grpc
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	authority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
+	clusterpeer "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	media "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockerpg"
@@ -32,8 +36,19 @@ func testPublisherLease(t *testing.T, conn *sql.DB) {
 	t.Helper()
 	ctx := serviceCtx()
 	seedClaimStream(t, conn, "sk-published-lease")
+	_, signingKey, keyErr := ed25519.GenerateKey(rand.Reader)
+	if keyErr != nil {
+		t.Fatal(keyErr)
+	}
 	tenant := &media.TenantAuthority{SchemaVersion: 1, TenantId: claimTenantID, Lifecycle: media.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE, BillingDecision: media.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW, EffectiveClusterGrants: []*media.TenantClusterGrant{{ClusterId: "media-eu", ControlCellId: "cell-eu", ClusterType: "edge"}, {ClusterId: "media-us", ControlCellId: "cell-us", ClusterType: "edge"}}}
 	object := &media.MediaObjectAuthority{SchemaVersion: 1, TenantId: claimTenantID, UserId: claimUserID, InternalName: "claim-internal", ObjectKind: media.MediaObjectKind_MEDIA_OBJECT_KIND_LIVE_STREAM, Lifecycle: media.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE, Object: &media.MediaObjectAuthority_LiveStream{LiveStream: &media.LiveStreamAuthority{StreamId: claimStreamID, IngestMode: "push", PublisherConfigurationVersion: 1}}}
+	tenant.BillingModel = media.TenantBillingModel_TENANT_BILLING_MODEL_POSTPAID
+	for _, grant := range tenant.EffectiveClusterGrants {
+		grant.AccessSource = clusterpeer.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER
+		grant.SubscriptionStatus, grant.ClusterClass = "active", "platform_official"
+	}
+	object.PlaybackId = "claim-playback"
+	object.PlaybackPolicy = &media.PlaybackPolicy{Kind: media.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_PUBLIC}
 	publish := func(kind, id string, version int64, payload proto.Message) []byte {
 		t.Helper()
 		encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
@@ -51,12 +66,33 @@ func testPublisherLease(t *testing.T, conn *sql.DB) {
 			if _, err = conn.ExecContext(ctx, `INSERT INTO commodore.media_authority_targets(authority_kind,authority_id,cell_id,highest_targeted_version) VALUES($1,$2,$3,$4) ON CONFLICT(authority_kind,authority_id,cell_id) DO UPDATE SET highest_targeted_version=EXCLUDED.highest_targeted_version`, kind, id, cell, version); err != nil {
 				t.Fatal(err)
 			}
+			kindID := media.AuthorityKind_AUTHORITY_KIND_TENANT
+			if kind == "media_object" {
+				kindID = media.AuthorityKind_AUTHORITY_KIND_MEDIA_OBJECT
+			}
+			now := time.Now().UTC()
+			envelope, envelopeErr := authority.NewEnvelope(kindID, id, uint64(version), now, now.Add(time.Hour), now.Add(2*time.Hour), "publisher-test", cell, payload,
+				[]*media.AuthoritySourceRevision{{Service: "commodore", Revision: "publisher-lease-fixture"}})
+			if envelopeErr != nil {
+				t.Fatal(envelopeErr)
+			}
+			signed, signErr := authority.Sign(envelope, signingKey)
+			if signErr != nil {
+				t.Fatal(signErr)
+			}
+			wire, marshalErr := proto.Marshal(signed)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			if _, err = conn.ExecContext(ctx, `INSERT INTO commodore.media_authority_deliveries(authority_kind,authority_id,authority_version,cell_id,signed_envelope) VALUES($1,$2,$3,$4,$5)`, kind, id, version, cell, wire); err != nil {
+				t.Fatal(err)
+			}
 		}
 		return digest[:]
 	}
-	tenantDigest := publish("tenant", claimTenantID, 1, tenant)
-	objectDigest := publish("media_object", authority.LiveStreamAuthorityID(claimStreamID), 1, object)
-	req := &pb.PublisherLeaseRequest{TenantId: claimTenantID, StreamId: claimStreamID, InternalName: "claim-internal", ClusterId: "media-eu", ControlCellId: "cell-eu", ExecutionToken: "first", NodeId: "node-eu", TenantAuthorityVersion: 1, ObjectAuthorityVersion: 1, TenantPayloadSha256: tenantDigest, ObjectPayloadSha256: objectDigest}
+	tenantDigest := publish("tenant", claimTenantID, 2, tenant)
+	objectDigest := publish("media_object", authority.LiveStreamAuthorityID(claimStreamID), 2, object)
+	req := &pb.PublisherLeaseRequest{TenantId: claimTenantID, StreamId: claimStreamID, InternalName: "claim-internal", ClusterId: "media-eu", ControlCellId: "cell-eu", ExecutionToken: "first", NodeId: "node-eu", TenantAuthorityVersion: 2, ObjectAuthorityVersion: 2, TenantPayloadSha256: tenantDigest, ObjectPayloadSha256: objectDigest}
 	server := &CommodoreServer{db: conn, logger: logging.NewLogger()}
 	if _, err := server.AcquirePublisherLease(context.Background(), req); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("lease allowed non-service caller: %v", err)
@@ -81,14 +117,39 @@ func testPublisherLease(t *testing.T, conn *sql.DB) {
 		t.Fatal("other cell learned publisher owner token")
 	}
 	stale := proto.CloneOf(req)
-	stale.TenantAuthorityVersion = 2
-	acquire(stale, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_AUTHORITY_STALE)
+	stale.TenantAuthorityVersion, stale.ObjectAuthorityVersion = 1, 1
+	staleResponse := acquire(stale, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_AUTHORITY_STALE)
+	pairField := staleResponse.ProtoReflect().Descriptor().Fields().ByName("signed_authorities")
+	if pairField == nil || staleResponse.ProtoReflect().Get(pairField).List().Len() != 2 {
+		t.Fatal("stale publisher received no current signed authority pair; its next attempt still depends on asynchronous delivery")
+	}
+	refreshed := proto.CloneOf(stale)
+	for i := range 2 {
+		var signed media.SignedAuthorityEnvelope
+		if err := proto.Unmarshal(staleResponse.ProtoReflect().Get(pairField).List().Get(i).Bytes(), &signed); err != nil {
+			t.Fatal(err)
+		}
+		if signed.GetEnvelope().GetAudienceCellId() != req.GetControlCellId() || signed.GetEnvelope().GetAuthorityVersion() != 2 || len(signed.GetSignature()) != ed25519.SignatureSize {
+			t.Fatalf("stale response returned an unrelated or unsigned authority: kind=%s version=%d", signed.GetEnvelope().GetKind(), signed.GetEnvelope().GetAuthorityVersion())
+		}
+		if signed.GetEnvelope().GetKind() == media.AuthorityKind_AUTHORITY_KIND_TENANT {
+			refreshed.TenantAuthorityVersion = int64(signed.GetEnvelope().GetAuthorityVersion())
+			refreshed.TenantPayloadSha256 = signed.GetEnvelope().GetPayloadSha256()
+		} else {
+			refreshed.ObjectAuthorityVersion = int64(signed.GetEnvelope().GetAuthorityVersion())
+			refreshed.ObjectPayloadSha256 = signed.GetEnvelope().GetPayloadSha256()
+		}
+	}
+	acquire(refreshed, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_SAME_EXECUTION)
 	forged := proto.CloneOf(req)
 	forged.ObjectPayloadSha256 = make([]byte, 32)
 	acquire(forged, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_AUTHORITY_STALE)
 	wrongCell := proto.CloneOf(req)
 	wrongCell.ControlCellId = "cell-unknown"
-	acquire(wrongCell, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_AUTHORITY_STALE)
+	wrongResponse := acquire(wrongCell, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_AUTHORITY_STALE)
+	if wrongResponse.ProtoReflect().Get(pairField).List().Len() != 0 {
+		t.Fatal("unknown cell received another cell's credential-bearing envelopes")
+	}
 	if cluster, token := readClaim(t, conn); cluster != "media-eu" || token != "first" {
 		t.Fatalf("failed request stole lease: %s/%s", cluster, token)
 	}
@@ -352,8 +413,9 @@ func testPublisherLease(t *testing.T, conn *sql.DB) {
 	})
 
 	tenant.BillingDecision = media.TenantBillingDecision_TENANT_BILLING_DECISION_SUSPENDED
-	req.TenantPayloadSha256 = publish("tenant", claimTenantID, 2, tenant)
+	tenant.EffectiveClusterGrants = nil
+	req.TenantPayloadSha256 = publish("tenant", claimTenantID, 3, tenant)
 	acquire(req, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_AUTHORITY_STALE)
-	req.TenantAuthorityVersion = 2
+	req.TenantAuthorityVersion = 3
 	acquire(req, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_DENIED)
 }

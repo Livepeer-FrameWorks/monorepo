@@ -224,6 +224,7 @@ func edgeRoleVarsFrom(config *EdgeProvisionConfig, remoteOS, remoteArch string, 
 	}
 
 	vars := map[string]any{
+		"edge_manage_docker":                false,
 		"edge_mode":                         mode,
 		"edge_node_id":                      config.NodeID,
 		"edge_cluster_id":                   config.ClusterID,
@@ -327,6 +328,16 @@ func edgeRoleVarsFrom(config *EdgeProvisionConfig, remoteOS, remoteArch string, 
 		}
 	}
 
+	arch := remoteOS + "-" + remoteArch
+	if remoteOS == "linux" && strings.TrimSpace(config.TelemetryURL) != "" {
+		nodeExporter, exporterErr := src.infraArtifact(NodeExporterArtifact, arch, config.Version)
+		if exporterErr != nil {
+			return nil, fmt.Errorf("edge: resolve node-exporter artifact: %w", exporterErr)
+		}
+		vars["edge_node_exporter_artifact_url"] = nodeExporter.URL
+		vars["edge_node_exporter_artifact_checksum"] = nodeExporter.Checksum
+		vars["edge_node_exporter_port"] = NodeExporterPort
+	}
 	if mode != "native" {
 		return vars, nil
 	}
@@ -343,8 +354,6 @@ func edgeRoleVarsFrom(config *EdgeProvisionConfig, remoteOS, remoteArch string, 
 			return nil, manifestErr
 		}
 	}
-
-	arch := remoteOS + "-" + remoteArch
 
 	mistURL, mistSum, runtimeHost, err := edgeExternalVariantBinary(manifest, "mistserver", arch, profile)
 	if err != nil {
@@ -389,15 +398,6 @@ func edgeRoleVarsFrom(config *EdgeProvisionConfig, remoteOS, remoteArch string, 
 		}
 		vars["edge_vmagent_artifact_url"] = artifact.URL
 		vars["edge_vmagent_artifact_checksum"] = artifact.Checksum
-		if remoteOS == "linux" {
-			nodeExporter, err := src.infraArtifact(NodeExporterArtifact, arch, config.Version)
-			if err != nil {
-				return nil, fmt.Errorf("edge: resolve node-exporter artifact: %w", err)
-			}
-			vars["edge_node_exporter_artifact_url"] = nodeExporter.URL
-			vars["edge_node_exporter_artifact_checksum"] = nodeExporter.Checksum
-			vars["edge_node_exporter_port"] = NodeExporterPort
-		}
 	}
 
 	return vars, nil

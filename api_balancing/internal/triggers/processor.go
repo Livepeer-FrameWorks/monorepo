@@ -2,7 +2,6 @@ package triggers
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -522,6 +521,12 @@ func (p *Processor) getLivepeerGatewayURLsForCluster(ctx context.Context, cluste
 		if inst.GetHealthStatus() != "healthy" {
 			continue
 		}
+		cell := strings.TrimSpace(inst.GetMetadata()[servicedefs.LivepeerGatewayMetadataAuthControlCellID])
+		// Gateway auth reads the owning Foghorn cell's durable job/session.
+		// A healthy gateway in another cell cannot authorize this cell's job.
+		if cell == "" || cell != p.livepeerJobCellID() {
+			continue
+		}
 		// Physical-only: livepeerGatewayURLFromInstance returns "" for instances
 		// without a concrete physical endpoint (a pooled name can't pin an
 		// instance for failover), so they are skipped; an empty list falls back
@@ -535,10 +540,6 @@ func (p *Processor) getLivepeerGatewayURLsForCluster(ctx context.Context, cluste
 		}
 		seen[url] = struct{}{}
 		resolved = append(resolved, url)
-		cell := strings.TrimSpace(inst.GetClusterId())
-		if cell == "" {
-			cell = clusterID
-		}
 		if _, dup := seenCells[cell]; !dup {
 			seenCells[cell] = struct{}{}
 			cells = append(cells, cell)
@@ -553,6 +554,13 @@ func (p *Processor) getLivepeerGatewayURLsForCluster(ctx context.Context, cluste
 	p.gatewayMu.Unlock()
 
 	return resolved, cells, false
+}
+
+func (p *Processor) livepeerJobCellID() string {
+	if cell := strings.TrimSpace(appconfig.Current().MediaAuthorityCellID); cell != "" {
+		return cell
+	}
+	return p.clusterID
 }
 
 // livepeerGatewayURLFromInstance returns the broadcaster URL for a gateway
@@ -573,68 +581,29 @@ func livepeerGatewayURLFromInstance(inst *quartermasterpb.ServiceInstance) strin
 	return "https://" + host
 }
 
-// ApplyLivepeerBroadcasters fills the hardcoded_broadcasters list on every
-// Livepeer process entry with the registered gateway instances across the
-// candidate clusters, in order — the per-instance failover set MistProcLivepeer
-// consumes. Trigger callers pass [origin, official, p.clusterID] so a self-host
-// operator who runs their own gateway wins over the platform fallback. Nil/empty
-// candidates falls back to p.clusterID. The first candidate cluster that has any
-// gateway wins (its full instance set is used), matching the per-cluster
-// failover precedence the resolver already encodes.
-//
-// If no candidate has a gateway, Livepeer process entries fall back to local
-// MistProcAV so video processing still runs in dev/self-hosted clusters without
-// a Livepeer gateway.
-func (p *Processor) ApplyLivepeerBroadcasters(processesJSON string, candidates []string) string {
-	return p.ApplyLivepeerBroadcastersContext(context.Background(), processesJSON, candidates)
+// ApplyLivepeerBroadcasters resolves gateway replicas in the cell that owns
+// this processor's admitted sessions and assigned jobs. Media placement has
+// already selected that owner; gateway discovery does not choose another one.
+func (p *Processor) ApplyLivepeerBroadcasters(processesJSON string) string {
+	return p.ApplyLivepeerBroadcastersContext(context.Background(), processesJSON)
 }
 
-// ApplyLivepeerBroadcastersContext is ApplyLivepeerBroadcasters bounded by
-// ctx. Once Quartermaster gives no answer for one candidate, the remaining
-// candidates are answered from the last known discovery only, so one
-// resolution waits on Quartermaster at most once.
-func (p *Processor) ApplyLivepeerBroadcastersContext(ctx context.Context, processesJSON string, candidates []string) string {
+// ApplyLivepeerBroadcastersContext preserves the caller's admission deadline.
+// Unavailable discovery uses the last known owner-cell gateways, or local AV
+// when no eligible gateway is known.
+func (p *Processor) ApplyLivepeerBroadcastersContext(ctx context.Context, processesJSON string) string {
 	if !mist.HasLivepeerProcesses(processesJSON) {
 		return processesJSON
 	}
-
-	if len(candidates) == 0 {
-		candidates = []string{p.clusterID}
+	ownerCell := p.livepeerJobCellID()
+	urls, cells, unreachable := p.getLivepeerGatewayURLsForCluster(ctx, p.clusterID, true)
+	if len(urls) > 0 {
+		withBroadcasters := mist.SetLivepeerBroadcasters(processesJSON, urls)
+		return mist.SetLivepeerGatewayClusters(withBroadcasters, cells)
 	}
-
-	seen := map[string]struct{}{}
-	tried := []string{}
-	discoveryUnreachable := false
-	for _, candidate := range candidates {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" {
-			continue
-		}
-		if _, dup := seen[candidate]; dup {
-			continue
-		}
-		seen[candidate] = struct{}{}
-		tried = append(tried, candidate)
-
-		urls, cells, unreachable := p.getLivepeerGatewayURLsForCluster(ctx, candidate, !discoveryUnreachable)
-		discoveryUnreachable = discoveryUnreachable || unreachable
-		if len(urls) > 0 {
-			withBroadcasters := mist.SetLivepeerBroadcasters(processesJSON, urls)
-			// The job capability names the cells whose Foghorn receives each
-			// selected gateway's auth webhook, not the media cluster asked for.
-			return mist.SetLivepeerGatewayClusters(withBroadcasters, cells)
-		}
-	}
-
-	if discoveryUnreachable {
-		p.logger.WithField("candidates", tried).Warn(
-			"Livepeer gateway discovery unavailable and no gateway known for any candidate cluster — falling back to local MistProcAV (service_unavailable)",
-		)
-	} else {
-		p.logger.WithField("candidates", tried).Warn(
-			"Livepeer gateway not registered in any candidate cluster — falling back to local MistProcAV (service_unavailable)",
-		)
-	}
+	p.logger.WithFields(logging.Fields{"job_cell_id": ownerCell, "discovery_unreachable": unreachable}).Warn(
+		"No gateway can authorize this cell's transcode job; falling back to local MistProcAV",
+	)
 	if p.metrics != nil && p.metrics.ServiceResolutionRejected != nil {
 		p.metrics.ServiceResolutionRejected.WithLabelValues("service_unavailable", "livepeer-gateway").Inc()
 	}
@@ -1757,21 +1726,16 @@ func ingestPlacementErrorCode(err error) ipcpb.IngestErrorCode {
 		errors.Is(err, balancer.ErrPlacementAuthorityDenied) {
 		return ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED
 	}
-	// Authority that kept changing through every decision round is not a
-	// refusal; the publisher's reconnect decides on the settled snapshot.
-	// Authority the cell could not fetch in time is a slow control plane, not a
-	// refusal: a new stream's authority is still arriving.
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, federation.ErrPlacementAuthorityChanged) ||
-		errors.Is(err, localauthority.ErrAuthorityFetchFailed) {
+	// Churn and dependency failures are not evidence that a deadline expired.
+	// Joined fetch errors still retain a real context deadline when one did.
+	if errors.Is(err, context.DeadlineExceeded) {
 		return ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT
 	}
 	if st, ok := status.FromError(err); ok {
 		switch st.Code() {
 		case codes.PermissionDenied:
 			return ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED
-		// An unobservable destination, an unreachable dependency or an
-		// aborted preparation attempt is resolved by the publisher's reconnect.
-		case codes.DeadlineExceeded, codes.Unavailable, codes.Aborted:
+		case codes.DeadlineExceeded:
 			return ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT
 		}
 	}
@@ -2001,6 +1965,10 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 			Error("PUSH_REWRITE: publishing node has no attributable media cluster; denying (retryable)")
 		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "node cluster attribution unavailable")
 	}
+	if sessionClusterID == "" && localValidation.GetValid() && publisherHardPolicyDenied(localAuthority, ingestClusterID, trigger.GetNodeId(), time.Now()) {
+		p.logger.WithFields(logging.Fields{"node_id": trigger.GetNodeId(), "trigger_uuid": claimToken, "stream_id": identity.GetStreamId(), "phase": "preclaim", "reason": "policy_denied"}).Info("Publisher denied before lease acquisition")
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED, "publisher is not permitted on this node by placement policy")
+	}
 	// A new publisher consumes one of this replica's guaranteed placement-renewal slots. Existing
 	// sessions retry without reserving again. The in-flight reservation closes concurrent bursts before
 	// the source enters LocallyPublishedStreams.
@@ -2028,20 +1996,43 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 		err = func() error {
 			var callErr error
 			if admissionRepository != nil && localValidation.GetValid() {
-				tenantBytes, encodeErr := proto.MarshalOptions{Deterministic: true}.Marshal(localAuthority.tenant.Authority)
-				if encodeErr != nil {
-					return encodeErr
+				leaseRequest, requestErr := publisherLeaseRequest(localAuthority, identity, p.mediaAuthorityStore.CellID(), ingestClusterID, trigger.GetNodeId(), claimToken)
+				if requestErr != nil {
+					return requestErr
 				}
-				objectBytes, encodeErr := proto.MarshalOptions{Deterministic: true}.Marshal(localAuthority.object.Authority)
-				if encodeErr != nil {
-					return encodeErr
+				refresh := func(refreshCtx context.Context, pair [][]byte) (*commodorepb.PublisherLeaseRequest, *commodorepb.ValidateStreamKeyResponse, error) {
+					if applyErr := p.applyPublisherAuthorityPair(refreshCtx, pair, identity.GetTenantId(), identity.GetStreamId()); applyErr != nil {
+						return nil, nil, applyErr
+					}
+					validation, current, found, readErr := p.readReadyLocalIngest(refreshCtx, pushRewrite.GetStreamName(), trigger.GetNodeId(), claimToken)
+					if readErr != nil {
+						return nil, nil, readErr
+					}
+					if !found {
+						return nil, &commodorepb.ValidateStreamKeyResponse{Valid: false, Error: "invalid stream key", RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY}, nil
+					}
+					if validation == nil {
+						return nil, nil, control.ErrPublisherAuthorityStale
+					}
+					if !validation.GetValid() {
+						return nil, validation, nil
+					}
+					if p.publisherRepositoryFor(refreshCtx, current) == nil {
+						return nil, nil, control.ErrPublisherAuthorityStale
+					}
+					validation.TenantResourceLimits = localTenantResourceLimits(current.tenant.Authority, ingestClusterID)
+					validation.OriginClusterId = proto.String(ingestClusterID)
+					next, buildErr := publisherLeaseRequest(current, validation, p.mediaAuthorityStore.CellID(), ingestClusterID, trigger.GetNodeId(), claimToken)
+					if buildErr != nil {
+						return nil, nil, buildErr
+					}
+					localValidation, localAuthority = validation, current
+					if sessionClusterID == "" && publisherHardPolicyDenied(current, ingestClusterID, trigger.GetNodeId(), time.Now()) {
+						return nil, nil, errPublisherHardPolicyDenied
+					}
+					return next, validation, nil
 				}
-				tenantDigest, objectDigest := sha256.Sum256(tenantBytes), sha256.Sum256(objectBytes)
-				leaseRequest := &commodorepb.PublisherLeaseRequest{TenantId: identity.GetTenantId(), StreamId: identity.GetStreamId(), InternalName: identity.GetInternalName(),
-					ClusterId: ingestClusterID, ControlCellId: p.mediaAuthorityStore.CellID(), ExecutionToken: claimToken, NodeId: trigger.GetNodeId(),
-					TenantAuthorityVersion: localAuthority.tenant.Version, ObjectAuthorityVersion: localAuthority.object.Version,
-					TenantPayloadSha256: tenantDigest[:], ObjectPayloadSha256: objectDigest[:]}
-				streamValidation, callErr = control.ClaimPublishedIngestPlacement(admissionCtx, claimClient, leaseRequest, localValidation, trigger.GetNodeId(), p.logger)
+				streamValidation, callErr = control.ClaimPublishedIngestPlacement(admissionCtx, claimClient, leaseRequest, localValidation, trigger.GetNodeId(), p.logger, refresh)
 				publishedLease = callErr == nil
 				return callErr
 			}
@@ -2055,13 +2046,17 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 		}()
 		control.ObservePublisherAdmissionPhase("lease", leaseStarted, err)
 	}
+	if errors.Is(err, errPublisherHardPolicyDenied) {
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED, "publisher is not permitted on this node by placement policy")
+	}
 	if recoveryErr, incomplete := errors.AsType[*control.IngestClaimRecoveryError](err); incomplete {
 		p.logger.WithError(recoveryErr).WithField("node_id", trigger.GetNodeId()).Warn("Publisher ownership recovery incomplete")
-		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT, "publisher ownership recovery is temporarily unavailable")
+		return "", true, ingesterrors.New(ingestPlacementErrorCode(recoveryErr), "publisher ownership recovery is temporarily unavailable")
 	}
 	if errors.Is(err, control.ErrPublisherAuthorityStale) {
 		p.mediaAuthorityStore.RefreshAuthorityAsync(localauthority.AuthorityLookup{InternalName: identity.GetInternalName()})
-		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT, "publisher authority is refreshing")
+		p.logger.WithFields(logging.Fields{"node_id": trigger.GetNodeId(), "trigger_uuid": claimToken, "stream_id": identity.GetStreamId(), "phase": "lease", "reason": "authority_stale", "tenant_authority_version": localAuthority.tenant.Version, "object_authority_version": localAuthority.object.Version}).Warn("Publisher authority synchronization incomplete")
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "publisher authority is changing; refresh is pending")
 	}
 	if err != nil || streamValidation == nil {
 		if localValidation == nil || !localValidation.GetValid() || (err != nil && !federation.CentralUnreachable(err)) {
@@ -2147,11 +2142,7 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 		// projection below need; without an answer in time the last known
 		// gateways, else local MistProcAV, process the stream.
 		discoveryCtx, cancelDiscovery := admissionReserveContext(admissionCtx, ingestSessionPersistReserve)
-		liveProcessesJSON = p.ApplyLivepeerBroadcastersContext(discoveryCtx, liveProcessesJSON, []string{
-			streamValidation.GetOriginClusterId(),
-			streamValidation.GetOfficialClusterId(),
-			p.clusterID,
-		})
+		liveProcessesJSON = p.ApplyLivepeerBroadcastersContext(discoveryCtx, liveProcessesJSON)
 		cancelDiscovery()
 		liveProcessesJSON = p.ApplyLivepeerWorkload(liveProcessesJSON, mist.WorkloadLive)
 	}
@@ -4019,14 +4010,26 @@ func (p *Processor) handleStreamProcess(trigger *ipcpb.MistTrigger) (string, boo
 	// authority arriving during an idempotent PUSH_REWRITE retry, cannot swap
 	// policy beneath the active publisher.
 	if strings.HasPrefix(streamName, "live+") || strings.HasPrefix(streamName, "pull+") {
-		if cfg, err := p.livepeerLiveProcessConfig(streamName, internalName, trigger.GetNodeId(), cachedConfig); cfg != "" || err != nil {
-			return cfg, err != nil, err
-		}
+		cfg, err := p.livepeerLiveProcessConfig(streamName, internalName, trigger.GetNodeId(), cachedConfig)
+		return cfg, err != nil, err
 	}
 	if strings.HasPrefix(streamName, "processing+") {
 		if cfg, err := p.livepeerProcessingProcessConfig(streamName, internalName, trigger.GetNodeId(), cachedConfig); cfg != "" || err != nil {
 			return cfg, err != nil, err
 		}
+	}
+
+	if !strings.Contains(streamName, "+") && mist.HasLivepeerProcesses(cachedConfig) {
+		registry := control.StreamRegistryInstance
+		if registry == nil {
+			return "", true, fmt.Errorf("managed live transcode source identity unavailable")
+		}
+		entry, known := registry.CachedSourceByInternalName(internalName)
+		if !known || entry.IngestMode != control.IngestMistNative {
+			return "", true, fmt.Errorf("managed live transcode source identity unavailable")
+		}
+		cfg, err := p.livepeerLiveProcessConfig(streamName, internalName, trigger.GetNodeId(), cachedConfig)
+		return cfg, err != nil, err
 	}
 
 	if cachedConfig != "" {
@@ -4071,7 +4074,9 @@ func (p *Processor) livepeerLiveProcessConfig(streamName, internalName, requesti
 		row, err := foghorndb.New(database).ActiveLiveTranscodeJobContext(ctx, internalName)
 		if err == nil {
 			if row.NodeID != requestingNodeID {
-				return "", fmt.Errorf("live transcode config requested by node %q, assigned to %q", requestingNodeID, row.NodeID)
+				// A relay runs no origin-owned process. The empty answer is final;
+				// it must not fall through to the shared stream's cached config.
+				return "", nil
 			}
 			return stampSignedLivepeerJob(row.ProcessesJson, control.TranscodeJobClaims{
 				ManifestID: streamName, AttemptOrGeneration: row.SessionID, Session: row.SessionID,
@@ -4096,8 +4101,11 @@ func (p *Processor) livepeerLiveProcessConfig(streamName, internalName, requesti
 	// HA-replicated current stream generation instead of minting an unbounded
 	// node-only bearer token.
 	stream := state.DefaultManager().GetStreamState(internalName)
-	if stream == nil || stream.NodeID != requestingNodeID || stream.TenantID == "" || stream.StartedAt == nil || stream.Status != "live" {
+	if stream == nil || stream.NodeID == "" || stream.TenantID == "" || stream.StartedAt == nil || stream.Status != "live" {
 		return "", fmt.Errorf("managed live transcode has no active assigned generation")
+	}
+	if stream.NodeID != requestingNodeID {
+		return "", nil
 	}
 	node := state.DefaultManager().GetNodeState(requestingNodeID)
 	if node == nil || node.ClusterID == "" {

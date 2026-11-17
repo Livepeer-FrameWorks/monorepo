@@ -1427,6 +1427,10 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_thumb_unprojected_range
 CREATE INDEX IF NOT EXISTS idx_foghorn_thumb_reassert_due_range
     ON foghorn.thumbnail_task_assignment(deterministic_reassert_at ASC)
     WHERE deterministic_reassert_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_foghorn_thumb_superseded_range
+    ON foghorn.thumbnail_task_assignment(superseded_at ASC)
+    INCLUDE (attempt_id, asset_key, version)
+    WHERE status = 'published' AND superseded_at IS NOT NULL;
 
 -- One row per file an attempt owns (allowlisted: poster.jpg / sprite.jpg / sprite.vtt). staging_key is the
 -- per-attempt upload target; version_key is the immutable published object; etag/size are provider-observed at

@@ -97,7 +97,7 @@ func TestPushRewrite_QuartermasterAndCommodoreHang_OutageOwnerAdmittedWithinBudg
 				p.commodoreClient = commodoreClient
 				p.SetQuartermasterClient(quartermasterClient)
 				// Origin and official are cluster-a; the process's own cluster
-				// is a second candidate, as in a multi-cluster cell.
+				// owns the jobs and supplies gateway discovery.
 				p.clusterID = "cluster-local"
 			})
 			if elapsed > 2500*time.Millisecond {
@@ -162,7 +162,7 @@ func TestResolveNodeClusterID_HangingQuartermasterIsOneBoundedAttempt(t *testing
 func TestApplyLivepeerBroadcasters_UnreachableQuartermasterUsesLastKnownGateways(t *testing.T) {
 	disc := newFakeGatewayDiscoverer(map[string][]string{"cluster-x": {"gw.x.example.com"}})
 	p := newGatewayProcessor(t, disc, "cluster-x")
-	if got := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"cluster-x"}); !strings.Contains(got, "gw.x.example.com") {
+	if got := p.ApplyLivepeerBroadcasters(gatewayTemplate); !strings.Contains(got, "gw.x.example.com") {
 		t.Fatalf("initial resolution = %q", got)
 	}
 	p.gatewayMu.Lock()
@@ -172,7 +172,7 @@ func TestApplyLivepeerBroadcasters_UnreachableQuartermasterUsesLastKnownGateways
 	p.gatewayMu.Unlock()
 	p.QuartermasterOutageBackoff().RecordUnreachable(status.Error(codes.Unavailable, "quartermaster is down"))
 
-	got := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"cluster-x"})
+	got := p.ApplyLivepeerBroadcasters(gatewayTemplate)
 	if !strings.Contains(got, "gw.x.example.com") || strings.Contains(got, `"process":"AV"`) {
 		t.Fatalf("resolution during the outage = %q; want the last known gateway", got)
 	}

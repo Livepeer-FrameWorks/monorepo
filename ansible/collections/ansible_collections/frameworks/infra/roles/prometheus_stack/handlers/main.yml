@@ -47,7 +47,7 @@
 - name: Restart node_exporter
   listen: node_exporter restart
   ansible.builtin.systemd:
-    name: node_exporter
+    name: "{{ node_exporter_service_name }}"
     state: restarted
     daemon_reload: true
   when: not ansible_check_mode

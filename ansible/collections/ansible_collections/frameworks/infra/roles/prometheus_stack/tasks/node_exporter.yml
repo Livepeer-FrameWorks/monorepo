@@ -31,6 +31,14 @@
   check_mode: false
   changed_when: false
 
+- name: Ensure node_exporter binary directory
+  ansible.builtin.file:
+    path: "{{ node_exporter_binary_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Report pending node_exporter install under --check
   ansible.builtin.debug:
     msg: "node_exporter would install {{ node_exporter_artifact_url }}"
@@ -101,7 +109,7 @@
 - name: Render node_exporter systemd unit
   ansible.builtin.template:
     src: node_exporter.service.j2
-    dest: /etc/systemd/system/node_exporter.service
+    dest: "/etc/systemd/system/{{ node_exporter_service_name }}.service"
     owner: root
     group: root
     mode: "0644"
@@ -109,7 +117,7 @@
 
 - name: Ensure node_exporter service
   ansible.builtin.systemd:
-    name: node_exporter
+    name: "{{ node_exporter_service_name }}"
     state: started
     enabled: true
     daemon_reload: true

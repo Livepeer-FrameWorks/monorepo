@@ -27,12 +27,14 @@ func TestGeneratedQueryCatalogPrepares_RealPG(t *testing.T) {
 	db := startQuartermasterQueryCatalogRealPG(t)
 	prepareQuartermasterQueryCatalog(t, db)
 	assertHealthCandidatesChooseOneActiveAssignment(t, db)
+	assertGatewayDiscoverySeparatesAssignmentFromAuthOwner(t, db)
 }
 
 func TestGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {
 	db := startQuartermasterQueryCatalogRealYugabyte(t)
 	prepareQuartermasterQueryCatalog(t, db)
 	assertHealthCandidatesChooseOneActiveAssignment(t, db)
+	assertGatewayDiscoverySeparatesAssignmentFromAuthOwner(t, db)
 }
 
 func assertHealthCandidatesChooseOneActiveAssignment(t *testing.T, db *sql.DB) {

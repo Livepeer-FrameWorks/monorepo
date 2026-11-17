@@ -1387,6 +1387,10 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *quarter
 		inst := quartermasterpb.ServiceInstance{Id: row.ID, InstanceId: row.InstanceID, ServiceId: row.ServiceID,
 			ClusterId: row.ClusterID, Protocol: row.Protocol, Status: row.Status, HealthStatus: row.HealthStatus,
 			Metadata: unmarshalStringMapJSON(row.Metadata), CreatedAt: timestamppb.New(row.CreatedAt), UpdatedAt: timestamppb.New(row.UpdatedAt)}
+		physicalClusterID := inst.Metadata[servicedefs.LivepeerGatewayMetadataPhysicalClusterID]
+		authControlCellID := inst.Metadata[servicedefs.LivepeerGatewayMetadataAuthControlCellID]
+		delete(inst.Metadata, servicedefs.LivepeerGatewayMetadataPhysicalClusterID)
+		delete(inst.Metadata, servicedefs.LivepeerGatewayMetadataAuthControlCellID)
 		if row.NodeID.Valid {
 			inst.NodeId = &row.NodeID.String
 		}
@@ -1436,6 +1440,10 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *quarter
 							inst.Metadata = map[string]string{}
 						}
 						inst.Metadata[servicedefs.LivepeerGatewayMetadataPublicInstanceHost] = instanceHost
+						if serviceType == "livepeer-gateway" && physicalClusterID != "" && authControlCellID != "" {
+							inst.Metadata[servicedefs.LivepeerGatewayMetadataPhysicalClusterID] = physicalClusterID
+							inst.Metadata[servicedefs.LivepeerGatewayMetadataAuthControlCellID] = authControlCellID
+						}
 					}
 				}
 			}

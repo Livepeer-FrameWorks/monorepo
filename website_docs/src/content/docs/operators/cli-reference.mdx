@@ -980,6 +980,22 @@ frameworks cluster stack-target --out-dir <dir> [flags]
 frameworks cluster stack-target --gitops-dir ../gitops --cluster staging --out-dir .stack/staging/target
 ```
 
+### frameworks cluster diagnose thumbnails
+
+Inspect thumbnail recovery indexes, database waits and the actual publishing,
+expiry and superseded-version selection plans in every Foghorn cell. Each query
+is read-only and has a five-second statement limit. A failed phase is reported
+while the other phases and cells are still checked. No media objects or tenant
+rows are returned.
+
+```bash
+frameworks cluster diagnose thumbnails --gitops-dir ../gitops --cluster production --output json
+```
+
+A timeout here concerns database recovery work. Use the individual phase results
+and database waits to distinguish query cost or contention from the separate
+object-storage projection path.
+
 ### frameworks cluster snapshot
 
 Collect a bounded incident bundle from the cluster manifest. The snapshot

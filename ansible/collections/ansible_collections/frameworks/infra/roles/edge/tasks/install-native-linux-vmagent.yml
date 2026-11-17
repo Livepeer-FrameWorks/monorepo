@@ -18,6 +18,9 @@
 # Host metrics (disk, filesystem, memory, load, systemd unit restarts) and the
 # host crash scan, which catches Mist child-process segfaults that never fail
 # a systemd unit.
+- name: Select host exporter ownership for the edge
+  ansible.builtin.include_tasks: prepare-node-exporter.yml
+
 - name: Install node_exporter and the host crash scan
   ansible.builtin.include_role:
     name: frameworks.infra.prometheus_stack
@@ -26,6 +29,10 @@
     node_exporter_artifact_url: "{{ edge_node_exporter_artifact_url }}"
     node_exporter_artifact_checksum: "{{ edge_node_exporter_artifact_checksum }}"
     node_exporter_port: "{{ edge_node_exporter_port }}"
+    node_exporter_service_name: "{{ edge_exporter_service_name }}"
+    node_exporter_binary_dir: "{{ edge_exporter_binary_dir }}"
+    node_exporter_user: "{{ edge_exporter_user }}"
+    node_exporter_textfile_dir: "{{ edge_exporter_textfile_dir }}"
 
 - name: Render vmagent scrape config
   ansible.builtin.template:

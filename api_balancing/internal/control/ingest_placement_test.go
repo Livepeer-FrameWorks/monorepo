@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"math"
+	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,8 +40,11 @@ func TestPreparedIngestEndpointsBindOnlyConfirmedProtocols(t *testing.T) {
 	for _, protocol := range []string{"", "whip", "rtmp", "srt"} {
 		t.Run(protocol, func(t *testing.T) {
 			var seen []string
+			var seenMu sync.Mutex
 			deps := &IngestDependencies{Protocol: protocol, GeoLat: math.NaN(), GeoLon: math.NaN(), Placement: ingestPlacementPreparerFunc(func(ctx context.Context, request IngestPlacementRequest) (balancer.PlacementPreparationResult, error) {
+				seenMu.Lock()
 				seen = append(seen, request.Protocol)
+				seenMu.Unlock()
 				if request.TenantID != "tenant" || request.StreamID != "stream" || request.InternalName != "internal" || request.Location != nil {
 					t.Fatal("publisher identity or unknown location changed")
 				}
@@ -54,8 +60,9 @@ func TestPreparedIngestEndpointsBindOnlyConfirmedProtocols(t *testing.T) {
 			}
 			want := protocol
 			if protocol == "" {
-				want = "whip,rtmp,srt"
+				want = "rtmp,srt,whip"
 			}
+			slices.Sort(seen)
 			if strings.Join(seen, ",") != want {
 				t.Fatalf("prepared protocols %v, want %s", seen, want)
 			}
@@ -65,6 +72,54 @@ func TestPreparedIngestEndpointsBindOnlyConfirmedProtocols(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPreparedIngestEndpointsFitIndependentProtocolsInsideRequestDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	deps := &IngestDependencies{Placement: ingestPlacementPreparerFunc(func(ctx context.Context, request IngestPlacementRequest) (balancer.PlacementPreparationResult, error) {
+		prepared := preparedIngestFixture(t, request)
+		timer := time.NewTimer(200 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return balancer.PlacementPreparationResult{}, ctx.Err()
+		case <-timer.C:
+			return prepared, nil
+		}
+	})}
+	stream := &commodorepb.ResolveStreamContextResponse{Admitted: true, IngestMode: "push", TenantId: "tenant", StreamId: "stream", InternalName: "internal"}
+	response, err := ResolveIngestEndpoints(ctx, deps, stream, "key")
+	if err != nil {
+		t.Fatalf("individually healthy protocol preparations exhausted the shared request deadline: %v", err)
+	}
+	if response.Primary.GetWhipUrl() == "" || response.Primary.GetRtmpUrl() == "" || response.Primary.GetSrtUrl() == "" {
+		t.Fatalf("a healthy protocol recommendation was omitted: %v", response)
+	}
+}
+
+func TestPreparedIngestEndpointsCancelSiblingPreparationsOnFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	want := errors.New("protocol authority unavailable")
+	var active atomic.Int32
+	deps := &IngestDependencies{Placement: ingestPlacementPreparerFunc(func(ctx context.Context, request IngestPlacementRequest) (balancer.PlacementPreparationResult, error) {
+		active.Add(1)
+		defer active.Add(-1)
+		if request.Protocol == "rtmp" {
+			return balancer.PlacementPreparationResult{}, want
+		}
+		<-ctx.Done()
+		return balancer.PlacementPreparationResult{}, ctx.Err()
+	})}
+	stream := &commodorepb.ResolveStreamContextResponse{Admitted: true, IngestMode: "push", TenantId: "tenant", StreamId: "stream", InternalName: "internal"}
+	response, err := ResolveIngestEndpoints(ctx, deps, stream, "key")
+	if response != nil || !errors.Is(err, want) {
+		t.Fatalf("protocol failure was masked by sibling waits: %v, %v", response, err)
+	}
+	if active.Load() != 0 {
+		t.Fatal("protocol preparations outlived the failed request")
 	}
 }
 
@@ -116,9 +171,9 @@ func TestPreparedIngestEndpointsNeverFallThroughOnInvalidPreparation(t *testing.
 
 func TestPreparedIngestEndpointsDoNotBroadenAmbiguousProtocolResults(t *testing.T) {
 	for _, ambiguous := range []bool{false, true} {
-		calls := 0
+		var calls atomic.Int32
 		deps := &IngestDependencies{Placement: ingestPlacementPreparerFunc(func(_ context.Context, request IngestPlacementRequest) (balancer.PlacementPreparationResult, error) {
-			calls++
+			calls.Add(1)
 			if request.Protocol == "rtmp" {
 				if ambiguous {
 					return balancer.PlacementPreparationResult{}, errors.New("reply lost")
@@ -132,11 +187,11 @@ func TestPreparedIngestEndpointsDoNotBroadenAmbiguousProtocolResults(t *testing.
 		stream := &commodorepb.ResolveStreamContextResponse{Admitted: true, IngestMode: "push", TenantId: "tenant", StreamId: "stream", InternalName: "internal"}
 		response, err := ResolveIngestEndpoints(context.Background(), deps, stream, "key")
 		if ambiguous {
-			if err == nil || response != nil || calls != 2 {
-				t.Fatalf("ambiguous preparation continued: %v, %v, %d", response, err, calls)
+			if err == nil || response != nil {
+				t.Fatalf("ambiguous preparation returned a recommendation: %v, %v", response, err)
 			}
-		} else if err != nil || len(response.Fallbacks) != 1 || response.Primary.GetRtmpUrl() != "" || response.Fallbacks[0].GetSrtUrl() == "" || calls != 3 {
-			t.Fatalf("independent protocol destinations changed: %v, %v, %d", response, err, calls)
+		} else if err != nil || len(response.Fallbacks) != 1 || response.Primary.GetRtmpUrl() != "" || response.Fallbacks[0].GetSrtUrl() == "" || calls.Load() != 3 {
+			t.Fatalf("independent protocol destinations changed: %v, %v, %d", response, err, calls.Load())
 		}
 	}
 }
