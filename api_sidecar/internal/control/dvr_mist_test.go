@@ -257,6 +257,10 @@ func TestStartRecording_RetriesInitialPushWarmup(t *testing.T) {
 	useFastInitialPushRetry(t)
 	mc := &startAwareFakeMist{pushIDToReturn: 12, failStarts: 2}
 	dm := newDVRManagerWithMist(t, mc)
+	var clock atomic.Int64
+	clock.Store(time.Now().UnixNano())
+	dm.nowFn = func() time.Time { return time.Unix(0, clock.Load()) }
+	dm.sleepFn = func(d time.Duration) { clock.Add(int64(d)) }
 
 	err := dm.StartRecording("hash-retry", "stream-1", "test-stream", "live+test-stream", "dtsc://source/live+test-stream", &ipcpb.DVRConfig{
 		SegmentDuration: 6,
