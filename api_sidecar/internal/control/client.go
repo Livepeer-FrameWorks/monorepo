@@ -32,6 +32,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/nodeidentity"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
@@ -61,7 +62,9 @@ const foghornInternalServerName = "foghorn.internal"
 //     corresponding media policy to a capable Mist controller.
 //   - Version 9 = acknowledges session termination only after verifying Mist session counts.
 //   - Version 10 = authorizes a session stop against its live owner waiter and uses local duration budgets.
-const controlProtocolVersion int32 = 10
+//   - Version 11 = isolates publisher and relay executions, confirms exact runtime drains,
+//     and persists recording source transitions with writer-bound progress and stop reports.
+const controlProtocolVersion int32 = 11
 
 // DeleteClipFunc is the function type for clip deletion
 type DeleteClipFunc func(clipHash string) (uint64, error)
@@ -2329,6 +2332,7 @@ func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 	for {
 		select {
 		case <-hbTicker.C:
+			liveGenerations, generationsReported := liveIngestGenerationsForRegister()
 			// Heartbeat carries the verified-applied managed-streams
 			// snapshot Foghorn uses as ground truth for the reconciler.
 			// A Send error means the bidi stream is broken; surface it
@@ -2337,8 +2341,10 @@ func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 			if err := sendHeartbeatAndConfirmDurableOutbox(connection, &ipcpb.ControlMessage{
 				SentAt: timestamppb.Now(),
 				Payload: &ipcpb.ControlMessage_Heartbeat{Heartbeat: &ipcpb.Heartbeat{
-					NodeId:                nodeID,
-					AppliedManagedStreams: snapshotAppliedManagedStreamsForRegister(),
+					NodeId:                        nodeID,
+					AppliedManagedStreams:         snapshotAppliedManagedStreamsForRegister(),
+					LiveIngestGenerations:         liveGenerations,
+					LiveIngestGenerationsReported: generationsReported,
 				}},
 			}); err != nil {
 				return fmt.Errorf("heartbeat send or durable confirmation: %w", err)
@@ -2617,6 +2623,12 @@ func handleDVRStart(logger logging.Logger, req *ipcpb.DVRStartRequest, send func
 	}
 
 	// Start the DVR recording job
+	if req.GetPreviousSourceRuntimeName() != "" {
+		if err := dvrManager.RebindRecording(req, send); err != nil {
+			logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Recording source handoff remains pending")
+		}
+		return
+	}
 	if err := dvrManager.StartRecording(dvrHash, streamID, internalName, sourceRuntimeName, sourceURL, config, send); err != nil {
 		logger.WithFields(logging.Fields{
 			"dvr_hash": dvrHash,
@@ -2626,13 +2638,14 @@ func handleDVRStart(logger logging.Logger, req *ipcpb.DVRStartRequest, send func
 		// Send failure notification
 		if send != nil {
 			send(&ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_DvrStopped{DvrStopped: &ipcpb.DVRStopped{
-				RequestId:       requestID,
-				DvrHash:         dvrHash,
-				Status:          "failed",
-				Error:           err.Error(),
-				ManifestPath:    "",
-				DurationSeconds: 0,
-				SizeBytes:       0,
+				SourceRuntimeName: sourceRuntimeName,
+				RequestId:         requestID,
+				DvrHash:           dvrHash,
+				Status:            "failed",
+				Error:             err.Error(),
+				ManifestPath:      "",
+				DurationSeconds:   0,
+				SizeBytes:         0,
 			}}})
 		}
 		return
@@ -3731,8 +3744,8 @@ func handleDrainStream(logger logging.Logger, req *ipcpb.DrainStreamRequest, sen
 	// wildcard instances are runtime-only — not in that map. nuke_stream
 	// stops input/pull PIDs, wipes stream state, kills lingering
 	// processes, and unlinks locks. Asynchronous on the controller side;
-	// dispatch success counts as unloaded=true since there's no
-	// synchronous completion signal.
+	// isolated runtimes require a subsequent authoritative inventory omission
+	// before the acknowledgement can complete the drain obligation.
 	unloaded := false
 	if err := mistClient.NukeStream(runtimeName); err != nil {
 		logger.WithFields(logging.Fields{
@@ -3745,6 +3758,24 @@ func handleDrainStream(logger logging.Logger, req *ipcpb.DrainStreamRequest, sen
 		partialErr += "nuke_stream: " + err.Error()
 	} else {
 		unloaded = true
+	}
+	if unloaded {
+		if _, isolated := streamident.ParseRuntimeBinding(runtimeName); isolated {
+			probeCtx, cancel := context.WithTimeout(context.Background(), dvrSourceStateTimeout)
+			absent, err := isolatedRuntimeAbsent(probeCtx, mistClient, runtimeName)
+			cancel()
+			unloaded = absent && err == nil
+			if !unloaded {
+				if partialErr != "" {
+					partialErr += "; "
+				}
+				if err != nil {
+					partialErr += "runtime absence unknown: " + err.Error()
+				} else {
+					partialErr += "runtime stop pending"
+				}
+			}
+		}
 	}
 
 	// Clear any DVR override the previous owner registered for this runtime name so publisher

@@ -191,3 +191,8 @@ releases:
         required_before_phase: postdeploy
   - version: v0.3.16
     min_cli_version: v0.3.16-rc1
+    # Prior binaries cannot interpret isolated runtimes and in-flight writer transitions.
+    rollback_disabled:
+      - commodore
+      - foghorn
+      - helmsman

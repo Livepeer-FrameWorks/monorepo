@@ -7,14 +7,53 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/control"
 	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"frameworks/api_balancing/internal/state"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 
 	"google.golang.org/protobuf/proto"
 )
+
+func TestPlaybackGrantRenewalKeepsServingNodesPhysicalRuntime(t *testing.T) {
+	for _, role := range []streamident.RuntimeRole{streamident.RuntimePublisher, streamident.RuntimeRelay} {
+		t.Run(string(role), func(t *testing.T) {
+			p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
+			defer closeDB()
+			until := time.Now().Add(time.Hour)
+			expectLocalPair(mock, objectBytes, tenantBytes, until, until, true)
+			var object mediaauthoritypb.MediaObjectAuthority
+			if err := proto.Unmarshal(objectBytes, &object); err != nil {
+				t.Fatal(err)
+			}
+			runtime, err := streamident.BoundRuntimeName("stream-internal", role, "84ed1d31-13d2-468d-b7b5-ef132d4e3ee9")
+			if err != nil {
+				t.Fatal(err)
+			}
+			registry := control.NewStreamRegistry(nil, "cell", time.Minute)
+			location := control.Location{}
+			if role == streamident.RuntimePublisher {
+				location.OwnerNodeID, location.SourceActive, location.SourceRuntimeName = "edge", true, runtime
+			} else {
+				location.InboundPulls = map[string]control.InboundPull{"edge": {DestNodeID: "edge", DestRuntimeName: runtime}}
+			}
+			registry.UpsertLocalSource(control.StreamEntry{TenantID: object.GetTenantId(), InternalName: "stream-internal", IngestMode: control.IngestPush, Locations: map[string]control.Location{"cell": location}})
+			previous := control.StreamRegistryInstance
+			control.SetStreamRegistry(registry)
+			t.Cleanup(func() { control.SetStreamRegistry(previous) })
+			grant, err := p.PlaybackGrantForStream(t.Context(), "edge", "live+stream-internal")
+			if err != nil || grant.GetInternalName() != runtime {
+				t.Fatalf("grant renewal replaced the serving runtime: grant=%+v error=%v", grant, err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
 
 type grantOffer struct {
 	nodeID string

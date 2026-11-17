@@ -8,8 +8,37 @@ import (
 	"frameworks/api_balancing/internal/control"
 	localauthority "frameworks/api_balancing/internal/mediaauthority"
 
+	federationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 )
+
+func TestIsolatedPreparedSourceConsumesItsCompleteExecutionBinding(t *testing.T) {
+	destination, media, _, source, fed, req := pushRuntimeFixture(t)
+	media.Paths.IsolatedDestinationFence = media.Paths.DestinationFence
+	generation := "84ed1d31-13d2-468d-b7b5-ef132d4e3ee9"
+	runtime, err := streamident.BoundRuntimeName(req.Query.InternalName, streamident.RuntimePublisher, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loc := source.entry.Locations["eu-cell"]
+	loc.SourceClusterID = "eu-ingest"
+	loc.OwnerNodeID, loc.SourceActive, loc.SourceGeneration, loc.SourceRevision, loc.SourceLeaseEpoch, loc.SourceRuntimeName = "eu-publisher", true, generation, 9007199254740993, 3, runtime
+	loc.EdgeCandidates[0].SourceGeneration = generation
+	loc.EdgeCandidates[0].SourceLeaseEpoch = 3
+	loc.EdgeCandidates[0].SourceRuntimeName = runtime
+	loc.EdgeCandidates[0].DTSCURL = "dtsc://eu.example:14200/" + runtime
+	source.entry.Locations["eu-cell"] = loc
+	req.Query.SourceGeneration = generation
+	fed.mutateAck = func(ack *federationpb.OriginPullAck) { ack.DtscUrl = "dtsc://eu.example:14200/" + runtime }
+	if response, prepareErr := destination.PreparePlacement(t.Context(), req); prepareErr != nil || response.GetOutcome() != placementpb.PreparationOutcome_PREPARATION_OUTCOME_ACCEPTED {
+		t.Fatalf("isolated preparation: response=%+v error=%v", response, prepareErr)
+	}
+	resolved, err := media.ResolvePreparedSource(t.Context(), destination.Receipts, pushSourceIdentity(req))
+	if err != nil || control.SourcePullBaseURL(resolved.DTSCURL) != "dtsc://eu.example:14200/"+runtime {
+		t.Fatalf("prepared physical source could not consume its own receipt: %+v error=%v", resolved, err)
+	}
+}
 
 func pushSourceIdentity(req *placementpb.PreparePlacementRequest) PlacementSourceIdentity {
 	return PlacementSourceIdentity{TenantID: req.Query.TenantId, ObjectID: req.Query.ObjectId, InternalName: req.Query.InternalName,

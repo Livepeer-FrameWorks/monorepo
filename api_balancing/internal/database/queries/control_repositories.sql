@@ -39,7 +39,9 @@ SELECT status,
        tenant_id::text AS tenant_id,
        COALESCE(stream_id::text, '')::text AS stream_id,
        COALESCE(stream_internal_name, '')::text AS stream_internal_name,
-       COALESCE(dvr_start_dispatch->>'node_id', '')::text AS dispatch_node
+       COALESCE(dvr_start_dispatch->>'node_id', '')::text AS dispatch_node,
+       COALESCE(dvr_start_dispatch->>'source_runtime_name', '')::text AS source_runtime_name,
+       COALESCE(dvr_start_dispatch->>'state', '')::text AS dispatch_state
 FROM foghorn.artifacts
 WHERE artifact_hash = $1 AND artifact_type = 'dvr'
 FOR UPDATE;
@@ -47,6 +49,9 @@ FOR UPDATE;
 -- name: RecordDVRProgress :exec
 UPDATE foghorn.artifacts
 SET status = CASE WHEN status IN ('requested', 'starting') THEN 'recording' ELSE status END,
+    dvr_start_dispatch = CASE WHEN dvr_start_dispatch->>'state' = 'source_handoff_pending'
+      THEN jsonb_set(dvr_start_dispatch - 'previous_source_runtime_name', '{state}', '"pending"'::jsonb)
+      ELSE dvr_start_dispatch END,
     size_bytes = GREATEST(COALESCE(size_bytes, 0), sqlc.arg(size_bytes)::bigint),
     updated_at = NOW()
 WHERE artifact_hash = $1 AND artifact_type = 'dvr';

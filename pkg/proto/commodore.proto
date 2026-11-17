@@ -511,6 +511,9 @@ message PublisherLeaseResponse {
   // order. A stale exact-pair claim takes no lease; these let the caller verify
   // current policy and credentials before a bounded version exchange.
   repeated bytes signed_authorities = 5;
+  // Monotonic per-stream ownership term from the global lease row. Replaying
+  // or renewing the same execution retains it; a successor advances it.
+  int64 lease_epoch = 6;
 }
 
 message ValidateStreamKeyRequest {
@@ -565,6 +568,9 @@ message ValidateStreamKeyResponse {
   bool claim_acquired = 32;
   // Confirms that node/cell execution abandonment fenced this claiming call.
   bool publisher_execution_fenced = 38;
+  // Present on a globally acquired publisher lease; zero retains legacy or
+  // signed-outage admission without claiming a globally ordered term.
+  int64 publisher_lease_epoch = 39;
   string user_id = 2;                   // json:"user_id,omitempty"
   string tenant_id = 3;                 // json:"tenant_id,omitempty"
   string internal_name = 4;             // json:"internal_name,omitempty"
@@ -839,6 +845,7 @@ message ActiveIngestStream {
   // Present together on execution-aware renewals, including outage adoption.
   string node_id = 6;
   string control_cell_id = 7;
+  int64 publisher_lease_epoch = 8;
 }
 
 message SyncActiveIngestPlacementRequest {

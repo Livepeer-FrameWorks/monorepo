@@ -43,7 +43,10 @@ func streamEventPlaybackID(ctx context.Context, internalName string) string {
 // the same node; zero disables the fence and records no playable event time,
 // which leaves the session out of the STREAM_END reaper. It reports whether
 // this call marked the session.
-func MarkIngestSessionPlayable(ctx context.Context, tenantID, nodeID, internalName string, eventMillis int64) (bool, error) {
+func MarkIngestSessionPlayable(ctx context.Context, tenantID, nodeID, internalName string, eventMillis int64, generation ...string) (bool, error) {
+	if len(generation) > 1 {
+		return false, errors.New("ambiguous publisher generation")
+	}
 	if db == nil {
 		return false, errors.New("mark ingest session playable: no database configured")
 	}
@@ -53,9 +56,16 @@ func MarkIngestSessionPlayable(ctx context.Context, tenantID, nodeID, internalNa
 	marked := false
 	playbackID := streamEventPlaybackID(ctx, internalName)
 	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
-		markedRow, err := foghorndb.New(tx).MarkIngestSessionPlayable(ctx, foghorndb.MarkIngestSessionPlayableParams{
-			TenantID: tenantID, StreamInternalName: internalName, NodeID: nodeID, EventUnixMillis: eventMillis,
-		})
+		var markedRow foghorndb.MarkIngestSessionPlayableRow
+		var err error
+		if len(generation) == 1 && generation[0] != "" {
+			bound, markErr := foghorndb.New(tx).MarkBoundIngestSessionPlayable(ctx, foghorndb.MarkBoundIngestSessionPlayableParams{
+				TenantID: tenantID, StreamInternalName: internalName, NodeID: nodeID, EventUnixMillis: eventMillis, Generation: generation[0]})
+			markedRow.StreamID, err = bound.StreamID, markErr
+		} else {
+			markedRow, err = foghorndb.New(tx).MarkIngestSessionPlayable(ctx, foghorndb.MarkIngestSessionPlayableParams{
+				TenantID: tenantID, StreamInternalName: internalName, NodeID: nodeID, EventUnixMillis: eventMillis})
+		}
 		if errors.Is(err, sql.ErrNoRows) {
 			return errTxRollbackNoop
 		}

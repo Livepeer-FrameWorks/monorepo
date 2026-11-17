@@ -39,6 +39,12 @@ func (r *StreamRegistry) recordOutboundPull(ctx context.Context, internalName st
 	if (pull.SourceGeneration != "") != (pull.SourceRevision > 0) || pull.SourceRevision < 0 {
 		return OutboundPull{}, ErrReplicationConflict
 	}
+	if pull.SourceLeaseEpoch < 0 || (pull.SourceLeaseEpoch > 0 && (pull.SourceGeneration == "" || configured)) {
+		return OutboundPull{}, ErrReplicationConflict
+	}
+	if !ValidPublisherPullRuntimes(internalName, pull.SourceGeneration, pull.AttemptID, pull.SourceRuntimeName, pull.DestRuntimeName, pull.SourceLeaseEpoch) {
+		return OutboundPull{}, ErrReplicationConflict
+	}
 	now := time.Now()
 	requestedAttempt := pull.AttemptID
 	if pull.AttemptID == "" {
@@ -57,7 +63,7 @@ func (r *StreamRegistry) recordOutboundPull(ctx context.Context, internalName st
 			if entry.IngestMode != IngestPull && entry.IngestMode != IngestMistNative {
 				return ErrReplicationConflict
 			}
-		} else if pull.SourceGeneration != "" && (!loc.SourceActive || loc.SourceGeneration != pull.SourceGeneration || loc.SourceRevision != pull.SourceRevision || loc.OwnerNodeID != pull.SourceNodeID) {
+		} else if pull.SourceGeneration != "" && (!loc.SourceActive || loc.SourceGeneration != pull.SourceGeneration || loc.SourceRevision != pull.SourceRevision || loc.OwnerNodeID != pull.SourceNodeID || loc.SourceLeaseEpoch != pull.SourceLeaseEpoch || loc.SourceRuntimeName != pull.SourceRuntimeName) {
 			return ErrReplicationConflict
 		}
 		entry.TenantID = pull.TenantID
@@ -66,7 +72,7 @@ func (r *StreamRegistry) recordOutboundPull(ctx context.Context, internalName st
 			if current.DestClusterID != pull.DestClusterID || current.DestNodeID != pull.DestNodeID {
 				continue
 			}
-			sameSource := current.ConfiguredSource == pull.ConfiguredSource && current.SourceNodeID == pull.SourceNodeID && current.SourceGeneration == pull.SourceGeneration && current.SourceRevision == pull.SourceRevision && current.DTSCURL == pull.DTSCURL
+			sameSource := current.ConfiguredSource == pull.ConfiguredSource && current.SourceNodeID == pull.SourceNodeID && current.SourceGeneration == pull.SourceGeneration && current.SourceRevision == pull.SourceRevision && current.DTSCURL == pull.DTSCURL && current.SourceLeaseEpoch == pull.SourceLeaseEpoch && current.SourceRuntimeName == pull.SourceRuntimeName && current.DestRuntimeName == pull.DestRuntimeName
 			if current.SourceMediaClusterID != pull.SourceMediaClusterID {
 				if (current.SourceMediaClusterID != "" && pull.SourceMediaClusterID == "") ||
 					(sameSource && current.SourceMediaClusterID != "") {

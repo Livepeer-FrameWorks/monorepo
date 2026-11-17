@@ -204,7 +204,8 @@ type conn struct {
 	// protocolVersion is the control-protocol version this sidecar declared at registration
 	// (Register.control_protocol_version). It gates protocol-dependent dispatch — notably staged freeze —
 	// on an OBSERVED capability rather than a per-request self-asserted flag. 0 = a pre-staged-freeze sidecar.
-	protocolVersion int32
+	protocolVersion        int32
+	ingestReconcileRunning atomic.Bool
 	// fence is the monotonic ownership fence issued to THIS control connection at registration. It
 	// orders whole-node artifact reports across reconnects (a later connection ranks strictly
 	// higher) and is used to write a terminal watermark tombstone when the connection is evicted.
@@ -2013,7 +2014,7 @@ receiveLoop:
 			// during resolution above never touched any node's ownership. A strictly-higher fence already owning
 			// the canonical id means a concurrent reconnect landed first → reject.
 			if rs := GetRedisStore(); rs != nil {
-				acquired, err := rs.AcquireConnOwnerFenced(context.Background(), canonicalNodeID, GetInstanceID(), GetAdvertiseAddr(), connFence)
+				acquired, err := rs.AcquireConnOwnerFenced(context.Background(), canonicalNodeID, GetInstanceID(), GetAdvertiseAddr(), connFence, state.ConnProtocol{ProtocolVersion: connProtocolVersion, ClusterID: clusterID})
 				if err != nil {
 					registry.log.WithError(err).WithField("node_id", canonicalNodeID).Error("Failed to acquire canonical conn owner in Redis; rejecting registration (fail closed)")
 					cleanup()
@@ -2347,20 +2348,23 @@ receiveLoop:
 				// config) and re-emits on the next reconciler tick.
 				if hb := x.Heartbeat; hb != nil {
 					UpdateVerifiedAppliedFromHeartbeat(canonicalNodeID, hb.GetAppliedManagedStreams())
+					if hb.GetLiveIngestGenerationsReported() {
+						scheduleReportedIngestReconcile(canonicalNodeID, c, hb.GetLiveIngestGenerations(), registry.log)
+					}
 				}
 				// HA: refresh connection ownership TTL under the fence. If a higher-fence connection has
 				// taken over (a reconnect landed on another instance), this stream is superseded and MUST
 				// close — that is how the losing connection is torn down after ownership handoff.
 				if rs := GetRedisStore(); rs != nil {
 					refreshOrRestore := func(nid string) (lost bool) {
-						err := rs.RefreshConnOwnerFenced(context.Background(), nid, GetInstanceID(), GetAdvertiseAddr(), connFence)
+						err := rs.RefreshConnOwnerFenced(context.Background(), nid, GetInstanceID(), GetAdvertiseAddr(), connFence, state.ConnProtocol{ProtocolVersion: connProtocolVersion, ClusterID: connSession.ClusterID})
 						switch {
 						case err == nil:
 							return false
 						case errors.Is(err, state.ErrConnOwnerMissing):
 							// Key expired (Redis blip / TTL lapse): re-acquire with our fence. If a strictly
 							// higher fence beat us to it, we lost ownership and must close.
-							acquired, aerr := rs.AcquireConnOwnerFenced(context.Background(), nid, GetInstanceID(), GetAdvertiseAddr(), connFence)
+							acquired, aerr := rs.AcquireConnOwnerFenced(context.Background(), nid, GetInstanceID(), GetAdvertiseAddr(), connFence, state.ConnProtocol{ProtocolVersion: connProtocolVersion, ClusterID: connSession.ClusterID})
 							if aerr != nil {
 								registry.log.WithError(aerr).WithField("node_id", nid).Warn("Failed to restore conn owner in Redis")
 								return false
@@ -3224,11 +3228,13 @@ type IngestSessionRequest struct {
 	StartedAtMillis int64
 	// DVRIntent is the durable DVR start intent (JSON of the StartDVR inputs) for a
 	// record:true session, or nil for a non-recording session.
-	DVRIntent         []byte
-	IngestClusterID   string
-	StrictLeaseOwner  bool
-	DecisionExpiresAt time.Time
-	Authority         *IngestAuthoritySnapshot
+	DVRIntent            []byte
+	IngestClusterID      string
+	StrictLeaseOwner     bool
+	RuntimeLayoutVersion int32
+	PublisherLeaseEpoch  int64
+	DecisionExpiresAt    time.Time
+	Authority            *IngestAuthoritySnapshot
 }
 
 const (
@@ -3337,6 +3343,28 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 		}
 		if authoritySnapshot.CapacityMaxStreams < 0 {
 			return "", 0, errors.New("ingest session capacity limit cannot be negative")
+		}
+	}
+	var isolatedInsert []byte
+	if req.RuntimeLayoutVersion < 0 || req.RuntimeLayoutVersion > 1 {
+		return "", 0, errors.New("unsupported publisher runtime layout")
+	}
+	if req.RuntimeLayoutVersion == 1 {
+		if !req.StrictLeaseOwner || req.PublisherLeaseEpoch <= 0 || streamID == "" {
+			return "", 0, errors.New("isolated publisher requires a fenced lease and stream identity")
+		}
+		generation := uuid.NewString()
+		runtimeName, err := streamident.BoundRuntimeName(internalName, streamident.RuntimePublisher, generation)
+		if err != nil {
+			return "", 0, err
+		}
+		payload := preparePublisherRequest{TenantID: tenantID, NodeID: nodeID, InternalName: internalName, StreamID: streamID, ConnectorPID: connectorPID,
+			TriggerUUID: triggerUUID, StartedAtMillis: startedAtMillis, DVRIntent: dvrIntent, IngestClusterID: ingestClusterID,
+			Authority: authoritySnapshot, StrictLeaseOwner: true, PublisherLeaseEpoch: req.PublisherLeaseEpoch, Generation: generation,
+			RuntimeLayoutVersion: 1, RuntimeName: runtimeName}
+		isolatedInsert, err = json.Marshal(payload)
+		if err != nil {
+			return "", 0, err
 		}
 	}
 	// The tenant advisory lock serializes capped count+insert decisions only when each waiter sees
@@ -3589,7 +3617,9 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 		// closed) rather than silently absorb it.
 		var newID string
 		var insErr error
-		if authoritySnapshot == nil {
+		if len(isolatedInsert) > 0 {
+			newID, insErr = q.InsertIsolatedIngestSession(ctx, isolatedInsert)
+		} else if authoritySnapshot == nil {
 			newID, insErr = q.InsertIngestSession(ctx, foghorndb.InsertIngestSessionParams{
 				TenantID: tenantID, NodeID: nodeID, StreamInternalName: internalName, ConnectorPid: connectorPID,
 				StartTriggerUuid: triggerUUID, StartedAtUnixMillis: startedAtMillis,
@@ -4106,7 +4136,7 @@ func FenceOfflineBackstop(ctx context.Context, registry *StreamRegistry, tenantI
 // before projection; callers must deny it without admission side effects. The prior owner is returned
 // only for an applied projection and is the node that must be drained. DB, lock, and Redis failures
 // fail closed and durably retire a still-pending session.
-func ProjectSourceIfCurrent(ctx context.Context, registry *StreamRegistry, tenantID, nodeID, internalName string, connectorPID int64, triggerUUID, generation string, intent AdmissionEffectIntent) (applied bool, resumed bool, err error) {
+func ProjectSourceIfCurrent(ctx context.Context, registry *StreamRegistry, tenantID, nodeID, internalName string, connectorPID int64, triggerUUID, generation string, intent AdmissionEffectIntent, source ...PublisherRuntimeBinding) (applied bool, resumed bool, err error) {
 	if registry == nil {
 		return false, false, nil
 	}
@@ -4176,12 +4206,12 @@ func ProjectSourceIfCurrent(ctx context.Context, registry *StreamRegistry, tenan
 		// result is CHECKED, not assumed. A strictly newer shared watermark while this DB generation
 		// remains current is cache divergence, so the repair path below advances durable authority and
 		// republishes above that watermark. An error leaves shared state unknown and fails closed.
-		_, projected, republishErr := registry.ProjectSource(internalName, nodeID, connectorPID, triggerUUID, generation, revision.Int64)
+		_, _, projected, republishErr := registry.projectSourceWithPriorGenerationContext(ctx, internalName, nodeID, connectorPID, triggerUUID, generation, revision.Int64, source...)
 		if republishErr != nil {
 			return false, false, fmt.Errorf("resumed projection re-publish: %w", republishErr)
 		}
 		if !projected {
-			repaired, repairErr := repairResumedSourceProjection(ctx, registry, tenantID, nodeID, internalName, connectorPID, triggerUUID, generation)
+			repaired, repairErr := repairResumedSourceProjection(ctx, registry, tenantID, nodeID, internalName, connectorPID, triggerUUID, generation, source...)
 			// The durable generation was already active before repair began. Surface
 			// that fact even when shared projection repair fails, so the caller never
 			// runs pending-session cleanup against established authority.
@@ -4189,7 +4219,7 @@ func ProjectSourceIfCurrent(ctx context.Context, registry *StreamRegistry, tenan
 		}
 		return true, true, nil
 	}
-	prior, priorGeneration, projected, projectErr := registry.projectSourceWithPriorGenerationContext(ctx, internalName, nodeID, connectorPID, triggerUUID, generation, rev)
+	prior, priorGeneration, projected, projectErr := registry.projectSourceWithPriorGenerationContext(ctx, internalName, nodeID, connectorPID, triggerUUID, generation, rev, source...)
 	if projectErr != nil {
 		cause := fmt.Errorf("publish source projection: %w", projectErr)
 		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation, 0))
@@ -4240,7 +4270,7 @@ func ProjectSourceIfCurrent(ctx context.Context, registry *StreamRegistry, tenan
 // before advancing the session and its once-only effect fence together. The
 // allocator lock and Redis I/O therefore never overlap, and a genuine stream
 // transition in the intentional unlock window is detected before mutation.
-func repairResumedSourceProjection(ctx context.Context, registry *StreamRegistry, tenantID, nodeID, internalName string, connectorPID int64, triggerUUID, generation string) (bool, error) {
+func repairResumedSourceProjection(ctx context.Context, registry *StreamRegistry, tenantID, nodeID, internalName string, connectorPID int64, triggerUUID, generation string, source ...publisherSourceIdentity) (bool, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return false, fmt.Errorf("resumed source repair deadline: %w", err)
@@ -4291,7 +4321,7 @@ func repairResumedSourceProjection(ctx context.Context, registry *StreamRegistry
 		var outcome resumedRepairOutcome
 		applyErr := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 0, func() error {
 			var attemptErr error
-			outcome, attemptErr = applyResumedSourceRepair(ctx, registry, tenantID, nodeID, internalName, connectorPID, triggerUUID, generation, expectedRevision, newRevision)
+			outcome, attemptErr = applyResumedSourceRepair(ctx, registry, tenantID, nodeID, internalName, connectorPID, triggerUUID, generation, expectedRevision, newRevision, source...)
 			return attemptErr
 		})
 		if applyErr != nil {
@@ -4322,7 +4352,7 @@ const (
 // lock and publishes newRevision through the shared CAS before committing. The transaction has no
 // effect outside the database and the registry CAS; the CAS is idempotent for the same identity at
 // the same revision, so the attempt can be replayed.
-func applyResumedSourceRepair(ctx context.Context, registry *StreamRegistry, tenantID, nodeID, internalName string, connectorPID int64, triggerUUID, generation string, expectedRevision, newRevision int64) (resumedRepairOutcome, error) {
+func applyResumedSourceRepair(ctx context.Context, registry *StreamRegistry, tenantID, nodeID, internalName string, connectorPID int64, triggerUUID, generation string, expectedRevision, newRevision int64, source ...publisherSourceIdentity) (resumedRepairOutcome, error) {
 	// Raw transaction: the stream lock must stay held across the Redis ProjectSource CAS below, which runs between statements and COMMIT; the caller replays the whole attempt.
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -4390,7 +4420,7 @@ func applyResumedSourceRepair(ctx context.Context, registry *StreamRegistry, ten
 	// retries for this generation cannot overtake one another in the
 	// commit-to-publish gap. A rejected write rolls back the stream state, but
 	// never the already-issued cell-wide fencing token.
-	_, projected, projectErr := registry.ProjectSourceContext(ctx, internalName, nodeID, connectorPID, triggerUUID, generation, newRevision)
+	_, _, projected, projectErr := registry.projectSourceWithPriorGenerationContext(ctx, internalName, nodeID, connectorPID, triggerUUID, generation, newRevision, source...)
 	if projectErr != nil {
 		rollbackQuiet(tx)
 		return resumedRepairRestart, fmt.Errorf("publish resumed source repair: %w", projectErr)
@@ -4951,6 +4981,10 @@ const ProcessingJobInventoryProtocolMin int32 = 7
 // push target's video choice instead of ignoring it.
 const RestreamTrackPolicyProtocolMin int32 = 8
 
+// IsolatedPublisherRuntimeProtocolMin preserves logical identity while using
+// distinct concrete Mist names for each publisher and relay attempt.
+const IsolatedPublisherRuntimeProtocolMin int32 = 11
+
 // NodeJobInventoryHandler re-dispatches work assigned to nodeID before
 // registeredAt that the node's registration did not report as running.
 // current reports whether that registration's connection is still the node's
@@ -5009,24 +5043,25 @@ const MinControlProtocolVersion int32 = NodeIdentityProofProtocolMin
 // ControlFeatures is the SINGLE place a sidecar session's protocol-gated capabilities are decided. It is derived
 // once from the negotiated control-protocol version (Register.control_protocol_version) and consumed by placement
 // and handlers, so protocol behavior lives in one contract instead of scattered `if version < X` checks. Registration
-// enforces MinControlProtocolVersion, so for a connected session every capability below is currently always true.
+// enforces MinControlProtocolVersion; newer optional capabilities remain gated during rolling upgrades.
 //
 // A false capability never means "drop the node": a dispatched operation the session cannot do FAILS CLOSED and the
 // work stays local/retryable until the sidecar is upgraded.
 type ControlFeatures struct {
-	ConfirmedSessionStop   bool // effect acknowledgement scoped to an exact node connection
-	StagedFreeze           bool // server-minted staged freeze (>= FreezeStagedProtocolMin)
-	StagedThumbnail        bool // server-minted staged thumbnail publication (>= ThumbnailStagedProtocolMin)
-	AuthoritativeInventory bool // versioned whole-node artifact inventory (>= AuthoritativeInventoryProtocolMin)
-	RestreamRevisionFence  bool // exact desired-set revision acknowledgements (>= RestreamRevisionFenceProtocolMin)
-	RestreamAttemptFence   bool // per-dispatch activation attempt echoes (>= RestreamAttemptFenceProtocolMin)
-	ProcessingJobInventory bool // running processing jobs listed in Register (>= ProcessingJobInventoryProtocolMin)
+	IsolatedPublisherRuntime bool
+	ConfirmedSessionStop     bool // effect acknowledgement scoped to an exact node connection
+	StagedFreeze             bool // server-minted staged freeze (>= FreezeStagedProtocolMin)
+	StagedThumbnail          bool // server-minted staged thumbnail publication (>= ThumbnailStagedProtocolMin)
+	AuthoritativeInventory   bool // versioned whole-node artifact inventory (>= AuthoritativeInventoryProtocolMin)
+	RestreamRevisionFence    bool // exact desired-set revision acknowledgements (>= RestreamRevisionFenceProtocolMin)
+	RestreamAttemptFence     bool // per-dispatch activation attempt echoes (>= RestreamAttemptFenceProtocolMin)
+	ProcessingJobInventory   bool // running processing jobs listed in Register (>= ProcessingJobInventoryProtocolMin)
 }
 
 // ControlFeaturesForProtocol derives the capability set a declared control-protocol version supports.
 func ControlFeaturesForProtocol(v int32) ControlFeatures {
 	return ControlFeatures{
-		ConfirmedSessionStop:   v >= StopSessionsAckProtocolMin,
+		IsolatedPublisherRuntime: v >= IsolatedPublisherRuntimeProtocolMin, ConfirmedSessionStop: v >= StopSessionsAckProtocolMin,
 		StagedFreeze:           v >= FreezeStagedProtocolMin,
 		StagedThumbnail:        v >= ThumbnailStagedProtocolMin,
 		AuthoritativeInventory: v >= AuthoritativeInventoryProtocolMin,
@@ -5133,7 +5168,7 @@ func processDVRProgress(progress *ipcpb.DVRProgress, session NodeSession, logger
 
 	// The durable progress write classifies the report: applied=true only for an accepted active
 	// transition. A terminal/finalizing no-op does not mirror into stream-instance state.
-	applied, perr := state.DefaultManager().ApplyDVRProgress(streamCtx(), dvrHash, status, uint64(sizeBytes), uint32(segmentCount), storageNodeID)
+	applied, perr := state.DefaultManager().ApplyDVRProgress(dvrWriterReportContext(streamCtx(), progress.GetSourceRuntimeName()), dvrHash, status, uint64(sizeBytes), uint32(segmentCount), storageNodeID)
 	if perr != nil {
 		logger.WithError(perr).WithField("dvr_hash", dvrHash).Debug("ApplyDVRProgress failed")
 	}
@@ -5239,15 +5274,20 @@ func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, sentAt *t
 	// authoritative.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	unrecordedSession := detachEndedWriterFromLiveSession(ctx, dvrHash, stopped.GetSourceState(), logger)
+	ctx = dvrWriterReportContext(ctx, stopped.GetSourceRuntimeName())
+	var unrecordedSession string
 	final, err := FinalizeDVR(ctx, dvrHash, FinalizeOptions{
-		ReportedStatus:  status,
-		StartedAtUnix:   stopped.GetStartedAt(),
-		ReportedError:   errorMsg,
-		DurationSeconds: int64(durationSeconds),
-		SizeBytes:       uint64(sizeBytes),
-		StorageNodeID:   storageNodeID,
-		ReportingNodeID: storageNodeID,
+		ReportedStatus:         status,
+		StartedAtUnix:          stopped.GetStartedAt(),
+		ReportedError:          errorMsg,
+		DurationSeconds:        int64(durationSeconds),
+		SizeBytes:              uint64(sizeBytes),
+		StorageNodeID:          storageNodeID,
+		ReportingNodeID:        storageNodeID,
+		WriterEndedSourceState: stopped.GetSourceState(),
+		DetachedSession:        &unrecordedSession,
+		WriterOutcomeUnknown:   stopped.GetWriterOutcomeUnknown(),
+		RetainStopObligation:   stopped.GetWriterOutcomeUnknown(),
 	})
 	if err != nil {
 		if final.ArtifactStatus == "" {
@@ -5269,6 +5309,9 @@ func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, sentAt *t
 	// The terminal DVR STOPPED lifecycle event is enqueued INSIDE FinalizeDVR's transaction (durable,
 	// atomic with the terminal state) — no separate crash-lossy callback here.
 	// The fresh recording starts once the ended one is settled, so the two never overlap.
+	if stopped.GetWriterOutcomeUnknown() && final.ArtifactStatus != "" {
+		DispatchDVRStops([]DVRStopClaim{{DVRHash: dvrHash, StorageNodeID: storageNodeID}}, logger)
+	}
 	if unrecordedSession != "" && unrecordedSessionHandler != nil {
 		unrecordedSessionHandler(unrecordedSession)
 	}
@@ -5282,42 +5325,6 @@ var unrecordedSessionHandler func(sessionID string)
 // SetUnrecordedSessionHandler registers the handler that records a live session afresh
 // once its ended recording is settled. Set once at startup.
 func SetUnrecordedSessionHandler(fn func(sessionID string)) { unrecordedSessionHandler = fn }
-
-// detachEndedWriterFromLiveSession runs before FinalizeDVR settles a recording whose writer
-// ended. A recording that ends while still active (no stop was claimed) and bound to a
-// session that is still live leaves that session unrecorded; detaching it hands the session
-// to DVR intent recovery, which starts it a fresh recording. It returns the detached
-// session, or "" when nothing was detached. A failure is logged and the finalize proceeds:
-// the recording itself is complete either way.
-//
-// The session row alone cannot tell a dead writer from an ended source: Mist's buffer ends
-// its recordings when it shuts down and closes the publisher (PUSH_INPUT_CLOSE, which ends
-// the session) only after them, so the stopped report can arrive while the session still
-// looks live. The reporting Helmsman reads the source from Mist when it reports the stop.
-// ENDED keeps the recording bound, so neither this path nor the recovery scan records the
-// session again, and the publisher's close ends it. LIVE is a writer that died while the
-// source publishes. UNSPECIFIED, from a Helmsman that does not report the source or whose
-// Mist read failed, keeps the session-row decision those Helmsmen always got.
-func detachEndedWriterFromLiveSession(ctx context.Context, dvrHash string, sourceState ipcpb.DVRSourceState, logger logging.Logger) string {
-	if db == nil {
-		return ""
-	}
-	if sourceState == ipcpb.DVRSourceState_DVR_SOURCE_STATE_ENDED {
-		logger.WithField("dvr_hash", dvrHash).Info("Recording ended with its source; its session is left to the publisher's close")
-		return ""
-	}
-	row, err := foghorndb.New(db).DetachEndedWriterFromLiveSession(ctx, dvrHash)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return ""
-	case err != nil:
-		logger.WithError(err).WithField("dvr_hash", dvrHash).Error("Failed to detach a recording whose writer ended from its live session")
-		return ""
-	}
-	logger.WithFields(logging.Fields{"dvr_hash": dvrHash, "internal_name": row.StreamInternalName, "session_id": row.SessionID, "source_state": sourceState.String()}).
-		Warn("Recording writer ended while its session is still live; the session will be recorded afresh")
-	return row.SessionID
-}
 
 // ResolveClipHash implements the ResolveClipHash RPC method
 func (s *Server) ResolveClipHash(ctx context.Context, req *ipcpb.ClipHashRequest) (*ipcpb.ClipHashResponse, error) {
@@ -5756,7 +5763,7 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 		if queueErr != nil {
 			shouldAbort, err = true, queueErr
 		} else {
-			responseText, shouldAbort, err = processor.ProcessPublisher(requestCtx, trigger)
+			responseText, shouldAbort, err = processor.ProcessPublisher(publisherRuntimeContext(requestCtx, session.ProtocolVersion), trigger)
 			release()
 		}
 		cancel()

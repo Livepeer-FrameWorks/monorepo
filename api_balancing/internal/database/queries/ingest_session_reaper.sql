@@ -16,7 +16,8 @@ ORDER BY node_id, started_at;
 -- name: ListNodeIngestGenerations :many
 SELECT s.id::text AS session_id, s.tenant_id::text AS tenant_id, s.stream_internal_name,
        (s.ended_at IS NOT NULL)::boolean AS ended, COALESCE(s.ended_reason, '')::text AS ended_reason,
-       COALESCE(a.id::text, '')::text AS active_generation, COALESCE(a.node_id, '')::text AS active_node_id
+       COALESCE(a.id::text, '')::text AS active_generation, COALESCE(a.node_id, '')::text AS active_node_id,
+       s.runtime_layout_version, COALESCE(NULLIF(s.runtime_name,''),'live+'||s.stream_internal_name)::text AS runtime_name
 FROM foghorn.ingest_sessions s
 LEFT JOIN foghorn.ingest_sessions a
   ON a.tenant_id = s.tenant_id AND a.stream_internal_name = s.stream_internal_name AND a.ended_at IS NULL

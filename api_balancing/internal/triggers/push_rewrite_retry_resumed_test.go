@@ -2,6 +2,9 @@ package triggers
 
 import (
 	"context"
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -132,6 +135,29 @@ func TestPushRewriteRetry_ResumedProjectionAcceptsIdentically(t *testing.T) {
 // ApplyAdmissionEffect drives owed legs: the drain leg zeroes the replaced owner's balancer input
 // and DISPATCHES the drain (completion is the Helmsman ack, so the leg is not reported done here);
 // the broadcast leg completes locally and is reported done; legs already done are not re-run.
+func installPriorRuntimeLookup(t *testing.T, tenant, internal, node, generation string) string {
+	t.Helper()
+	runtimeName, err := streamident.BoundRuntimeName(internal, streamident.RuntimePublisher, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := control.GetDB()
+	control.SetDB(conn)
+	mock.ExpectQuery("FROM foghorn.ingest_sessions").WithArgs(tenant, generation, internal, node).WillReturnRows(sqlmock.NewRows([]string{"runtime_name", "runtime_layout_version", "publisher_lease_epoch", "active", "cluster_id", "connector_pid"}).AddRow(runtimeName, 1, 7, false, "media", 123))
+	t.Cleanup(func() {
+		control.SetDB(previous)
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Error(err)
+		}
+		_ = conn.Close()
+	})
+	return runtimeName
+}
+
 func TestApplyAdmissionEffect_DrainsPriorOwnerAndBroadcasts(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
@@ -141,6 +167,8 @@ func TestApplyAdmissionEffect_DrainsPriorOwnerAndBroadcasts(t *testing.T) {
 
 	const internal, newOwner, oldOwner, tenant = "apply-admission", "node-new", "node-old", "tenant-1"
 	sm.SetStreamInstanceInputs(internal, oldOwner, 1)
+	const priorGeneration = "84ed1d31-13d2-468d-b7b5-ef132d4e3ee9"
+	priorRuntime := installPriorRuntimeLookup(t, tenant, internal, oldOwner, priorGeneration)
 
 	peer := &liveRecordingPeerNotifier{}
 	p := minimalProcessorForStreamEnd(t)
@@ -153,12 +181,13 @@ func TestApplyAdmissionEffect_DrainsPriorOwnerAndBroadcasts(t *testing.T) {
 	}
 
 	legs, err := p.ApplyAdmissionEffect(context.Background(), control.AdmissionEffect{
-		TenantID:         tenant,
-		InternalName:     internal,
-		NodeID:           newOwner,
-		SourceGeneration: "gen-1",
-		PriorOwnerNodeID: oldOwner,
-		BroadcastLive:    true,
+		TenantID:                   tenant,
+		InternalName:               internal,
+		NodeID:                     newOwner,
+		SourceGeneration:           "gen-1",
+		PriorOwnerNodeID:           oldOwner,
+		PriorOwnerSourceGeneration: priorGeneration,
+		BroadcastLive:              true,
 		PeerHints: []control.AdmissionPeerHint{
 			{ClusterID: "peer-cluster-1", Addr: "peer-1:18019"},
 			{ClusterID: "peer-cluster-2", Addr: "peer-2:18019"},
@@ -181,6 +210,9 @@ func TestApplyAdmissionEffect_DrainsPriorOwnerAndBroadcasts(t *testing.T) {
 	}
 	if len(drained) != 1 {
 		t.Fatalf("prior owner drain dispatched %d time(s), want 1: %v", len(drained), drained)
+	}
+	if !strings.Contains(drained[0], "|"+priorRuntime+"|") {
+		t.Fatalf("drain addressed current alias instead of historical publisher: %v", drained)
 	}
 	if got := peer.liveCount(); got != 1 {
 		t.Fatalf("federation live broadcast sent %d time(s), want 1", got)
@@ -214,6 +246,8 @@ func TestApplyAdmissionEffect_NotOwnerSkipsNodeAffineLegs(t *testing.T) {
 	control.SetStreamRegistry(control.NewStreamRegistry(nil, "cluster-local", time.Minute))
 	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
 
+	const priorGeneration = "84ed1d31-13d2-468d-b7b5-ef132d4e3ee9"
+	installPriorRuntimeLookup(t, "tenant-1", "not-owner-stream", "node-old", priorGeneration)
 	peer := &liveRecordingPeerNotifier{}
 	p := minimalProcessorForStreamEnd(t)
 	p.SetPeerNotifier(peer)
@@ -227,14 +261,15 @@ func TestApplyAdmissionEffect_NotOwnerSkipsNodeAffineLegs(t *testing.T) {
 	// Activation requires PushTargets to be owed; give the obligation one so the node-affinity
 	// gate is exercised (the broadcast is separately leader-gated below).
 	legs, err := p.ApplyAdmissionEffect(context.Background(), control.AdmissionEffect{
-		TenantID:         "tenant-1",
-		InternalName:     "not-owner-stream",
-		NodeID:           "node-elsewhere",
-		SourceGeneration: "gen-1",
-		PriorOwnerNodeID: "node-old",
-		PushTargets:      []byte{0x01}, // owed activation leg (decodability is not reached: deferred first)
-		BroadcastDone:    true,
-		DecklogDone:      true,
+		TenantID:                   "tenant-1",
+		InternalName:               "not-owner-stream",
+		NodeID:                     "node-elsewhere",
+		SourceGeneration:           "gen-1",
+		PriorOwnerNodeID:           "node-old",
+		PriorOwnerSourceGeneration: priorGeneration,
+		PushTargets:                []byte{0x01}, // owed activation leg (decodability is not reached: deferred first)
+		BroadcastDone:              true,
+		DecklogDone:                true,
 	})
 	if err != nil {
 		t.Fatalf("ApplyAdmissionEffect: %v", err)

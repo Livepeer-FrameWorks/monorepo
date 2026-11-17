@@ -208,7 +208,8 @@ func (q *Queries) ListNeverProjectedIngestSessions(ctx context.Context, olderTha
 const listNodeIngestGenerations = `-- name: ListNodeIngestGenerations :many
 SELECT s.id::text AS session_id, s.tenant_id::text AS tenant_id, s.stream_internal_name,
        (s.ended_at IS NOT NULL)::boolean AS ended, COALESCE(s.ended_reason, '')::text AS ended_reason,
-       COALESCE(a.id::text, '')::text AS active_generation, COALESCE(a.node_id, '')::text AS active_node_id
+       COALESCE(a.id::text, '')::text AS active_generation, COALESCE(a.node_id, '')::text AS active_node_id,
+       s.runtime_layout_version, COALESCE(NULLIF(s.runtime_name,''),'live+'||s.stream_internal_name)::text AS runtime_name
 FROM foghorn.ingest_sessions s
 LEFT JOIN foghorn.ingest_sessions a
   ON a.tenant_id = s.tenant_id AND a.stream_internal_name = s.stream_internal_name AND a.ended_at IS NULL
@@ -221,13 +222,15 @@ type ListNodeIngestGenerationsParams struct {
 }
 
 type ListNodeIngestGenerationsRow struct {
-	SessionID          string `db:"session_id" json:"session_id"`
-	TenantID           string `db:"tenant_id" json:"tenant_id"`
-	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
-	Ended              bool   `db:"ended" json:"ended"`
-	EndedReason        string `db:"ended_reason" json:"ended_reason"`
-	ActiveGeneration   string `db:"active_generation" json:"active_generation"`
-	ActiveNodeID       string `db:"active_node_id" json:"active_node_id"`
+	SessionID            string `db:"session_id" json:"session_id"`
+	TenantID             string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName   string `db:"stream_internal_name" json:"stream_internal_name"`
+	Ended                bool   `db:"ended" json:"ended"`
+	EndedReason          string `db:"ended_reason" json:"ended_reason"`
+	ActiveGeneration     string `db:"active_generation" json:"active_generation"`
+	ActiveNodeID         string `db:"active_node_id" json:"active_node_id"`
+	RuntimeLayoutVersion int16  `db:"runtime_layout_version" json:"runtime_layout_version"`
+	RuntimeName          string `db:"runtime_name" json:"runtime_name"`
 }
 
 func (q *Queries) ListNodeIngestGenerations(ctx context.Context, arg ListNodeIngestGenerationsParams) ([]ListNodeIngestGenerationsRow, error) {
@@ -247,6 +250,8 @@ func (q *Queries) ListNodeIngestGenerations(ctx context.Context, arg ListNodeIng
 			&i.EndedReason,
 			&i.ActiveGeneration,
 			&i.ActiveNodeID,
+			&i.RuntimeLayoutVersion,
+			&i.RuntimeName,
 		); err != nil {
 			return nil, err
 		}

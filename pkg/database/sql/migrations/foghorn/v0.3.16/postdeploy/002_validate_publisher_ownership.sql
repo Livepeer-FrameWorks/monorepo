@@ -1,0 +1,2 @@
+ALTER TABLE foghorn.ingest_sessions VALIDATE CONSTRAINT chk_ingest_publisher_lease_epoch;
+ALTER TABLE foghorn.ingest_sessions VALIDATE CONSTRAINT chk_ingest_runtime_binding;

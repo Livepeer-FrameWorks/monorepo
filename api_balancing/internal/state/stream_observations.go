@@ -58,7 +58,7 @@ func (sm *StreamStateManager) ObserveStreamProcesses(internalName, nodeID string
 	}
 	sm.mu.Lock()
 	instance := sm.streamInstances[internalName][nodeID]
-	if instance == nil || instance.Status == "offline" || (instance.ProcessObservation != nil &&
+	if instance == nil || !runtimeObservationMatches(instance, observation.GetRuntimeName()) || instance.Status == "offline" || (instance.ProcessObservation != nil &&
 		instance.ProcessObservation.GetReadStartedUnixMillis() >= observation.GetReadStartedUnixMillis()) {
 		sm.mu.Unlock()
 		return false
@@ -80,7 +80,7 @@ func (sm *StreamStateManager) ObserveStreamBuffer(internalName, nodeID string, o
 	}
 	sm.mu.Lock()
 	instance := sm.streamInstances[internalName][nodeID]
-	if instance == nil || instance.Status == "offline" || (instance.BufferObservation != nil &&
+	if instance == nil || !runtimeObservationMatches(instance, observation.RuntimeName) || instance.Status == "offline" || (instance.BufferObservation != nil &&
 		instance.BufferObservation.EventUnixMillis >= observation.EventUnixMillis) {
 		sm.mu.Unlock()
 		return false
@@ -96,13 +96,13 @@ func (sm *StreamStateManager) ObserveStreamBuffer(internalName, nodeID string, o
 // and the last applied level; an offline instance is never revived by a level,
 // the live report's stats update revives it first. It returns whether the level
 // was applied; state is persisted only when it changed.
-func (sm *StreamStateManager) ObserveStreamPlayabilityLevel(internalName, nodeID string, playable bool, sampledUnixMillis int64) bool {
+func (sm *StreamStateManager) ObserveStreamPlayabilityLevel(internalName, nodeID string, playable bool, sampledUnixMillis int64, runtime ...string) bool {
 	if internalName == "" || nodeID == "" || sampledUnixMillis <= 0 {
 		return false
 	}
 	sm.mu.Lock()
 	instance := sm.streamInstances[internalName][nodeID]
-	if instance == nil || instance.Status == "offline" || instance.BufferPlayableSampledUnixMillis >= sampledUnixMillis ||
+	if instance == nil || (len(runtime) > 0 && !runtimeObservationMatches(instance, runtime[0])) || instance.Status == "offline" || instance.BufferPlayableSampledUnixMillis >= sampledUnixMillis ||
 		(instance.BufferObservation != nil && instance.BufferObservation.EventUnixMillis >= sampledUnixMillis) {
 		sm.mu.Unlock()
 		return false

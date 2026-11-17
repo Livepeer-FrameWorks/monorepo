@@ -465,6 +465,7 @@ if cur then
   end
 end
 redis.call('set', KEYS[1], ARGV[1], 'PX', tonumber(ARGV[3]))
+if ARGV[4] ~= '' then redis.call('set', KEYS[3], ARGV[4], 'PX', tonumber(ARGV[3])) else redis.call('del', KEYS[3]) end
 return 1
 `)
 
@@ -478,6 +479,7 @@ if not cur then
 end
 if cur == ARGV[1] then
   redis.call('pexpire', KEYS[1], tonumber(ARGV[3]))
+  if ARGV[4] ~= '' then redis.call('set', KEYS[2], ARGV[4], 'PX', tonumber(ARGV[3])) else redis.call('del', KEYS[2]) end
   return 1
 end
 local incoming = tonumber(ARGV[2])
@@ -487,6 +489,7 @@ local curFence = 0
 if b then curFence = tonumber(string.sub(cur, b + 1)) or 0 end
 if incoming ~= nil and incoming > curFence then
   redis.call('set', KEYS[1], ARGV[1], 'PX', tonumber(ARGV[3]))
+  if ARGV[4] ~= '' then redis.call('set', KEYS[2], ARGV[4], 'PX', tonumber(ARGV[3])) else redis.call('del', KEYS[2]) end
   return 1
 end
 return 0
@@ -494,10 +497,14 @@ return 0
 
 // AcquireConnOwnerFenced performs the fenced CAS acquire. acquired is false when a higher-or-equal
 // fence already owns the node — the caller must reject/close its control stream (fail closed).
-func (r *RedisStateStore) AcquireConnOwnerFenced(ctx context.Context, nodeID, instanceID, grpcAddr string, fence int64) (acquired bool, err error) {
+func (r *RedisStateStore) AcquireConnOwnerFenced(ctx context.Context, nodeID, instanceID, grpcAddr string, fence int64, protocol ...ConnProtocol) (acquired bool, err error) {
+	metadata, err := encodeConnProtocol(fence, protocol)
+	if err != nil {
+		return false, err
+	}
 	res, err := acquireConnOwnerFenced.Run(ctx, r.client,
-		[]string{r.keyConnOwner(nodeID), r.keyNodeReapGuard(nodeID)},
-		encodeConnOwner(instanceID, grpcAddr, fence), fence, connOwnerTTL.Milliseconds(),
+		[]string{r.keyConnOwner(nodeID), r.keyNodeReapGuard(nodeID), r.keyConnOwner(nodeID) + ":protocol"},
+		encodeConnOwner(instanceID, grpcAddr, fence), fence, connOwnerTTL.Milliseconds(), metadata,
 	).Int64()
 	if err != nil {
 		return false, err
@@ -539,10 +546,14 @@ var ErrConnOwnerLost = errors.New("conn owner lost to a higher fence")
 
 // RefreshConnOwnerFenced renews ownership TTL. It returns ErrConnOwnerLost when a higher fence has
 // taken over (close the stream) and ErrConnOwnerMissing when the key expired (re-acquire).
-func (r *RedisStateStore) RefreshConnOwnerFenced(ctx context.Context, nodeID, instanceID, grpcAddr string, fence int64) error {
+func (r *RedisStateStore) RefreshConnOwnerFenced(ctx context.Context, nodeID, instanceID, grpcAddr string, fence int64, protocol ...ConnProtocol) error {
+	metadata, err := encodeConnProtocol(fence, protocol)
+	if err != nil {
+		return err
+	}
 	res, err := refreshConnOwnerFenced.Run(ctx, r.client,
-		[]string{r.keyConnOwner(nodeID)},
-		encodeConnOwner(instanceID, grpcAddr, fence), fence, connOwnerTTL.Milliseconds(),
+		[]string{r.keyConnOwner(nodeID), r.keyConnOwner(nodeID) + ":protocol"},
+		encodeConnOwner(instanceID, grpcAddr, fence), fence, connOwnerTTL.Milliseconds(), metadata,
 	).Int64()
 	if err != nil {
 		return err
@@ -658,4 +669,54 @@ func scanRedisKeyedMapContext[T any](ctx context.Context, r *RedisStateStore, pa
 	}
 
 	return result, nil
+}
+
+// ConnProtocol is registration metadata bound to the same connection fence and
+// TTL as ownership. It does not change the owner wire value older replicas read.
+type ConnProtocol struct {
+	Fence           int64  `json:"fence"`
+	ProtocolVersion int32  `json:"protocol_version"`
+	ClusterID       string `json:"cluster_id"`
+}
+
+func encodeConnProtocol(fence int64, protocol []ConnProtocol) (string, error) {
+	if len(protocol) == 0 {
+		return "", nil
+	}
+	if len(protocol) != 1 || protocol[0].ProtocolVersion < 0 {
+		return "", errors.New("invalid connection protocol binding")
+	}
+	value := protocol[0]
+	value.Fence = fence
+	raw, err := json.Marshal(value)
+	return string(raw), err
+}
+
+// GetConnOwnerProtocol reads owner and protocol in one Redis command. A stale
+// capability document cannot describe a successor connection, even during a
+// mixed-version rollout in which an older replica leaves that document behind.
+func (r *RedisStateStore) GetConnOwnerProtocol(ctx context.Context, nodeID string) (ConnOwner, ConnProtocol, error) {
+	values, err := r.client.MGet(ctx, r.keyConnOwner(nodeID), r.keyConnOwner(nodeID)+":protocol").Result()
+	if err != nil {
+		return ConnOwner{}, ConnProtocol{}, err
+	}
+	raw, ownerPresent := values[0].(string)
+	if !ownerPresent {
+		return ConnOwner{}, ConnProtocol{}, nil
+	}
+	owner := decodeConnOwner(raw)
+	metadata, protocolPresent := values[1].(string)
+	if !protocolPresent {
+		return owner, ConnProtocol{}, nil
+	}
+	var protocol ConnProtocol
+	if metadata != "" {
+		if err := json.Unmarshal([]byte(metadata), &protocol); err != nil {
+			return ConnOwner{}, ConnProtocol{}, err
+		}
+	}
+	if owner.InstanceID == "" || owner.Fence <= 0 || protocol.Fence != owner.Fence {
+		protocol = ConnProtocol{}
+	}
+	return owner, protocol, nil
 }

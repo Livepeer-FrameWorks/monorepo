@@ -16,6 +16,7 @@ import (
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -546,6 +547,9 @@ func authorityFreshness(now, refreshAfter, validUntil time.Time) Freshness {
 // index to the chapter's own finished output. Do not align the two lists.
 func stripRuntimePrefix(value string) string {
 	value = strings.TrimSpace(value)
+	if binding, ok := streamident.ParseRuntimeBinding(value); ok {
+		return binding.InternalName
+	}
 	for _, prefix := range []string{"live+", "pull+", "vod+", "dvr+"} {
 		if strings.HasPrefix(value, prefix) {
 			return strings.TrimPrefix(value, prefix)

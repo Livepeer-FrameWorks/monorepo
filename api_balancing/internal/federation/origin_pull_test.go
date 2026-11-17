@@ -72,6 +72,7 @@ func (f *fakeNotifyFedClient) NotifyOriginPull(_ context.Context, peerID, addres
 		return f.acks[idx], nil
 	}
 	ack := &foghornfederationpb.OriginPullAck{Accepted: true, DtscUrl: "dtsc://peer/" + req.StreamName,
+		SourceLeaseEpoch: req.GetSourceLeaseEpoch(), SourceRuntimeName: req.GetSourceRuntimeName(), DestRuntimeName: req.GetDestRuntimeName(),
 		SourceGeneration: req.GetSourceGeneration(), SourceRevision: req.GetSourceRevision(), AttemptId: req.GetAttemptId(),
 		SourceNodeId: req.GetSourceNodeId(), TenantId: req.GetTenantId(), DestClusterId: req.GetDestClusterId(), DestNodeId: req.GetDestNodeId(),
 		SourceCellId: req.GetSourceCellId(), SourceClusterId: req.GetSourceClusterId(),

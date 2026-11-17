@@ -50,7 +50,7 @@ func (r *StreamRegistry) AcceptedOutboundPull(ctx context.Context, internalName,
 			if entry.IngestMode != IngestPull && entry.IngestMode != IngestMistNative {
 				continue
 			}
-		} else if pull.SourceGeneration != loc.SourceGeneration || pull.SourceRevision != loc.SourceRevision {
+		} else if pull.SourceGeneration != loc.SourceGeneration || pull.SourceRevision != loc.SourceRevision || pull.SourceLeaseEpoch != loc.SourceLeaseEpoch || pull.SourceRuntimeName != loc.SourceRuntimeName {
 			continue
 		}
 		if !isDVR && !pull.ConfiguredSource && (!loc.SourceActive || loc.OwnerNodeID != sourceNodeID || loc.SourceGeneration == "") {
@@ -69,6 +69,9 @@ func (r *StreamRegistry) AcceptedOutboundPull(ctx context.Context, internalName,
 		}
 		want := sourcePullCredential(internalName, pull)
 		if want == "" || !hmac.Equal([]byte(want), []byte(credential)) {
+			continue
+		}
+		if pull.SourceLeaseEpoch > 0 && r.VerifyPublisherSourceLease(ctx, pull.TenantID, internalName, sourceNodeID, pull.SourceGeneration, pull.SourceLeaseEpoch) != nil {
 			continue
 		}
 		if isDVR && !DVRRecordingSource(ctx, db, pull.TenantID, strings.TrimPrefix(internalName, "dvr+"), sourceNodeID) {

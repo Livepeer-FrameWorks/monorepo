@@ -109,15 +109,15 @@ const progressSelectRe = `SELECT status,\s+tenant_id::text AS tenant_id,.*dvr_st
 
 // progressUpdateRe matches the metrics + first-edge promotion write. status only ever moves
 // requested/starting -> recording (CASE), never to a node-supplied value.
-const progressUpdateRe = `UPDATE foghorn.artifacts\s+SET status = CASE WHEN status IN \('requested', 'starting'\) THEN 'recording' ELSE status END,\s+size_bytes = GREATEST`
+const progressUpdateRe = `(?s)UPDATE foghorn.artifacts\s+SET status = CASE WHEN status IN \('requested', 'starting'\) THEN 'recording' ELSE status END,\s+dvr_start_dispatch = .*size_bytes = GREATEST`
 
 // progressTenant is the recording's tenant; recording.started is tenant-scoped
 // and needs a UUID.
 const progressTenant = "5c3e0000-0000-4000-8000-000000000001"
 
 func progressRows(status, dispatchNode string) *sqlmock.Rows {
-	return sqlmock.NewRows([]string{"status", "tenant_id", "stream_id", "internal_name", "dispatch_node"}).
-		AddRow(status, progressTenant, "stream-1", "live+x", dispatchNode)
+	return sqlmock.NewRows([]string{"status", "tenant_id", "stream_id", "internal_name", "dispatch_node", "source_runtime_name", "dispatch_state"}).
+		AddRow(status, progressTenant, "stream-1", "live+x", dispatchNode, "", "")
 }
 
 // UpdateDVRProgressByHash promotes a pre-terminal DVR and grows its size monotonically (GREATEST). The

@@ -5,13 +5,65 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 )
+
+func TestIsolatedDrainDoesNotAcknowledgeAsynchronousNukeAsStopped(t *testing.T) {
+	const generation = "84ed1d31-13d2-468d-b7b5-ef132d4e3ee9"
+	runtime, err := streamident.BoundRuntimeName("drain-proof", streamident.RuntimePublisher, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var present atomic.Bool
+	present.Store(true)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var cmd map[string]any
+		if raw := r.URL.Query().Get("command"); raw != "" {
+			_ = json.Unmarshal([]byte(raw), &cmd)
+		} else {
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &cmd)
+		}
+		if _, ok := cmd["authorize"]; ok {
+			_, _ = w.Write([]byte(`{"authorize":{"status":"OK"}}`))
+			return
+		}
+		if _, ok := cmd["active_streams"]; ok {
+			streams := map[string]any{}
+			if present.Load() {
+				streams[runtime] = map[string]any{"status": "Shutting down"}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"active_streams": streams})
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	withConfig(t, &sidecarcfg.HelmsmanConfig{MistServerURL: srv.URL})
+	if err := RecordAdmittedIngestGeneration(runtime, generation, 77); err != nil {
+		t.Fatal(err)
+	}
+	var response *ipcpb.DrainStreamResponse
+	drain := func() {
+		handleDrainStream(logging.NewLogger(), &ipcpb.DrainStreamRequest{RuntimeName: runtime, PriorOwnerSourceGeneration: generation}, func(msg *ipcpb.ControlMessage) { response = msg.GetDrainStreamResponse() })
+	}
+	drain()
+	if response == nil || response.GetUnloaded() || response.GetError() == "" {
+		t.Fatalf("asynchronous nuke was acknowledged as stopped: %+v", response)
+	}
+	present.Store(false)
+	drain()
+	if response == nil || !response.GetUnloaded() || response.GetError() != "" {
+		t.Fatalf("proven absence did not complete exact drain: %+v", response)
+	}
+}
 
 // TestHandleDrainStream_EmptyRuntimeName_NoOp covers the cheap guard. An
 // empty runtime name must not touch Mist or emit a response — sending a

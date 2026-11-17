@@ -176,6 +176,15 @@ func TestDetachEndedWriterFromLiveSession_RealPG(t *testing.T) {
 		return len(got) == 1 && got[0].SessionID == gen
 	}
 
+	detach := func(t *testing.T, hash string, sourceState ipcpb.DVRSourceState) string {
+		t.Helper()
+		var detached string
+		if _, err := claimDVRFinalization(ctx, hash, FinalizeOptions{ReportingNodeID: "node-a", reportingTenantID: ingA, WriterEndedSourceState: sourceState, DetachedSession: &detached}); err != nil {
+			t.Fatal(err)
+		}
+		return detached
+	}
+
 	// staging rc11 edge-eu: Mist's buffer hit its input timeout and ended the recording
 	// with "Live stream source shut down"; the stopped report reached Foghorn before the
 	// publisher's PUSH_INPUT_CLOSE, and the session was recorded afresh on a stream that no
@@ -186,7 +195,7 @@ func TestDetachEndedWriterFromLiveSession_RealPG(t *testing.T) {
 			t.Fatal("a live session with an active recording must not be listed")
 		}
 
-		if detached := detachEndedWriterFromLiveSession(ctx, "h-srcend", ipcpb.DVRSourceState_DVR_SOURCE_STATE_ENDED, lg); detached != "" {
+		if detached := detach(t, "h-srcend", ipcpb.DVRSourceState_DVR_SOURCE_STATE_ENDED); detached != "" {
 			t.Fatalf("a recording whose source ended was detached from session %q", detached)
 		}
 		if bound := boundTo(t, "h-srcend"); !bound.Valid || bound.String != gen {
@@ -207,7 +216,7 @@ func TestDetachEndedWriterFromLiveSession_RealPG(t *testing.T) {
 
 	t.Run("a recorder that died while the source publishes is recorded afresh at once", func(t *testing.T) {
 		gen := liveRecording(t, "live+recdied", "h-recdied", 320)
-		if detached := detachEndedWriterFromLiveSession(ctx, "h-recdied", ipcpb.DVRSourceState_DVR_SOURCE_STATE_LIVE, lg); detached != gen {
+		if detached := detach(t, "h-recdied", ipcpb.DVRSourceState_DVR_SOURCE_STATE_LIVE); detached != gen {
 			t.Fatalf("detached session = %q, want %q", detached, gen)
 		}
 		if bound := boundTo(t, "h-recdied"); bound.Valid {
@@ -231,7 +240,7 @@ func TestDetachEndedWriterFromLiveSession_RealPG(t *testing.T) {
 
 	t.Run("an unreported source keeps the session-row decision", func(t *testing.T) {
 		gen := liveRecording(t, "live+unknown", "h-unknown", 330)
-		if detached := detachEndedWriterFromLiveSession(ctx, "h-unknown", ipcpb.DVRSourceState_DVR_SOURCE_STATE_UNSPECIFIED, lg); detached != gen {
+		if detached := detach(t, "h-unknown", ipcpb.DVRSourceState_DVR_SOURCE_STATE_UNSPECIFIED); detached != gen {
 			t.Fatalf("detached session = %q, want %q", detached, gen)
 		}
 		if !sessionClaims(t, gen) {
@@ -244,7 +253,7 @@ func TestDetachEndedWriterFromLiveSession_RealPG(t *testing.T) {
 		if _, err := db.Exec(`UPDATE foghorn.ingest_sessions SET ended_at=NOW(), ended_at_unix_millis=2000 WHERE id=$1::uuid`, gen); err != nil {
 			t.Fatal(err)
 		}
-		if detached := detachEndedWriterFromLiveSession(ctx, "h-ended", ipcpb.DVRSourceState_DVR_SOURCE_STATE_LIVE, lg); detached != "" {
+		if detached := detach(t, "h-ended", ipcpb.DVRSourceState_DVR_SOURCE_STATE_LIVE); detached != "" {
 			t.Fatalf("a recording ended with its session must not be detached, got session %q", detached)
 		}
 		if bound := boundTo(t, "h-ended"); !bound.Valid || bound.String != gen {

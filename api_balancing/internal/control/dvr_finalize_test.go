@@ -270,7 +270,7 @@ func expectFinalizeClaimNoRows(mock sqlmock.Sqlmock, hash, priorStatus string) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT COALESCE\(status, ''\)::text AS status, revision`).
 		WithArgs(hash).
-		WillReturnRows(sqlmock.NewRows([]string{"status", "revision", "stream_id"}).AddRow(priorStatus, int64(3), ""))
+		WillReturnRows(sqlmock.NewRows([]string{"status", "revision", "stream_id", "source_runtime_name"}).AddRow(priorStatus, int64(3), "", ""))
 	mock.ExpectQuery(`UPDATE foghorn.artifacts\s+SET status = 'finalizing'.*RETURNING status, tenant_id::text`).
 		WithArgs(hash, sqlmock.AnyArg()).
 		WillReturnError(sql.ErrNoRows)

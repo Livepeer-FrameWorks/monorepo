@@ -105,8 +105,67 @@ func testPublisherLease(t *testing.T, conn *sql.DB) {
 		}
 		return got
 	}
-	acquire(req, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_ACQUIRED)
-	acquire(req, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_SAME_EXECUTION)
+	leaseEpoch := func(response *pb.PublisherLeaseResponse) int64 {
+		t.Helper()
+		field := response.ProtoReflect().Descriptor().Fields().ByName("lease_epoch")
+		if field == nil || response.ProtoReflect().Get(field).Int() <= 0 {
+			t.Fatal("publisher lease grant has no globally ordered ownership epoch")
+		}
+		return response.ProtoReflect().Get(field).Int()
+	}
+	firstEpoch := leaseEpoch(acquire(req, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_ACQUIRED))
+	if got := leaseEpoch(acquire(req, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_SAME_EXECUTION)); got != firstEpoch {
+		t.Fatalf("same execution changed ownership epoch: got=%d want=%d", got, firstEpoch)
+	}
+	lookup := proto.CloneOf(req)
+	lookup.TenantAuthorityVersion, lookup.ObjectAuthorityVersion = 0, 0
+	lookup.TenantPayloadSha256, lookup.ObjectPayloadSha256 = nil, nil
+	read, err := server.GetPublisherLease(ctx, lookup)
+	if err != nil || read.GetOutcome() != pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_SAME_EXECUTION || leaseEpoch(read) != firstEpoch {
+		t.Fatalf("read-only exact lease verification failed: response=%v err=%v", read, err)
+	}
+	for _, change := range []string{"node", "cell"} {
+		wrong := proto.CloneOf(lookup)
+		if change == "node" {
+			wrong.NodeId = "another-node"
+		} else {
+			wrong.ControlCellId = "another-cell"
+		}
+		read, err = server.GetPublisherLease(ctx, wrong)
+		if err != nil || read.GetOutcome() == pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_SAME_EXECUTION || read.GetLeaseEpoch() != 0 {
+			t.Fatalf("wrong %s verified another execution: response=%v err=%v", change, read, err)
+		}
+	}
+	t.Run("ownership epoch fences renewal and release", func(t *testing.T) {
+		wrong := &pb.ActiveIngestStream{TenantId: claimTenantID, InternalName: "claim-internal", ClusterId: req.GetClusterId(),
+			ClaimToken: req.GetExecutionToken(), NodeId: req.GetNodeId(), ControlCellId: req.GetControlCellId(), RequireExistingOwner: true,
+			PublisherLeaseEpoch: firstEpoch + 1}
+		for _, release := range []bool{false, true} {
+			batch := &pb.SyncActiveIngestPlacementRequest{}
+			if release {
+				batch.Release = []*pb.ActiveIngestStream{wrong}
+			} else {
+				batch.Renew = []*pb.ActiveIngestStream{wrong}
+			}
+			result, err := server.SyncActiveIngestPlacement(ctx, batch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if release && (result.GetReleased() != 0 || len(result.GetReleaseRefused()) != 1) {
+				t.Fatalf("wrong epoch released current execution: %v", result)
+			}
+			if !release && (result.GetRenewed() != 0 || len(result.GetRenewRefused()) != 1) {
+				t.Fatalf("wrong epoch renewed current execution: %v", result)
+			}
+		}
+		// A refused release must not poison the still-current execution's
+		// abandonment marker or prevent its next valid renewal.
+		wrong.PublisherLeaseEpoch = firstEpoch
+		result, err := server.SyncActiveIngestPlacement(ctx, &pb.SyncActiveIngestPlacementRequest{Renew: []*pb.ActiveIngestStream{wrong}})
+		if err != nil || result.GetRenewed() != 1 || len(result.GetRenewRefused()) != 0 {
+			t.Fatalf("refused stale release poisoned current lease: response=%v err=%v", result, err)
+		}
+	})
 	other := proto.CloneOf(req)
 	other.ExecutionToken = "second"
 	if got := acquire(other, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_HELD_BY_OTHER); got.GetHeldExecutionToken() != "first" {
@@ -140,7 +199,9 @@ func testPublisherLease(t *testing.T, conn *sql.DB) {
 			refreshed.ObjectPayloadSha256 = signed.GetEnvelope().GetPayloadSha256()
 		}
 	}
-	acquire(refreshed, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_SAME_EXECUTION)
+	if got := leaseEpoch(acquire(refreshed, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_SAME_EXECUTION)); got != firstEpoch {
+		t.Fatalf("authority exchange changed ownership epoch: got=%d want=%d", got, firstEpoch)
+	}
 	forged := proto.CloneOf(req)
 	forged.ObjectPayloadSha256 = make([]byte, 32)
 	acquire(forged, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_AUTHORITY_STALE)
@@ -189,6 +250,15 @@ func testPublisherLease(t *testing.T, conn *sql.DB) {
 	}
 	if won != 1 || lost != 1 {
 		t.Fatalf("cross-cell duplicate ownership: won=%d lost=%d", won, lost)
+	}
+	cluster, token := readClaim(t, conn)
+	current := proto.CloneOf(req)
+	if cluster == other.GetClusterId() {
+		current = proto.CloneOf(other)
+	}
+	current.ExecutionToken = token
+	if next := leaseEpoch(acquire(current, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_SAME_EXECUTION)); next <= firstEpoch {
+		t.Fatalf("successor owner did not advance global epoch: first=%d successor=%d", firstEpoch, next)
 	}
 	t.Run("released owner cannot be restored by an in-flight renewal", func(t *testing.T) {
 		cluster, token := readClaim(t, conn)
@@ -278,7 +348,7 @@ func testPublisherLease(t *testing.T, conn *sql.DB) {
 		}
 		cold := &pb.ValidateStreamKeyRequest{StreamKey: "sk-published-lease", ClusterId: "media-eu", ClaimToken: "cold-no-session", NodeId: "node-eu", ControlCellId: "cell-eu"}
 		response, err := claimServer(conn).ValidateStreamKey(ctx, cold)
-		if err != nil || !response.GetValid() {
+		if err != nil || !response.GetValid() || response.GetPublisherLeaseEpoch() <= 0 {
 			t.Fatalf("cold acquire: %v %v", response, err)
 		}
 		if _, err = server.AbandonPublisherLease(ctx, &pb.AbandonPublisherLeaseRequest{ControlCellId: cold.GetControlCellId(), NodeId: cold.GetNodeId(), ExecutionToken: cold.GetClaimToken()}); err != nil {

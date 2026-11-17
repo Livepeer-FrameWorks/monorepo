@@ -214,6 +214,9 @@ func (r *RedisRegistryStore) WriteSourceLocations(ctx context.Context, w SourceL
 		entry.Locations = cloneLocations(current.Locations)
 		for cid, loc := range w.Set {
 			previous := current.Locations[cid]
+			if previous.SourceLeaseEpoch > 0 || loc.SourceLeaseEpoch > 0 {
+				loc = mergeLocationRevisioned(previous, loc)
+			}
 			if len(previous.InboundPulls) > 0 || previous.OutboundRevision > 0 {
 				loc = preserveOutbound(previous, loc)
 				loc.InboundPulls = mergeInboundPulls(previous, loc)
@@ -225,7 +228,7 @@ func (r *RedisRegistryStore) WriteSourceLocations(ctx context.Context, w SourceL
 		for cid, notAfter := range w.Remove {
 			previous, ok := entry.Locations[cid]
 			// Destination revisions are anti-replay watermarks that a removal must not discard.
-			if !ok || len(previous.InboundPulls) > 0 || previous.OutboundRevision > 0 ||
+			if !ok || previous.SourceLeaseEpoch > 0 || len(previous.InboundPulls) > 0 || previous.OutboundRevision > 0 ||
 				(!notAfter.IsZero() && previous.UpdatedAt.After(notAfter)) {
 				continue
 			}

@@ -95,28 +95,30 @@ func TestApplyOfflineEffect_RetriesFailedNodeDispatchAfterLocalCleanup(t *testin
 		internal = "offline-retry"
 		node     = "node-offline-retry"
 	)
+	const generation = "79fdcd9a-3da0-4c44-a199-72096d9180b1"
+	runtimeName := installPriorRuntimeLookup(t, tenant, internal, node, generation)
 	projectSourceForTest(t, reg, internal, node, 10, "trigger-retry", "generation-retry", 1)
 
-	trackPushTargets("live+"+internal, tenant, []*commodorepb.PushTargetInternal{{TargetUri: "rtmp://example/retry"}})
-	t.Cleanup(func() { untrackPushTargets("live+" + internal) })
+	trackPushTargets(runtimeName, tenant, []*commodorepb.PushTargetInternal{{TargetUri: "rtmp://example/retry"}})
+	t.Cleanup(func() { untrackPushTargets(runtimeName) })
 
 	dispatchErr := errors.New("control stream unavailable")
 	p := minimalProcessorForStreamEnd(t)
 	p.sendDeactivatePushTargets = func(context.Context, string, *ipcpb.DeactivatePushTargets) error { return dispatchErr }
 	_, err := p.ApplyOfflineEffect(context.Background(), control.OfflineEffect{
 		TenantID: tenant, InternalName: internal, NodeID: node,
-		SourceGeneration: "generation-retry", SourceRevision: 2,
+		SourceGeneration: generation, SourceRevision: 2,
 		SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
 	})
 	if !errors.Is(err, dispatchErr) {
 		t.Fatalf("ApplyOfflineEffect error = %v, want node dispatch failure", err)
 	}
-	if tracked, found := lookupPushTarget("live+"+internal, "rtmp://example/retry"); !found || !tracked.Current {
+	if tracked, found := lookupPushTarget(runtimeName, "rtmp://example/retry"); !found || !tracked.Current {
 		t.Fatal("target must remain current until Helmsman reports its terminal state")
 	}
 }
 
-func TestApplyOfflineEffect_ThreadsCanceledContextToNodeDispatch(t *testing.T) {
+func TestApplyOfflineEffect_CanceledContextPreventsNodeDispatch(t *testing.T) {
 	reg := installRegistryForTest(t)
 	const internal = "offline-context-fence"
 	projectSourceForTest(t, reg, internal, "node-context", 11, "trigger-context", "generation-context", 1)
@@ -137,8 +139,8 @@ func TestApplyOfflineEffect_ThreadsCanceledContextToNodeDispatch(t *testing.T) {
 		SourceRevision:   2,
 		TeardownStream:   true,
 	})
-	if !errors.Is(observed, context.Canceled) || !errors.Is(err, context.Canceled) {
-		t.Fatalf("effect context was not threaded to dispatch: observed=%v err=%v", observed, err)
+	if observed != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled effect reached node dispatch or lost cancellation: observed=%v err=%v", observed, err)
 	}
 }
 

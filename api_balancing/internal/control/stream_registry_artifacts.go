@@ -402,12 +402,19 @@ func (r *StreamRegistry) UpsertFederatedSource(peerClusterID string, entry Strea
 	if peerClusterID == "" || entry.InternalName == "" {
 		return
 	}
-	// Withdrawal: an ad with IsLiveNow=false from this peer means the
-	// peer no longer serves the stream. Drop the peer's Location; if no
-	// Locations remain, the entry itself goes (clearing PlaybackID +
-	// StreamID reverse indexes).
-	if !location.IsLiveNow {
-		r.withdrawFederatedSource(peerClusterID, entry.InternalName)
+	if location.SourceLeaseEpoch < 0 {
+		return
+	}
+	// Legacy withdrawals have no ownership identity. Once a peer published a
+	// fenced owner, an unversioned frame cannot erase it.
+	if !location.IsLiveNow && location.SourceLeaseEpoch == 0 {
+		r.mu.RLock()
+		ce := r.byInt[entry.InternalName]
+		fenced := ce != nil && ce.entry.Locations[peerClusterID].SourceLeaseEpoch > 0
+		r.mu.RUnlock()
+		if !fenced {
+			r.withdrawFederatedSource(peerClusterID, entry.InternalName)
+		}
 		return
 	}
 	// The caller's key is the advertising cell, not a media cluster. It is
@@ -427,6 +434,16 @@ func (r *StreamRegistry) UpsertFederatedSource(peerClusterID string, entry Strea
 	var identity StreamEntry
 	r.mu.Lock()
 	ce, ok := r.byInt[entry.InternalName]
+	if ok {
+		if ce.entry.TenantID != "" && ce.entry.TenantID != entry.TenantID {
+			r.mu.Unlock()
+			return
+		}
+		if !acceptPublisherAdvertisement(ce.entry.Locations[peerClusterID], location) {
+			r.mu.Unlock()
+			return
+		}
+	}
 	if !ok {
 		if entry.HydratedAt.IsZero() {
 			entry.HydratedAt = time.Now()
@@ -474,6 +491,10 @@ func (r *StreamRegistry) withdrawFederatedSource(peerClusterID, internalName str
 	r.mu.Lock()
 	ce, ok := r.byInt[internalName]
 	if !ok {
+		r.mu.Unlock()
+		return
+	}
+	if ce.entry.Locations[peerClusterID].SourceLeaseEpoch > 0 {
 		r.mu.Unlock()
 		return
 	}

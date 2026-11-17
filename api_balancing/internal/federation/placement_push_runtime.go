@@ -77,7 +77,7 @@ func (runtime *LivePushPreparationRuntime) Revalidate(ctx context.Context, req *
 		pull.SourceClusterID != receipt.Pull.SourceCellID || pull.SourceMediaClusterID != receipt.Pull.SourceClusterID || pull.SourceNodeID != receipt.Pull.SourceNodeID ||
 		pull.SourceGeneration != receipt.Pull.SourceGeneration || pull.SourceRevision != receipt.Pull.SourceRevision ||
 		control.SourcePullBaseURL(pull.DTSCURL) != observed.source.dtscURL ||
-		!validPlacementDTSC(control.SourcePullBaseURL(pull.DTSCURL), control.RuntimeNameFor(control.IngestPush, req.Query.InternalName)) {
+		!validPlacementDTSC(control.SourcePullBaseURL(pull.DTSCURL), publisherRuntimeName(*observed.source, req.Query.InternalName)) {
 		return status.Error(codes.FailedPrecondition, "prepared pull is no longer current")
 	}
 	return nil
@@ -101,8 +101,10 @@ func (runtime *LivePushPreparationRuntime) Reconcile(ctx context.Context, req *p
 			TenantID: req.Query.TenantId, InternalName: req.Query.InternalName,
 			DestClusterID: req.ClusterId, DestNodeID: req.NodeId, DestNodeBaseURL: observed.node.Host,
 			RemoteCluster: source.cellID, SourceGeneration: source.generation, SourceRevision: source.revision,
+			SourceLeaseEpoch: source.leaseEpoch, SourceRuntimeName: source.runtimeName,
 			Remote: &federationpb.EdgeCandidate{ClusterId: source.clusterID, NodeId: source.nodeID,
-				SourceGeneration: source.generation, SourceRevision: source.revision},
+				SourceGeneration: source.generation, SourceRevision: source.revision, SourceLeaseEpoch: source.leaseEpoch, SourceRuntimeName: source.runtimeName},
+
 			BindPull:         bind,
 			DestinationFence: observed.destinationFence,
 		}
@@ -111,12 +113,13 @@ func (runtime *LivePushPreparationRuntime) Reconcile(ctx context.Context, req *p
 				return nil, status.Error(codes.FailedPrecondition, "pending pull belongs to another source")
 			}
 			arrange.AttemptID = receipt.Pull.AttemptID
+			arrange.DestRuntimeName = receipt.Pull.DestRuntimeName
 		}
 		prepared, arrangeErr := runtime.Arrange.ArrangeOriginPull(ctx, arrange)
 		if arrangeErr != nil {
 			return nil, arrangeErr
 		}
-		if prepared == nil || prepared.DestNodeID != req.NodeId || !validPlacementDTSC(control.SourcePullBaseURL(prepared.PullDTSCURL), control.RuntimeNameFor(control.IngestPush, req.Query.InternalName)) {
+		if prepared == nil || prepared.DestNodeID != req.NodeId || !validPlacementDTSC(control.SourcePullBaseURL(prepared.PullDTSCURL), publisherRuntimeName(*observed.source, req.Query.InternalName)) {
 			return nil, status.Error(codes.FailedPrecondition, "source preparation returned an invalid path")
 		}
 	}
@@ -195,7 +198,7 @@ func (runtime *LivePushPreparationRuntime) observe(ctx context.Context, req *pla
 	onPublisher := source.cellID == runtime.Paths.CellID && source.clusterID == req.ClusterId && source.nodeID == req.NodeId
 	var destinationFence int64
 	if !onPublisher {
-		destinationFence, err = runtime.currentDestinationFence(ctx, req.NodeId, req.ClusterId)
+		destinationFence, err = runtime.currentDestinationFence(ctx, req.NodeId, req.ClusterId, source)
 		if err != nil {
 			return pushPreparationState{}, err
 		}
@@ -220,11 +223,11 @@ func (runtime *LivePushPreparationRuntime) observe(ctx context.Context, req *pla
 
 func pushPullMatchesSource(pull *PlacementPullBinding, source *placementPublisher) bool {
 	return pull != nil && source != nil && canonicalPullAttempt(pull.AttemptID) && pull.SourceCellID == source.cellID &&
-		pull.SourceClusterID == source.clusterID && pull.SourceNodeID == source.nodeID && pull.SourceGeneration == source.generation && pull.SourceRevision == source.revision
+		pull.SourceClusterID == source.clusterID && pull.SourceNodeID == source.nodeID && pull.SourceGeneration == source.generation && pull.SourceRevision == source.revision && pull.SourceLeaseEpoch == source.leaseEpoch && pull.SourceRuntimeName == source.runtimeName
 }
 
-func (runtime *LivePushPreparationRuntime) currentDestinationFence(ctx context.Context, nodeID, clusterID string) (int64, error) {
-	fence, err := runtime.Paths.destinationFence(ctx, nodeID, clusterID)
+func (runtime *LivePushPreparationRuntime) currentDestinationFence(ctx context.Context, nodeID, clusterID string, source ...*placementPublisher) (int64, error) {
+	fence, err := runtime.Paths.destinationFence(ctx, nodeID, clusterID, source...)
 	if err != nil {
 		return 0, status.Error(codes.Unavailable, "destination connection ownership is unavailable")
 	}

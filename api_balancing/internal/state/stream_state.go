@@ -21,6 +21,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	pkgredis "github.com/Livepeer-FrameWorks/monorepo/pkg/redis"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -242,6 +243,7 @@ func (sm *StreamStateManager) BindStreamLivepeerAuth(internalName, processesJSON
 
 // StreamInstanceState represents per-node state for a specific stream
 type StreamInstanceState struct {
+	RuntimeName        string                              `json:"runtime_name,omitempty"`
 	NodeID             string                              `json:"node_id"`
 	TenantID           string                              `json:"tenant_id"`
 	Status             string                              `json:"status"`
@@ -694,6 +696,10 @@ func applyIdentity(dst *string, incoming string) {
 
 func (sm *StreamStateManager) UpdateStreamFromBuffer(streamName, internalName, nodeID, tenantID, bufferState string, streamDetailsJSON string) error {
 	sm.mu.Lock()
+	if !runtimeObservationMatches(sm.streamInstances[internalName][nodeID], streamName) {
+		sm.mu.Unlock()
+		return nil
+	}
 
 	// Get or create stream state
 	state := sm.streams[internalName]
@@ -725,6 +731,13 @@ func (sm *StreamStateManager) UpdateStreamFromBuffer(streamName, internalName, n
 		sm.streamInstances[internalName][nodeID] = inst
 	}
 	applyIdentity(&inst.TenantID, tenantID)
+	if binding, ok := streamident.ParseRuntimeBinding(streamName); ok {
+		inst.RuntimeName = streamName
+		inst.Replicated = binding.Role == streamident.RuntimeRelay
+		if binding.Role == streamident.RuntimePublisher {
+			inst.Inputs = 1
+		}
+	}
 
 	// Update basic fields
 	state.BufferState = bufferState
@@ -1396,9 +1409,21 @@ func (sm *StreamStateManager) SetOffline(internalName, nodeID string) {
 // SetOfflineContext applies the in-memory transition and persists both Redis snapshots and their
 // changelog entries with caller-owned cancellation. The durable offline worker uses this form so
 // no write-through operation can outlive its advisory-lock transaction.
+func (sm *StreamStateManager) SetOfflineForRuntime(internalName, nodeID, runtime string) {
+	if err := sm.setOfflineRuntimeContext(context.Background(), internalName, nodeID, runtime); err != nil && stateLogger != nil {
+		stateLogger.WithError(err).WithField("internal_name", internalName).WithField("node_id", nodeID).Warn("Failed to persist isolated runtime offline state")
+	}
+}
 func (sm *StreamStateManager) SetOfflineContext(ctx context.Context, internalName, nodeID string) error {
+	return sm.setOfflineRuntimeContext(ctx, internalName, nodeID)
+}
+func (sm *StreamStateManager) setOfflineRuntimeContext(ctx context.Context, internalName, nodeID string, runtime ...string) error {
 	staleCutoff := time.Now().Add(-sm.getStaleThreshold())
 	sm.mu.Lock()
+	if len(runtime) > 0 && !runtimeObservationMatches(sm.streamInstances[internalName][nodeID], runtime[0]) {
+		sm.mu.Unlock()
+		return nil
+	}
 	union := sm.streams[internalName]
 	if union == nil {
 		union = &StreamState{InternalName: internalName, StreamName: internalName}
@@ -1513,8 +1538,12 @@ func (sm *StreamStateManager) ObserveNodeSnapshotStream(internalName, nodeID str
 	sm.updateNodeStats(internalName, nodeID, total, inputs, up, down, replicated, true)
 }
 
-func (sm *StreamStateManager) updateNodeStats(internalName, nodeID string, total, inputs int, up, down int64, replicated, snapshot bool) {
+func (sm *StreamStateManager) updateNodeStats(internalName, nodeID string, total, inputs int, up, down int64, replicated, snapshot bool, runtime ...string) {
 	sm.mu.Lock()
+	if len(runtime) > 0 && !runtimeObservationMatches(sm.streamInstances[internalName][nodeID], runtime[0]) {
+		sm.mu.Unlock()
+		return
+	}
 	now := time.Now()
 	if sm.streamInstances[internalName] == nil {
 		sm.streamInstances[internalName] = make(map[string]*StreamInstanceState)
@@ -2197,6 +2226,7 @@ func (sm *StreamStateManager) SetNodeStoragePaths(nodeID string, storageLocal, s
 
 // BalancerStreamSummary provides per-stream metrics for balancer decisions
 type BalancerStreamSummary struct {
+	RuntimeName string    `json:"runtime_name,omitempty"`
 	TenantID    string    `json:"tenant_id"`
 	BufferState string    `json:"buffer_state"`
 	Playable    bool      `json:"playable"`
@@ -2255,7 +2285,8 @@ func (sm *StreamStateManager) GetBalancerNodeSnapshots() []BalancerNodeSnapshot 
 				nodeStreams[nodeID] = m
 			}
 			m[internalName] = BalancerStreamSummary{
-				TenantID: inst.TenantID, BufferState: inst.BufferState, Playable: inst.Playable, Status: inst.Status, ObservedAt: inst.LastUpdate,
+				RuntimeName: inst.RuntimeName,
+				TenantID:    inst.TenantID, BufferState: inst.BufferState, Playable: inst.Playable, Status: inst.Status, ObservedAt: inst.LastUpdate,
 				Total:      uint64(inst.TotalConnections),
 				Viewers:    uint64(inst.Viewers),
 				Inputs:     uint32(inst.Inputs),
@@ -3353,7 +3384,8 @@ func (sm *StreamStateManager) getBalancerSnapshotInternal(includeStale, includeU
 				nodeStreams[nodeID] = m
 			}
 			m[internalName] = BalancerStreamSummary{
-				TenantID: inst.TenantID, BufferState: inst.BufferState, Playable: inst.Playable,
+				RuntimeName: inst.RuntimeName,
+				TenantID:    inst.TenantID, BufferState: inst.BufferState, Playable: inst.Playable,
 				Status:     inst.Status,
 				ObservedAt: inst.LastUpdate,
 				Total:      uint64(inst.TotalConnections),
@@ -5249,4 +5281,11 @@ func (c *hostAddrCache) resolve(host string) []string {
 	}
 	c.entries[host] = hostAddrEntry{addrs: addrs, resolvedAt: time.Now()}
 	return addrs
+}
+
+func (sm *StreamStateManager) UpdateRuntimeNodeStats(internal, node, runtime string, total, inputs int, up, down int64, replicated bool) {
+	sm.updateNodeStats(internal, node, total, inputs, up, down, replicated, false, runtime)
+}
+func (sm *StreamStateManager) ObserveRuntimeNodeSnapshotStream(internal, node, runtime string, total, inputs int, up, down int64, replicated bool) {
+	sm.updateNodeStats(internal, node, total, inputs, up, down, replicated, true, runtime)
 }

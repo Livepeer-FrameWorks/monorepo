@@ -4,6 +4,13 @@ SELECT foghorn.prepare_publisher_admission_v1(sqlc.arg(request)::jsonb)::jsonb A
 -- name: ConfirmPublisherAdmission :one
 SELECT foghorn.confirm_publisher_admission_v1(sqlc.arg(request)::jsonb)::boolean AS confirmed;
 
+-- name: GetPublisherSourceLeaseBinding :one
+SELECT COALESCE(stream_id::text, '')::text AS stream_id, start_trigger_uuid, ingest_cluster_id, publisher_lease_epoch
+FROM foghorn.ingest_sessions
+WHERE tenant_id=sqlc.arg(tenant_id)::uuid AND id=sqlc.arg(generation)::uuid
+  AND stream_internal_name=sqlc.arg(internal_name) AND node_id=sqlc.arg(node_id)
+  AND ended_at IS NULL AND projection_state='active' AND publisher_lease_epoch > 0;
+
 -- name: GetPublisherAdmission :one
 SELECT id::text AS generation, source_revision, projection_state, ended_reason, ended_at,
        stream_internal_name, connector_pid, publisher_admission_version, COALESCE(stream_id::text, '')::text AS stream_id
@@ -57,7 +64,7 @@ WHERE marker.node_id=sqlc.arg(node_id) AND marker.start_trigger_uuid=sqlc.arg(tr
     WHERE session.node_id=marker.node_id AND session.start_trigger_uuid=marker.start_trigger_uuid AND session.ended_at IS NULL);
 
 -- name: ListPublisherLeaseReleases :many
-SELECT id::text AS generation, tenant_id::text AS tenant_id, stream_internal_name, ingest_cluster_id, start_trigger_uuid, node_id,
+SELECT id::text AS generation, tenant_id::text AS tenant_id, stream_internal_name, ingest_cluster_id, start_trigger_uuid, node_id, publisher_lease_epoch,
        COALESCE(ended_at,NOW())::timestamptz AS queued_at
 FROM foghorn.ingest_sessions
 WHERE publisher_admission_version=1 AND ended_at IS NOT NULL AND publisher_lease_released_at IS NULL
@@ -107,3 +114,11 @@ SELECT artifact_hash,COALESCE(dvr_start_dispatch->>'node_id','')::text AS storag
 FROM foghorn.artifacts
 WHERE tenant_id=sqlc.arg(tenant_id)::uuid AND ingest_generation=sqlc.arg(generation)::uuid
   AND artifact_type='dvr' AND dvr_start_dispatch->>'state'='stop_pending';
+
+-- name: GetPublisherRuntimeBinding :one
+SELECT COALESCE(NULLIF(runtime_name,''),'live+'||stream_internal_name)::text AS runtime_name,
+       runtime_layout_version, publisher_lease_epoch, (ended_at IS NULL)::boolean AS active,
+       COALESCE(ingest_cluster_id,'')::text AS cluster_id, connector_pid
+FROM foghorn.ingest_sessions
+WHERE tenant_id=sqlc.arg(tenant_id)::uuid AND id=sqlc.arg(generation)::uuid
+  AND stream_internal_name=sqlc.arg(internal_name) AND node_id=sqlc.arg(node_id);

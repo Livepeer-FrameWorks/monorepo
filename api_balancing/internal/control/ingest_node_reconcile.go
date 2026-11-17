@@ -10,6 +10,7 @@ import (
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/google/uuid"
 )
 
@@ -69,6 +70,16 @@ func IngestRegistrationCutoff(ctx context.Context) (time.Time, error) {
 // current reports whether the registration that produced reported is still the node's connection;
 // a newer registration reconciles on its own, so this one stops.
 func ReconcileNodeIngestSessions(ctx context.Context, nodeID string, reported []*ipcpb.LiveIngestGeneration, cutoff time.Time, drain NodeIngestDrainFunc, current func() bool, logger logging.Logger) (NodeIngestReconcileResult, error) {
+	return reconcileNodeIngestSessions(ctx, nodeID, reported, cutoff, true, drain, current, logger)
+}
+
+// ReconcileReportedNodeIngestSessions retries stops for ended generations only.
+// A heartbeat snapshot can race a new admission, so omissions are never ended.
+func ReconcileReportedNodeIngestSessions(ctx context.Context, nodeID string, reported []*ipcpb.LiveIngestGeneration, drain NodeIngestDrainFunc, current func() bool, logger logging.Logger) (NodeIngestReconcileResult, error) {
+	return reconcileNodeIngestSessions(ctx, nodeID, reported, time.Now(), false, drain, current, logger)
+}
+
+func reconcileNodeIngestSessions(ctx context.Context, nodeID string, reported []*ipcpb.LiveIngestGeneration, cutoff time.Time, endMissing bool, drain NodeIngestDrainFunc, current func() bool, logger logging.Logger) (NodeIngestReconcileResult, error) {
 	var result NodeIngestReconcileResult
 	if db == nil {
 		return result, errors.New("reconcile node ingest sessions: no database configured")
@@ -78,6 +89,9 @@ func ReconcileNodeIngestSessions(ctx context.Context, nodeID string, reported []
 		return result, errors.New("reconcile node ingest sessions requires node and cutoff")
 	}
 	stillCurrent := func() bool { return current == nil || current() }
+	if len(reported) > streamident.MaxPublishersPerFoghorn {
+		return result, errors.New("reported ingest inventory exceeds admission ceiling")
+	}
 
 	byGeneration := make(map[string]*ipcpb.LiveIngestGeneration, len(reported))
 	generationIDs := make([]string, 0, len(reported))
@@ -96,32 +110,34 @@ func ReconcileNodeIngestSessions(ctx context.Context, nodeID string, reported []
 	}
 
 	q := foghorndb.New(db)
-	open, err := q.ListNodeProjectedIngestSessionsBefore(ctx, foghorndb.ListNodeProjectedIngestSessionsBeforeParams{
-		NodeID: nodeID, StartedBefore: cutoff,
-	})
-	if err != nil {
-		return result, fmt.Errorf("list node ingest sessions: %w", err)
-	}
-	for _, session := range open {
-		if _, held := byGeneration[session.SessionID]; held {
-			result.Kept++
-			continue
+	if endMissing {
+		open, err := q.ListNodeProjectedIngestSessionsBefore(ctx, foghorndb.ListNodeProjectedIngestSessionsBeforeParams{
+			NodeID: nodeID, StartedBefore: cutoff,
+		})
+		if err != nil {
+			return result, fmt.Errorf("list node ingest sessions: %w", err)
 		}
-		if !stillCurrent() {
-			logger.WithField("node_id", nodeID).Info("Node re-registered again; leaving ingest reconciliation to the newer registration")
-			return result, nil
-		}
-		fields := logging.Fields{
-			"node_id": nodeID, "internal_name": session.StreamInternalName, "ingest_generation": session.SessionID,
-		}
-		ended, retireErr := RetireIngestSession(ctx, session.SessionID, session.TenantID, session.StreamInternalName, IngestEndedAbsentOnReregister, logger)
-		if retireErr != nil {
-			logger.WithError(retireErr).WithFields(fields).Warn("Failed to end ingest session the re-registered node no longer holds; the next registration retries")
-			continue
-		}
-		if ended {
-			result.Ended++
-			logger.WithFields(fields).Info("Ended ingest session: the re-registered node does not hold its publisher")
+		for _, session := range open {
+			if _, held := byGeneration[session.SessionID]; held {
+				result.Kept++
+				continue
+			}
+			if !stillCurrent() {
+				logger.WithField("node_id", nodeID).Info("Node re-registered again; leaving ingest reconciliation to the newer registration")
+				return result, nil
+			}
+			fields := logging.Fields{
+				"node_id": nodeID, "internal_name": session.StreamInternalName, "ingest_generation": session.SessionID,
+			}
+			ended, retireErr := RetireIngestSession(ctx, session.SessionID, session.TenantID, session.StreamInternalName, IngestEndedAbsentOnReregister, logger)
+			if retireErr != nil {
+				logger.WithError(retireErr).WithFields(fields).Warn("Failed to end ingest session the re-registered node no longer holds; the next registration retries")
+				continue
+			}
+			if ended {
+				result.Ended++
+				logger.WithFields(fields).Info("Ended ingest session: the re-registered node does not hold its publisher")
+			}
 		}
 	}
 
@@ -155,7 +171,7 @@ func ReconcileNodeIngestSessions(ctx context.Context, nodeID string, reported []
 			continue
 		}
 		runtimeName := strings.TrimSpace(report.GetRuntimeName())
-		if !runtimeNameMatchesStream(runtimeName, row.StreamInternalName) {
+		if (row.RuntimeLayoutVersion == 1 && runtimeName != row.RuntimeName) || (row.RuntimeLayoutVersion == 0 && !runtimeNameMatchesStream(runtimeName, row.StreamInternalName)) {
 			fields["runtime_name"] = runtimeName
 			logger.WithFields(fields).Warn("Not stopping superseded ingest generation: reported runtime name does not match its stream")
 			continue
@@ -182,7 +198,7 @@ func ReconcileNodeIngestSessions(ctx context.Context, nodeID string, reported []
 		if sendErr := drain(ctx, nodeID, &ipcpb.DrainStreamRequest{
 			RuntimeName: runtimeName, Reason: reason, SourceGeneration: obligation, PriorOwnerSourceGeneration: row.SessionID,
 		}); sendErr != nil {
-			logger.WithError(sendErr).WithFields(fields).Warn("Failed to tell the node to stop a superseded ingest generation; the next registration retries")
+			logger.WithError(sendErr).WithFields(fields).Warn("Failed to stop superseded ingest generation; the next inventory retries")
 			continue
 		}
 		result.Stopped++
@@ -241,6 +257,25 @@ func scheduleNodeIngestReconcile(nodeID string, registered *conn, register *ipcp
 
 // runtimeNameMatchesStream accepts the bare internal name or a Mist wildcard runtime name
 // ("live+<internal>") for it.
+func scheduleReportedIngestReconcile(nodeID string, registered *conn, reported []*ipcpb.LiveIngestGeneration, logger logging.Logger) {
+	if len(reported) == 0 || !registered.ingestReconcileRunning.CompareAndSwap(false, true) {
+		return
+	}
+	current := func() bool {
+		registry.mu.RLock()
+		defer registry.mu.RUnlock()
+		return registry.conns[registered.rawNodeID] == registered || registry.conns[nodeID] == registered
+	}
+	go func() {
+		defer registered.ingestReconcileRunning.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if _, err := ReconcileReportedNodeIngestSessions(ctx, nodeID, reported, SendDrainStream, current, logger); err != nil {
+			logger.WithError(err).WithField("node_id", nodeID).Warn("Reported ingest cleanup remains pending")
+		}
+	}()
+}
+
 func runtimeNameMatchesStream(runtimeName, internalName string) bool {
 	if runtimeName == "" || internalName == "" {
 		return false

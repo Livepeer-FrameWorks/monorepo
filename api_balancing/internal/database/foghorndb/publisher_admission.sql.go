@@ -65,6 +65,89 @@ func (q *Queries) GetPublisherAdmission(ctx context.Context, arg GetPublisherAdm
 	return i, err
 }
 
+const getPublisherRuntimeBinding = `-- name: GetPublisherRuntimeBinding :one
+SELECT COALESCE(NULLIF(runtime_name,''),'live+'||stream_internal_name)::text AS runtime_name,
+       runtime_layout_version, publisher_lease_epoch, (ended_at IS NULL)::boolean AS active,
+       COALESCE(ingest_cluster_id,'')::text AS cluster_id, connector_pid
+FROM foghorn.ingest_sessions
+WHERE tenant_id=$1::uuid AND id=$2::uuid
+  AND stream_internal_name=$3 AND node_id=$4
+`
+
+type GetPublisherRuntimeBindingParams struct {
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+	Generation   string `db:"generation" json:"generation"`
+	InternalName string `db:"internal_name" json:"internal_name"`
+	NodeID       string `db:"node_id" json:"node_id"`
+}
+
+type GetPublisherRuntimeBindingRow struct {
+	RuntimeName          string `db:"runtime_name" json:"runtime_name"`
+	RuntimeLayoutVersion int16  `db:"runtime_layout_version" json:"runtime_layout_version"`
+	PublisherLeaseEpoch  int64  `db:"publisher_lease_epoch" json:"publisher_lease_epoch"`
+	Active               bool   `db:"active" json:"active"`
+	ClusterID            string `db:"cluster_id" json:"cluster_id"`
+	ConnectorPid         int64  `db:"connector_pid" json:"connector_pid"`
+}
+
+func (q *Queries) GetPublisherRuntimeBinding(ctx context.Context, arg GetPublisherRuntimeBindingParams) (GetPublisherRuntimeBindingRow, error) {
+	row := q.db.QueryRowContext(ctx, getPublisherRuntimeBinding,
+		arg.TenantID,
+		arg.Generation,
+		arg.InternalName,
+		arg.NodeID,
+	)
+	var i GetPublisherRuntimeBindingRow
+	err := row.Scan(
+		&i.RuntimeName,
+		&i.RuntimeLayoutVersion,
+		&i.PublisherLeaseEpoch,
+		&i.Active,
+		&i.ClusterID,
+		&i.ConnectorPid,
+	)
+	return i, err
+}
+
+const getPublisherSourceLeaseBinding = `-- name: GetPublisherSourceLeaseBinding :one
+SELECT COALESCE(stream_id::text, '')::text AS stream_id, start_trigger_uuid, ingest_cluster_id, publisher_lease_epoch
+FROM foghorn.ingest_sessions
+WHERE tenant_id=$1::uuid AND id=$2::uuid
+  AND stream_internal_name=$3 AND node_id=$4
+  AND ended_at IS NULL AND projection_state='active' AND publisher_lease_epoch > 0
+`
+
+type GetPublisherSourceLeaseBindingParams struct {
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+	Generation   string `db:"generation" json:"generation"`
+	InternalName string `db:"internal_name" json:"internal_name"`
+	NodeID       string `db:"node_id" json:"node_id"`
+}
+
+type GetPublisherSourceLeaseBindingRow struct {
+	StreamID            string         `db:"stream_id" json:"stream_id"`
+	StartTriggerUuid    string         `db:"start_trigger_uuid" json:"start_trigger_uuid"`
+	IngestClusterID     sql.NullString `db:"ingest_cluster_id" json:"ingest_cluster_id"`
+	PublisherLeaseEpoch int64          `db:"publisher_lease_epoch" json:"publisher_lease_epoch"`
+}
+
+func (q *Queries) GetPublisherSourceLeaseBinding(ctx context.Context, arg GetPublisherSourceLeaseBindingParams) (GetPublisherSourceLeaseBindingRow, error) {
+	row := q.db.QueryRowContext(ctx, getPublisherSourceLeaseBinding,
+		arg.TenantID,
+		arg.Generation,
+		arg.InternalName,
+		arg.NodeID,
+	)
+	var i GetPublisherSourceLeaseBindingRow
+	err := row.Scan(
+		&i.StreamID,
+		&i.StartTriggerUuid,
+		&i.IngestClusterID,
+		&i.PublisherLeaseEpoch,
+	)
+	return i, err
+}
+
 const listDVRStopClaimsByGeneration = `-- name: ListDVRStopClaimsByGeneration :many
 SELECT artifact_hash,COALESCE(dvr_start_dispatch->>'node_id','')::text AS storage_node_id
 FROM foghorn.artifacts
@@ -250,7 +333,7 @@ FROM (
      WHERE publisher_sessions_settled_at IS NULL ORDER BY created_at LIMIT 32
    ) abandoned
    LEFT JOIN LATERAL (
-     SELECT candidate.id, candidate.tenant_id, candidate.node_id, candidate.stream_internal_name, candidate.connector_pid, candidate.start_trigger_uuid, candidate.started_at_unix_millis, candidate.started_at, candidate.ended_at, candidate.ended_at_unix_millis, candidate.ended_reason, candidate.ingest_cluster_id, candidate.media_authority_id, candidate.media_authority_version, candidate.tenant_authority_version, candidate.processes_json, candidate.capacity_max_streams, candidate.dvr_intent, candidate.dvr_intent_attempts, candidate.dvr_intent_lease_until, candidate.dvr_intent_error, candidate.projection_state, candidate.source_revision, candidate.projected_at, candidate.stream_id, candidate.playable_at, candidate.transcode_degraded_at, candidate.transcode_degraded_reason, candidate.playable_at_unix_millis, candidate.publisher_lease_strict_owner, candidate.publisher_admission_version, candidate.publisher_lease_released_at FROM foghorn.ingest_sessions candidate
+     SELECT candidate.id, candidate.tenant_id, candidate.node_id, candidate.stream_internal_name, candidate.connector_pid, candidate.start_trigger_uuid, candidate.publisher_lease_epoch, candidate.started_at_unix_millis, candidate.started_at, candidate.ended_at, candidate.ended_at_unix_millis, candidate.ended_reason, candidate.ingest_cluster_id, candidate.media_authority_id, candidate.media_authority_version, candidate.tenant_authority_version, candidate.processes_json, candidate.capacity_max_streams, candidate.dvr_intent, candidate.dvr_intent_attempts, candidate.dvr_intent_lease_until, candidate.dvr_intent_error, candidate.projection_state, candidate.source_revision, candidate.projected_at, candidate.stream_id, candidate.playable_at, candidate.transcode_degraded_at, candidate.transcode_degraded_reason, candidate.playable_at_unix_millis, candidate.publisher_lease_strict_owner, candidate.publisher_admission_version, candidate.publisher_lease_released_at, candidate.runtime_layout_version, candidate.runtime_name FROM foghorn.ingest_sessions candidate
      WHERE candidate.node_id=abandoned.node_id AND candidate.start_trigger_uuid=abandoned.start_trigger_uuid
        AND candidate.ended_at IS NULL
      LIMIT 32
@@ -319,7 +402,7 @@ func (q *Queries) ListPublisherAdmissionsToSettle(ctx context.Context, admission
 }
 
 const listPublisherLeaseReleases = `-- name: ListPublisherLeaseReleases :many
-SELECT id::text AS generation, tenant_id::text AS tenant_id, stream_internal_name, ingest_cluster_id, start_trigger_uuid, node_id,
+SELECT id::text AS generation, tenant_id::text AS tenant_id, stream_internal_name, ingest_cluster_id, start_trigger_uuid, node_id, publisher_lease_epoch,
        COALESCE(ended_at,NOW())::timestamptz AS queued_at
 FROM foghorn.ingest_sessions
 WHERE publisher_admission_version=1 AND ended_at IS NOT NULL AND publisher_lease_released_at IS NULL
@@ -327,13 +410,14 @@ ORDER BY ended_at LIMIT 100
 `
 
 type ListPublisherLeaseReleasesRow struct {
-	Generation         string         `db:"generation" json:"generation"`
-	TenantID           string         `db:"tenant_id" json:"tenant_id"`
-	StreamInternalName string         `db:"stream_internal_name" json:"stream_internal_name"`
-	IngestClusterID    sql.NullString `db:"ingest_cluster_id" json:"ingest_cluster_id"`
-	StartTriggerUuid   string         `db:"start_trigger_uuid" json:"start_trigger_uuid"`
-	NodeID             string         `db:"node_id" json:"node_id"`
-	QueuedAt           time.Time      `db:"queued_at" json:"queued_at"`
+	Generation          string         `db:"generation" json:"generation"`
+	TenantID            string         `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName  string         `db:"stream_internal_name" json:"stream_internal_name"`
+	IngestClusterID     sql.NullString `db:"ingest_cluster_id" json:"ingest_cluster_id"`
+	StartTriggerUuid    string         `db:"start_trigger_uuid" json:"start_trigger_uuid"`
+	NodeID              string         `db:"node_id" json:"node_id"`
+	PublisherLeaseEpoch int64          `db:"publisher_lease_epoch" json:"publisher_lease_epoch"`
+	QueuedAt            time.Time      `db:"queued_at" json:"queued_at"`
 }
 
 func (q *Queries) ListPublisherLeaseReleases(ctx context.Context) ([]ListPublisherLeaseReleasesRow, error) {
@@ -352,6 +436,7 @@ func (q *Queries) ListPublisherLeaseReleases(ctx context.Context) ([]ListPublish
 			&i.IngestClusterID,
 			&i.StartTriggerUuid,
 			&i.NodeID,
+			&i.PublisherLeaseEpoch,
 			&i.QueuedAt,
 		); err != nil {
 			return nil, err

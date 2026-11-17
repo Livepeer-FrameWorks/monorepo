@@ -96,8 +96,13 @@ func sourcePullCredential(internalName string, pull OutboundPull) string {
 		return ""
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = mac.Write([]byte(strings.Join([]string{"foghorn-source-pull-v1", sourceInternalKey(internalName), pull.TenantID,
+	fields := []string{"foghorn-source-pull-v1", sourceInternalKey(internalName), pull.TenantID,
 		pull.AttemptID, pull.SourceMediaClusterID, pull.SourceNodeID, pull.SourceGeneration, strconv.FormatInt(pull.SourceRevision, 10),
-		pull.DestClusterID, pull.DestNodeID, SourcePullBaseURL(pull.DTSCURL)}, "\x00")))
+		pull.DestClusterID, pull.DestNodeID, SourcePullBaseURL(pull.DTSCURL)}
+	if pull.SourceLeaseEpoch > 0 || pull.SourceRuntimeName != "" || pull.DestRuntimeName != "" {
+		fields[0] = "foghorn-source-pull-v2"
+		fields = append(fields, strconv.FormatInt(pull.SourceLeaseEpoch, 10), pull.SourceRuntimeName, pull.DestRuntimeName)
+	}
+	_, _ = mac.Write([]byte(strings.Join(fields, "\x00")))
 	return sourcePullCredentialPrefix + pull.AttemptID + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }

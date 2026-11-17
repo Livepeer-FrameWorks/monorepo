@@ -1,0 +1,10 @@
+ARG MIST_CONTRACT_BASE_IMAGE=scratch
+FROM ${MIST_CONTRACT_BASE_IMAGE}
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg \
+ && rm -rf /var/lib/apt/lists/* \
+ && cp -a /usr/share/frameworks/dist/mistserver/. /usr/local/
+
+ENV PATH="/usr/local/bin:${PATH}" \
+    LD_LIBRARY_PATH="/usr/local/lib"

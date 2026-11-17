@@ -62,9 +62,7 @@ func (runtime *LivePushPreparationRuntime) ResolvePreparedSource(ctx context.Con
 	query := PlacementSourceReceiptQuery{
 		TenantID: input.TenantID, InternalName: input.InternalName, ClusterID: input.ClusterID, NodeID: input.NodeID,
 		TenantAuthorityVersion: authority.TenantAuthorityVersion, ObjectAuthorityVersion: authority.ObjectAuthorityVersion,
-		Pull: PlacementPullBinding{AttemptID: pull.AttemptID, SourceCellID: pull.SourceClusterID, SourceClusterID: pull.SourceMediaClusterID,
-			DestinationFence: input.DestinationFence,
-			SourceNodeID:     pull.SourceNodeID, SourceGeneration: pull.SourceGeneration, SourceRevision: pull.SourceRevision},
+		Pull: placementInboundPullBinding(pull, input.DestinationFence),
 	}
 	receipt, err := receipts.CompletedPull(ctx, query)
 	if err != nil {
@@ -86,9 +84,10 @@ func (runtime *LivePushPreparationRuntime) ResolvePreparedSource(ctx context.Con
 			TenantID: input.TenantID, InternalName: input.InternalName, DestClusterID: input.ClusterID,
 			DestNodeID: input.NodeID, DestNodeBaseURL: pull.DestNodeBaseURL, DestinationFence: input.DestinationFence,
 			RemoteCluster: pull.SourceClusterID, SourceGeneration: pull.SourceGeneration, SourceRevision: pull.SourceRevision,
+			SourceLeaseEpoch: pull.SourceLeaseEpoch, SourceRuntimeName: pull.SourceRuntimeName, DestRuntimeName: pull.DestRuntimeName,
 			AttemptID: pull.AttemptID, RefreshAcceptance: true,
 			Remote: &federationpb.EdgeCandidate{ClusterId: pull.SourceMediaClusterID, NodeId: pull.SourceNodeID,
-				SourceGeneration: pull.SourceGeneration, SourceRevision: pull.SourceRevision},
+				SourceGeneration: pull.SourceGeneration, SourceRevision: pull.SourceRevision, SourceLeaseEpoch: pull.SourceLeaseEpoch, SourceRuntimeName: pull.SourceRuntimeName},
 			BindPull: func(binding *PlacementPullBinding) error {
 				if binding == nil || *binding != query.Pull {
 					return ErrPlacementReceiptConflict
@@ -167,5 +166,11 @@ func (runtime *LivePushPreparationRuntime) sourceAuthority(ctx context.Context, 
 func samePreparedSourcePull(a, b control.InboundPull) bool {
 	return a.TenantID == b.TenantID && a.AttemptID == b.AttemptID && a.SourceClusterID == b.SourceClusterID &&
 		a.SourceMediaClusterID == b.SourceMediaClusterID && a.SourceNodeID == b.SourceNodeID && a.SourceGeneration == b.SourceGeneration &&
-		a.SourceRevision == b.SourceRevision && a.DestClusterID == b.DestClusterID && a.DestNodeID == b.DestNodeID && a.DTSCURL == b.DTSCURL
+		a.SourceRevision == b.SourceRevision && a.SourceLeaseEpoch == b.SourceLeaseEpoch && a.SourceRuntimeName == b.SourceRuntimeName && a.DestRuntimeName == b.DestRuntimeName && a.DestClusterID == b.DestClusterID && a.DestNodeID == b.DestNodeID && a.DTSCURL == b.DTSCURL
+}
+
+func placementInboundPullBinding(pull control.InboundPull, fence int64) PlacementPullBinding {
+	return PlacementPullBinding{AttemptID: pull.AttemptID, SourceCellID: pull.SourceClusterID, SourceClusterID: pull.SourceMediaClusterID,
+		SourceNodeID: pull.SourceNodeID, SourceGeneration: pull.SourceGeneration, SourceRevision: pull.SourceRevision,
+		SourceLeaseEpoch: pull.SourceLeaseEpoch, SourceRuntimeName: pull.SourceRuntimeName, DestRuntimeName: pull.DestRuntimeName, DestinationFence: fence}
 }

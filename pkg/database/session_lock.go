@@ -131,6 +131,13 @@ func dropHold(ctx context.Context, conn *sql.Conn, lock AdvisoryLock) error {
 // statement_timeout bounds each attempt rather than the whole wait. A
 // session whose lock statement fails is discarded rather than pooled.
 func WithSessionLock(ctx context.Context, db *sql.DB, name string, fn func() error) error {
+	return WithSessionLockConn(ctx, db, name, func(_ *sql.Conn) error { return fn() })
+}
+
+// WithSessionLockConn executes fn on the session holding the lock. DDL must
+// stay on that session so connection loss ends both the lock and the operation,
+// and a pool limited to one connection cannot deadlock acquiring another.
+func WithSessionLockConn(ctx context.Context, db *sql.DB, name string, fn func(*sql.Conn) error) error {
 	lock := NamedLock(name)
 	conn, err := db.Conn(ctx)
 	if err != nil {
@@ -157,7 +164,7 @@ func WithSessionLock(ctx context.Context, db *sql.DB, name string, fn func() err
 		defer cancel()
 		_ = ReleaseSessionLock(unlockCtx, conn, lock) //nolint:errcheck // a failed unlock discards the session, which ends the lock
 	}()
-	return fn()
+	return fn(conn)
 }
 
 // SessionLeader elects one replica of a service to run a job that must not

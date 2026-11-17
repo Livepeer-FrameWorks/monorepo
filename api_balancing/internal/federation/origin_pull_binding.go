@@ -6,6 +6,7 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/google/uuid"
 )
 
@@ -19,6 +20,18 @@ func validPullGeneration(generation string, revision int64) bool {
 func canonicalPullAttempt(attempt string) bool {
 	id, err := uuid.Parse(attempt)
 	return err == nil && id != uuid.Nil && id.String() == attempt
+}
+
+// A receipt-bound publisher pull must be accepted by its exact source cell,
+// generation and node before its URL is exposed. A generationless relay hint
+// cannot establish a loop after that publisher has moved to another cell.
+func requiresPublisherOriginAcceptance(req ArrangeOriginPullRequest) bool {
+	if req.BindPull == nil || req.DestinationFence <= 0 || req.SourceRevision <= 0 || req.SourceLeaseEpoch <= 0 || req.Remote == nil ||
+		!validPullIdentity(req.RemoteCluster) || !validPullIdentity(req.Remote.GetClusterId()) || !validPullIdentity(req.Remote.GetNodeId()) {
+		return false
+	}
+	generation, err := uuid.Parse(req.SourceGeneration)
+	return err == nil && generation != uuid.Nil && generation.String() == req.SourceGeneration
 }
 
 func validPullIdentity(identity string) bool {
@@ -38,6 +51,21 @@ func bindOriginPullRequest(req *ArrangeOriginPullRequest) error {
 		}
 		req.SourceGeneration, req.SourceRevision = req.Remote.GetSourceGeneration(), req.Remote.GetSourceRevision()
 	}
+	if req.Remote.GetSourceLeaseEpoch() < 0 || req.SourceLeaseEpoch < 0 {
+		return ErrOriginPullSourceBinding
+	}
+	if req.Remote.GetSourceLeaseEpoch() != 0 {
+		if req.SourceLeaseEpoch != 0 && req.SourceLeaseEpoch != req.Remote.GetSourceLeaseEpoch() {
+			return ErrOriginPullSourceBinding
+		}
+		req.SourceLeaseEpoch = req.Remote.GetSourceLeaseEpoch()
+	}
+	if req.Remote.GetSourceRuntimeName() != "" {
+		if req.SourceRuntimeName != "" && req.SourceRuntimeName != req.Remote.GetSourceRuntimeName() {
+			return ErrOriginPullSourceBinding
+		}
+		req.SourceRuntimeName = req.Remote.GetSourceRuntimeName()
+	}
 	if !validPullGeneration(req.SourceGeneration, req.SourceRevision) || (req.SourceGeneration != "" && req.Remote.GetNodeId() == "") {
 		return ErrOriginPullSourceBinding
 	}
@@ -45,6 +73,18 @@ func bindOriginPullRequest(req *ArrangeOriginPullRequest) error {
 		req.AttemptID = uuid.NewString()
 	}
 	if !canonicalPullAttempt(req.AttemptID) {
+		return ErrOriginPullSourceBinding
+	}
+	if req.SourceRuntimeName != "" {
+		binding, ok := streamident.ParseRuntimeBinding(req.SourceRuntimeName)
+		if !ok || binding.Role != streamident.RuntimePublisher || binding.InternalName != req.InternalName || binding.ExecutionID != req.SourceGeneration || req.SourceLeaseEpoch <= 0 {
+			return ErrOriginPullSourceBinding
+		}
+		name, err := streamident.BoundRuntimeName(req.InternalName, streamident.RuntimeRelay, req.AttemptID)
+		if err != nil || (req.DestRuntimeName != "" && req.DestRuntimeName != name) {
+			return ErrOriginPullSourceBinding
+		}
+	} else if req.DestRuntimeName != "" {
 		return ErrOriginPullSourceBinding
 	}
 	return nil
@@ -59,7 +99,18 @@ func confirmedPublisherBinding(entry control.StreamEntry, nodeID, tenantID, clus
 	return loc.SourceGeneration, loc.SourceRevision
 }
 
+func confirmedPublisherEpoch(entry control.StreamEntry, nodeID, tenantID, clusterID string) int64 {
+	if generation, _ := confirmedPublisherBinding(entry, nodeID, tenantID, clusterID); generation == "" {
+		return 0
+	}
+	loc, _ := entry.LocalLocation(clusterID)
+	return loc.SourceLeaseEpoch
+}
+
 func validOriginPullNotification(req *foghornfederationpb.OriginPullNotification) bool {
+	if req.GetSourceLeaseEpoch() < 0 || !control.ValidPublisherPullRuntimes(req.GetStreamName(), req.GetSourceGeneration(), req.GetAttemptId(), req.GetSourceRuntimeName(), req.GetDestRuntimeName(), req.GetSourceLeaseEpoch()) {
+		return false
+	}
 	if req == nil || !validPullGeneration(req.GetSourceGeneration(), req.GetSourceRevision()) {
 		return false
 	}
@@ -79,6 +130,9 @@ func validOriginPullNotification(req *foghornfederationpb.OriginPullNotification
 }
 
 func originPullAckMatches(req ArrangeOriginPullRequest, destClusterID, destNodeID string, ack *foghornfederationpb.OriginPullAck) bool {
+	if ack.GetSourceLeaseEpoch() != req.SourceLeaseEpoch || ack.GetSourceRuntimeName() != req.SourceRuntimeName || ack.GetDestRuntimeName() != req.DestRuntimeName {
+		return false
+	}
 	if req.Remote.GetClusterId() != "" && (ack.GetSourceCellId() != req.RemoteCluster || ack.GetSourceClusterId() != req.Remote.GetClusterId()) {
 		return false
 	}
@@ -93,4 +147,12 @@ func originPullAckMatches(req ArrangeOriginPullRequest, destClusterID, destNodeI
 	}
 	return ack.GetTenantId() == req.TenantID && ack.GetSourceGeneration() == req.SourceGeneration && ack.GetSourceRevision() == req.SourceRevision &&
 		ack.GetAttemptId() == req.AttemptID && ack.GetSourceNodeId() == req.Remote.GetNodeId() && ack.GetDestClusterId() == destClusterID && ack.GetDestNodeId() == destNodeID
+}
+
+func confirmedPublisherRuntimeName(entry control.StreamEntry, node, tenant, cell string) string {
+	if generation, _ := confirmedPublisherBinding(entry, node, tenant, cell); generation != "" {
+		loc, _ := entry.LocalLocation(cell)
+		return loc.SourceRuntimeName
+	}
+	return ""
 }

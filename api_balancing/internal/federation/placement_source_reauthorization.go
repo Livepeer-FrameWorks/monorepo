@@ -35,6 +35,7 @@ func (runtime *LivePushPreparationRuntime) RetainPreparedSourceDemand(ctx contex
 		TenantID: request.Query.TenantId, AttemptID: pull.AttemptID, DestClusterID: request.ClusterId, DestNodeID: request.NodeId,
 		SourceClusterID: pull.SourceCellID, SourceMediaClusterID: pull.SourceClusterID, SourceNodeID: pull.SourceNodeID,
 		SourceGeneration: pull.SourceGeneration, SourceRevision: pull.SourceRevision,
+		SourceLeaseEpoch: pull.SourceLeaseEpoch, SourceRuntimeName: pull.SourceRuntimeName, DestRuntimeName: pull.DestRuntimeName,
 	}, string(payload), func(stored string) bool { return equivalentSourceDemand(stored, demand) })
 }
 

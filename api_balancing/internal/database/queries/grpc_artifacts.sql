@@ -107,6 +107,10 @@ WHERE a.artifact_hash = (
     SELECT c.artifact_hash
     FROM foghorn.artifacts c
     JOIN foghorn.ingest_sessions s ON s.id = c.ingest_generation
+    JOIN foghorn.ingest_sessions resumed ON resumed.id = sqlc.arg(new_generation)::uuid
+      AND resumed.tenant_id = c.tenant_id AND resumed.node_id = sqlc.arg(source_node_id)::text
+      AND resumed.stream_internal_name = c.stream_internal_name
+      AND resumed.ended_at IS NULL
     WHERE c.tenant_id = sqlc.arg(tenant_id)::uuid
       AND c.stream_internal_name = sqlc.arg(stream_internal_name)
       AND c.artifact_type = 'dvr'
@@ -115,11 +119,34 @@ WHERE a.artifact_hash = (
       AND c.dvr_start_dispatch->>'source_node_id' = sqlc.arg(source_node_id)::text
       AND c.ingest_generation <> sqlc.arg(new_generation)::uuid
       AND s.ended_at IS NOT NULL
+      AND (resumed.runtime_layout_version = 0 OR
+           c.dvr_start_dispatch->>'source_runtime_name' = resumed.runtime_name)
     ORDER BY c.created_at DESC
     LIMIT 1
     FOR UPDATE OF c
 )
 RETURNING a.artifact_hash, a.status;
+
+-- name: PrepareDVRSourceHandoff :one
+UPDATE foghorn.artifacts a
+SET ingest_generation = sqlc.arg(new_generation)::uuid,
+    dvr_start_dispatch = sqlc.arg(dispatch_json)::text::jsonb,
+    updated_at = NOW()
+WHERE a.artifact_hash = sqlc.arg(artifact_hash)
+  AND a.tenant_id = sqlc.arg(tenant_id)::uuid
+  AND a.artifact_type = 'dvr' AND a.status = 'recording'
+  AND a.federated_pointer = false
+  AND a.ingest_generation = sqlc.arg(old_generation)::uuid
+  AND a.dvr_start_dispatch->>'source_runtime_name' = sqlc.arg(old_runtime)::text
+  AND COALESCE(a.dvr_start_dispatch->>'state', '') <> 'source_handoff_pending'
+  AND EXISTS (SELECT 1 FROM foghorn.ingest_sessions old
+      WHERE old.id = a.ingest_generation AND old.tenant_id = a.tenant_id AND old.ended_at IS NOT NULL)
+  AND EXISTS (SELECT 1 FROM foghorn.ingest_sessions resumed
+      WHERE resumed.id = sqlc.arg(new_generation)::uuid AND resumed.tenant_id = a.tenant_id
+        AND resumed.stream_internal_name = a.stream_internal_name AND resumed.node_id = sqlc.arg(source_node_id)::text
+        AND resumed.ended_at IS NULL AND resumed.runtime_layout_version = 1
+        AND resumed.runtime_name = sqlc.arg(new_runtime)::text)
+RETURNING a.artifact_hash;
 
 -- name: InsertRequestedDVRArtifact :exec
 INSERT INTO foghorn.artifacts (

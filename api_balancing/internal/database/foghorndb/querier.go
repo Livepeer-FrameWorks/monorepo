@@ -376,6 +376,8 @@ type Querier interface {
 	GetProcessingJobAuthContext(ctx context.Context, arg GetProcessingJobAuthContextParams) (GetProcessingJobAuthContextRow, error)
 	GetPublisherAdmission(ctx context.Context, arg GetPublisherAdmissionParams) (GetPublisherAdmissionRow, error)
 	GetPublisherAuthorityPreflight(ctx context.Context, arg GetPublisherAuthorityPreflightParams) (GetPublisherAuthorityPreflightRow, error)
+	GetPublisherRuntimeBinding(ctx context.Context, arg GetPublisherRuntimeBindingParams) (GetPublisherRuntimeBindingRow, error)
+	GetPublisherSourceLeaseBinding(ctx context.Context, arg GetPublisherSourceLeaseBindingParams) (GetPublisherSourceLeaseBindingRow, error)
 	GetRegistryArtifactByHash(ctx context.Context, artifactHash string) (GetRegistryArtifactByHashRow, error)
 	GetRegistryArtifactByInternalName(ctx context.Context, internalName sql.NullString) (GetRegistryArtifactByInternalNameRow, error)
 	GetRegistryProcessingJob(ctx context.Context, artifactHash sql.NullString) (GetRegistryProcessingJobRow, error)
@@ -417,6 +419,7 @@ type Querier interface {
 	InsertIngestCloseTombstone(ctx context.Context, arg InsertIngestCloseTombstoneParams) error
 	InsertIngestSession(ctx context.Context, arg InsertIngestSessionParams) (string, error)
 	InsertIngestSessionWithAuthority(ctx context.Context, arg InsertIngestSessionWithAuthorityParams) (string, error)
+	InsertIsolatedIngestSession(ctx context.Context, request json.RawMessage) (string, error)
 	InsertMediaAuthorityApplyAudit(ctx context.Context, arg InsertMediaAuthorityApplyAuditParams) error
 	InsertMigratedArtifactMetadata(ctx context.Context, arg InsertMigratedArtifactMetadataParams) (int64, error)
 	InsertMintArtifactShell(ctx context.Context, arg InsertMintArtifactShellParams) error
@@ -623,6 +626,12 @@ type Querier interface {
 	MarkArtifactS3OnlyWhenUnhosted(ctx context.Context, artifactHash string) error
 	MarkArtifactSynced(ctx context.Context, arg MarkArtifactSyncedParams) error
 	MarkArtifactThumbnailPresent(ctx context.Context, artifactHash string) error
+	// First playable buffer of the active session, from the session's own node only.
+	// The playable_at IS NULL guard makes a repeated or replayed buffer trigger match
+	// nothing; the start fence keeps a delayed trigger of an earlier session on the
+	// same node from marking a newer one. Sessions without a public stream ID are
+	// marked too: the STREAM_END reaper orders against playable_at_unix_millis.
+	MarkBoundIngestSessionPlayable(ctx context.Context, arg MarkBoundIngestSessionPlayableParams) (MarkBoundIngestSessionPlayableRow, error)
 	MarkCompletingVODFailed(ctx context.Context, arg MarkCompletingVODFailedParams) (int64, error)
 	MarkCompletingVODProcessing(ctx context.Context, arg MarkCompletingVODProcessingParams) (int64, error)
 	MarkDVRChapterBackfillComplete(ctx context.Context, artifactHash string) error
@@ -689,6 +698,7 @@ type Querier interface {
 	PersistConfigSeed(ctx context.Context, arg PersistConfigSeedParams) (int64, error)
 	PersistSourceProjectionRevision(ctx context.Context, arg PersistSourceProjectionRevisionParams) error
 	PersistVodCompletionContract(ctx context.Context, arg PersistVodCompletionContractParams) error
+	PrepareDVRSourceHandoff(ctx context.Context, arg PrepareDVRSourceHandoffParams) (string, error)
 	PreparePublisherAdmission(ctx context.Context, request json.RawMessage) (json.RawMessage, error)
 	ProbeCurrentSourceProjection(ctx context.Context, arg ProbeCurrentSourceProjectionParams) (ProbeCurrentSourceProjectionRow, error)
 	ProjectProcessingArtifactStatus(ctx context.Context, arg ProjectProcessingArtifactStatusParams) error
@@ -735,6 +745,7 @@ type Querier interface {
 	RecordArtifactEventFailure(ctx context.Context, arg RecordArtifactEventFailureParams) error
 	RecordDVRCompletion(ctx context.Context, arg RecordDVRCompletionParams) error
 	RecordDVRProgress(ctx context.Context, arg RecordDVRProgressParams) error
+	RecordDVRSourceHandoffInterrupted(ctx context.Context, arg RecordDVRSourceHandoffInterruptedParams) error
 	RecordDVRStartTime(ctx context.Context, arg RecordDVRStartTimeParams) error
 	RecordFreezePublicationLedger(ctx context.Context, arg RecordFreezePublicationLedgerParams) error
 	// A URL import has no size until its processing node stages the source. The

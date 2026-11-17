@@ -1224,6 +1224,9 @@ func sourcePIDsFromStreamData(streamData map[string]any) (map[int64]struct{}, bo
 func offlineReportableInternalName(streamName string) (string, bool) {
 	parsed := streamident.Parse(streamName)
 	if parsed.IsSource() {
+		if _, bound := streamident.ParseRuntimeBinding(streamName); bound {
+			return streamName, true
+		}
 		return parsed.Concrete, true
 	}
 	return "", false
@@ -1401,10 +1404,11 @@ func buildOfflineLifecycleTriggerAt(nodeID, internalName string, observedAt time
 	zeroInputs := uint32(0)
 	zeroViewers := uint32(0)
 	trigger := &ipcpb.MistTrigger{
-		TriggerType: "STREAM_LIFECYCLE_UPDATE",
-		NodeId:      nodeID,
-		Timestamp:   observedAt.Unix(),
-		Blocking:    acknowledged,
+		TriggerType:       "STREAM_LIFECYCLE_UPDATE",
+		NodeId:            nodeID,
+		Timestamp:         observedAt.Unix(),
+		TriggerUnixMillis: observedAt.UnixMilli(),
+		Blocking:          acknowledged,
 		TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
 			StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{
 				NodeId:       nodeID,
@@ -1416,11 +1420,14 @@ func buildOfflineLifecycleTriggerAt(nodeID, internalName string, observedAt time
 			},
 		},
 	}
+	if binding, ok := streamident.ParseRuntimeBinding(internalName); ok {
+		trigger.GetStreamLifecycleUpdate().InternalName = binding.InternalName
+		trigger.GetStreamLifecycleUpdate().ProcessObservation = &ipcpb.MistStreamProcessObservation{RuntimeName: internalName}
+	}
 	if acknowledged {
 		requestID := uuid.NewString()
 		trigger.RequestId = requestID
 		trigger.TriggerUuid = requestID
-		trigger.TriggerUnixMillis = observedAt.UnixMilli()
 	}
 	return trigger
 }
@@ -1580,6 +1587,10 @@ func (pm *PrometheusMonitor) processObservedStreamDataContext(ctx context.Contex
 		internalName = after
 	} else {
 		internalName = streamName
+	}
+
+	if binding, ok := streamident.ParseRuntimeBinding(streamName); ok {
+		internalName = binding.InternalName
 	}
 
 	// Get current viewers
@@ -3451,6 +3462,9 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 
 					// Use normalized internal name as key (e.g., "live+demo_stream" -> "demo_stream")
 					internalName := mist.ExtractInternalName(streamName)
+					if _, bound := streamident.ParseRuntimeBinding(streamName); bound {
+						internalName = streamName
+					}
 					nodeUpdate.Streams[internalName] = sd
 				}
 			}

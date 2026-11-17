@@ -10,11 +10,11 @@ import (
 // segment set the anchor, the recording owner's terminal acknowledgement
 // supplies its start time so the terminal chapter backfill can still run.
 // An anchor that is already set never moves.
-func recordDVRStartTime(ctx context.Context, hash, tenantID, nodeID string, startedAt int64) error {
+func recordDVRStartTime(ctx context.Context, q *foghorndb.Queries, hash, tenantID, nodeID string, startedAt int64) error {
 	if startedAt <= 0 {
 		return nil
 	}
-	return foghorndb.New(db).RecordDVRStartTime(ctx, foghorndb.RecordDVRStartTimeParams{
+	return q.RecordDVRStartTime(ctx, foghorndb.RecordDVRStartTimeParams{
 		ArtifactHash: hash, TenantID: tenantID, NodeID: nodeID, StartedAtUnix: startedAt,
 	})
 }

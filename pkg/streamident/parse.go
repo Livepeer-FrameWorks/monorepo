@@ -113,6 +113,9 @@ func (p Parsed) IsArtifact() bool { return p.Kind.IsArtifact() }
 // Parse classifies a Mist runtime stream name. It never returns an error;
 // unrecognized input becomes KindBare with Concrete == Original.
 func Parse(runtimeName string) Parsed {
+	if binding, ok := ParseRuntimeBinding(runtimeName); ok {
+		return Parsed{Kind: KindSourceLive, Concrete: binding.InternalName, Original: runtimeName}
+	}
 	for _, p := range prefixes {
 		if rest, ok := strings.CutPrefix(runtimeName, p.prefix); ok {
 			return Parsed{Kind: p.kind, Concrete: rest, Original: runtimeName}

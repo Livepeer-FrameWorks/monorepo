@@ -8,6 +8,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,7 @@ import (
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockerpg"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -55,6 +57,190 @@ func testPublisherAdmissionOperations(t *testing.T, conn *sql.DB, dsn string) {
 		}
 		return got
 	}
+	t.Run("isolated runtime is durable and legacy replay stays legacy", func(t *testing.T) {
+		req := request()
+		req.PublisherLeaseEpoch = 19
+		req.StrictLeaseOwner = true
+		req.RuntimeLayoutVersion = 1
+		first := prepare(t, req)
+		binding, ok := streamident.ParseRuntimeBinding(first.RuntimeName)
+		if !ok || binding.ExecutionID != first.Generation || binding.InternalName != req.InternalName || first.RuntimeLayoutVersion != 1 {
+			t.Fatalf("runtime not bound to durable generation: %+v", first)
+		}
+		fresh := NewStreamRegistry(nil, "cell-a", time.Minute)
+		if applied, _, err := repository.Project(ctx, fresh, req, first, AdmissionEffectIntent{}); err != nil || !applied {
+			t.Fatalf("fresh runtime projection: %v %v", applied, err)
+		}
+		if !fresh.BeginNodeRuntime(req.InternalName, req.NodeID, req.TenantID, first.RuntimeName) {
+			t.Fatal("fresh projected publisher lost its tenant before readiness binding")
+		}
+		again := prepare(t, req)
+		if first.Generation != again.Generation || first.RuntimeName != again.RuntimeName {
+			t.Fatalf("retry minted another runtime: first=%+v next=%+v", first, again)
+		}
+		req.RuntimeLayoutVersion = 0
+		old, err := repository.Prepare(ctx, req, logger)
+		if err != nil || old.Outcome != IngestSessionAuthorityChanged {
+			t.Fatalf("old edge borrowed isolated publisher: %+v %v", old, err)
+		}
+		if _, err := conn.ExecContext(ctx, `UPDATE foghorn.ingest_sessions SET runtime_name='live+other' WHERE tenant_id=$1::uuid AND id=$2::uuid`, req.TenantID, first.Generation); err == nil {
+			t.Fatal("runtime binding could be overwritten")
+		}
+		legacy := request()
+		legacy.PublisherLeaseEpoch = 20
+		legacy.StrictLeaseOwner = true
+		before := prepare(t, legacy)
+		legacy.RuntimeLayoutVersion = 1
+		after := prepare(t, legacy)
+		if before.Generation != after.Generation || after.RuntimeLayoutVersion != 0 || after.RuntimeName != "live+"+legacy.InternalName {
+			t.Fatalf("legacy generation was renamed during replay: %+v", after)
+		}
+	})
+	t.Run("publisher epoch is immutable across admission replay", func(t *testing.T) {
+		req := request()
+		req.PublisherLeaseEpoch = 17
+		req.StrictLeaseOwner = true
+		first := prepare(t, req)
+		if first.PublisherLeaseEpoch != 17 {
+			t.Fatalf("prepared generation lost ownership epoch: %+v", first)
+		}
+		again := prepare(t, req)
+		if again.Generation != first.Generation || again.PublisherLeaseEpoch != 17 {
+			t.Fatalf("replay changed ownership: %+v", again)
+		}
+		req.PublisherLeaseEpoch = 18
+		changed, err := repository.Prepare(ctx, req, logger)
+		if err != nil || changed.Outcome != IngestSessionAuthorityChanged {
+			t.Fatalf("existing generation accepted a different global owner: %+v %v", changed, err)
+		}
+	})
+	t.Run("recording adoption cannot pretend a different physical source resumed", func(t *testing.T) {
+		req := request()
+		req.PublisherLeaseEpoch = 31
+		req.StrictLeaseOwner = true
+		req.RuntimeLayoutVersion = 1
+		old := prepare(t, req)
+		if _, err := conn.ExecContext(ctx, `UPDATE foghorn.ingest_sessions SET ended_at=NOW(),ended_at_unix_millis=$3 WHERE tenant_id=$1::uuid AND id=$2::uuid`, req.TenantID, old.Generation, time.Now().UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+		hash := strings.ReplaceAll(uuid.NewString(), "-", "")
+		if _, err := conn.ExecContext(ctx, `INSERT INTO foghorn.artifacts (artifact_hash,artifact_type,tenant_id,stream_internal_name,status,ingest_generation,dvr_start_dispatch) VALUES ($1,'dvr',$2::uuid,$3,'recording',$4::uuid,jsonb_build_object('source_node_id',$5::text,'source_runtime_name',$6::text,'ingest_generation',$4::text))`, hash, req.TenantID, req.InternalName, old.Generation, req.NodeID, old.RuntimeName); err != nil {
+			t.Fatal(err)
+		}
+		req.TriggerUUID = uuid.NewString()
+		req.ConnectorPID++
+		req.PublisherLeaseEpoch++
+		next := prepare(t, req)
+		_, err := foghorndb.New(conn).AdoptResumedDVR(ctx, foghorndb.AdoptResumedDVRParams{NewGeneration: next.Generation, TenantID: req.TenantID, StreamInternalName: sql.NullString{String: req.InternalName, Valid: true}, SourceNodeID: req.NodeID})
+		if !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("recording silently rebound without moving its physical writer: %v", err)
+		}
+		q := foghorndb.New(conn)
+		dispatch := fmt.Sprintf(`{"node_id":%q,"source_node_id":%q,"source_runtime_name":%q,"previous_source_runtime_name":%q,"ingest_generation":%q,"state":"source_handoff_pending"}`, req.NodeID, req.NodeID, next.RuntimeName, old.RuntimeName, next.Generation)
+		params := foghorndb.PrepareDVRSourceHandoffParams{ArtifactHash: hash, TenantID: req.TenantID, NewGeneration: next.Generation,
+			OldGeneration: old.Generation, OldRuntime: old.RuntimeName, NewRuntime: next.RuntimeName, SourceNodeID: req.NodeID, DispatchJson: dispatch}
+		if _, err := q.PrepareDVRSourceHandoff(ctx, params); err != nil {
+			t.Fatalf("durable source transition: %v", err)
+		}
+		oldContext := dvrWriterReportContext(ctx, old.RuntimeName)
+		if applied, _, err := (&dvrRepositoryDB{}).UpdateDVRProgressByHash(oldContext, hash, "recording", 100, 1, req.NodeID); applied || !errors.Is(err, errStaleDVRWriter) {
+			t.Fatalf("old writer promoted the source transition: applied=%v error=%v", applied, err)
+		}
+		if _, err := claimDVRFinalization(oldContext, hash); !errors.Is(err, errStaleDVRWriter) {
+			t.Fatalf("old writer finalized the source transition: %v", err)
+		}
+		newContext := dvrWriterReportContext(ctx, next.RuntimeName)
+		if applied, _, err := (&dvrRepositoryDB{}).UpdateDVRProgressByHash(newContext, hash, "starting", 100, 10, req.NodeID); applied || err != nil {
+			t.Fatalf("old segment count acknowledged an unconfirmed replacement: applied=%v error=%v", applied, err)
+		}
+		if applied, _, err := (&dvrRepositoryDB{}).UpdateDVRProgressByHash(newContext, hash, "recording", 100, 10, req.NodeID); !applied || err != nil {
+			t.Fatalf("new writer could not acknowledge the durable transition: applied=%v error=%v", applied, err)
+		}
+		got, err := q.GetDVRStartDispatch(ctx, foghorndb.GetDVRStartDispatchParams{ArtifactHash: hash, TenantID: req.TenantID})
+		if err != nil || strings.Contains(got, "previous_source_runtime_name") || !strings.Contains(got, next.RuntimeName) {
+			t.Fatalf("transition acknowledgement retained stale writer: %s %v", got, err)
+		}
+		if _, err := q.PrepareDVRSourceHandoff(ctx, params); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("replayed transition replaced its successor: %v", err)
+		}
+		detached := ""
+		if _, err := claimDVRFinalization(newContext, hash, FinalizeOptions{ReportingNodeID: req.NodeID, reportingTenantID: req.TenantID,
+			WriterOutcomeUnknown: true, WriterEndedSourceState: ipcpb.DVRSourceState_DVR_SOURCE_STATE_ENDED, DetachedSession: &detached}); err != nil {
+			t.Fatalf("interrupted source transition could not settle: %v", err)
+		}
+		if detached != next.Generation {
+			t.Fatalf("interrupted transition left live publisher unrecorded without recovery: detached=%q", detached)
+		}
+		got, err = q.GetDVRStartDispatch(ctx, foghorndb.GetDVRStartDispatchParams{ArtifactHash: hash, TenantID: req.TenantID})
+		if err != nil || !strings.Contains(got, "stop_pending") {
+			t.Fatalf("interrupted transition lost its writer drain obligation: %s %v", got, err)
+		}
+		var interruptionCode string
+		if err := conn.QueryRowContext(ctx, `SELECT error_message FROM foghorn.artifacts WHERE artifact_hash=$1 AND tenant_id=$2::uuid`, hash, req.TenantID).Scan(&interruptionCode); err != nil || interruptionCode != "recording_source_handoff_interrupted" {
+			t.Fatalf("interrupted transition has no stable failure reason: %q %v", interruptionCode, err)
+		}
+	})
+	t.Run("old runtime end cannot reap a replacement publisher", func(t *testing.T) {
+		req := request()
+		req.PublisherLeaseEpoch = 27
+		req.StrictLeaseOwner = true
+		req.RuntimeLayoutVersion = 1
+		old := prepare(t, req)
+		registry := NewStreamRegistry(nil, "cell-a", time.Minute)
+		if applied, _, err := repository.Project(ctx, registry, req, old, AdmissionEffectIntent{}); err != nil || !applied {
+			t.Fatalf("project old runtime: %v %v", applied, err)
+		}
+		if ended, err := RetireIngestSession(ctx, old.Generation, req.TenantID, req.InternalName, ingestEndedPlacementClaimLost, logger); err != nil || !ended {
+			t.Fatalf("retire: %v %v", ended, err)
+		}
+		req.TriggerUUID = uuid.NewString()
+		req.ConnectorPID++
+		req.PublisherLeaseEpoch++
+		next := prepare(t, req)
+		if applied, _, err := repository.Project(ctx, registry, req, next, AdmissionEffectIntent{}); err != nil || !applied {
+			t.Fatalf("project replacement: %v %v", applied, err)
+		}
+		if _, err := conn.ExecContext(ctx, `UPDATE foghorn.ingest_sessions SET playable_at_unix_millis=1 WHERE tenant_id=$1::uuid AND id=$2::uuid`, req.TenantID, next.Generation); err != nil {
+			t.Fatal(err)
+		}
+		if ended, err := EndIngestSessionsForStreamEnd(ctx, req.TenantID, req.NodeID, req.InternalName, time.Now().UnixMilli(), logger); err != nil || ended != 0 {
+			t.Fatalf("generationless end reaped isolated publisher: %d %v", ended, err)
+		}
+		if _, err := EndBoundPublisherRuntime(ctx, req.TenantID, req.NodeID, old.RuntimeName, time.Now().UnixMilli(), logger); err != nil {
+			t.Fatal(err)
+		}
+		var ended bool
+		if err := conn.QueryRowContext(ctx, `SELECT ended_at IS NOT NULL FROM foghorn.ingest_sessions WHERE tenant_id=$1::uuid AND id=$2::uuid`, req.TenantID, next.Generation).Scan(&ended); err != nil || ended {
+			t.Fatalf("old end retired replacement: ended=%v err=%v", ended, err)
+		}
+		result, err := ReconcileReportedNodeIngestSessions(ctx, req.NodeID, nil, nil, nil, logger)
+		if err != nil || result.Ended != 0 {
+			t.Fatalf("heartbeat absence retired publisher: %+v %v", result, err)
+		}
+		if err := conn.QueryRowContext(ctx, `SELECT ended_at IS NOT NULL FROM foghorn.ingest_sessions WHERE tenant_id=$1::uuid AND id=$2::uuid`, req.TenantID, next.Generation).Scan(&ended); err != nil || ended {
+			t.Fatalf("empty heartbeat ended new admission: %v %v", ended, err)
+		}
+		var attempts int
+		inventory := []*ipcpb.LiveIngestGeneration{{Generation: old.Generation, RuntimeName: old.RuntimeName, ConnectorPid: 100}}
+		dispatch := func(_ context.Context, node string, drain *ipcpb.DrainStreamRequest) error {
+			attempts++
+			if node != req.NodeID || drain.GetRuntimeName() != old.RuntimeName || drain.GetPriorOwnerSourceGeneration() != old.Generation {
+				t.Fatalf("cleanup retargeted replacement: %s %+v", node, drain)
+			}
+			if attempts == 1 {
+				return errors.New("lost stop delivery")
+			}
+			return nil
+		}
+		for range 2 {
+			if _, err := ReconcileReportedNodeIngestSessions(ctx, req.NodeID, inventory, dispatch, nil, logger); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if attempts != 2 {
+			t.Fatalf("lost exact stop was not retried: %d attempts", attempts)
+		}
+	})
 	t.Run("release recovery advances only confirmed execution obligations", func(t *testing.T) {
 		oldCell := localControlCellID
 		localControlCellID = "cell-a"

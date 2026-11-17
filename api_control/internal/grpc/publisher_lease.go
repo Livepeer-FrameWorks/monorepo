@@ -22,7 +22,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func validatePublisherLeaseRequest(ctx context.Context, req *pb.PublisherLeaseRequest) error {
+func validatePublisherLeaseIdentity(ctx context.Context, req *pb.PublisherLeaseRequest) error {
 	if err := requireServiceAuthentication(ctx, "publisher lease"); err != nil {
 		return err
 	}
@@ -38,6 +38,13 @@ func validatePublisherLeaseRequest(ctx context.Context, req *pb.PublisherLeaseRe
 	}
 	if len(req.GetNodeId()) > 100 || len(req.GetExecutionToken()) > 64 {
 		return status.Error(codes.InvalidArgument, "publisher execution identity too long")
+	}
+	return nil
+}
+
+func validatePublisherLeaseRequest(ctx context.Context, req *pb.PublisherLeaseRequest) error {
+	if err := validatePublisherLeaseIdentity(ctx, req); err != nil {
+		return err
 	}
 	if req.GetTenantAuthorityVersion() <= 0 || req.GetObjectAuthorityVersion() <= 0 || len(req.GetTenantPayloadSha256()) != 32 || len(req.GetObjectPayloadSha256()) != 32 {
 		return status.Error(codes.InvalidArgument, "publisher lease requires an exact authority pair")
@@ -152,6 +159,7 @@ func (s *CommodoreServer) AcquirePublisherLease(ctx context.Context, req *pb.Pub
 			response.Outcome = pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_SAME_EXECUTION
 		}
 		response.ExpiresAt = timestamppb.New(claim.ExpiresAt)
+		response.LeaseEpoch = claim.PublisherLeaseEpoch
 		return nil
 	})
 	if err != nil {
@@ -161,7 +169,7 @@ func (s *CommodoreServer) AcquirePublisherLease(ctx context.Context, req *pb.Pub
 }
 
 func (s *CommodoreServer) GetPublisherLease(ctx context.Context, req *pb.PublisherLeaseRequest) (*pb.PublisherLeaseResponse, error) {
-	if err := validatePublisherLeaseRequest(ctx, req); err != nil {
+	if err := validatePublisherLeaseIdentity(ctx, req); err != nil {
 		return nil, err
 	}
 	held, err := commodoredb.New(s.db).GetPublisherLease(ctx, commodoredb.GetPublisherLeaseParams{TenantID: req.GetTenantId(), StreamID: req.GetStreamId(), InternalName: req.GetInternalName(), LeaseSeconds: int64(activeIngestLease.Seconds())})
@@ -176,8 +184,9 @@ func (s *CommodoreServer) GetPublisherLease(ctx context.Context, req *pb.Publish
 		response.Outcome = pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_UNSPECIFIED
 	} else if held.ActiveIngestClusterID.String == req.GetClusterId() {
 		response.HeldExecutionToken = held.ActiveIngestClaimID.String
-		if response.HeldExecutionToken == req.GetExecutionToken() {
+		if response.HeldExecutionToken == req.GetExecutionToken() && held.ActiveIngestNodeID.String == req.GetNodeId() && held.ActiveIngestControlCellID.String == req.GetControlCellId() {
 			response.Outcome = pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_SAME_EXECUTION
+			response.LeaseEpoch = held.PublisherLeaseEpoch
 		}
 	}
 	return response, nil

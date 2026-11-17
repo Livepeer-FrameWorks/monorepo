@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"math"
+	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -35,6 +37,12 @@ func (p *Processor) acceptedSourcePull(ctx context.Context, internalName, nodeID
 		return false
 	}
 	pull, ok := registry.AcceptedOutboundPull(ctx, internalName, nodeID, control.SourcePullCredential(requestURL), time.Now())
+	if ok && pull.SourceRuntimeName != "" {
+		requested, err := url.Parse(requestURL)
+		if err != nil || path.Base(requested.Path) != pull.SourceRuntimeName {
+			return false
+		}
+	}
 	if ok && p.logger != nil {
 		p.logger.WithFields(map[string]any{"internal_name": internalName, "node_id": nodeID, "dest_cluster": pull.DestClusterID, "dest_node": pull.DestNodeID}).Info("Admitting DTSC connection as accepted origin pull")
 	}

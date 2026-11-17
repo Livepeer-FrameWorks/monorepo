@@ -15,6 +15,7 @@ import (
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	pkgredis "github.com/Livepeer-FrameWorks/monorepo/pkg/redis"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 )
 
 // IngestMode is a typed source stream ingest mode. The zero value is
@@ -103,12 +104,14 @@ type EdgeCandidate struct {
 	// RAMUsed/RAMMax mirror the ad's ram fields. They fed the legacy remote-edge
 	// scorer and currently have no consumer: cross-cell routing asks the peer's
 	// placement service rather than scoring cached peer telemetry locally.
-	RAMUsed          uint64
-	RAMMax           uint64
-	SourceGeneration string
-	SourceRevision   int64
-	SourceObservedAt int64
-	DTSCObservedAt   int64
+	RAMUsed           uint64
+	RAMMax            uint64
+	SourceGeneration  string
+	SourceLeaseEpoch  int64
+	SourceRuntimeName string
+	SourceRevision    int64
+	SourceObservedAt  int64
+	DTSCObservedAt    int64
 }
 
 // Location is a per-cluster view of a stream — local or federated. Each
@@ -194,7 +197,11 @@ type Location struct {
 	// SourceGeneration is the durable ingest-session id of the current push source. Source ownership
 	// transitions use it as identity while SourceRevision supplies ordering. Pull ownership has no
 	// ingest generation.
-	SourceGeneration string
+	SourceGeneration  string
+	SourceLeaseEpoch  int64
+	SourceRuntimeName string
+	SourceClusterID   string
+	AdvertisedSource  bool
 
 	// SourceTriggerUUID is the Mist X-Trigger-UUID of the source's admitting PUSH_REWRITE trigger
 	// execution — stable across THAT execution's blocking-trigger retries, but a distinct value for a
@@ -230,6 +237,9 @@ type OutboundPull struct {
 	ConfiguredSource     bool
 	SourceMediaClusterID string
 	SourceGeneration     string
+	SourceLeaseEpoch     int64
+	SourceRuntimeName    string
+	DestRuntimeName      string
 	SourceRevision       int64
 	DestClusterID        string
 	DestNodeID           string
@@ -612,6 +622,9 @@ func (r *StreamRegistry) LocalReplication(_ context.Context, internalName string
 
 func sourceInternalKey(name string) string {
 	name = strings.TrimSpace(name)
+	if binding, ok := streamident.ParseRuntimeBinding(name); ok {
+		return binding.InternalName
+	}
 	for _, prefix := range []string{"live+", "pull+"} {
 		if strings.HasPrefix(name, prefix) {
 			return strings.TrimPrefix(name, prefix)

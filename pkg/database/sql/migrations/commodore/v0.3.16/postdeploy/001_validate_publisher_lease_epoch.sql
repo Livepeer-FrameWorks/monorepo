@@ -1,0 +1,1 @@
+ALTER TABLE commodore.streams VALIDATE CONSTRAINT chk_stream_publisher_lease_epoch;
