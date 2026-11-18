@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/remote-dev.sh <doctor|sync|run|shell|path|ssh-config> [slot] [command...]
+Usage: scripts/remote-dev.sh <doctor|sync|run|storage|shell|path|ssh-config> [slot] [command...]
 
 Environment:
   FRAMEWORKS_GITOPS_DIR  GitOps checkout (default: sibling ../gitops)
@@ -12,6 +12,11 @@ Environment:
   REMOTE_DEV_USER        Remote Unix account (default: local username)
   REMOTE_DEV_SLOT        Slot used when the positional slot is omitted
   REMOTE_DEV_REPO_URL    Bootstrap clone URL
+  REMOTE_DEV_MIN_FREE_GB Minimum free workspace disk before a run (default: 48)
+
+Storage maintenance:
+  storage <slot> [--apply] [--wait-seconds N] [--keep-workspace NAME]
+  Audits by default. Apply reserves all heavy-job slots before bounding caches.
 EOF
 }
 
@@ -145,8 +150,19 @@ case "$action" in
     resolve_slot "${1:-}"
     shift || true
     [[ $# -gt 0 ]] || die "run requires a command"
+    minimum_free_gb=${REMOTE_DEV_MIN_FREE_GB:-48}
+    [[ $minimum_free_gb =~ ^[1-9][0-9]{0,3}$ ]] || die "REMOTE_DEV_MIN_FREE_GB must be a positive integer below 10000"
     printf -v quoted_command '%q ' "$@"
-    remote_script="set -e; umask 0002; cd $(printf '%q' "$remote_repo"); $(remote_environment); for lock in /srv/frameworks-dev/cache/.heavy-1.lock /srv/frameworks-dev/cache/.heavy-2.lock /srv/frameworks-dev/cache/.heavy-3.lock; do exec {lock_fd}>\"\$lock\"; if flock -n \"\$lock_fd\"; then exec bash scripts/remote-dev-job.sh $(printf '%q' "/srv/frameworks-dev/cache/$remote_user/job-tmp") $quoted_command; fi; exec {lock_fd}>&-; done; printf '%s\\n' 'remote-dev: all heavy-job slots are occupied; retry after one finishes' >&2; exit 75"
+    remote_script="set -e; umask 0002; cd $(printf '%q' "$remote_repo"); $(remote_environment); for lock in /srv/frameworks-dev/cache/.heavy-1.lock /srv/frameworks-dev/cache/.heavy-2.lock /srv/frameworks-dev/cache/.heavy-3.lock; do exec {lock_fd}>\"\$lock\"; if flock -n \"\$lock_fd\"; then available_kb=\$(df -Pk . | awk 'NR == 2 {print \$4}'); if [[ ! \$available_kb =~ ^[0-9]+$ ]] || (( available_kb < $minimum_free_gb * 1000000 )); then printf '%s\\n' 'remote-dev: workspace disk is below ${minimum_free_gb} GB free; run scripts/remote-dev.sh storage $slot --apply before retrying' >&2; exit 75; fi; mkdir -p .stack; touch .stack/last-job; exec bash scripts/remote-dev-job.sh $(printf '%q' "/srv/frameworks-dev/cache/$remote_user/job-tmp") $quoted_command; fi; exec {lock_fd}>&-; done; printf '%s\\n' 'remote-dev: all heavy-job slots are occupied; retry after one finishes' >&2; exit 75"
+    # shellcheck disable=SC2029
+    ssh "${ssh_args[@]}" "$remote_target" "bash -lc $(printf '%q' "$remote_script")"
+    ;;
+  storage)
+    resolve_slot "${1:-}"
+    shift || true
+    quoted_command=''
+    if (( $# )); then printf -v quoted_command '%q ' "$@"; fi
+    remote_script="set -e; cd $(printf '%q' "$remote_repo"); exec python3 scripts/remote-dev-storage.py $quoted_command"
     # shellcheck disable=SC2029
     ssh "${ssh_args[@]}" "$remote_target" "bash -lc $(printf '%q' "$remote_script")"
     ;;

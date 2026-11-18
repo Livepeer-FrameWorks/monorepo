@@ -40,6 +40,36 @@ temporary paths with persistent ad hoc cache directories; Go, pnpm, and Cargo ca
 persist separately. Environment generation, compose verification and test selection honor the
 configured shared Go cache. An uncatchable host/process kill can still require orphan cleanup.
 
+`run` checks the workspace filesystem before starting a job and exits 75 below
+48 GB free (`REMOTE_DEV_MIN_FREE_GB` overrides the threshold). Check `/srv/frameworks-dev`,
+not `/`: the build disk can be full while the OS disk has space.
+
+## Storage maintenance
+
+```bash
+scripts/remote-dev.sh storage issue-123
+scripts/remote-dev.sh storage issue-123 --apply --wait-seconds 900 --keep-workspace release-candidate
+```
+
+The first command audits without deleting. Apply reserves all three heavy-job
+locks; running jobs finish normally, and new jobs return 75 until maintenance ends.
+Without a wait allowance, an occupied slot returns 75. Do not invoke maintenance
+inside `remote-dev.sh run`, which already owns one of those locks.
+
+Maintenance removes only ignored dependencies and generated outputs from
+workspaces idle for three days. Process working directories, container bind mounts,
+the invoking workspace and explicit `--keep-workspace` names protect a workspace.
+Source, Git history, `.stack` evidence and native install archives are retained.
+New runs update `.stack/last-job` for the retention check.
+
+The shared Go build cache is trimmed oldest first to 16 GB, and Docker's own
+garbage collector bounds build cache at 20 GB while targeting 50 GB free and
+reserving 8 GB of build cache. Docker retains records in use. Maintenance does not
+remove containers, volumes or release images. `--keep-days`, `--go-cache-gb`,
+`--docker-cache-gb` and `--min-free-gb` set these limits. Each apply stores a JSON
+receipt with the selected outputs and actual free space under
+`/srv/frameworks-dev/cache/<user>/storage-maintenance/`.
+
 ## Common commands
 
 ```bash
