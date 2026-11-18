@@ -70,8 +70,8 @@ if [[ -r "/proc/$background_pid/stat" ]] && [[ $(awk '{print $3}' "/proc/$backgr
 fi
 assert_empty "$fixture/background"
 
-# Exercise the SSH wrapper against a private fake remote filesystem. The
-# unmodified wrapper leaks this command's file into its inherited TMPDIR.
+# Fixture paths travel through the environment so fake SSH rewrites only
+# paths belonging to the simulated remote filesystem.
 mkdir -p "$fixture/bin" "$fixture/legacy" "$fixture/remote/workspaces/fixture/job-test/monorepo/scripts"
 cp "$runner" "$fixture/remote/workspaces/fixture/job-test/monorepo/scripts/"
 cat > "$fixture/bin/ssh" <<'SSH'
@@ -104,8 +104,8 @@ assert_empty "$fixture/legacy"
 set +e
 PATH="$fixture/bin:$PATH" REMOTE_DEV_TEST_ROOT="$fixture/remote" \
   REMOTE_DEV_HOST=fixture REMOTE_DEV_PORT=22 REMOTE_DEV_USER=fixture \
-  REMOTE_DEV_TEST_AVAILABLE_KB=1000000 \
-  bash "$repo/scripts/remote-dev.sh" run job-test touch "$fixture/should-not-start"
+  REMOTE_DEV_TEST_AVAILABLE_KB=1000000 REMOTE_DEV_TEST_FIXTURE="$fixture" \
+  bash "$repo/scripts/remote-dev.sh" run job-test bash -c 'touch "$REMOTE_DEV_TEST_FIXTURE/should-not-start"'
 status=$?
 set -e
 [[ "$status" = 75 && ! -e "$fixture/should-not-start" ]] || {
@@ -117,8 +117,8 @@ for available_kb in 46874999 46875000; do
   set +e
   PATH="$fixture/bin:$PATH" REMOTE_DEV_TEST_ROOT="$fixture/remote" \
     REMOTE_DEV_HOST=fixture REMOTE_DEV_PORT=22 REMOTE_DEV_USER=fixture \
-    REMOTE_DEV_TEST_AVAILABLE_KB="$available_kb" \
-    bash "$repo/scripts/remote-dev.sh" run job-test touch "$fixture/budget-$available_kb"
+    REMOTE_DEV_TEST_AVAILABLE_KB="$available_kb" REMOTE_DEV_TEST_FIXTURE="$fixture" \
+    bash "$repo/scripts/remote-dev.sh" run job-test bash -c 'touch "$REMOTE_DEV_TEST_FIXTURE/budget-$REMOTE_DEV_TEST_AVAILABLE_KB"'
   status=$?
   set -e
   if [[ "$available_kb" = 46874999 ]]; then
@@ -139,11 +139,11 @@ for available_kb in 80000000 200000000; do
   mkdir -p "$capacity"
   PATH="$fixture/bin:$PATH" REMOTE_DEV_TEST_ROOT="$fixture/remote" \
     REMOTE_DEV_HOST=fixture REMOTE_DEV_PORT=22 REMOTE_DEV_USER=fixture \
-    REMOTE_DEV_TEST_AVAILABLE_KB="$available_kb" \
+    REMOTE_DEV_TEST_AVAILABLE_KB="$available_kb" REMOTE_DEV_TEST_CASE_DIR="$capacity" \
     bash "$repo/scripts/remote-dev.sh" run job-test bash -c '
-      touch "$1/first-ready"
-      while [[ ! -e "$1/release" ]]; do sleep 0.05; done
-    ' bash "$capacity" &
+      touch "$REMOTE_DEV_TEST_CASE_DIR/first-ready"
+      while [[ ! -e "$REMOTE_DEV_TEST_CASE_DIR/release" ]]; do sleep 0.05; done
+    ' &
   first_job=$!
   for _ in $(seq 1 100); do
     [[ ! -f "$capacity/first-ready" ]] || break
@@ -156,10 +156,11 @@ for available_kb in 80000000 200000000; do
     exit 1
   fi
   set +e
+  # shellcheck disable=SC2016
   PATH="$fixture/bin:$PATH" REMOTE_DEV_TEST_ROOT="$fixture/remote" \
     REMOTE_DEV_HOST=fixture REMOTE_DEV_PORT=22 REMOTE_DEV_USER=fixture \
-    REMOTE_DEV_TEST_AVAILABLE_KB="$available_kb" \
-    timeout 5s bash "$repo/scripts/remote-dev.sh" run job-test touch "$capacity/second-started"
+    REMOTE_DEV_TEST_AVAILABLE_KB="$available_kb" REMOTE_DEV_TEST_CASE_DIR="$capacity" \
+    timeout 5s bash "$repo/scripts/remote-dev.sh" run job-test bash -c 'touch "$REMOTE_DEV_TEST_CASE_DIR/second-started"'
   status=$?
   set -e
   touch "$capacity/release"
@@ -177,8 +178,8 @@ for available_kb in 80000000 200000000; do
   fi
   PATH="$fixture/bin:$PATH" REMOTE_DEV_TEST_ROOT="$fixture/remote" \
     REMOTE_DEV_HOST=fixture REMOTE_DEV_PORT=22 REMOTE_DEV_USER=fixture \
-    REMOTE_DEV_TEST_AVAILABLE_KB="$available_kb" \
-    bash "$repo/scripts/remote-dev.sh" run job-test touch "$capacity/after-release"
+    REMOTE_DEV_TEST_AVAILABLE_KB="$available_kb" REMOTE_DEV_TEST_CASE_DIR="$capacity" \
+    bash "$repo/scripts/remote-dev.sh" run job-test bash -c 'touch "$REMOTE_DEV_TEST_CASE_DIR/after-release"'
 done
 
 cat > "$fixture/bin/python3" <<'PYTHON'
