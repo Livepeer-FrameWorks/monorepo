@@ -81,6 +81,11 @@ command=${command//\/srv\/frameworks-dev/$REMOTE_DEV_TEST_ROOT}
 exec bash -c "$command"
 SSH
 chmod +x "$fixture/bin/ssh"
+cat > "$fixture/bin/df" <<'DF'
+#!/usr/bin/env bash
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\nfixture 100000000 1000 %s 1%% /\n' "${REMOTE_DEV_TEST_AVAILABLE_KB:-99000000}"
+DF
+chmod +x "$fixture/bin/df"
 PATH="$fixture/bin:$PATH" REMOTE_DEV_TEST_ROOT="$fixture/remote" \
   REMOTE_DEV_TEST_FIXTURE="$fixture" \
   REMOTE_DEV_HOST=fixture REMOTE_DEV_PORT=22 REMOTE_DEV_USER=fixture TMPDIR="$fixture/legacy" \
@@ -95,6 +100,32 @@ case "$actual_tmp" in
 esac
 [[ ! -e "$actual_tmp" ]] || { echo 'FAIL: SSH job temporary directory survived completion' >&2; exit 1; }
 assert_empty "$fixture/legacy"
+
+set +e
+PATH="$fixture/bin:$PATH" REMOTE_DEV_TEST_ROOT="$fixture/remote" \
+  REMOTE_DEV_HOST=fixture REMOTE_DEV_PORT=22 REMOTE_DEV_USER=fixture \
+  REMOTE_DEV_TEST_AVAILABLE_KB=1000000 \
+  bash "$repo/scripts/remote-dev.sh" run job-test touch "$fixture/should-not-start"
+status=$?
+set -e
+[[ "$status" = 75 && ! -e "$fixture/should-not-start" ]] || {
+  echo 'FAIL: remote job started without disk headroom' >&2
+  exit 1
+}
+
+cat > "$fixture/bin/python3" <<'PYTHON'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$REMOTE_DEV_TEST_STORAGE_ARGS"
+PYTHON
+chmod +x "$fixture/bin/python3"
+PATH="$fixture/bin:$PATH" REMOTE_DEV_TEST_ROOT="$fixture/remote" \
+  REMOTE_DEV_HOST=fixture REMOTE_DEV_PORT=22 REMOTE_DEV_USER=fixture \
+  REMOTE_DEV_TEST_AVAILABLE_KB=1 REMOTE_DEV_TEST_STORAGE_ARGS="$fixture/storage-args" \
+  bash "$repo/scripts/remote-dev.sh" storage job-test
+[[ $(cat "$fixture/storage-args") = scripts/remote-dev-storage.py ]] || {
+  echo 'FAIL: storage audit gained an empty argument or required build disk headroom' >&2
+  exit 1
+}
 
 # The real env targets must honor the shared cache rather than compiling a
 # second standard library in every checkout. The stub records the child env.

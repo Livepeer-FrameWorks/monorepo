@@ -904,9 +904,12 @@ stack-up:
 stack-down:
 	@bash $(CURDIR)/scripts/stack/down.sh
 
-.PHONY: test-remote-dev-job test-stack-slot-ownership
-test-remote-dev-job: test-stack-slot-ownership
+.PHONY: test-remote-dev-job test-stack-slot-ownership test-remote-dev-storage
+test-remote-dev-job: test-stack-slot-ownership test-remote-dev-storage
 	@bash $(CURDIR)/scripts/test-remote-dev-job.sh
+
+test-remote-dev-storage:
+	@python3 $(CURDIR)/scripts/test-remote-dev-storage.py
 
 test-stack-slot-ownership:
 	@bash $(CURDIR)/scripts/stack/test_slot_ownership.sh
