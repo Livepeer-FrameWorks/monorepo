@@ -40,9 +40,13 @@ temporary paths with persistent ad hoc cache directories; Go, pnpm, and Cargo ca
 persist separately. Environment generation, compose verification and test selection honor the
 configured shared Go cache. An uncatchable host/process kill can still require orphan cleanup.
 
-`run` checks the workspace filesystem before starting a job and exits 75 below
-48 GB free (`REMOTE_DEV_MIN_FREE_GB` overrides the threshold). Check `/srv/frameworks-dev`,
-not `/`: the build disk can be full while the OS disk has space.
+`run` budgets 48 GB of free workspace disk per occupied heavy-job slot
+(`REMOTE_DEV_MIN_FREE_GB` overrides the per-slot budget). The first job needs
+48 GB free, a second needs 96 GB, and a third needs 144 GB. Admissions share a
+lock so simultaneous starts cannot reuse one allocation; jobs with enough
+headroom still run concurrently. Insufficient headroom returns 75. Check
+`/srv/frameworks-dev`, not `/`: the build disk can be full while the OS disk
+has space. This admission budget is not a filesystem quota for running jobs.
 
 ## Storage maintenance
 
