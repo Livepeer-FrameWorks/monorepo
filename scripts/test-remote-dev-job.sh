@@ -113,6 +113,74 @@ set -e
   exit 1
 }
 
+for available_kb in 46874999 46875000; do
+  set +e
+  PATH="$fixture/bin:$PATH" REMOTE_DEV_TEST_ROOT="$fixture/remote" \
+    REMOTE_DEV_HOST=fixture REMOTE_DEV_PORT=22 REMOTE_DEV_USER=fixture \
+    REMOTE_DEV_TEST_AVAILABLE_KB="$available_kb" \
+    bash "$repo/scripts/remote-dev.sh" run job-test touch "$fixture/budget-$available_kb"
+  status=$?
+  set -e
+  if [[ "$available_kb" = 46874999 ]]; then
+    [[ "$status" = 75 && ! -e "$fixture/budget-$available_kb" ]] || {
+      echo 'FAIL: remote disk budget admitted less than 48 decimal GB' >&2
+      exit 1
+    }
+  else
+    [[ "$status" = 0 && -e "$fixture/budget-$available_kb" ]] || {
+      echo 'FAIL: remote disk budget rejected exactly 48 decimal GB' >&2
+      exit 1
+    }
+  fi
+done
+
+for available_kb in 80000000 200000000; do
+  capacity="$fixture/capacity-$available_kb"
+  mkdir -p "$capacity"
+  PATH="$fixture/bin:$PATH" REMOTE_DEV_TEST_ROOT="$fixture/remote" \
+    REMOTE_DEV_HOST=fixture REMOTE_DEV_PORT=22 REMOTE_DEV_USER=fixture \
+    REMOTE_DEV_TEST_AVAILABLE_KB="$available_kb" \
+    bash "$repo/scripts/remote-dev.sh" run job-test bash -c '
+      touch "$1/first-ready"
+      while [[ ! -e "$1/release" ]]; do sleep 0.05; done
+    ' bash "$capacity" &
+  first_job=$!
+  for _ in $(seq 1 100); do
+    [[ ! -f "$capacity/first-ready" ]] || break
+    sleep 0.05
+  done
+  if [[ ! -f "$capacity/first-ready" ]]; then
+    kill -TERM "$first_job" || true
+    wait "$first_job" || true
+    echo 'FAIL: first capacity fixture did not start' >&2
+    exit 1
+  fi
+  set +e
+  PATH="$fixture/bin:$PATH" REMOTE_DEV_TEST_ROOT="$fixture/remote" \
+    REMOTE_DEV_HOST=fixture REMOTE_DEV_PORT=22 REMOTE_DEV_USER=fixture \
+    REMOTE_DEV_TEST_AVAILABLE_KB="$available_kb" \
+    timeout 5s bash "$repo/scripts/remote-dev.sh" run job-test touch "$capacity/second-started"
+  status=$?
+  set -e
+  touch "$capacity/release"
+  wait "$first_job"
+  if [[ "$available_kb" = 80000000 ]]; then
+    [[ "$status" = 75 && ! -e "$capacity/second-started" ]] || {
+      echo 'FAIL: concurrent remote jobs shared one disk headroom allocation' >&2
+      exit 1
+    }
+  else
+    [[ "$status" = 0 && -e "$capacity/second-started" ]] || {
+      echo 'FAIL: sufficient headroom did not allow concurrent remote jobs' >&2
+      exit 1
+    }
+  fi
+  PATH="$fixture/bin:$PATH" REMOTE_DEV_TEST_ROOT="$fixture/remote" \
+    REMOTE_DEV_HOST=fixture REMOTE_DEV_PORT=22 REMOTE_DEV_USER=fixture \
+    REMOTE_DEV_TEST_AVAILABLE_KB="$available_kb" \
+    bash "$repo/scripts/remote-dev.sh" run job-test touch "$capacity/after-release"
+done
+
 cat > "$fixture/bin/python3" <<'PYTHON'
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "$REMOTE_DEV_TEST_STORAGE_ARGS"
