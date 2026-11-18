@@ -517,6 +517,16 @@ func (s *DecklogServer) SendEvent(ctx context.Context, trigger *ipcpb.MistTrigge
 		return nil, err
 	}
 
+	// Mist timestamps can be epoch seconds or milliseconds. Typed events and raw
+	// accounting facts must share the observation clock across delayed forwarding and replay.
+	if observed := trigger.GetTimestamp(); observed > 0 {
+		if observed < 1_000_000_000_000 {
+			analyticsEvent.Timestamp = time.Unix(observed, 0).UTC()
+		} else {
+			analyticsEvent.Timestamp = time.UnixMilli(observed).UTC()
+		}
+	}
+
 	// Envelope v2 fields from the MistTrigger override Decklog-level defaults.
 	// cluster_id (33) / origin_cluster_id (37) on the trigger play the
 	// source_cluster_id / stream_origin_cluster_id roles; the new region

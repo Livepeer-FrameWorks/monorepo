@@ -34,6 +34,8 @@ Transport is gRPC-only: TLS plus service-token auth via the shared interceptor (
 
 The Kafka record is the transparent `protojson` serialization of the protobuf message (proto field names, unpopulated fields omitted) in the envelope's `Data` map — no hand-maintained JSON mapping. Consumers get exactly what the proto says.
 
+The typed event's `Timestamp` preserves `MistTrigger.timestamp`, normalized to UTC: positive values below `1_000_000_000_000` are epoch seconds, and values at or above that boundary are epoch milliseconds. A missing or nonpositive timestamp falls back to Decklog receipt time. Forwarding delays and retries therefore retain a supplied observation time, keeping typed lifecycle events aligned with the raw accounting projection. The raw journal retains the original protobuf timestamp and units.
+
 ## Tenant attribution is fail-closed
 
 Decklog rejects any event without a valid UUID `tenant_id` — there is no zero-UUID fallback tenant, and an un-attributed event never reaches Kafka. The exceptions are declared, not inferred: a service event whose type `pkg/serviceevents.PlatformScoped` allows (operator-audience events, and the cluster lifecycle events whose domain counterparts the registry declares platform-scoped), and a domain event whose registered scope is `PLATFORM`, which must carry no tenant. Enrichment is upstream's job (Foghorn for media-plane triggers); rejections are counted on `events_ingested_total{status="tenant_rejected"|"tenant_missing"}`.
