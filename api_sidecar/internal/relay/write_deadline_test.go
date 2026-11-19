@@ -118,12 +118,13 @@ func TestRelayStreamTimesOutClientThatStopsReading(t *testing.T) {
 	s := relayForUpstream(t, up, "stall", size, admission.CacheMemoryOnly, 0)
 	s.writeStallTimeout = 300 * time.Millisecond
 
-	handlerDone := make(chan time.Time, 1)
+	handlerDone := make(chan time.Duration, 1)
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
+		startedAt := time.Now()
 		c.Next()
-		handlerDone <- time.Now()
+		handlerDone <- time.Since(startedAt)
 	})
 	s.MountRoutes(r)
 	waitFillsOnCleanup(t, s)
@@ -141,11 +142,9 @@ func TestRelayStreamTimesOutClientThatStopsReading(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	stalledAt := time.Now()
-
 	select {
-	case doneAt := <-handlerDone:
-		if waited := doneAt.Sub(stalledAt); waited < 300*time.Millisecond {
+	case waited := <-handlerDone:
+		if waited < s.writeStallTimeout {
 			t.Fatalf("handler returned after %v, before the stall timeout", waited)
 		}
 	case <-time.After(10 * time.Second):

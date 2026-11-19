@@ -2591,17 +2591,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 
 	// Protocol specified - redirect to specific edge node
 	// Find the URL for the requested protocol from the outputs
-	var redirectURL string
-
-	// Check primary outputs
-	if response.Primary.Outputs != nil {
-		redirectURL = findProtocolURL(response.Primary.Outputs, protocol)
-	}
-
-	// If not found and there's a direct URL, use it
-	if redirectURL == "" && response.Primary.Url != "" {
-		redirectURL = response.Primary.Url
-	}
+	redirectURL := resolvedViewerProtocolURL(response.Primary, protocol)
 
 	if redirectURL == "" {
 		respondPlaybackError(c, http.StatusNotFound, "PROTOCOL_NOT_AVAILABLE", fmt.Sprintf("Protocol '%s' not available for this stream", protocol), nil)
