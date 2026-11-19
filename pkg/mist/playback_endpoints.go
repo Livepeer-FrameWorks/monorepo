@@ -130,16 +130,31 @@ func playbackTemplate(outputs map[string]any, protocol string) string {
 		aliases = []string{"DTSC"}
 	case "srt":
 		aliases = []string{"SRT", "TSSRT"}
-	case "mp4", "mews", "wsmp4":
-		aliases = []string{"MP4", "MP4 progressive", "MP4 WebSocket"}
-	case "webm", "mkv", "mews_webm":
-		aliases = []string{"WEBM", "MKV", "EBML", "MKV progressive", "WebM progressive", "WebM WebSocket"}
+	case "mp4":
+		aliases = []string{"MP4", "MP4 progressive"}
+	case "mews", "wsmp4":
+		if hasReportedListener(outputs, "MP4 WebSocket") {
+			return ingestTemplate(outputs, "MP4 WebSocket")
+		}
+		aliases = []string{"MP4"}
+	case "webm", "mkv":
+		aliases = []string{"WEBM", "MKV", "EBML", "MKV progressive", "WebM progressive"}
+	case "mews_webm":
+		if hasReportedListener(outputs, "WebM WebSocket") {
+			return ingestTemplate(outputs, "WebM WebSocket")
+		}
+		aliases = []string{"WEBM", "MKV", "EBML"}
 	case "ts":
 		aliases = []string{"TS", "HTTPTS", "TS HTTP progressive"}
 	case "aac":
 		aliases = []string{"AAC", "AAC progressive"}
-	case "h264", "h264_ws":
-		aliases = []string{"H264", "Annex B progressive", "Annex B WebSocket"}
+	case "h264":
+		aliases = []string{"H264", "Annex B progressive"}
+	case "h264_ws":
+		if hasReportedListener(outputs, "Annex B WebSocket") {
+			return ingestTemplate(outputs, "Annex B WebSocket")
+		}
+		aliases = []string{"H264"}
 	case "raw_ws":
 		aliases = []string{"WSRaw", "Raw WebSocket"}
 	case "json_ws":

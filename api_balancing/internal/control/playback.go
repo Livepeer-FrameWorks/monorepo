@@ -783,7 +783,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 			Url:         endpointURL,
 			GeoDistance: geoDistance,
 			LoadScore:   float64(node.Score),
-			Outputs:     BuildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, resolvedPlaybackID, false),
+			Outputs:     BuildAdvertisedPlaybackOutputs(nodeOutputs.BaseURL, nodeOutputs.Outputs, resolvedPlaybackID, false),
 		})
 	}
 
@@ -1457,7 +1457,7 @@ func BuildViewerEndpointFromOutputs(nodeID string, nodeOutputs *NodeOutputs, str
 		BaseUrl:  baseURL,
 		Protocol: protocol,
 		Url:      endpointURL,
-		Outputs:  BuildOutputsMap(baseURL, nodeOutputs.Outputs, streamName, isLive),
+		Outputs:  BuildAdvertisedPlaybackOutputs(baseURL, nodeOutputs.Outputs, streamName, isLive),
 	}
 }
 
@@ -1558,6 +1558,15 @@ func BuildAdvertisedPlaybackOutputs(baseURL string, rawOutputs map[string]any, s
 			continue
 		}
 		outputs[protocol.name] = &sharedpb.OutputEndpoint{Protocol: protocol.name, Url: endpoint, Capabilities: BuildOutputCapabilities(protocol.name, isLive)}
+	}
+	if html := outputs["MIST_HTML"]; html != nil {
+		// player.js belongs to the observed HTTP listener, not a media format.
+		if page, err := url.Parse(html.Url); err == nil {
+			outputs["PLAYER_JS"] = &sharedpb.OutputEndpoint{
+				Protocol: "PLAYER_JS", Url: page.ResolveReference(&url.URL{Path: "player.js"}).String(),
+				Capabilities: BuildOutputCapabilities("PLAYER_JS", isLive),
+			}
+		}
 	}
 	return outputs
 }

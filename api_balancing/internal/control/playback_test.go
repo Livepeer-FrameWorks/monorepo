@@ -142,8 +142,9 @@ func TestBuildViewerEndpointFromOutputsRepairsMalformedBaseURL(t *testing.T) {
 	if endpoint.BaseUrl != "https://edge-eu-1.media-eu-1.frameworks.network/view/" {
 		t.Fatalf("unexpected base url: %q", endpoint.BaseUrl)
 	}
-	if endpoint.Outputs["PLAYER_JS"].Url != "https://edge-eu-1.media-eu-1.frameworks.network/view/player.js" {
-		t.Fatalf("unexpected PLAYER_JS url: %q", endpoint.Outputs["PLAYER_JS"].Url)
+	// Repairing a display base does not make malformed listener evidence valid.
+	if endpoint.Outputs["PLAYER_JS"] != nil || endpoint.Outputs["MP4"] != nil {
+		t.Fatal("malformed listener evidence manufactured playback outputs")
 	}
 }
 

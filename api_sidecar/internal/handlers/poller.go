@@ -959,6 +959,16 @@ func (pm *PrometheusMonitor) emitNodeLifecycleRuntime(runtime *mistNodeRuntime) 
 	// Fetch JSON data using Mist client (/{secret}.json)
 	runtime.clientMu.Lock()
 	jsonData, jsonErr := runtime.client.FetchJSONContext(runtime.ctx, "")
+	if jsonErr == nil {
+		if reported, ok := jsonData["outputs"].(map[string]any); ok {
+			catalog, catalogErr := runtime.client.FetchPlaybackOutputsContext(runtime.ctx, reported)
+			if catalogErr == nil {
+				jsonData["outputs"] = catalog
+			} else if monitorLogger != nil {
+				monitorLogger.WithError(catalogErr).Warn("Mist method inventory unavailable; reporting only observed metric outputs")
+			}
+		}
+	}
 	runtime.clientMu.Unlock()
 	if !pm.nodeRuntimeCurrent(runtime) {
 		return

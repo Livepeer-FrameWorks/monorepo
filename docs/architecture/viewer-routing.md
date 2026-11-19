@@ -548,6 +548,25 @@ nearby RTMP-only nodes cannot hide an available WHIP node farther down the ranki
 Listener reports expire after 30 seconds independently of heartbeats and capacity
 metrics. A successful empty report withdraws previously advertised listeners.
 
+Mist's flat metrics omit connectors whose URLs exist only in
+`capabilities.connectors.*.methods`. Helmsman reads the enabled protocol
+configuration and capabilities alongside each listener report, then projects
+these methods onto the observed HTTP listener. The report carries public URLs,
+not the configuration backup or API credentials. Disabled connectors and missing
+HTTP dependencies cannot add methods; a failed inventory read contributes only
+the flat listener report, without retaining old method capabilities.
+
+HTTP progressive MP4 and WebSocket MP4 are distinct method entries. Foghorn uses
+the same advertised catalog for placement, endpoint responses and final playback
+admission. An HTTP hostname alone does not imply MP4 support, and an explicit
+format request cannot fall back to another format's primary URL. The stack's
+progressive-playback scenario downloads and decodes live, DVR and stored-clip MP4
+through replicas in both cells, with independent HLS checks.
+
+DTSC preserves the recording's explicit Unix clock when relaying active DVR.
+The destination uses that clock for `startunix` and `stopunix`; host boot time
+provides a fallback only for sources without an explicit UTC mapping.
+
 Mist can advertise WebRTC with its UDP port in a `ws` URL. WHIP signalling uses
 the separately reported HTTP listener, including its public host, port and proxy
 prefix. Helmsman configures its single managed HTTP `pubaddr` as a scalar because

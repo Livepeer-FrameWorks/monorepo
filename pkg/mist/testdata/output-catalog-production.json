@@ -1,0 +1,416 @@
+{
+  "outputs": {
+    "AAC": "https://edge.example/view/$.aac",
+    "CMAF": "https://edge.example/view/cmaf/$/",
+    "DTSC": "dtsc://HOST/$",
+    "EBML": "https://edge.example/view/$.webm",
+    "FLAC": "https://edge.example/view/$.flac",
+    "FLV": "https://edge.example/view/$.flv",
+    "H264": "https://edge.example/view/$.h264",
+    "HDS": "https://edge.example/view/dynamic/$/manifest.f4m",
+    "HLS": "https://edge.example/view/hls/$/index.m3u8",
+    "HTTP": "https://edge.example/view/$.html",
+    "HTTPTS": "https://edge.example/view/$.ts",
+    "JPG": "https://edge.example/view/",
+    "MP3": "https://edge.example/view/$.mp3",
+    "OGG": "https://edge.example/view/$.ogg",
+    "RTMP": "rtmp://HOST/play/$",
+    "RTSP": "rtsp://HOST:5554/$",
+    "SDP": "https://edge.example/view/$.sdp",
+    "TSSRT": "srt://HOST/?streamid=$",
+    "WAV": "https://edge.example/view/$.wav",
+    "WSRaw": "https://edge.example/view/$.raw",
+    "WebRTC": "ws://HOST:18203/webrtc/$"
+  },
+  "config_backup": {
+    "config": {
+      "protocols": [
+        {
+          "connector": "HTTP"
+        },
+        {
+          "connector": "WebRTC"
+        },
+        {
+          "connector": "DTSC"
+        },
+        {
+          "connector": "WSRaw"
+        },
+        {
+          "connector": "ThumbVTT"
+        },
+        {
+          "connector": "CMAF"
+        },
+        {
+          "connector": "AAC"
+        },
+        {
+          "connector": "EBML"
+        },
+        {
+          "connector": "FLAC"
+        },
+        {
+          "connector": "FLV"
+        },
+        {
+          "connector": "H264"
+        },
+        {
+          "connector": "HDS"
+        },
+        {
+          "connector": "HLS"
+        },
+        {
+          "connector": "HTTPTS"
+        },
+        {
+          "connector": "JSON"
+        },
+        {
+          "connector": "MP3"
+        },
+        {
+          "connector": "MP4"
+        },
+        {
+          "connector": "OGG"
+        },
+        {
+          "connector": "RTMP"
+        },
+        {
+          "connector": "RTSP"
+        },
+        {
+          "connector": "SDP"
+        },
+        {
+          "connector": "SubRip"
+        },
+        {
+          "connector": "TSSRT"
+        },
+        {
+          "connector": "WAV"
+        },
+        {
+          "connector": "JPG"
+        }
+      ]
+    }
+  },
+  "capabilities": {
+    "connectors": {
+      "AAC": {
+        "deps": "HTTP",
+        "url_rel": "/$.aac",
+        "methods": [
+          {
+            "hrn": "AAC progressive",
+            "handler": "http"
+          }
+        ]
+      },
+      "CMAF": {
+        "deps": "HTTP",
+        "url_rel": "/cmaf/$/",
+        "methods": [
+          {
+            "hrn": "DASH",
+            "handler": "http",
+            "url_rel": "/cmaf/$/index.mpd"
+          },
+          {
+            "hrn": "HLS (CMAF)",
+            "handler": "http",
+            "url_rel": "/cmaf/$/index.m3u8"
+          },
+          {
+            "hrn": "MS Smooth Streaming",
+            "handler": "http",
+            "url_rel": "/cmaf/$/Manifest"
+          }
+        ]
+      },
+      "DTSC": {
+        "deps": "",
+        "url_rel": "/$",
+        "methods": [
+          {
+            "hrn": "DTSC",
+            "handler": "dtsc"
+          }
+        ]
+      },
+      "EBML": {
+        "deps": "HTTP",
+        "url_rel": "/$.webm",
+        "methods": [
+          {
+            "hrn": "MKV progressive",
+            "handler": "http"
+          }
+        ]
+      },
+      "FLAC": {
+        "deps": "HTTP",
+        "url_rel": "/$.flac",
+        "methods": [
+          {
+            "hrn": "FLAC progressive",
+            "handler": "http"
+          }
+        ]
+      },
+      "FLV": {
+        "deps": "HTTP",
+        "url_rel": "/$.flv",
+        "methods": [
+          {
+            "hrn": "FLV progressive",
+            "handler": "http"
+          }
+        ]
+      },
+      "Forward": {
+        "deps": "This output protocol can currently only be used by the pushing system."
+      },
+      "H264": {
+        "deps": "HTTP",
+        "url_rel": "/$.h264",
+        "methods": [
+          {
+            "hrn": "Annex B progressive over HTTP",
+            "handler": "http",
+            "url_rel": "/$.h264"
+          },
+          {
+            "hrn": "Annex B over WebSocket",
+            "handler": "ws",
+            "url_rel": "/$.h264"
+          }
+        ]
+      },
+      "HDS": {
+        "deps": "HTTP",
+        "url_rel": "/dynamic/$/manifest.f4m",
+        "methods": [
+          {
+            "hrn": "Flash Dynamic (HDS)",
+            "handler": "http"
+          }
+        ]
+      },
+      "HLS": {
+        "deps": "HTTP",
+        "url_rel": "/hls/$/index.m3u8",
+        "methods": [
+          {
+            "hrn": "HLS (TS)",
+            "handler": "http"
+          }
+        ]
+      },
+      "HTTP": {
+        "url_rel": "/$.html"
+      },
+      "HTTPMinimalServer": {
+        "deps": "HTTP",
+        "url_rel": "/static/"
+      },
+      "HTTPS": {},
+      "HTTPTS": {
+        "deps": "HTTP",
+        "url_rel": "/$.ts",
+        "methods": [
+          {
+            "hrn": "TS HTTP progressive",
+            "handler": "http"
+          }
+        ]
+      },
+      "JPEGReceiver": {
+        "deps": ""
+      },
+      "JPG": {
+        "deps": "HTTP",
+        "url_rel": ["/$.jpg", "/$.mjpg"],
+        "methods": [
+          {
+            "hrn": "JPEG image",
+            "handler": "http",
+            "url_rel": "/$.jpg"
+          },
+          {
+            "hrn": "JPEG stream",
+            "handler": "http",
+            "url_rel": "/$.mjpg"
+          }
+        ]
+      },
+      "JSON": {
+        "deps": "HTTP",
+        "methods": [
+          {
+            "hrn": "JSON progressive",
+            "handler": "http",
+            "url_rel": "/$.json"
+          },
+          {
+            "hrn": "JSON WebSocket",
+            "handler": "ws",
+            "url_rel": "/$.json"
+          }
+        ]
+      },
+      "JSONLine": {
+        "deps": ""
+      },
+      "MP3": {
+        "deps": "HTTP",
+        "url_rel": "/$.mp3",
+        "methods": [
+          {
+            "hrn": "MP3 progressive",
+            "handler": "http"
+          }
+        ]
+      },
+      "MP4": {
+        "deps": "HTTP",
+        "methods": [
+          {
+            "hrn": "MP4 progressive",
+            "handler": "http",
+            "url_rel": "/$.mp4"
+          },
+          {
+            "hrn": "MP4 WebSocket",
+            "handler": "ws",
+            "url_rel": "/$.mp4"
+          }
+        ]
+      },
+      "NDI": {
+        "deps": ""
+      },
+      "OGG": {
+        "deps": "HTTP",
+        "url_rel": "/$.ogg",
+        "methods": [
+          {
+            "hrn": "OGG progressive",
+            "handler": "http"
+          }
+        ]
+      },
+      "RTMP": {
+        "deps": "",
+        "url_rel": "/play/$",
+        "methods": [
+          {
+            "hrn": "RTMP",
+            "handler": "rtmp"
+          }
+        ]
+      },
+      "RTSP": {
+        "deps": "",
+        "url_rel": "/$",
+        "methods": [
+          {
+            "hrn": "RTSP",
+            "handler": "rtsp"
+          }
+        ]
+      },
+      "SDP": {
+        "deps": "HTTP",
+        "url_rel": "/$.sdp",
+        "methods": [
+          {
+            "hrn": "RTP-based SDP",
+            "handler": "http"
+          }
+        ]
+      },
+      "SubRip": {
+        "deps": "HTTP",
+        "methods": [
+          {
+            "hrn": "SRT subtitle progressive",
+            "handler": "http",
+            "url_rel": "/$.srt"
+          },
+          {
+            "hrn": "WebVTT subtitle progressive",
+            "handler": "http",
+            "url_rel": "/$.webvtt"
+          }
+        ]
+      },
+      "TS": {
+        "deps": ""
+      },
+      "TSSRT": {
+        "deps": "",
+        "url_rel": "?streamid=$",
+        "methods": [
+          {
+            "hrn": "SRT (Secure Reliable Transport)",
+            "handler": "srt"
+          }
+        ]
+      },
+      "ThumbVTT": {
+        "deps": "HTTP",
+        "methods": [
+          {
+            "hrn": "Thumbnail VTT progressive",
+            "handler": "http",
+            "url_rel": "/$.thumbvtt"
+          }
+        ]
+      },
+      "WAV": {
+        "deps": "HTTP",
+        "url_rel": "/$.wav",
+        "methods": [
+          {
+            "hrn": "WAV progressive",
+            "handler": "http"
+          }
+        ]
+      },
+      "WSRaw": {
+        "deps": "HTTP",
+        "url_rel": "/$.raw",
+        "methods": [
+          {
+            "hrn": "Raw WebSocket",
+            "handler": "ws",
+            "url_rel": "/$.raw"
+          }
+        ]
+      },
+      "WebRTC": {
+        "deps": "HTTP",
+        "url_rel": "/webrtc/$",
+        "methods": [
+          {
+            "hrn": "WebRTC with WebSocket signalling",
+            "handler": "ws"
+          },
+          {
+            "hrn": "WebRTC with WHEP signalling",
+            "handler": "http"
+          }
+        ]
+      }
+    }
+  }
+}
