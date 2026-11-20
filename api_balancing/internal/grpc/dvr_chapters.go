@@ -7,8 +7,11 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -109,6 +112,12 @@ func (s *FoghornGRPCServer) ListDVRChapters(ctx context.Context, req *foghorncon
 	if req.GetDvrArtifactId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "dvr_artifact_id is required")
 	}
+	if req.GetMode() == foghorncontrolpb.ArchivedClipCoverageMode {
+		if ctxkeys.GetAuthType(ctx) != "service" || req.GetTenantId() == "" {
+			return nil, status.Error(codes.PermissionDenied, "archived clip lookup requires service and tenant identity")
+		}
+		return s.listArchivedClipCoverage(ctx, req)
+	}
 	if err := s.assertChapterTenant(ctx, req.GetDvrArtifactId(), req.GetTenantId()); err != nil {
 		return nil, err
 	}
@@ -183,6 +192,49 @@ func (s *FoghornGRPCServer) ListDVRChapters(ctx context.Context, req *foghorncon
 		Chapters:      out,
 		NextPageToken: nextToken,
 	}, nil
+}
+
+// Query materialized media directly. Viewer listings can clamp their range to
+// the start of the final segment or skip chapters under a former policy.
+const findArchivedClipCoverage = `-- name: FindArchivedClipCoverage
+SELECT c.chapter_id, c.state, c.playback_artifact_hash, c.actual_media_start_ms, c.actual_media_end_ms
+FROM foghorn.dvr_chapters c
+JOIN foghorn.artifacts a ON a.artifact_hash = c.artifact_hash
+WHERE a.artifact_type = 'dvr' AND a.tenant_id = $1 AND a.artifact_hash = $2
+  AND c.state IN ('finalized', 'frozen', 'reclaimed') AND NOT c.is_current
+  AND c.playback_artifact_hash IS NOT NULL
+  AND c.actual_media_start_ms > 0 AND c.actual_media_start_ms <= $3 AND c.actual_media_end_ms >= $4
+ORDER BY c.chapter_id
+LIMIT 201`
+
+func (s *FoghornGRPCServer) listArchivedClipCoverage(ctx context.Context, req *foghorncontrolpb.ListDVRChaptersRequest) (*foghorncontrolpb.ListDVRChaptersResponse, error) {
+	startMs, endMs := req.GetRangeStartMs(), req.GetRangeEndMs()
+	if startMs <= 0 || endMs <= startMs {
+		return nil, status.Error(codes.InvalidArgument, "archived clip lookup requires a positive wall-clock range")
+	}
+	rows, err := s.db.QueryContext(ctx, findArchivedClipCoverage, req.GetTenantId(), req.GetDvrArtifactId(), startMs, endMs)
+	if err != nil {
+		s.logger.WithError(err).Warn("Archived clip coverage query failed")
+		return nil, status.Error(codes.Internal, "failed to read archived clip coverage")
+	}
+	defer rows.Close()
+	response := &foghorncontrolpb.ListDVRChaptersResponse{}
+	for rows.Next() {
+		chapter := &foghorncontrolpb.ChapterRef{}
+		if err := rows.Scan(&chapter.ChapterId, &chapter.State, &chapter.PlaybackArtifactHash,
+			&chapter.ActualMediaStartMs, &chapter.ActualMediaEndMs); err != nil {
+			return nil, status.Error(codes.Internal, "failed to read archived clip chapter")
+		}
+		response.Chapters = append(response.Chapters, chapter)
+		if len(response.Chapters) > 200 {
+			return nil, status.Error(codes.FailedPrecondition, "too many archived chapters cover the clip range")
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Error(codes.Internal, "failed to read archived clip coverage")
+	}
+	grpc.SetTrailer(ctx, metadata.Pairs(foghorncontrolpb.ArchivedClipCoverageTrailer, "1"))
+	return response, nil
 }
 
 // assertChapterTenant verifies the tenant_id on the request matches the

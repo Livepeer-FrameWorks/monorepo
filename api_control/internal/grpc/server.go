@@ -9368,10 +9368,12 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *sharedpb.CreateCl
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	// Route to the cluster where the stream is ingesting (if known), else primary
+	// A fresh live claim is authoritative for ingest. Historical wall-clock
+	// clips can instead belong to a DVR on a different tenant-eligible cell.
 	var foghornClient *foghornclient.GRPCClient
 	var clipClusterID string
-	if freshClusterID, ok := selectActiveIngestCluster(source.ActiveIngestClusterID, source.ActiveIngestClusterUpdatedAt, time.Now()); ok {
+	now := time.Now()
+	if freshClusterID, ok := selectActiveIngestCluster(source.ActiveIngestClusterID, source.ActiveIngestClusterUpdatedAt, now); ok {
 		foghornClient, err = s.resolveFoghornForCluster(ctx, freshClusterID, tenantID)
 		if err == nil {
 			clipClusterID = freshClusterID
@@ -9383,6 +9385,11 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *sharedpb.CreateCl
 				"active_ingest_cluster_time": source.ActiveIngestClusterUpdatedAt.Time,
 				"error":                      err,
 			}).Warn("Failed to resolve active ingest cluster for clip, falling back to tenant route")
+		}
+	} else if startMs, endMs, ok := archivedClipRange(req, now); ok {
+		foghornClient, clipClusterID, err = s.resolveArchivedClipOrigin(ctx, tenantID, streamID, source.InternalName, startMs, endMs)
+		if err != nil {
+			return nil, err
 		}
 	}
 	if foghornClient == nil {

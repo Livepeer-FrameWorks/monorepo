@@ -47,6 +47,9 @@ func (s *CommodoreServer) RetrieveDVRChapter(ctx context.Context, req *foghornco
 // ListDVRChapters validates tenant ownership then forwards to the DVR's
 // origin Foghorn.
 func (s *CommodoreServer) ListDVRChapters(ctx context.Context, req *foghorncontrolpb.ListDVRChaptersRequest) (*foghorncontrolpb.ListDVRChaptersResponse, error) {
+	if req.GetMode() == foghorncontrolpb.ArchivedClipCoverageMode {
+		return nil, status.Error(codes.InvalidArgument, "unsupported chapter listing mode")
+	}
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
