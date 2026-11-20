@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"frameworks/api_sidecar/internal/appconfig"
 	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/dvrpolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -129,6 +131,10 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 		if terminalDetail != "" {
 			outputs["chapter_failure"] = "source_missing"
 			outputs["chapter_failure_detail"] = terminalDetail
+			var ledgerErr *dvrpolicy.LedgerInconsistentError
+			if errors.As(buildErr, &ledgerErr) {
+				outputs["chapter_failure"] = dvrpolicy.ChapterFailureLedgerInconsistent
+			}
 		}
 		h.sendResult(send, req.GetJobId(), "failed", buildErr.Error(), outputs, "", 0)
 		return
@@ -449,7 +455,9 @@ func (h *ProcessingJobHandler) retryChapterDTSH(vodStreamName, dtshPath string, 
 // Returns (count, hasGaps, terminalDetail, err). terminalDetail is
 // non-empty only when the failure is deterministic and not worth
 // retrying — no recovery URL for a missing segment, or the request
-// has no source segments at all. Transient failures (S3 5xx,
+// has no source segments at all. A ledger validation failure carries a typed
+// LedgerInconsistentError so it cannot be reported as physical source loss.
+// Transient failures (S3 5xx,
 // timeouts, network errors during recovery fetch) leave terminalDetail
 // empty so the caller surfaces them as a retryable error rather than
 // marking the chapter failed_source_missing.
@@ -481,7 +489,7 @@ func (h *ProcessingJobHandler) buildChapterHLS(
 		if ordered[i].GetMediaStartMs() > covered {
 			return 0, false, 0, 0,
 				fmt.Sprintf("ledger gap between %dms and %dms", covered, ordered[i].GetMediaStartMs()),
-				fmt.Errorf("chapter %s has ledger gap", req.GetSourceChapterId())
+				&dvrpolicy.LedgerInconsistentError{Detail: fmt.Sprintf("ledger gap between %dms and %dms", covered, ordered[i].GetMediaStartMs())}
 		}
 		if ordered[i].GetMediaEndMs() > covered {
 			covered = ordered[i].GetMediaEndMs()

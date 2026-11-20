@@ -1,6 +1,10 @@
 package control
 
-import "github.com/Livepeer-FrameWorks/monorepo/pkg/hls"
+import (
+	"math"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/hls"
+)
 
 // dvrSegmentClock is one playlist entry's ledger timing. startMs is 0 when
 // the playlist gives the entry no wall-clock anchor.
@@ -20,7 +24,10 @@ func dvrPlaylistClocks(parsed *hls.Manifest) []dvrSegmentClock {
 	clocks := make([]dvrSegmentClock, 0, len(parsed.Segments))
 	var nextClockMs int64
 	for _, segment := range parsed.Segments {
-		duration := int64(segment.Duration * 1000)
+		// EXTINF is decimal seconds. Binary float conversion can put an exact
+		// millisecond below its integer (8.014 * 1000 becomes 8013.999999999999).
+		// Truncation would create a ledger gap against the next PDT anchor.
+		duration := int64(math.Round(segment.Duration * 1000))
 		start := segment.ProgramDateTimeMs
 		if start <= 0 {
 			start = nextClockMs

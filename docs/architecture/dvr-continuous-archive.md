@@ -22,6 +22,38 @@ Manual recording starts resolve the stream's fresh active ingest owner, not the 
 
 Finalization claims persist the stop time before upload retries. Chapter IDs, retention and terminal events use that persisted time; chapter queries truncate timestamps to milliseconds consistently with Go. List/retrieve requests with omitted chapter settings inherit the recording's policy. UTC-aligned fixed-interval boundaries stay unchanged even when recording begins midway through the first interval.
 
+Chapter settings travel in the stream's signed authority. Saving chapter mode or
+interval queues a durable refresh even when recording-enabled stays unchanged.
+A connected new publisher cannot use an older recording configuration while that
+publication is pending; it receives a retryable recording-settings message through
+the existing lease call. Publication rechecks the saved settings before committing,
+so an initial compile cannot publish defaults over an intervening chapter edit.
+Active recordings retain their accepted snapshot. A fixed 86400-second interval
+is independent of the tier's shorter live rewind window. Managed-source and local
+ingest-context adapters preserve the signed mode and interval, including explicit
+`none`; neither may silently replace those fields with window-sized chapters.
+
+Manual starts require a successful billing-policy read and successful processing,
+chapter and retention resolution before dispatching a recording. Window limits and
+the retention tier bound come from that same billing response; a failed required
+read does not substitute a default. These interactive policy reads use one
+fail-fast attempt rather than waiting for an unavailable service to reconnect.
+The recording-creation RPC retains its durable intent and recovery behavior.
+Explicit `none` and explicit zero retention
+(keep forever, subject to the tier bound) remain distinct from omitted values.
+The federation `CreateRemoteDVR` wire method returns `Unimplemented` after the
+normal service-authentication and federation checks: its stream/tenant-only
+request cannot carry the complete recording policy. Recording creation uses the
+owner-facing recording API and its existing active-ingest owner routing.
+
+`make verify-dvr-policy` exercises the adapters, duration quantization and the
+publication/admission contracts on PostgreSQL and Yugabyte. Stack scenario 81
+saves daily chapters immediately after creation, records briefly in both cells,
+and checks that a later settings edit leaves each accepted recording unchanged.
+Scenario 82 stops only the isolated stack's billing service, verifies that a
+manual start creates nothing, then checks recovery with the saved chapter and
+retention settings. It is not safe for rollout smoke against a live cluster.
+
 ## Source of truth: `foghorn.dvr_segments`
 
 The per-segment ledger is the durable timeline. Every Mist `RECORDING_SEGMENT` becomes one row, written by Foghorn via the helmsman control stream. The trigger's start/end fields are stream-relative milliseconds, not Unix time. Helmsman reads the segment's absolute timing from the local playlist's `PROGRAM-DATE-TIME`, advancing subsequent entries by `EXTINF` exactly as reconciliation does. A missing playlist entry or clock anchor is retried by reconciliation; neither filenames nor receipt time establish chapter placement:
@@ -114,6 +146,14 @@ A chapter is **playable** at `finalized` or later — the canonical `.mkv` is th
 8. Dispatch `ProcessingJobRequest{job_type='dvr_chapter_finalize'}` with the resolved processes_json. On send error, `RetryChapterFinalize` rolls back to `closed`.
 
 ### Helmsman finalize handler
+
+An internal hole in the requested ledger is reported as `ledger_inconsistent`,
+with `LEDGER_INCONSISTENT` in the stored failure detail. Foghorn marks that
+attempt `failed_permanent` rather than `failed_source_missing`: the same ledger
+cannot produce a verified complete remux, but its source files may still exist.
+This does not authorize source reclamation or clock correction. Recovery-fetch
+transport errors remain retryable; confirmed unavailable segments retain the
+source-missing classification.
 
 `processing_chapter.go::handleChapterFinalize`:
 

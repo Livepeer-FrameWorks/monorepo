@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/dvrpolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
@@ -34,10 +36,14 @@ type settlementCompatibilityCommodore struct {
 	leases       atomic.Int32
 	fencedClaims atomic.Int32
 	legacyClaims atomic.Int32
+	leaseErr     error
 }
 
 func (c *settlementCompatibilityCommodore) AcquirePublisherLease(context.Context, *commodorepb.PublisherLeaseRequest) (*commodorepb.PublisherLeaseResponse, error) {
 	c.leases.Add(1)
+	if c.leaseErr != nil {
+		return nil, c.leaseErr
+	}
 	return &commodorepb.PublisherLeaseResponse{Outcome: commodorepb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_ACQUIRED}, nil
 }
 
@@ -57,7 +63,7 @@ func (c *settlementCompatibilityCommodore) CheckStreamKey(ctx context.Context, r
 	return c.ValidateStreamKey(ctx, req)
 }
 
-func settlementCompatibilityClient(t *testing.T) (*commodore.GRPCClient, *settlementCompatibilityCommodore) {
+func settlementCompatibilityClient(t *testing.T, leaseErrors ...error) (*commodore.GRPCClient, *settlementCompatibilityCommodore) {
 	t.Helper()
 	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -65,6 +71,9 @@ func settlementCompatibilityClient(t *testing.T) (*commodore.GRPCClient, *settle
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 	fake := &settlementCompatibilityCommodore{}
+	if len(leaseErrors) > 0 {
+		fake.leaseErr = leaseErrors[0]
+	}
 	server := grpc.NewServer()
 	commodorepb.RegisterInternalServiceServer(server, fake)
 	t.Cleanup(server.Stop)
@@ -86,6 +95,7 @@ func TestPublisherAdmissionLegacyDomainDenialReturnsLeaseSynchronously(t *testin
 		{"missing deadline", nil, true},
 		{"invalid deadline", &timestamppb.Timestamp{Seconds: 253402300800}, true},
 		{"capable deadline", nil, false},
+		{"pending recording settings", nil, false},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			fixture, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
@@ -112,7 +122,12 @@ func TestPublisherAdmissionLegacyDomainDenialReturnsLeaseSynchronously(t *testin
 			if scenario.legacy {
 				mock.ExpectQuery(`FROM foghorn\.media_object_authority_projection`).WillReturnError(sql.ErrNoRows)
 			}
-			client, fake := settlementCompatibilityClient(t)
+			pendingSettings := scenario.name == "pending recording settings"
+			var leaseErr error
+			if pendingSettings {
+				leaseErr = dvrpolicy.RecordingPolicyPendingError()
+			}
+			client, fake := settlementCompatibilityClient(t, leaseErr)
 			p := NewProcessor(logging.NewLogger(), client, nil, nil, nil)
 			p.SetMediaAuthorityStore(fixture.mediaAuthorityStore)
 			p.SetPublisherAdmissionRepository(control.NewPublisherAdmissionRepository(nil))
@@ -136,6 +151,16 @@ func TestPublisherAdmissionLegacyDomainDenialReturnsLeaseSynchronously(t *testin
 			defer cancel()
 			_, _, publishErr := p.ProcessPublisher(ctx, trigger)
 			ingestErr, ok := errors.AsType[*ingesterrors.IngestError](publishErr)
+			if pendingSettings {
+				if placementCalled || !ok || ingestErr.Code != ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL ||
+					!strings.Contains(ingestErr.Message, "Recording settings are still being applied") || fake.leases.Load() != 1 || len(fake.requests()) != 0 {
+					t.Fatalf("pending settings did not refuse before placement without fallback or release: called=%v err=%v leases=%d releases=%d", placementCalled, publishErr, fake.leases.Load(), len(fake.requests()))
+				}
+				if err := mock.ExpectationsWereMet(); err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
 			if !placementCalled || !ok || ingestErr.Code != ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED {
 				t.Fatalf("expected post-lease placement denial: called=%v err=%v", placementCalled, publishErr)
 			}

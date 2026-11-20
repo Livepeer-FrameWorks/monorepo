@@ -303,7 +303,12 @@ func TestReadinessPreservationKeepsCutoverAcrossVerifiedObjectChanges(t *testing
 
 func newFixtureStore(t *testing.T, cellID string) (*Store, sqlmock.Sqlmock, func()) {
 	t.Helper()
-	db, mock, err := sqlmock.New()
+	return newFixtureStoreWithMatcher(t, cellID, sqlmock.QueryMatcherRegexp)
+}
+
+func newFixtureStoreWithMatcher(t *testing.T, cellID string, matcher sqlmock.QueryMatcher) (*Store, sqlmock.Sqlmock, func()) {
+	t.Helper()
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(matcher))
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}

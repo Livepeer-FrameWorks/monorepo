@@ -128,6 +128,9 @@ func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (result Ma
 	}
 	defer func() {
 		if resultErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil && !errors.Is(resultErr, ctxErr) {
+				resultErr = errors.Join(resultErr, ctxErr)
+			}
 			result.Complete = false
 		}
 		if s.managedStreamSets == nil {
@@ -283,6 +286,7 @@ func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (result Ma
 			Admitted: true, StreamId: live.GetStreamId(), PlaybackId: authority.GetPlaybackId(), InternalName: authority.GetInternalName(),
 			IngestMode: live.GetIngestMode(), TenantId: authority.GetTenantId(), UserId: authority.GetUserId(),
 			IsRecordingEnabled: live.GetRecordingEnabled(), RequiresAuth: authority.GetPlaybackPolicy().GetKind() != mediaauthoritypb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_PUBLIC,
+			DvrChapterMode: live.GetDvrChapterMode(), DvrChapterIntervalSeconds: live.GetDvrChapterIntervalSeconds(),
 			BillingModel: localBillingModel(tenant.Authority.GetBillingModel()), OriginClusterId: &origin, OfficialClusterId: &official,
 			ClusterPeers: s.RoutingClusterPeers(tenant.Authority, clusterID), AuthorityClusterPeers: TenantClusterPeers(tenant.Authority), ProcessesJson: live.GetProcessesJson(), DvrProcessesJson: live.GetDvrProcessesJson(),
 			DvrPolicy: tenant.Authority.GetDvrPolicy(), Allowances: tenant.Authority.GetAllowances(), TenantResourceLimits: clusterResourceLimits(tenant.Authority, clusterID),
@@ -338,6 +342,7 @@ func (s *Store) PromoteManagedStreamIfMatching(ctx context.Context, clusterID st
 		streamCtx.GetUserId() != authority.GetUserId() || streamCtx.GetInternalName() != authority.GetInternalName() ||
 		streamCtx.GetPlaybackId() != authority.GetPlaybackId() || streamCtx.GetIngestMode() != live.GetIngestMode() ||
 		streamCtx.GetIsRecordingEnabled() != live.GetRecordingEnabled() || streamCtx.GetProcessesJson() != live.GetProcessesJson() ||
+		(live.GetPublisherConfigurationVersion() >= 1 && (streamCtx.GetDvrChapterMode() != live.GetDvrChapterMode() || streamCtx.GetDvrChapterIntervalSeconds() != live.GetDvrChapterIntervalSeconds())) ||
 		streamCtx.GetDvrProcessesJson() != live.GetDvrProcessesJson() || streamCtx.GetBillingModel() != localBillingModel(tenant.Authority.GetBillingModel()) ||
 		streamCtx.GetOfficialClusterId() != tenant.Authority.GetOfficialClusterId() || !proto.Equal(streamCtx.GetDvrPolicy(), tenant.Authority.GetDvrPolicy()) ||
 		!sharedauthority.SameResourceLimits(streamCtx.GetTenantResourceLimits(), localLimits) ||

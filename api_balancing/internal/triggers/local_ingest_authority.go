@@ -109,6 +109,7 @@ func (p *Processor) ResolveLocalIngestContext(ctx context.Context, credential st
 		OriginClusterId: validation.OriginClusterId, OfficialClusterId: validation.OfficialClusterId,
 		ClusterPeers: validation.GetClusterPeers(), AuthorityClusterPeers: validation.GetAuthorityClusterPeers(), ProcessesJson: validation.GetProcessesJson(),
 		DvrProcessesJson: validation.GetDvrProcessesJson(), DvrPolicy: validation.GetDvrPolicy(),
+		DvrChapterMode: validation.GetDvrChapterMode(), DvrChapterIntervalSeconds: validation.GetDvrChapterIntervalSeconds(),
 		Allowances: validation.GetAllowances(), TenantResourceLimits: validation.GetTenantResourceLimits(),
 	}
 	if local.object.Authority != nil {

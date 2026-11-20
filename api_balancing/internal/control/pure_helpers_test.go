@@ -90,9 +90,9 @@ func TestIsPlayableChapterState(t *testing.T) {
 }
 
 // chapterTerminalFailure decides retry-vs-fail from a Helmsman processing result.
-// Only an affirmative source_missing signal (in outputs, or the error text) is
-// terminal; everything else is transient (retry). A terminal source_missing
-// carries a reason, defaulting when none is provided.
+// Missing-source signals are terminal; network failures remain retryable. The
+// ledger-specific classification is also exercised through its transactional
+// result handler in finalize_hook_coverage_test.go.
 func TestChapterTerminalFailure(t *testing.T) {
 	t.Run("source_missing via outputs is terminal with detail", func(t *testing.T) {
 		terminal, reason := chapterTerminalFailure(map[string]string{

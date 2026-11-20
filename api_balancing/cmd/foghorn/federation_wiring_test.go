@@ -77,10 +77,6 @@ func (localArtifacts) CreateClip(context.Context, *sharedpb.CreateClipRequest) (
 	return &sharedpb.CreateClipResponse{}, nil
 }
 
-func (localArtifacts) StartDVR(context.Context, *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, error) {
-	return &sharedpb.StartDVRResponse{}, nil
-}
-
 func (localArtifacts) DeleteClip(context.Context, *sharedpb.DeleteClipRequest) (*sharedpb.DeleteClipResponse, error) {
 	return &sharedpb.DeleteClipResponse{}, nil
 }
@@ -128,7 +124,6 @@ func wiredServerConfig(db *sql.DB) federation.FederationServerConfig {
 		DB:              db,
 		Placement:       &federation.PlacementDestination{},
 		ClipCreator:     localArtifacts{},
-		DVRCreator:      localArtifacts{},
 		ArtifactHandler: localArtifacts{},
 		AdvertisedBacking: func(context.Context, string, string) (federation.S3Backing, bool) {
 			return federation.S3Backing{}, false

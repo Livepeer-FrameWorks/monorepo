@@ -6,9 +6,30 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/dvrpolicy"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestPublishedLeasePreservesRecordingPolicyPendingWithoutExchange(t *testing.T) {
+	calls, refreshes := 0, 0
+	client := &publishedClaimClient{
+		PublisherLeaseClient: authorityExchangeClient{acquire: func(context.Context, *pb.PublisherLeaseRequest) (*pb.PublisherLeaseResponse, error) {
+			calls++
+			return nil, dvrpolicy.RecordingPolicyPendingError()
+		}},
+		request:  &pb.PublisherLeaseRequest{},
+		identity: &pb.ValidateStreamKeyResponse{Valid: true},
+		refresh: func(context.Context, [][]byte) (*pb.PublisherLeaseRequest, *pb.ValidateStreamKeyResponse, error) {
+			refreshes++
+			return nil, nil, errors.New("no publication exists to exchange")
+		},
+	}
+	response, err := client.ValidateStreamKeyForClaim(context.Background(), "", "cell", "execution")
+	if response != nil || !dvrpolicy.IsRecordingPolicyPending(err) || calls != 1 || refreshes != 0 {
+		t.Fatalf("pending policy was lost or exchanged for the same stale pair: response=%v err=%v calls=%d refreshes=%d", response, err, calls, refreshes)
+	}
+}
 
 type authorityExchangeClient struct {
 	PublisherLeaseClient
@@ -60,6 +81,8 @@ func TestPublishedLeaseExchangesOnlyVerifiedNewerPairWithinSameExecution(t *test
 				next.ObjectAuthorityVersion = 2
 				next.ObjectPayloadSha256 = bytes.Repeat([]byte{3}, 32)
 				validated.ProcessesJson = "current-config"
+				validated.IsRecordingEnabled = true
+				validated.DvrChapterMode, validated.DvrChapterIntervalSeconds = "fixed_interval", 86400
 				switch scenario {
 				case "wrong-node":
 					next.NodeId = "other-node"
@@ -73,7 +96,8 @@ func TestPublishedLeaseExchangesOnlyVerifiedNewerPairWithinSameExecution(t *test
 			got, err := adapter.ValidateStreamKeyForClaim(ctx, "", "cluster", "execution")
 			switch scenario {
 			case "current":
-				if err != nil || !got.GetValid() || !got.GetClaimAcquired() || got.GetProcessesJson() != "current-config" || calls != 2 || refreshes != 1 {
+				if err != nil || !got.GetValid() || !got.GetClaimAcquired() || got.GetProcessesJson() != "current-config" ||
+					!got.GetIsRecordingEnabled() || got.GetDvrChapterMode() != "fixed_interval" || got.GetDvrChapterIntervalSeconds() != 86400 || calls != 2 || refreshes != 1 {
 					t.Fatalf("current-pair exchange failed: got=%v err=%v calls=%d refreshes=%d", got, err, calls, refreshes)
 				}
 			case "credential-callback-denied":

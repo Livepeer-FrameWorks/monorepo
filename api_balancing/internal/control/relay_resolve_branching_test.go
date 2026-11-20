@@ -73,7 +73,7 @@ func TestFillFileArtifactResolve(t *testing.T) {
 		sm := state.ResetDefaultManagerForTests()
 		t.Cleanup(func() { state.ResetDefaultManagerForTests() })
 		sm.SetNodeInfo("node-1", "n", true, nil, nil, "", "", nil)
-		sm.SetNodeConnectionInfo(context.Background(), "node-1", "n", "", "platform-eu", nil)
+		sm.SetNodeConnectionInfo(context.Background(), "node-1", "127.0.0.1", "", "platform-eu", nil)
 		AddPlatformSharedCluster("platform-eu")
 		mock.ExpectQuery(`FROM foghorn.artifacts`).WithArgs("h").
 			WillReturnRows(fileArtifactRows().AddRow(
@@ -98,7 +98,7 @@ func TestFillFileArtifactResolve(t *testing.T) {
 		sm := state.ResetDefaultManagerForTests()
 		t.Cleanup(func() { state.ResetDefaultManagerForTests() })
 		sm.SetNodeInfo("byoc-a-node", "n", true, nil, nil, "", "", nil)
-		sm.SetNodeConnectionInfo(context.Background(), "byoc-a-node", "n", "tenant-a", "", nil)
+		sm.SetNodeConnectionInfo(context.Background(), "byoc-a-node", "127.0.0.1", "tenant-a", "", nil)
 		mock.ExpectQuery(`FROM foghorn.artifacts`).WithArgs("h").
 			WillReturnRows(fileArtifactRows().AddRow(
 				"s3://bucket/key.mp4", int64(1234), "mp4", false, "stream1",
@@ -245,7 +245,7 @@ func TestFillCrossClusterArtifactFromCommodore(t *testing.T) {
 		t.Cleanup(func() { state.ResetDefaultManagerForTests() })
 		// Platform/shared edge on a served cluster: passes tenant binding so the ORIGIN-cluster gate is exercised.
 		sm.SetNodeInfo("node-1", "n", true, nil, nil, "", "", nil)
-		sm.SetNodeConnectionInfo(context.Background(), "node-1", "n", "", "platform-eu", nil)
+		sm.SetNodeConnectionInfo(context.Background(), "node-1", "127.0.0.1", "", "platform-eu", nil)
 		AddPlatformSharedCluster("platform-eu")
 		startFakeCommodoreServer(t, &fakeCommodoreInternal{
 			vodHash: func(_ context.Context, _ *commodorepb.ResolveVodHashRequest) (*commodorepb.ResolveVodHashResponse, error) {
@@ -264,7 +264,7 @@ func TestFillCrossClusterArtifactFromCommodore(t *testing.T) {
 		sm := state.ResetDefaultManagerForTests()
 		t.Cleanup(func() { state.ResetDefaultManagerForTests() })
 		sm.SetNodeInfo("byoc-a-node", "n", true, nil, nil, "", "", nil)
-		sm.SetNodeConnectionInfo(context.Background(), "byoc-a-node", "n", "tenant-a", "", nil)
+		sm.SetNodeConnectionInfo(context.Background(), "byoc-a-node", "127.0.0.1", "tenant-a", "", nil)
 		startFakeCommodoreServer(t, &fakeCommodoreInternal{
 			vodHash: func(_ context.Context, _ *commodorepb.ResolveVodHashRequest) (*commodorepb.ResolveVodHashResponse, error) {
 				// The node-tenant binding is checked BEFORE the origin/peer gate, so this is denied regardless.
@@ -355,7 +355,7 @@ func entitlePlatformNode(t *testing.T, nodeID string) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
 	sm.SetNodeInfo(nodeID, "n", true, nil, nil, "", "", nil)
-	sm.SetNodeConnectionInfo(context.Background(), nodeID, "n", "", "platform-eu", nil)
+	sm.SetNodeConnectionInfo(context.Background(), nodeID, "127.0.0.1", "", "platform-eu", nil)
 	AddPlatformSharedCluster("platform-eu")
 }
 

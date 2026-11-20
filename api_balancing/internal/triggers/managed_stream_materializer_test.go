@@ -103,6 +103,7 @@ func TestEnsureManagedStreamDVR_CarriesChapterPolicy(t *testing.T) {
 		wantInterval *int32
 	}{
 		{"fixed interval", "fixed_interval", 7200, strPtr("fixed_interval"), int32Ptr(7200)},
+		{"daily interval", "fixed_interval", 86400, strPtr("fixed_interval"), int32Ptr(86400)},
 		{"window sized", "window_sized_chapters", 0, strPtr("window_sized_chapters"), nil},
 		{"live rewind only", "none", 0, strPtr("none"), nil},
 		{"sender without the field", "", 0, nil, nil},

@@ -11,6 +11,7 @@ import (
 
 	"frameworks/api_control/internal/database/commodoredb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/dvrpolicy"
 	authority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	media "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
@@ -73,6 +74,14 @@ func (s *CommodoreServer) AcquirePublisherLease(ctx context.Context, req *pb.Pub
 			response.Outcome = pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_DENIED
 			return nil
 		}
+		saved, err := q.LockLiveStreamRecordingConfiguration(ctx, commodoredb.LockLiveStreamRecordingConfigurationParams{TenantID: req.GetTenantId(), StreamID: req.GetStreamId()})
+		if errors.Is(err, sql.ErrNoRows) {
+			response.Outcome = pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_DENIED
+			return nil
+		}
+		if err != nil {
+			return err
+		}
 		pair, err := q.LockPublisherLeaseAuthority(ctx, commodoredb.LockPublisherLeaseAuthorityParams{TenantID: req.GetTenantId(), AuthorityID: authority.LiveStreamAuthorityID(req.GetStreamId()), CellID: req.GetControlCellId()})
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
@@ -80,17 +89,28 @@ func (s *CommodoreServer) AcquirePublisherLease(ctx context.Context, req *pb.Pub
 		if err != nil {
 			return err
 		}
+		object, tenant := &media.MediaObjectAuthority{}, &media.TenantAuthority{}
+		if err = proto.Unmarshal(pair.ObjectPayload, object); err != nil {
+			return err
+		}
+		if err = proto.Unmarshal(pair.TenantPayload, tenant); err != nil {
+			return err
+		}
+		resuming := saved.ActiveIngestClusterID.String == req.GetClusterId() && saved.ActiveIngestClaimID.String == req.GetExecutionToken() &&
+			saved.ActiveIngestNodeID.String == req.GetNodeId() && saved.ActiveIngestControlCellID.String == req.GetControlCellId() &&
+			saved.ActiveIngestClusterUpdatedAt.Valid && time.Now().Before(saved.ActiveIngestClusterUpdatedAt.Time.Add(activeIngestLease))
+		if !resuming && object.GetTenantId() == req.GetTenantId() && tenant.GetTenantId() == req.GetTenantId() &&
+			object.GetLiveStream().GetStreamId() == req.GetStreamId() && object.GetInternalName() == req.GetInternalName() &&
+			object.GetLifecycle() == media.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE &&
+			tenant.GetLifecycle() == media.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE &&
+			tenant.GetBillingDecision() == media.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW &&
+			!recordingConfigurationMatches(saved, object.GetLiveStream()) {
+			return dvrpolicy.RecordingPolicyPendingError()
+		}
 		now := time.Now()
 		if pair.ObjectVersion != req.GetObjectAuthorityVersion() || pair.TenantVersion != req.GetTenantAuthorityVersion() || !bytes.Equal(pair.ObjectDigest, req.GetObjectPayloadSha256()) || !bytes.Equal(pair.TenantDigest, req.GetTenantPayloadSha256()) || !now.Before(pair.ObjectValidUntil) || !now.Before(pair.TenantValidUntil) {
 			response.Reason = "published authority pair differs or has expired"
 			if now.Before(pair.ObjectValidUntil) && now.Before(pair.TenantValidUntil) {
-				object, tenant := &media.MediaObjectAuthority{}, &media.TenantAuthority{}
-				if decodeErr := proto.Unmarshal(pair.ObjectPayload, object); decodeErr != nil {
-					return decodeErr
-				}
-				if decodeErr := proto.Unmarshal(pair.TenantPayload, tenant); decodeErr != nil {
-					return decodeErr
-				}
 				if object.GetTenantId() == req.GetTenantId() && tenant.GetTenantId() == req.GetTenantId() && object.GetLiveStream().GetStreamId() == req.GetStreamId() && object.GetInternalName() == req.GetInternalName() {
 					// The shared current-pointer locks remain held, so this read
 					// cannot return a pair published after the comparison above.
@@ -104,13 +124,6 @@ func (s *CommodoreServer) AcquirePublisherLease(ctx context.Context, req *pb.Pub
 				}
 			}
 			return nil
-		}
-		object, tenant := &media.MediaObjectAuthority{}, &media.TenantAuthority{}
-		if err = proto.Unmarshal(pair.ObjectPayload, object); err != nil {
-			return err
-		}
-		if err = proto.Unmarshal(pair.TenantPayload, tenant); err != nil {
-			return err
 		}
 		response.Outcome = pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_DENIED
 		if object.GetTenantId() != req.GetTenantId() || tenant.GetTenantId() != req.GetTenantId() || object.GetLiveStream().GetStreamId() != req.GetStreamId() || object.GetInternalName() != req.GetInternalName() || object.GetLiveStream().GetIngestMode() != "push" || object.GetLifecycle() != media.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE || tenant.GetLifecycle() != media.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE || tenant.GetBillingDecision() != media.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW {
@@ -163,6 +176,9 @@ func (s *CommodoreServer) AcquirePublisherLease(ctx context.Context, req *pb.Pub
 		return nil
 	})
 	if err != nil {
+		if dvrpolicy.IsRecordingPolicyPending(err) {
+			return nil, err
+		}
 		return nil, status.Errorf(codes.Unavailable, "publisher lease unavailable: %v", err)
 	}
 	return response, nil
@@ -250,7 +266,7 @@ func validatePublisherExecutionIdentity(nodeID, cellID string) error {
 
 // acquireCompatiblePublisherClaim binds the configuration-building cold path
 // to the same definitive execution fence as the published-authority fast path.
-func (s *CommodoreServer) acquireCompatiblePublisherClaim(ctx context.Context, req *pb.ValidateStreamKeyRequest, clusterID string) (claim commodoredb.AcquireIngestClaimRow, err error) {
+func (s *CommodoreServer) acquireCompatiblePublisherClaim(ctx context.Context, req *pb.ValidateStreamKeyRequest, clusterID string, configuration *pb.ValidateStreamKeyResponse) (claim commodoredb.AcquireIngestClaimRow, err error) {
 	bound := req.GetNodeId() != "" || req.GetControlCellId() != ""
 	token := strings.TrimSpace(req.GetClaimToken())
 	params := commodoredb.AcquireIngestClaimParams{ClusterID: sql.NullString{String: clusterID, Valid: true}, ClaimToken: sql.NullString{String: token, Valid: true}, LeaseSeconds: int64(activeIngestLease.Seconds()), LookupStreamKey: req.GetStreamKey()}
@@ -273,6 +289,15 @@ func (s *CommodoreServer) acquireCompatiblePublisherClaim(ctx context.Context, r
 		}
 		if abandoned {
 			return errPublisherExecutionAbandoned
+		}
+		saved, readErr := q.LockLiveStreamRecordingConfiguration(ctx, commodoredb.LockLiveStreamRecordingConfigurationParams{TenantID: configuration.GetTenantId(), StreamID: configuration.GetStreamId()})
+		if readErr != nil {
+			return readErr
+		}
+		projected := &media.LiveStreamAuthority{RecordingEnabled: configuration.GetIsRecordingEnabled(),
+			PublisherConfigurationVersion: 1, DvrChapterMode: configuration.GetDvrChapterMode(), DvrChapterIntervalSeconds: configuration.GetDvrChapterIntervalSeconds()}
+		if !recordingConfigurationMatches(saved, projected) {
+			return dvrpolicy.RecordingPolicyPendingError()
 		}
 		var claimErr error
 		claim, claimErr = q.AcquireIngestClaim(ctx, params)

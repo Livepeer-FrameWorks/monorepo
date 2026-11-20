@@ -18,12 +18,6 @@ func (noopClipCreator) CreateClip(context.Context, *sharedpb.CreateClipRequest) 
 	return &sharedpb.CreateClipResponse{}, nil
 }
 
-type noopDVRCreator struct{}
-
-func (noopDVRCreator) StartDVR(context.Context, *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, error) {
-	return &sharedpb.StartDVRResponse{}, nil
-}
-
 // unknownPeers is a peer authority with no knowledge of any peer: it excludes no
 // tenant and places no peer in a control cell, the state of a peer manager
 // before discovery.
@@ -279,10 +273,9 @@ func TestFederationServer_DelegatesAndRegisterServices(t *testing.T) {
 		Logger:      testLogger(),
 		ClusterID:   "cluster-a",
 		ClipCreator: noopClipCreator{},
-		DVRCreator:  noopDVRCreator{},
 	})
-	if srv.clipCreator == nil || srv.dvrCreator == nil {
-		t.Fatal("expected clip and dvr creators to be set")
+	if srv.clipCreator == nil {
+		t.Fatal("expected clip creator to be set")
 	}
 
 	grpcServer := grpc.NewServer()

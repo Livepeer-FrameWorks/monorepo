@@ -29,6 +29,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients"
 	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
@@ -41,6 +42,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	fwdb "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/dvrpolicy"
 	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
@@ -2371,7 +2373,10 @@ func (s *CommodoreServer) validateStreamKey(ctx context.Context, req *commodorep
 		// re-fired PUSH_REWRITE.
 		claimToken := strings.TrimSpace(req.GetClaimToken())
 		boundExecution := req.GetNodeId() != ""
-		claim, claimErr := s.acquireCompatiblePublisherClaim(ctx, req, activeIngestClusterID)
+		claim, claimErr := s.acquireCompatiblePublisherClaim(ctx, req, activeIngestClusterID, resp)
+		if dvrpolicy.IsRecordingPolicyPending(claimErr) {
+			return nil, claimErr
+		}
 		if errors.Is(claimErr, errPublisherExecutionAbandoned) {
 			return &commodorepb.ValidateStreamKeyResponse{Valid: false, Error: "publisher execution abandoned"}, nil
 		}
@@ -3738,16 +3743,27 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *sharedpb.StartDVRRe
 	// One Purser RPC for both suspension AND retention. Avoids a per-DVR-start
 	// GetSubscription + GetBillingTier roundtrip since GetTenantBillingStatus
 	// returns recording_retention_days alongside is_suspended.
-	var billingStatus *purserpb.GetTenantBillingStatusResponse
-	if s.purserClient != nil {
-		var bsErr error
-		billingStatus, bsErr = s.purserClient.GetTenantBillingStatus(ctx, tenantID)
-		if bsErr != nil {
-			s.logger.WithError(bsErr).Warn("Failed to fetch billing status; continuing fail-open")
-		}
+	if s.purserClient == nil {
+		return nil, status.Error(codes.Unavailable, "recording billing policy unavailable")
 	}
-	if billingStatus != nil && billingStatus.IsSuspended {
+	// Required reads on an interactive start must report an unreachable owner,
+	// rather than wait for its connection to recover inside the browser request.
+	policyCtx := clients.WithSingleAttempt(ctx)
+	billingStatus, billingErr := s.purserClient.GetTenantBillingStatus(policyCtx, tenantID)
+	if billingErr != nil {
+		s.logger.WithError(billingErr).WithField("tenant_id", tenantID).Warn("DVR start could not resolve billing policy")
+		return nil, status.Error(codes.Unavailable, "recording billing policy unavailable")
+	}
+	if billingStatus == nil {
+		return nil, status.Error(codes.Unavailable, "recording billing policy unavailable")
+	}
+	if billingStatus.IsSuspended {
 		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to start recordings")
+	}
+	policy := billingStatus.GetDvrPolicy()
+	if policy == nil || policy.GetDefaultWindowSeconds() <= 0 || policy.GetMaxWindowSeconds() <= 0 ||
+		policy.GetDefaultSegmentDurationSeconds() <= 0 || policy.GetMaxEntries() <= 0 {
+		return nil, status.Error(codes.Unavailable, "recording window policy unavailable")
 	}
 
 	internalName := req.GetInternalName()
@@ -3794,60 +3810,60 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *sharedpb.StartDVRRe
 	// Foghorn back-fills commodore.dvr_recordings.retention_until after
 	// FinalizeDVR.
 
-	foghornClient, processClusterID, err := s.resolveDVRStartOwner(ctx, tenantID, streamID)
+	foghornClient, processClusterID, err := s.resolveDVRStartOwner(policyCtx, tenantID, streamID)
 	if err != nil {
 		return nil, err
 	}
+	dvrProcesses, processErr := s.resolveProcessesJSONStrict(policyCtx, tenantID, streamID, processClusterID, "dvr")
+	if processErr != nil {
+		s.logger.WithError(processErr).WithField("stream_id", streamID).Warn("DVR start could not resolve processing policy")
+		return nil, status.Error(codes.Unavailable, "recording processing policy unavailable")
+	}
 	foghornReq := &sharedpb.StartDVRRequest{
-		TenantId:      tenantID,
-		InternalName:  internalName,
-		UserId:        &userID,
-		ProcessesJson: s.resolveProcessesJSON(ctx, tenantID, streamID, processClusterID, "dvr"),
+		TenantId: tenantID, InternalName: internalName, UserId: &userID,
+		ProcessesJson: dvrProcesses, DvrPolicy: proto.CloneOf(policy),
 	}
 	if streamID != "" {
 		foghornReq.StreamId = &streamID
 	}
-	if billingStatus != nil && billingStatus.DvrPolicy != nil {
-		foghornReq.DvrPolicy = billingStatus.DvrPolicy
+	// Retention and window limits use the same successful billing read. A
+	// second lookup must not replace a known bound with a failure fallback.
+	dvrDays, dvrErr := s.resolveInitialRetentionWithBound(ctx, commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR, tenantID, streamID, billingStatus.GetRecordingRetentionDays())
+	if dvrErr != nil {
+		s.logger.WithError(dvrErr).WithField("stream_id", streamID).Warn("DVR start could not resolve retention policy")
+		return nil, status.Error(codes.Unavailable, "recording retention policy unavailable")
 	}
-	// Run the per-class cascade (per-stream → tenant per-class → system
-	// default) clamped by the tier cap. Resolved value carries 0 = "keep
-	// forever" (NULL retention_until at finalize); >0 sets that many days.
-	// Per-asset override doesn't apply at start (artifact doesn't exist yet);
-	// it kicks in via UpdateAssetRetention after finalize.
-	if dvrDays, dvrErr := s.resolveInitialRetention(ctx, commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR, tenantID, streamID); dvrErr == nil {
-		if foghornReq.DvrPolicy == nil {
-			foghornReq.DvrPolicy = &sharedpb.DVRPolicy{}
-		}
-		days := dvrDays
-		foghornReq.DvrPolicy.RecordingRetentionDays = &days
-	} else {
-		s.logger.WithError(dvrErr).WithFields(logging.Fields{
-			"tenant_id": tenantID,
-			"stream_id": streamID,
-		}).Warn("DVR retention resolution failed; Foghorn falls back to its 30-day default")
-	}
+	foghornReq.DvrPolicy.RecordingRetentionDays = proto.Int32(dvrDays)
+
 	// Forward caller-supplied window so dvrpolicy.Resolve can clamp it
 	// against tier and cluster live-window bounds inside Foghorn.
 	if w := req.GetDvrWindowSeconds(); w > 0 {
 		foghornReq.DvrWindowSeconds = &w
 	}
 
-	// Snapshot Stream-level chapter config onto the DVR artifact. Reads
-	// happen on the same row we just resolved internal_name from; one
-	// extra query keeps the snapshot inside this critical section so
-	// concurrent Stream.dvrChapterMode mutations don't race the recording.
 	chapterConfig, scanErr := commodoredb.New(s.db).GetStreamDVRChapterConfig(ctx, commodoredb.GetStreamDVRChapterConfigParams{
 		StreamID: streamID, TenantID: tenantID,
 	})
-	if scanErr == nil {
-		mode, iv := streamDVRChapterPolicy(chapterConfig.DvrChapterMode, chapterConfig.DvrChapterIntervalSeconds)
-		foghornReq.DvrChapterMode = &mode
-		if iv > 0 {
-			foghornReq.DvrChapterIntervalSeconds = &iv
+	if errors.Is(scanErr, sql.ErrNoRows) {
+		return nil, status.Error(codes.NotFound, "stream not found")
+	}
+	if scanErr != nil {
+		s.logger.WithError(scanErr).WithField("stream_id", streamID).Warn("DVR start could not read chapter policy")
+		return nil, status.Error(codes.Unavailable, "recording chapter policy unavailable")
+	}
+	mode, interval := streamDVRChapterPolicy(chapterConfig.DvrChapterMode, chapterConfig.DvrChapterIntervalSeconds)
+	switch mode {
+	case dvrChapterModeFixedInterval:
+		if interval < 3600 {
+			return nil, status.Error(codes.Unavailable, "recording chapter policy unavailable")
 		}
-	} else if !errors.Is(scanErr, sql.ErrNoRows) {
-		s.logger.WithError(scanErr).WithField("stream_id", streamID).Warn("Failed to read Stream chapter config; recording starts with window-sized chapters")
+	case dvrChapterModeWindowSized, dvrChapterModeNone:
+	default:
+		return nil, status.Error(codes.Unavailable, "recording chapter policy unavailable")
+	}
+	foghornReq.DvrChapterMode = &mode
+	if interval > 0 {
+		foghornReq.DvrChapterIntervalSeconds = &interval
 	}
 
 	s.logger.WithFields(logging.Fields{
