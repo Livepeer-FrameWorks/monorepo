@@ -42,8 +42,10 @@ const ProcessingJobTypeThumbnail = "thumbnail"
 // condition of the infrastructure, not of the job, so it does not draw from the
 // job's retry budget.
 const (
-	ProcessingResultRetryCause      = "retry_cause"
-	ProcessingRetryCauseSourceStall = "source_stall"
+	ProcessingResultRetryCause             = "retry_cause"
+	ProcessingRetryCauseSourceStall        = "source_stall"
+	ProcessingRetryCauseMemoryPressure     = "memory_pressure"
+	ProcessingRetryCauseInsufficientMemory = "insufficient_memory"
 )
 
 // LivepeerVODSegmentDeadlineMs is the default per-segment gateway response
@@ -234,6 +236,7 @@ func ReplaceLivepeerWithLocal(processesJSON string) string {
 			copyProcessOptionWithFallback(av, prof, p, "source_mask")
 			copyProcessOptionWithFallback(av, prof, p, "target_mask")
 			copyProcessOptionWithFallback(av, prof, p, "restart_type")
+			copyProcessOptionWithFallback(av, prof, p, "memory_budgeted")
 			copyProcessOption(av, prof, "source_track")
 			copyProcessOption(av, prof, "gopsize")
 			if name, ok := prof["name"].(string); ok {
@@ -993,6 +996,14 @@ func livepeerProfileFloat(profile LivepeerJSONProfile, key string) (float64, boo
 }
 
 func processTrackInhibited(proc map[string]json.RawMessage, source SourceMediaInfo) bool {
+	var selection string
+	if err := json.Unmarshal(proc["track_select"], &selection); err == nil {
+		for _, selector := range strings.Split(selection, "&") {
+			if selector == "video=none" {
+				return true
+			}
+		}
+	}
 	var raw string
 	if err := json.Unmarshal(proc["track_inhibit"], &raw); err != nil {
 		return false

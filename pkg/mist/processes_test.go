@@ -60,7 +60,7 @@ func TestDisableProcessRestartsMarksEveryEntry(t *testing.T) {
 }
 
 func TestReplaceLivepeerWithLocalCarriesRestartType(t *testing.T) {
-	input := `[{"process":"Livepeer","restart_type":"disabled","target_profiles":[{"name":"360p","profile":"H264Main","height":360,"bitrate":900000}]}]`
+	input := `[{"process":"Livepeer","restart_type":"disabled","memory_budgeted":true,"target_profiles":[{"name":"360p","profile":"H264Main","height":360,"bitrate":900000}]}]`
 	var got []map[string]any
 	if err := json.Unmarshal([]byte(ReplaceLivepeerWithLocal(input)), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -70,6 +70,9 @@ func TestReplaceLivepeerWithLocalCarriesRestartType(t *testing.T) {
 	}
 	if got[0]["restart_type"] != "disabled" {
 		t.Errorf("restart_type = %#v, want \"disabled\"", got[0]["restart_type"])
+	}
+	if got[0]["memory_budgeted"] != true {
+		t.Errorf("local replacement lost its memory budget: %#v", got[0])
 	}
 }
 

@@ -57,3 +57,19 @@ func TestNoRenditionRecordingUsesSourceSpan(t *testing.T) {
 		t.Fatal("truncated recording accepted for nonzero source start")
 	}
 }
+
+func TestLocalRenditionKilledBySignalIsRetryable(t *testing.T) {
+	hx := startRecordingGraceJob(t, "vod", "killedrung", recordingGeometry{width: 1280, height: 720, sourceEnd: 10000, processes: `[{"process":"AV","codec":"H264","resolution":"0x360"}]`})
+	if err := os.WriteFile(hx.outputPath, []byte("mkv bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	RouteProcessExit(ProcessExitEvent{StreamName: hx.streamName, ProcessType: "AV", Config: `{"process":"AV","codec":"H264"}`, ExitCode: -9, Status: "stopped", Reason: "Killed by signal 9"})
+	end := hx.cleanRecordingEnd()
+	end.Tracks = nil
+	SignalProcessingRecordingEnd(end)
+	hx.pushEnd(`{"active_seconds":10}`)
+	result := hx.awaitResult(t, 30*time.Second)
+	if result.GetStatus() != processingResultRetryable {
+		t.Fatalf("killed rendition status=%q error=%q, want retryable", result.GetStatus(), result.GetError())
+	}
+}

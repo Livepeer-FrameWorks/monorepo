@@ -450,6 +450,30 @@ that is a failure, reported as `SHM_LOST` (retried by Helmsman), also while
 the recording still waits for its header; a killed buffer, which changes no
 state, is noticed by its heartbeat on the stream state page stopping for 30 s.
 
+**Memory admission.** Helmsman first reads source metadata with all process
+inputs inhibited, then stops that probe before admission. It reserves the work
+that will run on the edge: Livepeer request buffers, local audio, thumbnails
+and any local video encoders. A Livepeer job reserves its local fallback only
+when that fallback is needed, before publishing or starting it. The reservation
+is persisted with the job's process override, survives a Helmsman restart and
+is released only after the processing stream stops.
+
+The planner assigns explicit decoder and encoder thread counts within the
+node's memory budget. It retains the encoder preset's lookahead wherever it
+fits, reducing it for the largest renditions only when necessary. CPU scaling
+uses FFmpeg's default bicubic filter. Linux admission uses host available
+memory and cgroup working-set pressure, excluding reclaimable inactive file
+cache. On macOS it uses installed capacity and the reservation ledger.
+
+When capacity is occupied or a node cannot fit the job, Foghorn queues it for
+another attempt after 30 seconds without spending a processing-failure retry.
+The waiting job holds no active source or encoder processes. Actual encoder
+failures still use the bounded processing retry policy.
+
+At source EOF, Livepeer's drain deadline includes every remaining segment's
+allowed resend budgets and sink flush time. A recording must still pass the
+same full-source duration and rendition checks before publication.
+
 **Buffer lifetime.** After source EOF the buffer stays up while a recording
 reading it makes progress; a recording that made no progress for the stale
 window (60 s) no longer keeps it alive. Tracks are not idle-erased while
@@ -614,3 +638,12 @@ Commodore enforces original-download grants at 20 per minute with a burst of fiv
 database bucket shared across replicas and gateways. The gateway also rejects excess requests
 locally. Original-download metadata reads do not lock the artifact or VOD metadata rows;
 original deletion takes the artifact lock before rechecking and changing retention metadata.
+
+Memory admission reads the running Mist processor capabilities. Explicit
+`encode_threads`, `decode_threads` and `lookahead` are budgeted only when the
+processor advertises them. Older Mist versions use a conservative automatic-thread
+estimate and receive no unsupported resource options. A policy that cannot fit
+fails with its required bytes and node budget. Temporary pressure returns the job
+to the durable queue without spending failure retries, within the existing
+20-minute no-progress window; after that window the job fails with a memory wait
+reason. The first infrastructure wait remains durable across dispatches.

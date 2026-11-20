@@ -631,6 +631,18 @@ func TestProcessProcessingJobResult_RetryableRequeuesWithinBudget(t *testing.T) 
 	}
 }
 
+func TestProcessingCapacityDeferralDoesNotConsumeRetry(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	logger := logging.NewLogger()
+	mock.ExpectQuery(`WITH requeued AS \(\s+UPDATE foghorn.processing_jobs AS job\s+SET status = 'queued'.*next_attempt_at = NOW\(\) \+ INTERVAL '30 seconds'`).
+		WithArgs(sql.NullString{String: "waiting for processing memory", Valid: true}, "job-1", sql.NullString{String: "node-1", Valid: true}, ProcessingProgressStallTimeout.String()).
+		WillReturnRows(sqlmock.NewRows([]string{"requeued"}).AddRow(1))
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: "job-1", Status: "retryable", Error: "waiting for processing memory", Outputs: map[string]string{"retry_cause": "memory_pressure"}}, "node-1", logger)
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Once the retry budget is spent (or the report is not from the assigned
 // node) nothing is requeued and the job takes the ordinary failure path.
 func TestProcessProcessingJobResult_RetryableFailsWhenBudgetSpent(t *testing.T) {

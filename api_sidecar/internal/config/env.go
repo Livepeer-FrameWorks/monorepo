@@ -15,6 +15,9 @@ func getSystemMemoryBytes() uint64 {
 	return getMemoryBytes()
 }
 
+// MemoryCapacityBytes is the host capacity before container limits are applied.
+func MemoryCapacityBytes() uint64 { return getSystemMemoryBytes() }
+
 // HelmsmanConfig is the startup configuration snapshot handed to the control
 // client. It is built once from the typed appconfig.Helmsman; values that must
 // follow a SIGHUP reload are read through appconfig.Runtime instead.

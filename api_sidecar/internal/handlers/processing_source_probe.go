@@ -162,6 +162,10 @@ func (e *processingSourceStallError) Unwrap() error { return e.boot }
 // readiness failure: retryable when storage stalled under the source read,
 // failed otherwise.
 func processingReadinessFailureStatus(err error) string {
+	var resource *processingResourceError
+	if errors.As(err, &resource) {
+		return processingResultRetryable
+	}
 	var stall *processingSourceStallError
 	if errors.As(err, &stall) {
 		return processingResultRetryable

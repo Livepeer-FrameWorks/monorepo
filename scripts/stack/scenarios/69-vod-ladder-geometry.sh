@@ -20,6 +20,10 @@ gateway_absent() {
 gateway_present() {
   [ "$(gateway_state)" = healthy ] && [ "$(date +%s)" -ge "$DISCOVERY_READY_AT" ]
 }
+orchestrator_present() {
+  stack_running "$ORCHESTRATOR" &&
+    curl -ksS --connect-timeout 2 --max-time 5 "https://$ORCHESTRATOR:8935/" -o /dev/null
+}
 ready_or_failed() {
   local status
   status=$(vod_status "$1")
@@ -67,6 +71,11 @@ done
 for path in livepeer local fallback; do
   case "$path" in
     livepeer)
+      if ! eventually 30 "Livepeer orchestrator accepts connections" orchestrator_present; then
+        docker compose -p "$COMPOSE_PROJECT_NAME" ps --all "$ORCHESTRATOR" >&2
+        docker inspect --format '{{json .State}}' "$(docker compose -p "$COMPOSE_PROJECT_NAME" ps --all -q "$ORCHESTRATOR")" >&2
+        finish
+      fi
       DISCOVERY_READY_AT=$(($(date +%s) + 6))
       eventually 120 "Livepeer gateway available" gateway_present || finish
       ;;

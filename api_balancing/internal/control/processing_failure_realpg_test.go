@@ -109,6 +109,46 @@ func TestCompletedProcessingJobClearsRetryReason_RealPG(t *testing.T) {
 	}
 }
 
+func TestMemoryDeferralSurvivesTenMinutesAndCompletes_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	previous := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(previous) })
+	seedActiveImportJob(t, conn)
+	if _, err := conn.Exec(`UPDATE foghorn.processing_jobs SET retry_count=$3, started_at=NOW()-INTERVAL '10 minutes' WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant, ProcessingMaxRetries); err != nil {
+		t.Fatal(err)
+	}
+	logger := logging.NewLogger()
+	for attempt := 0; attempt < 5; attempt++ {
+		if err := processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "retryable", Error: "waiting for processing memory", Outputs: map[string]string{mist.ProcessingResultRetryCause: mist.ProcessingRetryCauseMemoryPressure}}, "edge-1", logger); err != nil {
+			t.Fatal(err)
+		}
+		var job, artifact string
+		var retries int
+		var delayed bool
+		if err := conn.QueryRow(`SELECT j.status,a.status,j.retry_count,COALESCE(j.next_attempt_at>NOW(),false) FROM foghorn.processing_jobs j JOIN foghorn.artifacts a ON a.artifact_hash=j.artifact_hash AND a.tenant_id=j.tenant_id WHERE j.job_id=$1::uuid AND j.tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant).Scan(&job, &artifact, &retries, &delayed); err != nil {
+			t.Fatal(err)
+		}
+		if job != "queued" || artifact != "queued" || retries != ProcessingMaxRetries || !delayed {
+			t.Fatalf("capacity wait consumed retry or failed valid upload after ten minutes: job=%s artifact=%s retries=%d delayed=%v", job, artifact, retries, delayed)
+		}
+		if _, err := conn.Exec(`UPDATE foghorn.processing_jobs SET status='processing',processing_node_id='edge-1',next_attempt_at=NULL WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant); err != nil {
+			t.Fatal(err)
+		}
+	}
+	duration := int64(60000)
+	if err := processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "completed", OutputPath: "/storage/vod/queued.mkv", OutputSizeBytes: 1024, MediaDurationMs: &duration, Outputs: map[string]string{"video_codec": "H264", "width": "3840", "height": "2160", "duration_ms": "60000"}}, "edge-1", logger); err != nil {
+		t.Fatal(err)
+	}
+	var job, artifact string
+	if err := conn.QueryRow(`SELECT j.status,a.status FROM foghorn.processing_jobs j JOIN foghorn.artifacts a ON a.artifact_hash=j.artifact_hash AND a.tenant_id=j.tenant_id WHERE j.job_id=$1::uuid AND j.tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant).Scan(&job, &artifact); err != nil {
+		t.Fatal(err)
+	}
+	if job != "completed" || artifact != "ready" {
+		t.Fatalf("deferred upload did not reach READY: job=%s artifact=%s", job, artifact)
+	}
+}
+
 // Lease heartbeats refresh updated_at but not progress_advanced_at; only an
 // increased percentage or media position moves the watchdog clock.
 func TestProcessingProgressWatchdogClock_RealPG(t *testing.T) {
@@ -243,5 +283,44 @@ func TestSourceStallRetriesOutsideRetryBudget_RealPG(t *testing.T) {
 	}
 	if reason := msg.(*publicv1.UploadFailed).GetReason(); reason != publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_TIMED_OUT {
 		t.Fatalf("upload.failed reason = %s, want TIMED_OUT", reason)
+	}
+}
+
+func TestCapacityDeferralHasAFiniteLifetime_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	previous := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(previous) })
+	seedActiveImportJob(t, conn)
+	if _, err := conn.Exec(`UPDATE foghorn.processing_jobs SET started_at=NOW()-INTERVAL '1 hour', source_stalled_since=NOW()-INTERVAL '1 hour' WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant); err != nil {
+		t.Fatal(err)
+	}
+	if err := processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "retryable", Error: "waiting for processing memory", Outputs: map[string]string{mist.ProcessingResultRetryCause: mist.ProcessingRetryCauseMemoryPressure}}, "edge-1", logging.NewLogger()); err != nil {
+		t.Fatal(err)
+	}
+	var job, artifact, reason string
+	if err := conn.QueryRow(`SELECT j.status,a.status,COALESCE(j.error_message,'') FROM foghorn.processing_jobs j JOIN foghorn.artifacts a ON a.artifact_hash=j.artifact_hash AND a.tenant_id=j.tenant_id WHERE j.job_id=$1::uuid AND j.tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant).Scan(&job, &artifact, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if job != "failed" || artifact != "failed" {
+		t.Fatalf("capacity deferral is unbounded: job=%s artifact=%s reason=%s", job, artifact, reason)
+	}
+}
+
+func TestNeverFitVODCapacityFailure_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	previous := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(previous) })
+	seedActiveImportJob(t, conn)
+	if err := processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "retryable", Error: "4K processing workload cannot fit the cluster's largest node", Outputs: map[string]string{mist.ProcessingResultRetryCause: "insufficient_memory"}}, "edge-1", logging.NewLogger()); err != nil {
+		t.Fatal(err)
+	}
+	var job, artifact string
+	if err := conn.QueryRow(`SELECT j.status,a.status FROM foghorn.processing_jobs j JOIN foghorn.artifacts a ON a.artifact_hash=j.artifact_hash AND a.tenant_id=j.tenant_id WHERE j.job_id=$1::uuid AND j.tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant).Scan(&job, &artifact); err != nil {
+		t.Fatal(err)
+	}
+	if job != "failed" || artifact != "failed" {
+		t.Fatalf("never-fit 4K VOD was requeued: job=%s artifact=%s", job, artifact)
 	}
 }

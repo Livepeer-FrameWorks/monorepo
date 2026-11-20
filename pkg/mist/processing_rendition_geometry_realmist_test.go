@@ -35,6 +35,7 @@ func TestProcessingRenditionGeometry_RealMist(t *testing.T) {
 		})
 	}
 	rungs = append(rungs, contract.RenditionSpec{Name: "1440p", Codec: "H264", Profile: "high", Resolution: "x1440", Bitrate: 10800000, TrackInhibit: "video=<2560x1440"})
+	rungs = append(rungs, contract.RenditionSpec{Name: "2160p", Codec: "H264", Profile: "high", Resolution: "x2160", Bitrate: 24000000, TrackInhibit: "video=<3840x2160"})
 	ladder, err := SetTranscodeLadder(catalogLivepeerProcesses, rungs)
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +48,16 @@ func TestProcessingRenditionGeometry_RealMist(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var processes []any
+			budget, cpus := uint64(24*1024*1024*1024), 8
+			if source.Width == 3840 && source.Height == 2160 {
+				budget, cpus = 2560*1024*1024, 2
+			}
+			plan, err := PlanProcessingMemory(policy, source, budget, cpus)
+			if err != nil || !plan.Fits {
+				t.Fatalf("local admission: %+v %v", plan, err)
+			}
+			policy = plan.ProcessesJSON
+			var processes []map[string]any
 			if err := json.Unmarshal([]byte(policy), &processes); err != nil {
 				t.Fatal(err)
 			}
@@ -75,7 +85,12 @@ func TestProcessingRenditionGeometry_RealMist(t *testing.T) {
 				}
 			})
 			command := fmt.Sprintf("ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=%dx%d:rate=10 -t 6 -c:v libx264 -threads 2 -preset ultrafast -g 10 -bf 0 -pix_fmt yuv420p /tmp/source.mp4 && exec MistController -c /tmp/config.json", source.Width, source.Height)
-			if output, err := dockerpg.Run("run", "-d", "--name", name, "--shm-size=256m", "-v", configPath+":/tmp/config.json:ro", "--entrypoint", "/bin/sh", image, "-c", command); err != nil {
+			args := []string{"run", "-d", "--name", name, "--shm-size=256m"}
+			if source.Width == 3840 && source.Height == 2160 {
+				args = append(args, "--memory=3g", "--memory-swap=3g", "--cpus=2")
+			}
+			args = append(args, "-v", configPath+":/tmp/config.json:ro", "--entrypoint", "/bin/sh", image, "-c", command)
+			if output, err := dockerpg.Run(args...); err != nil {
 				t.Fatalf("start fixture: %v %s", err, output)
 			}
 			deadline := time.Now().Add(40 * time.Second)
@@ -122,6 +137,9 @@ func TestProcessingRenditionGeometry_RealMist(t *testing.T) {
 					t.Fatalf("missing modeled %dx%d rendition: %s", r.Width, r.Height, probe)
 				}
 				counts[size]--
+			}
+			if state, err := dockerpg.CLI("inspect", "--format", "{{.State.OOMKilled}} {{.RestartCount}}", name); err != nil || strings.TrimSpace(state) != "false 0" {
+				t.Fatalf("ladder exhausted container memory: state=%q err=%v", state, err)
 			}
 		})
 	}

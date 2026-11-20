@@ -7,16 +7,21 @@
 need ffmpeg jq curl python3 grep || finish
 
 set_policy() {
-  gql 'mutation($keep:Boolean){setVodOriginalPolicy(keepVodOriginals:$keep){__typename ... on MediaRetentionPolicy{effectiveKeepVodOriginals} ... on ValidationError{message}}}' "$(jq -cn --argjson keep "$1" '{keep:$keep}')"
+  local jwt
+  jwt=$(session_token) || return 1
+  gql 'mutation($keep:Boolean){setVodOriginalPolicy(keepVodOriginals:$keep){__typename ... on MediaRetentionPolicy{effectiveKeepVodOriginals} ... on ValidationError{message}}}' "$(jq -cn --argjson keep "$1" '{keep:$keep}')" "$jwt"
 }
 ACTIVATION_EPOCH=
 restore_policy() {
   if [ -n "$ACTIVATION_EPOCH" ]; then
     pg "$FOGHORN_A_DB" "UPDATE foghorn.vod_original_retention_activation SET activated_at=to_timestamp($ACTIVATION_EPOCH) WHERE singleton" >/dev/null
   fi
-  set_policy null >/dev/null
+  set_policy null | jq -e '.data.setVodOriginalPolicy.__typename=="MediaRetentionPolicy"' >/dev/null || {
+    echo 'original-retention scenario failed to restore the account policy' >&2
+    return 1
+  }
 }
-trap restore_policy EXIT
+trap 'rc=$?; restore_policy || rc=1; exit "$rc"' EXIT
 ready() { [ "$(vod_status "$1")" = READY ]; }
 synced() { [ "$(pg "$FOGHORN_A_DB" "SELECT sync_status FROM foghorn.artifacts WHERE tenant_id='$STACK_TENANT_ID' AND artifact_hash='$1'")" = synced ]; }
 original_size() { pg "$FOGHORN_A_DB" "SELECT COALESCE(v.original_size_bytes,0) FROM foghorn.vod_metadata v JOIN foghorn.artifacts a USING(artifact_hash) WHERE a.tenant_id='$STACK_TENANT_ID' AND a.artifact_hash='$1'"; }

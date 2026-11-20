@@ -111,6 +111,15 @@ var reportStreamTranscodeDegraded = func(evt ProcessReplaceEvent) error {
 	return control.SendStreamTranscodeDegraded(evt.StreamName, evt.ProcessType, processReplaceReason(evt), evt.ReplacementCount)
 }
 
+func reportProcessDegradation(evt ProcessReplaceEvent) {
+	report, log := reportStreamTranscodeDegraded, logger
+	go func() {
+		if err := report(evt); err != nil {
+			log.WithError(err).WithField("stream", evt.StreamName).Warn("Failed to report transcode degradation to Foghorn")
+		}
+	}()
+}
+
 // HandleProcessReplace handles the blocking PROCESS_REPLACE trigger. It answers
 // locally so a replacement never waits on the control plane, then reports the
 // degradation to Foghorn and to any processing job running on the stream.
@@ -128,6 +137,20 @@ func HandleProcessReplace(c *gin.Context) {
 	if err != nil {
 		incMistWebhook("PROCESS_REPLACE", "parse_error")
 		logger.WithError(err).Error("Failed to parse PROCESS_REPLACE trigger")
+		c.String(http.StatusOK, noProcessReplacement)
+		return
+	}
+	// The VOD job owns memory admission and a source restart. Starting local
+	// encoders in this blocking trigger would bypass that reservation.
+	if strings.HasPrefix(evt.StreamName, "processing+") {
+		RouteProcessReplace(evt)
+		if evt.ShortReason != "SOURCE_ROTATED" && !expectedSourceCodecRoute(evt.ProcessType, evt.ShortReason, evt.Reason) {
+			if _, count := processReplacementFor(evt); count > 0 {
+				// No replacement is running until the job admits its local work.
+				reportProcessDegradation(evt)
+			}
+		}
+		logger.WithField("stream", evt.StreamName).Info("PROCESS_REPLACE: VOD job must admit its local ladder before restart")
 		c.String(http.StatusOK, noProcessReplacement)
 		return
 	}
@@ -166,11 +189,7 @@ func HandleProcessReplace(c *gin.Context) {
 	}
 	incMistWebhook("PROCESS_REPLACE", "replaced")
 	logger.WithFields(fields).Warn("PROCESS_REPLACE: replacing failed Livepeer transcode with local MistProcAV renditions")
-	go func(evt ProcessReplaceEvent) {
-		if err := reportStreamTranscodeDegraded(evt); err != nil {
-			logger.WithError(err).WithField("stream", evt.StreamName).Warn("Failed to report transcode degradation to Foghorn")
-		}
-	}(evt)
+	reportProcessDegradation(evt)
 	c.String(http.StatusOK, replacement)
 }
 

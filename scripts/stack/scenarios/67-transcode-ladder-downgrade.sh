@@ -33,9 +33,9 @@ check 'paid tenant stores uhd' json_has "$chosen" '.data.setTranscodeLadderPolic
 set_tier free || { fail 'downgrade tenant'; finish; }
 eventually 90 'downgrade preserves uhd but resolves standard' policy_is standard
 refused=$(gql 'mutation{createVodUpload(input:{filename:"valid.mp4",sizeBytes:1024,transcodeLadder:"uhd"}){__typename ... on ValidationError{field}}}' '{}' "$jwt")
-check 'free tenant cannot request uhd' json_has "$refused" '.data.createVodUpload.__typename=="ValidationError" and .data.createVodUpload.field=="transcodeLadder"'
+check 'free tenant cannot request uhd' json_has "$refused" '.data.createVodUpload.__typename=="ValidationError" and .data.createVodUpload.field=="transcodeLadder"' || log "upload refusal response: $refused"
 refused_import=$(gql 'mutation{importVodAsset(input:{url:"https://example.com/video.mp4",transcodeLadder:"uhd"}){__typename ... on ValidationError{field}}}' '{}' "$jwt")
-check 'free tenant cannot request uhd through import' json_has "$refused_import" '.data.importVodAsset.__typename=="ValidationError" and .data.importVodAsset.field=="transcodeLadder"'
+check 'free tenant cannot request uhd through import' json_has "$refused_import" '.data.importVodAsset.__typename=="ValidationError" and .data.importVodAsset.field=="transcodeLadder"' || log "import refusal response: $refused_import"
 check 'refusal leaves no upload asset' [ "$(pg commodore "SELECT count(*) FROM commodore.vod_assets WHERE tenant_id='$tenant'")" = 0 ]
 set_tier payg || { fail 'upgrade tenant'; finish; }
 eventually 90 'upgrade restores saved uhd choice' policy_is uhd

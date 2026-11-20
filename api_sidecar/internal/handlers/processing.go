@@ -39,9 +39,11 @@ import (
 // regular safe-wrapper uploads. STREAM_PROCESS provides the MistProc*
 // config (VP9/thumbs/audio) from Commodore.
 type ProcessingJobHandler struct {
-	logger        logging.Logger
-	mistServerURL string
-	storagePath   string
+	logger         logging.Logger
+	mistServerURL  string
+	storagePath    string
+	memorySnapshot func() (uint64, uint64, error)
+	memoryControls map[string]bool
 }
 
 // pendingJobs tracks in-flight processing jobs, signaled by PUSH_END.
@@ -477,6 +479,7 @@ type processingOverrideRecord struct {
 	JobID         string    `json:"job_id,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 	ExpiresAt     time.Time `json:"expires_at"`
+	MemoryBytes   uint64    `json:"memory_bytes,omitempty"`
 }
 
 const processingOverrideMaxLifetime = 5 * time.Hour
@@ -546,7 +549,7 @@ func processingOverridePath(dir, streamName string) string {
 	return filepath.Join(dir, hex.EncodeToString(sum[:])+".json")
 }
 
-func setProcessingProcessOverride(streamName, processesJSON, jobID string, expiresAt time.Time) error {
+func setProcessingProcessOverride(streamName, processesJSON, jobID string, expiresAt time.Time, memoryBytes ...uint64) error {
 	if streamName == "" || processesJSON == "" {
 		return errors.New("processing override requires stream name and processes_json")
 	}
@@ -560,13 +563,23 @@ func setProcessingProcessOverride(streamName, processesJSON, jobID string, expir
 		Version: 1, StreamName: streamName, ProcessesJSON: processesJSON,
 		JobID: strings.TrimSpace(jobID), CreatedAt: now, ExpiresAt: expiresAt.UTC(),
 	}
+	if previous, ok := processingOverrideRecords[streamName]; ok {
+		record.MemoryBytes = previous.MemoryBytes
+	}
+	if len(memoryBytes) > 0 {
+		record.MemoryBytes = memoryBytes[0]
+	}
+	return persistProcessingOverrideLocked(record)
+}
+
+func persistProcessingOverrideLocked(record processingOverrideRecord) error {
 	dir := processingOverrideStateDir
 	if dir != "" {
 		encoded, marshalErr := json.Marshal(record)
 		if marshalErr != nil {
 			return marshalErr
 		}
-		path := processingOverridePath(dir, streamName)
+		path := processingOverridePath(dir, record.StreamName)
 		tmp, createErr := os.CreateTemp(dir, ".processing-override-*")
 		if createErr != nil {
 			return createErr
@@ -603,8 +616,8 @@ func setProcessingProcessOverride(streamName, processesJSON, jobID string, expir
 			return closeErr
 		}
 	}
-	processingProcessOverrides[streamName] = processesJSON
-	processingOverrideRecords[streamName] = record
+	processingProcessOverrides[record.StreamName] = record.ProcessesJSON
+	processingOverrideRecords[record.StreamName] = record
 	return nil
 }
 
@@ -612,7 +625,7 @@ func reconcileExpiredProcessingOverrides(activeStreams map[string]interface{}, n
 	processingProcessOverridesMu.Lock()
 	stale := make(map[string]processingOverrideRecord)
 	for streamName, record := range processingOverrideRecords {
-		if record.ExpiresAt.IsZero() || record.ExpiresAt.After(now) {
+		if record.MemoryBytes == 0 && (record.ExpiresAt.IsZero() || record.ExpiresAt.After(now)) {
 			continue
 		}
 		if _, active := activeStreams[streamName]; !active {
@@ -633,7 +646,7 @@ func reconcileProcessingOverridePersistence(mistServerURL string, logger logging
 	hasExpired := false
 	now := time.Now()
 	for _, record := range processingOverrideRecords {
-		if !record.ExpiresAt.IsZero() && !record.ExpiresAt.After(now) {
+		if record.MemoryBytes > 0 || (!record.ExpiresAt.IsZero() && !record.ExpiresAt.After(now)) {
 			hasExpired = true
 			break
 		}
@@ -731,6 +744,9 @@ func processingOverrideExpiry(req *ipcpb.ProcessingJobRequest) time.Time {
 func clearProcessingProcessOverride(streamName string, ownerJobID ...string) {
 	processingProcessOverridesMu.Lock()
 	defer processingProcessOverridesMu.Unlock()
+	if record, ok := processingOverrideRecords[streamName]; ok && record.MemoryBytes > 0 {
+		return
+	}
 	dir := processingOverrideStateDir
 	if len(ownerJobID) > 0 && strings.TrimSpace(ownerJobID[0]) != "" {
 		owner := strings.TrimSpace(ownerJobID[0])
@@ -763,7 +779,7 @@ func clearExpiredProcessingProcessOverride(streamName string, expected processin
 	defer processingProcessOverridesMu.Unlock()
 	current, ok := processingOverrideRecords[streamName]
 	if !ok || !processingOverrideRecordsEqual(current, expected) ||
-		current.ExpiresAt.IsZero() || current.ExpiresAt.After(now) {
+		(current.MemoryBytes == 0 && (current.ExpiresAt.IsZero() || current.ExpiresAt.After(now))) {
 		return
 	}
 	if dir := processingOverrideStateDir; dir != "" {
@@ -788,7 +804,7 @@ func clearExpiredProcessingProcessOverride(streamName string, expected processin
 
 func processingOverrideRecordsEqual(a, b processingOverrideRecord) bool {
 	return a.Version == b.Version && a.StreamName == b.StreamName && a.ProcessesJSON == b.ProcessesJSON &&
-		a.JobID == b.JobID && a.CreatedAt.Equal(b.CreatedAt) && a.ExpiresAt.Equal(b.ExpiresAt)
+		a.JobID == b.JobID && a.MemoryBytes == b.MemoryBytes && a.CreatedAt.Equal(b.CreatedAt) && a.ExpiresAt.Equal(b.ExpiresAt)
 }
 
 func removeProcessingProcessOverrideLocked(streamName string) {
@@ -1049,7 +1065,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		h.sendResult(send, req.GetJobId(), "failed", "processing job is missing processes_json", nil, "", 0)
 		return
 	}
-	if err := setProcessingProcessOverride(streamName, processesJSON, req.GetJobId(), processingOverrideExpiry(req)); err != nil {
+	if err := setProcessingProcessOverride(streamName, processingSourceProbePolicy, req.GetJobId(), processingOverrideExpiry(req)); err != nil {
 		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("persist processing policy: %v", err), nil, "", 0)
 		return
 	}
@@ -1142,6 +1158,15 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		return
 	}
 
+	defer h.finishProcessingMemory(log, mistClient, streamName, req.GetJobId())
+	admittedProcesses, admissionSource, memoryErr := h.prepareProcessingMemory(log, mistClient, req, streamName, outputPath, processesJSON, processExitCh, send)
+	if memoryErr != nil {
+		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+		h.sendResult(send, req.GetJobId(), processingMemoryResultStatus(memoryErr), fmt.Sprintf("processing memory admission: %v", memoryErr), processingMemoryFailureOutputs(memoryErr), "", 0)
+		return
+	}
+	processesJSON = admittedProcesses
+
 	// fallbackAttempted: the stream was restarted on local MistProcAV.
 	// inPlaceReplaced: Mist replaced the failed Livepeer process inside the
 	// running buffer (PROCESS_REPLACE); a restart remains available if that
@@ -1158,13 +1183,20 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	// process policy: the persisted STREAM_PROCESS override (so a buffer reboot
 	// keeps it), Foghorn's cached config, and the readiness expectations.
 	adoptLocalProcessingPolicy := func() bool {
+		if data, err := h.getActiveProcessingStreamData(mistClient, streamName); err == nil {
+			observed, _ := sourceFromReadinessOutputs(inspectProcessingActiveStream(data).outputs)
+			if observed.Width > 0 && observed.Height > 0 {
+				admissionSource = observed
+			}
+		}
 		localConfig := mist.ReplaceLivepeerWithLocal(effectiveProcessesJSON)
-		if err := setProcessingProcessOverride(streamName, localConfig, req.GetJobId(), processingOverrideExpiry(req)); err != nil {
-			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("persist fallback processing policy: %v", err), nil, "", 0)
+		admitted, err := h.admitProcessingPolicy(log, req, streamName, localConfig, admissionSource, send)
+		if err != nil {
+			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+			h.sendResult(send, req.GetJobId(), processingMemoryResultStatus(err), fmt.Sprintf("fallback memory admission: %v", err), processingMemoryFailureOutputs(err), "", 0)
 			return false
 		}
-		effectiveProcessesJSON = localConfig
-		h.updateProcessConfigCache(send, req.GetJobId(), req.GetArtifactHash(), localConfig)
+		effectiveProcessesJSON = admitted
 		return true
 	}
 
@@ -1201,6 +1233,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 					return
 				}
 				drainRetiredProcessEvents(processExitCh, processAVCh, processReplaceCh)
+				clearProcessingResourceFailures(streamName)
 				var replaced bool
 				doneCh, replaced = replacePendingJobChannel(streamName, req.GetJobId())
 				if !replaced {
@@ -1235,19 +1268,20 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		return
 	}
 	if uprightConfig != effectiveProcessesJSON {
-		effectiveProcessesJSON = localEncoderConfig(uprightConfig)
-		if err := setProcessingProcessOverride(streamName, effectiveProcessesJSON, req.GetJobId(), processingOverrideExpiry(req)); err != nil {
+		admitted, err := h.admitProcessingPolicy(log, req, streamName, localEncoderConfig(uprightConfig), source, send)
+		if err != nil {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("persist rotation policy: %v", err), nil, "", 0)
+			h.sendResult(send, req.GetJobId(), processingMemoryResultStatus(err), fmt.Sprintf("rotation memory admission: %v", err), processingMemoryFailureOutputs(err), "", 0)
 			return
 		}
-		h.updateProcessConfigCache(send, req.GetJobId(), req.GetArtifactHash(), effectiveProcessesJSON)
+		effectiveProcessesJSON = admitted
 		if err := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath, 0); err != nil {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("restart rotation render: %v", err), nil, "", 0)
 			return
 		}
 		drainRetiredProcessEvents(processExitCh, processAVCh, processReplaceCh)
+		clearProcessingResourceFailures(streamName)
 		priorDuration := sourceDurationMs
 		outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(context.Background(), log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
 		sourceDurationMs = max(priorDuration, sourceDurationMs)
@@ -1322,6 +1356,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 			return false
 		}
 		drainRetiredProcessEvents(processExitCh, processAVCh, processReplaceCh)
+		clearProcessingResourceFailures(streamName)
 		// Fresh doneCh so a PUSH_END from the retired push can't satisfy the
 		// restarted push's completion check.
 		var replaced bool
@@ -1362,6 +1397,11 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		return recordingEndPredatesPush(evt.TimeStarted, currentPushStartedAt)
 	}
 	terminalSignalsReady := func() (ready bool, terminalFailure bool) {
+		if err := processingResourceFailure(streamName, ignoredProcessExitBootCounts); err != nil {
+			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+			h.sendResult(send, req.GetJobId(), processingResultRetryable, err.Error(), nil, "", 0)
+			return false, true
+		}
 		if recordingEnd == nil {
 			return false, false
 		}
@@ -1464,6 +1504,10 @@ loop:
 			}
 
 			switch {
+			case retryableProcessingExit(evt):
+				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+				h.sendResult(send, req.GetJobId(), processingResultRetryable, (&processingResourceError{event: evt}).Error(), nil, "", 0)
+				return
 			case evt.Status == "unrecoverable" && isCriticalProcess(evt):
 				log.WithFields(evtFields).Error("Critical process unrecoverable")
 				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
@@ -1615,6 +1659,11 @@ loop:
 	// controller lists the masked source, while RECORDING_END lists only outputs.
 	sampleSourceEnd()
 	srcInfo, _ := sourceFromReadinessOutputs(outputs)
+	if err := processingResourceFailure(streamName, ignoredProcessExitBootCounts); err != nil {
+		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+		h.sendResult(send, req.GetJobId(), processingResultRetryable, err.Error(), nil, "", 0)
+		return
+	}
 	if !renditionsComplete(log, effectiveProcessesJSON, recordingEnd.Tracks, srcInfo, sourceEndMs, sourceStartMs, recordingEnd.MediaDurationMs) {
 		h.logProcessingTrackDivergence(log, mistClient, streamName, recordingEnd.Tracks)
 		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
@@ -1754,6 +1803,9 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(ctx context.Context,
 	var lastBoot time.Time
 
 	for {
+		if err := processingResourceFailure(streamName, ignoredProcessExitBootCounts); err != nil {
+			return nil, 0, err
+		}
 		if failure, ok := takeProcessingSourceFailure(streamName); ok {
 			return nil, 0, errors.New(failure)
 		}
@@ -1773,6 +1825,8 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(ctx context.Context,
 				continue
 			}
 			switch {
+			case retryableProcessingExit(evt):
+				return nil, 0, &processingResourceError{event: evt}
 			case evt.Status == "unrecoverable" && isCriticalProcess(evt):
 				log.WithFields(evtFields).Error("Critical process unrecoverable while waiting for processing readiness")
 				return nil, 0, fmt.Errorf("%s process failed during readiness: %s", evt.ProcessType, evt.Reason)
@@ -2233,7 +2287,7 @@ func renditionsComplete(log *logrus.Entry, processesJSON string, tracks []proces
 		}
 		return true
 	}
-	return renditionsCompleteFromTracks(log, renditionShortSides(expected), tracks, sourceEndMs)
+	return renditionsCompleteFromTracks(log, renditionShortSides(expected), tracks, sourceEndMs-sourceStartMs)
 }
 
 func renditionShortSides(expected []mist.ExpectedRendition) []int {
@@ -2244,12 +2298,12 @@ func renditionShortSides(expected []mist.ExpectedRendition) []int {
 	return out
 }
 
-func renditionsCompleteFromTracks(log *logrus.Entry, expectedShortSides []int, videoTracks []processingMetaVideoTrack, sourceEndMs float64) bool {
+func renditionsCompleteFromTracks(log *logrus.Entry, expectedShortSides []int, videoTracks []processingMetaVideoTrack, sourceSpanMs float64) bool {
 	for _, idx := range sourceVideoTrackIndexes(videoTracks, nil) {
-		sourceEndMs = max(sourceEndMs, videoTracks[idx].lastms)
+		sourceSpanMs = max(sourceSpanMs, videoTracks[idx].spanMs())
 	}
-	if sourceEndMs <= 0 {
-		log.Warn("Source end unavailable; refusing to prove rendition completeness")
+	if sourceSpanMs <= 0 {
+		log.Warn("Source span unavailable; refusing to prove rendition completeness")
 		return false
 	}
 	pool := nonSourceVideoTracks(videoTracks, nil)
@@ -2257,13 +2311,13 @@ func renditionsCompleteFromTracks(log *logrus.Entry, expectedShortSides []int, v
 	for _, short := range expectedShortSides {
 		idx := -1
 		for i, track := range pool {
-			if !consumed[i] && mist.RenditionShortSideMatches(track.width, track.height, short) && sourceEndMs-track.lastms <= maxRenditionSpanShortfallMs {
+			if !consumed[i] && mist.RenditionShortSideMatches(track.width, track.height, short) && sourceSpanMs-track.spanMs() <= maxRenditionSpanShortfallMs {
 				idx = i
 				break
 			}
 		}
 		if idx < 0 {
-			log.WithFields(logrus.Fields{"expected_short_side": short, "source_end_ms": sourceEndMs, "recorded_video_heights": videoTrackHeights(pool)}).Warn("Output rendition missing or truncated")
+			log.WithFields(logrus.Fields{"expected_short_side": short, "source_span_ms": sourceSpanMs, "recorded_video_heights": videoTrackHeights(pool)}).Warn("Output rendition missing or truncated")
 			return false
 		}
 		consumed[idx] = true
@@ -2305,9 +2359,7 @@ func sourceFromReadinessOutputs(outputs map[string]string) (mist.SourceMediaInfo
 	if mirror, mirrorErr := strconv.ParseBool(outputs["source_mirror"]); mirrorErr == nil {
 		src.Mirror = mirror
 	}
-	if src.Rotation == 90 || src.Rotation == 270 {
-		src.Width, src.Height = src.Height, src.Width
-	}
+	src.Width, src.Height = src.DisplaySize()
 	var span float64
 	if d, err := strconv.Atoi(outputs["duration_ms"]); err == nil {
 		span = float64(d)
@@ -2728,7 +2780,7 @@ func extractActiveStreamMetadata(streamData map[string]interface{}) map[string]s
 		}
 		if rotation, ok := mapInt64(track, "rotation"); ok && rotation != 0 {
 			outputs["source_rotation"] = strconv.FormatInt(rotation, 10)
-			if rotation == 90 || rotation == 270 {
+			if rotation%180 == 90 || rotation%180 == -90 {
 				outputs["width"], outputs["height"] = outputs["height"], outputs["width"]
 			}
 		}
@@ -2970,8 +3022,9 @@ func drainRetiredProcessEvents(processExitCh <-chan ProcessExitEvent, processAVC
 
 // processExitListeners routes PROCESS_EXIT triggers to processing handlers.
 var (
-	processExitListeners   = map[string]chan ProcessExitEvent{}
-	processExitListenersMu sync.Mutex
+	processExitListeners    = map[string]chan ProcessExitEvent{}
+	processResourceFailures = map[string][]ProcessExitEvent{}
+	processExitListenersMu  sync.Mutex
 )
 
 var (
@@ -3070,6 +3123,7 @@ func RegisterProcessExitListener(streamName string) chan ProcessExitEvent {
 	defer processExitListenersMu.Unlock()
 	ch := make(chan ProcessExitEvent, 4)
 	processExitListeners[streamName] = ch
+	delete(processResourceFailures, streamName)
 	return ch
 }
 
@@ -3077,12 +3131,19 @@ func UnregisterProcessExitListener(streamName string) {
 	processExitListenersMu.Lock()
 	defer processExitListenersMu.Unlock()
 	delete(processExitListeners, streamName)
+	delete(processResourceFailures, streamName)
 }
 
 // RouteProcessExit delivers a PROCESS_EXIT event to the processing handler listening on the stream.
 func RouteProcessExit(evt ProcessExitEvent) {
 	processExitListenersMu.Lock()
 	ch, ok := processExitListeners[evt.StreamName]
+	if ok && retryableProcessingExit(evt) {
+		failures := processResourceFailures[evt.StreamName]
+		if len(failures) < 16 {
+			processResourceFailures[evt.StreamName] = append(failures, evt)
+		}
+	}
 	processExitListenersMu.Unlock()
 	if !ok {
 		logUnroutedProcessExit(evt)

@@ -73,6 +73,47 @@ func TestParseProcessReplaceTrigger(t *testing.T) {
 	}
 }
 
+func TestVODProcessReplacementWaitsForMemoryAdmission(t *testing.T) {
+	oldLogger := logger
+	logger = logging.NewLogger()
+	t.Cleanup(func() { logger = oldLogger })
+	stream := "processing+deferred-local-memory"
+	ch := RegisterProcessReplaceListener(stream)
+	defer UnregisterProcessReplaceListener(stream)
+	code, body := callProcessReplace(t, processReplaceBody(stream, "Livepeer", failedLivepeerConfig))
+	if code != http.StatusOK || body != noProcessReplacement {
+		t.Fatalf("local encoders started before admission: %d %s", code, body)
+	}
+	select {
+	case evt := <-ch:
+		if evt.ReplacementCount != 0 {
+			t.Fatal("unreserved local replacement")
+		}
+	default:
+		t.Fatal("job was not told to restart through admission")
+	}
+}
+
+func TestVODDeferredReplacementStillReportsUnexpectedFailure(t *testing.T) {
+	oldLogger, oldReport := logger, reportStreamTranscodeDegraded
+	logger = logging.NewLogger()
+	reports := make(chan ProcessReplaceEvent, 1)
+	reportStreamTranscodeDegraded = func(evt ProcessReplaceEvent) error { reports <- evt; return nil }
+	t.Cleanup(func() { logger, reportStreamTranscodeDegraded = oldLogger, oldReport })
+	code, body := callProcessReplace(t, processReplaceBody("processing+deferred-failure-report", "Livepeer", failedLivepeerConfig))
+	if code != http.StatusOK || body != noProcessReplacement {
+		t.Fatalf("unreserved replacement: %d %s", code, body)
+	}
+	select {
+	case evt := <-reports:
+		if evt.ReplacementCount != 0 {
+			t.Fatal("unadmitted replacement was reported as running")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("deferred VOD fallback hid the Livepeer failure")
+	}
+}
+
 // A hard-failed Livepeer transcode is answered with the equivalent local AV
 // ladder: one AV process per profile, no Livepeer entry, and each rendition
 // keeping its upscale inhibit. Foghorn is told about it.
@@ -152,25 +193,32 @@ func testSourceRoutingWithoutDegradation(t *testing.T, shortReason, reason strin
 	reports := make(chan ProcessReplaceEvent, 1)
 	reportStreamTranscodeDegraded = func(evt ProcessReplaceEvent) error { reports <- evt; return nil }
 	t.Cleanup(func() { reportStreamTranscodeDegraded = old })
-	body := strings.Join([]string{"processing+rotated", "Livepeer", failedLivepeerConfig, "2", shortReason, reason}, "\n")
-	ch := RegisterProcessReplaceListener("processing+rotated")
-	defer UnregisterProcessReplaceListener("processing+rotated")
-	code, replacement := callProcessReplace(t, body)
-	if code != http.StatusOK || replacement == noProcessReplacement {
-		t.Fatalf("replacement = %d %s", code, replacement)
-	}
-	select {
-	case evt := <-ch:
-		if evt.ReplacementCount != 2 {
-			t.Fatalf("replacement count = %d", evt.ReplacementCount)
-		}
-	default:
-		t.Fatal("routing event did not reach processing job")
-	}
-	select {
-	case evt := <-reports:
-		t.Fatalf("rotated source reported as degraded: %+v", evt)
-	case <-time.After(100 * time.Millisecond):
+	for _, tc := range []struct {
+		stream string
+		count  int
+	}{{"live+rotated", 2}, {"processing+rotated", 0}} {
+		t.Run(tc.stream, func(t *testing.T) {
+			body := strings.Join([]string{tc.stream, "Livepeer", failedLivepeerConfig, "2", shortReason, reason}, "\n")
+			ch := RegisterProcessReplaceListener(tc.stream)
+			defer UnregisterProcessReplaceListener(tc.stream)
+			code, replacement := callProcessReplace(t, body)
+			if code != http.StatusOK || (replacement == noProcessReplacement) != (tc.count == 0) {
+				t.Fatalf("replacement = %d %s, want replacement count %d", code, replacement, tc.count)
+			}
+			select {
+			case evt := <-ch:
+				if evt.ReplacementCount != tc.count {
+					t.Fatalf("replacement count = %d, want %d", evt.ReplacementCount, tc.count)
+				}
+			default:
+				t.Fatal("routing event did not reach its listener")
+			}
+			select {
+			case evt := <-reports:
+				t.Fatalf("source routing reported as degraded: %+v", evt)
+			case <-time.After(100 * time.Millisecond):
+			}
+		})
 	}
 }
 
@@ -193,11 +241,9 @@ func TestLivepeerExitFallbackDecision(t *testing.T) {
 	}
 }
 
-// Livepeer returns 403 during a VOD job: Mist fires PROCESS_EXIT and then
-// PROCESS_REPLACE for the processing+ stream. Helmsman's answer is routed to the
-// job, whose in-place wait completes on the first local video output instead of
-// tearing the stream down.
-func TestLivepeer403IsReplacedInPlaceForProcessingJob(t *testing.T) {
+// A VOD callback cannot start its local ladder until the job has reserved it.
+// The empty replacement wakes the job so it can restart through admission.
+func TestLivepeer403RestartsProcessingJobThroughAdmission(t *testing.T) {
 	_, wg := stubDegradedReports(t)
 	wg.Add(1)
 	const stream = "processing+importhash"
@@ -217,12 +263,11 @@ func TestLivepeer403IsReplacedInPlaceForProcessingJob(t *testing.T) {
 	go func() {
 		done <- awaitInPlaceLivepeerReplacement(context.Background(), logrus.NewEntry(logrus.New()), exitCh, processAVCh, replaceCh, ignored, time.Second, 2*time.Second)
 	}()
-	if code, body := callProcessReplace(t, processReplaceBody(stream, "Livepeer", failedLivepeerConfig)); code != http.StatusOK || body == noProcessReplacement {
+	if code, body := callProcessReplace(t, processReplaceBody(stream, "Livepeer", failedLivepeerConfig)); code != http.StatusOK || body != noProcessReplacement {
 		t.Fatalf("PROCESS_REPLACE status %d body %q", code, body)
 	}
-	processAVCh <- ProcessAVSegmentCompleteEvent{StreamName: stream, TrackType: "video", OutputCodec: "H264", OutputWidth: 1280, OutputHeight: 720, OutputFrames: 60}
-	if err := <-done; err != nil {
-		t.Fatalf("in-place replacement failed: %v", err)
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "without a replacement") {
+		t.Fatalf("unadmitted in-place replacement result = %v", err)
 	}
 	wg.Wait()
 }

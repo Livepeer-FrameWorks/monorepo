@@ -272,3 +272,30 @@ WITH requeued AS (
     RETURNING a.artifact_hash
 )
 SELECT COUNT(*)::int AS requeued FROM requeued;
+
+-- Capacity backpressure is not a failed processing attempt. Only the assigned
+-- node can return an active job, and the queue delay bounds redispatch traffic.
+-- name: RequeueCapacityDeferredProcessingJob :one
+WITH requeued AS (
+    UPDATE foghorn.processing_jobs AS job
+    SET status = 'queued', processing_node_id = NULL, updated_at = NOW(),
+        error_message = sqlc.arg(error_message),
+        progress_last_ms = 0, progress_advanced_at = NULL,
+        source_stalled_since = COALESCE(job.source_stalled_since, job.started_at, NOW()),
+        next_attempt_at = NOW() + INTERVAL '30 seconds'
+    WHERE job.job_id = sqlc.arg(job_id)
+      AND job.processing_node_id = sqlc.arg(node_id)
+      AND job.status IN ('dispatched', 'processing')
+      AND COALESCE(job.source_stalled_since, job.started_at, NOW()) > NOW() - CAST(sqlc.arg(wait_window) AS text)::interval
+    RETURNING artifact_hash, tenant_id
+), artifact AS (
+    UPDATE foghorn.artifacts AS a
+    SET status = 'queued', updated_at = NOW()
+    FROM requeued AS r
+    WHERE a.artifact_hash = r.artifact_hash
+      AND a.tenant_id = r.tenant_id
+      AND a.artifact_type IN ('clip', 'vod')
+      AND a.status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
+    RETURNING a.artifact_hash
+)
+SELECT COUNT(*)::int AS requeued FROM requeued;
