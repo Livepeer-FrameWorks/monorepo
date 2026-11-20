@@ -22,7 +22,7 @@
         "retentionDays": 0,
         "maxConcurrentStreams": 0,
         "maxConcurrentViewers": 0,
-        "dvrMaxWindowSeconds": 43200
+        "dvrMaxWindowSeconds": 86400
       }
     },
     {
