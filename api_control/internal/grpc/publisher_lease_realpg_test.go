@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/dvrpolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	authority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	clusterpeer "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
@@ -482,6 +483,185 @@ func testPublisherLease(t *testing.T, conn *sql.DB) {
 		}
 	})
 
+	t.Run("cold claim rechecks configuration after discovery", func(t *testing.T) {
+		if _, err := conn.ExecContext(ctx, `UPDATE commodore.streams SET active_ingest_cluster_id=NULL,active_ingest_claim_id=NULL,
+			active_ingest_node_id=NULL,active_ingest_control_cell_id=NULL,is_recording_enabled=true,
+			dvr_chapter_mode='fixed_interval',dvr_chapter_interval_seconds=86400
+			WHERE tenant_id=$1::uuid AND id=$2::uuid`, claimTenantID, claimStreamID); err != nil {
+			t.Fatal(err)
+		}
+		request := &pb.ValidateStreamKeyRequest{StreamKey: "sk-published-lease", ClaimToken: "cold-stale-chapters", NodeId: "node-eu", ControlCellId: "cell-eu"}
+		configuration := &pb.ValidateStreamKeyResponse{TenantId: claimTenantID, StreamId: claimStreamID,
+			IsRecordingEnabled: true, DvrChapterMode: "window_sized_chapters"}
+		_, err := server.acquireCompatiblePublisherClaim(ctx, request, "media-eu", configuration)
+		if !dvrpolicy.IsRecordingPolicyPending(err) {
+			t.Fatalf("cold discovery admitted settings superseded before its lease: %v", err)
+		}
+		if cluster, token := readClaim(t, conn); cluster != "" || token != "" {
+			t.Fatalf("cold claim changed ownership before configuration was current: %s/%s", cluster, token)
+		}
+	})
+
+	t.Run("lease waits for a concurrent chapter save", func(t *testing.T) {
+		deadlineCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		if _, err := conn.ExecContext(deadlineCtx, `UPDATE commodore.streams SET active_ingest_cluster_id=NULL,active_ingest_claim_id=NULL,
+			active_ingest_node_id=NULL,active_ingest_control_cell_id=NULL,is_recording_enabled=true,
+			dvr_chapter_mode='fixed_interval',dvr_chapter_interval_seconds=7200
+			WHERE tenant_id=$1::uuid AND id=$2::uuid`, claimTenantID, claimStreamID); err != nil {
+			t.Fatal(err)
+		}
+		published := proto.CloneOf(object)
+		published.GetLiveStream().RecordingEnabled = true
+		published.GetLiveStream().DvrChapterMode, published.GetLiveStream().DvrChapterIntervalSeconds = "fixed_interval", 7200
+		attempt := proto.CloneOf(req)
+		attempt.ExecutionToken, attempt.ObjectAuthorityVersion = "chapter-edit-serialization", 4
+		attempt.ObjectPayloadSha256 = publish("media_object", authority.LiveStreamAuthorityID(claimStreamID), 4, published)
+		edit, err := conn.BeginTx(deadlineCtx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer edit.Rollback()
+		if _, err := edit.ExecContext(deadlineCtx, `UPDATE commodore.streams SET dvr_chapter_interval_seconds=86400
+			WHERE tenant_id=$1::uuid AND id=$2::uuid`, claimTenantID, claimStreamID); err != nil {
+			t.Fatal(err)
+		}
+		type leaseResult struct {
+			response *pb.PublisherLeaseResponse
+			err      error
+		}
+		done := make(chan leaseResult, 1)
+		go func() {
+			response, err := server.AcquirePublisherLease(deadlineCtx, attempt)
+			done <- leaseResult{response, err}
+		}()
+		// Observe the request's execution lock, not a guessed scheduler delay.
+		// The owner edit still holds the stream row when the lease reaches it.
+		for {
+			probe, err := conn.BeginTx(deadlineCtx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var acquired bool
+			err = probe.QueryRowContext(deadlineCtx, `SELECT pg_try_advisory_xact_lock(hashtext($1)::bigint)`,
+				publisherLeaseExecutionKey(attempt.GetControlCellId(), attempt.GetNodeId(), attempt.GetExecutionToken())).Scan(&acquired)
+			rollbackErr := probe.Rollback()
+			if err != nil || rollbackErr != nil {
+				t.Fatalf("observe execution lock: %v %v", err, rollbackErr)
+			}
+			if !acquired {
+				break
+			}
+			select {
+			case result := <-done:
+				t.Fatalf("lease completed before the concurrent settings save: %+v", result)
+			case <-deadlineCtx.Done():
+				t.Fatal(deadlineCtx.Err())
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+		if err := edit.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case result := <-done:
+			if result.response != nil || !dvrpolicy.IsRecordingPolicyPending(result.err) {
+				t.Fatalf("lease ignored a save committed while it waited: %+v", result)
+			}
+		case <-deadlineCtx.Done():
+			t.Fatal(deadlineCtx.Err())
+		}
+		if cluster, token := readClaim(t, conn); cluster != "" || token != "" {
+			t.Fatalf("concurrent save left a stale publisher lease: %s/%s", cluster, token)
+		}
+	})
+
+	t.Run("saved chapter policy fences admission until publication", func(t *testing.T) {
+		for i, tc := range []struct {
+			name                             string
+			publishedEnabled, savedEnabled   bool
+			publishedMode, savedMode         string
+			publishedInterval, savedInterval int32
+		}{
+			{"enable", false, true, "none", "fixed_interval", 0, 86400},
+			{"disable", true, false, "fixed_interval", "fixed_interval", 86400, 86400},
+			{"mode", true, true, "window_sized_chapters", "fixed_interval", 0, 86400},
+			{"interval", true, true, "fixed_interval", "fixed_interval", 7200, 86400},
+			{"explicit none", true, true, "window_sized_chapters", "none", 0, 0},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				if _, err := conn.ExecContext(ctx, `UPDATE commodore.streams
+					SET active_ingest_cluster_id=NULL, active_ingest_claim_id=NULL,
+					    active_ingest_node_id=NULL, active_ingest_control_cell_id=NULL,
+					    is_recording_enabled=$3, dvr_chapter_mode=NULLIF($4, 'none'),
+					    dvr_chapter_interval_seconds=NULLIF($5, 0)
+					WHERE tenant_id=$1::uuid AND id=$2::uuid`, claimTenantID, claimStreamID,
+					tc.savedEnabled, tc.savedMode, tc.savedInterval); err != nil {
+					t.Fatal(err)
+				}
+				published := proto.CloneOf(object)
+				live := published.GetLiveStream()
+				live.RecordingEnabled, live.DvrChapterMode, live.DvrChapterIntervalSeconds = tc.publishedEnabled, tc.publishedMode, tc.publishedInterval
+				attempt := proto.CloneOf(req)
+				if i%2 != 0 {
+					attempt.ClusterId, attempt.ControlCellId, attempt.NodeId = "media-us", "cell-us", "node-us"
+				}
+				attempt.ExecutionToken = "chapter-policy-" + tc.name
+				attempt.ObjectAuthorityVersion = int64(10 + i*2)
+				attempt.ObjectPayloadSha256 = publish("media_object", authority.LiveStreamAuthorityID(claimStreamID), attempt.ObjectAuthorityVersion, published)
+				result, err := server.AcquirePublisherLease(ctx, attempt)
+				if !dvrpolicy.IsRecordingPolicyPending(err) {
+					t.Fatalf("saved settings were not fenced before recording: result=%v err=%v", result, err)
+				}
+				if cluster, token := readClaim(t, conn); cluster != "" || token != "" {
+					t.Fatalf("pending recording acquired publisher lease: %s/%s", cluster, token)
+				}
+				live.RecordingEnabled, live.DvrChapterMode, live.DvrChapterIntervalSeconds = tc.savedEnabled, tc.savedMode, tc.savedInterval
+				digest := publish("media_object", authority.LiveStreamAuthorityID(claimStreamID), attempt.ObjectAuthorityVersion+1, published)
+				// A lagging cell receives the newer signed pair in the existing
+				// lease exchange; it must not need a separate configuration RPC.
+				exchange := acquire(attempt, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_AUTHORITY_STALE)
+				if len(exchange.GetSignedAuthorities()) != 2 {
+					t.Fatalf("new publication was not offered to the lagging cell: %v", exchange)
+				}
+				attempt.ObjectAuthorityVersion++
+				attempt.ObjectPayloadSha256 = digest
+				acquire(attempt, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_ACQUIRED)
+				// A setting edit after acceptance affects the next publisher,
+				// not a retry of this execution whose start intent is pinned.
+				if _, err := conn.ExecContext(ctx, `UPDATE commodore.streams SET is_recording_enabled=NOT is_recording_enabled
+					WHERE tenant_id=$1::uuid AND id=$2::uuid`, claimTenantID, claimStreamID); err != nil {
+					t.Fatal(err)
+				}
+				acquire(attempt, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_SAME_EXECUTION)
+				newPublisher := proto.CloneOf(attempt)
+				newPublisher.ExecutionToken += "-next"
+				if result, err := server.AcquirePublisherLease(ctx, newPublisher); result != nil || !dvrpolicy.IsRecordingPolicyPending(err) {
+					t.Fatalf("new execution bypassed pending settings: response=%v err=%v", result, err)
+				}
+			})
+		}
+	})
+
+	t.Run("chapter-only changes do not block non-recording ingest", func(t *testing.T) {
+		if _, err := conn.ExecContext(ctx, `UPDATE commodore.streams SET active_ingest_cluster_id=NULL,active_ingest_claim_id=NULL,
+			active_ingest_node_id=NULL,active_ingest_control_cell_id=NULL,is_recording_enabled=false,
+			dvr_chapter_mode='fixed_interval',dvr_chapter_interval_seconds=7200
+			WHERE tenant_id=$1::uuid AND id=$2::uuid`, claimTenantID, claimStreamID); err != nil {
+			t.Fatal(err)
+		}
+		attempt := proto.CloneOf(req)
+		attempt.ExecutionToken, attempt.ObjectAuthorityVersion = "non-recording-policy-edit", 50
+		attempt.ObjectPayloadSha256 = publish("media_object", authority.LiveStreamAuthorityID(claimStreamID), 50, object)
+		acquire(attempt, pb.PublisherLeaseOutcome_PUBLISHER_LEASE_OUTCOME_ACQUIRED)
+	})
+
+	if _, err := conn.ExecContext(ctx, `UPDATE commodore.streams SET is_recording_enabled=false
+		WHERE tenant_id=$1::uuid AND id=$2::uuid`, claimTenantID, claimStreamID); err != nil {
+		t.Fatal(err)
+	}
+	req.ObjectAuthorityVersion = 100
+	req.ObjectPayloadSha256 = publish("media_object", authority.LiveStreamAuthorityID(claimStreamID), req.ObjectAuthorityVersion, object)
 	tenant.BillingDecision = media.TenantBillingDecision_TENANT_BILLING_DECISION_SUSPENDED
 	tenant.EffectiveClusterGrants = nil
 	req.TenantPayloadSha256 = publish("tenant", claimTenantID, 3, tenant)

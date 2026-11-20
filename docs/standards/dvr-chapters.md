@@ -47,7 +47,13 @@ open → closed → finalizing → finalized → frozen → reclaimed
 | `frozen`                | Chapter artifact + `.dtsh` durably on S3. Safe to reclaim source TS segments.                       |
 | `reclaimed`             | Source segments deleted; the chapter row remains as range metadata. Playback uses the VOD artifact. |
 | `failed_source_missing` | Recovery exhausted — at least one overlapping segment was missing from both local and S3 freeze.    |
-| `failed_permanent`      | Unrecoverable input (max retries exceeded, ledger invariants violated).                             |
+| `failed_permanent`      | Automatic processing stopped: retries exhausted or a ledger invariant requires operator review.     |
+
+Ledger validation failures use `failed_permanent` with a `LEDGER_INCONSISTENT`
+failure detail. They do not establish physical source loss and do not authorize
+reclamation. The processing-result marker is `chapter_failure=ledger_inconsistent`;
+source files remain available for operator investigation. Automatic retry does not
+rewrite ledger timestamps or ignore internal holes.
 
 A chapter is **playable** (`playableNow=true`) when its state is one of `finalized`, `frozen`, or `reclaimed` — in all three the canonical `.mkv` is the playback target. Earlier / terminal-failure states return no `playbackId`.
 

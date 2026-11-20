@@ -48,15 +48,6 @@ func TestCreateRemoteClipCarriesTheNamedActor(t *testing.T) {
 	}
 }
 
-type dvrCreatorSpy struct {
-	called bool
-}
-
-func (d *dvrCreatorSpy) StartDVR(context.Context, *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, error) {
-	d.called = true
-	return &sharedpb.StartDVRResponse{DvrHash: "dvrhash"}, nil
-}
-
 func TestPrepareArtifactRejectsInconsistentS3Metadata(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -147,31 +138,5 @@ func TestCreateRemoteClipRejectsTenantMismatch(t *testing.T) {
 	}
 	if cc.called {
 		t.Fatal("clip creator should not be called on tenant mismatch")
-	}
-}
-
-func TestCreateRemoteDVRRejectsTenantMismatch(t *testing.T) {
-	state.ResetDefaultManagerForTests()
-	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
-
-	sm := state.DefaultManager()
-	if err := sm.UpdateStreamFromBuffer("stream-a", "stream-a", "node-a", "tenant-origin", "FULL", ""); err != nil {
-		t.Fatalf("UpdateStreamFromBuffer: %v", err)
-	}
-
-	dc := &dvrCreatorSpy{}
-	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger(), DVRCreator: dc, AllowFederationMutations: true})
-	resp, err := srv.CreateRemoteDVR(serviceAuthContext(), &foghornfederationpb.RemoteDVRRequest{
-		StreamInternalName: "stream-a",
-		TenantId:           "tenant-other",
-	})
-	if err != nil {
-		t.Fatalf("CreateRemoteDVR() err = %v", err)
-	}
-	if resp.GetAccepted() {
-		t.Fatalf("expected request rejection, got %+v", resp)
-	}
-	if dc.called {
-		t.Fatal("dvr creator should not be called on tenant mismatch")
 	}
 }

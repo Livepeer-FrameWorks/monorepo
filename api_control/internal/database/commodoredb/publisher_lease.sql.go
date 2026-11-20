@@ -121,6 +121,51 @@ func (q *Queries) GetPublisherLease(ctx context.Context, arg GetPublisherLeasePa
 	return i, err
 }
 
+const lockLiveStreamRecordingConfiguration = `-- name: LockLiveStreamRecordingConfiguration :one
+SELECT COALESCE(is_recording_enabled, FALSE)::boolean AS is_recording_enabled,
+       dvr_chapter_mode, dvr_chapter_interval_seconds,
+       active_ingest_cluster_id, active_ingest_claim_id, active_ingest_node_id,
+       active_ingest_control_cell_id, active_ingest_cluster_updated_at
+FROM commodore.streams
+WHERE tenant_id=$1::uuid AND id=$2::uuid
+  AND deleted_at IS NULL
+FOR UPDATE
+`
+
+type LockLiveStreamRecordingConfigurationParams struct {
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	StreamID string `db:"stream_id" json:"stream_id"`
+}
+
+type LockLiveStreamRecordingConfigurationRow struct {
+	IsRecordingEnabled           bool           `db:"is_recording_enabled" json:"is_recording_enabled"`
+	DvrChapterMode               sql.NullString `db:"dvr_chapter_mode" json:"dvr_chapter_mode"`
+	DvrChapterIntervalSeconds    sql.NullInt32  `db:"dvr_chapter_interval_seconds" json:"dvr_chapter_interval_seconds"`
+	ActiveIngestClusterID        sql.NullString `db:"active_ingest_cluster_id" json:"active_ingest_cluster_id"`
+	ActiveIngestClaimID          sql.NullString `db:"active_ingest_claim_id" json:"active_ingest_claim_id"`
+	ActiveIngestNodeID           sql.NullString `db:"active_ingest_node_id" json:"active_ingest_node_id"`
+	ActiveIngestControlCellID    sql.NullString `db:"active_ingest_control_cell_id" json:"active_ingest_control_cell_id"`
+	ActiveIngestClusterUpdatedAt sql.NullTime   `db:"active_ingest_cluster_updated_at" json:"active_ingest_cluster_updated_at"`
+}
+
+// Setting writes already lock this row. Publication and lease acquisition take
+// it before the authority pointers so a saved change cannot pass as current.
+func (q *Queries) LockLiveStreamRecordingConfiguration(ctx context.Context, arg LockLiveStreamRecordingConfigurationParams) (LockLiveStreamRecordingConfigurationRow, error) {
+	row := q.db.QueryRowContext(ctx, lockLiveStreamRecordingConfiguration, arg.TenantID, arg.StreamID)
+	var i LockLiveStreamRecordingConfigurationRow
+	err := row.Scan(
+		&i.IsRecordingEnabled,
+		&i.DvrChapterMode,
+		&i.DvrChapterIntervalSeconds,
+		&i.ActiveIngestClusterID,
+		&i.ActiveIngestClaimID,
+		&i.ActiveIngestNodeID,
+		&i.ActiveIngestControlCellID,
+		&i.ActiveIngestClusterUpdatedAt,
+	)
+	return i, err
+}
+
 const lockPublisherLeaseAuthority = `-- name: LockPublisherLeaseAuthority :one
 SELECT object_version.payload AS object_payload, tenant_version.payload AS tenant_payload,
        object_version.payload_sha256 AS object_digest, tenant_version.payload_sha256 AS tenant_digest,

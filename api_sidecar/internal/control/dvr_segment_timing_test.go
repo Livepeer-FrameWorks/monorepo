@@ -5,6 +5,15 @@ import (
 	"time"
 )
 
+func TestDVRSegmentTimingPreservesMillisecondDuration(t *testing.T) {
+	const manifest = "#EXTM3U\n#EXT-X-PROGRAM-DATE-TIME:2026-11-19T17:16:01.868Z\n#EXTINF:8.014000,\nsegments/16_128.ts\n#EXT-X-PROGRAM-DATE-TIME:2026-11-19T17:16:09.882Z\n#EXTINF:6.030000,\nsegments/16_129.ts\n"
+	_, end, duration, ok := dvrSegmentWallClock(manifest, "16_128.ts")
+	start, _, _, nextOK := dvrSegmentWallClock(manifest, "16_129.ts")
+	if !ok || !nextOK || duration != 8014 || end != start {
+		t.Fatalf("duration=%dms end=%d next=%d anchored=%v/%v; want 8014ms and no manufactured gap", duration, end, start, ok, nextOK)
+	}
+}
+
 func TestDVRSegmentTimingUsesPlaylistUnixClock(t *testing.T) {
 	const manifest = "#EXTM3U\n#EXT-X-PROGRAM-DATE-TIME:2026-09-12T22:00:00.000Z\n#EXTINF:6.021,\nsegments/first.ts\n#EXTINF:6,\nsegments/second.ts\n#EXT-X-PROGRAM-DATE-TIME:2026-09-12T22:01:00.000Z\n#EXTINF:3,\nsegments/third.ts\n"
 	base := time.Date(2026, 9, 12, 22, 0, 0, 0, time.UTC).UnixMilli()

@@ -33,6 +33,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/dvrpolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
@@ -2054,6 +2055,9 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 	if recoveryErr, incomplete := errors.AsType[*control.IngestClaimRecoveryError](err); incomplete {
 		p.logger.WithError(recoveryErr).WithField("node_id", trigger.GetNodeId()).Warn("Publisher ownership recovery incomplete")
 		return "", true, ingesterrors.New(ingestPlacementErrorCode(recoveryErr), "publisher ownership recovery is temporarily unavailable")
+	}
+	if dvrpolicy.IsRecordingPolicyPending(err) {
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "Recording settings are still being applied. Please retry shortly.")
 	}
 	if errors.Is(err, control.ErrPublisherAuthorityStale) {
 		p.mediaAuthorityStore.RefreshAuthorityAsync(localauthority.AuthorityLookup{InternalName: identity.GetInternalName()})

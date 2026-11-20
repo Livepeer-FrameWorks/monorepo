@@ -1635,6 +1635,9 @@ func (s *CommodoreServer) publishMediaObjectAuthority(ctx context.Context, autho
 		if err := lockMediaAuthorityCompileFence(ctx, queries, "media_object:"+authorityID); err != nil {
 			return err
 		}
+		if err := lockLiveRecordingPublication(ctx, queries, payload); err != nil {
+			return err
+		}
 		if parent, ok := ctx.Value(mediaObjectParentContextKey{}).(*mediaauthoritypb.TenantAuthority); ok {
 			current, err := queries.LockCurrentTenantMediaAuthority(ctx, payload.GetTenantId())
 			if err != nil {

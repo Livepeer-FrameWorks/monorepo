@@ -2029,6 +2029,8 @@ BEGIN
        AND OLD.live_video_abr IS NOT DISTINCT FROM NEW.live_video_abr
        AND OLD.always_on IS NOT DISTINCT FROM NEW.always_on
        AND OLD.is_recording_enabled IS NOT DISTINCT FROM NEW.is_recording_enabled
+       AND OLD.dvr_chapter_mode IS NOT DISTINCT FROM NEW.dvr_chapter_mode
+       AND OLD.dvr_chapter_interval_seconds IS NOT DISTINCT FROM NEW.dvr_chapter_interval_seconds
        AND OLD.requires_auth IS NOT DISTINCT FROM NEW.requires_auth
        AND OLD.playback_policy IS NOT DISTINCT FROM NEW.playback_policy
        AND OLD.playback_webhook_secret_enc IS NOT DISTINCT FROM NEW.playback_webhook_secret_enc
@@ -2049,7 +2051,8 @@ $$;
 
 CREATE OR REPLACE TRIGGER trg_live_stream_media_authority
 AFTER INSERT OR DELETE OR UPDATE OF tenant_id, user_id, internal_name, playback_id, stream_key,
-    ingest_mode, live_video_abr, always_on, is_recording_enabled, requires_auth, playback_policy,
+    ingest_mode, live_video_abr, always_on, is_recording_enabled, dvr_chapter_mode, dvr_chapter_interval_seconds,
+    requires_auth, playback_policy,
     playback_webhook_secret_enc, active_ingest_cluster_id, last_ingest_cluster_id, deleted_at
 ON commodore.streams
 FOR EACH ROW EXECUTE FUNCTION commodore.live_stream_media_authority_changed();
@@ -2461,6 +2464,8 @@ BEGIN
        AND OLD.transcode_ladder IS NOT DISTINCT FROM NEW.transcode_ladder
        AND OLD.always_on IS NOT DISTINCT FROM NEW.always_on
        AND OLD.is_recording_enabled IS NOT DISTINCT FROM NEW.is_recording_enabled
+       AND OLD.dvr_chapter_mode IS NOT DISTINCT FROM NEW.dvr_chapter_mode
+       AND OLD.dvr_chapter_interval_seconds IS NOT DISTINCT FROM NEW.dvr_chapter_interval_seconds
        AND OLD.requires_auth IS NOT DISTINCT FROM NEW.requires_auth
        AND OLD.playback_policy IS NOT DISTINCT FROM NEW.playback_policy
        AND OLD.playback_webhook_secret_enc IS NOT DISTINCT FROM NEW.playback_webhook_secret_enc
@@ -2482,7 +2487,8 @@ $$;
 DROP TRIGGER IF EXISTS trg_live_stream_media_authority ON commodore.streams;
 CREATE TRIGGER trg_live_stream_media_authority
 AFTER INSERT OR DELETE OR UPDATE OF tenant_id, user_id, internal_name, playback_id, stream_key,
-    ingest_mode, live_video_abr, transcode_ladder, always_on, is_recording_enabled, requires_auth, playback_policy,
+    ingest_mode, live_video_abr, transcode_ladder, always_on, is_recording_enabled, dvr_chapter_mode, dvr_chapter_interval_seconds,
+    requires_auth, playback_policy,
     playback_webhook_secret_enc, active_ingest_cluster_id, last_ingest_cluster_id, deleted_at
 ON commodore.streams
 FOR EACH ROW EXECUTE FUNCTION commodore.live_stream_media_authority_changed();

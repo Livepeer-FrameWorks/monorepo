@@ -110,9 +110,13 @@ func (r *Resolver) DoSetStreamRetentionOverrides(ctx context.Context, input mode
 			Field:   strPtr("streamId"),
 		}, nil
 	}
+	streamID, err := normalizeStreamID(input.StreamID)
+	if err != nil {
+		return &model.ValidationError{Message: err.Error(), Field: strPtr("streamId")}, nil //nolint:nilerr // Validation failures are data in the GraphQL result union.
+	}
 
 	req := &commodorepb.SetStreamRetentionOverridesRequest{
-		StreamId: input.StreamID,
+		StreamId: streamID,
 	}
 	if input.DvrRetentionDaysOverride != nil {
 		v := int32(*input.DvrRetentionDaysOverride)
@@ -135,7 +139,7 @@ func (r *Resolver) DoSetStreamRetentionOverrides(ctx context.Context, input mode
 		}, nil
 	}
 	if middleware.IsDemoMode(ctx) {
-		out := &model.StreamRetentionOverrides{StreamID: input.StreamID}
+		out := &model.StreamRetentionOverrides{StreamID: streamID}
 		if v := input.DvrRetentionDaysOverride; v != nil {
 			out.DvrRetentionDaysOverride = v
 		}

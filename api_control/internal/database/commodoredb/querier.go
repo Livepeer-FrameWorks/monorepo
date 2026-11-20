@@ -529,6 +529,9 @@ type Querier interface {
 	LockDeviceAuthorizationByHash(ctx context.Context, deviceCodeHash string) (LockDeviceAuthorizationByHashRow, error)
 	LockDeviceAuthorizationByUserCode(ctx context.Context, userCode string) (LockDeviceAuthorizationByUserCodeRow, error)
 	LockIngestStopTarget(ctx context.Context, arg LockIngestStopTargetParams) (LockIngestStopTargetRow, error)
+	// Setting writes already lock this row. Publication and lease acquisition take
+	// it before the authority pointers so a saved change cannot pass as current.
+	LockLiveStreamRecordingConfiguration(ctx context.Context, arg LockLiveStreamRecordingConfigurationParams) (LockLiveStreamRecordingConfigurationRow, error)
 	// Serializes activation derivation for one authority. Acknowledgements for the
 	// same authority version are delivered concurrently, each in its own READ
 	// COMMITTED transaction, so without this every one of them can read the others'

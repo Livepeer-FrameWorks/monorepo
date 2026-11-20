@@ -202,6 +202,18 @@ func (s *CommodoreServer) readStreamRetentionOverride(ctx context.Context, tenan
 // resolved value. Returns int32 days; 0 means "keep forever" (artifact
 // retention_until written as NULL).
 func (s *CommodoreServer) resolveInitialRetention(ctx context.Context, target commodorepb.MediaRetentionTarget, tenantID, streamID string) (int32, error) {
+	days, err := s.initialRetentionChoice(ctx, target, tenantID, streamID)
+	if err != nil {
+		return 0, err
+	}
+	cap, capErr := s.fetchEntitlementBound(ctx, tenantID)
+	if capErr != nil {
+		cap = safeFallbackRetentionDays
+	}
+	return clampInitialRetention(days, cap), nil
+}
+
+func (s *CommodoreServer) initialRetentionChoice(ctx context.Context, target commodorepb.MediaRetentionTarget, tenantID, streamID string) (int32, error) {
 	days, set, err := s.readStreamRetentionOverride(ctx, tenantID, streamID, target)
 	if err != nil {
 		return 0, fmt.Errorf("stream override: %w", err)
@@ -216,19 +228,33 @@ func (s *CommodoreServer) resolveInitialRetention(ctx context.Context, target co
 		days = systemRetentionDefault(target)
 	}
 
-	cap, capErr := s.fetchEntitlementBound(ctx, tenantID)
-	if capErr != nil {
-		// Tier lookup failed: fall back to a 30-day clamp so we don't
-		// unintentionally retain forever on an unknown plan.
-		cap = safeFallbackRetentionDays
+	return days, nil
+}
+
+// resolveInitialRetentionWithBound uses an already resolved tier bound. Required
+// policy reads fail before creation; zero remains an explicit forever choice.
+func (s *CommodoreServer) resolveInitialRetentionWithBound(ctx context.Context, target commodorepb.MediaRetentionTarget, tenantID, streamID string, cap int32) (int32, error) {
+	if cap < 0 {
+		return 0, errors.New("negative retention bound")
 	}
+	days, err := s.initialRetentionChoice(ctx, target, tenantID, streamID)
+	if err != nil {
+		return 0, err
+	}
+	if days < 0 {
+		return 0, errors.New("negative retention choice")
+	}
+	return clampInitialRetention(days, cap), nil
+}
+
+func clampInitialRetention(days, cap int32) int32 {
 	if cap > 0 {
 		// 0 = forever must be clamped to the cap; anything above the cap too.
 		if days <= 0 || days > cap {
 			days = cap
 		}
 	}
-	return days, nil
+	return days
 }
 
 // resolveTenantPerClassEffective returns the effective retention the

@@ -1806,7 +1806,6 @@ func main() {
 			DB:              db,
 			Placement:       placementDestination,
 			ClipCreator:     foghornServer,
-			DVRCreator:      foghornServer,
 			ArtifactHandler: foghornServer,
 			LocalS3Backing: federation.S3Backing{
 				Bucket:   localS3Backing.Bucket,

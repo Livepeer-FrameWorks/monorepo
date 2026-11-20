@@ -13,6 +13,7 @@ import (
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/dvrpolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
@@ -90,9 +91,13 @@ func handleChapterFinalizeResult(
 	// not have a processing_jobs row, so both values live on dvr_chapters.
 	if jobStatus == "failed" {
 		if terminal, reason := chapterTerminalFailure(result.GetOutputs(), result.GetError()); terminal {
+			terminalState := ChapterStateFailedSourceMissing
+			if result.GetOutputs()["chapter_failure"] == dvrpolicy.ChapterFailureLedgerInconsistent {
+				terminalState = ChapterStateFailedPermanent
+			}
 			// MarkChapterFailed transitions the chapter, fails the child artifact, AND enqueues the
 			// failed lifecycle in one transaction — no separate (loss-prone) emit needed.
-			changed, err := MarkChapterFailed(ctx, chapterID, ChapterStateFailedSourceMissing, reason, nodeID, expectedAttempt)
+			changed, err := MarkChapterFailed(ctx, chapterID, terminalState, reason, nodeID, expectedAttempt)
 			if err != nil {
 				logger.WithError(err).WithFields(fields).Warn("Chapter finalize: terminal-fail mark failed")
 			} else if !changed {
@@ -698,9 +703,12 @@ func isPlayableChapterState(state string) bool {
 
 // chapterTerminalFailure inspects the Helmsman processing-result error
 // and outputs to decide whether the chapter should retry or fail
-// terminally. Source-missing surfaces as outputs["chapter_failure"] =
-// "source_missing"; everything else is transient.
+// terminally. Missing source and inconsistent ledger are distinct deterministic
+// failures; a transport or recovery-fetch error remains retryable.
 func chapterTerminalFailure(outputs map[string]string, errMsg string) (bool, string) {
+	if outputs["chapter_failure"] == dvrpolicy.ChapterFailureLedgerInconsistent {
+		return true, (&dvrpolicy.LedgerInconsistentError{Detail: outputs["chapter_failure_detail"]}).Error()
+	}
 	if outputs["chapter_failure"] == "source_missing" {
 		reason := outputs["chapter_failure_detail"]
 		if reason == "" {

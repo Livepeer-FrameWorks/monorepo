@@ -376,6 +376,40 @@ func TestHandleChapterFinalizeResult_TerminalFailureMarksFailed(t *testing.T) {
 	}
 }
 
+func TestHandleChapterFinalizeResult_LedgerFailurePreservesSourceClassification(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	startFakeCommodoreServer(t, &fakeCommodoreInternal{})
+
+	const chapterID = "chap-fail-1"
+	result := &ipcpb.ProcessingJobResult{
+		JobId: chapterFinalizeJobIDPrefix + chapterID,
+		Outputs: map[string]string{
+			"chapter_failure":        "ledger_inconsistent",
+			"chapter_failure_detail": "ledger gap between 9013ms and 9014ms",
+		},
+	}
+
+	// Ledger inconsistency fails the chapter and child artifact atomically without
+	// reporting unavailable source or replaying the same inconsistent ledger.
+	mock.ExpectBegin()
+	mock.ExpectQuery(`UPDATE foghorn.dvr_chapters\s+SET state\s+= \$1.*RETURNING playback_artifact_hash`).
+		WithArgs(ChapterStateFailedPermanent, "LEDGER_INCONSISTENT: ledger gap between 9013ms and 9014ms", chapterID, chapterFinalizeAttempt, "node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash"}).AddRow(chapterHash32))
+	mock.ExpectQuery(`UPDATE foghorn.artifacts\s+SET status = 'failed'.*RETURNING tenant_id`).
+		WithArgs(chapterHash32, "LEDGER_INCONSISTENT: ledger gap between 9013ms and 9014ms").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("5eed517e-ba5e-da7a-517e-ba5eda7a0001"))
+	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectChapterFailedEvent(mock, chapterID, "parentdvrhash")
+	mock.ExpectCommit()
+
+	handleChapterFinalizeResult(context.Background(), chapterID, "failed", chapterFinalizeAttempt, result, "node-1", logging.NewLogger())
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
 // INVARIANT: a "failed" result with a transient (non-source-missing) error rolls
 // the chapter finalizing → closed via RetryChapterFinalize so the queue retries,
 // and never marks it terminally failed.

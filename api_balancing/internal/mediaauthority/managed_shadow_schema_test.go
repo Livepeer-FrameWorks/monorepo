@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -229,35 +230,37 @@ func TestManagedSourceShadowRejectsPlacementSchemaBeforeSecrets(t *testing.T) {
 }
 
 func TestManagedSourceCancellationStopsTenantReads(t *testing.T) {
-	store, mock, closeDB := newFixtureStore(t, "cell-a")
-	defer closeDB()
-	metric := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_managed_sets_total", Help: "test"}, []string{"outcome"})
-	store.SetManagedStreamSetMetric(metric)
-	object := &mediapb.MediaObjectAuthority{TenantId: "tenant", InternalName: "internal",
-		Object: &mediapb.MediaObjectAuthority_LiveStream{LiveStream: &mediapb.LiveStreamAuthority{StreamId: "stream", IngestMode: "mist_native"}}}
-	payload, err := proto.Marshal(object)
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest := sha256.Sum256(payload)
-	until := store.now().Add(time.Hour)
-	mock.ExpectQuery("ListLocalManagedStreamAuthorities").WillReturnRows(sqlmock.NewRows([]string{
-		"authority_id", "authority_version", "payload", "payload_sha256", "refresh_after", "valid_until",
-		"local_source_ready", "withheld_by_tenant_revival", "tenant_authority_version",
-	}).AddRow("stream", 2, payload, digest[:], until, until, true, false, 0))
-	mock.ExpectQuery("GetLocalTenantSourceAuthority").WithArgs("tenant").WillDelayFor(time.Second).WillReturnError(context.Canceled)
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	_, err = store.ManagedStreams(ctx, "cluster")
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("cancelled tenant read returned %v, want caller deadline", err)
-	}
-	if got := testutil.ToFloat64(metric.WithLabelValues("cancelled")); got != 1 {
-		t.Fatalf("cancelled sets = %v, want 1", got)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		store, mock, closeDB := newFixtureStore(t, "cell-a")
+		defer closeDB()
+		metric := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_managed_sets_total", Help: "test"}, []string{"outcome"})
+		store.SetManagedStreamSetMetric(metric)
+		object := &mediapb.MediaObjectAuthority{TenantId: "tenant", InternalName: "internal",
+			Object: &mediapb.MediaObjectAuthority_LiveStream{LiveStream: &mediapb.LiveStreamAuthority{StreamId: "stream", IngestMode: "mist_native"}}}
+		payload, err := proto.Marshal(object)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(payload)
+		until := store.now().Add(time.Hour)
+		mock.ExpectQuery("ListLocalManagedStreamAuthorities").WillReturnRows(sqlmock.NewRows([]string{
+			"authority_id", "authority_version", "payload", "payload_sha256", "refresh_after", "valid_until",
+			"local_source_ready", "withheld_by_tenant_revival", "tenant_authority_version",
+		}).AddRow("stream", 2, payload, digest[:], until, until, true, false, 0))
+		mock.ExpectQuery("GetLocalTenantSourceAuthority").WithArgs("tenant").WillDelayFor(time.Second).WillReturnError(context.Canceled)
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		_, err = store.ManagedStreams(ctx, "cluster")
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("cancelled tenant read returned %v, want caller deadline", err)
+		}
+		if got := testutil.ToFloat64(metric.WithLabelValues("cancelled")); got != 1 {
+			t.Fatalf("cancelled sets = %v, want 1", got)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 func TestManagedSourceDatabaseFailureStopsTenantReads(t *testing.T) {

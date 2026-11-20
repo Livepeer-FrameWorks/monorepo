@@ -36,11 +36,6 @@ type ClipCreator interface {
 	CreateClip(ctx context.Context, req *sharedpb.CreateClipRequest) (*sharedpb.CreateClipResponse, error)
 }
 
-// DVRCreator starts DVR recordings on the local cluster. Implemented by FoghornGRPCServer.
-type DVRCreator interface {
-	StartDVR(ctx context.Context, req *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, error)
-}
-
 // ArtifactCommandHandler dispatches artifact lifecycle commands locally.
 // Implemented by FoghornGRPCServer; used by ForwardArtifactCommand.
 type ArtifactCommandHandler interface {
@@ -75,7 +70,6 @@ type FederationServer struct {
 	db              *sql.DB
 	s3Client        FederationS3Client
 	clipCreator     ClipCreator
-	dvrCreator      DVRCreator
 	artifactHandler ArtifactCommandHandler
 	peerManager     PeerAddrResolver
 	droppedAdMu     sync.Mutex
@@ -183,7 +177,6 @@ type FederationServerConfig struct {
 	DB              *sql.DB
 	S3Client        FederationS3Client
 	ClipCreator     ClipCreator
-	DVRCreator      DVRCreator
 	ArtifactHandler ArtifactCommandHandler
 	PeerManager     PeerAddrResolver
 	FedClient       *FederationClient
@@ -224,7 +217,6 @@ func (cfg FederationServerConfig) Validate() error {
 		{"FedClient", cfg.FedClient},
 		{"Placement", cfg.Placement},
 		{"ClipCreator", cfg.ClipCreator},
-		{"DVRCreator", cfg.DVRCreator},
 		{"ArtifactHandler", cfg.ArtifactHandler},
 		{"AdvertisedBacking", cfg.AdvertisedBacking},
 		{"IsServedCluster", cfg.IsServedCluster},
@@ -282,7 +274,6 @@ func NewFederationServer(cfg FederationServerConfig) *FederationServer {
 		db:                cfg.DB,
 		s3Client:          cfg.S3Client,
 		clipCreator:       cfg.ClipCreator,
-		dvrCreator:        cfg.DVRCreator,
 		artifactHandler:   cfg.ArtifactHandler,
 		peerManager:       cfg.PeerManager,
 		fedClient:         cfg.FedClient,
@@ -1581,61 +1572,16 @@ func (s *FederationServer) CreateRemoteClip(ctx context.Context, req *foghornfed
 	}, nil
 }
 
-// CreateRemoteDVR handles a peer cluster requesting DVR recording on the origin.
-// DVR must record on the origin cluster (co-located with ingest source).
-func (s *FederationServer) CreateRemoteDVR(ctx context.Context, req *foghornfederationpb.RemoteDVRRequest) (*foghornfederationpb.RemoteDVRResponse, error) {
+// CreateRemoteDVR retains the federation wire method, but its request cannot
+// carry the complete owner-authorized recording policy required for a start.
+func (s *FederationServer) CreateRemoteDVR(ctx context.Context, _ *foghornfederationpb.RemoteDVRRequest) (*foghornfederationpb.RemoteDVRResponse, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
-	// FAIL CLOSED with the mutation surface: this STARTS a DVR recording on behalf of a peer.
 	if s.federationMutationsDisabled() {
 		return nil, status.Error(codes.FailedPrecondition, "federation_mutations_disabled")
 	}
-	if req.GetStreamInternalName() == "" {
-		return nil, status.Error(codes.InvalidArgument, "stream_internal_name required")
-	}
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
-	}
-	if s.dvrCreator == nil {
-		return &foghornfederationpb.RemoteDVRResponse{Accepted: false, Reason: "DVR not available"}, nil
-	}
-
-	log := s.logger.WithFields(logging.Fields{
-		"internal_name":      req.GetStreamInternalName(),
-		"requesting_cluster": req.GetRequestingCluster(),
-		"dvr_hash":           req.GetDvrHash(),
-	})
-
-	// Verify stream exists locally
-	sm := state.DefaultManager()
-	ss := sm.GetStreamState(req.GetStreamInternalName())
-	if ss == nil || ss.Status != "live" {
-		return &foghornfederationpb.RemoteDVRResponse{Accepted: false, Reason: "stream not live on origin"}, nil
-	}
-	if ss.TenantID != "" && ss.TenantID != req.GetTenantId() {
-		return &foghornfederationpb.RemoteDVRResponse{Accepted: false, Reason: "stream tenant mismatch"}, nil
-	}
-
-	// Delegate to local DVR start
-	dvrReq := &sharedpb.StartDVRRequest{
-		InternalName: req.GetStreamInternalName(),
-		TenantId:     req.GetTenantId(),
-	}
-	if uid := req.GetUserId(); uid != "" {
-		dvrReq.UserId = &uid
-	}
-	dvrResp, err := s.dvrCreator.StartDVR(ctx, dvrReq)
-	if err != nil {
-		log.WithError(err).Warn("Remote DVR creation failed")
-		return &foghornfederationpb.RemoteDVRResponse{Accepted: false, Reason: err.Error()}, nil
-	}
-
-	log.WithField("dvr_hash", dvrResp.GetDvrHash()).Info("Remote DVR started on origin")
-	return &foghornfederationpb.RemoteDVRResponse{
-		Accepted: true,
-		DvrHash:  dvrResp.GetDvrHash(),
-	}, nil
+	return nil, status.Error(codes.Unimplemented, "recordings must be started through the stream owner's recording API")
 }
 
 // PeerChannel receives a peer's stream advertisements, lifecycle events,

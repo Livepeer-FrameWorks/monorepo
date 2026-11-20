@@ -1,3 +1,15 @@
+-- name: LockLiveStreamRecordingConfiguration :one
+-- Setting writes already lock this row. Publication and lease acquisition take
+-- it before the authority pointers so a saved change cannot pass as current.
+SELECT COALESCE(is_recording_enabled, FALSE)::boolean AS is_recording_enabled,
+       dvr_chapter_mode, dvr_chapter_interval_seconds,
+       active_ingest_cluster_id, active_ingest_claim_id, active_ingest_node_id,
+       active_ingest_control_cell_id, active_ingest_cluster_updated_at
+FROM commodore.streams
+WHERE tenant_id=sqlc.arg(tenant_id)::uuid AND id=sqlc.arg(stream_id)::uuid
+  AND deleted_at IS NULL
+FOR UPDATE;
+
 -- name: LockPublisherLeaseAuthority :one
 SELECT object_version.payload AS object_payload, tenant_version.payload AS tenant_payload,
        object_version.payload_sha256 AS object_digest, tenant_version.payload_sha256 AS tenant_digest,

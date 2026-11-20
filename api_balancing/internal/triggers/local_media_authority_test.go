@@ -466,6 +466,18 @@ func TestReadyLocalIngestUsesNonPushModeRejectionContract(t *testing.T) {
 func TestReadyLocalIngestContextDoesNotChooseOutageOwnerBeforeFrontDoorFallback(t *testing.T) {
 	p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
 	defer closeDB()
+	object := &mediaauthoritypb.MediaObjectAuthority{}
+	if err := proto.Unmarshal(objectBytes, object); err != nil {
+		t.Fatal(err)
+	}
+	object.GetLiveStream().PublisherConfigurationVersion = 1
+	object.GetLiveStream().DvrChapterMode = "fixed_interval"
+	object.GetLiveStream().DvrChapterIntervalSeconds = 86400
+	var marshalErr error
+	objectBytes, marshalErr = proto.MarshalOptions{Deterministic: true}.Marshal(object)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
 	validUntil := time.Now().Add(time.Hour)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 		WithArgs(sharedauthority.PublishingCredentialDigest("sk_local")).
@@ -481,6 +493,9 @@ func TestReadyLocalIngestContextDoesNotChooseOutageOwnerBeforeFrontDoorFallback(
 	}
 	if streamCtx.GetActiveIngestClusterId() != "" || streamCtx.GetInternalName() != "stream-internal" || len(streamCtx.GetClusterPeers()) != 0 || len(streamCtx.GetAuthorityClusterPeers()) != 1 {
 		t.Fatalf("local ingest context = %+v", streamCtx)
+	}
+	if streamCtx.GetDvrChapterMode() != "fixed_interval" || streamCtx.GetDvrChapterIntervalSeconds() != 86400 {
+		t.Fatalf("local ingest context lost signed chapter policy: %q/%d", streamCtx.GetDvrChapterMode(), streamCtx.GetDvrChapterIntervalSeconds())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

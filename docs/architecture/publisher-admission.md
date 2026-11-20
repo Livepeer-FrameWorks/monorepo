@@ -39,7 +39,7 @@ lock, including when the caller waited behind another publisher.
 A signed permission is reusable configuration, not exclusive ownership. The
 ready path does not call `ValidateStreamKey`, Purser, or Quartermaster to rebuild
 configuration. Commodore checks its own current publication; it does not accept
-caller-supplied configuration as permission. A stale publication takes no lease
+caller-supplied configuration as permission. A stale cell copy takes no lease
 and can return the current cell-specific signed tenant/object pair. Foghorn
 checks both identities, applies the envelopes through its normal trust,
 audience, expiry and restore fences, and revalidates the presented credential,
@@ -49,6 +49,24 @@ identity and original deadline. The installed pair remains useful to the next
 attempt even if authority changes again. Missing deliveries or an older server
 without the pair still require bounded shared filling and refusal. Normal
 matching admission retains one lease call.
+
+Saved recording settings and signed publication are separate freshness states.
+Chapter mode/interval and recording-enabled writes enqueue stream authority work
+in their owning transaction, including edits made while creation is compiling.
+Before publishing complete publisher configuration, Commodore locks the stream
+and checks those captured settings against the saved row. A superseded compile
+cannot advance the current publication; its durable obligation remains retryable.
+Publisher acquisition takes the same stream lock before the authority pointers.
+For a new execution, a published recording configuration behind the saved row
+returns `FailedPrecondition` with `recording.frameworks.network` /
+`RECORDING_POLICY_PENDING`, without acquiring a lease or returning the same stale
+pair as a remedy. This is a reachable owner, so it cannot enable outage admission.
+Once publication catches up, a lagging cell uses the signed-pair exchange above.
+An exact, fresh execution already accepted under its pinned configuration may
+resume; a chapter-only edit does not block non-recording ingest. These checks add
+no cross-service policy RPC to the ready path. Cold execution-fenced claims also
+recheck the configuration they discovered before acquiring their lease.
+
 Denials remain denials. Capable edges' cold validating claims also carry node/cell/execution
 identity, serialize against the same global abandonment fence, and require an
 explicit server acknowledgement of fencing support. Outage admission retains the signed deterministic owner
