@@ -72,9 +72,36 @@ func routeProcessingJob(job *processingJob) (string, string) {
 		return "", "no alive nodes"
 	}
 
+	memoryFits := func(node *state.NodeState) bool {
+		return job.RequiredMemoryBytes <= 0 || (node.RAMMax > 0 && mist.ProcessingMemoryBudget(uint64(node.RAMMax)) >= uint64(job.RequiredMemoryBytes))
+	}
+	if job.RequiredMemoryBytes > 0 {
+		known, unknown, possible := false, false, false
+		for _, id := range aliveIDs {
+			n := sm.GetNodeState(id)
+			if n == nil || n.ClusterID != originCluster || !n.CapProcessing || !n.IsHealthy || !nodeAcceptsProcessing(n, job.PreferredNode.Valid && job.PreferredNode.String == id) || !nodeEligibleForJobTenant(n, jobTenant) {
+				continue
+			}
+			if _, ok := n.ClassLoad(class); !ok {
+				continue
+			}
+			if n.RAMMax <= 0 {
+				unknown = true
+				continue
+			}
+			known = true
+			if memoryFits(n) {
+				possible = true
+			}
+		}
+		if known && !unknown && !possible {
+			return "", mist.ProcessingMemoryNoNodeReason
+		}
+	}
+
 	if job.PreferredNode.Valid && job.PreferredNode.String != "" {
 		node := sm.GetNodeState(job.PreferredNode.String)
-		if node != nil && node.ClusterID == originCluster && node.CapProcessing && node.IsHealthy && nodeAcceptsProcessing(node, true) && node.CanRunClass(class) && nodeEligibleForJobTenant(node, jobTenant) {
+		if node != nil && node.ClusterID == originCluster && node.CapProcessing && node.IsHealthy && nodeAcceptsProcessing(node, true) && node.CanRunClass(class) && memoryFits(node) && nodeEligibleForJobTenant(node, jobTenant) {
 			return job.PreferredNode.String, "preferred_source_node"
 		}
 		return "", "preferred source node unavailable"
@@ -87,7 +114,7 @@ func routeProcessingJob(job *processingJob) (string, string) {
 		if node == nil || node.ClusterID != originCluster || !node.CapProcessing || !node.IsHealthy || !nodeAcceptsProcessing(node, false) {
 			continue
 		}
-		if !node.CanRunClass(class) {
+		if !node.CanRunClass(class) || !memoryFits(node) {
 			continue
 		}
 		if !nodeEligibleForJobTenant(node, jobTenant) {

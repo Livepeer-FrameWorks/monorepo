@@ -3,15 +3,16 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 func TestRenditionSpanWithNonzeroTimestampOrigin(t *testing.T) {
@@ -55,7 +56,7 @@ func TestUpstreamEAC3ProcessingMetadata(t *testing.T) {
 	}
 }
 
-func TestNeverFitsProcessingMemoryIsNotTransient(t *testing.T) {
+func TestNodeCapacityRefusalCarriesPlacementRequirement(t *testing.T) {
 	isolateProcessingOverrideState(t)
 	const stream, job = "processing+never-fits", "never-fits"
 	if err := setProcessingProcessOverride(stream, processingSourceProbePolicy, job, time.Now().Add(time.Hour)); err != nil {
@@ -65,11 +66,19 @@ func TestNeverFitsProcessingMemoryIsNotTransient(t *testing.T) {
 	h := &ProcessingJobHandler{memoryControls: map[string]bool{"AV": true, "Thumbs": true}, memorySnapshot: func() (uint64, uint64, error) { return total, total, nil }}
 	policy := mist.ReplaceLivepeerWithLocal(`[{"process":"Livepeer","target_profiles":[{"height":2160,"bitrate":16000000},{"height":1440,"bitrate":8000000},{"height":1080,"bitrate":5000000},{"height":720,"bitrate":3000000},{"height":480,"bitrate":1200000},{"height":360,"bitrate":800000}]}]`)
 	_, err := h.admitProcessingPolicy(discardLog(), &ipcpb.ProcessingJobRequest{JobId: job}, stream, policy, mist.SourceMediaInfo{Width: 3840, Height: 2160}, func(*ipcpb.ControlMessage) {})
-	if err == nil || processingMemoryFailureOutputs(err)[mist.ProcessingResultRetryCause] == mist.ProcessingRetryCauseMemoryPressure {
-		t.Fatalf("work that cannot fit the largest node was classified as a transient memory wait: %v", err)
+	if err == nil {
+		t.Fatal("oversized local work was admitted")
 	}
-	if !strings.Contains(err.Error(), "cannot fit") {
-		t.Fatalf("permanent memory refusal lacks a clear reason: %v", err)
+	outputs := processingMemoryFailureOutputs(err)
+	if outputs[mist.ProcessingResultRetryCause] != mist.ProcessingRetryCauseMemoryNodeTooSmall ||
+		outputs[mist.ProcessingRequiredMemoryBytes] == "" || outputs[mist.ProcessingMemoryPolicy] != policy {
+		t.Fatalf("node refusal lost its placement requirement: %v, %v", err, outputs)
+	}
+	if processingMemoryResultStatus(err) != processingResultRetryable {
+		t.Fatalf("a node refusal must let Foghorn consider the other cluster nodes: %v", err)
+	}
+	if !strings.Contains(err.Error(), "memory budget") {
+		t.Fatalf("memory refusal lacks a clear reason: %v", err)
 	}
 }
 

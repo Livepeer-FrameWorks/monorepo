@@ -64,7 +64,9 @@ def main():
             configuration = json.dumps({"profiles":profiles,"workload":"vod","deadlineMs":120000,"minSpeed":0.001})
             session = {"name":name,"segments":[]}
             receipt["sessions"].append(session)
-            for seq, source in enumerate(sorted(work.glob(f"{name}-[0-9].ts"))):
+            segments = sorted(work.glob(f"{name}-[0-9].ts"))
+            assert len(segments) == 4, f"expected four source segments for {name}, found {len(segments)}"
+            for seq, source in enumerate(segments):
                 request = urllib.request.Request(f"http://{port}/live/{project}-{name}/{seq}.ts", data=source.read_bytes(), headers={"Accept":"multipart/mixed","Content-Type":"video/mp2t","Content-Duration":"2000","Content-Resolution":f"{width}x{height}","Livepeer-Transcode-Configuration":configuration})
                 started = time.monotonic()
                 discovery_deadline = started + 35

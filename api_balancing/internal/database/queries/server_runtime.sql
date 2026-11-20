@@ -30,13 +30,17 @@ WHERE artifact_hash = $1 AND dtsh_sync_request_id = $2 AND dtsh_sync_node_id = $
 UPDATE foghorn.artifacts SET dtsh_status = 'failed', dtsh_failure_count = dtsh_failure_count+1, sync_error = NULLIF(sqlc.arg(error_message)::text, ''), dtsh_sync_request_id = NULL, dtsh_sync_node_id = NULL, dtsh_last_attempt = NOW(), updated_at = NOW()
 WHERE artifact_hash = sqlc.arg(artifact_hash) AND dtsh_sync_request_id = sqlc.narg(dtsh_sync_request_id) AND dtsh_sync_node_id = sqlc.narg(dtsh_sync_node_id) AND status NOT IN ('deleted', 'expired', 'aborted') AND tenant_id::text = sqlc.arg(tenant_id) RETURNING COALESCE(sync_object_key, '');
 -- name: UpdateProcessingJobCache :execrows
-UPDATE foghorn.processing_jobs SET processes_json = $3, updated_at = NOW() WHERE job_id = $1 AND artifact_hash = $2 AND processing_node_id = $4 AND status IN ('dispatched', 'processing');
+-- Older edges omit the tenant echo; only the assigned node can recover it from the job.
+UPDATE foghorn.processing_jobs AS job SET processes_json = $3, required_memory_bytes=GREATEST(job.required_memory_bytes,sqlc.arg(required_memory_bytes)::bigint), capacity_wait_started_at=NULL, updated_at = NOW() WHERE job.job_id = $1 AND job.artifact_hash = $2 AND job.processing_node_id = $4 AND job.status IN ('dispatched', 'processing')
+AND job.tenant_id::text = COALESCE(NULLIF(sqlc.arg(tenant_id)::text, ''),
+ (SELECT assigned.tenant_id::text FROM foghorn.processing_jobs assigned WHERE assigned.job_id=$1 AND assigned.processing_node_id=$4));
 -- name: LockProcessingJobForCompletion :one
-SELECT status, COALESCE(processing_node_id, '') AS processing_node_id, job_type FROM foghorn.processing_jobs WHERE job_id = $1 FOR UPDATE;
+SELECT status, COALESCE(processing_node_id, '') AS processing_node_id, job_type FROM foghorn.processing_jobs WHERE job_id = $1
+AND tenant_id::text = COALESCE(NULLIF(sqlc.arg(tenant_id)::text, ''), tenant_id::text) FOR UPDATE;
 -- name: LockProcessingArtifactForCompletion :one
-SELECT a.artifact_hash, COALESCE(a.artifact_type, '')::text AS artifact_type, COALESCE(a.tenant_id::text, '')::text AS tenant_id, COALESCE(a.stream_id::text, '')::text AS stream_id, COALESCE(a.stream_internal_name, '')::text AS stream_internal_name, COALESCE(a.s3_url, '')::text AS s3_url, COALESCE(a.format, '')::text AS format,
+SELECT a.artifact_hash, COALESCE(a.artifact_type, '')::text AS artifact_type, COALESCE(a.tenant_id::text, pj.tenant_id::text, '')::text AS tenant_id, COALESCE(a.stream_id::text, '')::text AS stream_id, COALESCE(a.stream_internal_name, '')::text AS stream_internal_name, COALESCE(a.s3_url, '')::text AS s3_url, COALESCE(a.format, '')::text AS format,
 COALESCE((pj.source_params->>'source_start_unix')::bigint, 0)::bigint AS requested_start_unix, COALESCE((pj.source_params->>'source_stop_unix')::bigint, 0)::bigint AS requested_stop_unix
-FROM foghorn.processing_jobs pj JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash WHERE pj.job_id = $1 FOR UPDATE OF a;
+FROM foghorn.processing_jobs pj JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash AND pj.tenant_id = a.tenant_id WHERE pj.job_id = $1 FOR UPDATE OF a;
 -- name: MarkProcessingArtifactReady :execrows
 UPDATE foghorn.artifacts SET format = sqlc.narg(format), size_bytes = sqlc.narg(size_bytes), duration_seconds = CASE WHEN sqlc.arg(duration_ms)::bigint>0 THEN (sqlc.arg(duration_ms)::bigint/1000)::int ELSE duration_seconds END,
 duration_ms = CASE WHEN sqlc.arg(duration_ms)::bigint>0 THEN sqlc.arg(duration_ms)::bigint ELSE duration_ms END, tracks = CASE WHEN sqlc.arg(tracks_present)::boolean THEN sqlc.arg(tracks)::jsonb ELSE tracks END,
@@ -51,10 +55,11 @@ updated_at = NOW() WHERE artifact_hash = sqlc.arg(artifact_hash);
 -- A requeue records why the previous attempt failed; the attempt that completes supersedes it.
 UPDATE foghorn.processing_jobs SET status = 'completed', progress = 100, output_metadata = sqlc.narg(output_metadata), error_message = NULL, completed_at = NOW(), updated_at = NOW() WHERE job_id = $1;
 -- name: LockProcessingJobForFailure :one
-SELECT pj.status, COALESCE(pj.processing_node_id, '')::text AS processing_node_id, COALESCE(a.artifact_hash, '')::text AS artifact_hash, COALESCE(a.artifact_type, '')::text AS artifact_type, COALESCE(a.tenant_id::text, '')::text AS tenant_id, COALESCE(a.stream_id::text, '')::text AS stream_id, COALESCE(a.stream_internal_name, '')::text AS stream_internal_name
-FROM foghorn.processing_jobs pj LEFT JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash WHERE pj.job_id = $1 FOR UPDATE OF pj;
+SELECT pj.status, COALESCE(pj.processing_node_id, '')::text AS processing_node_id, COALESCE(a.artifact_hash, '')::text AS artifact_hash, COALESCE(a.artifact_type, '')::text AS artifact_type, COALESCE(a.tenant_id::text, pj.tenant_id::text, '')::text AS tenant_id, COALESCE(a.stream_id::text, '')::text AS stream_id, COALESCE(a.stream_internal_name, '')::text AS stream_internal_name
+FROM foghorn.processing_jobs pj LEFT JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash AND pj.tenant_id = a.tenant_id WHERE pj.job_id = $1
+AND pj.tenant_id::text = COALESCE(NULLIF(sqlc.arg(tenant_id)::text, ''), pj.tenant_id::text) FOR UPDATE OF pj;
 -- name: MarkProcessingJobFailed :exec
-UPDATE foghorn.processing_jobs SET status = 'failed', error_message = $2, completed_at = NOW(), updated_at = NOW() WHERE job_id = $1;
+UPDATE foghorn.processing_jobs SET status = 'failed', error_message = $2, completed_at = NOW(), updated_at = NOW() WHERE job_id = $1 AND tenant_id::text=sqlc.arg(tenant_id);
 -- name: MarkProcessingArtifactFailed :execrows
 UPDATE foghorn.artifacts SET status = 'failed', error_message = $2, updated_at = NOW() WHERE artifact_hash = $1 AND tenant_id::text = $3 AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted');
 -- name: UpdateProcessingJobProgress :one
@@ -64,6 +69,7 @@ UPDATE foghorn.artifacts SET status = 'failed', error_message = $2, updated_at =
 UPDATE foghorn.processing_jobs SET progress = GREATEST(progress, sqlc.arg(progress)::int), progress_last_ms = GREATEST(progress_last_ms, sqlc.arg(last_ms)::bigint),
   progress_advanced_at = CASE WHEN sqlc.arg(progress)::int > COALESCE(progress, 0) OR sqlc.arg(last_ms)::bigint > progress_last_ms THEN NOW() ELSE progress_advanced_at END,
   source_stalled_since = CASE WHEN sqlc.arg(progress)::int > COALESCE(progress, 0) OR sqlc.arg(last_ms)::bigint > progress_last_ms THEN NULL ELSE source_stalled_since END,
+  capacity_wait_started_at = CASE WHEN sqlc.arg(progress)::int > COALESCE(progress, 0) OR sqlc.arg(last_ms)::bigint > progress_last_ms THEN NULL ELSE capacity_wait_started_at END,
   updated_at = NOW()
 WHERE job_id = sqlc.arg(job_id) AND status IN ('dispatched', 'processing') AND processing_node_id = sqlc.arg(processing_node_id) RETURNING artifact_hash, tenant_id::text, progress, job_type;
 -- name: RecordImportSourceStaged :execrows

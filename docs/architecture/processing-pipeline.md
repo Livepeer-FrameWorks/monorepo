@@ -465,10 +465,27 @@ uses FFmpeg's default bicubic filter. Linux admission uses host available
 memory and cgroup working-set pressure, excluding reclaimable inactive file
 cache. On macOS it uses installed capacity and the reservation ledger.
 
-When capacity is occupied or a node cannot fit the job, Foghorn queues it for
-another attempt after 30 seconds without spending a processing-failure retry.
-The waiting job holds no active source or encoder processes. Actual encoder
-failures still use the bounded processing retry policy.
+The first metadata probe prices rotated, mirrored and unsupported-codec sources as
+local work before Livepeer can start. Every rendition's decoder concurrency follows
+the source dimensions and the node's CPU/memory budget, independently of its output
+size. A fallback drains the retiring generation and releases its reservation before
+measuring available memory.
+
+Helmsman distinguishes an undersized node from temporarily occupied memory and
+reports the minimum required bytes with the intended policy. Foghorn persists both
+and routes subsequent attempts only to nodes in the artifact's origin cluster with
+a sufficient processing budget. If the cluster's eligible nodes cannot fit the
+ladder, the job and asset fail together with a clear capacity error. UHD remains
+available on every paid tier.
+
+Busy jobs return to the durable queue for another attempt after 30 seconds without
+spending a processing-failure retry. The run of capacity waits is bounded by the
+existing 20-minute processing no-progress window; an expired wait fails visibly,
+including when no worker claims it again. Admitting a job or advancing its media
+ends the wait. Waiting jobs hold no source or encoder processes, and a fallback's
+local policy survives redispatch so it does not repeat a paid Livepeer attempt.
+Corrupt and unreadable source errors fail immediately; source stalls and actual
+resource failures retain their separate retry classifications.
 
 At source EOF, Livepeer's drain deadline includes every remaining segment's
 allowed resend budgets and sink flush time. A recording must still pass the
@@ -647,3 +664,9 @@ fails with its required bytes and node budget. Temporary pressure returns the jo
 to the durable queue without spending failure retries, within the existing
 20-minute no-progress window; after that window the job fails with a memory wait
 reason. The first infrastructure wait remains durable across dispatches.
+
+Processing results echo the dispatched tenant in their outputs. Foghorn checks that tenant
+against the assigned job before accepting a memory-policy update, capacity deferral or
+terminal result. During rolling upgrades, an older edge can omit the echo; its authenticated
+node identity must still match the job assignment, and the stored job supplies the tenant.
+Capacity-wait and stale-lease cutoffs use UTC when sent to the database timestamp columns.

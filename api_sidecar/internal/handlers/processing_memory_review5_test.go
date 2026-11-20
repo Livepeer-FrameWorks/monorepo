@@ -30,9 +30,13 @@ func TestLocalFallbackNeedsItsOwnMemoryAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = h.admitProcessingPolicy(discardLog(), req, stream, mist.ReplaceLivepeerWithLocal(admitted), source, send)
-	var capacity *processingPermanentCapacityError
-	if !errors.As(err, &capacity) {
+	var capacity *processingCapacityError
+	if !errors.As(err, &capacity) || !capacity.nodeTooSmall {
 		t.Fatalf("oversized fallback did not refuse: %v", err)
+	}
+	out := processingMemoryFailureOutputs(err)
+	if out[mist.ProcessingResultRetryCause] != mist.ProcessingRetryCauseMemoryNodeTooSmall || out[mist.ProcessingRequiredMemoryBytes] == "" || mist.HasLivepeerProcesses(out[mist.ProcessingMemoryPolicy]) {
+		t.Fatalf("unplaceable fallback lost its routing contract: %v", out)
 	}
 	if got, _ := getProcessingProcessOverride(stream); got != admitted {
 		t.Fatalf("unreserved local policy published: %s", got)
@@ -110,8 +114,8 @@ func TestProcessingFallbackAcquiresLocalMemoryBeforePublishingPolicy(t *testing.
 	send := func(message *ipcpb.ControlMessage) { published = append(published, message) }
 	local := mist.ReplaceLivepeerWithLocal(remote)
 	_, err = h.admitProcessingPolicy(logrus.NewEntry(logrus.New()), request, stream, local, source, send)
-	var capacity *processingPermanentCapacityError
-	if !errors.As(err, &capacity) || len(published) != 0 {
+	var capacity *processingCapacityError
+	if !errors.As(err, &capacity) || !capacity.nodeTooSmall || len(published) != 0 {
 		t.Fatalf("unreserved local policy: error=%v publications=%d", err, len(published))
 	}
 	processingProcessOverridesMu.Lock()

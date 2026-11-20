@@ -43,9 +43,13 @@ const ProcessingJobTypeThumbnail = "thumbnail"
 // job's retry budget.
 const (
 	ProcessingResultRetryCause             = "retry_cause"
+	ProcessingResultTenantID               = "tenant_id"
 	ProcessingRetryCauseSourceStall        = "source_stall"
 	ProcessingRetryCauseMemoryPressure     = "memory_pressure"
 	ProcessingRetryCauseInsufficientMemory = "insufficient_memory"
+	ProcessingRetryCauseMemoryNodeTooSmall = "memory_node_too_small"
+	ProcessingRequiredMemoryBytes          = "required_memory_bytes"
+	ProcessingMemoryPolicy                 = "memory_processes_json"
 )
 
 // LivepeerVODSegmentDeadlineMs is the default per-segment gateway response
@@ -67,11 +71,12 @@ const LivepeerVODMinSpeed = 0.5
 // SourceMediaInfo is the source video track metadata used to complete
 // height-only or width-only Livepeer target_profiles.
 type SourceMediaInfo struct {
-	Width    int
-	Height   int
-	FPS      float64
-	Rotation int
-	Mirror   bool
+	VideoCodec string
+	Width      int
+	Height     int
+	FPS        float64
+	Rotation   int
+	Mirror     bool
 }
 
 // DisplaySize returns the dimensions after applying the source display matrix.

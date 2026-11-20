@@ -244,3 +244,50 @@ func TestRouteProcessingJob(t *testing.T) {
 		}
 	})
 }
+
+func TestRouteProcessingJobSkipsInsufficientRAM(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	old := clusterAccessibleForTenant
+	clusterAccessibleForTenant = func(string, string) bool { return true }
+	t.Cleanup(func() { clusterAccessibleForTenant = old })
+	for _, id := range []string{"small", "large"} {
+		touchInCluster(sm, id, routeTestCluster)
+		setNodeProcessing(sm, id, true, 8, 0)
+	}
+	// Node heartbeats already report RAMMax; preserve the other advertised metrics.
+	setNodeMemory(sm, "small", 1536*1024*1024, map[string]state.ClassCapacity{mist.ProcessingClassVideoTranscode: {Total: 8}})
+	setNodeMemory(sm, "large", 8*1024*1024*1024, map[string]state.ClassCapacity{mist.ProcessingClassVideoTranscode: {Total: 8}})
+	job := originJob()
+	job.RequiredMemoryBytes = 2 * 1024 * 1024 * 1024
+	if id, reason := routeProcessingJob(job); id != "large" {
+		t.Fatalf("memory-aware route=%s (%s), want large", id, reason)
+	}
+	job.RequiredMemoryBytes = 16 * 1024 * 1024 * 1024
+	if id, reason := routeProcessingJob(job); id != "" || reason != "no node in this cluster has enough memory for this ladder" {
+		t.Fatalf("impossible job not refused clearly: %s %s", id, reason)
+	}
+}
+
+func setNodeMemory(sm *state.StreamStateManager, nodeID string, ram float64, classes map[string]state.ClassCapacity) {
+	sm.UpdateNodeMetrics(nodeID, struct {
+		CPU                  float64
+		RAMMax               float64
+		RAMCurrent           float64
+		UpSpeed              float64
+		DownSpeed            float64
+		BWLimit              float64
+		CapIngest            bool
+		CapEdge              bool
+		CapStorage           bool
+		CapProcessing        bool
+		Roles                []string
+		StorageCapacityBytes uint64
+		StorageUsedBytes     uint64
+		ProcessingClasses    map[string]state.ClassCapacity
+	}{RAMMax: ram,
+		CapProcessing:     true,
+		ProcessingClasses: classes,
+	})
+}

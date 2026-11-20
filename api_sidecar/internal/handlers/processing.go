@@ -29,6 +29,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/singleflight"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -1010,6 +1011,21 @@ func NewProcessingJobHandler(logger logging.Logger, mistServerURL, storagePath, 
 // Handle executes a processing job: activates the processing+ wildcard stream,
 // starts a push to local disk as MKV, validates RECORDING_END, reports result.
 func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func(*ipcpb.ControlMessage)) {
+	if send != nil && req.GetTenantId() != "" {
+		forward := send
+		send = func(message *ipcpb.ControlMessage) {
+			if message.GetProcessingJobResult() != nil {
+				message = proto.CloneOf(message)
+				result := message.GetProcessingJobResult()
+				if result.Outputs == nil {
+					result.Outputs = make(map[string]string)
+				}
+				result.Outputs[mist.ProcessingResultTenantID] = req.GetTenantId()
+			}
+			forward(message)
+		}
+	}
+
 	log := h.logger.WithFields(logging.Fields{
 		"job_id":        req.GetJobId(),
 		"job_type":      req.GetJobType(),
@@ -1174,7 +1190,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	fallbackAttempted := false
 	inPlaceReplaced := false
 	var inPlacePending *inPlaceLivepeerReplacement
-	hasLivepeer := mist.HasLivepeerProcesses(req.GetProcessesJson())
+	hasLivepeer := mist.HasLivepeerProcesses(processesJSON)
 	ignoredProcessExitBootCounts := map[string]int{}
 	activePushID := 0
 	effectiveProcessesJSON := processesJSON
@@ -1190,7 +1206,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 			}
 		}
 		localConfig := mist.ReplaceLivepeerWithLocal(effectiveProcessesJSON)
-		admitted, err := h.admitProcessingPolicy(log, req, streamName, localConfig, admissionSource, send)
+		admitted, err := h.admitLocalProcessingFallback(log, mistClient, req, streamName, outputPath, activePushID, localConfig, admissionSource, send)
 		if err != nil {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 			h.sendResult(send, req.GetJobId(), processingMemoryResultStatus(err), fmt.Sprintf("fallback memory admission: %v", err), processingMemoryFailureOutputs(err), "", 0)
@@ -1209,7 +1225,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 				return
 			}
 			replacedInPlace := false
-			if livepeerExitFallbackDecision(livepeerBootErr.evt) == livepeerFallbackInPlace {
+			if processingLivepeerExitFallbackDecision(livepeerBootErr.evt) == livepeerFallbackInPlace {
 				inPlaceErr := awaitInPlaceLivepeerReplacement(context.Background(), log, processExitCh, processAVCh, processReplaceCh, ignoredProcessExitBootCounts, processReplaceConfirmWindow, processingReadinessWindow)
 				if inPlaceErr == nil {
 					outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(context.Background(), log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
@@ -1480,7 +1496,7 @@ loop:
 			}
 
 			if evt.ProcessType == "Livepeer" {
-				decision := livepeerExitFallbackDecision(evt)
+				decision := processingLivepeerExitFallbackDecision(evt)
 				if fallbackAttempted || inPlacePending != nil || inPlaceReplaced {
 					decision = livepeerFallbackNone
 				}
@@ -1817,7 +1833,7 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(ctx context.Context,
 		if evt, ok := nextProcessExitEvent(processExitCh, ignoredProcessExitBootCounts); ok {
 			evtFields := processExitFields(evt)
 			if evt.ProcessType == "Livepeer" {
-				decision := livepeerExitFallbackDecision(evt)
+				decision := processingLivepeerExitFallbackDecision(evt)
 				logLivepeerProcessingExit(log, evt, decision, "readiness")
 				if decision != livepeerFallbackNone {
 					return nil, 0, &livepeerReadinessFallbackError{evt: evt}
@@ -2344,6 +2360,7 @@ func (h *ProcessingJobHandler) logProcessingTrackDivergence(log *logrus.Entry, m
 // supplies display dimensions, so DisplaySize applies the rotation exactly once.
 func sourceFromReadinessOutputs(outputs map[string]string) (mist.SourceMediaInfo, float64) {
 	var src mist.SourceMediaInfo
+	src.VideoCodec = outputs["video_codec"]
 	if w, err := strconv.Atoi(outputs["width"]); err == nil {
 		src.Width = w
 	}
@@ -3427,19 +3444,20 @@ func stagedProcessingSourceSize(artifactHash, stagedSourcePath string) int64 {
 // for this artifact with the given processes_json (used for Livepeer fallback).
 // Foghorn applies it only to the exact dispatched job owned by this node, so
 // jobID must be the job's own id.
-func (h *ProcessingJobHandler) updateProcessConfigCache(send func(*ipcpb.ControlMessage), jobID, artifactHash, processesJSON string) {
+func (h *ProcessingJobHandler) updateProcessConfigCache(send func(*ipcpb.ControlMessage), jobID, artifactHash, processesJSON string, requiredMemory ...uint64) {
 	if send == nil {
 		return
+	}
+	outputs := map[string]string{"artifact_hash": artifactHash, "processes_json": processesJSON}
+	if len(requiredMemory) > 0 {
+		outputs[mist.ProcessingRequiredMemoryBytes] = strconv.FormatUint(requiredMemory[0], 10)
 	}
 	send(&ipcpb.ControlMessage{
 		Payload: &ipcpb.ControlMessage_ProcessingJobResult{
 			ProcessingJobResult: &ipcpb.ProcessingJobResult{
-				JobId:  jobID,
-				Status: "cache_update",
-				Outputs: map[string]string{
-					"artifact_hash":  artifactHash,
-					"processes_json": processesJSON,
-				},
+				JobId:   jobID,
+				Status:  "cache_update",
+				Outputs: outputs,
 			},
 		},
 		SentAt: timestamppb.Now(),
@@ -3810,4 +3828,12 @@ func (h *ProcessingJobHandler) sendCompletedResult(send func(*ipcpb.ControlMessa
 		Payload: &ipcpb.ControlMessage_ProcessingJobResult{ProcessingJobResult: res},
 		SentAt:  timestamppb.Now(),
 	})
+}
+
+func processingLivepeerExitFallbackDecision(evt ProcessExitEvent) livepeerFallbackDecision {
+	decision := livepeerExitFallbackDecision(evt)
+	if decision == livepeerFallbackInPlace {
+		return livepeerFallbackRestart
+	}
+	return decision
 }

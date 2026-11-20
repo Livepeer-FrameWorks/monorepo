@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const ProcessingMemoryNoNodeReason = "no node in this cluster has enough memory for this ladder"
+
 const processingMiB = uint64(1024 * 1024)
 
 type ProcessingMemoryPlan struct {
@@ -182,7 +184,7 @@ func PlanProcessingMemory(raw string, source SourceMediaInfo, budget uint64, cpu
 					concurrency = max(1, int(uint64(threads)*rung.area/largest))
 				}
 				processes[rung.index]["encode_threads"] = concurrency
-				processes[rung.index]["decode_threads"] = min(concurrency, 4)
+				processes[rung.index]["decode_threads"] = min(min(threads, 4), max(1, (source.Width*source.Height+1280*720-1)/(1280*720)))
 			}
 			for _, process := range processes {
 				if process["process"] == "Thumbs" {
@@ -263,4 +265,21 @@ func PlanProcessingMemoryForCapabilities(raw string, source SourceMediaInfo, bud
 	}
 	bytes, err := estimateProcessingMemory(string(estimated), source, false)
 	return ProcessingMemoryPlan{ProcessesJSON: string(published), Bytes: bytes, Fits: bytes <= budget}, err
+}
+
+// ProcessingMemoryBudget leaves headroom for the runtime and non-job work.
+func ProcessingMemoryBudget(total uint64) uint64 {
+	headroom := max(512*processingMiB, total/6)
+	if headroom >= total {
+		return 0
+	}
+	return total - headroom
+}
+
+// ProcessingSourcePolicy selects known local-only inputs before starting Livepeer.
+func ProcessingSourcePolicy(raw string, source SourceMediaInfo) string {
+	if source.Rotation%360 != 0 || source.Mirror || (source.VideoCodec != "" && !strings.EqualFold(source.VideoCodec, "H264") && !strings.EqualFold(source.VideoCodec, "HEVC")) {
+		return ReplaceLivepeerWithLocal(raw)
+	}
+	return raw
 }
