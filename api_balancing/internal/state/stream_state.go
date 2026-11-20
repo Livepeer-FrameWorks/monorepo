@@ -4186,8 +4186,11 @@ func (sm *StreamStateManager) queueNodeLifecycleWrite(update *ipcpb.NodeLifecycl
 	if sm.nodeRepo == nil || update == nil {
 		return
 	}
+	// The processor enriches and strips this report after queuing it. Delayed
+	// persistence and its retries must own all mutable fields they serialize.
+	snapshot := proto.CloneOf(update)
 	sm.nodeLifecycleBatchMu.Lock()
-	sm.nodeLifecycleBatch = append(sm.nodeLifecycleBatch, update)
+	sm.nodeLifecycleBatch = append(sm.nodeLifecycleBatch, snapshot)
 
 	if len(sm.nodeLifecycleBatch) >= sm.nodeLifecycleBatchSize {
 		batch := sm.nodeLifecycleBatch
