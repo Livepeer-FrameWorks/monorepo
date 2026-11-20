@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -207,34 +208,37 @@ func TestTenantCacheLastGoodExpiresUnderProlongedOutage(t *testing.T) {
 // Serving stale while refreshing must not delay an authoritative suspension
 // for an active tenant past the jittered TTL plus one lookup.
 func TestTenantCacheObservesSuspensionWithinTTL(t *testing.T) {
-	timing := shortTenantCacheTiming()
-	timing.staleWindow = 10 * time.Second
-	const lookup = 5 * time.Millisecond
-	v := &countingTenantValidator{delay: lookup}
-	v.set(activeTenantResponse(), nil)
-	tc := newTenantCache(v, logging.NewLogger(), timing)
-	if _, err := tc.GetBillingAccessStatus("t1"); err != nil {
-		t.Fatalf("first lookup: %v", err)
-	}
-	suspended := activeTenantResponse()
-	suspended.IsSuspended = true
-	v.set(suspended, nil)
-	flipped := time.Now()
+	// Virtual time measures cache expiry independently of host scheduling.
+	synctest.Test(t, func(t *testing.T) {
+		timing := shortTenantCacheTiming()
+		timing.staleWindow = 10 * time.Second
+		const lookup = 5 * time.Millisecond
+		v := &countingTenantValidator{delay: lookup}
+		v.set(activeTenantResponse(), nil)
+		tc := newTenantCache(v, logging.NewLogger(), timing)
+		if _, err := tc.GetBillingAccessStatus("t1"); err != nil {
+			t.Fatalf("first lookup: %v", err)
+		}
+		suspended := activeTenantResponse()
+		suspended.IsSuspended = true
+		v.set(suspended, nil)
+		flipped := time.Now()
 
-	bound := maxFresh(timing) + lookup + 15*time.Millisecond
-	for {
-		status, err := tc.GetBillingAccessStatus("t1")
-		if err != nil {
-			t.Fatalf("lookup: %v", err)
+		bound := maxFresh(timing) + lookup + 15*time.Millisecond
+		for {
+			status, err := tc.GetBillingAccessStatus("t1")
+			if err != nil {
+				t.Fatalf("lookup: %v", err)
+			}
+			if status.IsSuspended {
+				break
+			}
+			if elapsed := time.Since(flipped); elapsed > bound {
+				t.Fatalf("suspension not observed %s after it took effect, want within %s", elapsed, bound)
+			}
+			time.Sleep(time.Millisecond)
 		}
-		if status.IsSuspended {
-			break
-		}
-		if elapsed := time.Since(flipped); elapsed > bound {
-			t.Fatalf("suspension not observed %s after it took effect, want within %s", elapsed, bound)
-		}
-		time.Sleep(time.Millisecond)
-	}
+	})
 }
 
 // "Not valid" is Quartermaster's answer, not a failed lookup: the last
