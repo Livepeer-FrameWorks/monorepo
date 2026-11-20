@@ -77,7 +77,7 @@ func RetireIngestSession(ctx context.Context, sessionID, tenantID, internalName,
 		if claimErr != nil {
 			return fmt.Errorf("claim DVR stop on retire: %w", claimErr)
 		}
-		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, retiredRow.StreamID, playbackID); idleErr != nil {
+		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, retiredRow.StreamID, playbackID, sessionID); idleErr != nil {
 			return idleErr
 		}
 		revision, revErr := nextSourceRevision(ctx, tx, tenantID, internalName)
@@ -135,7 +135,7 @@ func RetireIngestSessionByClaim(ctx context.Context, tenantID, internalName, cla
 		if err != nil {
 			return err
 		}
-		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, retiredRow.StreamID, playbackID); idleErr != nil {
+		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, retiredRow.StreamID, playbackID, sessionID); idleErr != nil {
 			return idleErr
 		}
 		revision, err := nextSourceRevision(ctx, tx, tenantID, internalName)
@@ -144,6 +144,7 @@ func RetireIngestSessionByClaim(ctx context.Context, tenantID, internalName, cla
 		}
 		if err := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, retiredRow.NodeID, sessionID, revision, OfflineEffectIntent{
 			SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
+			DrainPublisher: true, DrainRuntimeName: retiredRow.RuntimeName,
 		}); err != nil {
 			return err
 		}
@@ -203,7 +204,7 @@ func ReapNeverProjectedIngestSessions(ctx context.Context, olderThan time.Durati
 			if err != nil {
 				return err
 			}
-			if idleErr := domainevents.StreamIdle(ctx, tx, candidate.tenant, ended.StreamID, playbackID); idleErr != nil {
+			if idleErr := domainevents.StreamIdle(ctx, tx, candidate.tenant, ended.StreamID, playbackID, candidate.id); idleErr != nil {
 				return idleErr
 			}
 			revision, err := nextSourceRevision(ctx, tx, candidate.tenant, candidate.stream)

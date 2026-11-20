@@ -185,3 +185,30 @@ managed streams expose source state instead of encoder URLs or stream-key contro
   <LinkCard title="Recordings" href="/builders/recordings/" />
   <LinkCard title="API Reference" href="/builders/api-reference/" />
 </CardGrid>
+
+## Transcode ladder choices
+
+Stream create and edit settings expose `transcodeLadder`. An empty choice inherits the account
+choice, then the plan default. Read `transcodeLadderPolicy` for allowed names and set the account
+default with `setTranscodeLadderPolicy`. Stream changes apply on the next broadcast. A stored
+choice excluded by a plan downgrade falls back to an allowed ladder and returns after an upgrade.
+`liveVideoAbr: OFF` removes live video renditions regardless of the choice. See
+[the ladder sizes and bitrates](/builders/encoder-setup#how-it-works).
+
+## Ingest sessions and saved media
+
+Read `Stream.ingest` with `streams:read` for `IDLE`, `CONNECTED`, or `LIVE`, its session ID,
+timestamps, and resume deadline. Null means the controlling cell is unavailable; it is not an
+offline signal. `Stream.metrics` provides viewer and quality analytics under `analytics:read`.
+An idle ingest can still serve buffered media or DVR replay; `stream.ended` reports that the live
+buffer was unloaded. Saved recordings remain independent artifacts.
+
+List a stream's saved media with `Stream.recordings` and `Stream.clips`, then follow the cursor
+pages. Use `dvrRecording(id) { chapters }` for an ordered recording's playable parts, and
+`recording.chapter_ready` to learn when another part is ready.
+
+Each push stream has one publishing key. `refreshStreamKey` rotates it; existing publishers
+continue unless `endActiveSession: true` is supplied. `disconnectIngest` requests a durable stop
+without changing the key, so an encoder can reconnect. Both require `streams:write`. Pull inputs
+are stopped through `updateStream` with `pullSource.enabled: false`. See the
+[API examples](/builders/api-reference#disconnect-an-encoder).

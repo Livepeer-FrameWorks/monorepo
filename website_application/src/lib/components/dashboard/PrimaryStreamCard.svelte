@@ -3,13 +3,12 @@
   import { Input } from "$lib/components/ui/input";
   import { getIconComponent } from "$lib/iconUtils";
   import { resolve } from "$app/paths";
-  import { StreamStatus } from "$houdini";
   import type { StreamCoreFields$data, StreamMetricsListFields$data } from "$houdini";
   import { streamCurrentViewers, streamResolutionLabel } from "$lib/utils/stream-metrics-display";
 
   export type PrimaryStreamData = Pick<
     StreamCoreFields$data,
-    "id" | "streamId" | "name" | "streamKey" | "ingestMode"
+    "id" | "streamId" | "name" | "ingest" | "streamKey" | "ingestMode"
   > & {
     metrics: StreamMetricsListFields$data | null;
   };
@@ -22,9 +21,8 @@
 
   let { stream, onCopyStreamKey, createStreamUrl }: Props = $props();
 
-  // Derive status from metrics edge
-  const status = $derived(stream?.metrics?.status);
-  const isLive = $derived(stream?.metrics?.isLive || status === StreamStatus.LIVE);
+  const status = $derived(stream?.ingest?.state);
+  const isLive = $derived(status === "LIVE");
   const displayStreamId = $derived(stream?.streamId || stream?.id || "");
   const displayViewers = $derived(streamCurrentViewers(stream?.metrics));
   const displayResolution = $derived(streamResolutionLabel(stream?.metrics));
@@ -53,7 +51,7 @@
           class="w-2 h-2 rounded-full {isLive ? 'bg-success animate-pulse' : 'bg-destructive'}"
         ></div>
         <span class="text-xs text-muted-foreground capitalize">
-          {status?.toLowerCase() || "offline"}
+          {status?.toLowerCase() || "unavailable"}
         </span>
       </div>
     </div>

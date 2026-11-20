@@ -214,7 +214,7 @@ SELECT default_vod_retention_days,
        default_dvr_retention_days,
        default_clip_retention_days,
        COALESCE(updated_by::text, ''::text)::text AS updated_by,
-       updated_at
+       updated_at, keep_vod_originals
 FROM commodore.tenant_media_retention_policies
 WHERE tenant_id = $1::uuid
 `
@@ -225,6 +225,7 @@ type GetTenantMediaRetentionPolicyRow struct {
 	DefaultClipRetentionDays sql.NullInt32 `db:"default_clip_retention_days" json:"default_clip_retention_days"`
 	UpdatedBy                string        `db:"updated_by" json:"updated_by"`
 	UpdatedAt                sql.NullTime  `db:"updated_at" json:"updated_at"`
+	KeepVodOriginals         sql.NullBool  `db:"keep_vod_originals" json:"keep_vod_originals"`
 }
 
 func (q *Queries) GetTenantMediaRetentionPolicy(ctx context.Context, tenantID string) (GetTenantMediaRetentionPolicyRow, error) {
@@ -236,6 +237,7 @@ func (q *Queries) GetTenantMediaRetentionPolicy(ctx context.Context, tenantID st
 		&i.DefaultClipRetentionDays,
 		&i.UpdatedBy,
 		&i.UpdatedAt,
+		&i.KeepVodOriginals,
 	)
 	return i, err
 }
@@ -257,6 +259,18 @@ func (q *Queries) GetVODRetentionUntil(ctx context.Context, arg GetVODRetentionU
 	var retention_until sql.NullTime
 	err := row.Scan(&retention_until)
 	return retention_until, err
+}
+
+const getVodOriginalPolicy = `-- name: GetVodOriginalPolicy :one
+SELECT keep_vod_originals FROM commodore.tenant_media_retention_policies
+WHERE tenant_id = $1::uuid
+`
+
+func (q *Queries) GetVodOriginalPolicy(ctx context.Context, tenantID string) (sql.NullBool, error) {
+	row := q.db.QueryRowContext(ctx, getVodOriginalPolicy, tenantID)
+	var keep_vod_originals sql.NullBool
+	err := row.Scan(&keep_vod_originals)
+	return keep_vod_originals, err
 }
 
 const resolveClipTenantArtifact = `-- name: ResolveClipTenantArtifact :one
@@ -436,5 +450,23 @@ func (q *Queries) UpsertTenantMediaRetentionPolicy(ctx context.Context, arg Upse
 		arg.ClipDays,
 		arg.UpdatedBy,
 	)
+	return err
+}
+
+const upsertVodOriginalPolicy = `-- name: UpsertVodOriginalPolicy :exec
+INSERT INTO commodore.tenant_media_retention_policies (tenant_id, keep_vod_originals, updated_by)
+VALUES ($1::uuid, $2::boolean, NULLIF($3::text, '')::uuid)
+ON CONFLICT (tenant_id) DO UPDATE SET keep_vod_originals = EXCLUDED.keep_vod_originals,
+ updated_by = EXCLUDED.updated_by, updated_at = NOW()
+`
+
+type UpsertVodOriginalPolicyParams struct {
+	TenantID         string       `db:"tenant_id" json:"tenant_id"`
+	KeepVodOriginals sql.NullBool `db:"keep_vod_originals" json:"keep_vod_originals"`
+	UpdatedBy        string       `db:"updated_by" json:"updated_by"`
+}
+
+func (q *Queries) UpsertVodOriginalPolicy(ctx context.Context, arg UpsertVodOriginalPolicyParams) error {
+	_, err := q.db.ExecContext(ctx, upsertVodOriginalPolicy, arg.TenantID, arg.KeepVodOriginals, arg.UpdatedBy)
 	return err
 }

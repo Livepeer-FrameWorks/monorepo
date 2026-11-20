@@ -432,7 +432,8 @@ message PeerStreamEdge {
   string base_url = 2;       // Public HTTPS URL
   string dtsc_url = 3;       // DTSC pull URL for origin-pull cascading
   bool is_origin = 4;        // True if node has original ingest input
-  uint64 bw_available = 5;   // Available bandwidth (bytes/sec)
+  reserved 5;
+  reserved "bw_available";
   double cpu_percent = 6;    // 0-100
   uint32 viewer_count = 7;
   double geo_lat = 8;
@@ -480,7 +481,8 @@ message PeerHeartbeat {
 // trading and marketplace bidding. No sender or consumer exists yet; the arm is
 // consumed silently alongside the retired telemetry payloads.
 message CapacitySummary {
-  uint64 total_bandwidth = 1;     // Total cluster bandwidth (bytes/sec)
+  reserved 1;
+  reserved "total_bandwidth";
   uint64 available_bandwidth = 2; // Available bandwidth (bytes/sec)
   uint32 total_edges = 3;
   uint32 available_edges = 4;

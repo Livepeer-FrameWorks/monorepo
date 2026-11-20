@@ -39,7 +39,7 @@ func TestHandleStreamAdvertisement_MapsRAMIntoEdgeCandidates(t *testing.T) {
 		IsLive:        true,
 		Timestamp:     time.Now().Unix(),
 		Edges: []*foghornfederationpb.PeerStreamEdge{
-			{NodeId: "edge-1", ClusterId: "virtual-b", BaseUrl: "https://e1", DtscUrl: "dtsc://e1/live+s1", BwAvailable: 1000, RamUsed: 256, RamMax: 1024, Playable: true,
+			{NodeId: "edge-1", ClusterId: "virtual-b", BaseUrl: "https://e1", DtscUrl: "dtsc://e1/live+s1", RamUsed: 256, RamMax: 1024, Playable: true,
 				IsOrigin: true, SourceGeneration: "generation", SourceRevision: 9007199254740993, SourceObservedAt: 1800000000, DtscObservedAt: 1800000001},
 		},
 	}, &channelCell)

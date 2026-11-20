@@ -123,7 +123,7 @@ func TestStreamLifecycleDomainEvents_RealPG(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := msg.(*publicv1.StreamConnected); got.GetStreamId() != domainStream || got.GetProtocol() != publicv1.IngestProtocol_INGEST_PROTOCOL_RTMP ||
-		got.GetPlaybackId() != domainStreamPlayback {
+		got.GetPlaybackId() != domainStreamPlayback || got.GetSessionId() != first {
 		t.Fatalf("stream.connected payload = %+v", got)
 	}
 
@@ -175,6 +175,22 @@ func TestStreamLifecycleDomainEvents_RealPG(t *testing.T) {
 	}
 	assertStreamPlayback("stream.idle", idle[0], domainStreamPlayback)
 
+	if _, err := EndIngestSessionsForSourceAbsence(ctx, domainTenant, "node-owner", stream, 3400, logging.NewLogger()); err != nil {
+		t.Fatal(err)
+	}
+	if rows := domainRows(t, conn, "stream.ended"); len(rows) != 0 {
+		t.Fatal("publisher absence emitted stream.ended before buffer unload")
+	}
+	if _, err := EndIngestSessionsForStreamEnd(ctx, domainTenant, "node-owner", stream, 3500, logging.NewLogger()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EndIngestSessionsForStreamEnd(ctx, domainTenant, "node-owner", stream, 3600, logging.NewLogger()); err != nil {
+		t.Fatal(err)
+	}
+	if rows := domainRows(t, conn, "stream.ended"); len(rows) != 1 {
+		t.Fatalf("buffer unload after publisher close must emit one stream.ended, got %d", len(rows))
+	}
+
 	// A new generation connects again, and the STREAM_END reaper ending it emits idle.
 	second, outcome := mintStreamSession(t, "node-owner", stream, 102, "trig-2", 4000)
 	if outcome != IngestSessionActive || second == first {
@@ -218,7 +234,7 @@ func TestStreamLifecycleDomainEvents_RealPG(t *testing.T) {
 		order = append(order, ty)
 	}
 	_ = rows.Close()
-	want := []string{"stream.connected", "stream.live", "stream.idle", "stream.connected", "stream.live", "stream.idle", "stream.connected", "stream.idle", "stream.connected"}
+	want := []string{"stream.connected", "stream.live", "stream.idle", "stream.ended", "stream.connected", "stream.live", "stream.idle", "stream.ended", "stream.connected", "stream.idle", "stream.connected"}
 	if len(order) != len(want) {
 		t.Fatalf("stream event order = %v, want %v", order, want)
 	}

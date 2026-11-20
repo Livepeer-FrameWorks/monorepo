@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { protocolLabel } from "$lib/analytics/protocols";
   import { onMount, onDestroy, untrack } from "svelte";
   import { page } from "$app/state";
   import { goto } from "$app/navigation";
@@ -620,7 +621,7 @@
                           <p class="text-[10px] text-muted-foreground">
                             {event.clientCity || "Unknown"}{event.clientCountry
                               ? `, ${event.clientCountry}`
-                              : ""} • {event.protocol.toUpperCase()}
+                              : ""} • {protocolLabel(event.protocol)}
                           </p>
                         </div>
                       </div>

@@ -282,10 +282,7 @@ func TestInternalDomainEventsNeverReachTenants(t *testing.T) {
 			t.Fatalf("deliver via %s: %v", topic, err)
 		}
 	}
-	chapter := &internalv1.RecordingChapterReady{
-		Artifact:  &publicv1.Artifact{ArtifactId: "rec-1", Kind: publicv1.ArtifactKind_ARTIFACT_KIND_RECORDING, StreamId: streamID},
-		ChapterId: "chapter-1",
-	}
+	chapter := &internalv1.ArtifactNodeCopyChanged{ArtifactHash: "chapter-1", NodeId: "node-1"}
 
 	internal, _ := domainRecord(t, "domain.events", tenantID, "rec-1", chapter)
 	if internal.Headers[events.HeaderVisibility] != events.VisibilityInternal {
@@ -423,6 +420,28 @@ func testSessionRevocationAudience(t *testing.T, named bool) {
 	} {
 		if leaked := nextEvent(stream, 100*time.Millisecond); leaked != nil {
 			t.Fatalf("%s received %v", name, leaked)
+		}
+	}
+}
+
+func TestStreamIntegrationEventsReachTenantSubscriber(t *testing.T) {
+	server, client := startSignalman(t)
+	handlers := wireDomainEvents(t, server, testDomainMetrics(), "eu")
+	tenant := uuid.NewString()
+	subscriber := streamEvents(subscribeTenant(t, client, tenant, signalmanpb.Channel_CHANNEL_EVENTS))
+	waitForConnections(t, client, 1)
+	for _, name := range []string{"stream.ended", "stream.ingest_disconnected", "recording.chapter_ready"} {
+		spec, ok := events.Lookup(name)
+		if !ok || !spec.Public() {
+			t.Fatalf("missing public contract %s", name)
+		}
+		record, ev := domainRecord(t, "domain.events", tenant, "stream-1", spec.NewMessage())
+		if err := handlers["domain.events"](t.Context(), record); err != nil {
+			t.Fatal(err)
+		}
+		got := nextEvent(subscriber, 2*time.Second).GetData().GetTenantEvent()
+		if got.GetId() != ev.ID || got.GetType() != name {
+			t.Fatalf("received %v, want %s event %s", got, name, ev.ID)
 		}
 	}
 }

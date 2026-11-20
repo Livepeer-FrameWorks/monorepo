@@ -162,6 +162,9 @@ func (r *Resolver) DoWalletLogin(ctx context.Context, input model.WalletLoginInp
 
 // DoLinkWallet links a wallet to the current user's account
 func (r *Resolver) DoLinkWallet(ctx context.Context, input model.WalletLoginInput) (model.LinkWalletResult, error) {
+	if err := middleware.RequirePermission(ctx, "security:write"); err != nil {
+		return nil, err
+	}
 	start := time.Now()
 	defer func() {
 		if r.Metrics != nil {
@@ -209,6 +212,9 @@ func (r *Resolver) DoLinkWallet(ctx context.Context, input model.WalletLoginInpu
 
 // DoUnlinkWallet removes a wallet from the current user's account
 func (r *Resolver) DoUnlinkWallet(ctx context.Context, walletID string) (model.UnlinkWalletResult, error) {
+	if err := middleware.RequirePermission(ctx, "security:write"); err != nil {
+		return nil, err
+	}
 	start := time.Now()
 	defer func() {
 		if r.Metrics != nil {

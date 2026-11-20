@@ -76,6 +76,7 @@ func stopSessionsEffectWithAuthorization(ctx context.Context, logger logging.Log
 		return fmt.Errorf("list sessions before termination: %w", err)
 	}
 	names := mist.SessionStreamNames(req.StreamNames, live)
+	claimedStop := false
 	var held []*lockedIngestGenerationFence
 	defer func() {
 		for i := len(held) - 1; i >= 0; i-- {
@@ -96,6 +97,56 @@ func stopSessionsEffectWithAuthorization(ctx context.Context, logger logging.Log
 		}
 		if len(expected) != len(req.StreamNames) {
 			return errors.New("session termination is missing generation scope")
+		}
+		for _, target := range req.Targets {
+			claimedStop = claimedStop || target.GetFenceAdmission()
+		}
+		if claimedStop {
+			ingestGenerationStoreMu.RLock()
+			store := ingestGenerationStore
+			ingestGenerationStoreMu.RUnlock()
+			if store == nil {
+				return errors.New("claimed stop requires a persistent admission store")
+			}
+			var exact []string
+			for _, target := range req.Targets {
+				if !target.GetFenceAdmission() || target.GetConnectorPid() <= 0 || mist.ExtractInternalName(target.GetInternalName()) != target.GetInternalName() {
+					return errors.New("claimed stop has incomplete publisher identity")
+				}
+			}
+			for _, target := range req.Targets {
+				if err := store.RevokeAdmission(target.GetInternalName(), target.GetSourceGeneration(), target.GetConnectorPid()); err != nil {
+					return fmt.Errorf("persist publisher rejection: %w", err)
+				}
+				store.SchedulePrune(func(_ []string, err error) {
+					if err != nil {
+						logger.WithError(err).Warn("Publisher rejection maintenance failed")
+					}
+				})
+				runtime, err := streamident.BoundRuntimeName(target.GetInternalName(), streamident.RuntimePublisher, target.GetSourceGeneration())
+				if err != nil {
+					return err
+				}
+				exact = append(exact, runtime)
+				for _, name := range names {
+					if name == runtime || mist.ExtractInternalName(name) != target.GetInternalName() {
+						continue
+					}
+					// A legacy runtime has no generation in its name. Include it
+					// only while its persisted local identity names this publisher.
+					if _, ok := streamident.ParseRuntimeBinding(name); ok {
+						continue
+					}
+					fence, _ := lockIngestFence(name, false)
+					if fence != nil {
+						if fence.active && fence.generation == target.GetSourceGeneration() {
+							exact = append(exact, name)
+						}
+						fence.Unlock()
+					}
+				}
+			}
+			names = exact
 		}
 		// Input sessions are absent from the viewer inventory. The requested
 		// generation identifies their exact runtime even with no viewers.
@@ -131,7 +182,7 @@ func stopSessionsEffectWithAuthorization(ctx context.Context, logger logging.Log
 			return errors.New("session termination expired before Mist dispatch")
 		}
 	}
-	if sessions := currentPlaybackGrantSessions(); sessions != nil {
+	if sessions := currentPlaybackGrantSessions(); sessions != nil && !claimedStop {
 		sessions.StopStreams(req.StreamNames, req.GetReason())
 	}
 	if err := client.StopSessionsMultipleContext(ctx, names); err != nil {

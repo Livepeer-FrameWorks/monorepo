@@ -7,6 +7,7 @@ from .base_model import BaseModel
 from .fragments import (  # noqa: F401
     AuthErrorDefault,
     InfrastructureNodeDefault,
+    InfrastructureNodeDefaultCapacity,
     InfrastructureNodeDefaultLiveState,
     InfrastructureNodeDefaultRoutingImpactPreview,
     NotFoundErrorDefault,

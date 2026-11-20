@@ -52,6 +52,7 @@ type IngestNodeLostDeps struct {
 }
 
 type lostNodeSession struct {
+	pull                              bool
 	sessionID, tenantID, internalName string
 }
 
@@ -87,7 +88,7 @@ func ReapLostNodeIngestSessionsOnce(ctx context.Context, deps IngestNodeLostDeps
 		if _, seen := byNode[row.NodeID]; !seen {
 			nodes = append(nodes, row.NodeID)
 		}
-		byNode[row.NodeID] = append(byNode[row.NodeID], lostNodeSession{sessionID: row.SessionID, tenantID: row.TenantID, internalName: row.StreamInternalName})
+		byNode[row.NodeID] = append(byNode[row.NodeID], lostNodeSession{sessionID: row.SessionID, tenantID: row.TenantID, internalName: row.StreamInternalName, pull: row.IsPull})
 	}
 	for nodeID := range absence {
 		if _, open := byNode[nodeID]; !open {
@@ -152,7 +153,13 @@ func ReapLostNodeIngestSessionsOnce(ctx context.Context, deps IngestNodeLostDeps
 				"node_id": nodeID, "internal_name": s.internalName, "ingest_generation": s.sessionID,
 				"absent_for": absentFor.String(),
 			}
-			retired, retireErr := RetireIngestSession(ctx, s.sessionID, s.tenantID, s.internalName, IngestEndedNodeLost, logger)
+			var retired bool
+			var retireErr error
+			if s.pull {
+				retired, retireErr = RetirePullIngestSession(ctx, s.tenantID, s.internalName, s.sessionID, IngestEndedNodeLost, false, logger)
+			} else {
+				retired, retireErr = RetireIngestSession(ctx, s.sessionID, s.tenantID, s.internalName, IngestEndedNodeLost, logger)
+			}
 			if retireErr != nil {
 				logger.WithError(retireErr).WithFields(fields).Warn("Lost-node ingest pass: failed to end session of a lost node; the next pass retries")
 				continue

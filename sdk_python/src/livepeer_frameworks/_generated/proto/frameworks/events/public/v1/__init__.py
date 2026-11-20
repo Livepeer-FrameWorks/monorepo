@@ -26,6 +26,7 @@ __all__ = (
     "PaymentFailed",
     "PaymentFailureReason",
     "RecordingChapterFailed",
+    "RecordingChapterReady",
     "RecordingFailed",
     "RecordingReady",
     "RecordingStarted",
@@ -33,7 +34,9 @@ __all__ = (
     "StreamConnected",
     "StreamCreated",
     "StreamDeleted",
+    "StreamEnded",
     "StreamIdle",
+    "StreamIngestDisconnected",
     "StreamKeyRotated",
     "StreamLive",
     "StreamUpdated",
@@ -627,6 +630,31 @@ default_message_pool.register_message(
 
 
 @dataclass(eq=False, repr=False)
+class RecordingChapterReady(betterproto2.Message):
+    """
+    RecordingChapterReady reports that one chapter of a recording became
+    playable.
+    """
+
+    artifact: "Artifact | None" = betterproto2.field(
+        1, betterproto2.TYPE_MESSAGE, optional=True
+    )
+
+    chapter_id: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+
+    start_ms: "int" = betterproto2.field(3, betterproto2.TYPE_INT64)
+
+    end_ms: "int" = betterproto2.field(4, betterproto2.TYPE_INT64)
+
+    size_bytes: "int" = betterproto2.field(5, betterproto2.TYPE_INT64)
+
+
+default_message_pool.register_message(
+    "frameworks.events.public.v1", "RecordingChapterReady", RecordingChapterReady
+)
+
+
+@dataclass(eq=False, repr=False)
 class RecordingFailed(betterproto2.Message):
     artifact: "Artifact | None" = betterproto2.field(
         1, betterproto2.TYPE_MESSAGE, optional=True
@@ -718,6 +746,8 @@ class StreamConnected(betterproto2.Message):
     playback_id is the stream's public playback ID.
     """
 
+    session_id: "str" = betterproto2.field(4, betterproto2.TYPE_STRING)
+
 
 default_message_pool.register_message(
     "frameworks.events.public.v1", "StreamConnected", StreamConnected
@@ -749,6 +779,24 @@ default_message_pool.register_message(
 
 
 @dataclass(eq=False, repr=False)
+class StreamEnded(betterproto2.Message):
+    """
+    StreamEnded reports that the origin unloaded the latest ingest buffer.
+    """
+
+    stream_id: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+
+    playback_id: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+
+    session_id: "str" = betterproto2.field(3, betterproto2.TYPE_STRING)
+
+
+default_message_pool.register_message(
+    "frameworks.events.public.v1", "StreamEnded", StreamEnded
+)
+
+
+@dataclass(eq=False, repr=False)
 class StreamIdle(betterproto2.Message):
     """
     StreamIdle reports that the stream's ingest session ended.
@@ -762,9 +810,29 @@ class StreamIdle(betterproto2.Message):
     not resolve the stream while the control plane was unreachable.
     """
 
+    session_id: "str" = betterproto2.field(3, betterproto2.TYPE_STRING)
+
 
 default_message_pool.register_message(
     "frameworks.events.public.v1", "StreamIdle", StreamIdle
+)
+
+
+@dataclass(eq=False, repr=False)
+class StreamIngestDisconnected(betterproto2.Message):
+    """
+    StreamIngestDisconnected reports an explicitly requested publisher disconnect.
+    """
+
+    stream_id: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+
+    session_id: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+
+    reason: "str" = betterproto2.field(3, betterproto2.TYPE_STRING)
+
+
+default_message_pool.register_message(
+    "frameworks.events.public.v1", "StreamIngestDisconnected", StreamIngestDisconnected
 )
 
 
@@ -796,6 +864,8 @@ class StreamLive(betterproto2.Message):
     playback_id is the stream's public playback ID; empty when Foghorn could
     not resolve the stream while the control plane was unreachable.
     """
+
+    session_id: "str" = betterproto2.field(3, betterproto2.TYPE_STRING)
 
 
 default_message_pool.register_message(

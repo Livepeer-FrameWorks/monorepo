@@ -813,9 +813,9 @@ Read by `api_balancing/cmd/foghorn`.
 | `MEDIA_AUTHORITY_SEAL_KEY_ID` | string |  |  | v0.3.0 | Key ID of the private key that opens sealed secrets in media authority. Set together with MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64. |
 | `MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64` | string |  | secret | v0.3.0 | Base64-wrapped PKCS#8 PRIVATE KEY PEM that opens sealed secrets in media authority. |
 | `FOGHORN_INGEST_REJECT_OVER_ALLOWANCE_LOAD` | string | `0.5` |  | v0.3.0 | Cluster load between 0 and 1 above which over-allowance free-tier ingest is rejected. Values outside the open range use 0.5. |
-| `FOGHORN_INGEST_REJECT_FREE_LOAD` | string | `0.95` |  | v0.3.0 | Cluster load between 0 and 1 above which any free-tier ingest is rejected. Values outside the open range use 0.95. |
+| `FOGHORN_INGEST_REJECT_FREE_LOAD` | string | `0.85` |  | v0.3.0 | Cluster load between 0 and 1 above which any free-tier ingest is rejected. The threshold is capped at 0.85; invalid values use 0.85. |
 | `FOGHORN_VIEWER_REJECT_OVER_ALLOWANCE_LOAD` | string | `0.8` |  | v0.3.0 | Cluster load between 0 and 1 above which over-allowance free-tier viewers are rejected. Values outside the open range use 0.8. |
-| `FOGHORN_VIEWER_REJECT_FREE_LOAD` | string | `0.95` |  | v0.3.0 | Cluster load between 0 and 1 above which any free-tier viewer is rejected. Values outside the open range use 0.95. |
+| `FOGHORN_VIEWER_REJECT_FREE_LOAD` | string | `0.85` |  | v0.3.0 | Cluster load between 0 and 1 above which any free-tier viewer is rejected. The threshold is capped at 0.85; invalid values use 0.85. |
 | `INGEST_RESOLVE_RATE_PER_MIN` | string | `60` |  | v0.3.0 | Per-client-IP refill rate of the unauthenticated ingest resolver, in requests per minute. Re-read on every request; values below 1 use 1. |
 | `INGEST_RESOLVE_BURST` | string | `10` |  | v0.3.0 | Per-client-IP burst of the ingest resolver rate limit. Re-read on every request; values below 1 use 1. |
 | `INGEST_RESOLVE_MAX_BUCKETS` | string | `50000` |  | v0.3.0 | Maximum client IPs tracked by the ingest resolver rate limit before the least recently used is evicted. |
@@ -891,9 +891,6 @@ Read by `api_sidecar/cmd/helmsman`.
 | `CADDY_CONFIG_PATH` | string | `/etc/caddy/Caddyfile` |  | v0.3.0 | Caddyfile that Helmsman writes and posts to the Caddy admin API on reload. |
 | `CHANDLER_URL` | string | `chandler:18020` |  | v0.3.0 | Chandler host:port that the Caddyfile rendered from the config seed reverse-proxies to. |
 | `MISTSERVER_HTTP_URL` | string | `http://mistserver:8080` |  | v0.3.0 | MistServer HTTP output URL that the rendered Caddyfile reverse-proxies to. An http:// prefix is stripped. |
-| `HELMSMAN_BW_LIMIT_BYTES_PER_SEC` | string |  |  | v0.3.0 | Operator-pinned node bandwidth limit in bytes per second, written to MistServer and reported to Foghorn. Takes precedence over the other bandwidth limit keys. |
-| `HELMSMAN_BW_LIMIT_BYTES` | string |  |  | v0.3.0 | Node bandwidth limit in bytes per second, used when HELMSMAN_BW_LIMIT_BYTES_PER_SEC is empty or 0. |
-| `HELMSMAN_BW_LIMIT_MBPS` | string |  |  | v0.3.0 | Node bandwidth limit in megabits per second, used when neither byte-based bandwidth limit key is set. |
 | `HELMSMAN_SUPERVISOR` | string |  |  | v0.3.0 | Process supervisor used for in-place component updates: s6, systemd, or launchd. Any other value detects s6 supervision, then uses launchd on macOS and systemd elsewhere. |
 | `DEPLOY_MODE` | string | `native` |  | v0.3.0 | Deployment mode reported to Foghorn. A value other than native without s6 supervision refuses in-place component updates. |
 | `MIST_ONNX_PROFILE` | string | `cpu` |  | v0.3.0 | ONNX runtime profile of the bundled MistServer, reported to Foghorn in node lifecycle updates. |

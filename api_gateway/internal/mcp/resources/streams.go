@@ -8,11 +8,13 @@ import (
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/mcperrors"
 	"frameworks/api_gateway/internal/resolvers"
+	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -57,7 +59,7 @@ type StreamInfo struct {
 	Title          string                   `json:"title"`
 	Description    string                   `json:"description,omitempty"`
 	Status         string                   `json:"status,omitempty"`
-	IsLive         bool                     `json:"is_live"`
+	IsLive         *bool                    `json:"is_live"`
 	IsRecording    bool                     `json:"is_recording"`
 	RecordEnabled  bool                     `json:"record_enabled"`
 	PlaybackID     string                   `json:"playback_id"`
@@ -105,6 +107,7 @@ func handleStreamsList(ctx context.Context, clients *clients.ServiceClients, log
 		return nil, fmt.Errorf("failed to list streams: %w", err)
 	}
 
+	states := resourceIngestStates(ctx, clients.Commodore, resp.GetStreams(), logger)
 	streams := make([]StreamInfo, 0, len(resp.Streams))
 	for _, s := range resp.Streams {
 		info := StreamInfo{
@@ -112,8 +115,8 @@ func handleStreamsList(ctx context.Context, clients *clients.ServiceClients, log
 			StreamID:       s.StreamId,
 			Title:          s.Title,
 			Description:    s.Description,
-			Status:         s.Status,
-			IsLive:         s.IsLive,
+			Status:         "unavailable",
+			IsLive:         nil,
 			IsRecording:    s.IsRecording,
 			RecordEnabled:  s.IsRecordingEnabled,
 			PlaybackID:     s.PlaybackId,
@@ -125,6 +128,7 @@ func handleStreamsList(ctx context.Context, clients *clients.ServiceClients, log
 		if s.CreatedAt != nil {
 			info.CreatedAt = s.CreatedAt.AsTime().Format("2006-01-02T15:04:05Z")
 		}
+		info.Status, info.IsLive = resourceIngestStatus(states[s.GetStreamId()])
 		streams = append(streams, info)
 	}
 
@@ -176,8 +180,8 @@ func HandleStreamByID(ctx context.Context, uri string, clients *clients.ServiceC
 		StreamID:       stream.StreamId,
 		Title:          stream.Title,
 		Description:    stream.Description,
-		Status:         stream.Status,
-		IsLive:         stream.IsLive,
+		Status:         "unavailable",
+		IsLive:         nil,
 		IsRecording:    stream.IsRecording,
 		RecordEnabled:  stream.IsRecordingEnabled,
 		PlaybackID:     stream.PlaybackId,
@@ -190,6 +194,8 @@ func HandleStreamByID(ctx context.Context, uri string, clients *clients.ServiceC
 		info.CreatedAt = stream.CreatedAt.AsTime().Format("2006-01-02T15:04:05Z")
 	}
 
+	states := resourceIngestStates(ctx, clients.Commodore, []*commodorepb.Stream{stream}, logger)
+	info.Status, info.IsLive = resourceIngestStatus(states[stream.GetStreamId()])
 	return marshalResourceResult(uri, info)
 }
 
@@ -222,7 +228,7 @@ type StreamHealthInfo struct {
 	ID             string `json:"id"`
 	StreamID       string `json:"stream_id"`
 	Status         string `json:"status,omitempty"`
-	IsLive         bool   `json:"is_live"`
+	IsLive         *bool  `json:"is_live"`
 	CurrentViewers int    `json:"current_viewers,omitempty"`
 	PeakViewers    int    `json:"peak_viewers,omitempty"`
 	Duration       int    `json:"duration_seconds,omitempty"`
@@ -238,13 +244,15 @@ func handleStreamHealth(ctx context.Context, streamID string, clients *clients.S
 	health := StreamHealthInfo{
 		ID:             globalid.Encode(globalid.TypeStream, stream.StreamId),
 		StreamID:       stream.StreamId,
-		Status:         stream.Status,
-		IsLive:         stream.IsLive,
+		Status:         "unavailable",
+		IsLive:         nil,
 		CurrentViewers: int(stream.CurrentViewers),
 		PeakViewers:    int(stream.PeakViewers),
 		Duration:       int(stream.Duration),
 	}
 
+	states := resourceIngestStates(ctx, clients.Commodore, []*commodorepb.Stream{stream}, logger)
+	health.Status, health.IsLive = resourceIngestStatus(states[stream.GetStreamId()])
 	return marshalResourceResult(fmt.Sprintf("streams://%s/health", streamID), health)
 }
 
@@ -259,4 +267,34 @@ func decodeStreamIdentifier(input string) (string, error) {
 		return id, nil
 	}
 	return input, nil
+}
+
+func resourceIngestStates(ctx context.Context, client commodoreclient.Interface, streams []*commodorepb.Stream, logger logging.Logger) map[string]*pb.StreamIngest {
+	ids := make([]string, 0, len(streams))
+	for _, stream := range streams {
+		ids = append(ids, stream.GetStreamId())
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	response, err := client.GetStreamIngestStates(ctx, ids)
+	if err != nil {
+		logger.WithError(err).Warn("Stream ingest state unavailable")
+		return nil
+	}
+	return response.GetStates()
+}
+func resourceIngestStatus(view *pb.StreamIngest) (string, *bool) {
+	if view == nil {
+		return "unavailable", nil
+	}
+	live := view.GetState() == pb.StreamIngestState_STREAM_INGEST_STATE_LIVE
+	switch view.GetState() {
+	case pb.StreamIngestState_STREAM_INGEST_STATE_LIVE:
+		return "live", &live
+	case pb.StreamIngestState_STREAM_INGEST_STATE_CONNECTED:
+		return "connected", &live
+	default:
+		return "idle", &live
+	}
 }

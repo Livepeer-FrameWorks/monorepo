@@ -1,11 +1,10 @@
 <script lang="ts">
   import { cn } from "$lib/utils";
   import { Badge } from "$lib/components/ui/badge";
-  import { StreamStatus } from "$houdini";
   import type { StreamCoreFields$data, StreamMetricsListFields$data } from "$houdini";
   import { streamCurrentViewers, streamResolutionLabel } from "$lib/utils/stream-metrics-display";
 
-  type StreamCardData = Pick<StreamCoreFields$data, "id" | "streamId" | "name"> & {
+  type StreamCardData = Pick<StreamCoreFields$data, "id" | "streamId" | "name" | "ingest"> & {
     metrics: StreamMetricsListFields$data | null;
   };
 
@@ -21,8 +20,8 @@
     [key: string]: unknown;
   } = $props();
 
-  const status = $derived(stream.metrics?.status);
-  const isLive = $derived(status === StreamStatus.LIVE);
+  const status = $derived(stream.ingest?.state);
+  const isLive = $derived(status === "LIVE");
   const displayStreamId = $derived(stream.streamId || stream.id);
   const displayName = $derived(stream.name || `Stream ${displayStreamId.slice(0, 8)}`);
   const displayViewers = $derived(streamCurrentViewers(stream.metrics));
@@ -35,12 +34,18 @@
       <h3 class="font-semibold text-foreground">
         {displayName}
       </h3>
-      <Badge tone={isLive ? "green" : "red"} class="text-xs">
+      <Badge tone={!status ? "neutral" : isLive ? "green" : "red"} class="text-xs">
         <div class="flex items-center gap-1.5">
           <div
             class={cn("size-1.5 rounded-full", isLive ? "bg-success animate-pulse" : "bg-error")}
           ></div>
-          {isLive ? "Live" : "Offline"}
+          {status
+            ? isLive
+              ? "Live"
+              : status === "CONNECTED"
+                ? "Connected"
+                : "Offline"
+            : "Unavailable"}
         </div>
       </Badge>
     </div>

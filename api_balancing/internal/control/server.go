@@ -15,6 +15,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"net"
 	"net/http"
 	"net/url"
@@ -1061,7 +1062,7 @@ func (r *CommandRelay) forward(ctx context.Context, req *foghornrelaypb.ForwardC
 		return fmt.Errorf("relay: not configured")
 	}
 	commandType := RelayCommandType(req)
-	confirmedStop := req.GetStopSessions() != nil
+	confirmedStop := req.GetStopSessions() != nil || req.GetStopClaimedSessions() != nil
 	requestID := RelayRequestID(req)
 	log := r.logger.WithFields(logging.Fields{
 		"target_node_id":  req.GetTargetNodeId(),
@@ -1180,6 +1181,8 @@ func RelayCommandType(req *foghornrelaypb.ForwardCommandRequest) string {
 		return "dtsh_sync"
 	case *foghornrelaypb.ForwardCommandRequest_StopSessions:
 		return "stop_sessions"
+	case *foghornrelaypb.ForwardCommandRequest_StopClaimedSessions:
+		return "stop_claimed_sessions"
 	case *foghornrelaypb.ForwardCommandRequest_InvalidateSessions:
 		return "invalidate_sessions"
 	case *foghornrelaypb.ForwardCommandRequest_DeactivatePushTargets:
@@ -1203,6 +1206,8 @@ func RelayCommandType(req *foghornrelaypb.ForwardCommandRequest) string {
 
 func RelayRequestID(req *foghornrelaypb.ForwardCommandRequest) string {
 	switch cmd := req.GetCommand().(type) {
+	case *foghornrelaypb.ForwardCommandRequest_StopClaimedSessions:
+		return cmd.StopClaimedSessions.GetRequestId()
 	case *foghornrelaypb.ForwardCommandRequest_DvrStart:
 		return cmd.DvrStart.GetRequestId()
 	case *foghornrelaypb.ForwardCommandRequest_DvrStop:
@@ -2803,6 +2808,15 @@ func processDrainStreamResponse(resp *ipcpb.DrainStreamResponse, session NodeSes
 	if err := MarkAdmissionDrainDone(ackCtx, nodeID, resp.GetSourceGeneration()); err != nil {
 		logger.WithError(err).WithField("node_id", nodeID).Warn("Failed to record drain acknowledgement")
 	}
+	if tenantID := resp.GetTenantId(); tenantID != "" {
+		if _, tenantErr := uuid.Parse(tenantID); tenantErr != nil {
+			return false
+		}
+		ackCtx = context.WithValue(ackCtx, ctxkeys.KeyTenantID, tenantID)
+	}
+	if err := MarkOfflinePublisherDrainDone(ackCtx, nodeID, resp.GetSourceGeneration()); err != nil {
+		logger.WithError(err).WithField("node_id", nodeID).Warn("Failed to record retired publisher drain acknowledgement")
+	}
 	return true
 }
 
@@ -3039,6 +3053,28 @@ func SendLocalDVRStart(nodeID string, req *ipcpb.DVRStartRequest) error {
 
 // SendDVRStart sends a DVRStartRequest to the given node, relaying via HA if needed.
 func SendDVRStart(nodeID string, req *ipcpb.DVRStartRequest) error {
+	if req.GetDvrHash() == "" {
+		return sendDVRStart(nodeID, req)
+	}
+	source := ""
+	if stream := state.DefaultManager().GetStreamState(req.GetInternalName()); stream != nil {
+		source = stream.NodeID
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	legs, err := reserveJobBandwidth(ctx, "dvr:"+req.GetDvrHash(), req.GetInternalName(), source, nodeID)
+	if err != nil {
+		return err
+	}
+	if err = sendDVRStart(nodeID, req); err != nil {
+		releasePendingJobBandwidth(legs)
+		return err
+	}
+	activateJobBandwidth(legs)
+	return nil
+}
+
+func sendDVRStart(nodeID string, req *ipcpb.DVRStartRequest) error {
 	err := SendLocalDVRStart(nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -3493,7 +3529,7 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 				if endErr := q.EndSupersededPIDIngestSession(ctx, foghorndb.EndSupersededPIDIngestSessionParams{SessionID: incID, EndedAtUnixMillis: sql.NullInt64{Int64: startedAtMillis, Valid: true}}); endErr != nil {
 					return fmt.Errorf("end stale ingest session on PID reuse: %w", endErr)
 				}
-				if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, streamID, req.PlaybackID); idleErr != nil {
+				if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, streamID, req.PlaybackID, incID); idleErr != nil {
 					return idleErr
 				}
 				claims, claimErr := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, incID, tenantID)
@@ -3601,7 +3637,7 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 			}); endErr != nil {
 				return fmt.Errorf("end ingest session superseded by a new node: %w", endErr)
 			}
-			if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, streamID, req.PlaybackID); idleErr != nil {
+			if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, streamID, req.PlaybackID, takeoverSessionID); idleErr != nil {
 				return idleErr
 			}
 			claims, claimErr := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, takeoverSessionID, tenantID)
@@ -3643,7 +3679,7 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 			return fmt.Errorf("insert ingest session: %w", insErr)
 		}
 		if streamID != "" {
-			if connErr := domainevents.StreamConnected(ctx, tx, tenantID, streamID, req.PlaybackID, req.Protocol); connErr != nil {
+			if connErr := domainevents.StreamConnected(ctx, tx, tenantID, streamID, req.PlaybackID, req.Protocol, newID); connErr != nil {
 				return connErr
 			}
 		}
@@ -3750,6 +3786,11 @@ type DVRStopClaim struct {
 	StorageNodeID string
 }
 
+const endedSourceDVRWhereSQL = `stream_internal_name = $1 AND dvr_start_dispatch->>'source_node_id' = $2 AND tenant_id::text = $3
+		 AND (ingest_generation IS NULL OR NOT EXISTS (
+		     SELECT 1 FROM foghorn.ingest_sessions s
+		      WHERE s.id = foghorn.artifacts.ingest_generation AND s.ended_at IS NULL))`
+
 // ClaimDVRStops is the DURABLE half of the single claim-before-send DVR-stop primitive
 // used by every stop path (StopDVR RPC, STREAM_END backstop, PUSH_INPUT_CLOSE finalizer).
 // It transitions every ACTIVE dvr row matched by whereSQL to status='stopping' +
@@ -3795,10 +3836,7 @@ func ClaimDVRStops(ctx context.Context, q dvrStopQueryer, whereSQL string, args 
 			claims = append(claims, DVRStopClaim{DVRHash: row.ArtifactHash, StorageNodeID: row.StorageNodeID})
 		}
 		return claims, nil
-	case `stream_internal_name = $1 AND dvr_start_dispatch->>'source_node_id' = $2 AND tenant_id::text = $3
-		 AND (ingest_generation IS NULL OR NOT EXISTS (
-		     SELECT 1 FROM foghorn.ingest_sessions s
-		      WHERE s.id = foghorn.artifacts.ingest_generation AND s.ended_at IS NULL))`:
+	case endedSourceDVRWhereSQL:
 		values, err := dvrStopStringArgs(args, 3)
 		if err != nil {
 			return nil, err
@@ -3893,12 +3931,10 @@ func StopDVRForEndedSource(internalName, tenantID, endedSourceNodeID string, log
 	// reconnect that already re-minted a generation and bound its own DVR — stopping ALL DVRs on
 	// the node would kill that live recording. So claim only DVRs whose bound ingest_generation
 	// is ENDED (its session's ended_at IS NOT NULL) or NULL (legacy/unbound); leave any bound to
-	// an active session running.
+	// an active session running. An active direct-pull buffer on the same source
+	// node also protects its unbound recording from a delayed end.
 	claims, err := ClaimDVRStops(ctx, db,
-		`stream_internal_name = $1 AND dvr_start_dispatch->>'source_node_id' = $2 AND tenant_id::text = $3
-		 AND (ingest_generation IS NULL OR NOT EXISTS (
-		     SELECT 1 FROM foghorn.ingest_sessions s
-		      WHERE s.id = foghorn.artifacts.ingest_generation AND s.ended_at IS NULL))`,
+		endedSourceDVRWhereSQL,
 		internalName, endedSourceNodeID, tenantID)
 	if err != nil {
 		return fmt.Errorf("claim DVR stop obligation for ended source session: %w", err)
@@ -3951,12 +3987,25 @@ func OpenIngestSessionCluster(ctx context.Context, tenantID, nodeID, triggerUUID
 // open: its PUSH_INPUT_CLOSE or Helmsman's runtime-absence report ends it if it is gone.
 // eventMillis <= 0 (missing X-Trigger-UnixMillis) is a NO-OP. Returns the number of sessions
 // ended. Fails closed (error) on a query failure; nil DB is a no-op.
-func EndIngestSessionsForStreamEnd(ctx context.Context, tenantID, nodeID, internalName string, eventMillis int64, logger logging.Logger) (int, error) {
+func EndIngestSessionsForStreamEnd(ctx context.Context, tenantID, nodeID, internalName string, eventMillis int64, logger logging.Logger, mode ...IngestMode) (int, error) {
+	return endIngestSessionsForBufferEnd(ctx, tenantID, nodeID, internalName, eventMillis, logger, true, mode...)
+}
+
+// EndIngestSessionsForSourceAbsence retires the publisher without claiming a
+// STREAM_END observation. A later explicit buffer unload emits stream.ended.
+func EndIngestSessionsForSourceAbsence(ctx context.Context, tenantID, nodeID, internalName string, eventMillis int64, logger logging.Logger, mode ...IngestMode) (int, error) {
+	return endIngestSessionsForBufferEnd(ctx, tenantID, nodeID, internalName, eventMillis, logger, false, mode...)
+}
+
+func endIngestSessionsForBufferEnd(ctx context.Context, tenantID, nodeID, internalName string, eventMillis int64, logger logging.Logger, emitEnded bool, mode ...IngestMode) (int, error) {
 	if db == nil || eventMillis <= 0 {
 		return 0, nil
 	}
 	if tenantID == "" || nodeID == "" || internalName == "" {
 		return 0, fmt.Errorf("stream-end reaper missing scope: tenant=%q node=%q stream=%q", tenantID, nodeID, internalName)
+	}
+	if len(mode) > 0 && mode[0] == IngestPull {
+		return endPullIngestSessionsForBufferEnd(ctx, tenantID, nodeID, internalName, eventMillis, logger, emitEnded)
 	}
 	playbackID := streamEventPlaybackID(ctx, internalName)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -3966,6 +4015,10 @@ func EndIngestSessionsForStreamEnd(ctx context.Context, tenantID, nodeID, intern
 	var spared []foghorndb.ListStreamEndSparedIngestSessionsRow
 	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
 		allClaims, endedCount, spared = nil, 0, nil
+		if err := foghorndb.New(tx).LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); err != nil {
+			return err
+		}
+
 		endedIDs, scanErr := foghorndb.New(tx).ReapStreamEndIngestSessions(ctx, foghorndb.ReapStreamEndIngestSessionsParams{
 			TenantID: tenantID, NodeID: nodeID, StreamInternalName: internalName, EndedAtUnixMillis: sql.NullInt64{Int64: eventMillis, Valid: true},
 		})
@@ -3980,7 +4033,7 @@ func EndIngestSessionsForStreamEnd(ctx context.Context, tenantID, nodeID, intern
 				return fmt.Errorf("claim DVR stop for reaped session %s: %w", ended.SessionID, claimErr)
 			}
 			allClaims = append(allClaims, claims...)
-			if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID, playbackID); idleErr != nil {
+			if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID, playbackID, ended.SessionID); idleErr != nil {
 				return idleErr
 			}
 		}
@@ -3991,6 +4044,9 @@ func EndIngestSessionsForStreamEnd(ctx context.Context, tenantID, nodeID, intern
 		})
 		if listErr != nil {
 			return fmt.Errorf("list ingest sessions kept open on stream end: %w", listErr)
+		}
+		if emitEnded {
+			return markStreamBufferEndedTx(ctx, tx, tenantID, nodeID, internalName, eventMillis, false, playbackID)
 		}
 		return nil
 	})
@@ -4048,7 +4104,7 @@ func EndExactMissingIngestSession(ctx context.Context, tenantID, nodeID, interna
 		if err != nil {
 			return fmt.Errorf("claim DVR stop for missing runtime %s: %w", ended.SessionID, err)
 		}
-		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID, playbackID); idleErr != nil {
+		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID, playbackID, ended.SessionID); idleErr != nil {
 			return idleErr
 		}
 		reaped = true
@@ -4470,7 +4526,7 @@ func abortPendingSourceProjection(ctx context.Context, tenantID, internalName, g
 		if err != nil {
 			return fmt.Errorf("end pending source projection: %w", err)
 		}
-		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, aborted.StreamID, playbackID); idleErr != nil {
+		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, aborted.StreamID, playbackID, generation); idleErr != nil {
 			return idleErr
 		}
 		revision, err := nextSourceRevision(ctx, tx, tenantID, internalName)
@@ -4581,7 +4637,7 @@ func FinalizeIngestSessionClose(ctx context.Context, tenantID, nodeID string, co
 		res.EndedSessionID = ended.ID
 		res.ClaimToken = ended.StartTriggerUuid
 		res.ClusterID = ended.ClusterID
-		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID, playbackID); idleErr != nil {
+		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID, playbackID, ended.ID); idleErr != nil {
 			return idleErr
 		}
 		revision, revisionErr := nextSourceRevision(ctx, tx, tenantID, internalName)
@@ -5049,6 +5105,7 @@ const MinControlProtocolVersion int32 = NodeIdentityProofProtocolMin
 // work stays local/retryable until the sidecar is upgraded.
 type ControlFeatures struct {
 	IsolatedPublisherRuntime bool
+	ClaimedPublisherStop     bool
 	ConfirmedSessionStop     bool // effect acknowledgement scoped to an exact node connection
 	StagedFreeze             bool // server-minted staged freeze (>= FreezeStagedProtocolMin)
 	StagedThumbnail          bool // server-minted staged thumbnail publication (>= ThumbnailStagedProtocolMin)
@@ -5061,7 +5118,7 @@ type ControlFeatures struct {
 // ControlFeaturesForProtocol derives the capability set a declared control-protocol version supports.
 func ControlFeaturesForProtocol(v int32) ControlFeatures {
 	return ControlFeatures{
-		IsolatedPublisherRuntime: v >= IsolatedPublisherRuntimeProtocolMin, ConfirmedSessionStop: v >= StopSessionsAckProtocolMin,
+		IsolatedPublisherRuntime: v >= IsolatedPublisherRuntimeProtocolMin, ConfirmedSessionStop: v >= StopSessionsAckProtocolMin, ClaimedPublisherStop: v >= ClaimedPublisherStopProtocolMin,
 		StagedFreeze:           v >= FreezeStagedProtocolMin,
 		StagedThumbnail:        v >= ThumbnailStagedProtocolMin,
 		AuthoritativeInventory: v >= AuthoritativeInventoryProtocolMin,
@@ -5964,6 +6021,8 @@ func composeConfigSeedCandidate(nodeID string, _ []string, peerAddr string, oper
 	var ownerTenantID string
 	ownerResolved := false
 	clusterResolved := strings.TrimSpace(clusterID) != ""
+	budget := state.DefaultNodeCapacity()
+	capacityResolved := false
 
 	if geoipReader != nil {
 		if gd := geoip.LookupCached(context.Background(), geoipReader, geoipCache, peerAddr); gd != nil {
@@ -6020,6 +6079,10 @@ func composeConfigSeedCandidate(nodeID string, _ []string, peerAddr string, oper
 		cancel()
 		if err == nil && node != nil {
 			clusterResolved = true
+			if node.GetCapacity() != nil {
+				budget = capacityFromQuartermaster(node.GetCapacity())
+				capacityResolved = true
+			}
 			if resolvedClusterID == "" {
 				resolvedClusterID = strings.TrimSpace(node.GetClusterId())
 			}
@@ -6095,6 +6158,7 @@ func composeConfigSeedCandidate(nodeID string, _ []string, peerAddr string, oper
 		Telemetry:           telemetry,
 		FoghornBalancerBase: FoghornBalancerBaseForNode(resolvedClusterID, nodeID),
 		SeedVersion:         0,
+		Capacity:            budget,
 	}
 	if tlsBundle != nil {
 		seed.TlsBundles = []*ipcpb.TLSCertBundle{tlsBundle}
@@ -6119,6 +6183,7 @@ func composeConfigSeedCandidate(nodeID string, _ []string, peerAddr string, oper
 	}
 	tlsResolved := clusterTLSResolved && clusterClassResolved && platformTLSResolved && tenantTLSResolved
 	return seed, configSeedFallback{
+		preserveCapacity:    !capacityResolved,
 		preserveTenant:      !ownerResolved,
 		preserveSite:        !clusterResolved,
 		preserveTLS:         !tlsResolved,
@@ -6143,6 +6208,7 @@ func composeConfigSeed(nodeID string, roles []string, peerAddr string, operation
 }
 
 type configSeedFallback struct {
+	preserveCapacity  bool
 	preserveTenant    bool
 	preserveSite      bool
 	preserveTLS       bool
@@ -6189,11 +6255,11 @@ func mergeConfigSeedFallback(current, lastGood *ipcpb.ConfigSeed, fallback confi
 	if !fallback.preserveTelemetry {
 		merged.Telemetry = current.GetTelemetry()
 	}
+	if lastGood.GetCapacity() == nil || (!fallback.preserveCapacity && current.GetCapacity().GetRevision() >= lastGood.GetCapacity().GetRevision()) {
+		merged.Capacity = current.GetCapacity()
+	}
 	if current.GetFoghornBalancerBase() != "" {
 		merged.FoghornBalancerBase = current.GetFoghornBalancerBase()
-	}
-	if current.GetProcessing() != nil {
-		merged.Processing = current.GetProcessing()
 	}
 	return merged
 }
@@ -6597,6 +6663,7 @@ func SendLocalConfigSeed(nodeID string, seed *ipcpb.ConfigSeed) error {
 	if c == nil {
 		return ErrNotConnected
 	}
+	state.DefaultManager().SetNodeCapacity(nodeID, seed.GetCapacity())
 	msg := &ipcpb.ControlMessage{
 		Payload: &ipcpb.ControlMessage_ConfigSeed{ConfigSeed: seed},
 		SentAt:  timestamppb.Now(),
@@ -6663,6 +6730,7 @@ func SendConfigSeedWithFallback(nodeID string, seed *ipcpb.ConfigSeed, fallback 
 	}
 	proto.Reset(seed)
 	proto.Merge(seed, persisted)
+	state.DefaultManager().SetNodeCapacity(nodeID, seed.GetCapacity())
 	err := SendLocalConfigSeed(nodeID, seed)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -8643,6 +8711,11 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 
 					// Claim readiness on the transaction. A row deleted/failed mid-processing matches
 					// 0 (guard) — the job still completes, but nothing is published.
+					if artifactType == "vod" {
+						if err := stampVodOriginal(ctx, q, tenantID, artifactHash); err != nil {
+							return err
+						}
+					}
 					affected, dbErr := q.MarkProcessingArtifactReady(ctx, foghorndb.MarkProcessingArtifactReadyParams{
 						Format: sql.NullString{String: newFormat, Valid: newFormat != ""}, ArtifactHash: artifactHash,
 						SizeBytes: sql.NullInt64{Int64: sizeBytes, Valid: true}, DurationMs: actualDurationMs,
@@ -9233,6 +9306,28 @@ func SendLocalProcessingJob(nodeID string, req *ipcpb.ProcessingJobRequest) erro
 
 // SendProcessingJob sends a ProcessingJobRequest to the given node, relaying via HA if needed.
 func SendProcessingJob(nodeID string, req *ipcpb.ProcessingJobRequest) error {
+	if req.GetJobId() == "" {
+		return sendProcessingJob(nodeID, req)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	stream := req.GetParams()["source_stream_name"]
+	if stream == "" {
+		stream = req.GetSourceStreamInternalName()
+	}
+	legs, err := reserveJobBandwidth(ctx, "processing:"+req.GetJobId(), stream, req.GetParams()["source_node_id"], nodeID)
+	if err != nil {
+		return err
+	}
+	if err = sendProcessingJob(nodeID, req); err != nil {
+		releasePendingJobBandwidth(legs)
+		return err
+	}
+	activateJobBandwidth(legs)
+	return nil
+}
+
+func sendProcessingJob(nodeID string, req *ipcpb.ProcessingJobRequest) error {
 	err := SendLocalProcessingJob(nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -10100,12 +10195,23 @@ func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeCloc
 			// re-published over a PREVIOUS version (active_object_key changed), that superseded MEDIA object and the
 			// superseded .dtsh index (the OLD active_dtsh_key, when this attempt published a new one) are now
 			// unreferenced — durably enqueue them for cleanup on THIS transaction.
+			originalKey := ""
+			if artifactType == "vod" && previousActiveKey != "" {
+				key, originalErr := q.GetKeptVodOriginalKey(ctx, foghorndb.GetKeptVodOriginalKeyParams{ArtifactHash: assetHash, TenantID: tenantID})
+				if originalErr != nil && !errors.Is(originalErr, sql.ErrNoRows) {
+					return fmt.Errorf("read kept original during sync: %w", originalErr)
+				}
+				originalKey = key
+			}
 			if previousActiveKey != "" && previousActiveKey != publishMainKey {
 				supersededKeys := []string{previousActiveKey}
 				if previousActiveDtshKey != "" && previousActiveDtshKey != publishDtshKey {
 					supersededKeys = append(supersededKeys, previousActiveDtshKey)
 				}
 				for _, sk := range supersededKeys {
+					if sk == originalKey {
+						continue
+					}
 					if eErr := EnqueueStagingCleanupTx(ctx, tx, sk); eErr != nil {
 						return fmt.Errorf("enqueue superseded object cleanup in sync completion: %w", eErr)
 					}
@@ -12565,4 +12671,18 @@ func clearChandlerPerClusterCache() {
 	chandlerPerClusterMu.Lock()
 	chandlerPerClusterCache = map[string]chandlerCachedURL{}
 	chandlerPerClusterMu.Unlock()
+}
+
+func SendClaimedStopSessionsContext(ctx context.Context, nodeID string, req *ipcpb.StopSessionsRequest) error {
+	err := SendLocalClaimedStopSessionsContext(ctx, nodeID, req)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if !shouldRelay(nodeID, err) {
+		return err
+	}
+	if commandRelay == nil {
+		return ErrNotConnected
+	}
+	return relayFailure(err, commandRelay.forward(ctx, &foghornrelaypb.ForwardCommandRequest{TargetNodeId: nodeID, Command: &foghornrelaypb.ForwardCommandRequest_StopClaimedSessions{StopClaimedSessions: req}}))
 }

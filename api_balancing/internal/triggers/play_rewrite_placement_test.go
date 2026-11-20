@@ -28,7 +28,7 @@ func TestPlayRewritePlacementPrecedesMediaAndViewerEffects(t *testing.T) {
 				if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 3*time.Second {
 					t.Fatal("pre-source admission exceeded trigger budget")
 				}
-				if stream := sm.GetStreamState("stream"); stream != nil && stream.Viewers != 0 {
+				if stats := sm.GetVirtualViewerStats(); stats.Active != 0 {
 					t.Fatal("viewer started before pre-source admission")
 				}
 				decision := federation.PlacementAdmissionDecision{TenantID: "tenant", ObjectID: "live_stream:stream", InternalName: "stream", ClusterID: "cluster", NodeID: "node", Protocol: "hls",
@@ -62,14 +62,14 @@ func TestPlayRewritePlacementPrecedesMediaAndViewerEffects(t *testing.T) {
 				if err != nil || abort || response != "live+stream" {
 					t.Fatalf("valid pre-source admission rejected: %q %t %v", response, abort, err)
 				}
-				if stream := sm.GetStreamState("stream"); stream == nil || stream.Viewers != 1 {
+				if stream := sm.GetStreamState("stream"); stream == nil || stream.Viewers != 0 || sm.GetVirtualViewerStats().Active != 1 {
 					t.Fatal("accepted request did not start its correlated viewer")
 				}
 			} else {
 				if err == nil || response != "" {
 					t.Fatalf("failed admission returned a usable source identity: %q %v", response, err)
 				}
-				if stream := sm.GetStreamState("stream"); stream != nil && stream.Viewers != 0 {
+				if stats := sm.GetVirtualViewerStats(); stats.Active != 0 {
 					t.Fatal("failed admission changed viewer state")
 				}
 				if trigger.GetPlayRewrite().ResolvedInternalName != nil {
@@ -123,7 +123,7 @@ func TestPlayRewriteMetadataRequiresPlacementWithoutStartingViewer(t *testing.T)
 			} else if err == nil || response != "" {
 				t.Fatalf("metadata bypassed placement: %q %v", response, err)
 			}
-			if stream := sm.GetStreamState("stream"); stream != nil && stream.Viewers != 0 {
+			if stats := sm.GetVirtualViewerStats(); stats.Active != 0 {
 				t.Fatal("metadata request started a viewer")
 			}
 		})

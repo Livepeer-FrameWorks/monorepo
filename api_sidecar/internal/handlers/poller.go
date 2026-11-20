@@ -26,6 +26,7 @@ import (
 	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/dtsh"
 	"frameworks/api_sidecar/internal/leases"
+	"frameworks/api_sidecar/internal/netstat"
 	"frameworks/api_sidecar/internal/updater"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -43,7 +44,7 @@ import (
 
 // clientLifecycleTickStride spaces client-lifecycle emissions across monitorNodes ticks.
 // monitorNodes ticks every 10s; stride 6 yields a 60s client-QoE cadence while keeping
-// node and stream lifecycle on the 10s cadence. The clients API is QoE/diagnostic only;
+// node and stream lifecycle on the 10s cadence. The same 10s clients census feeds audience counts;
 // USER_NEW/USER_END remain authoritative for connect/disconnect and billing.
 const clientLifecycleTickStride = 6
 
@@ -66,15 +67,19 @@ type admittedRuntimeIdentity struct {
 // lifetime. Poll work captures one runtime, so a node replacement can never
 // pair the new node ID with the old node's Mist client.
 type mistNodeRuntime struct {
-	generation        uint64
-	nodeID            string
-	baseURL           string
-	client            *mist.Client
-	clientMu          sync.Mutex
-	acceleratorClient *mist.Client
-	acceleratorMu     sync.Mutex
-	ctx               context.Context
-	cancel            context.CancelFunc
+	generation         uint64
+	nodeID             string
+	baseURL            string
+	client             *mist.Client
+	clientMu           sync.Mutex
+	audienceClient     *mist.Client
+	audienceMu         sync.Mutex
+	processingMu       sync.Mutex
+	processingSessions map[string]uint8
+	acceleratorClient  *mist.Client
+	acceleratorMu      sync.Mutex
+	ctx                context.Context
+	cancel             context.CancelFunc
 
 	taskMu   sync.Mutex
 	stopping bool
@@ -91,6 +96,7 @@ func newMistNodeRuntime(generation uint64, nodeID, baseURL, username, password s
 		nodeID:            nodeID,
 		baseURL:           baseURL,
 		client:            client,
+		audienceClient:    mist.NewClient(monitorLogger, clientConfig),
 		acceleratorClient: acceleratorClient,
 		ctx:               ctx,
 		cancel:            cancel,
@@ -178,6 +184,7 @@ type PrometheusMonitor struct {
 	lastSeen              time.Time
 	isHealthy             bool
 	lastJSONData          map[string]any // Store last fetched JSON data
+	lastNodeFetchErr      error
 	// mistAPI is fed by the authenticated active_streams poll and gates the
 	// node's reported health.
 	mistAPI mistAPIHealth
@@ -221,9 +228,18 @@ type PrometheusMonitor struct {
 	streamObservationIssued   map[string]uint64
 
 	// Bandwidth rate calculation state
-	lastBwUp     uint64
-	lastBwDown   uint64
-	lastPollTime time.Time
+	lastBwUp            uint64
+	lastBwDown          uint64
+	lastPollTime        time.Time
+	lastUpRate          uint64
+	lastDownRate        uint64
+	lastRateValid       bool
+	lastRateWindowStart time.Time
+	lastRateWindowEnd   time.Time
+	networkReader       netstat.Reader
+	networkSampler      *netstat.Sampler
+	networkRate         netstat.Rate
+	networkReadError    string
 
 	// Vanish-diff state: internal names seen on the previous successful
 	// active_streams poll. A stream present last poll but absent now has
@@ -477,6 +493,8 @@ func InitPrometheusMonitor(logger logging.Logger) {
 		nodeMetricsWake:         make(chan struct{}, 1),
 		isHealthy:               true,
 		lastJSONData:            make(map[string]any),
+		networkReader:           netstat.NewReader("/"),
+		networkSampler:          netstat.NewSampler(10 * time.Second),
 		artifactIndex:           make(map[string]*ClipInfo),
 		admittedRuntimeMissing:  make(map[admittedRuntimeIdentity]time.Time),
 		loadAdmittedGenerations: control.ActiveAdmittedIngestGenerations,
@@ -794,6 +812,16 @@ func (pm *PrometheusMonitor) AddNode(nodeID, baseURL, edgePublicURL string) {
 	pm.longitude = nil
 	pm.location = ""
 	pm.lastJSONData = make(map[string]any) // Clear previous data
+	pm.lastNodeFetchErr = nil
+	pm.lastBwUp, pm.lastBwDown = 0, 0
+	pm.lastUpRate, pm.lastDownRate = 0, 0
+	pm.lastPollTime, pm.lastRateWindowStart, pm.lastRateWindowEnd = time.Time{}, time.Time{}, time.Time{}
+	pm.lastRateValid = false
+	if pm.networkSampler != nil {
+		pm.networkSampler.Invalidate()
+	}
+	pm.networkRate = netstat.Rate{}
+	pm.networkReadError = ""
 
 	pm.mutex.Unlock()
 
@@ -918,15 +946,10 @@ func (pm *PrometheusMonitor) monitorNodes() {
 		select {
 		case <-Ticker.C:
 			if runtime := pm.currentNodeRuntime(); runtime != nil {
-				runtime.launch(func(context.Context) { pm.emitNodeLifecycleRuntime(runtime) })
+				emitClients := clientTickCount%clientLifecycleTickStride == 0
+				runtime.launch(func(context.Context) { pm.emitNodeLifecycleRuntime(runtime, emitClients) })
 				runtime.launch(func(context.Context) { pm.emitStreamLifecycleRuntime(runtime) })
-				if clientTickCount%clientLifecycleTickStride == 0 {
-					runtime.launch(func(context.Context) {
-						if err := pm.emitClientLifecycleRuntime(runtime); err != nil {
-							return
-						}
-					})
-				}
+
 				clientTickCount++
 			}
 
@@ -952,7 +975,7 @@ func (pm *PrometheusMonitor) emitNodeLifecycle(nodeID, baseURL string) {
 	pm.emitNodeLifecycleRuntime(runtime)
 }
 
-func (pm *PrometheusMonitor) emitNodeLifecycleRuntime(runtime *mistNodeRuntime) {
+func (pm *PrometheusMonitor) emitNodeLifecycleRuntime(runtime *mistNodeRuntime, emitClients ...bool) {
 	if !pm.nodeRuntimeCurrent(runtime) {
 		return
 	}
@@ -970,8 +993,25 @@ func (pm *PrometheusMonitor) emitNodeLifecycleRuntime(runtime *mistNodeRuntime) 
 		}
 	}
 	runtime.clientMu.Unlock()
+	var clients map[string]any
+	if jsonErr == nil && len(jsonData) > 0 {
+		var audienceErr error
+		clients, audienceErr = pm.fetchNodeAudience(runtime.ctx, runtime, jsonData)
+		if audienceErr != nil {
+			monitorLogger.WithError(audienceErr).Warn("Viewer census unavailable; forwarding fresh node metrics without audience counts")
+		}
+	}
+	if jsonErr == nil && clients != nil && len(emitClients) > 0 && emitClients[0] {
+		if err := pm.emitClientLifecycleSnapshotRuntime(runtime, clients); err != nil {
+			monitorLogger.WithError(err).Warn("Could not emit client lifecycle snapshot")
+		}
+	}
+
 	if !pm.nodeRuntimeCurrent(runtime) {
 		return
+	}
+	if jsonErr == nil && len(jsonData) > 0 {
+		pm.observeNetworkCounters()
 	}
 
 	// Send update through channel
@@ -1871,6 +1911,10 @@ func (pm *PrometheusMonitor) processUpdates() {
 
 		// Update node information
 		pm.lastSeen = time.Now()
+		if update.Error == nil && len(update.JSONData) == 0 {
+			update.Error = errors.New("mist returned no metrics")
+		}
+		pm.lastNodeFetchErr = update.Error
 
 		if update.Error != nil {
 			pm.isHealthy = false
@@ -1903,7 +1947,9 @@ func (pm *PrometheusMonitor) processUpdates() {
 
 		// Forwarding has its own coalescing, deadline-bounded worker so a control
 		// outage cannot block this single update consumer and fill updateChannel.
-		pm.requestNodeMetricsForward()
+		if update.Error == nil {
+			pm.requestNodeMetricsForward()
+		}
 	}
 }
 
@@ -1992,7 +2038,11 @@ func (pm *PrometheusMonitor) forwardNodeMetricsContext(ctx context.Context, runt
 	}
 	jsonData := pm.lastJSONData
 	version := pm.nodeMetricsVersion.Load()
+	validSnapshot := pm.lastNodeFetchErr == nil && len(jsonData) > 0
 	pm.mutex.RUnlock()
+	if !validSnapshot {
+		return
+	}
 	mistTrigger := pm.nodeLifecycleTrigger(runtime.nodeID, jsonData)
 
 	// Send
@@ -2033,8 +2083,7 @@ func (pm *PrometheusMonitor) nodeLifecycleTrigger(nodeID string, jsonData map[st
 
 // connectionNodeLifecycleReport is the first report a newly registered control connection
 // carries, sent before anything else on it: Foghorn admits publishers to this node only on its
-// telemetry, so a report must not wait for the next poll tick. It reads Mist now and falls back to
-// the last snapshot when that read fails.
+// telemetry, so a report must not wait for the next poll tick. A failed read returns no report.
 func (pm *PrometheusMonitor) connectionNodeLifecycleReport(ctx context.Context) (*ipcpb.MistTrigger, error) {
 	runtime := pm.currentNodeRuntime()
 	if runtime == nil {
@@ -2046,18 +2095,32 @@ func (pm *PrometheusMonitor) connectionNodeLifecycleReport(ctx context.Context) 
 	if fetchErr == nil && len(jsonData) == 0 {
 		fetchErr = errors.New("mist returned no metrics")
 	}
-	if fetchErr != nil {
-		jsonData = nil
-		pm.mutex.RLock()
-		if pm.nodeID == runtime.nodeID {
-			jsonData = pm.lastJSONData
+	if fetchErr == nil {
+		if _, audienceErr := pm.fetchNodeAudience(ctx, runtime, jsonData); audienceErr != nil {
+			monitorLogger.WithError(audienceErr).Warn("Viewer census unavailable during control reconnect; using fresh node metrics")
 		}
-		pm.mutex.RUnlock()
-		if len(jsonData) == 0 {
-			return nil, fmt.Errorf("no Mist metrics snapshot: %w", fetchErr)
-		}
-		monitorLogger.WithError(fetchErr).Warn("Reading Mist for the connection's first node lifecycle report failed; reporting the last snapshot")
 	}
+
+	if fetchErr != nil {
+		pm.mutex.Lock()
+		if pm.nodeID == runtime.nodeID && pm.baseURL == runtime.baseURL {
+			pm.lastNodeFetchErr = fetchErr
+			pm.isHealthy = false
+			pm.nodeMetricsVersion.Add(1)
+		}
+		pm.mutex.Unlock()
+		return nil, fmt.Errorf("no fresh Mist metrics snapshot: %w", fetchErr)
+	}
+	if !pm.nodeRuntimeCurrent(runtime) {
+		return nil, errors.New("mist runtime changed during metrics read")
+	}
+	pm.observeNetworkCounters()
+	pm.mutex.Lock()
+	if pm.nodeID == runtime.nodeID && pm.baseURL == runtime.baseURL {
+		pm.lastNodeFetchErr = nil
+		pm.lastJSONData = jsonData
+	}
+	pm.mutex.Unlock()
 	return pm.nodeLifecycleTrigger(runtime.nodeID, jsonData), nil
 }
 
@@ -2242,32 +2305,7 @@ func getMapKeys(m map[string]any) []string {
 	return keys
 }
 
-func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
-	runtime := pm.currentNodeRuntime()
-	if runtime == nil || runtime.nodeID != nodeID || runtime.baseURL != mistURL {
-		return nil
-	}
-	return pm.emitClientLifecycleRuntime(runtime)
-}
-
-func (pm *PrometheusMonitor) emitClientLifecycleRuntime(runtime *mistNodeRuntime) error {
-	if !pm.nodeRuntimeCurrent(runtime) {
-		return nil
-	}
-	// Query MistServer clients API for detailed metrics using shared client
-	runtime.clientMu.Lock()
-	result, err := runtime.client.GetClientsContext(runtime.ctx)
-	runtime.clientMu.Unlock()
-	if err != nil {
-		if runtime.ctx.Err() != nil || !pm.nodeRuntimeCurrent(runtime) {
-			return err
-		}
-		monitorLogger.WithFields(logging.Fields{
-			"error": err,
-			"url":   runtime.baseURL + "/api2",
-		}).Error("Failed to query MistServer clients API")
-		return err
-	}
+func (pm *PrometheusMonitor) emitClientLifecycleSnapshotRuntime(runtime *mistNodeRuntime, result map[string]any) error {
 	if !pm.nodeRuntimeCurrent(runtime) {
 		return nil
 	}
@@ -2286,8 +2324,7 @@ func (pm *PrometheusMonitor) emitClientLifecycleRuntime(runtime *mistNodeRuntime
 		if data, ok := clients["data"].([]any); ok {
 			fields, ok := clients["fields"].([]any)
 			if !ok {
-				monitorLogger.Error("Failed to parse client fields as []any")
-				return err
+				return errors.New("mist clients response has no field list")
 			}
 
 			// Map field names to indices
@@ -3197,6 +3234,8 @@ func storedArtifactsLocked() []*ipcpb.StoredArtifact {
 
 // convertNodeAPIToMistTrigger converts MistServer JSON API response to MistTrigger
 func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData map[string]any, logger logging.Logger) *ipcpb.MistTrigger {
+	pm.mutex.Lock()
+	defer pm.mutex.Unlock()
 	// Use public edge URL for client-facing BaseUrl (for playback URLs)
 	// Fall back to internal URL if public not configured
 	baseURL := pm.edgePublicURL
@@ -3219,6 +3258,9 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 		// enrichNodeLifecycleTrigger (captureArtifactSnapshot), not here — pairing them here would
 		// let a concurrent report attach a newer snapshot to this older revision.
 	}
+	observedValid := false
+	nodeUpdate.ObservedValid = &observedValid
+	nodeUpdate.ObservedSource = ipcpb.ObservedSource_OBSERVED_SOURCE_MIST
 
 	if jsonData != nil {
 		// An absent outputs member in a successful metrics response means no
@@ -3269,19 +3311,29 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 			nodeUpdate.BandwidthOutTotal = currentUp
 			nodeUpdate.BandwidthInTotal = currentDown
 
-			// Compute rates (bytes/sec) from delta
-			elapsed := time.Since(pm.lastPollTime).Seconds()
-			if pm.lastBwUp > 0 && elapsed > 1.0 && currentUp >= pm.lastBwUp {
-				// Normal case: compute rate from delta
-				nodeUpdate.UpSpeed = uint64(float64(currentUp-pm.lastBwUp) / elapsed)
-				nodeUpdate.DownSpeed = uint64(float64(currentDown-pm.lastBwDown) / elapsed)
+			now := time.Now()
+			elapsed := now.Sub(pm.lastPollTime)
+			reset := currentUp < pm.lastBwUp || currentDown < pm.lastBwDown
+			if !pm.lastPollTime.IsZero() && !reset && elapsed >= 0 && elapsed < time.Second {
+				// The reconnect and periodic paths may convert the same fresh sample.
+				// Keep its rate and measurement window rather than advancing the baseline.
+				nodeUpdate.UpSpeed, nodeUpdate.DownSpeed = pm.lastUpRate, pm.lastDownRate
+				observedValid = pm.lastRateValid
+			} else {
+				observedValid = !pm.lastPollTime.IsZero() && !reset && elapsed >= time.Second && elapsed <= 30*time.Second
+				pm.lastRateWindowStart, pm.lastRateWindowEnd = pm.lastPollTime, now
+				if observedValid {
+					nodeUpdate.UpSpeed = uint64(float64(currentUp-pm.lastBwUp) / elapsed.Seconds())
+					nodeUpdate.DownSpeed = uint64(float64(currentDown-pm.lastBwDown) / elapsed.Seconds())
+				}
+				pm.lastUpRate, pm.lastDownRate = nodeUpdate.UpSpeed, nodeUpdate.DownSpeed
+				pm.lastRateValid = observedValid
+				pm.lastBwUp, pm.lastBwDown, pm.lastPollTime = currentUp, currentDown, now
 			}
-			// Else: first poll or counter reset - leave rates at 0
-
-			// Store for next poll
-			pm.lastBwUp = currentUp
-			pm.lastBwDown = currentDown
-			pm.lastPollTime = time.Now()
+			if !pm.lastRateWindowStart.IsZero() {
+				nodeUpdate.SampleWindowStartMs = pm.lastRateWindowStart.UnixMilli()
+			}
+			nodeUpdate.SampleWindowEndMs = pm.lastRateWindowEnd.UnixMilli()
 		} else if bandwidth, ok := jsonData["bandwidth"].(map[string]any); ok {
 			// Older payloads report aggregate bandwidth under a nested object.
 			if up, ok := bandwidth["up"].(float64); ok {
@@ -3290,6 +3342,9 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 			if down, ok := bandwidth["down"].(float64); ok {
 				nodeUpdate.DownSpeed = uint64(down)
 			}
+			_, hasUp := bandwidth["up"].(float64)
+			_, hasDown := bandwidth["down"].(float64)
+			observedValid = hasUp && hasDown
 		}
 
 		// Extract current connections from curr array
@@ -3328,9 +3383,6 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 			nodeUpdate.BwLimit = limit
 		} else if limit, ok := jsonData["bwlimit"].(float64); ok && limit > 0 {
 			nodeUpdate.BwLimit = uint64(limit)
-		} else {
-			// Default to 1Gbps when MistServer doesn't report bwlimit (same as C++ default)
-			nodeUpdate.BwLimit = 128 * 1024 * 1024 // 128 MB/s = ~1 Gbps
 		}
 
 		// Extract location data
@@ -3356,6 +3408,14 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 	}
 	if nodeUpdate.BwLimit == 0 {
 		nodeUpdate.BwLimit = sidecarcfg.ConfiguredBandwidthLimitBytesPerSec()
+	}
+	nodeUpdate.CapacityRevisionApplied = sidecarcfg.CurrentCapacityRevisionApplied()
+	if pm.networkRate.Valid {
+		nodeUpdate.UpSpeed, nodeUpdate.DownSpeed = pm.networkRate.Up, pm.networkRate.Down
+		observedValid = true
+		nodeUpdate.ObservedSource = ipcpb.ObservedSource_OBSERVED_SOURCE_NIC
+		nodeUpdate.SampleWindowStartMs = pm.networkRate.WindowStart.UnixMilli()
+		nodeUpdate.SampleWindowEndMs = pm.networkRate.WindowEnd.UnixMilli()
 	}
 
 	// Get Disk Usage from OS.
@@ -3442,10 +3502,6 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 						if bandwidthOut, ok := bw[1].(float64); ok {
 							sd.BytesDown = uint64(bandwidthOut)
 						}
-						// Calculate bandwidth per viewer (bytes/sec per viewer)
-						if sd.Total > 0 && sd.BytesDown > 0 {
-							sd.Bandwidth = uint32(sd.BytesDown / sd.Total)
-						}
 					}
 
 					sd.Replicated = mistStreamReplicated(streamInfo)
@@ -3474,6 +3530,10 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 					internalName := mist.ExtractInternalName(streamName)
 					if _, bound := streamident.ParseRuntimeBinding(streamName); bound {
 						internalName = streamName
+					}
+					if audience, ok := jsonData[audienceSnapshotKey].(map[string]uint32); ok {
+						count := audience[streamName]
+						sd.AudienceViewers = &count
 					}
 					nodeUpdate.Streams[internalName] = sd
 				}

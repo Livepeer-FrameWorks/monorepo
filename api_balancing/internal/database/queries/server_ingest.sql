@@ -3,10 +3,9 @@ SELECT node_id, lifecycle::text AS lifecycle FROM foghorn.node_lifecycle WHERE l
 -- name: LockIngestStream :exec
 SELECT pg_advisory_xact_lock(hashtext($1)::bigint);
 -- name: CountActiveTenantIngestSessions :one
-SELECT COUNT(*)::integer
-FROM foghorn.ingest_sessions
-WHERE tenant_id = sqlc.arg(tenant_id)::uuid
-  AND ended_at IS NULL;
+SELECT ((SELECT COUNT(*) FROM foghorn.ingest_sessions WHERE tenant_id=sqlc.arg(tenant_id)::uuid AND ended_at IS NULL)
+    + (SELECT COUNT(DISTINCT stream_internal_name) FROM foghorn.pull_ingest_sessions
+       WHERE tenant_id=sqlc.arg(tenant_id)::uuid AND ended_at IS NULL))::integer AS count;
 -- name: GetStopSessionsGeneration :one
 SELECT COALESCE((SELECT id::text FROM foghorn.ingest_sessions
  WHERE tenant_id=sqlc.arg(tenant_id)::uuid AND node_id=sqlc.arg(node_id)
@@ -99,6 +98,10 @@ WHERE foghorn.artifacts.artifact_type  =  'dvr'
       SELECT 1 FROM foghorn.ingest_sessions s
       WHERE s.id  =  foghorn.artifacts.ingest_generation AND s.ended_at IS NULL
   ))
+  AND NOT EXISTS (SELECT 1 FROM foghorn.pull_ingest_sessions p
+    WHERE p.tenant_id=foghorn.artifacts.tenant_id
+      AND p.stream_internal_name=foghorn.artifacts.stream_internal_name AND p.node_id=$2
+      AND p.ended_at IS NULL AND p.admission_state='active')
 RETURNING artifact_hash, COALESCE(dvr_start_dispatch->>'node_id', '')::text AS storage_node_id;
 -- name: GetOpenIngestSessionCluster :one
 SELECT COALESCE(ingest_cluster_id, '')::text FROM foghorn.ingest_sessions WHERE tenant_id  =  sqlc.arg(tenant_id)::uuid AND node_id  =  sqlc.arg(node_id) AND start_trigger_uuid  =  sqlc.arg(start_trigger_uuid) AND ended_at IS NULL;
@@ -133,7 +136,10 @@ WHERE tenant_id = sqlc.arg(tenant_id)::uuid
   AND ended_at IS NULL
 RETURNING id::text AS session_id, start_trigger_uuid, COALESCE(stream_id::text, '')::text AS stream_id;
 -- name: HasActiveStreamIngestSession :one
-SELECT EXISTS (SELECT 1 FROM foghorn.ingest_sessions WHERE tenant_id  =  sqlc.arg(tenant_id)::uuid AND stream_internal_name  =  sqlc.arg(stream_internal_name) AND ended_at IS NULL);
+SELECT EXISTS (SELECT 1 FROM foghorn.ingest_sessions s
+ WHERE s.tenant_id=sqlc.arg(tenant_id)::text::uuid AND s.stream_internal_name=sqlc.arg(stream_internal_name) AND s.ended_at IS NULL
+ UNION ALL SELECT 1 FROM foghorn.pull_ingest_sessions p
+ WHERE p.tenant_id=sqlc.arg(tenant_id)::text::uuid AND p.stream_internal_name=sqlc.arg(stream_internal_name) AND p.ended_at IS NULL);
 -- name: ProbeCurrentSourceProjection :one
 SELECT EXISTS (SELECT 1 FROM foghorn.ingest_sessions s WHERE s.tenant_id  =  sqlc.arg(tenant_id)::uuid AND s.stream_internal_name  =  sqlc.arg(stream_internal_name) AND s.id  =  sqlc.arg(generation)::uuid AND s.ended_at IS NULL) AS is_current,
 (SELECT s.source_revision FROM foghorn.ingest_sessions s WHERE s.id  =  sqlc.arg(generation)::uuid AND s.tenant_id  =  sqlc.arg(tenant_id)::uuid) AS source_revision,

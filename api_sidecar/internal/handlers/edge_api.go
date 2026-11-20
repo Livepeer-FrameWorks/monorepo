@@ -29,6 +29,7 @@ func HandleEdgeStatus(c *gin.Context) {
 		"uptime_seconds":   int(time.Since(edgeAPIStartTime).Seconds()),
 		"version":          version.Version,
 		"git_commit":       version.GitCommit,
+		"capacity":         localNodeCapacity(),
 	})
 }
 
@@ -262,4 +263,30 @@ func EdgeAPIAuthMiddleware() gin.HandlerFunc {
 		c.Set(edgeAPIContextTenantID, resp.TenantId)
 		c.Next()
 	}
+}
+
+func localNodeCapacity() gin.H {
+	budget, applied := config.CurrentCapacityState()
+	if budget == nil {
+		return nil
+	}
+	return gin.H{
+		"node_id":                      control.GetNodeID(),
+		"egress_budget_bytes_per_sec":  budget.GetEgressBudgetBytesPerSec(),
+		"ingress_budget_bytes_per_sec": budget.GetIngressBudgetBytesPerSec(),
+		"egress_source":                strings.TrimPrefix(budget.GetEgressSource().String(), "BANDWIDTH_BUDGET_SOURCE_"),
+		"ingress_source":               strings.TrimPrefix(budget.GetIngressSource().String(), "BANDWIDTH_BUDGET_SOURCE_"),
+		"revision":                     budget.GetRevision(),
+		"applied_revision":             applied,
+	}
+}
+
+// HandleGetNodeCapacity exposes the seed/application state on the loopback management listener.
+func HandleGetNodeCapacity(c *gin.Context) {
+	result := localNodeCapacity()
+	if result == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "node capacity has not been seeded"})
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }

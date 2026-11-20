@@ -405,15 +405,16 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 
 func (lb *LoadBalancer) rateNodeWithReason(snap state.EnhancedBalancerNodeSnapshot, streamName string, lat, lon float64, tagAdjust map[string]int, isSourceSelection bool) (uint64, nodeRejectionReason) {
 	// Check if host is valid
-	if snap.RAMMax == 0 || snap.BWLimit == 0 {
+	if !validPlacementMetrics(snap) {
 		lb.logger.WithFields(logging.Fields{
 			"host": snap.Host, "ram_max": snap.RAMMax, "bw_limit": snap.BWLimit,
 		}).Warn("Host invalid")
 		return 0, rejectHostInvalid
 	}
 
-	// Check bandwidth limits using pre-computed available bandwidth
-	if snap.BWAvailable == 0 {
+	// Include the next admission in the capacity gate.
+	link := snap.EgressLink()
+	if snap.BWAvailable == 0 || !link.Admits(snap.EstBandwidthPerUser) {
 		lb.logger.WithFields(logging.Fields{
 			"host": snap.Host, "up_speed": snap.UpSpeed, "add_bandwidth": snap.AddBandwidth,
 			"bw_limit": snap.BWLimit, "bw_available": snap.BWAvailable,
@@ -474,7 +475,7 @@ func (lb *LoadBalancer) rateNodeWithReason(snap state.EnhancedBalancerNodeSnapsh
 	// Use pre-computed scores for faster calculation
 	cpuScore := snap.CPUScore
 	ramScore := snap.RAMScore
-	bwScore := weights["bw"] - (uint64(snap.UpSpeed+float64(snap.AddBandwidth))*weights["bw"])/uint64(snap.BWLimit)
+	bwScore := uint64(float64(weights["bw"]) * (1 - math.Min(1, link.LoadFraction())))
 
 	// Geographic score (still computed dynamically)
 	var geoScore uint64 = 0
@@ -509,7 +510,7 @@ func (lb *LoadBalancer) rateNodeWithReason(snap state.EnhancedBalancerNodeSnapsh
 
 	lb.logger.WithFields(logging.Fields{
 		"host": snap.Host, "cpu_score": cpuScore, "ram_score": ramScore, "stream_bonus": streamBonus,
-		"bw_score": bwScore, "bw_max_mbps": uint64(snap.BWLimit) / 1024 / 1024, "geo_score": geoScore,
+		"bw_score": bwScore, "bw_max_mbps": snap.BWLimit * 8 / 1_000_000, "geo_score": geoScore,
 		"tag_adjustment": adjustment, "final_score": score,
 	}).Info("Host scoring details")
 

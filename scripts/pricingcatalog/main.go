@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -41,10 +42,18 @@ const (
 )
 
 type catalogFile struct {
+	TranscodeLadders []struct {
+		Name       string `yaml:"name"`
+		Renditions []struct {
+			Resolution string `yaml:"resolution"`
+		} `yaml:"renditions"`
+	} `yaml:"transcode_ladders"`
 	Tiers []catalogTier `yaml:"tiers"`
 }
 
 type catalogTier struct {
+	TranscodeLadders  []string       `yaml:"allowed_transcode_ladders"`
+	MaxVideoHeight    int            `yaml:"-"`
 	TierName          string         `yaml:"tier_name"`
 	DisplayName       string         `yaml:"display_name"`
 	BasePrice         float64        `yaml:"base_price"`
@@ -74,6 +83,7 @@ type output struct {
 }
 
 type tier struct {
+	MaxVideoHeight   int          `json:"maxVideoHeight"`
 	ID               string       `json:"id"`
 	Name             string       `json:"name"`
 	BasePrice        float64      `json:"basePrice"`
@@ -96,6 +106,7 @@ type limits struct {
 	RetentionDays        float64 `json:"retentionDays"`
 	MaxConcurrentStreams float64 `json:"maxConcurrentStreams"`
 	MaxConcurrentViewers float64 `json:"maxConcurrentViewers"`
+	DvrMaxWindowSeconds  float64 `json:"dvrMaxWindowSeconds"`
 }
 
 func main() {
@@ -149,6 +160,29 @@ func render(raw []byte) ([]byte, error) {
 		return nil, errors.New("catalog has no tiers")
 	}
 
+	ceilings := map[string]int{}
+	for _, ladder := range file.TranscodeLadders {
+		for _, rendition := range ladder.Renditions {
+			height, err := strconv.Atoi(strings.TrimPrefix(rendition.Resolution, "x"))
+			if err != nil || height <= 0 {
+				return nil, fmt.Errorf("ladder %s has invalid resolution %q", ladder.Name, rendition.Resolution)
+			}
+			if height > ceilings[ladder.Name] {
+				ceilings[ladder.Name] = height
+			}
+		}
+	}
+	for i := range file.Tiers {
+		for _, allowed := range file.Tiers[i].TranscodeLadders {
+			height, ok := ceilings[allowed]
+			if !ok {
+				return nil, fmt.Errorf("tier %s has unknown ladder %s", file.Tiers[i].TierName, allowed)
+			}
+			if height > file.Tiers[i].MaxVideoHeight {
+				file.Tiers[i].MaxVideoHeight = height
+			}
+		}
+	}
 	sorted := append([]catalogTier(nil), file.Tiers...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].TierLevel < sorted[j].TierLevel })
 
@@ -187,10 +221,11 @@ func render(raw []byte) ([]byte, error) {
 
 func convertTier(t catalogTier) (tier, error) {
 	out := tier{
-		ID:        t.TierName,
-		Name:      t.DisplayName,
-		BasePrice: t.BasePrice,
-		Prepaid:   t.IsDefaultPrepaid,
+		MaxVideoHeight: t.MaxVideoHeight,
+		ID:             t.TierName,
+		Name:           t.DisplayName,
+		BasePrice:      t.BasePrice,
+		Prepaid:        t.IsDefaultPrepaid,
 	}
 	seen := map[string]bool{}
 	for _, rule := range t.PricingRules {
@@ -242,6 +277,9 @@ func convertTier(t catalogTier) (tier, error) {
 		return tier{}, err
 	}
 	if out.Limits.MaxConcurrentViewers, err = numericEntitlement(t, "max_concurrent_viewers"); err != nil {
+		return tier{}, err
+	}
+	if out.Limits.DvrMaxWindowSeconds, err = numericEntitlement(t, "dvr_max_window_seconds"); err != nil {
 		return tier{}, err
 	}
 	return out, nil

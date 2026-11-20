@@ -10,6 +10,7 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/capacity"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -448,6 +449,25 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 		}
 		req.DestRuntimeName = name
 	}
+	ingressBandwidthID := "origin-in:" + req.AttemptID + ":" + req.InternalName
+	if !revalidatedExisting {
+		allowed, reserveErr := state.DefaultManager().ReserveNodeBandwidth(ctx, ingressBandwidthID, destNodeID, req.InternalName, state.BandwidthIngress, capacity.DefaultIngestEstimate)
+		if reserveErr != nil {
+			return nil, reserveErr
+		}
+		if !allowed {
+			return nil, fmt.Errorf("%w: destination ingress capacity exhausted", ErrOriginPullNoDest)
+		}
+		defer func() {
+			if resultErr != nil {
+				releaseCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				if releaseErr := state.DefaultManager().ReleasePendingNodeBandwidth(releaseCtx, ingressBandwidthID, destNodeID); releaseErr != nil {
+					d.Logger.WithError(releaseErr).Warn("Could not release refused pull bandwidth")
+				}
+			}
+		}()
+	}
 	if err := bindArrangedPull(ctx, req, PlacementPullBinding{
 		DestinationFence: req.DestinationFence,
 		AttemptID:        req.AttemptID, SourceCellID: req.RemoteCluster, SourceClusterID: req.Remote.GetClusterId(),
@@ -531,6 +551,12 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 	}
 	if req.BindPull != nil && pull.AttemptID != req.AttemptID {
 		return nil, ErrOriginPullSourceBinding
+	}
+
+	if !revalidatedExisting {
+		if _, err := state.DefaultManager().ActivateNodeBandwidth(ctx, ingressBandwidthID, destNodeID); err != nil {
+			return nil, err
+		}
 	}
 
 	d.Logger.WithFields(logging.Fields{

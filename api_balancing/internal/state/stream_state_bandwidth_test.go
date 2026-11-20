@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -100,23 +101,13 @@ func TestReleasePendingViewerKeepsOtherAttemptsAndActiveViewers(t *testing.T) {
 	}
 }
 
-func TestCreateVirtualViewer_SaturatesAddBandwidth(t *testing.T) {
-	sm := setupStateManager(t)
-	nodeID := "node-1"
-	configureTestNode(sm, nodeID)
-
-	sm.mu.Lock()
-	node := sm.nodes[nodeID]
-	node.AddBandwidth = ^uint64(0) - 128
-	node.EstBandwidthPerUser = 256
-	sm.mu.Unlock()
-
-	sm.CreateVirtualViewer(nodeID, "stream", "203.0.113.10")
-
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	if node.AddBandwidth != ^uint64(0) {
-		t.Fatalf("expected AddBandwidth to saturate at max uint64, got %d", node.AddBandwidth)
+func TestMemoryBandwidthSumsSaturate(t *testing.T) {
+	got := memoryBandwidthSums(map[string]bandwidthReservation{
+		"first":  {Bytes: ^uint64(0) - 128, Direction: BandwidthEgress},
+		"second": {Bytes: 256, Direction: BandwidthEgress},
+	})
+	if got.Egress != ^uint64(0) {
+		t.Fatalf("sum overflowed: %d", got.Egress)
 	}
 }
 
@@ -133,6 +124,9 @@ func TestReconcileVirtualViewers_TimesOutStalePending(t *testing.T) {
 	sm.mu.Unlock()
 
 	sm.ReconcileVirtualViewers(nodeID, 0, 0)
+	if err := sm.SettleNodeBandwidth(context.Background(), nodeID, 0, 0, time.Now().Add(31*time.Second)); err != nil {
+		t.Fatal(err)
+	}
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -191,7 +185,7 @@ func TestCalculateEstBandwidthPerUser_UsesNodeMetricsAndClusterAverage(t *testin
 	}
 }
 
-func TestClampBandwidthEnforcesMinAndMax(t *testing.T) {
+func TestClampBandwidthEnforcesFloorWithoutCeiling(t *testing.T) {
 	sm := setupStateManager(t)
 
 	min := sm.clampBandwidth(1)
@@ -200,12 +194,12 @@ func TestClampBandwidthEnforcesMinAndMax(t *testing.T) {
 	}
 
 	max := sm.clampBandwidth(10 * 1024 * 1024)
-	if max != 1024*1024 {
-		t.Fatalf("expected max clamp 1MB/s, got %d", max)
+	if max != 10*1024*1024 {
+		t.Fatalf("high-bitrate estimate was capped: %d", max)
 	}
 }
 
-func TestUpdateUserConnection_ClampsBandwidthPenalty(t *testing.T) {
+func TestViewerIdentityDoesNotCreateAnotherReservation(t *testing.T) {
 	sm := setupStateManager(t)
 	nodeID := "node-5"
 	configureTestNode(sm, nodeID)
@@ -229,13 +223,13 @@ func TestUpdateUserConnection_ClampsBandwidthPenalty(t *testing.T) {
 		UpSpeed: 10 * 1024 * 1024,
 	})
 
-	sm.UpdateUserConnection("stream-3", nodeID, "tenant-3", 1)
+	sm.EnsureViewerStreamIdentity("stream-3", nodeID, "tenant-3")
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	node := sm.nodes[nodeID]
-	if node.AddBandwidth != 1024*1024 {
-		t.Fatalf("expected AddBandwidth to be clamped to 1MB/s, got %d", node.AddBandwidth)
+	if node.AddBandwidth != 0 {
+		t.Fatalf("viewer count created a duplicate reservation: %d", node.AddBandwidth)
 	}
 }
 
@@ -253,7 +247,7 @@ func TestReplicatedNodeUpdateTimesOutLocalPendingRedirects(t *testing.T) {
 	fresh := sm.CreateVirtualViewer(nodeID, "stream", "203.0.113.31")
 	sm.mu.Lock()
 	sm.virtualViewers[stale].RedirectTime = time.Now().Add(-time.Minute)
-	freshBandwidth := sm.virtualViewers[fresh].EstBandwidth
+	reservedBandwidth := sm.virtualViewers[fresh].EstBandwidth + sm.virtualViewers[stale].EstBandwidth
 	payload, err := json.Marshal(sm.nodes[nodeID])
 	sm.mu.Unlock()
 	if err != nil {
@@ -269,7 +263,7 @@ func TestReplicatedNodeUpdateTimesOutLocalPendingRedirects(t *testing.T) {
 		t.Fatalf("stale redirect state = %s, want abandoned", state)
 	}
 	node := sm.nodes[nodeID]
-	if node.PendingRedirects != 1 || node.AddBandwidth != freshBandwidth {
-		t.Fatalf("pending=%d addBandwidth=%d, want only the fresh redirect (1, %d)", node.PendingRedirects, node.AddBandwidth, freshBandwidth)
+	if node.PendingRedirects != 1 || node.AddBandwidth != reservedBandwidth {
+		t.Fatalf("pending=%d addBandwidth=%d, want one pending correlation and unchanged ledger sum (1, %d)", node.PendingRedirects, node.AddBandwidth, reservedBandwidth)
 	}
 }

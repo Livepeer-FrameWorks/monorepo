@@ -27,7 +27,7 @@ func PlaybackProtocol(requested string) string {
 		return "smoothstreaming"
 	case "http", "mist_html":
 		return "mist_html"
-	case "hls", "dash", "whep", "rtmp", "rtsp", "dtsc", "srt", "mp4", "webm", "mkv", "mews_webm", "ts", "aac", "h264", "h264_ws", "raw_ws", "json_ws", "flv", "hds", "sdp":
+	case "webvtt", "hls", "dash", "whep", "rtmp", "rtsp", "dtsc", "srt", "mp4", "webm", "mkv", "mews_webm", "ts", "aac", "h264", "h264_ws", "raw_ws", "json_ws", "flv", "hds", "sdp":
 		return strings.ToLower(strings.TrimSpace(requested))
 	default:
 		return ""
@@ -120,6 +120,12 @@ func ResolvePlaybackURL(outputs map[string]any, publicBase, protocol, streamName
 func playbackTemplate(outputs map[string]any, protocol string) string {
 	var aliases []string
 	switch protocol {
+	case "webvtt":
+		template := ingestTemplate(outputs, "WebVTT subtitle progressive", "SubRip")
+		if strings.HasSuffix(template, ".srt") {
+			template = strings.TrimSuffix(template, ".srt") + ".webvtt"
+		}
+		return template
 	case "hls":
 		aliases = []string{"HLS", "HLS (TS)"}
 	case "rtmp":

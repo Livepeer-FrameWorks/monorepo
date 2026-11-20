@@ -3327,7 +3327,7 @@ frameworks edge provision --manifest edges.yaml
 - `--fetch-cert` - Fetch TLS certificate from Navigator
 - `--skip-preflight` - Skip preflight checks
 - `--capability string` - Enabled capability for single-node provisioning; repeat for `ingest`, `edge`, `storage`, `processing`
-- `--bandwidth-mbps int` - Advertised edge bandwidth limit in Mbps; Helmsman writes it to MistServer `bwlimit` and reports it to Foghorn
+- `--bandwidth-mbps int` - Operator-owned budget for both directions in decimal Mbit/s, written through the API after provisioning. `0` restores defaults. Token-only installs refuse this flag; use `edge capacity set` from an authenticated operator context.
 - `--max-transcodes int` - Maximum local transcodes reported by Helmsman
 - `--storage-capacity-bytes uint` - Local storage capacity limit reported by Helmsman
 
@@ -3431,6 +3431,30 @@ frameworks edge logs --follow --tail 500
 - `--ssh-key` - SSH private key path
 
 ---
+
+### frameworks edge capacity
+
+Read and replace a node's operator-owned bandwidth budgets through the control API. Platform
+contexts use Quartermaster; signed-in tenant contexts use Bridge. Ownership or platform-operator
+access is required, with `infrastructure:read` for reads and `infrastructure:write` for changes.
+
+```bash
+frameworks edge capacity show edge-eu-1
+frameworks edge capacity set edge-eu-1 --egress-mbps 2000 --ingress-mbps 1000
+frameworks edge capacity set edge-eu-1 --egress-mbps default
+```
+
+Budgets use decimal Mbit/s. An omitted direction retains its current override; `default` restores
+1 Gbit/s for that direction. `set` reads the current revision and performs one compare-and-swap
+write; a concurrent change rejects the write. `--expected-revision` can require a previously read
+revision. There is no automatic overwrite on conflict. `show` includes default/operator provenance,
+usable egress (85% of budget), and the applied revision, or marks application unknown when the edge
+does not report it. `--output json` returns the same budget state as JSON.
+
+Manifest `bandwidth_mbps` applies to both directions on every provision; zero restores both
+defaults. Logged-in `edge deploy --bandwidth-mbps` waits up to two minutes for registration before
+writing the budget. If it cannot save it, the output supplies an explicit follow-up command.
+Changing a budget applies live without re-provisioning or restarting MistServer.
 
 ### frameworks edge doctor
 

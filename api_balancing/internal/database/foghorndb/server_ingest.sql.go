@@ -172,6 +172,10 @@ WHERE foghorn.artifacts.artifact_type  =  'dvr'
       SELECT 1 FROM foghorn.ingest_sessions s
       WHERE s.id  =  foghorn.artifacts.ingest_generation AND s.ended_at IS NULL
   ))
+  AND NOT EXISTS (SELECT 1 FROM foghorn.pull_ingest_sessions p
+    WHERE p.tenant_id=foghorn.artifacts.tenant_id
+      AND p.stream_internal_name=foghorn.artifacts.stream_internal_name AND p.node_id=$2
+      AND p.ended_at IS NULL AND p.admission_state='active')
 RETURNING artifact_hash, COALESCE(dvr_start_dispatch->>'node_id', '')::text AS storage_node_id
 `
 
@@ -374,17 +378,16 @@ func (q *Queries) ConfirmSourceProjection(ctx context.Context, arg ConfirmSource
 }
 
 const countActiveTenantIngestSessions = `-- name: CountActiveTenantIngestSessions :one
-SELECT COUNT(*)::integer
-FROM foghorn.ingest_sessions
-WHERE tenant_id = $1::uuid
-  AND ended_at IS NULL
+SELECT ((SELECT COUNT(*) FROM foghorn.ingest_sessions WHERE tenant_id=$1::uuid AND ended_at IS NULL)
+    + (SELECT COUNT(DISTINCT stream_internal_name) FROM foghorn.pull_ingest_sessions
+       WHERE tenant_id=$1::uuid AND ended_at IS NULL))::integer AS count
 `
 
 func (q *Queries) CountActiveTenantIngestSessions(ctx context.Context, tenantID string) (int32, error) {
 	row := q.db.QueryRowContext(ctx, countActiveTenantIngestSessions, tenantID)
-	var column_1 int32
-	err := row.Scan(&column_1)
-	return column_1, err
+	var count int32
+	err := row.Scan(&count)
+	return count, err
 }
 
 const detachEndedWriterFromLiveSession = `-- name: DetachEndedWriterFromLiveSession :one
@@ -516,7 +519,10 @@ func (q *Queries) GetStopSessionsGeneration(ctx context.Context, arg GetStopSess
 }
 
 const hasActiveStreamIngestSession = `-- name: HasActiveStreamIngestSession :one
-SELECT EXISTS (SELECT 1 FROM foghorn.ingest_sessions WHERE tenant_id  =  $1::uuid AND stream_internal_name  =  $2 AND ended_at IS NULL)
+SELECT EXISTS (SELECT 1 FROM foghorn.ingest_sessions s
+ WHERE s.tenant_id=$1::text::uuid AND s.stream_internal_name=$2 AND s.ended_at IS NULL
+ UNION ALL SELECT 1 FROM foghorn.pull_ingest_sessions p
+ WHERE p.tenant_id=$1::text::uuid AND p.stream_internal_name=$2 AND p.ended_at IS NULL)
 `
 
 type HasActiveStreamIngestSessionParams struct {

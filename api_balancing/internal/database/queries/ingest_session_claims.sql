@@ -14,4 +14,9 @@ SELECT tenant_id::text AS tenant_id, stream_internal_name, node_id,
        start_trigger_uuid, id::text AS generation, publisher_lease_strict_owner, publisher_lease_epoch
 FROM foghorn.ingest_sessions
 WHERE ended_at IS NULL AND projection_state = 'pending'
-  AND started_at >= NOW() - (sqlc.arg(admission_window_ms)::bigint * INTERVAL '1 millisecond');
+  AND started_at >= NOW() - (sqlc.arg(admission_window_ms)::bigint * INTERVAL '1 millisecond')
+UNION ALL
+SELECT tenant_id::text AS tenant_id,stream_internal_name,node_id,ingest_cluster_id::text,
+       ('pull:'||stream_id::text)::text AS start_trigger_uuid,id::text AS generation,
+       FALSE AS publisher_lease_strict_owner,0::bigint AS publisher_lease_epoch
+FROM foghorn.pull_ingest_sessions WHERE ended_at IS NULL AND admission_state='active';

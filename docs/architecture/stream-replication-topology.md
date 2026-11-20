@@ -312,6 +312,19 @@ Everything above is the demand-driven half. The proactive half — orchestrated 
   `foghorn.ingest_sessions` generation, including a same-node reconnect. The stream advisory lock and
   partial unique constraint allow one active generation per tenant stream. Source projection remains
   pending until its ordered Redis CAS succeeds; failed or abandoned projections are durably retired.
+- **Direct pull buffers have their own durable sessions**. `pull_ingest_sessions`
+  records each node's Mist buffer, separate from push publisher generations. The
+  first playable direct buffer in a cell emits `stream.connected` with protocol
+  PULL and `stream.live` in one transaction. Additional nodes in that cell emit
+  neither event; ending the last direct buffer emits `stream.idle`. FULL edges
+  and periodic playability reports share the same idempotent transition. Relay
+  buffers are excluded using the shared inbound-pull registry. Ended PIDs and
+  samples at or before the node's end fence cannot resurrect a lifetime.
+  Registration inventory keeps a present buffer and retires an absent older
+  buffer; a missing or malformed inventory proves no absence. Its node-clock
+  snapshot start fences buffers created during the read. Active pull rows feed
+  the same ten-second placement renewal as push, so a long-running pull keeps
+  its DVR start route. An inactive source owner may be restamped on the next dial.
 - **Offline teardown is a durable transition**. `PUSH_INPUT_CLOSE` ends the exact generation.
   `STREAM_END` is an aggregate backstop that ends only a generation Mist reported playable before
   the end event (see viewer-routing.md). Losing a node's control connection ends
@@ -320,8 +333,11 @@ Everything above is the demand-driven half. The proactive half — orchestrated 
   sessions it no longer holds and drains generations taken over elsewhere or ended as `node_lost`.
   A node that stays away for 5 minutes, with no connected edge serving a live pulled copy of its
   streams, has its sessions ended as `node_lost` by the lease-holding replica, under the same guard. Stream-wide effects are leased from `ingest_offline_effects`, rechecked and applied
-  under the same stream lock as admission, so a reconnect either supersedes teardown or projects after
-  it completes.
+  with authority and settlement under the same stream lock as admission, and external I/O between those
+  transactions. A reconnect supersedes routing cleanup. Claim loss also persists a publisher-stop leg with
+  the retired generation and exact runtime name; that leg remains pending across reconnects and retry
+  exhaustion until the authenticated edge acknowledges that generation. A newer generation never
+  authorizes stopping its replacement.
 - **A DVR never changes publisher sessions**. A recording binds to the generation that created it;
   reconnecting creates a fresh session and, when recording is enabled, a fresh recording. The close
   finalizer ends that generation and claims its DVR stop in one transaction. Recovery replays durable

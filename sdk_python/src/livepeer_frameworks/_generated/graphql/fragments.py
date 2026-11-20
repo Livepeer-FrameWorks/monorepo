@@ -8,6 +8,7 @@ from .enums import (
     AuthClientKind,
     AuthMethod,
     BufferState,
+    CapacityBudgetSource,
     ClusterPricingModel,
     ClusterSubscriptionStatus,
     ClusterVisibility,
@@ -50,6 +51,7 @@ from .enums import (
     StorageArtifactKind,
     StreamEventSource,
     StreamEventType,
+    StreamIngestState,
     StreamStatus,
     ValidationStatus,
     VodAssetStatus,
@@ -154,6 +156,10 @@ class ArtifactEventDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["ArtifactEventDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["ArtifactEventDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -240,6 +246,18 @@ class ArtifactEventDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class ArtifactEventDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class ArtifactEventDefaultStreamMetrics(BaseModel):
@@ -511,6 +529,10 @@ class ArtifactEventInNodeDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["ArtifactEventInNodeDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["ArtifactEventInNodeDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -599,6 +621,18 @@ class ArtifactEventInNodeDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class ArtifactEventInNodeDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class ArtifactEventInNodeDefaultStreamMetrics(BaseModel):
@@ -873,6 +907,10 @@ class ArtifactStateDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["ArtifactStateDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["ArtifactStateDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -959,6 +997,18 @@ class ArtifactStateDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class ArtifactStateDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class ArtifactStateDefaultStreamMetrics(BaseModel):
@@ -2756,6 +2806,10 @@ class ClientMetrics5mDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["ClientMetrics5mDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["ClientMetrics5mDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -2842,6 +2896,18 @@ class ClientMetrics5mDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class ClientMetrics5mDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class ClientMetrics5mDefaultStreamMetrics(BaseModel):
@@ -3307,6 +3373,11 @@ class ClipInNodeDefault(BaseModel):
         description="Processing status (queued, processing, ready, failed)."
     )
     "Processing status (queued, processing, ready, failed)."
+    error_message: Optional[str] = Field(
+        alias="errorMessage",
+        description="Processing failure detail from the artifact catalog.",
+    )
+    "Processing failure detail from the artifact catalog."
     clip_created_at: Optional[datetime] = Field(
         alias="clipCreatedAt", description="When the clip was requested."
     )
@@ -3440,6 +3511,10 @@ class ClipInNodeDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["ClipInNodeDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["ClipInNodeDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -3524,6 +3599,18 @@ class ClipInNodeDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class ClipInNodeDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class ClipInNodeDefaultStreamMetrics(BaseModel):
@@ -3890,10 +3977,10 @@ class ClusterDefault(BaseModel):
         alias="maxConcurrentViewers", description="Maximum allowed concurrent viewers."
     )
     "Maximum allowed concurrent viewers."
-    max_bandwidth_mbps: int = Field(
-        alias="maxBandwidthMbps", description="Maximum allowed bandwidth in Mbps."
+    capacity: Optional["ClusterDefaultCapacity"] = Field(
+        description="Aggregate node budgets and usable capacity; null when the control plane is unavailable."
     )
-    "Maximum allowed bandwidth in Mbps."
+    "Aggregate node budgets and usable capacity; null when the control plane is unavailable."
     health_status: str = Field(
         alias="healthStatus",
         description="Cluster health status (healthy, degraded, critical).",
@@ -3956,6 +4043,14 @@ class ClusterDefault(BaseModel):
     "Short marketplace description."
 
 
+class ClusterDefaultCapacity(BaseModel):
+    egress_budget_bytes_per_sec: float = Field(alias="egressBudgetBytesPerSec")
+    ingress_budget_bytes_per_sec: float = Field(alias="ingressBudgetBytesPerSec")
+    egress_usable_bytes_per_sec: float = Field(alias="egressUsableBytesPerSec")
+    ingress_usable_bytes_per_sec: float = Field(alias="ingressUsableBytesPerSec")
+    default_budget_nodes: int = Field(alias="defaultBudgetNodes")
+
+
 class ClusterInNodeDefault(BaseModel):
     """A streaming cluster containing one or more infrastructure nodes.
     Clusters provide isolated capacity for streaming workloads."""
@@ -4004,10 +4099,10 @@ class ClusterInNodeDefault(BaseModel):
         alias="maxConcurrentViewers", description="Maximum allowed concurrent viewers."
     )
     "Maximum allowed concurrent viewers."
-    max_bandwidth_mbps: int = Field(
-        alias="maxBandwidthMbps", description="Maximum allowed bandwidth in Mbps."
+    capacity: Optional["ClusterInNodeDefaultCapacity"] = Field(
+        description="Aggregate node budgets and usable capacity; null when the control plane is unavailable."
     )
-    "Maximum allowed bandwidth in Mbps."
+    "Aggregate node budgets and usable capacity; null when the control plane is unavailable."
     health_status: str = Field(
         alias="healthStatus",
         description="Cluster health status (healthy, degraded, critical).",
@@ -4068,6 +4163,14 @@ class ClusterInNodeDefault(BaseModel):
         alias="shortDescription", description="Short marketplace description."
     )
     "Short marketplace description."
+
+
+class ClusterInNodeDefaultCapacity(BaseModel):
+    egress_budget_bytes_per_sec: float = Field(alias="egressBudgetBytesPerSec")
+    ingress_budget_bytes_per_sec: float = Field(alias="ingressBudgetBytesPerSec")
+    egress_usable_bytes_per_sec: float = Field(alias="egressUsableBytesPerSec")
+    ingress_usable_bytes_per_sec: float = Field(alias="ingressUsableBytesPerSec")
+    default_budget_nodes: int = Field(alias="defaultBudgetNodes")
 
 
 class ClusterInviteDefault(BaseModel):
@@ -4247,6 +4350,10 @@ class ConnectionEventDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["ConnectionEventDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["ConnectionEventDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -4333,6 +4440,18 @@ class ConnectionEventDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class ConnectionEventDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class ConnectionEventDefaultStreamMetrics(BaseModel):
@@ -4624,6 +4743,10 @@ class ConnectionEventInNodeDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["ConnectionEventInNodeDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["ConnectionEventInNodeDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -4714,6 +4837,18 @@ class ConnectionEventInNodeDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class ConnectionEventInNodeDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class ConnectionEventInNodeDefaultStreamMetrics(BaseModel):
@@ -5074,10 +5209,10 @@ class CreateEdgeClusterResponseDefaultCluster(BaseModel):
         alias="maxConcurrentViewers", description="Maximum allowed concurrent viewers."
     )
     "Maximum allowed concurrent viewers."
-    max_bandwidth_mbps: int = Field(
-        alias="maxBandwidthMbps", description="Maximum allowed bandwidth in Mbps."
+    capacity: Optional["CreateEdgeClusterResponseDefaultClusterCapacity"] = Field(
+        description="Aggregate node budgets and usable capacity; null when the control plane is unavailable."
     )
-    "Maximum allowed bandwidth in Mbps."
+    "Aggregate node budgets and usable capacity; null when the control plane is unavailable."
     health_status: str = Field(
         alias="healthStatus",
         description="Cluster health status (healthy, degraded, critical).",
@@ -5138,6 +5273,14 @@ class CreateEdgeClusterResponseDefaultCluster(BaseModel):
         alias="shortDescription", description="Short marketplace description."
     )
     "Short marketplace description."
+
+
+class CreateEdgeClusterResponseDefaultClusterCapacity(BaseModel):
+    egress_budget_bytes_per_sec: float = Field(alias="egressBudgetBytesPerSec")
+    ingress_budget_bytes_per_sec: float = Field(alias="ingressBudgetBytesPerSec")
+    egress_usable_bytes_per_sec: float = Field(alias="egressUsableBytesPerSec")
+    ingress_usable_bytes_per_sec: float = Field(alias="ingressUsableBytesPerSec")
+    default_budget_nodes: int = Field(alias="defaultBudgetNodes")
 
 
 class CreateEdgeClusterResponseDefaultBootstrapToken(BaseModel):
@@ -5711,6 +5854,10 @@ class GeographicDistributionDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["GeographicDistributionDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["GeographicDistributionDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -5801,6 +5948,18 @@ class GeographicDistributionDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class GeographicDistributionDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class GeographicDistributionDefaultStreamMetrics(BaseModel):
@@ -6238,6 +6397,10 @@ class InfrastructureNodeDefault(BaseModel):
         description="Current traffic on this node. Operators use these counts to understand\nhow much live traffic is affected before draining or entering maintenance.\nCounts come from Foghorn's GetNodeHealth.",
     )
     "Current traffic on this node. Operators use these counts to understand\nhow much live traffic is affected before draining or entering maintenance.\nCounts come from Foghorn's GetNodeHealth."
+    capacity: Optional["InfrastructureNodeDefaultCapacity"] = Field(
+        description="Operator-owned directional budgets; null when the control plane is unavailable."
+    )
+    "Operator-owned directional budgets; null when the control plane is unavailable."
 
 
 class InfrastructureNodeDefaultLiveState(BaseModel):
@@ -6272,6 +6435,28 @@ class InfrastructureNodeDefaultRoutingImpactPreview(BaseModel):
 
     active_streams: int = Field(alias="activeStreams")
     active_viewers: int = Field(alias="activeViewers")
+
+
+class InfrastructureNodeDefaultCapacity(BaseModel):
+    egress_budget_bytes_per_sec: float = Field(
+        alias="egressBudgetBytesPerSec",
+        description="Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s).",
+    )
+    "Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s)."
+    ingress_budget_bytes_per_sec: float = Field(
+        alias="ingressBudgetBytesPerSec",
+        description="Effective ingress budget in bytes per second. Default: 125000000 (1 Gbit/s).",
+    )
+    "Effective ingress budget in bytes per second. Default: 125000000 (1 Gbit/s)."
+    egress_source: CapacityBudgetSource = Field(alias="egressSource")
+    ingress_source: CapacityBudgetSource = Field(alias="ingressSource")
+    revision: int
+    updated_at: Optional[datetime] = Field(alias="updatedAt")
+    applied_revision: Optional[int] = Field(
+        alias="appliedRevision",
+        description="Last revision applied by Helmsman; null when the node does not report one.",
+    )
+    "Last revision applied by Helmsman; null when the node does not report one."
 
 
 class InfrastructureNodeInNodeDefault(BaseModel):
@@ -6362,6 +6547,13 @@ class InfrastructureNodeInNodeDefault(BaseModel):
         description="Current traffic on this node. Operators use these counts to understand\nhow much live traffic is affected before draining or entering maintenance.\nCounts come from Foghorn's GetNodeHealth.",
     )
     "Current traffic on this node. Operators use these counts to understand\nhow much live traffic is affected before draining or entering maintenance.\nCounts come from Foghorn's GetNodeHealth."
+    infrastructure_node_capacity: Optional[
+        "InfrastructureNodeInNodeDefaultInfrastructureNodeCapacity"
+    ] = Field(
+        alias="infrastructureNodeCapacity",
+        description="Operator-owned directional budgets; null when the control plane is unavailable.",
+    )
+    "Operator-owned directional budgets; null when the control plane is unavailable."
 
 
 class InfrastructureNodeInNodeDefaultLiveState(BaseModel):
@@ -6396,6 +6588,35 @@ class InfrastructureNodeInNodeDefaultRoutingImpactPreview(BaseModel):
 
     active_streams: int = Field(alias="activeStreams")
     active_viewers: int = Field(alias="activeViewers")
+
+
+class InfrastructureNodeInNodeDefaultInfrastructureNodeCapacity(BaseModel):
+    egress_budget_bytes_per_sec: float = Field(
+        alias="egressBudgetBytesPerSec",
+        description="Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s).",
+    )
+    "Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s)."
+    ingress_budget_bytes_per_sec: float = Field(
+        alias="ingressBudgetBytesPerSec",
+        description="Effective ingress budget in bytes per second. Default: 125000000 (1 Gbit/s).",
+    )
+    "Effective ingress budget in bytes per second. Default: 125000000 (1 Gbit/s)."
+    egress_source: CapacityBudgetSource = Field(alias="egressSource")
+    ingress_source: CapacityBudgetSource = Field(alias="ingressSource")
+    revision: int
+    updated_at: Optional[datetime] = Field(alias="updatedAt")
+    applied_revision: Optional[int] = Field(
+        alias="appliedRevision",
+        description="Last revision applied by Helmsman; null when the node does not report one.",
+    )
+    "Last revision applied by Helmsman; null when the node does not report one."
+
+
+class IngestDisconnectSuccessDefault(BaseModel):
+    """An accepted request to stop the currently claimed push publisher."""
+
+    stream_id: str = Field(alias="streamId")
+    stop_requested: bool = Field(alias="stopRequested")
 
 
 class IngestEndpoint(BaseModel):
@@ -7130,6 +7351,16 @@ class MediaRetentionPolicyDefault(BaseModel):
         description="Effective clip horizon the cascade resolves to today (0 = keep forever).",
     )
     "Effective clip horizon the cascade resolves to today (0 = keep forever)."
+    keep_vod_originals: Optional[bool] = Field(
+        alias="keepVodOriginals",
+        description="Account default for new uploads. Null inherits the system default (keep).",
+    )
+    "Account default for new uploads. Null inherits the system default (keep)."
+    effective_keep_vod_originals: bool = Field(
+        alias="effectiveKeepVodOriginals",
+        description="Effective original-retention default for new uploads.",
+    )
+    "Effective original-retention default for new uploads."
 
 
 class MediaRetentionPolicyDefaultBounds(BaseModel):
@@ -7278,6 +7509,8 @@ class NetworkStatusDefaultClusters(BaseModel):
     current_viewers: int = Field(alias="currentViewers")
     egress_mbps: int = Field(alias="egressMbps")
     egress_capacity_mbps: int = Field(alias="egressCapacityMbps")
+    egress_usable_mbps: int = Field(alias="egressUsableMbps")
+    default_budget_nodes: int = Field(alias="defaultBudgetNodes")
     ingress_mbps: int = Field(alias="ingressMbps")
     services: list[str]
 
@@ -7906,6 +8139,10 @@ class ProcessingUsageRecordDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["ProcessingUsageRecordDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["ProcessingUsageRecordDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -7996,6 +8233,18 @@ class ProcessingUsageRecordDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class ProcessingUsageRecordDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class ProcessingUsageRecordDefaultStreamMetrics(BaseModel):
@@ -8308,6 +8557,10 @@ class ProcessingUsageRecordInNodeDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["ProcessingUsageRecordInNodeDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["ProcessingUsageRecordInNodeDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -8398,6 +8651,18 @@ class ProcessingUsageRecordInNodeDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class ProcessingUsageRecordInNodeDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class ProcessingUsageRecordInNodeDefaultStreamMetrics(BaseModel):
@@ -8746,6 +9011,10 @@ class QualityTierDailyDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["QualityTierDailyDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["QualityTierDailyDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -8832,6 +9101,18 @@ class QualityTierDailyDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class QualityTierDailyDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class QualityTierDailyDefaultStreamMetrics(BaseModel):
@@ -9116,6 +9397,10 @@ class RebufferingEventDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["RebufferingEventDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["RebufferingEventDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -9202,6 +9487,18 @@ class RebufferingEventDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class RebufferingEventDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class RebufferingEventDefaultStreamMetrics(BaseModel):
@@ -9514,6 +9811,10 @@ class RoutingEventDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["RoutingEventDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["RoutingEventDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -9600,6 +9901,18 @@ class RoutingEventDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class RoutingEventDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class RoutingEventDefaultStreamMetrics(BaseModel):
@@ -10062,6 +10375,16 @@ class SkipperToolStartEventDefault(BaseModel):
 
 
 class StorageArtifact(BaseModel):
+    origin_type: Optional[str] = Field(
+        alias="originType",
+        description="How the artifact was produced, such as dvr_chapter.",
+    )
+    "How the artifact was produced, such as dvr_chapter."
+    parent_recording_id: Optional[str] = Field(
+        alias="parentRecordingId",
+        description="Catalog ID of the parent DVR recording, present on saved chapters.",
+    )
+    "Catalog ID of the parent DVR recording, present on saved chapters."
     key: str
     kind: StorageArtifactKind
     id: str
@@ -10188,6 +10511,10 @@ class StorageEventDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["StorageEventDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["StorageEventDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -10274,6 +10601,18 @@ class StorageEventDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class StorageEventDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class StorageEventDefaultStreamMetrics(BaseModel):
@@ -10546,6 +10885,10 @@ class StorageEventInNodeDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["StorageEventInNodeDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["StorageEventInNodeDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -10634,6 +10977,18 @@ class StorageEventInNodeDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class StorageEventInNodeDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class StorageEventInNodeDefaultStreamMetrics(BaseModel):
@@ -10913,6 +11268,10 @@ class StreamAnalyticsDailyDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["StreamAnalyticsDailyDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["StreamAnalyticsDailyDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -11003,6 +11362,18 @@ class StreamAnalyticsDailyDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class StreamAnalyticsDailyDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class StreamAnalyticsDailyDefaultStreamMetrics(BaseModel):
@@ -11299,6 +11670,10 @@ class StreamAnalyticsSummaryDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["StreamAnalyticsSummaryDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["StreamAnalyticsSummaryDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -11389,6 +11764,18 @@ class StreamAnalyticsSummaryDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class StreamAnalyticsSummaryDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class StreamAnalyticsSummaryDefaultStreamMetrics(BaseModel):
@@ -11675,6 +12062,10 @@ class StreamConnectionHourlyDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["StreamConnectionHourlyDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["StreamConnectionHourlyDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -11765,6 +12156,18 @@ class StreamConnectionHourlyDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class StreamConnectionHourlyDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class StreamConnectionHourlyDefaultStreamMetrics(BaseModel):
@@ -12058,6 +12461,10 @@ class StreamEventDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["StreamEventDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["StreamEventDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -12142,6 +12549,18 @@ class StreamEventDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class StreamEventDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class StreamEventDefaultStreamMetrics(BaseModel):
@@ -12435,6 +12854,10 @@ class StreamEventInNodeDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["StreamEventInNodeDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["StreamEventInNodeDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -12521,6 +12944,18 @@ class StreamEventInNodeDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class StreamEventInNodeDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class StreamEventInNodeDefaultStreamMetrics(BaseModel):
@@ -12928,6 +13363,10 @@ class StreamHealthMetricDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["StreamHealthMetricDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["StreamHealthMetricDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -13016,6 +13455,18 @@ class StreamHealthMetricDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class StreamHealthMetricDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class StreamHealthMetricDefaultStreamMetrics(BaseModel):
@@ -13303,6 +13754,10 @@ class StreamHealthMetricInNodeDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["StreamHealthMetricInNodeDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["StreamHealthMetricInNodeDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -13393,6 +13848,18 @@ class StreamHealthMetricInNodeDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class StreamHealthMetricInNodeDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class StreamHealthMetricInNodeDefaultStreamMetrics(BaseModel):
@@ -13658,6 +14125,10 @@ class StreamInNodeDefault(BaseModel):
         alias="streamUpdatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["StreamInNodeDefaultIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["StreamInNodeDefaultMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -13754,6 +14225,18 @@ class StreamInNodeDefaultSourceLocationClusters(BaseModel):
         alias="nodeIds", description="Empty means any node of the cluster."
     )
     "Empty means any node of the cluster."
+
+
+class StreamInNodeDefaultIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class StreamInNodeDefaultMetrics(BaseModel):
@@ -13990,21 +14473,6 @@ class StreamInNodeDefaultRetentionOverrides(BaseModel):
     clip_retention_days_override: Optional[int] = Field(
         alias="clipRetentionDaysOverride"
     )
-
-
-class StreamKey(BaseModel):
-    typename__: str = Field(alias="__typename")
-    id: str
-    stream_id: str = Field(alias="streamId")
-    key_value: str = Field(
-        alias="keyValue",
-        description="The publishing secret. Stream keys are read only through operations that need the streams:write scope.",
-    )
-    "The publishing secret. Stream keys are read only through operations that need the streams:write scope."
-    key_name: Optional[str] = Field(alias="keyName")
-    is_active: bool = Field(alias="isActive")
-    last_used_at: Optional[datetime] = Field(alias="lastUsedAt")
-    created_at: datetime = Field(alias="createdAt")
 
 
 class StreamMetrics(BaseModel):
@@ -14384,8 +14852,16 @@ class TenantEventDefaultViewerMetrics(BaseModel):
     session_id: Optional[str] = Field(alias="sessionId")
     connection_time: Optional[float] = Field(alias="connectionTime")
     position: Optional[float]
-    bandwidth_in_bps: Optional[int] = Field(alias="bandwidthInBps")
-    bandwidth_out_bps: Optional[int] = Field(alias="bandwidthOutBps")
+    bandwidth_in_bps: Optional[int] = Field(
+        alias="bandwidthInBps",
+        description="Bandwidth in bytes per second sent to the viewer; legacy field name.",
+    )
+    "Bandwidth in bytes per second sent to the viewer; legacy field name."
+    bandwidth_out_bps: Optional[int] = Field(
+        alias="bandwidthOutBps",
+        description="Bandwidth in bytes per second received from the viewer; legacy field name.",
+    )
+    "Bandwidth in bytes per second received from the viewer; legacy field name."
     bytes_downloaded: Optional[float] = Field(alias="bytesDownloaded")
     bytes_uploaded: Optional[float] = Field(alias="bytesUploaded")
     packets_sent: Optional[int] = Field(alias="packetsSent")
@@ -15109,6 +15585,10 @@ class TrackListEventDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["TrackListEventDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["TrackListEventDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -15195,6 +15675,18 @@ class TrackListEventDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class TrackListEventDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class TrackListEventDefaultStreamMetrics(BaseModel):
@@ -15475,6 +15967,10 @@ class TrackListEventInNodeDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["TrackListEventInNodeDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["TrackListEventInNodeDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -15565,6 +16061,18 @@ class TrackListEventInNodeDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class TrackListEventInNodeDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class TrackListEventInNodeDefaultStreamMetrics(BaseModel):
@@ -15853,6 +16361,10 @@ class TrackListUpdateDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["TrackListUpdateDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["TrackListUpdateDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -15939,6 +16451,18 @@ class TrackListUpdateDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class TrackListUpdateDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class TrackListUpdateDefaultStreamMetrics(BaseModel):
@@ -16147,6 +16671,22 @@ class TrackListUpdateDefaultTracks(BaseModel):
     sample_rate: Optional[int] = Field(alias="sampleRate")
 
 
+class TranscodeLadderPolicyDefault(BaseModel):
+    ladders: list["TranscodeLadderPolicyDefaultLadders"]
+    plan_default: str = Field(alias="planDefault")
+    tenant_ladder: Optional[str] = Field(alias="tenantLadder")
+    effective_ladder: str = Field(alias="effectiveLadder")
+
+
+class TranscodeLadderPolicyDefaultLadders(BaseModel):
+    """A named video rendition ladder, with rungs skipped for smaller sources."""
+
+    name: str
+    display_name: str = Field(alias="displayName")
+    description: str
+    rendition_names: list[str] = Field(alias="renditionNames")
+
+
 class ValidationErrorDefault(BaseModel):
     message: str
     code: Optional[str]
@@ -16230,6 +16770,10 @@ class ViewerCountBucketDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["ViewerCountBucketDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["ViewerCountBucketDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -16316,6 +16860,18 @@ class ViewerCountBucketDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class ViewerCountBucketDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class ViewerCountBucketDefaultStreamMetrics(BaseModel):
@@ -16614,6 +17170,10 @@ class ViewerGeographicDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["ViewerGeographicDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["ViewerGeographicDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -16700,6 +17260,18 @@ class ViewerGeographicDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class ViewerGeographicDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class ViewerGeographicDefaultStreamMetrics(BaseModel):
@@ -16965,6 +17537,10 @@ class ViewerHoursHourlyDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["ViewerHoursHourlyDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["ViewerHoursHourlyDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -17051,6 +17627,18 @@ class ViewerHoursHourlyDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class ViewerHoursHourlyDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class ViewerHoursHourlyDefaultStreamMetrics(BaseModel):
@@ -17320,6 +17908,10 @@ class ViewerHoursHourlyInNodeDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["ViewerHoursHourlyInNodeDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["ViewerHoursHourlyInNodeDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -17410,6 +18002,18 @@ class ViewerHoursHourlyInNodeDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class ViewerHoursHourlyInNodeDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class ViewerHoursHourlyInNodeDefaultStreamMetrics(BaseModel):
@@ -17611,8 +18215,16 @@ class ViewerMetricsDefault(BaseModel):
     session_id: Optional[str] = Field(alias="sessionId")
     connection_time: Optional[float] = Field(alias="connectionTime")
     position: Optional[float]
-    bandwidth_in_bps: Optional[int] = Field(alias="bandwidthInBps")
-    bandwidth_out_bps: Optional[int] = Field(alias="bandwidthOutBps")
+    bandwidth_in_bps: Optional[int] = Field(
+        alias="bandwidthInBps",
+        description="Bandwidth in bytes per second sent to the viewer; legacy field name.",
+    )
+    "Bandwidth in bytes per second sent to the viewer; legacy field name."
+    bandwidth_out_bps: Optional[int] = Field(
+        alias="bandwidthOutBps",
+        description="Bandwidth in bytes per second received from the viewer; legacy field name.",
+    )
+    "Bandwidth in bytes per second received from the viewer; legacy field name."
     bytes_downloaded: Optional[float] = Field(alias="bytesDownloaded")
     bytes_uploaded: Optional[float] = Field(alias="bytesUploaded")
     packets_sent: Optional[int] = Field(alias="packetsSent")
@@ -17686,6 +18298,10 @@ class ViewerMetricsDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["ViewerMetricsDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["ViewerMetricsDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -17772,6 +18388,18 @@ class ViewerMetricsDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class ViewerMetricsDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class ViewerMetricsDefaultStreamMetrics(BaseModel):
@@ -18048,6 +18676,10 @@ class ViewerSessionDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["ViewerSessionDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["ViewerSessionDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -18134,6 +18766,18 @@ class ViewerSessionDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class ViewerSessionDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class ViewerSessionDefaultStreamMetrics(BaseModel):
@@ -18415,6 +19059,10 @@ class ViewerSessionInNodeDefaultStream(BaseModel):
         alias="updatedAt", description="When this stream was last modified."
     )
     "When this stream was last modified."
+    ingest: Optional["ViewerSessionInNodeDefaultStreamIngest"] = Field(
+        description="Ingest state under streams:read; null with a field error when the owning cell is unavailable."
+    )
+    "Ingest state under streams:read; null with a field error when the owning cell is unavailable."
     metrics: Optional["ViewerSessionInNodeDefaultStreamMetrics"] = Field(
         description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
@@ -18503,6 +19151,18 @@ class ViewerSessionInNodeDefaultStreamSourceLocation(BaseModel):
         alias="avoidNodeIds", description="Empty unless mode is RESTRICTED."
     )
     "Empty unless mode is RESTRICTED."
+
+
+class ViewerSessionInNodeDefaultStreamIngest(BaseModel):
+    """Current ingest-session state, readable with streams:read."""
+
+    state: StreamIngestState
+    is_live: bool = Field(alias="isLive")
+    session_id: Optional[str] = Field(alias="sessionId")
+    connected_at: Optional[datetime] = Field(alias="connectedAt")
+    live_since: Optional[datetime] = Field(alias="liveSince")
+    ended_at: Optional[datetime] = Field(alias="endedAt")
+    resumable_until: Optional[datetime] = Field(alias="resumableUntil")
 
 
 class ViewerSessionInNodeDefaultStreamMetrics(BaseModel):
@@ -18947,6 +19607,11 @@ class VodAssetInNodeDefault(BaseModel):
         description="Marginal storage cost for this asset on the tenant's tier. Null when\nthe tenant has no storage meter (self-hosted, fully tenant-private\ncluster). Computed from sizeBytes in GiB × the tier's price per GiB-month.",
     )
     "Marginal storage cost for this asset on the tenant's tier. Null when\nthe tenant has no storage meter (self-hosted, fully tenant-private\ncluster). Computed from sizeBytes in GiB × the tier's price per GiB-month."
+    original_file: Optional["VodAssetInNodeDefaultOriginalFile"] = Field(
+        alias="originalFile",
+        description="Retained byte-identical upload. Null for imports, failed uploads, and assets without a kept original.",
+    )
+    "Retained byte-identical upload. Null for imports, failed uploads, and assets without a kept original."
 
 
 class VodAssetInNodeDefaultPlaybackPolicy(BaseModel):
@@ -19048,6 +19713,21 @@ class VodAssetInNodeDefaultStorageCost(BaseModel):
     per_day: float = Field(alias="perDay")
     per_month: float = Field(alias="perMonth")
     currency: str
+
+
+class VodAssetInNodeDefaultOriginalFile(BaseModel):
+    """Metadata of the byte-identical retained upload."""
+
+    size_bytes: float = Field(alias="sizeBytes")
+
+
+class VodOriginalDownloadDefault(BaseModel):
+    """Short-lived download of the byte-identical original upload, without playback metering."""
+
+    url: str
+    expires_at: datetime = Field(alias="expiresAt")
+    size_bytes: float = Field(alias="sizeBytes")
+    filename: str
 
 
 class VodRetentionAssetDefault(BaseModel):
@@ -19538,6 +20218,7 @@ IncidentDetailDefault.model_rebuild()
 IncidentUpdatedEventDefault.model_rebuild()
 InfrastructureNodeDefault.model_rebuild()
 InfrastructureNodeInNodeDefault.model_rebuild()
+IngestDisconnectSuccessDefault.model_rebuild()
 IngestEndpoint.model_rebuild()
 InvoiceDefault.model_rebuild()
 InvoicePaymentDefault.model_rebuild()
@@ -19627,7 +20308,6 @@ StreamHealthMetricDefault.model_rebuild()
 StreamHealthMetricInNodeDefault.model_rebuild()
 StreamHealthSummaryDefault.model_rebuild()
 StreamInNodeDefault.model_rebuild()
-StreamKey.model_rebuild()
 StreamMetrics.model_rebuild()
 StreamRetentionOverridesDefault.model_rebuild()
 StreamValidationDefault.model_rebuild()
@@ -19644,6 +20324,7 @@ TopAssetEntryDefault.model_rebuild()
 TrackListEventDefault.model_rebuild()
 TrackListEventInNodeDefault.model_rebuild()
 TrackListUpdateDefault.model_rebuild()
+TranscodeLadderPolicyDefault.model_rebuild()
 ValidationErrorDefault.model_rebuild()
 ValidationError.model_rebuild()
 ViewerCountBucketDefault.model_rebuild()
@@ -19658,6 +20339,7 @@ ViewerSessionDefault.model_rebuild()
 ViewerSessionInNodeDefault.model_rebuild()
 VodAsset.model_rebuild()
 VodAssetInNodeDefault.model_rebuild()
+VodOriginalDownloadDefault.model_rebuild()
 VodRetentionAssetDefault.model_rebuild()
 VodRetentionDefault.model_rebuild()
 WalletIdentityDefault.model_rebuild()

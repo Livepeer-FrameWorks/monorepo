@@ -22,6 +22,7 @@ type Loaders struct {
 	ServiceInstancesByNode    *ServiceInstancesByNodeLoader
 	LiveNodeState             *LiveNodeStateLoader
 	StreamMetrics             *StreamMetricsLoader
+	StreamIngest              *StreamIngestLoader
 	ArtifactLifecycle         *ArtifactLifecycleLoader
 	Stream                    *StreamLoader
 	WebhookAttempts           *WebhookAttemptsLoader
@@ -37,6 +38,7 @@ func New(serviceClients *clients.ServiceClients) *Loaders {
 		ServiceInstancesByNode:    NewServiceInstancesByNodeLoader(serviceClients),
 		LiveNodeState:             NewLiveNodeStateLoader(serviceClients),
 		StreamMetrics:             NewStreamMetricsLoader(serviceClients.Periscope),
+		StreamIngest:              NewStreamIngestLoader(serviceClients.Commodore),
 		ArtifactLifecycle:         NewArtifactLifecycleLoader(serviceClients.Periscope),
 		Stream:                    NewStreamLoader(serviceClients.Commodore),
 		WebhookAttempts:           NewWebhookAttemptsLoader(serviceClients.Bosun),

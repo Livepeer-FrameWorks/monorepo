@@ -40,7 +40,7 @@ describe("GatewayClient operation gate", () => {
     const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) =>
       isProbe(init)
         ? new Response(
-            JSON.stringify({ data: { serverInfo: { version: "v0.3.11", features: [] } } })
+            JSON.stringify({ data: { serverInfo: { version: "v0.3.16", features: [] } } })
           )
         : new Response(
             JSON.stringify({
@@ -70,7 +70,7 @@ describe("GatewayClient operation gate", () => {
     const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) =>
       isProbe(init)
         ? new Response(
-            JSON.stringify({ data: { serverInfo: { version: "v0.3.11", features: [] } } })
+            JSON.stringify({ data: { serverInfo: { version: "v0.3.16", features: [] } } })
           )
         : new Response(
             JSON.stringify({

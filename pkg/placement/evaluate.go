@@ -2,6 +2,7 @@ package placement
 
 import (
 	"fmt"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/capacity"
 	"math"
 	"math/bits"
 	"slices"
@@ -225,7 +226,7 @@ func feasibility(c Candidate, r Request, requireSource bool) Reason {
 	if c.RAMMax == 0 || c.RAMUsed > c.RAMMax || c.BWLimit == 0 || c.BWAvailable > c.BWLimit || !finite(c.CPUPercent) || c.CPUPercent < 0 || c.CPUPercent > 100 {
 		return InvalidMetrics
 	}
-	if c.Capacity == CapacityExhausted || c.BWAvailable == 0 {
+	if c.Capacity == CapacityExhausted || !candidateLink(c).Admits(0) || candidateLink(c).Available() == 0 {
 		return CapacityFull
 	}
 	if requireSource && r.Verb == Serve {
@@ -256,9 +257,8 @@ const (
 	// localitySlackKM treats nodes within this distance of the nearest one as equally local.
 	localitySlackKM = 250.0
 	// Load bound: used fraction of bandwidth (after reservations), CPU percent and RAM.
-	boundBandwidthUsed = 0.80
-	boundCPUPercent    = 80.0
-	boundRAMUsed       = 0.85
+	boundCPUPercent = 80.0
+	boundRAMUsed    = 0.85
 	// Mist load-balancer weights, applied to the same projected metrics.
 	weightCPU       = 500.0
 	weightRAM       = 500.0
@@ -288,9 +288,10 @@ func rankPool(nodes []ranked, r Request) {
 		case len(r.ArrivalClusterIDs) > 0 && !slices.Contains(r.ArrivalClusterIDs, c.ClusterID):
 			n.locality = 1
 		}
-		bwUsed := 1 - float64(c.BWAvailable)/float64(c.BWLimit)
+		link := candidateLink(c)
+		bwUsed := link.LoadFraction()
 		ramUsed := float64(c.RAMUsed) / float64(c.RAMMax)
-		n.withinBound = bwUsed <= boundBandwidthUsed && c.CPUPercent <= boundCPUPercent && ramUsed <= boundRAMUsed
+		n.withinBound = link.WithinTarget() && c.CPUPercent <= boundCPUPercent && ramUsed <= boundRAMUsed
 		n.score = weightCPU*(1-c.CPUPercent/100) + weightRAM*(1-ramUsed) + weightBandwidth*(1-bwUsed)
 	}
 }
@@ -565,7 +566,7 @@ func compare(a, b ranked, order Order) int {
 	if a.score < b.score {
 		return 1
 	}
-	if n := compareFraction(a.candidate.BWAvailable, a.candidate.BWLimit, b.candidate.BWAvailable, b.candidate.BWLimit); n != 0 {
+	if n := compareFraction(candidateLink(a.candidate).Available(), a.candidate.BWLimit, candidateLink(b.candidate).Available(), b.candidate.BWLimit); n != 0 {
 		return -n
 	}
 	if a.candidate.CPUPercent < b.candidate.CPUPercent {
@@ -633,4 +634,9 @@ func distanceKM(a, b Coordinates) float64 {
 	lon := math.Sin((b.Longitude - a.Longitude) * rad / 2)
 	h := lat*lat + math.Cos(a.Latitude*rad)*math.Cos(b.Latitude*rad)*lon*lon
 	return 2 * 6371.0088 * math.Asin(math.Sqrt(math.Max(0, math.Min(1, h))))
+}
+
+// Candidate bandwidth is raw headroom so older peers receive the same wire meaning.
+func candidateLink(c Candidate) capacity.Link {
+	return capacity.Link{Budget: c.BWLimit, Observed: c.BWLimit - min(c.BWLimit, c.BWAvailable)}
 }

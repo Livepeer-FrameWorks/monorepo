@@ -14,7 +14,7 @@ import (
 )
 
 func TestViewerProtocolForwarding(t *testing.T) {
-	for input, canonical := range map[string]string{"WEBRTC": "webrtc", "WHEP": "whep", "HLS": "hls", "HLS_CMAF": "cmaf", "DASH": "dash", "MEWS": "wsmp4", "RAW_WS": "raw_ws", "MIST_HTML": "mist_html", "RTMP": "rtmp"} {
+	for input, canonical := range map[string]string{"WEBVTT": "webvtt", "WEBRTC": "webrtc", "WHEP": "whep", "HLS": "hls", "HLS_CMAF": "cmaf", "DASH": "dash", "MEWS": "wsmp4", "RAW_WS": "raw_ws", "MIST_HTML": "mist_html", "RTMP": "rtmp"} {
 		t.Run(input, func(t *testing.T) {
 			fake := &clientstest.FakeCommodore{ResolveViewerFn: func(_ context.Context, req *sharedpb.ViewerEndpointRequest) (*sharedpb.ViewerEndpointResponse, error) {
 				if req.GetContentId() != "public" || req.GetViewerIp() != "192.0.2.1" || req.GetViewerToken() != "" || req.GetProtocol() != canonical {

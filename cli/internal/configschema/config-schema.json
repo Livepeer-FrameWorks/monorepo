@@ -4483,9 +4483,9 @@
         {
           "key": "FOGHORN_INGEST_REJECT_FREE_LOAD",
           "type": "string",
-          "default": "0.95",
+          "default": "0.85",
           "introduced": "v0.3.0",
-          "description": "Cluster load between 0 and 1 above which any free-tier ingest is rejected. Values outside the open range use 0.95."
+          "description": "Cluster load between 0 and 1 above which any free-tier ingest is rejected. The threshold is capped at 0.85; invalid values use 0.85."
         },
         {
           "key": "FOGHORN_VIEWER_REJECT_OVER_ALLOWANCE_LOAD",
@@ -4497,9 +4497,9 @@
         {
           "key": "FOGHORN_VIEWER_REJECT_FREE_LOAD",
           "type": "string",
-          "default": "0.95",
+          "default": "0.85",
           "introduced": "v0.3.0",
-          "description": "Cluster load between 0 and 1 above which any free-tier viewer is rejected. Values outside the open range use 0.95."
+          "description": "Cluster load between 0 and 1 above which any free-tier viewer is rejected. The threshold is capped at 0.85; invalid values use 0.85."
         },
         {
           "key": "INGEST_RESOLVE_RATE_PER_MIN",
@@ -4929,24 +4929,6 @@
           "default": "http://mistserver:8080",
           "introduced": "v0.3.0",
           "description": "MistServer HTTP output URL that the rendered Caddyfile reverse-proxies to. An http:// prefix is stripped."
-        },
-        {
-          "key": "HELMSMAN_BW_LIMIT_BYTES_PER_SEC",
-          "type": "string",
-          "introduced": "v0.3.0",
-          "description": "Operator-pinned node bandwidth limit in bytes per second, written to MistServer and reported to Foghorn. Takes precedence over the other bandwidth limit keys."
-        },
-        {
-          "key": "HELMSMAN_BW_LIMIT_BYTES",
-          "type": "string",
-          "introduced": "v0.3.0",
-          "description": "Node bandwidth limit in bytes per second, used when HELMSMAN_BW_LIMIT_BYTES_PER_SEC is empty or 0."
-        },
-        {
-          "key": "HELMSMAN_BW_LIMIT_MBPS",
-          "type": "string",
-          "introduced": "v0.3.0",
-          "description": "Node bandwidth limit in megabits per second, used when neither byte-based bandwidth limit key is set."
         },
         {
           "key": "HELMSMAN_SUPERVISOR",

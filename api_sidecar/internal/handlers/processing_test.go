@@ -487,45 +487,6 @@ func TestInspectProcessingActiveStreamUsesHealthTracks(t *testing.T) {
 	}
 }
 
-func TestProcessingLivepeerRenditionsReadyBlocksUntilRequestedTracksExist(t *testing.T) {
-	processesJSON := `[{"process":"Livepeer","target_profiles":[{"name":"360p","height":360}]}]`
-	sourceOutputs := map[string]string{
-		"width":       "1920",
-		"height":      "1080",
-		"duration_ms": "9000",
-	}
-
-	ready, missing, err := processingLivepeerRenditionsReady(processingTrackPresence{
-		outputs:     sourceOutputs,
-		sourceMedia: true,
-		videoTracks: []processingMetaVideoTrack{{codec: "H264", width: 1920, height: 1080}},
-	}, processesJSON)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if ready {
-		t.Fatal("expected Livepeer readiness to block while requested rendition is absent")
-	}
-	if len(missing) != 1 || missing[0] != 360 {
-		t.Fatalf("missing = %v, want [360]", missing)
-	}
-
-	ready, missing, err = processingLivepeerRenditionsReady(processingTrackPresence{
-		outputs:     sourceOutputs,
-		sourceMedia: true,
-		videoTracks: []processingMetaVideoTrack{
-			{codec: "H264", width: 1920, height: 1080},
-			{codec: "H264", width: 640, height: 360, source: "video_H264_1920x1080_30fps_0"},
-		},
-	}, processesJSON)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !ready || len(missing) != 0 {
-		t.Fatalf("ready=%v missing=%v, want ready with no missing heights", ready, missing)
-	}
-}
-
 func TestExtractActiveStreamMetadataUsesLargestVideoAsSource(t *testing.T) {
 	got := extractActiveStreamMetadata(map[string]interface{}{
 		"lastms": float64(9000),
@@ -644,36 +605,13 @@ func TestRecordingEndSourceNamesSurviveIntoRenditionCheck(t *testing.T) {
 
 	processes := `[{"process":"Livepeer","target_profiles":[{"name":"480p","height":480,"bitrate":1600000},{"name":"360p","height":360,"bitrate":900000}]}]`
 	source := mist.SourceMediaInfo{Width: 854, Height: 480}
-	if heights, err := mist.RequestedRenditionHeights(processes, source); err != nil || len(heights) != 2 || heights[0] != 480 {
+	if heights, err := mist.ExpectedVideoRenditions(processes, source); err != nil || len(heights) != 2 || heights[0].ShortSide != 480 {
 		t.Fatalf("the ladder must request the same-height 480p rendition, got %v (%v)", heights, err)
 	}
 	log := logrus.New()
 	log.SetLevel(logrus.FatalLevel)
-	if !livepeerRenditionsCompleteFromTracks(logrus.NewEntry(log), processes, tracks, source, 29933) {
+	if !renditionsComplete(logrus.NewEntry(log), processes, tracks, source, 29933, 0, 30000) {
 		t.Fatal("a complete ladder was refused: the early-ending source passthrough was taken for the 480p rendition")
-	}
-}
-
-func TestAuthoritativeSourceSpanFromRecordingEndTracks(t *testing.T) {
-	tracks := []processingMetaVideoTrack{
-		{codec: "H264", width: 1280, height: 720, firstms: 0, lastms: 30000},
-		{codec: "H264", width: 640, height: 360, firstms: 0, lastms: 30000},
-	}
-	got, ok := authoritativeSourceSpanFromTracks(logrus.NewEntry(logrus.New()), tracks, 1000, 720)
-	if !ok {
-		t.Fatal("expected source span from final RECORDING_END tracks")
-	}
-	if got != 30000 {
-		t.Fatalf("span=%d, want 30000", got)
-	}
-}
-
-func TestAuthoritativeSourceSpanFromRecordingEndTracksFailsWithoutSourceHeight(t *testing.T) {
-	tracks := []processingMetaVideoTrack{
-		{codec: "H264", width: 640, height: 360, firstms: 0, lastms: 30000},
-	}
-	if _, ok := authoritativeSourceSpanFromTracks(logrus.NewEntry(logrus.New()), tracks, 1000, 720); ok {
-		t.Fatal("expected missing source-height track to fail closed")
 	}
 }
 
@@ -682,7 +620,7 @@ func TestRenditionsCompleteFromTracks(t *testing.T) {
 	log.SetLevel(logrus.FatalLevel)
 	entry := logrus.NewEntry(log)
 	const srcSpan = 9000.0
-	// Ladder intent is raw requested heights (see RequestedRenditionHeights).
+	// The ladder is expressed as short sides in either orientation.
 	expected := []int{720, 360}
 	// RECORDING_END names the source of every process output; the source
 	// passthrough names none.
@@ -729,16 +667,14 @@ func TestRenditionsCompleteFromTracks(t *testing.T) {
 		t.Fatal("expected renditions within the resolution rounding tolerance to pass")
 	}
 
-	// No independent source span: verify the requested rendition tracks by
-	// height. This is the normalized-output case where the source passthrough is
-	// intentionally absent from the final artifact.
+	// A recorded source track supplies an independent end when readiness has none.
 	if !renditionsCompleteFromTracks(entry, expected, full, 0) {
 		t.Fatal("expected complete rendition set to pass without an independent source span")
 	}
 
 	noSourceOutput := []processingMetaVideoTrack{track(1280, 720, srcSpan), track(640, 360, srcSpan)}
-	if !renditionsCompleteFromTracks(entry, expected, noSourceOutput, 0) {
-		t.Fatal("expected no-source output to validate by requested rendition heights")
+	if renditionsCompleteFromTracks(entry, expected, noSourceOutput, 0) {
+		t.Fatal("expected masked-source output with unknown source end to fail closed")
 	}
 
 	// A height that cannot be determined for a requested profile fails closed.

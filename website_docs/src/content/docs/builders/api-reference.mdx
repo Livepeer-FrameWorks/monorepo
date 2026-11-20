@@ -47,16 +47,39 @@ resource's `write` scope includes its `read` scope: a token with `streams:write`
 `streams:read` allows. A dashboard session is not scoped. The scope a request needs follows from the
 fields it selects, not only from its root field:
 
-| Fields                                                                                                                 | Scope            |
-| ---------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| Stream reads: `streamsConnection`, `stream`, and a `Stream` reached through another object (for example `clip.stream`) | `streams:read`   |
-| Push target reads: `Stream.pushTargets`                                                                                | `streams:read`   |
-| Stream changes: `createStream`, `updateStream`, `deleteStream`, push target changes, VOD upload                        | `streams:write`  |
-| Stream keys: `Stream.streamKey`, `streamKeysConnection`, `refreshStreamKey`, `createStreamKey`, `deleteStreamKey`      | `streams:write`  |
-| Live state and analytics: `Stream.metrics`, everything under `analytics`                                               | `analytics:read` |
+| Scope                  | Operations and fields                                                                                                                                                                                                |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `account:read`         | Account profile, tenant account status, and account resource reads.                                                                                                                                                  |
+| `streams:read`         | Streams, `Stream.ingest`, clips, VOD assets, recording catalog, `Stream.recordings`, `Stream.clips`, `dvrRecording`, saved `DVRRequest.chapters`, stream/track/storage/processing subscriptions.                     |
+| `streams:write`        | Stream and push-target changes, uploads/imports, clips and recordings, stream keys, `disconnectIngest`, `refreshStreamKey`, per-stream retention overrides and per-asset retention changes. Includes `streams:read`. |
+| `analytics:read`       | `Stream.metrics`, analytics queries, viewer metrics and connection subscriptions, artifact placement fields. Viewer connection data includes IP addresses and location.                                              |
+| `billing:read`         | Billing account, tiers, invoices, balances, and tenant-wide retention policy reads.                                                                                                                                  |
+| `billing:write`        | Billing changes, payments, and tenant-wide retention policy changes. Account billing changes also require the appropriate owner/admin role.                                                                          |
+| `developer:read`       | Webhook endpoint/delivery reads. Developer-token management requires an interactive session.                                                                                                                         |
+| `developer:write`      | Webhook endpoint changes. API tokens cannot create or manage other API tokens.                                                                                                                                       |
+| `infrastructure:read`  | Private node and cluster inventory, health, incidents, and node capacity reads.                                                                                                                                      |
+| `infrastructure:write` | Infrastructure and node capacity changes, subject to node/operator ownership and platform-operator authorization.                                                                                                    |
+| `placement:read`       | Media placement policies, topology, options, and previews.                                                                                                                                                           |
+| `placement:write`      | Media placement consent and policy changes.                                                                                                                                                                          |
+| `security:read`        | Account security settings and identities; session and password management require interactive sign-in.                                                                                                               |
+| `security:write`       | Account security changes.                                                                                                                                                                                            |
+| `settings:write`       | Tenant settings and preferred cluster changes, subject to owner/admin authorization.                                                                                                                                 |
+| `support:read`         | Support conversation and history reads.                                                                                                                                                                              |
+| `support:write`        | Create support conversations and send messages. Includes `support:read`.                                                                                                                                             |
+| `consultant:use`       | Skipper requests. Other tools it invokes retain their own authorization checks.                                                                                                                                      |
+| `mcp:high-risk`        | Additional MCP grant for destructive, credential-changing, payment, and arbitrary-query tools; the tool's resource scope and confirmation are also required.                                                         |
+
+Lifecycle status and capture timestamps come from the tenant's recording/clip catalog under
+`streams:read`. Placement fields need `analytics:read` and return a field error when it is absent.
+`liveSystemHealth` uses `infrastructure:read`; support subscriptions use `support:read`, and
+Skipper reads/chat use `consultant:use`. The raw `liveFirehose` combines four channels and requires
+`streams:read`, `analytics:read`, `infrastructure:read`, and `consultant:use` together.
+
+Per-stream and per-asset retention changes use `streams:write`; the tenant-wide policy remains
+under `billing:read`/`billing:write`.
 
 A stream key lets whoever holds it publish to the stream, so it is a write credential: an API
-token reads, creates, rotates, lists, or deactivates keys only with `streams:write`. With
+token reads or rotates the publishing key only with `streams:write`. With
 `streams:read` alone the rest of a stream resolves, `streamKey` is `null`, and the response carries
 a `FORBIDDEN` error at its path, for example `["stream", "streamKey"]`.
 
@@ -66,8 +89,8 @@ mutation needs `analytics:read` as well. Without it the rest of the stream resol
 [Partial results](#partial-results)).
 
 The SDKs' stream operations (`ListStreams`, `GetStream`, `CreateStream`, `UpdateStream`,
-`RefreshStreamKey`) do not select `metrics`. Of them, only `CreateStream` and `RefreshStreamKey`
-select `streamKey`. `GetStreamMetrics` and `ListStreamMetrics` read live state and need
+`RefreshStreamKey`) read `ingest` and do not select `metrics`. Of them, only `CreateStream` and `RefreshStreamKey`
+select `streamKey`. `GetStreamMetrics` and `ListStreamMetrics` read analytics and need
 `analytics:read`; `GetStreamKey` reads one stream's key and needs `streams:write`.
 
 The dashboard may authenticate via httpOnly cookies.  
@@ -195,39 +218,47 @@ query {
 
 ### Get a Stream's Live State
 
-Live state comes from analytics, so an API token needs `analytics:read` for it (the SDKs'
-`GetStreamMetrics`; `ListStreamMetrics` reads a page of streams):
+Read `Stream.ingest` with `streams:read`. Its state is `IDLE`, `CONNECTED`, or `LIVE`,
+and `sessionId` identifies the current or latest ingest session. `CONNECTED` means the publisher
+has connected; `LIVE` means its buffer is playable. An idle ingest can still have buffered playback
+or DVR replay. `resumableUntil` is the publisher session's resume deadline when applicable.
 
 ```graphql
 query {
   stream(id: "stream-global-id") {
     id
-    metrics {
-      status
+    ingest {
+      state
       isLive
-      currentViewers
-      startedAt
-      updatedAt
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
     }
   }
 }
 ```
 
-### Create a Stream Key
+If a media cell cannot answer, its streams' `ingest` fields are null with field errors; other
+cells' results still resolve. Treat null as unavailable rather than offline. Viewer counts and
+quality measurements remain under `Stream.metrics` with `analytics:read`.
+
+### Rotate a Stream Key
+
+Each push stream has one publishing key. Read `Stream.streamKey` with `streams:write`,
+or replace it with `refreshStreamKey`:
 
 ```graphql
 mutation {
-  createStreamKey(streamId: "stream-global-id", input: { name: "OBS Key" }) {
+  refreshStreamKey(id: "stream-global-id") {
     __typename
-    ... on StreamKey {
+    ... on Stream {
       id
-      keyValue
-      keyName
-      createdAt
+      streamKey
     }
     ... on ValidationError {
       message
-      field
     }
     ... on AuthError {
       message
@@ -235,6 +266,46 @@ mutation {
   }
 }
 ```
+
+Rotation changes the publishing key for future connections. Existing publishers continue by
+default. Pass `endActiveSession: true` to rotate the key and request a durable disconnect of the
+publisher claimed at the time of rotation. Both changes commit together; a retry never captures a
+replacement publisher. The deprecated `streamKeysConnection`
+projects only the current primary key for older SDK lines. Deprecated `createStreamKey` and
+`deleteStreamKey` refuse the operation and direct callers to rotation.
+
+### Disconnect an encoder
+
+Use `disconnectIngest` with `streams:write` to request termination of the current push publisher.
+It returns after the stop request is stored durably. `stopRequested: false` means there was no
+active claimed publisher. A successful request is retried through temporary cell or node outages;
+`stream.ingest_disconnected` confirms that its exact session has ended.
+
+```graphql
+mutation {
+  disconnectIngest(streamId: "stream-global-id") {
+    __typename
+    ... on IngestDisconnectSuccess {
+      streamId
+      stopRequested
+    }
+    ... on ValidationError {
+      message
+    }
+    ... on AuthError {
+      message
+    }
+  }
+}
+```
+
+The encoder can reconnect with the same key. To replace the key as well, use
+`refreshStreamKey(id: "stream-global-id", endActiveSession: true)`. Pull streams reject both
+publisher-stop actions; disable the upstream with `pullSource.enabled: false` in `updateStream`.
+
+Saved media is available through `Stream.recordings`, `Stream.clips`, and
+`dvrRecording(id) { chapters(page: { first: 25 }) { nodes { chapterId } } }`, all with
+keyset pagination. See [recordings](/builders/recordings) for cursor and time-range examples.
 
 ### Get Stream Analytics
 

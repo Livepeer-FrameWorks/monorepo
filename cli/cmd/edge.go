@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -94,6 +95,7 @@ func newEdgeCmd() *cobra.Command {
 	edge.AddCommand(newEdgeDriftCmd())
 	edge.AddCommand(newEdgeDiagnoseCmd())
 	edge.AddCommand(newEdgeModeCmd())
+	edge.AddCommand(newEdgeCapacityCmd())
 	edge.AddCommand(newEdgeDeployCmd())
 	return edge
 }
@@ -838,6 +840,15 @@ Local (user LaunchAgent, no admin required):
 Multi-node manifest example:
   frameworks edge provision --manifest edges.yaml --parallel 4`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if bandwidthMbps < 0 {
+				return fmt.Errorf("bandwidth_mbps must be non-negative")
+			}
+			if bandwidthMbps > 0 {
+				if _, err := parseCapacityMbps(strconv.Itoa(bandwidthMbps)); err != nil {
+					return fmt.Errorf("bandwidth_mbps: %w", err)
+				}
+			}
+
 			cfg, err := fwcfg.Load()
 			if err != nil {
 				return fmt.Errorf("failed to load config: %w", err)
@@ -850,6 +861,9 @@ Multi-node manifest example:
 
 			// Check if using manifest mode
 			if manifestPath != "" {
+				if cmd.Flags().Changed("bandwidth-mbps") {
+					return fmt.Errorf("set bandwidth_mbps in the manifest instead of combining --manifest with --bandwidth-mbps")
+				}
 				return runEdgeProvisionFromManifest(cmd, cliCtx, edgeManifestProvisionOptions{
 					ManifestPath:            manifestPath,
 					ClusterManifestOverride: clusterManifestPath,
@@ -870,6 +884,9 @@ Multi-node manifest example:
 				})
 			}
 
+			if cmd.Flags().Changed("bandwidth-mbps") && cliCtx.Persona != fwcfg.PersonaPlatform {
+				return fmt.Errorf("token-only provisioning cannot set bandwidth; after enrollment run %s using an authenticated operator context", edgeCapacityFollowup("<node-id>", bandwidthMbps))
+			}
 			// Default --cluster-id from context. --foghorn-addr is intentionally
 			// NOT defaulted here; the bootstrap branch below must distinguish
 			// "operator explicitly passed --foghorn-addr" (debug override → direct
@@ -1073,7 +1090,6 @@ Multi-node manifest example:
 				TelemetryURL:    telemetryURL,
 				TelemetryToken:  telemetryToken,
 				Capabilities:    capabilities,
-				BandwidthMbps:   bandwidthMbps,
 				MaxTranscodes:   maxTranscodes,
 				StorageBytes:    storageCapacityBytes,
 				SkipPreflight:   skipPreflight,
@@ -1125,6 +1141,14 @@ Multi-node manifest example:
 				runningMode = enrollment.Mode
 			}
 			node := newProvisionedEdgeNode(cmd.OutOrStdout(), nodeName, host, epConfig, sshTarget, sshKey, runningMode, enrollment != nil, edgeControlAccessFor(cliCtx))
+			if cmd.Flags().Changed("bandwidth-mbps") && cliCtx.Persona == fwcfg.PersonaPlatform {
+				selector := epConfig.NodeID
+				if selector == "" {
+					selector = epConfig.NodeName
+				}
+				node.CommitCapacity = provisionedCapacityCommit(cmd.OutOrStdout(), edgeControlAccessFor(cliCtx), epConfig.ClusterID, selector, bandwidthMbps)
+			}
+
 			results := runEdgeRolloutWith(cmd.Context(), cmd.OutOrStdout(), []edgeRolloutNode{node}, 1, dryRun, noDrain)
 			if err := summarizeEdgeRollout(cmd.OutOrStdout(), results, dryRun); err != nil {
 				return err
@@ -1173,7 +1197,7 @@ Multi-node manifest example:
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Check every node in Ansible check mode and print its plan and diff; change nothing")
 	cmd.Flags().BoolVar(&noDrain, "no-drain", false, "Apply a change that restarts media services without draining the node first, even when another node could take its sessions; its live sessions reconnect")
 	cmd.Flags().StringSliceVar(&capabilities, "capability", nil, "Edge capability to enable (repeatable: ingest, edge, storage, processing)")
-	cmd.Flags().IntVar(&bandwidthMbps, "bandwidth-mbps", 0, "Advertised edge bandwidth limit in Mbps")
+	cmd.Flags().IntVar(&bandwidthMbps, "bandwidth-mbps", 0, "Operator-owned budget for both directions in decimal Mbit/s (0 restores defaults; written through the API)")
 	cmd.Flags().IntVar(&maxTranscodes, "max-transcodes", 0, "Maximum local transcodes for Helmsman to report")
 	cmd.Flags().Uint64Var(&storageCapacityBytes, "storage-capacity-bytes", 0, "Local storage capacity limit for Helmsman to report")
 
@@ -1318,6 +1342,8 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, opts
 			prepareFailures = append(prepareFailures, edgeRolloutResult{Name: n.Name, Err: err})
 			continue
 		}
+		node.CommitCapacity = provisionedCapacityCommit(cmd.OutOrStdout(), edgeControlAccessFor(controlCtx), clusterID, n.Name, n.ResolvedBandwidthMbps(manifest.BandwidthMbps))
+
 		nodes = append(nodes, node)
 	}
 
@@ -1778,7 +1804,6 @@ func prepareManifestEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 		TelemetryToken:           telemetryToken,
 		TelemetryAddress:         telemetryAddress,
 		Capabilities:             capabilities,
-		BandwidthMbps:            bandwidthMbps,
 		MaxTranscodes:            maxTranscodes,
 		StorageBytes:             storageCapacityBytes,
 		SkipPreflight:            skipPreflight,
@@ -2696,17 +2721,19 @@ type edgeDoctorHTTPS struct {
 
 // edgeDoctorJSONReport is the --output json shape for `edge doctor`.
 type edgeDoctorJSONReport struct {
-	Mode            string                `json:"mode"`
-	Domain          string                `json:"domain,omitempty"`
-	HostChecks      []preflight.Check     `json:"host_checks"`
-	ServiceChecks   []readiness.EdgeCheck `json:"service_checks"`
-	ServiceProbeErr string                `json:"service_probe_error,omitempty"`
-	HTTPS           edgeDoctorHTTPS       `json:"https"`
-	StreamChecks    []readiness.EdgeCheck `json:"stream_checks"`
-	ConfigVersion   edgeConfigMarker      `json:"config_version"`
-	Warnings        []readiness.Warning   `json:"warnings"`
-	NextSteps       []ux.NextStep         `json:"next_steps"`
-	OK              bool                  `json:"ok"`
+	Capacity         *edgeCapacitySnapshot `json:"capacity"`
+	CapacityProbeErr string                `json:"capacity_probe_error,omitempty"`
+	Mode             string                `json:"mode"`
+	Domain           string                `json:"domain,omitempty"`
+	HostChecks       []preflight.Check     `json:"host_checks"`
+	ServiceChecks    []readiness.EdgeCheck `json:"service_checks"`
+	ServiceProbeErr  string                `json:"service_probe_error,omitempty"`
+	HTTPS            edgeDoctorHTTPS       `json:"https"`
+	StreamChecks     []readiness.EdgeCheck `json:"stream_checks"`
+	ConfigVersion    edgeConfigMarker      `json:"config_version"`
+	Warnings         []readiness.Warning   `json:"warnings"`
+	NextSteps        []ux.NextStep         `json:"next_steps"`
+	OK               bool                  `json:"ok"`
 }
 
 func newEdgeDoctorCmd() *cobra.Command {
@@ -2871,7 +2898,18 @@ func newEdgeDoctorCmd() *cobra.Command {
 		if _, statErr := os.Stat(dir + string(os.PathSeparator) + envFile); statErr != nil {
 			hasEnv = false
 		}
+		nodeCapacity, capacityErr := readLocalEdgeCapacity(ctx, dir, deployMode)
+		capacityProbeErr := ""
+		if capacityErr != nil {
+			capacityProbeErr = capacityErr.Error()
+		} else {
+			if renderErr := renderEdgeCapacity(textOut, nodeCapacity, false); renderErr != nil {
+				return renderErr
+			}
+		}
+
 		report := readiness.EdgeReadiness(readiness.EdgeInputs{
+			Capacity: edgeReadinessCapacity(nodeCapacity), CapacityError: capacityProbeErr,
 			HasEnv:          hasEnv,
 			Domain:          domain,
 			Mode:            deployMode,
@@ -2893,6 +2931,7 @@ func newEdgeDoctorCmd() *cobra.Command {
 
 		if jsonMode {
 			payload := edgeDoctorJSONReport{
+				Capacity: nodeCapacity, CapacityProbeErr: capacityProbeErr,
 				ConfigVersion: configVersion,
 				Mode:          deployMode,
 				Domain:        domain,

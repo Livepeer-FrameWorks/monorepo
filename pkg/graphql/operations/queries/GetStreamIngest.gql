@@ -1,0 +1,16 @@
+query GetStreamIngest($id: ID!) {
+  stream(id: $id) {
+    id
+    streamId
+    name
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
+  }
+}

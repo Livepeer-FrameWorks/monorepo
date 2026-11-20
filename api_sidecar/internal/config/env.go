@@ -148,12 +148,9 @@ func GetStorageCapacityBytes() uint64 {
 	return appconfig.Runtime().StorageCapacity()
 }
 
-// ConfiguredBandwidthLimitBytesPerSec returns an operator-pinned node bandwidth
-// limit. The canonical env uses bytes/sec because Foghorn's NodeLifecycleUpdate
-// stores bw_limit in bytes/sec; HELMSMAN_BW_LIMIT_MBPS is accepted for operator
-// convenience.
+// ConfiguredBandwidthLimitBytesPerSec returns the current seed's egress budget, or 0 without a seed budget.
 func ConfiguredBandwidthLimitBytesPerSec() uint64 {
-	return appconfig.Runtime().BandwidthLimitBytesPerSecond()
+	return CurrentNodeCapacity().GetEgressBudgetBytesPerSec()
 }
 
 // HardwareSpecs holds detected hardware information

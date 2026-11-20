@@ -38,6 +38,7 @@ import (
 	"frameworks/api_balancing/internal/triggers"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/capacity"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clips"
@@ -3456,6 +3457,7 @@ func (s *FoghornGRPCServer) existingVodUploadResult(ctx context.Context, tenantI
 		Parts:        protoParts,
 		ExpiresAt:    timestamppb.New(existing.UploadExpiresAt.Time),
 		PlaybackId:   playbackID,
+		KeepOriginal: proto.Bool(existing.KeepOriginal),
 	}, true, nil
 }
 
@@ -3466,6 +3468,10 @@ func (s *FoghornGRPCServer) createVodUploadImpl(ctx context.Context, req *shared
 	if req.Filename == "" {
 		return nil, status.Error(codes.InvalidArgument, "filename is required")
 	}
+	if err := vodupload.ValidateFilename(req.GetFilename()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
 	if req.SizeBytes <= 0 {
 		return nil, status.Error(codes.InvalidArgument, "size_bytes must be positive")
 	}
@@ -3478,6 +3484,17 @@ func (s *FoghornGRPCServer) createVodUploadImpl(ctx context.Context, req *shared
 	// transaction would always roll back. Commodore always sends both; enforce the contract.
 	if req.GetRequestId() != "" && strings.TrimSpace(req.GetVodHash()) == "" {
 		return nil, status.Error(codes.InvalidArgument, "vod_hash is required when request_id is set")
+	}
+
+	keepOriginal := req.GetKeepOriginal()
+	if keepOriginal {
+		if err := s.requireOriginalRetentionReady(ctx); err != nil {
+			if status.Code(err) != codes.FailedPrecondition {
+				return nil, err
+			}
+			keepOriginal = false
+			s.logger.WithError(err).WithField("tenant_id", req.GetTenantId()).Info("Accepting upload without original retention while activation is unavailable")
+		}
 	}
 
 	// Record 'accepted' in the durable command ledger (keyed by request_id + vod_hash)
@@ -3649,6 +3666,7 @@ func (s *FoghornGRPCServer) createVodUploadImpl(ctx context.Context, req *shared
 			return execErr
 		}
 		if execErr := queries.InsertVodMultipartMetadata(ctx, foghorndb.InsertVodMultipartMetadataParams{
+			KeepOriginal: keepOriginal,
 			ArtifactHash: artifactHash, Filename: sql.NullString{String: req.Filename, Valid: true},
 			Title: sql.NullString{String: req.GetTitle(), Valid: true}, Description: sql.NullString{String: req.GetDescription(), Valid: true},
 			ContentType: sql.NullString{String: contentType, Valid: true}, S3UploadID: sql.NullString{String: uploadID, Valid: true},
@@ -3709,6 +3727,7 @@ func (s *FoghornGRPCServer) createVodUploadImpl(ctx context.Context, req *shared
 		Parts:        protoParts,
 		ExpiresAt:    timestamppb.New(uploadExpiresAt),
 		PlaybackId:   req.GetPlaybackId(),
+		KeepOriginal: proto.Bool(keepOriginal),
 	}, nil
 }
 
@@ -4132,9 +4151,8 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 		return nil, status.Errorf(codes.Internal, "refusing to complete VOD upload: %v", ownErr)
 	}
 
-	// Reject a retry whose upload id / parts / processing spec DIVERGE from the persisted contract rather
-	// than completing a different multipart set or changing the requested outputs. An empty spec on the
-	// retry is an idempotent replay (no spec re-sent), not a divergence.
+	// Multipart identity must match; processing intent stays at the first claim even if
+	// the account's inherited policy changes before a completion retry.
 	if req.UploadId != contract.UploadID || !vodPartsMatchContract(req.Parts, contract.Parts) {
 		s.logger.WithFields(logging.Fields{
 			"artifact_hash":      artifactHash,
@@ -4144,8 +4162,7 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 		return nil, status.Error(codes.FailedPrecondition, "upload completion request does not match the persisted completion contract")
 	}
 	if reqSpec := req.GetProcessesJson(); reqSpec != "" && authoritativeProcessesJSON != "" && reqSpec != authoritativeProcessesJSON {
-		s.logger.WithField("artifact_hash", artifactHash).Warn("CompleteVodUpload retry processing spec diverges from persisted contract; rejecting")
-		return nil, status.Error(codes.FailedPrecondition, "upload processing spec does not match the persisted completion contract")
+		s.logger.WithField("artifact_hash", artifactHash).Info("CompleteVodUpload retry keeps the persisted processing policy")
 	}
 
 	// Convert the CONTRACT's parts (already ordered by part number at persist time) to storage parts, so
@@ -4721,6 +4738,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 			OriginClusterID:     vodRow.OriginClusterID.String,
 			ActiveObjectKey:     vodRow.ActiveObjectKey.String,
 			ActiveDtshKey:       vodRow.ActiveDtshKey.String,
+			OriginalObjectKey:   vodRow.OriginalS3Key.String,
 			PendingObjectKey:    vodRow.SyncObjectKey.String,
 			DurableBackendLocal: vodRow.DurableBackendLocal,
 			BackendID:           vodRow.BackendID.String,
@@ -4740,13 +4758,18 @@ func (s *FoghornGRPCServer) getVodAssetInfo(ctx context.Context, artifactHash st
 	if err != nil {
 		return nil, err
 	}
-	return buildVodAssetInfo(
+	asset := buildVodAssetInfo(
 		row.ID, row.ArtifactHash, row.Status.String, row.StorageLocation, row.Filename, row.Title, row.Description,
 		row.SizeBytes, row.DurationMs, row.Resolution, row.VideoCodec, row.AudioCodec, row.BitrateKbps,
 		sql.NullString{String: row.S3UploadID, Valid: row.S3UploadID != ""},
 		sql.NullString{String: row.S3Key, Valid: row.S3Key != ""}, row.ErrorMessage,
 		row.CreatedAt.Time, row.UpdatedAt.Time, row.RetentionUntil,
-	), nil
+	)
+	if row.OriginalSizeBytes.Valid {
+		size := row.OriginalSizeBytes.Int64
+		asset.OriginalSizeBytes = &size
+	}
+	return asset, nil
 }
 
 func (s *FoghornGRPCServer) lookupCompletedUploadAsset(artifactHash string, pipelineFailed bool) (*sharedpb.VodAssetInfo, error) {
@@ -5302,6 +5325,21 @@ func (s *FoghornGRPCServer) InvalidateTenantCache(ctx context.Context, req *fogh
 	}, nil
 }
 
+func (s *FoghornGRPCServer) PushNodeCapacity(ctx context.Context, req *foghornpb.PushNodeCapacityRequest) (*foghornpb.PushNodeCapacityResponse, error) {
+	nodeID := strings.TrimSpace(req.GetNodeId())
+	if nodeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "node_id is required")
+	}
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "capacity delivery requires service authentication")
+	}
+	revision, delivered, err := control.PushNodeCapacity(nodeID)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "push node capacity: %v", err)
+	}
+	return &foghornpb.PushNodeCapacityResponse{ComposedRevision: revision, Delivered: delivered}, nil
+}
+
 // SetNodeOperationalMode changes a node's operational mode with tenant ownership validation.
 func (s *FoghornGRPCServer) SetNodeOperationalMode(ctx context.Context, req *foghorncontrolpb.SetNodeModeRequest) (*foghorncontrolpb.SetNodeModeResponse, error) {
 	nodeID := strings.TrimSpace(req.GetNodeId())
@@ -5371,11 +5409,11 @@ func (s *FoghornGRPCServer) GetNodeHealth(ctx context.Context, req *foghorncontr
 		ClusterId:         ns.ClusterID,
 		TenantId:          ns.TenantID,
 		CpuPercent:        ns.CPU,
-		RamUsedMb:         ns.RAMCurrent,
-		RamMaxMb:          ns.RAMMax,
-		BandwidthUpMbps:   ns.UpSpeed,
-		BandwidthDownMbps: ns.DownSpeed,
-		BwLimitMbps:       ns.BWLimit,
+		RamUsedMb:         ns.RAMCurrent / (1024 * 1024),
+		RamMaxMb:          ns.RAMMax / (1024 * 1024),
+		BandwidthUpMbps:   ns.UpSpeed * 8 / 1_000_000,
+		BandwidthDownMbps: ns.DownSpeed * 8 / 1_000_000,
+		BwLimitMbps:       ns.BWLimit * 8 / 1_000_000,
 		DiskTotalBytes:    ns.DiskTotalBytes,
 		DiskUsedBytes:     ns.DiskUsedBytes,
 		Location:          ns.Location,
@@ -5383,7 +5421,17 @@ func (s *FoghornGRPCServer) GetNodeHealth(ctx context.Context, req *foghorncontr
 		ProvisionedConfigCliVersion:   ns.ProvisionedConfigCLIVersion,
 		ProvisionedConfigDigest:       ns.ProvisionedConfigDigest,
 		ProvisionedConfigRenderDigest: ns.ProvisionedConfigRenderDigest,
+		CapacityRevisionApplied:       ns.CapacityRevisionApplied,
+		EgressUsableMbps:              float64((capacity.Link{Budget: uint64(ns.BWLimit)}).Usable()) * 8 / 1_000_000,
+		EgressReservedMbps:            float64(ns.AddBandwidth) * 8 / 1_000_000,
+		ObservedSource:                ns.ObservedSource,
 	}
+	budget := ns.Capacity
+	if budget == nil {
+		budget = state.DefaultNodeCapacity()
+	}
+	resp.BudgetSource = budget.GetEgressSource()
+	resp.CapacityRevisionComposed = budget.GetRevision()
 	for _, capability := range []struct {
 		name    string
 		enabled bool
@@ -5489,7 +5537,7 @@ func storageCapDecision(currentBytes, additionalBytes, limitBytes int64) error {
 	}
 	return status.Errorf(
 		codes.ResourceExhausted,
-		"storage cap reached: %.2f GB used of %.2f GB limit — delete content or upgrade",
+		"storage cap reached (including retained originals): %.2f GB used of %.2f GB limit — delete content, disable original retention in /account/storage, or upgrade",
 		float64(currentBytes)/float64(1<<30),
 		float64(limitBytes)/float64(1<<30),
 	)

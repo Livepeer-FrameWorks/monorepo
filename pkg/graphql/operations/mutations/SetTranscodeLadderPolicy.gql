@@ -1,0 +1,24 @@
+# Set the transcode ladder the tenant's streams and VOD uploads inherit; an
+# empty ladder returns to the plan default.
+mutation SetTranscodeLadderPolicy($input: SetTranscodeLadderPolicyInput!) {
+  setTranscodeLadderPolicy(input: $input) {
+    ... on TranscodeLadderPolicy {
+      ladders {
+        name
+        displayName
+        description
+        renditionNames
+      }
+      planDefault
+      tenantLadder
+      effectiveLadder
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on AuthError {
+      message
+    }
+  }
+}

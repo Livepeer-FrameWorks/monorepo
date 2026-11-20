@@ -23,7 +23,7 @@ Consequences observed in the current design:
 
 - Job cost is only observable after the fact (wall-clock duration, and CPU indirectly via node-level telemetry), and even then it is not attributed back to the job or retained for future placement decisions.
 - Co-placed jobs interfere in ways the dispatcher cannot see: GPU sharing between transcode jobs, memory-bandwidth pressure, and hardware-encoder contention between processing jobs and live serving on the same node (transcode and DVR/clip work share nodes with viewer-facing delivery).
-- `docs/rfcs/capacity-planning.md` scopes itself to reactive thresholds and explicitly lists predictive capacity planning as a Non-Goal; that Non-Goal now redirects here. Its threshold and N×2 reporting proposals cover CPU/RAM/bandwidth only — GPU is absent because the telemetry does not exist.
+- `docs/architecture/viewer-routing.md#node-bandwidth-budgets` documents the reactive bandwidth model and separates deferred failure-domain reporting from predictive processing cost. GPU is absent because the telemetry does not exist.
 - `docs/rfcs/processing-orchestration.md` names capacity- and GPU-aware scheduling as the open grey area blocking processing from becoming a first-class orchestrated capability. This RFC is the design for that grey area.
 
 The feature registry tracks this as `workload-cost-model` (`docs/platform-features.yaml`, area `processing`, kind `foundation`, status `roadmap`), which points at this RFC.
@@ -53,11 +53,11 @@ Finally, cost is content-dependent: the same job type varies by codec, resolutio
 - A demand-side cost predictor: given job parameters (codec, resolution, framerate, model size, realtime factor), produce an expected footprint per resource (CPU, GPU compute, VRAM, encoder sessions, memory bandwidth class, disk/network I/O).
 - A measured-feedback loop: Helmsman reports per-job actuals on completion; Foghorn corrects predictions so the model converges on observed reality per node class and content bucket.
 - An interference term: admission accounts for contention between co-placed jobs and between processing and live serving on shared nodes.
-- Consumers wired in: job dispatch uses predicted-fit admission and placement scoring instead of raw in-flight counts; capacity thresholds and N×2 reporting (capacity-planning RFC) gain the GPU dimension and a predicted-committed view.
+- Consumers wired in: job dispatch uses predicted-fit admission and placement scoring instead of raw in-flight counts; reactive capacity thresholds and future failure-domain reporting gain the GPU dimension and a predicted-committed view.
 
 ## Non-Goals
 
-- Autoscaling or provisioning. The model informs placement and reporting; operators still own infrastructure (consistent with capacity-planning.md).
+- Autoscaling or provisioning. The model informs placement and reporting; operators still own infrastructure (consistent with the node bandwidth model).
 - Monetary cost, pricing, or billing changes. "Cost" here is resource footprint; rating and settlement are Purser's domain and unchanged.
 - Optimal bin-packing or ML-based forecasting. The predictor is a parametric model with measured correction, not a learned scheduler. Sophistication can grow later behind the same interfaces.
 - Orchestrating live transcode as jobs. Live processing policy remains the processing-orchestration RFC's scope; this RFC supplies the cost/telemetry substrate it will consume.
@@ -99,9 +99,9 @@ A cost vector and a parametric predictor in Foghorn:
 ### Phase 5: Consumers
 
 - Job dispatch: `routeProcessingJob` evolves from class + in-flight count to class + predicted-fit admission + headroom scoring (Phases 2–4). Behavior is flag-gated; the legacy path remains until prediction-error metrics justify cutover.
-- Capacity thresholds and reporting: the capacity-planning RFC's exclusion thresholds and N×2 cluster reporting gain the GPU dimension (utilization and VRAM) and a committed-vs-measured view — cluster capacity dashboards can show both what is measured now and what dispatch has already promised. That RFC's Non-Goals section already redirects predictive scope here.
+- Capacity thresholds and reporting: the node bandwidth model's exclusion thresholds gain the GPU dimension (utilization and VRAM) and a committed-vs-measured view. Future failure-domain reporting can show both what is measured now and what dispatch has already promised; the current bandwidth implementation does not provide N×2 loss simulations.
 - Placement policy engine: the cost model becomes an available decision input at the `process` verb per `docs/rfcs/placement-policy-engine.md`; no policy semantics are defined here.
-- Continuous routing adjustment during live sessions: the measured inputs the model maintains are evaluated continuously, not only at admission time. Node utilization actuals, and — once the NAT-traversal RFC's probe infrastructure exists (`docs/rfcs/nat-traversal.md`) — measured inter-server network performance (latency, throughput), translate into automatic server-selection adjustment on the delivery side: scoring steers new sessions away from nodes and paths under sustained degradation and rebalances load toward healthier capacity while streams stay live. Adjustment applies hysteresis: a signal must hold beyond its bound for a dwell window before it changes selection, and re-inclusion uses a wider band than exclusion, so short-lived fluctuations do not cause flapping between servers. This layer sits above the capacity-planning RFC's exclusion thresholds (`docs/rfcs/capacity-planning.md`), which remain the reactive guard rail that hard-excludes saturated nodes; the adjustment logic acts earlier and gradually so the guard rail rarely trips. It concerns viewer/session routing only — processing-job placement remains admission-time, per Non-Goals.
+- Continuous routing adjustment during live sessions: the measured inputs the model maintains are evaluated continuously, not only at admission time. Node utilization actuals, and — once the NAT-traversal RFC's probe infrastructure exists (`docs/rfcs/nat-traversal.md`) — measured inter-server network performance (latency, throughput), translate into automatic server-selection adjustment on the delivery side: scoring steers new sessions away from nodes and paths under sustained degradation and rebalances load toward healthier capacity while streams stay live. Adjustment applies hysteresis: a signal must hold beyond its bound for a dwell window before it changes selection, and re-inclusion uses a wider band than exclusion, so short-lived fluctuations do not cause flapping between servers. This layer sits above the node bandwidth model's exclusion thresholds (`docs/architecture/viewer-routing.md#node-bandwidth-budgets`), which remain the reactive guard rail that hard-excludes saturated nodes; the adjustment logic acts earlier and gradually so the guard rail rarely trips. It concerns viewer/session routing only — processing-job placement remains admission-time, per Non-Goals.
 
 ## Impact / Dependencies
 
@@ -114,8 +114,8 @@ A cost vector and a parametric predictor in Foghorn:
 ### Other impact
 
 - `pkg/database/sql/schema/foghorn.sql` — `processing_jobs` class + parameters columns, job actuals, correction-factor table (additive migrations per `docs/standards/schema-migrations.md`).
-- `pkg/grafana/rules/` — GPU gauges and prediction-error metrics join the capacity-planning rule set.
-- `docs/rfcs/capacity-planning.md` — its Non-Goals redirect predictive scope here; GPU dimension lands there once Phase 1 telemetry exists.
+- `pkg/grafana/rules/` — GPU gauges and prediction-error metrics join the capacity alert rules.
+- `docs/architecture/viewer-routing.md#node-bandwidth-budgets` — its Non-Goals redirect predictive scope here; GPU dimension lands there once Phase 1 telemetry exists.
 - `docs/rfcs/processing-orchestration.md` — its GPU-aware scheduling grey area resolves by reference to this RFC.
 - `docs/platform-features.yaml` — `workload-cost-model` status advances as phases land.
 - No GraphQL/webapp surface: this is a scheduling foundation; value surfaces through processing and analytics (per the registry entry).
@@ -142,7 +142,7 @@ A cost vector and a parametric predictor in Foghorn:
 2. **Phase 2** behind a dispatch flag: predictor and committed-cost tracking run in shadow mode first (log the decision the model would have made alongside the legacy decision), then cut over per cluster.
 3. **Phase 3** actuals reporting lands with the next Helmsman release; correction factors accumulate before they gate anything.
 4. **Phase 4** interference term enabled after Phase 3 provides co-placement data; serving reserve defaults conservative.
-5. **Phase 5** consumer wiring (capacity thresholds, N×2 GPU reporting) follows the capacity-planning RFC's own rollout once telemetry exists.
+5. **Phase 5** consumer wiring adds GPU thresholds once telemetry exists; failure-domain reporting requires its own reviewed design.
 
 Each phase is independently revertible via flags; schema changes are additive.
 
@@ -161,7 +161,7 @@ Each phase is independently revertible via flags; schema changes are additive.
 - [Evidence] `pkg/proto/ipc.proto` — `ProcessingClassCapacity` (slot model), `NodeLifecycleUpdate` (no GPU fields)
 - [Evidence] `pkg/proto/foghorn_federation.proto` — `EdgeTelemetry`/`EdgeSnapshot` (CPU/RAM/BW only)
 - [Evidence] `pkg/mist/processes.go` — processing class constants
-- [Reference] `docs/rfcs/capacity-planning.md` — reactive thresholds and N×2 reporting; its predictive Non-Goal redirects here, and its exclusion thresholds are the guard-rail layer under the continuous-adjustment consumer
+- [Reference] `docs/architecture/viewer-routing.md#node-bandwidth-budgets` — reactive bandwidth thresholds, deferred failure-domain reporting, and the guard-rail layer under the proposed continuous-adjustment consumer
 - [Reference] `docs/rfcs/nat-traversal.md` — probe infrastructure supplying the inter-server network-performance signal the continuous-adjustment consumer evaluates
 - [Reference] `docs/rfcs/processing-orchestration.md` — GPU-aware scheduling named as the open grey area this RFC designs
 - [Reference] `docs/rfcs/placement-policy-engine.md` — cost model as decision input at the `process` verb

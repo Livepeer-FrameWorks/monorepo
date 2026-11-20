@@ -18,6 +18,8 @@ query GetNetworkOverview($timeRange: TimeRangeInput!) {
       currentViewers
       egressMbps
       egressCapacityMbps
+      egressUsableMbps
+      defaultBudgetNodes
       ingressMbps
     }
     peerConnections {

@@ -15,39 +15,39 @@ func discardLog() *logrus.Entry {
 	return logrus.NewEntry(l)
 }
 
-// livepeerRenditionsCompleteFromTracks is the wrapper that parses the requested
+// renditionsComplete is the wrapper that parses the requested
 // Livepeer ladder from the process config and delegates to the pure
-// completeness check. It must fail closed on malformed config, return true when
-// nothing is requested, and return true when every requested rendition has a
+// completeness check. It must fail closed on malformed config, prove whole-output coverage when
+// no video rendition is requested, and return true when every requested rendition has a
 // matching output track.
 func TestLivepeerRenditionsCompleteFromTracks(t *testing.T) {
 	log := discardLog()
 	source := mist.SourceMediaInfo{Width: 1920, Height: 1080}
 
 	t.Run("malformed process config fails closed", func(t *testing.T) {
-		if livepeerRenditionsCompleteFromTracks(log, "not-json", nil, source, 30000) {
+		if renditionsComplete(log, "not-json", nil, source, 30000, 0, 30000) {
 			t.Fatal("malformed config must be treated as incomplete")
 		}
 	})
 
 	t.Run("no renditions requested is complete", func(t *testing.T) {
 		// An empty process array requests no Livepeer transcode.
-		if !livepeerRenditionsCompleteFromTracks(log, "[]", nil, source, 30000) {
-			t.Fatal("no requested renditions has nothing to prove → complete")
+		if !renditionsComplete(log, "[]", nil, source, 30000, 0, 30000) {
+			t.Fatal("complete whole recording must pass without extra renditions")
 		}
 	})
 
 	t.Run("requested rendition with matching track is complete", func(t *testing.T) {
 		processes := `[{"process":"Livepeer","target_profiles":[{"height":720}]}]`
 		tracks := []processingMetaVideoTrack{renditionTrack(2, 1280, 720, 30000)}
-		if !livepeerRenditionsCompleteFromTracks(log, processes, tracks, source, 30000) {
+		if !renditionsComplete(log, processes, tracks, source, 30000, 0, 30000) {
 			t.Fatal("a 720 request matched by a 720 track must be complete")
 		}
 	})
 
 	t.Run("requested rendition with no matching track is incomplete", func(t *testing.T) {
 		processes := `[{"process":"Livepeer","target_profiles":[{"height":720}]}]`
-		if livepeerRenditionsCompleteFromTracks(log, processes, nil, source, 30000) {
+		if renditionsComplete(log, processes, nil, source, 30000, 0, 30000) {
 			t.Fatal("a requested rendition with no tracks must be incomplete")
 		}
 	})

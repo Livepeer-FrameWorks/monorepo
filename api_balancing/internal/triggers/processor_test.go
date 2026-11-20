@@ -1347,8 +1347,8 @@ func TestHandlePlayRewriteStartsCorrelatedPlaybackViewer(t *testing.T) {
 	if abort || resp != "live+"+internalName {
 		t.Fatalf("expected allowed PLAY_REWRITE, got response=%q abort=%v", resp, abort)
 	}
-	if got := sm.GetStreamState(internalName).Viewers; got != 1 {
-		t.Fatalf("expected 1 viewer after PLAY_REWRITE, got %d", got)
+	if got := sm.GetStreamState(internalName).Viewers; got != 0 || sm.GetVirtualViewerStats().Active != 1 {
+		t.Fatalf("admission must reserve one viewer while audience waits for census: audience=%d active=%d", got, sm.GetVirtualViewerStats().Active)
 	}
 
 	_, _, err = processor.handleUserNew(&ipcpb.MistTrigger{
@@ -1367,6 +1367,9 @@ func TestHandlePlayRewriteStartsCorrelatedPlaybackViewer(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("handleUserNew failed: %v", err)
+	}
+	if censusErr := sm.SetNodeStreamCounts(context.Background(), state.NodeStreamCountsSnapshot{NodeID: nodeID, Fence: 1, Seq: 1, Streams: map[string]uint32{internalName: 1}}); censusErr != nil {
+		t.Fatal(censusErr)
 	}
 	if got := sm.GetStreamState(internalName).Viewers; got != 1 {
 		t.Fatalf("expected USER_NEW session attachment not to increment viewers, got %d", got)
@@ -1407,8 +1410,14 @@ func TestHandlePlayRewriteStartsCorrelatedPlaybackViewer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleUserEnd failed: %v", err)
 	}
+	if got := sm.GetStreamState(internalName).Viewers; got != 1 || sm.GetVirtualViewerStats().Active != 0 {
+		t.Fatalf("USER_END must settle correlation without replacing audience census: audience=%d active=%d", got, sm.GetVirtualViewerStats().Active)
+	}
+	if censusErr := sm.SetNodeStreamCounts(context.Background(), state.NodeStreamCountsSnapshot{NodeID: nodeID, Fence: 1, Seq: 2, Streams: map[string]uint32{}}); censusErr != nil {
+		t.Fatal(censusErr)
+	}
 	if got := sm.GetStreamState(internalName).Viewers; got != 0 {
-		t.Fatalf("expected generic HTTP USER_END with attached session to decrement viewers, got %d", got)
+		t.Fatalf("empty census retained %d viewers", got)
 	}
 }
 
@@ -1580,7 +1589,7 @@ func TestHandleUserEndCountsOnlyConfirmedPlaybackDisconnect(t *testing.T) {
 	if confirmed := sm.ConfirmVirtualViewerByID(viewerID, nodeID, internalName, clientIP, "mist-session-1"); !confirmed {
 		t.Fatal("expected virtual viewer confirmation")
 	}
-	sm.UpdateUserConnection(internalName, nodeID, tenantID, 1)
+	sm.EnsureViewerStreamIdentity(internalName, nodeID, tenantID)
 
 	_, _, err := processor.handleUserEnd(&ipcpb.MistTrigger{
 		NodeId:   nodeID,

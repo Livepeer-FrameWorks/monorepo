@@ -158,6 +158,13 @@ Mode changes propagate through the load balancer to the node's control stream. T
 		},
 	)
 
+	addTool(server, &mcp.Tool{
+		Name:        "set_node_capacity",
+		Description: "Replace a node's egress and ingress bandwidth budgets in bytes per second. Requires infrastructure:write and node ownership or platform operator access. Read the revision from get_node_info, then pass expected_revision. Null or omitted directional budgets restore the visible default of 125000000 bytes/s (1 Gbit/s). The saved budget applies live without restarting Mist; an offline edge applies it on reconnect.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args SetNodeCapacityInput) (*mcp.CallToolResult, any, error) {
+		return handleSetNodeCapacity(ctx, args, serviceClients, logger)
+	})
+
 	addTool(server,
 		&mcp.Tool{
 			Name: "get_node_health",
@@ -244,6 +251,21 @@ type SetNodeModeInput struct {
 	Reason string `json:"reason,omitempty" jsonschema:"Reason for the mode change (for audit trail)."`
 }
 
+type SetNodeCapacityInput struct {
+	NodeID                   string  `json:"node_id" jsonschema:"The node whose operator budget to replace."`
+	EgressBudgetBytesPerSec  *uint64 `json:"egress_budget_bytes_per_sec,omitempty" jsonschema:"Positive bytes per second. Null or omitted restores the 1 Gbit/s default."`
+	IngressBudgetBytesPerSec *uint64 `json:"ingress_budget_bytes_per_sec,omitempty" jsonschema:"Positive bytes per second. Null or omitted restores the 1 Gbit/s default."`
+	ExpectedRevision         uint64  `json:"expected_revision" jsonschema:"Revision read from get_node_info. A stale revision rejects the change."`
+}
+
+type NodeCapacityResult struct {
+	EgressBudgetBytesPerSec  uint64 `json:"egress_budget_bytes_per_sec"`
+	IngressBudgetBytesPerSec uint64 `json:"ingress_budget_bytes_per_sec"`
+	EgressSource             string `json:"egress_source"`
+	IngressSource            string `json:"ingress_source"`
+	Revision                 uint64 `json:"revision"`
+}
+
 type GetNodeHealthInput struct {
 	NodeID string `json:"node_id" jsonschema:"The node ID to check health for."`
 }
@@ -305,16 +327,17 @@ type EnrollmentTokenResult struct {
 }
 
 type NodeInfoResult struct {
-	NodeID        string `json:"node_id"`
-	NodeName      string `json:"node_name"`
-	NodeType      string `json:"node_type"`
-	ClusterID     string `json:"cluster_id"`
-	Region        string `json:"region,omitempty"`
-	ExternalIP    string `json:"external_ip,omitempty"`
-	CPUCores      int32  `json:"cpu_cores,omitempty"`
-	MemoryGB      int32  `json:"memory_gb,omitempty"`
-	DiskGB        int32  `json:"disk_gb,omitempty"`
-	LastHeartbeat string `json:"last_heartbeat,omitempty"`
+	Capacity      *NodeCapacityResult `json:"capacity,omitempty"`
+	NodeID        string              `json:"node_id"`
+	NodeName      string              `json:"node_name"`
+	NodeType      string              `json:"node_type"`
+	ClusterID     string              `json:"cluster_id"`
+	Region        string              `json:"region,omitempty"`
+	ExternalIP    string              `json:"external_ip,omitempty"`
+	CPUCores      int32               `json:"cpu_cores,omitempty"`
+	MemoryGB      int32               `json:"memory_gb,omitempty"`
+	DiskGB        int32               `json:"disk_gb,omitempty"`
+	LastHeartbeat string              `json:"last_heartbeat,omitempty"`
 }
 
 type ManageNodeResult struct {
@@ -333,6 +356,13 @@ type SetNodeModeResult struct {
 }
 
 type NodeHealthResult struct {
+	BudgetSource             string  `json:"budget_source"`
+	ObservedSource           string  `json:"observed_source"`
+	EgressUsableMbps         float64 `json:"egress_usable_mbps"`
+	EgressReservedMbps       float64 `json:"egress_reserved_mbps"`
+	CapacityRevisionComposed uint64  `json:"capacity_revision_composed"`
+	CapacityRevisionApplied  *uint64 `json:"capacity_revision_applied"`
+
 	NodeID            string   `json:"node_id"`
 	Mode              string   `json:"operational_mode"`
 	IsHealthy         bool     `json:"is_healthy"`
@@ -645,6 +675,7 @@ func handleGetNodeInfo(ctx context.Context, args GetNodeInfoInput, resolver *res
 	}
 
 	result := NodeInfoResult{
+		Capacity:  nodeCapacityResult(node.GetCapacity()),
 		NodeID:    node.NodeId,
 		NodeName:  node.NodeName,
 		NodeType:  node.NodeType,
@@ -790,22 +821,28 @@ func handleGetNodeHealth(ctx context.Context, args GetNodeHealthInput, serviceCl
 	}
 
 	result := NodeHealthResult{
-		NodeID:            resp.GetNodeId(),
-		Mode:              resp.GetOperationalMode(),
-		IsHealthy:         resp.GetIsHealthy(),
-		ActiveViewers:     resp.GetActiveViewers(),
-		ActiveStreams:     resp.GetActiveStreams(),
-		ClusterID:         resp.GetClusterId(),
-		LastHeartbeat:     resp.GetLastHeartbeat(),
-		CPUPercent:        resp.GetCpuPercent(),
-		RAMUsedMB:         resp.GetRamUsedMb(),
-		RAMMaxMB:          resp.GetRamMaxMb(),
-		BandwidthUpMbps:   resp.GetBandwidthUpMbps(),
-		BandwidthDownMbps: resp.GetBandwidthDownMbps(),
-		BWLimitMbps:       resp.GetBwLimitMbps(),
-		DiskTotalBytes:    resp.GetDiskTotalBytes(),
-		DiskUsedBytes:     resp.GetDiskUsedBytes(),
-		Location:          resp.GetLocation(),
+		BudgetSource:             strings.TrimPrefix(resp.GetBudgetSource().String(), "BANDWIDTH_BUDGET_SOURCE_"),
+		ObservedSource:           strings.TrimPrefix(resp.GetObservedSource().String(), "OBSERVED_SOURCE_"),
+		EgressUsableMbps:         resp.GetEgressUsableMbps(),
+		EgressReservedMbps:       resp.GetEgressReservedMbps(),
+		CapacityRevisionComposed: resp.GetCapacityRevisionComposed(),
+		CapacityRevisionApplied:  resp.CapacityRevisionApplied,
+		NodeID:                   resp.GetNodeId(),
+		Mode:                     resp.GetOperationalMode(),
+		IsHealthy:                resp.GetIsHealthy(),
+		ActiveViewers:            resp.GetActiveViewers(),
+		ActiveStreams:            resp.GetActiveStreams(),
+		ClusterID:                resp.GetClusterId(),
+		LastHeartbeat:            resp.GetLastHeartbeat(),
+		CPUPercent:               resp.GetCpuPercent(),
+		RAMUsedMB:                resp.GetRamUsedMb(),
+		RAMMaxMB:                 resp.GetRamMaxMb(),
+		BandwidthUpMbps:          resp.GetBandwidthUpMbps(),
+		BandwidthDownMbps:        resp.GetBandwidthDownMbps(),
+		BWLimitMbps:              resp.GetBwLimitMbps(),
+		DiskTotalBytes:           resp.GetDiskTotalBytes(),
+		DiskUsedBytes:            resp.GetDiskUsedBytes(),
+		Location:                 resp.GetLocation(),
 	}
 	if resp.Latitude != nil {
 		lat := resp.GetLatitude()

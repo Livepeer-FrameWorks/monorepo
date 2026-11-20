@@ -196,7 +196,7 @@ func reconcileNodeIngestSessions(ctx context.Context, nodeID string, reported []
 			reason += ":now_on_node:" + row.ActiveNodeID
 		}
 		if sendErr := drain(ctx, nodeID, &ipcpb.DrainStreamRequest{
-			RuntimeName: runtimeName, Reason: reason, SourceGeneration: obligation, PriorOwnerSourceGeneration: row.SessionID,
+			RuntimeName: runtimeName, Reason: reason, SourceGeneration: obligation, PriorOwnerSourceGeneration: row.SessionID, TenantId: row.TenantID,
 		}); sendErr != nil {
 			logger.WithError(sendErr).WithFields(fields).Warn("Failed to stop superseded ingest generation; the next inventory retries")
 			continue
@@ -223,7 +223,7 @@ func reconcileNodeIngestSessions(ctx context.Context, nodeID string, reported []
 // the connection's next message: the cutoff is read synchronously so every PUSH_REWRITE on the new
 // connection mints after it.
 func scheduleNodeIngestReconcile(nodeID string, registered *conn, register *ipcpb.Register, logger logging.Logger) {
-	if !register.GetLiveIngestGenerationsReported() {
+	if !register.GetLiveIngestGenerationsReported() && !register.GetLiveSourceBuffersReported() {
 		logger.WithField("node_id", nodeID).Info("Registration carries no live ingest inventory; the node's ingest sessions are kept as they are")
 		return
 	}
@@ -243,6 +243,14 @@ func scheduleNodeIngestReconcile(nodeID string, registered *conn, register *ipcp
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
+		if register.GetLiveSourceBuffersReported() && register.GetLiveSourceBuffersSampledUnixMillis() > 0 {
+			if _, err := ReconcileNodePullSessions(ctx, nodeID, register.GetLiveSourceBuffers(), time.UnixMilli(register.GetLiveSourceBuffersSampledUnixMillis()), current, logger); err != nil {
+				logger.WithError(err).WithField("node_id", nodeID).Warn("Pull buffer registration reconciliation failed")
+			}
+		}
+		if !register.GetLiveIngestGenerationsReported() {
+			return
+		}
 		result, err := ReconcileNodeIngestSessions(ctx, nodeID, reported, cutoff, SendDrainStream, current, logger)
 		fields := logging.Fields{
 			"node_id": nodeID, "reported": len(reported), "kept": result.Kept, "ended": result.Ended, "stopped": result.Stopped,

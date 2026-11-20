@@ -4689,14 +4689,16 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 			shortDesc = c.ShortDescription
 		}
 
-		var currentStreams, currentViewers, egressMbps, ingressMbps, egressCapacityMbps int
+		var currentStreams, currentViewers, egressMbps, ingressMbps, egressCapacityMbps, egressUsableMbps, defaultBudgetNodes int
 		if models.ClusterTypeCanBePreferred(c.ClusterType) {
 			if ls, ok := liveStatsByCluster[c.ClusterId]; ok {
 				currentStreams = int(ls.ActiveStreams)
 				currentViewers = int(ls.CurrentViewers)
 				egressMbps = int(ls.UploadBytesPerSec * 8 / 1_000_000)
 				ingressMbps = int(ls.DownloadBytesPerSec * 8 / 1_000_000)
-				egressCapacityMbps = int(ls.EgressCapacityBps * 8 / 1_000_000)
+				egressCapacityMbps = int(ls.EgressBudgetBytesPerSec * 8 / 1_000_000)
+				egressUsableMbps = int(ls.GetEgressUsableBytesPerSec() * 8 / 1_000_000)
+				defaultBudgetNodes = int(ls.GetDefaultBudgetNodes())
 			}
 		}
 
@@ -4729,6 +4731,8 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 			CurrentViewers:     currentViewers,
 			EgressMbps:         egressMbps,
 			EgressCapacityMbps: egressCapacityMbps,
+			EgressUsableMbps:   egressUsableMbps,
+			DefaultBudgetNodes: defaultBudgetNodes,
 			IngressMbps:        ingressMbps,
 			Services:           clusterServices,
 		})

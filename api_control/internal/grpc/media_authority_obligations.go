@@ -163,7 +163,7 @@ func (s *CommodoreServer) processMediaAuthorityTenantRenewals(ctx context.Contex
 // together share one read of what they all derive from, and no read can outlive
 // the change that enqueued the next rows.
 func (s *CommodoreServer) processMediaAuthorityObligationLane(ctx context.Context, lane string, lease, timeout time.Duration) {
-	if !s.mediaAuthorityEnabled() && lane != commodoredb.MediaAuthorityLaneIngestRevocation {
+	if !s.mediaAuthorityEnabled() && lane != commodoredb.MediaAuthorityLaneIngestRevocation && lane != commodoredb.MediaAuthorityLaneIngestStop {
 		return
 	}
 	completed := make(chan struct{}, mediaAuthorityRefreshWorkers)
@@ -278,6 +278,16 @@ func (s *CommodoreServer) renewMediaAuthorityObligationLease(ctx context.Context
 }
 
 func (s *CommodoreServer) compileMediaAuthorityObligation(ctx context.Context, row commodoredb.ClaimMediaAuthorityObligationsRow) error {
+	if row.Lane == commodoredb.MediaAuthorityLaneIngestStop {
+		if err := s.applyIngestStopObligation(ctx, row); err != nil {
+			if class, _ := classifyAuthorityCompileError(err); class == authorityCompilePark {
+				return err
+			}
+			return &authorityCompileError{class: authorityCompileRevocationPending, code: "ingest_disconnect_pending", err: err}
+		}
+		return nil
+	}
+
 	target := commodoredb.MediaAuthorityTarget{Key: row.TargetKey, Kind: row.TargetKind}
 	if row.Lane == commodoredb.MediaAuthorityLaneIngestRevocation {
 		if row.TargetKind == commodoredb.MediaAuthorityTargetTenant {
@@ -572,7 +582,7 @@ func (s *CommodoreServer) observeMediaAuthorityObligationStats(ctx context.Conte
 	for _, row := range lanes {
 		due[row.Lane] = row
 	}
-	for _, lane := range []string{commodoredb.MediaAuthorityLaneEvent, commodoredb.MediaAuthorityLaneBulk, commodoredb.MediaAuthorityLaneIngestRevocation, commodoredb.MediaAuthorityLaneObjectDeadline, commodoredb.MediaAuthorityLaneTenantDeadline} {
+	for _, lane := range []string{commodoredb.MediaAuthorityLaneEvent, commodoredb.MediaAuthorityLaneBulk, commodoredb.MediaAuthorityLaneIngestRevocation, commodoredb.MediaAuthorityLaneIngestStop, commodoredb.MediaAuthorityLaneObjectDeadline, commodoredb.MediaAuthorityLaneTenantDeadline} {
 		s.metrics.MediaAuthorityRefreshPending.WithLabelValues(lane).Set(float64(due[lane].DueCount))
 		s.metrics.MediaAuthorityRefreshOldestPendingSeconds.WithLabelValues(lane).Set(due[lane].OldestDueSeconds)
 	}

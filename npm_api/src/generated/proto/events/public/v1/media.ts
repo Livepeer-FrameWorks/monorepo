@@ -108,6 +108,18 @@ export interface UploadFailed {
   reason: MediaFailureReason;
 }
 
+/**
+ * RecordingChapterReady reports that one chapter of a recording became
+ * playable.
+ */
+export interface RecordingChapterReady {
+  artifact: Artifact | undefined;
+  chapterId: string;
+  startMs: bigint;
+  endMs: bigint;
+  sizeBytes: bigint;
+}
+
 export const ClipRequested: MessageFns<ClipRequested> = {
   fromJSON(object: any): ClipRequested {
     return {
@@ -267,6 +279,26 @@ export const UploadFailed: MessageFns<UploadFailed> = {
       reason: isSet(object.reason)
         ? mediaFailureReasonFromJSON(object.reason)
         : MediaFailureReason.MEDIA_FAILURE_REASON_UNSPECIFIED,
+    };
+  },
+};
+
+export const RecordingChapterReady: MessageFns<RecordingChapterReady> = {
+  fromJSON(object: any): RecordingChapterReady {
+    return {
+      artifact: isSet(object.artifact) ? Artifact.fromJSON(object.artifact) : undefined,
+      chapterId: isSet(object.chapterId)
+        ? globalThis.String(object.chapterId)
+        : isSet(object.chapter_id)
+        ? globalThis.String(object.chapter_id)
+        : "",
+      startMs: isSet(object.startMs) ? BigInt(object.startMs) : isSet(object.start_ms) ? BigInt(object.start_ms) : 0n,
+      endMs: isSet(object.endMs) ? BigInt(object.endMs) : isSet(object.end_ms) ? BigInt(object.end_ms) : 0n,
+      sizeBytes: isSet(object.sizeBytes)
+        ? BigInt(object.sizeBytes)
+        : isSet(object.size_bytes)
+        ? BigInt(object.size_bytes)
+        : 0n,
     };
   },
 };

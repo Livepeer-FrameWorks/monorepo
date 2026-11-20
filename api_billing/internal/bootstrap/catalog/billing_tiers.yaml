@@ -43,8 +43,144 @@
 # Stripe IDs (stripe_product_id, stripe_price_id_*) are filled by Purser's
 # startup Stripe sync; the reconciler leaves them alone if already populated.
 
+transcode_ladders:
+  - name: standard
+    display_name: Standard
+    description: Video renditions up to 1080p.
+    renditions:
+      - {
+          "name": "360p",
+          "codec": "H264",
+          "resolution": "x360",
+          "bitrate": 900000,
+          "profile": "high",
+          "track_inhibit": "video=<640x360",
+        }
+      - {
+          "name": "480p",
+          "codec": "H264",
+          "resolution": "x480",
+          "bitrate": 1600000,
+          "profile": "high",
+          "track_inhibit": "video=<850x480",
+        }
+      - {
+          "name": "720p",
+          "codec": "H264",
+          "resolution": "x720",
+          "bitrate": 4500000,
+          "profile": "high",
+          "track_inhibit": "video=<1280x720",
+        }
+      - {
+          "name": "1080p",
+          "codec": "H264",
+          "resolution": "x1080",
+          "bitrate": 7800000,
+          "profile": "high",
+          "track_inhibit": "video=<1920x1080",
+        }
+  - name: qhd
+    display_name: 1440p
+    description: Video renditions up to 1440p.
+    renditions:
+      - {
+          "name": "360p",
+          "codec": "H264",
+          "resolution": "x360",
+          "bitrate": 900000,
+          "profile": "high",
+          "track_inhibit": "video=<640x360",
+        }
+      - {
+          "name": "480p",
+          "codec": "H264",
+          "resolution": "x480",
+          "bitrate": 1600000,
+          "profile": "high",
+          "track_inhibit": "video=<850x480",
+        }
+      - {
+          "name": "720p",
+          "codec": "H264",
+          "resolution": "x720",
+          "bitrate": 4500000,
+          "profile": "high",
+          "track_inhibit": "video=<1280x720",
+        }
+      - {
+          "name": "1080p",
+          "codec": "H264",
+          "resolution": "x1080",
+          "bitrate": 7800000,
+          "profile": "high",
+          "track_inhibit": "video=<1920x1080",
+        }
+      - {
+          "name": "1440p",
+          "codec": "H264",
+          "resolution": "x1440",
+          "bitrate": 10800000,
+          "profile": "high",
+          "track_inhibit": "video=<2560x1440",
+        }
+  - name: uhd
+    display_name: 4K
+    description: Video renditions up to 2160p.
+    renditions:
+      - {
+          "name": "360p",
+          "codec": "H264",
+          "resolution": "x360",
+          "bitrate": 900000,
+          "profile": "high",
+          "track_inhibit": "video=<640x360",
+        }
+      - {
+          "name": "480p",
+          "codec": "H264",
+          "resolution": "x480",
+          "bitrate": 1600000,
+          "profile": "high",
+          "track_inhibit": "video=<850x480",
+        }
+      - {
+          "name": "720p",
+          "codec": "H264",
+          "resolution": "x720",
+          "bitrate": 4500000,
+          "profile": "high",
+          "track_inhibit": "video=<1280x720",
+        }
+      - {
+          "name": "1080p",
+          "codec": "H264",
+          "resolution": "x1080",
+          "bitrate": 7800000,
+          "profile": "high",
+          "track_inhibit": "video=<1920x1080",
+        }
+      - {
+          "name": "1440p",
+          "codec": "H264",
+          "resolution": "x1440",
+          "bitrate": 10800000,
+          "profile": "high",
+          "track_inhibit": "video=<2560x1440",
+        }
+      - {
+          "name": "2160p",
+          "codec": "H264",
+          "resolution": "x2160",
+          "bitrate": 15000000,
+          "profile": "high",
+          "track_inhibit": "video=<3840x2160",
+        }
+
 tiers:
   - tier_name: payg
+    allowed_transcode_ladders: [standard, qhd, uhd]
+    default_transcode_ladder: standard
     display_name: Pay As You Go
     description: Prepaid account balance. Pay per delivered minute, no subscription.
     base_price: 0.00
@@ -59,7 +195,7 @@ tiers:
       custom_subdomain_enabled: false
       custom_domain_enabled: false
       dvr_default_window_seconds: 14400 # 4h
-      dvr_max_window_seconds: 86400 # 24h
+      dvr_max_window_seconds: 86400 # 12h
       dvr_default_segment_duration_seconds: 12
       dvr_max_entries: 7200
       dvr_allow_cluster_extension: false
@@ -77,17 +213,19 @@ tiers:
     is_default_prepaid: true
     is_default_postpaid: false
     processes_live: &standard_live |
-      [{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none&meta=none","x-LSP-name":"Audio to Opus"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none&meta=none","x-LSP-name":"Audio to AAC"},{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":4500000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1280x720"},{"name":"1080p","bitrate":7800000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}],"track_inhibit":"video=<640x360","x-LSP-name":"ABR Transcode"},{"process":"Thumbs","track_select":"video=lowres","x-LSP-name":"Thumbnail Sprites"}]
+      [{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none&meta=none","x-LSP-name":"Audio to Opus"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none&meta=none","x-LSP-name":"Audio to AAC"},{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","track_inhibit":"video=<640x360","x-LSP-name":"ABR Transcode"},{"process":"Thumbs","track_select":"video=lowres","x-LSP-name":"Thumbnail Sprites"}]
     processes_dvr: &standard_dvr |
-      [{"process":"Thumbs","x-LSP-name":"DVR Thumbnail Sprites","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]
+      [{"process":"Thumbs","x-LSP-name":"DVR Thumbnail Sprites","track_select":"video=maxbps","track_inhibit":"meta=thumbvtt","inconsequential":true,"exit_unmask":true}]
     processes_clip: &standard_clip |
-      [{"process":"Thumbs","x-LSP-name":"Clip Thumbnail Sprites","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]
+      [{"process":"Thumbs","x-LSP-name":"Clip Thumbnail Sprites","track_select":"video=maxbps","track_inhibit":"meta=thumbvtt","inconsequential":true,"exit_unmask":true}]
     processes_dvr_finalize: &standard_dvr_finalize |
-      [{"process":"Thumbs","x-LSP-name":"DVR Chapter Thumbnail Sprites","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]
+      [{"process":"Thumbs","x-LSP-name":"DVR Chapter Thumbnail Sprites","track_select":"video=maxbps","track_inhibit":"meta=thumbvtt","inconsequential":true,"exit_unmask":true}]
     processes_vod: &standard_vod |
-      [{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none&meta=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none&meta=none"},{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":4500000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1280x720"},{"name":"1080p","bitrate":7800000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}],"track_inhibit":"video=<640x360"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]
+      [{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none&meta=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none&meta=none"},{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","track_inhibit":"video=<640x360"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"meta=thumbvtt","inconsequential":true,"exit_unmask":true}]
 
   - tier_name: free
+    allowed_transcode_ladders: [standard]
+    default_transcode_ladder: standard
     display_name: Free
     description: Hosted plan with 10K delivered mins, 10 GB storage, 3 streams and 200 viewers. Livepeer transcoding.
     base_price: 0.00
@@ -141,8 +279,10 @@ tiers:
     processes_vod: *standard_vod
 
   - tier_name: supporter
+    allowed_transcode_ladders: [standard, qhd, uhd]
+    default_transcode_ladder: standard
     display_name: Supporter
-    description: 120K delivered mins, hosted load balancer, custom subdomain. ~100-300 viewers.
+    description: 120K delivered mins, hosted load balancer, custom subdomain.
     base_price: 79.00
     currency: EUR
     billing_period: monthly
@@ -179,8 +319,10 @@ tiers:
     processes_vod: *standard_vod
 
   - tier_name: developer
+    allowed_transcode_ladders: [standard, qhd, uhd]
+    default_transcode_ladder: standard
     display_name: Developer
-    description: 500K delivered mins, lower overage rates, team features as they ship. ~500-1K viewers.
+    description: 500K delivered mins, lower overage rates, team features as they ship.
     base_price: 249.00
     currency: EUR
     billing_period: monthly
@@ -217,8 +359,10 @@ tiers:
     processes_vod: *standard_vod
 
   - tier_name: production
+    allowed_transcode_ladders: [standard, qhd, uhd]
+    default_transcode_ladder: standard
     display_name: Production
-    description: 2M delivered mins, lowest overage rates, dedicated processing allocation. ~2-5K viewers.
+    description: 2M delivered mins, lowest overage rates, dedicated processing allocation.
     base_price: 999.00
     currency: EUR
     billing_period: monthly
@@ -255,6 +399,8 @@ tiers:
     processes_vod: *standard_vod
 
   - tier_name: enterprise
+    allowed_transcode_ladders: [standard, qhd, uhd]
+    default_transcode_ladder: standard
     display_name: Enterprise
     description: Custom capacity, private deployments, dedicated support, custom SLAs. Contact us.
     base_price: 0.00

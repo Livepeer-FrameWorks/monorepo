@@ -22,6 +22,17 @@
           - ansible_facts.services['frameworks-caddy.service'].state == 'running'
         fail_msg: "edge native: one or more services not running"
 
+    - name: Read rendered Helmsman environment
+      ansible.builtin.slurp:
+        src: /etc/frameworks/helmsman.env
+      register: edge_rendered_helmsman_env
+
+    - name: Assert bandwidth is not provisioned through the environment
+      ansible.builtin.assert:
+        that:
+          - "'HELMSMAN_BW_LIMIT_BYTES_PER_SEC' not in (edge_rendered_helmsman_env.content | b64decode)"
+        fail_msg: "Node bandwidth must come from the capacity API and config seed"
+
     - name: Wait for Caddy :443 (edge bootstrap listener)
       ansible.builtin.wait_for:
         host: 127.0.0.1

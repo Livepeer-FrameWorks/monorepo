@@ -173,8 +173,11 @@ func TestDoCreateStreamKey(t *testing.T) {
 	}
 	r := newResolver(commo)
 	key, err := r.DoCreateStreamKey(clientstest.AuthedCtx("t1"), "s1", model.CreateStreamKeyInput{Name: "ci-key"})
-	if err != nil || key == nil || key.Id != "k9" {
+	if err != nil || key == nil {
 		t.Fatalf("DoCreateStreamKey = (%+v, %v)", key, err)
+	}
+	if primary, ok := key.(*commodorepb.StreamKey); !ok || primary.GetId() != "k9" {
+		t.Fatalf("unexpected legacy backend response: %T", key)
 	}
 	if gotName != "ci-key" {
 		t.Errorf("key name not forwarded: %q", gotName)

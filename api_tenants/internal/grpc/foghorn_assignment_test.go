@@ -170,7 +170,7 @@ func expectSelfHostingClusterWrites(mock sqlmock.Sqlmock) {
 	mock.ExpectQuery(lockTenantOwnershipSQL).
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"max_owned_clusters", "is_provider"}).AddRow(10, true))
-	mock.ExpectExec("(?s)INSERT INTO quartermaster\\.infrastructure_clusters.*max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps.*VALUES.*0, 0, 0.*NULLIF\\(\\$8::text, ''\\), \\$2, 'tenant_private'").
+	mock.ExpectExec("(?s)INSERT INTO quartermaster\\.infrastructure_clusters.*max_concurrent_streams, max_concurrent_viewers.*VALUES.*0, 0.*NULLIF\\(\\$8::text, ''\\), \\$2, 'tenant_private'").
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "Tenant Edge", "tenant-1", nil, sqlmock.AnyArg(), "media-eu-1", "eu", "frameworks.network").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("(?s)INSERT INTO quartermaster\\.tenant_cluster_access.*VALUES").
@@ -248,7 +248,7 @@ func TestCreatePrivateClusterUsesUnlimitedCapacityDefaults(t *testing.T) {
 	mock.ExpectQuery(lockTenantOwnershipSQL).
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"max_owned_clusters", "is_provider"}).AddRow(10, true))
-	mock.ExpectExec("(?s)INSERT INTO quartermaster\\.infrastructure_clusters.*max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps.*VALUES.*0, 0, 0.*NULLIF\\(\\$8::text, ''\\), \\$2, 'tenant_private'").
+	mock.ExpectExec("(?s)INSERT INTO quartermaster\\.infrastructure_clusters.*max_concurrent_streams, max_concurrent_viewers.*VALUES.*0, 0.*NULLIF\\(\\$8::text, ''\\), \\$2, 'tenant_private'").
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "Tenant Edge", "tenant-1", nil, sqlmock.AnyArg(), "media-eu-1", "eu", "frameworks.network").
 		WillReturnError(errors.New("stop after cluster insert"))
 	mock.ExpectRollback()

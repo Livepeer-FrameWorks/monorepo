@@ -49,15 +49,6 @@ VALUES (
 ) ON CONFLICT (internal_name) DO NOTHING;
 
 -- Create primary stream key for demo stream
-INSERT INTO commodore.stream_keys (tenant_id, user_id, stream_id, key_value, key_name, is_active)
-VALUES (
-    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
-    '5eedface-5e1f-da7a-face-5e1fda7a0001',
-    '5eedfeed-11fe-ca57-feed-11feca570001',
-    'sk_demo_live_stream_primary_key',
-    'Primary Key',
-    TRUE
-) ON CONFLICT (key_value) DO NOTHING;
 
 -- ============================================================================
 -- COMMODORE: Demo Clips (Business Registry)

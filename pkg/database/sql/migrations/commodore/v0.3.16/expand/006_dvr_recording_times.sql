@@ -1,0 +1,3 @@
+ALTER TABLE commodore.dvr_recordings
+    ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS ended_at TIMESTAMPTZ;

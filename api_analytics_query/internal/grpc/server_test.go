@@ -301,23 +301,15 @@ func TestGetNetworkLiveStatsEgressCapacity(t *testing.T) {
 		logger:     logging.NewLoggerWithService("periscope-query-test"),
 	}
 
-	// Two clusters:
-	//   edge-a: one healthy/normal node (counted) + one maintenance node (load
-	//   counted, capacity excluded) + one unhealthy node (capacity excluded).
-	//   edge-b: one healthy/normal node only.
-	// Aggregated by ClickHouse, the result the resolver scans is the per-cluster
-	// row: (cluster_id, sum(up_speed), sum(down_speed), sumIf(bw_limit,...), countIf(is_healthy=1)).
-	mock.ExpectQuery(`(?s)sumIf\(bw_limit, is_healthy = 1 AND operational_mode = 'normal'\).*FROM periscope\.node_state_current FINAL`).WillReturnRows(
-		sqlmock.NewRows([]string{"cluster_id", "up", "down", "egress_capacity_bps", "active_nodes"}).
-			// edge-a: up 700+200+50, down 100+30+5, capacity only from the healthy normal node (1.25 Gbps)
-			AddRow("edge-a", uint64(950), uint64(135), uint64(1_250_000_000), int32(2)).
-			// edge-b: single healthy normal 10 Gbps node, 500 up / 50 down
-			AddRow("edge-b", uint64(500), uint64(50), uint64(10_000_000_000), int32(1)),
+	mock.ExpectQuery(`(?s)sum\(if\(egress_budget > 0.*countIf\(budget_source = 'DEFAULT'\).*WHERE is_healthy = 1 AND operational_mode = 'normal'.*updated_at >= now\(\) - INTERVAL 60 SECOND`).WillReturnRows(
+		sqlmock.NewRows([]string{"cluster_id", "up", "down", "egress_capacity_bps", "active_nodes", "defaults", "viewers"}).
+			AddRow("edge-a", uint64(700), uint64(100), uint64(1_250_000_000), int32(1), int32(0), int32(120)).
+			AddRow("edge-b", uint64(500), uint64(50), uint64(10_000_000_000), int32(1), int32(1), int32(40)),
 	)
 	mock.ExpectQuery(`FROM periscope\.stream_state_current`).WillReturnRows(
-		sqlmock.NewRows([]string{"cluster_id", "streams", "viewers"}).
-			AddRow("edge-a", int32(3), int32(120)).
-			AddRow("edge-b", int32(1), int32(40)),
+		sqlmock.NewRows([]string{"cluster_id", "streams"}).
+			AddRow("edge-a", int32(3)).
+			AddRow("edge-b", int32(1)),
 	)
 
 	resp, err := server.GetNetworkLiveStats(context.Background(), &periscopepb.GetNetworkLiveStatsRequest{})
@@ -334,11 +326,14 @@ func TestGetNetworkLiveStatsEgressCapacity(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing edge-a in response")
 	}
-	if a.EgressCapacityBps != 1_250_000_000 {
-		t.Errorf("edge-a egress capacity = %d, want 1_250_000_000 (maintenance + unhealthy nodes excluded)", a.EgressCapacityBps)
+	if a.EgressBudgetBytesPerSec != 1_250_000_000 {
+		t.Errorf("edge-a egress capacity = %d, want 1_250_000_000 (maintenance + unhealthy nodes excluded)", a.EgressBudgetBytesPerSec)
 	}
-	if a.UploadBytesPerSec != 950 || a.DownloadBytesPerSec != 135 {
-		t.Errorf("edge-a up/down = %d/%d, want 950/135 (all nodes' load aggregated)", a.UploadBytesPerSec, a.DownloadBytesPerSec)
+	if a.UploadBytesPerSec != 700 || a.DownloadBytesPerSec != 100 {
+		t.Errorf("edge-a up/down = %d/%d, want 700/100 (eligible nodes only)", a.UploadBytesPerSec, a.DownloadBytesPerSec)
+	}
+	if a.GetEgressUsableBytesPerSec() != 1_062_500_000 || a.GetEgressObservedBytesPerSec() != 700 || a.GetDefaultBudgetNodes() != 0 || a.GetActiveNodes() != 1 {
+		t.Errorf("edge-a capacity: %+v", a)
 	}
 	if a.ActiveStreams != 3 || a.CurrentViewers != 120 {
 		t.Errorf("edge-a streams/viewers = %d/%d, want 3/120", a.ActiveStreams, a.CurrentViewers)
@@ -348,8 +343,8 @@ func TestGetNetworkLiveStatsEgressCapacity(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing edge-b in response")
 	}
-	if b.EgressCapacityBps != 10_000_000_000 {
-		t.Errorf("edge-b egress capacity = %d, want 10_000_000_000", b.EgressCapacityBps)
+	if b.EgressBudgetBytesPerSec != 10_000_000_000 {
+		t.Errorf("edge-b egress capacity = %d, want 10_000_000_000", b.EgressBudgetBytesPerSec)
 	}
 
 	if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
@@ -1748,4 +1743,41 @@ func TestGetArtifactNodeCopiesTruncation(t *testing.T) {
 			t.Errorf("unmet: %v", err)
 		}
 	})
+}
+
+func TestNetworkLiveStatsFailsOnStorageErrors(t *testing.T) {
+	for _, failure := range []string{"query", "scan", "rows", "stream-query", "stream-scan", "stream-rows"} {
+		t.Run(failure, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			server := &PeriscopeServer{clickhouse: db, logger: logging.NewLoggerWithService("test")}
+			expected := mock.ExpectQuery(`FROM periscope.node_state_current`)
+			if strings.HasPrefix(failure, "stream-") {
+				expected.WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "up", "down", "budget", "nodes", "defaults", "viewers"}).AddRow("cluster", 0, 0, 125000000, 1, 1, 0))
+				expected = mock.ExpectQuery(`FROM periscope.stream_state_current`)
+			}
+			if failure == "query" || failure == "stream-query" {
+				expected.WillReturnError(errors.New("offline"))
+			} else {
+				row := sqlmock.NewRows([]string{"cluster_id", "up", "down", "budget", "nodes", "defaults", "viewers"}).AddRow("cluster", "bad-value", 0, 125000000, 1, 1, 0)
+				if strings.HasPrefix(failure, "stream-") {
+					row = sqlmock.NewRows([]string{"cluster_id", "streams"}).AddRow("cluster", "bad-value")
+				}
+				if failure == "rows" || failure == "stream-rows" {
+					row.RowError(0, errors.New("stream interrupted"))
+				}
+				expected.WillReturnRows(row)
+			}
+			_, err = server.GetNetworkLiveStats(context.Background(), &periscopepb.GetNetworkLiveStatsRequest{})
+			if status.Code(err) != codes.Unavailable {
+				t.Fatalf("%s failure returned %v, want Unavailable", failure, err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }

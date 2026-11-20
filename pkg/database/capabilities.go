@@ -87,6 +87,7 @@ var capabilityCatalog = map[string][]Capability{
 		{Name: "network observation receipt and outbox", Engine: EnginePostgres, Probe: "SELECT l.tenant_id, r.id, r.digest, r.received_at, o.payload, o.next_attempt_at, o.attempts FROM network_observer.scheduler_lock l, network_observer.ingest_receipts r, network_observer.telemetry_outbox o LIMIT 0", IntroducedIn: "v0.3.13"},
 	},
 	"periscope-ingest": {
+		{Name: "node bandwidth capacity", Engine: EngineClickHouse, Probe: "SELECT egress_budget, budget_source FROM periscope.node_state_current LIMIT 0", IntroducedIn: "v0.3.16"},
 		{Name: "subsecond viewer lifecycle", Engine: EngineClickHouse, Probe: "SELECT tenant_id, source_timestamp_ms FROM periscope.viewer_connection_events LIMIT 0", IntroducedIn: "v0.3.14"},
 		{Name: "network observations and snapshot rollups", Engine: EngineClickHouse, Probe: "SELECT n.tenant_id, n.event_id, n.inserted_at, n.accounting_version, toTypeName(r.latency_state), toTypeName(r.duration_ratio_state), r.snapshot_version, w.service_charge_numerator, w.accepted_source_ms, g.gateway_id, g.latency_sum FROM periscope.network_observations n, periscope.network_observation_rollups r, periscope.network_work_rollups w, periscope.network_gateway_rollups g LIMIT 0", IntroducedIn: "v0.3.13"},
 		{Name: "distributed ledger-worker locking", Engine: EnginePostgres, Probe: "SELECT pg_try_advisory_xact_lock(hashtext('periscope-ingest:capability'))"},
@@ -95,6 +96,7 @@ var capabilityCatalog = map[string][]Capability{
 		{Name: "domain event projections", Engine: EngineClickHouse, Probe: "SELECT a.tenant_id, a.artifact_id, a.version, e.actor_auth_type, e.actor_token_hash FROM periscope.artifact_state_current_v2 AS a, periscope.api_events AS e LIMIT 0", IntroducedIn: "v0.3.11"},
 	},
 	"periscope-query": {
+		{Name: "node bandwidth capacity", Engine: EngineClickHouse, Probe: "SELECT egress_budget, budget_source FROM periscope.node_state_current LIMIT 0", IntroducedIn: "v0.3.16"},
 		{Name: "subsecond viewer lifecycle", Engine: EngineClickHouse, Probe: "SELECT tenant_id, last_connected_at_ms, last_disconnected_at_ms FROM periscope.viewer_sessions_current LIMIT 0", IntroducedIn: "v0.3.14"},
 		{Name: "network public and private projection", Engine: EngineClickHouse, Probe: "SELECT n.tenant_id, n.public_data, n.private_tenant_id, n.private_data, n.accounting_version, r.samples, r.qualified_samples, toTypeName(r.latency_state), toTypeName(r.duration_ratio_state), w.service_charge_numerator, w.accepted_source_ms, g.gateway_id, g.latency_sum FROM periscope.network_observations n, periscope.network_observation_rollups r, periscope.network_work_rollups w, periscope.network_gateway_rollups g LIMIT 0", IntroducedIn: "v0.3.13"},
 		{Name: "delegated-token replay fencing", Engine: EnginePostgres, Probe: "SELECT jti, expires_at FROM periscope.delegated_jwt_replays LIMIT 0"},
@@ -116,6 +118,7 @@ var capabilityCatalog = map[string][]Capability{
 		{Name: "payment-owned webhook recovery", Engine: EnginePostgres, Probe: "SELECT tenant_id, provider_payment_id, last_error_code FROM purser.provider_webhook_inbox LIMIT 0", IntroducedIn: "v0.3.15"},
 	},
 	"quartermaster": {
+		{Name: "node bandwidth capacity", Engine: EnginePostgres, Probe: "SELECT node_id, egress_budget_bytes_per_sec, ingress_budget_bytes_per_sec, revision, updated_by, updated_at FROM quartermaster.infrastructure_node_capacity LIMIT 0", IntroducedIn: "v0.3.16"},
 		{Name: "manifest registry ownership", Engine: EnginePostgres, Probe: "SELECT registration_source, registry_owner FROM quartermaster.service_instances LIMIT 0", IntroducedIn: "v0.3.15"},
 		{Name: "media capacity consent", Engine: EnginePostgres, Probe: "SELECT media_consent_revision, media_allow_ingest, media_allow_serve, media_allow_external_source FROM quartermaster.infrastructure_clusters LIMIT 0"},
 		{Name: "media capacity consent receipts", Engine: EnginePostgres, Probe: "SELECT tenant_id, cluster_record_id, cluster_id, revision, request_sha256, review_digest FROM quartermaster.media_capacity_consent_changes LIMIT 0"},

@@ -588,6 +588,7 @@ func main() {
 			"Restream desired-state command delivery and correlated acknowledgement outcomes",
 			[]string{"operation", "outcome"},
 		),
+		PullAdmissionMisses: metricsCollector.NewCounter("pull_admission_misses_total", "Playable direct pull buffers healed without a pending admission", nil),
 		OfflineEffectDeadLetters: metricsCollector.NewCounter(
 			"offline_effect_dead_letters_total",
 			"Durable ingest-offline obligations retained after exhaustion or revived by a late acknowledgement",
@@ -1304,12 +1305,13 @@ func main() {
 	// long-lived Helmsman control stream. Uses the HA-aware SendDrainStream
 	// so a replacement admitted on one Foghorn instance can still drain an
 	// old owner connected to a peer instance.
-	triggerProcessor.SetDrainStreamDispatcher(func(ctx context.Context, nodeID, runtimeName, reason, sourceGeneration, priorOwnerSourceGeneration string) error {
+	triggerProcessor.SetDrainStreamDispatcher(func(ctx context.Context, nodeID, runtimeName, reason, sourceGeneration, priorOwnerSourceGeneration, tenantID string) error {
 		return control.SendDrainStream(ctx, nodeID, &ipcpb.DrainStreamRequest{
 			RuntimeName:                runtimeName,
 			Reason:                     reason,
 			SourceGeneration:           sourceGeneration,
 			PriorOwnerSourceGeneration: priorOwnerSourceGeneration,
+			TenantId:                   tenantID,
 		})
 	})
 	logger.Info("Initialized trigger processor with Commodore, Decklog and Quartermaster clients")
@@ -2064,6 +2066,7 @@ func main() {
 	certRefreshCtx, certRefreshCancel := context.WithCancel(context.Background())
 	defer certRefreshCancel()
 	go control.StartCertRefreshLoop(certRefreshCtx, 1*time.Hour, logger)
+	go control.StartCapacitySyncLoop(certRefreshCtx, time.Minute, logger)
 
 	// Refresh served cluster assignments from Quartermaster every 5 minutes.
 	clusterRefreshCtx, clusterRefreshCancel := context.WithCancel(context.Background())
@@ -2097,7 +2100,7 @@ func main() {
 		DB:            db,
 		Logger:        logger,
 		Interval:      1 * time.Hour,
-		RetentionDays: 30, // Default 30 days
+		RetentionDays: 30, // Failed-artifact cleanup horizon
 		DecklogClient: decklogClient,
 	})
 	retentionJob.Start()
@@ -2319,7 +2322,7 @@ func main() {
 	defer ingestAdmissionEffectsJob.Stop()
 
 	// Keep Commodore's record of where each stream is being published current
-	// for ordinary push ingest. PUSH_REWRITE claims that placement once, under
+	// for push and direct pull ingest. Admission claims that placement once, under
 	// a short lease; without this the claim lapses under a still-connected
 	// publisher and endpoint resolution stops routing their reconnects here.
 	// The cadence is derived from that lease inside the job, so it is not
@@ -2346,19 +2349,8 @@ func main() {
 			return out, nil
 		},
 		ClaimLost: func(ctx context.Context, refused *commodorepb.ActiveIngestStream) error {
-			nodeID, retired, err := control.RetireIngestSessionByClaim(ctx, refused.GetTenantId(), refused.GetInternalName(), refused.GetClaimToken(), logger)
-			if err != nil || !retired {
-				return err
-			}
-			binding, runtimeErr := control.PublisherRuntimeBindingForClaim(ctx, refused.GetTenantId(), refused.GetInternalName(), nodeID, refused.GetClaimToken())
-			if runtimeErr != nil {
-				return runtimeErr
-			}
-			return control.SendDrainStream(ctx, nodeID, &ipcpb.DrainStreamRequest{
-				RuntimeName:                binding.RuntimeName,
-				Reason:                     "placement_claim_lost",
-				PriorOwnerSourceGeneration: binding.Generation,
-			})
+			_, _, err := control.RetireIngestSessionByClaim(ctx, refused.GetTenantId(), refused.GetInternalName(), refused.GetClaimToken(), logger)
+			return err
 		},
 	}
 	// Assigned only when present: a nil *GRPCClient in the interface field

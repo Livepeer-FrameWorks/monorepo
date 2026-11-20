@@ -10,6 +10,7 @@ import (
 	context "context"
 	foghorn_control "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	media_placement "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
+	quartermaster_values "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster_values"
 	shared "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
@@ -71,6 +72,9 @@ const (
 	InternalService_GetTenantPrimaryUser_FullMethodName               = "/commodore.InternalService/GetTenantPrimaryUser"
 	InternalService_CreateUserInTenant_FullMethodName                 = "/commodore.InternalService/CreateUserInTenant"
 	InternalService_GetMediaRetentionPolicy_FullMethodName            = "/commodore.InternalService/GetMediaRetentionPolicy"
+	InternalService_SetVodOriginalPolicy_FullMethodName               = "/commodore.InternalService/SetVodOriginalPolicy"
+	InternalService_GetTranscodeLadderPolicy_FullMethodName           = "/commodore.InternalService/GetTranscodeLadderPolicy"
+	InternalService_SetTenantTranscodeLadder_FullMethodName           = "/commodore.InternalService/SetTenantTranscodeLadder"
 	InternalService_SetMediaRetentionPolicy_FullMethodName            = "/commodore.InternalService/SetMediaRetentionPolicy"
 	InternalService_UpdateAssetRetention_FullMethodName               = "/commodore.InternalService/UpdateAssetRetention"
 	InternalService_ResetAssetRetention_FullMethodName                = "/commodore.InternalService/ResetAssetRetention"
@@ -308,6 +312,9 @@ type InternalServiceClient interface {
 	// after finalize push a new retention_until into Foghorn via
 	// foghorn.DVRControlService.OverrideArtifactRetention.
 	GetMediaRetentionPolicy(ctx context.Context, in *GetMediaRetentionPolicyRequest, opts ...grpc.CallOption) (*GetMediaRetentionPolicyResponse, error)
+	SetVodOriginalPolicy(ctx context.Context, in *SetVodOriginalPolicyRequest, opts ...grpc.CallOption) (*GetMediaRetentionPolicyResponse, error)
+	GetTranscodeLadderPolicy(ctx context.Context, in *GetTranscodeLadderPolicyRequest, opts ...grpc.CallOption) (*TranscodeLadderPolicy, error)
+	SetTenantTranscodeLadder(ctx context.Context, in *SetTenantTranscodeLadderRequest, opts ...grpc.CallOption) (*TranscodeLadderPolicy, error)
 	SetMediaRetentionPolicy(ctx context.Context, in *SetMediaRetentionPolicyRequest, opts ...grpc.CallOption) (*SetMediaRetentionPolicyResponse, error)
 	UpdateAssetRetention(ctx context.Context, in *UpdateAssetRetentionRequest, opts ...grpc.CallOption) (*UpdateAssetRetentionResponse, error)
 	ResetAssetRetention(ctx context.Context, in *ResetAssetRetentionRequest, opts ...grpc.CallOption) (*UpdateAssetRetentionResponse, error)
@@ -849,6 +856,36 @@ func (c *internalServiceClient) GetMediaRetentionPolicy(ctx context.Context, in 
 	return out, nil
 }
 
+func (c *internalServiceClient) SetVodOriginalPolicy(ctx context.Context, in *SetVodOriginalPolicyRequest, opts ...grpc.CallOption) (*GetMediaRetentionPolicyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetMediaRetentionPolicyResponse)
+	err := c.cc.Invoke(ctx, InternalService_SetVodOriginalPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) GetTranscodeLadderPolicy(ctx context.Context, in *GetTranscodeLadderPolicyRequest, opts ...grpc.CallOption) (*TranscodeLadderPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TranscodeLadderPolicy)
+	err := c.cc.Invoke(ctx, InternalService_GetTranscodeLadderPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) SetTenantTranscodeLadder(ctx context.Context, in *SetTenantTranscodeLadderRequest, opts ...grpc.CallOption) (*TranscodeLadderPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TranscodeLadderPolicy)
+	err := c.cc.Invoke(ctx, InternalService_SetTenantTranscodeLadder_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *internalServiceClient) SetMediaRetentionPolicy(ctx context.Context, in *SetMediaRetentionPolicyRequest, opts ...grpc.CallOption) (*SetMediaRetentionPolicyResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SetMediaRetentionPolicyResponse)
@@ -1246,6 +1283,9 @@ type InternalServiceServer interface {
 	// after finalize push a new retention_until into Foghorn via
 	// foghorn.DVRControlService.OverrideArtifactRetention.
 	GetMediaRetentionPolicy(context.Context, *GetMediaRetentionPolicyRequest) (*GetMediaRetentionPolicyResponse, error)
+	SetVodOriginalPolicy(context.Context, *SetVodOriginalPolicyRequest) (*GetMediaRetentionPolicyResponse, error)
+	GetTranscodeLadderPolicy(context.Context, *GetTranscodeLadderPolicyRequest) (*TranscodeLadderPolicy, error)
+	SetTenantTranscodeLadder(context.Context, *SetTenantTranscodeLadderRequest) (*TranscodeLadderPolicy, error)
 	SetMediaRetentionPolicy(context.Context, *SetMediaRetentionPolicyRequest) (*SetMediaRetentionPolicyResponse, error)
 	UpdateAssetRetention(context.Context, *UpdateAssetRetentionRequest) (*UpdateAssetRetentionResponse, error)
 	ResetAssetRetention(context.Context, *ResetAssetRetentionRequest) (*UpdateAssetRetentionResponse, error)
@@ -1450,6 +1490,15 @@ func (UnimplementedInternalServiceServer) CreateUserInTenant(context.Context, *C
 }
 func (UnimplementedInternalServiceServer) GetMediaRetentionPolicy(context.Context, *GetMediaRetentionPolicyRequest) (*GetMediaRetentionPolicyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetMediaRetentionPolicy not implemented")
+}
+func (UnimplementedInternalServiceServer) SetVodOriginalPolicy(context.Context, *SetVodOriginalPolicyRequest) (*GetMediaRetentionPolicyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetVodOriginalPolicy not implemented")
+}
+func (UnimplementedInternalServiceServer) GetTranscodeLadderPolicy(context.Context, *GetTranscodeLadderPolicyRequest) (*TranscodeLadderPolicy, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetTranscodeLadderPolicy not implemented")
+}
+func (UnimplementedInternalServiceServer) SetTenantTranscodeLadder(context.Context, *SetTenantTranscodeLadderRequest) (*TranscodeLadderPolicy, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetTenantTranscodeLadder not implemented")
 }
 func (UnimplementedInternalServiceServer) SetMediaRetentionPolicy(context.Context, *SetMediaRetentionPolicyRequest) (*SetMediaRetentionPolicyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetMediaRetentionPolicy not implemented")
@@ -2390,6 +2439,60 @@ func _InternalService_GetMediaRetentionPolicy_Handler(srv interface{}, ctx conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InternalService_SetVodOriginalPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetVodOriginalPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).SetVodOriginalPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_SetVodOriginalPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).SetVodOriginalPolicy(ctx, req.(*SetVodOriginalPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_GetTranscodeLadderPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTranscodeLadderPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).GetTranscodeLadderPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_GetTranscodeLadderPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).GetTranscodeLadderPolicy(ctx, req.(*GetTranscodeLadderPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_SetTenantTranscodeLadder_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetTenantTranscodeLadderRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).SetTenantTranscodeLadder(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_SetTenantTranscodeLadder_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).SetTenantTranscodeLadder(ctx, req.(*SetTenantTranscodeLadderRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _InternalService_SetMediaRetentionPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SetMediaRetentionPolicyRequest)
 	if err := dec(in); err != nil {
@@ -2912,6 +3015,18 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetMediaRetentionPolicy",
 			Handler:    _InternalService_GetMediaRetentionPolicy_Handler,
+		},
+		{
+			MethodName: "SetVodOriginalPolicy",
+			Handler:    _InternalService_SetVodOriginalPolicy_Handler,
+		},
+		{
+			MethodName: "GetTranscodeLadderPolicy",
+			Handler:    _InternalService_GetTranscodeLadderPolicy_Handler,
+		},
+		{
+			MethodName: "SetTenantTranscodeLadder",
+			Handler:    _InternalService_SetTenantTranscodeLadder_Handler,
 		},
 		{
 			MethodName: "SetMediaRetentionPolicy",
@@ -4511,20 +4626,26 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	StreamService_DiagnoseStream_FullMethodName   = "/commodore.StreamService/DiagnoseStream"
-	StreamService_CreateStream_FullMethodName     = "/commodore.StreamService/CreateStream"
-	StreamService_GetStream_FullMethodName        = "/commodore.StreamService/GetStream"
-	StreamService_GetStreamsBatch_FullMethodName  = "/commodore.StreamService/GetStreamsBatch"
-	StreamService_ListStreams_FullMethodName      = "/commodore.StreamService/ListStreams"
-	StreamService_UpdateStream_FullMethodName     = "/commodore.StreamService/UpdateStream"
-	StreamService_DeleteStream_FullMethodName     = "/commodore.StreamService/DeleteStream"
-	StreamService_RefreshStreamKey_FullMethodName = "/commodore.StreamService/RefreshStreamKey"
+	StreamService_ListStreamArtifacts_FullMethodName          = "/commodore.StreamService/ListStreamArtifacts"
+	StreamService_GetStreamIngestStates_FullMethodName        = "/commodore.StreamService/GetStreamIngestStates"
+	StreamService_DiagnoseStream_FullMethodName               = "/commodore.StreamService/DiagnoseStream"
+	StreamService_CreateStream_FullMethodName                 = "/commodore.StreamService/CreateStream"
+	StreamService_GetStream_FullMethodName                    = "/commodore.StreamService/GetStream"
+	StreamService_GetStreamsBatch_FullMethodName              = "/commodore.StreamService/GetStreamsBatch"
+	StreamService_ListStreams_FullMethodName                  = "/commodore.StreamService/ListStreams"
+	StreamService_UpdateStream_FullMethodName                 = "/commodore.StreamService/UpdateStream"
+	StreamService_DeleteStream_FullMethodName                 = "/commodore.StreamService/DeleteStream"
+	StreamService_RefreshStreamKey_FullMethodName             = "/commodore.StreamService/RefreshStreamKey"
+	StreamService_RefreshStreamKeyAndEndIngest_FullMethodName = "/commodore.StreamService/RefreshStreamKeyAndEndIngest"
+	StreamService_DisconnectIngest_FullMethodName             = "/commodore.StreamService/DisconnectIngest"
 )
 
 // StreamServiceClient is the client API for StreamService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type StreamServiceClient interface {
+	ListStreamArtifacts(ctx context.Context, in *ListStreamArtifactsRequest, opts ...grpc.CallOption) (*ListStreamArtifactsResponse, error)
+	GetStreamIngestStates(ctx context.Context, in *foghorn_control.GetStreamIngestStatesRequest, opts ...grpc.CallOption) (*foghorn_control.GetStreamIngestStatesResponse, error)
 	// Support metadata only; requires a platform-operator JWT.
 	DiagnoseStream(ctx context.Context, in *DiagnoseStreamRequest, opts ...grpc.CallOption) (*DiagnoseStreamResponse, error)
 	CreateStream(ctx context.Context, in *CreateStreamRequest, opts ...grpc.CallOption) (*CreateStreamResponse, error)
@@ -4534,6 +4655,9 @@ type StreamServiceClient interface {
 	UpdateStream(ctx context.Context, in *UpdateStreamRequest, opts ...grpc.CallOption) (*Stream, error)
 	DeleteStream(ctx context.Context, in *DeleteStreamRequest, opts ...grpc.CallOption) (*DeleteStreamResponse, error)
 	RefreshStreamKey(ctx context.Context, in *RefreshStreamKeyRequest, opts ...grpc.CallOption) (*RefreshStreamKeyResponse, error)
+	// Older servers must refuse rotate-and-end before changing credentials.
+	RefreshStreamKeyAndEndIngest(ctx context.Context, in *RefreshStreamKeyRequest, opts ...grpc.CallOption) (*RefreshStreamKeyResponse, error)
+	DisconnectIngest(ctx context.Context, in *DisconnectIngestRequest, opts ...grpc.CallOption) (*DisconnectIngestResponse, error)
 }
 
 type streamServiceClient struct {
@@ -4542,6 +4666,26 @@ type streamServiceClient struct {
 
 func NewStreamServiceClient(cc grpc.ClientConnInterface) StreamServiceClient {
 	return &streamServiceClient{cc}
+}
+
+func (c *streamServiceClient) ListStreamArtifacts(ctx context.Context, in *ListStreamArtifactsRequest, opts ...grpc.CallOption) (*ListStreamArtifactsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListStreamArtifactsResponse)
+	err := c.cc.Invoke(ctx, StreamService_ListStreamArtifacts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *streamServiceClient) GetStreamIngestStates(ctx context.Context, in *foghorn_control.GetStreamIngestStatesRequest, opts ...grpc.CallOption) (*foghorn_control.GetStreamIngestStatesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(foghorn_control.GetStreamIngestStatesResponse)
+	err := c.cc.Invoke(ctx, StreamService_GetStreamIngestStates_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *streamServiceClient) DiagnoseStream(ctx context.Context, in *DiagnoseStreamRequest, opts ...grpc.CallOption) (*DiagnoseStreamResponse, error) {
@@ -4624,10 +4768,32 @@ func (c *streamServiceClient) RefreshStreamKey(ctx context.Context, in *RefreshS
 	return out, nil
 }
 
+func (c *streamServiceClient) RefreshStreamKeyAndEndIngest(ctx context.Context, in *RefreshStreamKeyRequest, opts ...grpc.CallOption) (*RefreshStreamKeyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RefreshStreamKeyResponse)
+	err := c.cc.Invoke(ctx, StreamService_RefreshStreamKeyAndEndIngest_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *streamServiceClient) DisconnectIngest(ctx context.Context, in *DisconnectIngestRequest, opts ...grpc.CallOption) (*DisconnectIngestResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DisconnectIngestResponse)
+	err := c.cc.Invoke(ctx, StreamService_DisconnectIngest_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // StreamServiceServer is the server API for StreamService service.
 // All implementations must embed UnimplementedStreamServiceServer
 // for forward compatibility.
 type StreamServiceServer interface {
+	ListStreamArtifacts(context.Context, *ListStreamArtifactsRequest) (*ListStreamArtifactsResponse, error)
+	GetStreamIngestStates(context.Context, *foghorn_control.GetStreamIngestStatesRequest) (*foghorn_control.GetStreamIngestStatesResponse, error)
 	// Support metadata only; requires a platform-operator JWT.
 	DiagnoseStream(context.Context, *DiagnoseStreamRequest) (*DiagnoseStreamResponse, error)
 	CreateStream(context.Context, *CreateStreamRequest) (*CreateStreamResponse, error)
@@ -4637,6 +4803,9 @@ type StreamServiceServer interface {
 	UpdateStream(context.Context, *UpdateStreamRequest) (*Stream, error)
 	DeleteStream(context.Context, *DeleteStreamRequest) (*DeleteStreamResponse, error)
 	RefreshStreamKey(context.Context, *RefreshStreamKeyRequest) (*RefreshStreamKeyResponse, error)
+	// Older servers must refuse rotate-and-end before changing credentials.
+	RefreshStreamKeyAndEndIngest(context.Context, *RefreshStreamKeyRequest) (*RefreshStreamKeyResponse, error)
+	DisconnectIngest(context.Context, *DisconnectIngestRequest) (*DisconnectIngestResponse, error)
 	mustEmbedUnimplementedStreamServiceServer()
 }
 
@@ -4647,6 +4816,12 @@ type StreamServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedStreamServiceServer struct{}
 
+func (UnimplementedStreamServiceServer) ListStreamArtifacts(context.Context, *ListStreamArtifactsRequest) (*ListStreamArtifactsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListStreamArtifacts not implemented")
+}
+func (UnimplementedStreamServiceServer) GetStreamIngestStates(context.Context, *foghorn_control.GetStreamIngestStatesRequest) (*foghorn_control.GetStreamIngestStatesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetStreamIngestStates not implemented")
+}
 func (UnimplementedStreamServiceServer) DiagnoseStream(context.Context, *DiagnoseStreamRequest) (*DiagnoseStreamResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DiagnoseStream not implemented")
 }
@@ -4671,6 +4846,12 @@ func (UnimplementedStreamServiceServer) DeleteStream(context.Context, *DeleteStr
 func (UnimplementedStreamServiceServer) RefreshStreamKey(context.Context, *RefreshStreamKeyRequest) (*RefreshStreamKeyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RefreshStreamKey not implemented")
 }
+func (UnimplementedStreamServiceServer) RefreshStreamKeyAndEndIngest(context.Context, *RefreshStreamKeyRequest) (*RefreshStreamKeyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RefreshStreamKeyAndEndIngest not implemented")
+}
+func (UnimplementedStreamServiceServer) DisconnectIngest(context.Context, *DisconnectIngestRequest) (*DisconnectIngestResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DisconnectIngest not implemented")
+}
 func (UnimplementedStreamServiceServer) mustEmbedUnimplementedStreamServiceServer() {}
 func (UnimplementedStreamServiceServer) testEmbeddedByValue()                       {}
 
@@ -4690,6 +4871,42 @@ func RegisterStreamServiceServer(s grpc.ServiceRegistrar, srv StreamServiceServe
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&StreamService_ServiceDesc, srv)
+}
+
+func _StreamService_ListStreamArtifacts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListStreamArtifactsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StreamServiceServer).ListStreamArtifacts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StreamService_ListStreamArtifacts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StreamServiceServer).ListStreamArtifacts(ctx, req.(*ListStreamArtifactsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StreamService_GetStreamIngestStates_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(foghorn_control.GetStreamIngestStatesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StreamServiceServer).GetStreamIngestStates(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StreamService_GetStreamIngestStates_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StreamServiceServer).GetStreamIngestStates(ctx, req.(*foghorn_control.GetStreamIngestStatesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _StreamService_DiagnoseStream_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -4836,6 +5053,42 @@ func _StreamService_RefreshStreamKey_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _StreamService_RefreshStreamKeyAndEndIngest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RefreshStreamKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StreamServiceServer).RefreshStreamKeyAndEndIngest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StreamService_RefreshStreamKeyAndEndIngest_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StreamServiceServer).RefreshStreamKeyAndEndIngest(ctx, req.(*RefreshStreamKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StreamService_DisconnectIngest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DisconnectIngestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StreamServiceServer).DisconnectIngest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StreamService_DisconnectIngest_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StreamServiceServer).DisconnectIngest(ctx, req.(*DisconnectIngestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // StreamService_ServiceDesc is the grpc.ServiceDesc for StreamService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -4843,6 +5096,14 @@ var StreamService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "commodore.StreamService",
 	HandlerType: (*StreamServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ListStreamArtifacts",
+			Handler:    _StreamService_ListStreamArtifacts_Handler,
+		},
+		{
+			MethodName: "GetStreamIngestStates",
+			Handler:    _StreamService_GetStreamIngestStates_Handler,
+		},
 		{
 			MethodName: "DiagnoseStream",
 			Handler:    _StreamService_DiagnoseStream_Handler,
@@ -4875,6 +5136,14 @@ var StreamService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "RefreshStreamKey",
 			Handler:    _StreamService_RefreshStreamKey_Handler,
 		},
+		{
+			MethodName: "RefreshStreamKeyAndEndIngest",
+			Handler:    _StreamService_RefreshStreamKeyAndEndIngest_Handler,
+		},
+		{
+			MethodName: "DisconnectIngest",
+			Handler:    _StreamService_DisconnectIngest_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "commodore.proto",
@@ -4890,8 +5159,11 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type StreamKeyServiceClient interface {
+	// Deprecated: Do not use.
 	CreateStreamKey(ctx context.Context, in *CreateStreamKeyRequest, opts ...grpc.CallOption) (*StreamKeyResponse, error)
+	// Deprecated: Do not use.
 	ListStreamKeys(ctx context.Context, in *ListStreamKeysRequest, opts ...grpc.CallOption) (*ListStreamKeysResponse, error)
+	// Deprecated: Do not use.
 	DeactivateStreamKey(ctx context.Context, in *DeactivateStreamKeyRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
@@ -4903,6 +5175,7 @@ func NewStreamKeyServiceClient(cc grpc.ClientConnInterface) StreamKeyServiceClie
 	return &streamKeyServiceClient{cc}
 }
 
+// Deprecated: Do not use.
 func (c *streamKeyServiceClient) CreateStreamKey(ctx context.Context, in *CreateStreamKeyRequest, opts ...grpc.CallOption) (*StreamKeyResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StreamKeyResponse)
@@ -4913,6 +5186,7 @@ func (c *streamKeyServiceClient) CreateStreamKey(ctx context.Context, in *Create
 	return out, nil
 }
 
+// Deprecated: Do not use.
 func (c *streamKeyServiceClient) ListStreamKeys(ctx context.Context, in *ListStreamKeysRequest, opts ...grpc.CallOption) (*ListStreamKeysResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListStreamKeysResponse)
@@ -4923,6 +5197,7 @@ func (c *streamKeyServiceClient) ListStreamKeys(ctx context.Context, in *ListStr
 	return out, nil
 }
 
+// Deprecated: Do not use.
 func (c *streamKeyServiceClient) DeactivateStreamKey(ctx context.Context, in *DeactivateStreamKeyRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
@@ -4937,8 +5212,11 @@ func (c *streamKeyServiceClient) DeactivateStreamKey(ctx context.Context, in *De
 // All implementations must embed UnimplementedStreamKeyServiceServer
 // for forward compatibility.
 type StreamKeyServiceServer interface {
+	// Deprecated: Do not use.
 	CreateStreamKey(context.Context, *CreateStreamKeyRequest) (*StreamKeyResponse, error)
+	// Deprecated: Do not use.
 	ListStreamKeys(context.Context, *ListStreamKeysRequest) (*ListStreamKeysResponse, error)
+	// Deprecated: Do not use.
 	DeactivateStreamKey(context.Context, *DeactivateStreamKeyRequest) (*emptypb.Empty, error)
 	mustEmbedUnimplementedStreamKeyServiceServer()
 }
@@ -5755,14 +6033,16 @@ var ClipService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	DVRService_StopDVR_FullMethodName   = "/commodore.DVRService/StopDVR"
-	DVRService_DeleteDVR_FullMethodName = "/commodore.DVRService/DeleteDVR"
+	DVRService_GetDVRRecording_FullMethodName = "/commodore.DVRService/GetDVRRecording"
+	DVRService_StopDVR_FullMethodName         = "/commodore.DVRService/StopDVR"
+	DVRService_DeleteDVR_FullMethodName       = "/commodore.DVRService/DeleteDVR"
 )
 
 // DVRServiceClient is the client API for DVRService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type DVRServiceClient interface {
+	GetDVRRecording(ctx context.Context, in *GetDVRRecordingRequest, opts ...grpc.CallOption) (*shared.DVRInfo, error)
 	StopDVR(ctx context.Context, in *shared.StopDVRRequest, opts ...grpc.CallOption) (*shared.StopDVRResponse, error)
 	DeleteDVR(ctx context.Context, in *shared.DeleteDVRRequest, opts ...grpc.CallOption) (*shared.DeleteDVRResponse, error)
 }
@@ -5773,6 +6053,16 @@ type dVRServiceClient struct {
 
 func NewDVRServiceClient(cc grpc.ClientConnInterface) DVRServiceClient {
 	return &dVRServiceClient{cc}
+}
+
+func (c *dVRServiceClient) GetDVRRecording(ctx context.Context, in *GetDVRRecordingRequest, opts ...grpc.CallOption) (*shared.DVRInfo, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(shared.DVRInfo)
+	err := c.cc.Invoke(ctx, DVRService_GetDVRRecording_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *dVRServiceClient) StopDVR(ctx context.Context, in *shared.StopDVRRequest, opts ...grpc.CallOption) (*shared.StopDVRResponse, error) {
@@ -5799,6 +6089,7 @@ func (c *dVRServiceClient) DeleteDVR(ctx context.Context, in *shared.DeleteDVRRe
 // All implementations must embed UnimplementedDVRServiceServer
 // for forward compatibility.
 type DVRServiceServer interface {
+	GetDVRRecording(context.Context, *GetDVRRecordingRequest) (*shared.DVRInfo, error)
 	StopDVR(context.Context, *shared.StopDVRRequest) (*shared.StopDVRResponse, error)
 	DeleteDVR(context.Context, *shared.DeleteDVRRequest) (*shared.DeleteDVRResponse, error)
 	mustEmbedUnimplementedDVRServiceServer()
@@ -5811,6 +6102,9 @@ type DVRServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedDVRServiceServer struct{}
 
+func (UnimplementedDVRServiceServer) GetDVRRecording(context.Context, *GetDVRRecordingRequest) (*shared.DVRInfo, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetDVRRecording not implemented")
+}
 func (UnimplementedDVRServiceServer) StopDVR(context.Context, *shared.StopDVRRequest) (*shared.StopDVRResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StopDVR not implemented")
 }
@@ -5836,6 +6130,24 @@ func RegisterDVRServiceServer(s grpc.ServiceRegistrar, srv DVRServiceServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&DVRService_ServiceDesc, srv)
+}
+
+func _DVRService_GetDVRRecording_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetDVRRecordingRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DVRServiceServer).GetDVRRecording(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DVRService_GetDVRRecording_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DVRServiceServer).GetDVRRecording(ctx, req.(*GetDVRRecordingRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _DVRService_StopDVR_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -5881,6 +6193,10 @@ var DVRService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "commodore.DVRService",
 	HandlerType: (*DVRServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetDVRRecording",
+			Handler:    _DVRService_GetDVRRecording_Handler,
+		},
 		{
 			MethodName: "StopDVR",
 			Handler:    _DVRService_StopDVR_Handler,
@@ -6035,12 +6351,14 @@ var ViewerService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	VodService_CreateVodUpload_FullMethodName    = "/commodore.VodService/CreateVodUpload"
-	VodService_ImportVodAsset_FullMethodName     = "/commodore.VodService/ImportVodAsset"
-	VodService_CompleteVodUpload_FullMethodName  = "/commodore.VodService/CompleteVodUpload"
-	VodService_AbortVodUpload_FullMethodName     = "/commodore.VodService/AbortVodUpload"
-	VodService_GetVodUploadStatus_FullMethodName = "/commodore.VodService/GetVodUploadStatus"
-	VodService_DeleteVodAsset_FullMethodName     = "/commodore.VodService/DeleteVodAsset"
+	VodService_CreateVodUpload_FullMethodName           = "/commodore.VodService/CreateVodUpload"
+	VodService_ImportVodAsset_FullMethodName            = "/commodore.VodService/ImportVodAsset"
+	VodService_CompleteVodUpload_FullMethodName         = "/commodore.VodService/CompleteVodUpload"
+	VodService_AbortVodUpload_FullMethodName            = "/commodore.VodService/AbortVodUpload"
+	VodService_GetVodUploadStatus_FullMethodName        = "/commodore.VodService/GetVodUploadStatus"
+	VodService_DeleteVodAsset_FullMethodName            = "/commodore.VodService/DeleteVodAsset"
+	VodService_CreateVodOriginalDownload_FullMethodName = "/commodore.VodService/CreateVodOriginalDownload"
+	VodService_DeleteVodOriginal_FullMethodName         = "/commodore.VodService/DeleteVodOriginal"
 )
 
 // VodServiceClient is the client API for VodService service.
@@ -6066,6 +6384,8 @@ type VodServiceClient interface {
 	// VOD-only RPC.
 	// Delete VOD asset
 	DeleteVodAsset(ctx context.Context, in *shared.DeleteVodAssetRequest, opts ...grpc.CallOption) (*shared.DeleteVodAssetResponse, error)
+	CreateVodOriginalDownload(ctx context.Context, in *shared.CreateVodOriginalDownloadRequest, opts ...grpc.CallOption) (*shared.CreateVodOriginalDownloadResponse, error)
+	DeleteVodOriginal(ctx context.Context, in *shared.DeleteVodOriginalRequest, opts ...grpc.CallOption) (*shared.DeleteVodOriginalResponse, error)
 }
 
 type vodServiceClient struct {
@@ -6136,6 +6456,26 @@ func (c *vodServiceClient) DeleteVodAsset(ctx context.Context, in *shared.Delete
 	return out, nil
 }
 
+func (c *vodServiceClient) CreateVodOriginalDownload(ctx context.Context, in *shared.CreateVodOriginalDownloadRequest, opts ...grpc.CallOption) (*shared.CreateVodOriginalDownloadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(shared.CreateVodOriginalDownloadResponse)
+	err := c.cc.Invoke(ctx, VodService_CreateVodOriginalDownload_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vodServiceClient) DeleteVodOriginal(ctx context.Context, in *shared.DeleteVodOriginalRequest, opts ...grpc.CallOption) (*shared.DeleteVodOriginalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(shared.DeleteVodOriginalResponse)
+	err := c.cc.Invoke(ctx, VodService_DeleteVodOriginal_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // VodServiceServer is the server API for VodService service.
 // All implementations must embed UnimplementedVodServiceServer
 // for forward compatibility.
@@ -6159,6 +6499,8 @@ type VodServiceServer interface {
 	// VOD-only RPC.
 	// Delete VOD asset
 	DeleteVodAsset(context.Context, *shared.DeleteVodAssetRequest) (*shared.DeleteVodAssetResponse, error)
+	CreateVodOriginalDownload(context.Context, *shared.CreateVodOriginalDownloadRequest) (*shared.CreateVodOriginalDownloadResponse, error)
+	DeleteVodOriginal(context.Context, *shared.DeleteVodOriginalRequest) (*shared.DeleteVodOriginalResponse, error)
 	mustEmbedUnimplementedVodServiceServer()
 }
 
@@ -6186,6 +6528,12 @@ func (UnimplementedVodServiceServer) GetVodUploadStatus(context.Context, *shared
 }
 func (UnimplementedVodServiceServer) DeleteVodAsset(context.Context, *shared.DeleteVodAssetRequest) (*shared.DeleteVodAssetResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteVodAsset not implemented")
+}
+func (UnimplementedVodServiceServer) CreateVodOriginalDownload(context.Context, *shared.CreateVodOriginalDownloadRequest) (*shared.CreateVodOriginalDownloadResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateVodOriginalDownload not implemented")
+}
+func (UnimplementedVodServiceServer) DeleteVodOriginal(context.Context, *shared.DeleteVodOriginalRequest) (*shared.DeleteVodOriginalResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteVodOriginal not implemented")
 }
 func (UnimplementedVodServiceServer) mustEmbedUnimplementedVodServiceServer() {}
 func (UnimplementedVodServiceServer) testEmbeddedByValue()                    {}
@@ -6316,6 +6664,42 @@ func _VodService_DeleteVodAsset_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VodService_CreateVodOriginalDownload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(shared.CreateVodOriginalDownloadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VodServiceServer).CreateVodOriginalDownload(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VodService_CreateVodOriginalDownload_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VodServiceServer).CreateVodOriginalDownload(ctx, req.(*shared.CreateVodOriginalDownloadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VodService_DeleteVodOriginal_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(shared.DeleteVodOriginalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VodServiceServer).DeleteVodOriginal(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VodService_DeleteVodOriginal_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VodServiceServer).DeleteVodOriginal(ctx, req.(*shared.DeleteVodOriginalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // VodService_ServiceDesc is the grpc.ServiceDesc for VodService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -6347,12 +6731,22 @@ var VodService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "DeleteVodAsset",
 			Handler:    _VodService_DeleteVodAsset_Handler,
 		},
+		{
+			MethodName: "CreateVodOriginalDownload",
+			Handler:    _VodService_CreateVodOriginalDownload_Handler,
+		},
+		{
+			MethodName: "DeleteVodOriginal",
+			Handler:    _VodService_DeleteVodOriginal_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "commodore.proto",
 }
 
 const (
+	NodeManagementService_SetNodeCapacity_FullMethodName        = "/commodore.NodeManagementService/SetNodeCapacity"
+	NodeManagementService_GetNodeCapacity_FullMethodName        = "/commodore.NodeManagementService/GetNodeCapacity"
 	NodeManagementService_SetNodeOperationalMode_FullMethodName = "/commodore.NodeManagementService/SetNodeOperationalMode"
 	NodeManagementService_GetNodeHealth_FullMethodName          = "/commodore.NodeManagementService/GetNodeHealth"
 )
@@ -6361,6 +6755,8 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type NodeManagementServiceClient interface {
+	SetNodeCapacity(ctx context.Context, in *quartermaster_values.SetNodeCapacityRequest, opts ...grpc.CallOption) (*quartermaster_values.NodeCapacity, error)
+	GetNodeCapacity(ctx context.Context, in *quartermaster_values.GetNodeCapacityRequest, opts ...grpc.CallOption) (*quartermaster_values.NodeCapacity, error)
 	// Set a node's operational mode (normal, draining, maintenance)
 	SetNodeOperationalMode(ctx context.Context, in *foghorn_control.SetNodeModeRequest, opts ...grpc.CallOption) (*foghorn_control.SetNodeModeResponse, error)
 	// Get real-time health and routing state for a node
@@ -6373,6 +6769,26 @@ type nodeManagementServiceClient struct {
 
 func NewNodeManagementServiceClient(cc grpc.ClientConnInterface) NodeManagementServiceClient {
 	return &nodeManagementServiceClient{cc}
+}
+
+func (c *nodeManagementServiceClient) SetNodeCapacity(ctx context.Context, in *quartermaster_values.SetNodeCapacityRequest, opts ...grpc.CallOption) (*quartermaster_values.NodeCapacity, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(quartermaster_values.NodeCapacity)
+	err := c.cc.Invoke(ctx, NodeManagementService_SetNodeCapacity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nodeManagementServiceClient) GetNodeCapacity(ctx context.Context, in *quartermaster_values.GetNodeCapacityRequest, opts ...grpc.CallOption) (*quartermaster_values.NodeCapacity, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(quartermaster_values.NodeCapacity)
+	err := c.cc.Invoke(ctx, NodeManagementService_GetNodeCapacity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *nodeManagementServiceClient) SetNodeOperationalMode(ctx context.Context, in *foghorn_control.SetNodeModeRequest, opts ...grpc.CallOption) (*foghorn_control.SetNodeModeResponse, error) {
@@ -6399,6 +6815,8 @@ func (c *nodeManagementServiceClient) GetNodeHealth(ctx context.Context, in *fog
 // All implementations must embed UnimplementedNodeManagementServiceServer
 // for forward compatibility.
 type NodeManagementServiceServer interface {
+	SetNodeCapacity(context.Context, *quartermaster_values.SetNodeCapacityRequest) (*quartermaster_values.NodeCapacity, error)
+	GetNodeCapacity(context.Context, *quartermaster_values.GetNodeCapacityRequest) (*quartermaster_values.NodeCapacity, error)
 	// Set a node's operational mode (normal, draining, maintenance)
 	SetNodeOperationalMode(context.Context, *foghorn_control.SetNodeModeRequest) (*foghorn_control.SetNodeModeResponse, error)
 	// Get real-time health and routing state for a node
@@ -6413,6 +6831,12 @@ type NodeManagementServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedNodeManagementServiceServer struct{}
 
+func (UnimplementedNodeManagementServiceServer) SetNodeCapacity(context.Context, *quartermaster_values.SetNodeCapacityRequest) (*quartermaster_values.NodeCapacity, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetNodeCapacity not implemented")
+}
+func (UnimplementedNodeManagementServiceServer) GetNodeCapacity(context.Context, *quartermaster_values.GetNodeCapacityRequest) (*quartermaster_values.NodeCapacity, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetNodeCapacity not implemented")
+}
 func (UnimplementedNodeManagementServiceServer) SetNodeOperationalMode(context.Context, *foghorn_control.SetNodeModeRequest) (*foghorn_control.SetNodeModeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetNodeOperationalMode not implemented")
 }
@@ -6438,6 +6862,42 @@ func RegisterNodeManagementServiceServer(s grpc.ServiceRegistrar, srv NodeManage
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&NodeManagementService_ServiceDesc, srv)
+}
+
+func _NodeManagementService_SetNodeCapacity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(quartermaster_values.SetNodeCapacityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeManagementServiceServer).SetNodeCapacity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeManagementService_SetNodeCapacity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeManagementServiceServer).SetNodeCapacity(ctx, req.(*quartermaster_values.SetNodeCapacityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NodeManagementService_GetNodeCapacity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(quartermaster_values.GetNodeCapacityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeManagementServiceServer).GetNodeCapacity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeManagementService_GetNodeCapacity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeManagementServiceServer).GetNodeCapacity(ctx, req.(*quartermaster_values.GetNodeCapacityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _NodeManagementService_SetNodeOperationalMode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -6483,6 +6943,14 @@ var NodeManagementService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "commodore.NodeManagementService",
 	HandlerType: (*NodeManagementServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "SetNodeCapacity",
+			Handler:    _NodeManagementService_SetNodeCapacity_Handler,
+		},
+		{
+			MethodName: "GetNodeCapacity",
+			Handler:    _NodeManagementService_GetNodeCapacity_Handler,
+		},
 		{
 			MethodName: "SetNodeOperationalMode",
 			Handler:    _NodeManagementService_SetNodeOperationalMode_Handler,

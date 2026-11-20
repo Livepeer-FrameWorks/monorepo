@@ -16,6 +16,9 @@ query GetInfrastructureNode($id: ID!) {
       diskGb
       lastHeartbeat
       tags
+      capacity {
+        ...NodeCapacityFields @mask_disable
+      }
       effectiveMode
       routingImpactPreview {
         activeStreams

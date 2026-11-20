@@ -104,7 +104,7 @@ describe("controller protocol discovery", () => {
             ok: true,
             json: async () => ({
               data: {
-                serverInfo: { version: "v0.3.11", features: ["viewer-protocol-selection"] },
+                serverInfo: { version: "v0.3.16", features: ["viewer-protocol-selection"] },
               },
             }),
           };
@@ -410,7 +410,7 @@ describe("PlayerController gateway stream start", () => {
         if (JSON.parse(options.body).query.includes("serverInfo")) {
           return {
             ok: true,
-            json: async () => ({ data: { serverInfo: { version: "v0.3.11", features: [] } } }),
+            json: async () => ({ data: { serverInfo: { version: "v0.3.16", features: [] } } }),
           };
         }
         resolves();

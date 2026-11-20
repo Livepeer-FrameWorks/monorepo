@@ -14,7 +14,7 @@ const claimOfflineEffects = `-- name: ClaimOfflineEffects :many
 WITH candidates AS (
     SELECT e.id FROM foghorn.ingest_offline_effects e
     WHERE e.state = 'pending' AND e.next_attempt_at <= NOW()
-      AND e.attempts < 12 AND e.ack_wait_attempts < 12
+      AND (e.attempts < 12 AND e.ack_wait_attempts < 12)
       AND (e.leased_until IS NULL OR e.leased_until < NOW())
       AND (e.claim_affinity IS NULL OR e.claim_affinity = $1
            OR e.updated_at <= NOW() - INTERVAL '10 seconds')
@@ -31,9 +31,9 @@ WITH candidates AS (
               COALESCE(o.source_generation::text, '')::text AS source_generation, o.source_revision,
               o.set_node_offline, o.set_node_offline_done, o.teardown_stream, o.teardown_done,
               o.broadcast_offline, o.broadcast_offline_done, o.decklog_trigger, o.decklog_done,
-              o.lease_token::text AS lease_token
+              o.lease_token::text AS lease_token, o.drain_publisher, o.drain_done, o.drain_runtime_name, o.state_superseded
 )
-SELECT id, tenant_id, stream_internal_name, source_node_id, source_generation, source_revision, set_node_offline, set_node_offline_done, teardown_stream, teardown_done, broadcast_offline, broadcast_offline_done, decklog_trigger, decklog_done, lease_token FROM leased ORDER BY id
+SELECT id, tenant_id, stream_internal_name, source_node_id, source_generation, source_revision, set_node_offline, set_node_offline_done, teardown_stream, teardown_done, broadcast_offline, broadcast_offline_done, decklog_trigger, decklog_done, lease_token, drain_publisher, drain_done, drain_runtime_name, state_superseded FROM leased ORDER BY id
 `
 
 type ClaimOfflineEffectsParams struct {
@@ -58,6 +58,10 @@ type ClaimOfflineEffectsRow struct {
 	DecklogTrigger       []byte `db:"decklog_trigger" json:"decklog_trigger"`
 	DecklogDone          bool   `db:"decklog_done" json:"decklog_done"`
 	LeaseToken           string `db:"lease_token" json:"lease_token"`
+	DrainPublisher       bool   `db:"drain_publisher" json:"drain_publisher"`
+	DrainDone            bool   `db:"drain_done" json:"drain_done"`
+	DrainRuntimeName     string `db:"drain_runtime_name" json:"drain_runtime_name"`
+	StateSuperseded      bool   `db:"state_superseded" json:"state_superseded"`
 }
 
 func (q *Queries) ClaimOfflineEffects(ctx context.Context, arg ClaimOfflineEffectsParams) ([]ClaimOfflineEffectsRow, error) {
@@ -85,6 +89,10 @@ func (q *Queries) ClaimOfflineEffects(ctx context.Context, arg ClaimOfflineEffec
 			&i.DecklogTrigger,
 			&i.DecklogDone,
 			&i.LeaseToken,
+			&i.DrainPublisher,
+			&i.DrainDone,
+			&i.DrainRuntimeName,
+			&i.StateSuperseded,
 		); err != nil {
 			return nil, err
 		}
@@ -103,13 +111,15 @@ const enqueueOfflineEffect = `-- name: EnqueueOfflineEffect :exec
 INSERT INTO foghorn.ingest_offline_effects
     (tenant_id, stream_internal_name, source_node_id, source_generation, source_revision,
      set_node_offline, set_node_offline_done, teardown_stream, teardown_done,
-     broadcast_offline, broadcast_offline_done, decklog_trigger, decklog_done)
+     broadcast_offline, broadcast_offline_done, decklog_trigger, decklog_done,
+     drain_publisher, drain_done, drain_runtime_name)
 VALUES ($1::text::uuid, $2, $3,
         NULLIF($4::text, '')::uuid, $5,
         $6, NOT $6,
         $7, NOT $7,
         $8, NOT $8,
-        $9, COALESCE(octet_length($9::bytea), 0) = 0)
+        $9, COALESCE(octet_length($9::bytea), 0) = 0,
+        $10::boolean, NOT $10::boolean, $11::text)
 ON CONFLICT (tenant_id, stream_internal_name, source_revision) DO NOTHING
 `
 
@@ -123,6 +133,8 @@ type EnqueueOfflineEffectParams struct {
 	TeardownStream     bool   `db:"teardown_stream" json:"teardown_stream"`
 	BroadcastOffline   bool   `db:"broadcast_offline" json:"broadcast_offline"`
 	DecklogTrigger     []byte `db:"decklog_trigger" json:"decklog_trigger"`
+	DrainPublisher     bool   `db:"drain_publisher" json:"drain_publisher"`
+	DrainRuntimeName   string `db:"drain_runtime_name" json:"drain_runtime_name"`
 }
 
 func (q *Queries) EnqueueOfflineEffect(ctx context.Context, arg EnqueueOfflineEffectParams) error {
@@ -136,6 +148,8 @@ func (q *Queries) EnqueueOfflineEffect(ctx context.Context, arg EnqueueOfflineEf
 		arg.TeardownStream,
 		arg.BroadcastOffline,
 		arg.DecklogTrigger,
+		arg.DrainPublisher,
+		arg.DrainRuntimeName,
 	)
 	return err
 }
@@ -189,8 +203,8 @@ func (q *Queries) FailExhaustedOfflineEffects(ctx context.Context) ([]FailExhaus
 
 const failOfflineEffect = `-- name: FailOfflineEffect :exec
 UPDATE foghorn.ingest_offline_effects
-SET state = CASE WHEN attempts >= 12 OR ack_wait_attempts >= 12 THEN 'failed' ELSE 'pending' END,
-    applied_at = CASE WHEN attempts >= 12 OR ack_wait_attempts >= 12 THEN NOW() ELSE applied_at END,
+SET state = CASE WHEN (attempts >= 12 OR ack_wait_attempts >= 12) THEN 'failed' ELSE 'pending' END,
+    applied_at = CASE WHEN (attempts >= 12 OR ack_wait_attempts >= 12) THEN NOW() ELSE applied_at END,
     leased_until = NULL, lease_token = NULL, last_error = $1::text, updated_at = NOW(),
     next_attempt_at = NOW() + LEAST(INTERVAL '5 minutes', INTERVAL '1 second' * power(2, LEAST(attempts, 8)))
 WHERE id = $2 AND state = 'pending'
@@ -209,11 +223,10 @@ func (q *Queries) FailOfflineEffect(ctx context.Context, arg FailOfflineEffectPa
 }
 
 const hasActiveIngestSession = `-- name: HasActiveIngestSession :one
-SELECT EXISTS (
-    SELECT 1 FROM foghorn.ingest_sessions
-    WHERE tenant_id = $1::text::uuid
-      AND stream_internal_name = $2 AND ended_at IS NULL
-)
+SELECT EXISTS (SELECT 1 FROM foghorn.ingest_sessions s
+ WHERE s.tenant_id=$1::text::uuid AND s.stream_internal_name=$2 AND s.ended_at IS NULL
+ UNION ALL SELECT 1 FROM foghorn.pull_ingest_sessions p
+ WHERE p.tenant_id=$1::text::uuid AND p.stream_internal_name=$2 AND p.ended_at IS NULL)
 `
 
 type HasActiveIngestSessionParams struct {
@@ -263,22 +276,93 @@ func (q *Queries) LatestEndedNodeIngestSession(ctx context.Context, arg LatestEn
 	return i, err
 }
 
+const listOfflineAcknowledgementTenants = `-- name: ListOfflineAcknowledgementTenants :many
+SELECT tenant_id::text AS tenant_id
+FROM foghorn.ingest_offline_effects
+WHERE source_node_id = $1
+  AND source_generation = $2::text::uuid
+  AND state IN ('pending', 'failed')
+  AND ((drain_publisher AND NOT drain_done) OR (teardown_stream AND NOT teardown_done))
+GROUP BY tenant_id
+LIMIT 2
+`
+
+type ListOfflineAcknowledgementTenantsParams struct {
+	SourceNodeID     string `db:"source_node_id" json:"source_node_id"`
+	SourceGeneration string `db:"source_generation" json:"source_generation"`
+}
+
+// Legacy edge replies carry the authenticated node and generation, not a tenant.
+// Resolve only that immutable identity; every following mutation remains tenant-scoped.
+func (q *Queries) ListOfflineAcknowledgementTenants(ctx context.Context, arg ListOfflineAcknowledgementTenantsParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listOfflineAcknowledgementTenants, arg.SourceNodeID, arg.SourceGeneration)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var tenant_id string
+		if err := rows.Scan(&tenant_id); err != nil {
+			return nil, err
+		}
+		items = append(items, tenant_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markOfflinePublisherDrainDone = `-- name: MarkOfflinePublisherDrainDone :execrows
+UPDATE foghorn.ingest_offline_effects
+SET drain_done=TRUE, next_attempt_at=NOW(), claim_affinity=NULL, updated_at=NOW(),
+    state=CASE WHEN state='failed' THEN 'pending' ELSE state END,
+    attempts=CASE WHEN state='failed' THEN 0 ELSE attempts END,
+    ack_wait_attempts=CASE WHEN state='failed' THEN 0 ELSE ack_wait_attempts END,
+    applied_at=CASE WHEN state='failed' THEN NULL ELSE applied_at END,
+    leased_until=CASE WHEN state='failed' THEN NULL ELSE leased_until END,
+    lease_token=CASE WHEN state='failed' THEN NULL ELSE lease_token END
+WHERE tenant_id=$1::text::uuid AND source_node_id=$2
+  AND source_generation=$3::text::uuid
+  AND drain_publisher AND NOT drain_done AND state IN ('pending','failed')
+`
+
+type MarkOfflinePublisherDrainDoneParams struct {
+	TenantID         string `db:"tenant_id" json:"tenant_id"`
+	SourceNodeID     string `db:"source_node_id" json:"source_node_id"`
+	SourceGeneration string `db:"source_generation" json:"source_generation"`
+}
+
+func (q *Queries) MarkOfflinePublisherDrainDone(ctx context.Context, arg MarkOfflinePublisherDrainDoneParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markOfflinePublisherDrainDone, arg.TenantID, arg.SourceNodeID, arg.SourceGeneration)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const markOfflineTeardownDone = `-- name: MarkOfflineTeardownDone :execrows
 UPDATE foghorn.ingest_offline_effects
 SET teardown_done = TRUE,
     next_attempt_at = NOW(), claim_affinity = NULL, updated_at = NOW()
-WHERE source_node_id = $1
-  AND source_generation = $2::text::uuid
+WHERE tenant_id = $1::text::uuid
+  AND source_node_id = $2
+  AND source_generation = $3::text::uuid
   AND state = 'pending' AND teardown_stream AND NOT teardown_done
 `
 
 type MarkOfflineTeardownDoneParams struct {
+	TenantID         string `db:"tenant_id" json:"tenant_id"`
 	SourceNodeID     string `db:"source_node_id" json:"source_node_id"`
 	SourceGeneration string `db:"source_generation" json:"source_generation"`
 }
 
 func (q *Queries) MarkOfflineTeardownDone(ctx context.Context, arg MarkOfflineTeardownDoneParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markOfflineTeardownDone, arg.SourceNodeID, arg.SourceGeneration)
+	result, err := q.db.ExecContext(ctx, markOfflineTeardownDone, arg.TenantID, arg.SourceNodeID, arg.SourceGeneration)
 	if err != nil {
 		return 0, err
 	}
@@ -305,7 +389,7 @@ func (q *Queries) PurgeTerminalOfflineEffects(ctx context.Context, olderThanMs i
 }
 
 const readOfflineEffectLegsLocked = `-- name: ReadOfflineEffectLegsLocked :one
-SELECT set_node_offline_done, teardown_done, broadcast_offline_done, decklog_done
+SELECT set_node_offline_done, teardown_done, broadcast_offline_done, decklog_done, drain_done, state_superseded
 FROM foghorn.ingest_offline_effects
 WHERE id = $1 AND state = 'pending'
   AND lease_token = $2::text::uuid
@@ -322,6 +406,8 @@ type ReadOfflineEffectLegsLockedRow struct {
 	TeardownDone         bool `db:"teardown_done" json:"teardown_done"`
 	BroadcastOfflineDone bool `db:"broadcast_offline_done" json:"broadcast_offline_done"`
 	DecklogDone          bool `db:"decklog_done" json:"decklog_done"`
+	DrainDone            bool `db:"drain_done" json:"drain_done"`
+	StateSuperseded      bool `db:"state_superseded" json:"state_superseded"`
 }
 
 func (q *Queries) ReadOfflineEffectLegsLocked(ctx context.Context, arg ReadOfflineEffectLegsLockedParams) (ReadOfflineEffectLegsLockedRow, error) {
@@ -332,6 +418,8 @@ func (q *Queries) ReadOfflineEffectLegsLocked(ctx context.Context, arg ReadOffli
 		&i.TeardownDone,
 		&i.BroadcastOfflineDone,
 		&i.DecklogDone,
+		&i.DrainDone,
+		&i.StateSuperseded,
 	)
 	return i, err
 }
@@ -391,18 +479,20 @@ SET teardown_done = TRUE,
     state = 'pending', attempts = 0, ack_wait_attempts = 0, next_attempt_at = NOW(),
     claim_affinity = NULL, applied_at = NULL, leased_until = NULL, lease_token = NULL,
     last_error = NULL, updated_at = NOW()
-WHERE source_node_id = $1
-  AND source_generation = $2::text::uuid
+WHERE tenant_id = $1::text::uuid
+  AND source_node_id = $2
+  AND source_generation = $3::text::uuid
   AND state = 'failed' AND teardown_stream AND NOT teardown_done
 `
 
 type ReviveFailedOfflineTeardownDoneParams struct {
+	TenantID         string `db:"tenant_id" json:"tenant_id"`
 	SourceNodeID     string `db:"source_node_id" json:"source_node_id"`
 	SourceGeneration string `db:"source_generation" json:"source_generation"`
 }
 
 func (q *Queries) ReviveFailedOfflineTeardownDone(ctx context.Context, arg ReviveFailedOfflineTeardownDoneParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, reviveFailedOfflineTeardownDone, arg.SourceNodeID, arg.SourceGeneration)
+	result, err := q.db.ExecContext(ctx, reviveFailedOfflineTeardownDone, arg.TenantID, arg.SourceNodeID, arg.SourceGeneration)
 	if err != nil {
 		return 0, err
 	}
@@ -410,69 +500,54 @@ func (q *Queries) ReviveFailedOfflineTeardownDone(ctx context.Context, arg Reviv
 }
 
 const settleOfflineEffect = `-- name: SettleOfflineEffect :execrows
-UPDATE foghorn.ingest_offline_effects
+WITH progress AS (
+    SELECT owed.id,
+        drain_done OR $7::boolean AS drain_complete,
+        state_superseded OR $8::boolean AS source_superseded,
+        (NOT set_node_offline OR $1::boolean)
+          AND (NOT teardown_stream OR $2::boolean)
+          AND (NOT broadcast_offline OR $3::boolean)
+          AND (COALESCE(octet_length(decklog_trigger), 0) = 0 OR $4::boolean)
+          AND (NOT drain_publisher OR drain_done OR $7::boolean) AS complete,
+        (teardown_stream AND NOT $2::boolean)
+          OR (drain_publisher AND NOT (drain_done OR $7::boolean)) AS awaiting_ack,
+        drain_publisher AND NOT (drain_done OR $7::boolean) AS drain_pending
+    FROM foghorn.ingest_offline_effects owed
+    WHERE owed.id = $9 AND owed.state = 'pending'
+      AND owed.lease_token = $6::text::uuid
+)
+UPDATE foghorn.ingest_offline_effects e
 SET set_node_offline_done = $1,
     teardown_done = $2,
     broadcast_offline_done = $3,
     decklog_done = $4,
-	attempts = CASE
-		WHEN $5::boolean
-		 AND NOT ((NOT set_node_offline OR $1)
-		  AND (NOT teardown_stream OR $2)
-		  AND (NOT broadcast_offline OR $3)
-		  AND (COALESCE(octet_length(decklog_trigger), 0) = 0 OR $4))
-		THEN 0 ELSE attempts END,
-    ack_wait_attempts = CASE
-        WHEN $5::boolean
-         AND teardown_stream AND NOT $2
-         AND NOT ((NOT set_node_offline OR $1)
-          AND (NOT teardown_stream OR $2)
-          AND (NOT broadcast_offline OR $3)
-          AND (COALESCE(octet_length(decklog_trigger), 0) = 0 OR $4))
-        THEN ack_wait_attempts + 1 ELSE ack_wait_attempts END,
+    drain_done = p.drain_complete, state_superseded = p.source_superseded,
+    ack_wait_attempts = CASE WHEN $5::boolean AND p.awaiting_ack
+        THEN e.ack_wait_attempts + 1 ELSE e.ack_wait_attempts END,
     state = CASE
-        WHEN (NOT set_node_offline OR $1)
-         AND (NOT teardown_stream OR $2)
-         AND (NOT broadcast_offline OR $3)
-         AND (COALESCE(octet_length(decklog_trigger), 0) = 0 OR $4)
-        THEN 'applied'
+        WHEN p.complete THEN CASE WHEN p.source_superseded THEN 'superseded' ELSE 'applied' END
         WHEN $5::boolean
-         AND (attempts >= 12 OR (teardown_stream AND NOT $2 AND ack_wait_attempts + 1 >= 12))
-        THEN 'failed'
-        ELSE 'pending'
-    END,
+          AND (e.attempts >= 12 OR (p.awaiting_ack AND e.ack_wait_attempts + 1 >= 12)) THEN 'failed'
+        ELSE 'pending' END,
     applied_at = CASE
-        WHEN (NOT set_node_offline OR $1)
-         AND (NOT teardown_stream OR $2)
-         AND (NOT broadcast_offline OR $3)
-         AND (COALESCE(octet_length(decklog_trigger), 0) = 0 OR $4)
-        THEN NOW()
+        WHEN p.complete THEN NOW()
         WHEN $5::boolean
-         AND (attempts >= 12 OR (teardown_stream AND NOT $2 AND ack_wait_attempts + 1 >= 12))
-        THEN NOW()
-        ELSE applied_at
-    END,
-    next_attempt_at = CASE WHEN $5::boolean
-        THEN NOW() + LEAST(
-            INTERVAL '5 minutes',
-            INTERVAL '1 second' * power(2, LEAST(
-                CASE WHEN teardown_stream AND NOT $2
-                     THEN ack_wait_attempts + 1 ELSE attempts END,
-                8
-            ))
-        )
-        ELSE next_attempt_at END,
+          AND (e.attempts >= 12 OR (p.awaiting_ack AND e.ack_wait_attempts + 1 >= 12)) THEN NOW()
+        ELSE e.applied_at END,
+    next_attempt_at = CASE WHEN $5::boolean THEN
+        NOW() + LEAST(INTERVAL '5 minutes', INTERVAL '1 second' * power(2,
+            LEAST(CASE WHEN p.awaiting_ack THEN e.ack_wait_attempts + 1 ELSE e.attempts END, 8)))
+        ELSE e.next_attempt_at END,
     updated_at = NOW(),
-    leased_until = CASE WHEN $5::boolean THEN NULL ELSE leased_until END,
-    lease_token = CASE WHEN $5::boolean THEN NULL ELSE lease_token END,
+    leased_until = CASE WHEN $5::boolean THEN NULL ELSE e.leased_until END,
+    lease_token = CASE WHEN $5::boolean THEN NULL ELSE e.lease_token END,
     last_error = CASE
         WHEN $5::boolean
-         AND (attempts >= 12 OR (teardown_stream AND NOT $2 AND ack_wait_attempts + 1 >= 12))
-        THEN COALESCE(NULLIF(last_error, ''), 'offline obligation exhausted retry budget')
-        WHEN $5::boolean THEN NULL
-        ELSE last_error END
-WHERE id = $6 AND state = 'pending'
-  AND lease_token = $7::text::uuid
+          AND (e.attempts >= 12 OR (p.awaiting_ack AND e.ack_wait_attempts + 1 >= 12))
+          THEN COALESCE(NULLIF(e.last_error, ''), 'offline obligation exhausted retry budget')
+        WHEN $5::boolean THEN NULL ELSE e.last_error END
+FROM progress p
+WHERE e.id = p.id AND e.state = 'pending' AND e.lease_token = $6::text::uuid
 `
 
 type SettleOfflineEffectParams struct {
@@ -481,8 +556,10 @@ type SettleOfflineEffectParams struct {
 	BroadcastOfflineDone bool   `db:"broadcast_offline_done" json:"broadcast_offline_done"`
 	DecklogDone          bool   `db:"decklog_done" json:"decklog_done"`
 	ReleaseLease         bool   `db:"release_lease" json:"release_lease"`
-	EffectID             int64  `db:"effect_id" json:"effect_id"`
 	LeaseToken           string `db:"lease_token" json:"lease_token"`
+	DrainDone            bool   `db:"drain_done" json:"drain_done"`
+	StateSuperseded      bool   `db:"state_superseded" json:"state_superseded"`
+	EffectID             int64  `db:"effect_id" json:"effect_id"`
 }
 
 func (q *Queries) SettleOfflineEffect(ctx context.Context, arg SettleOfflineEffectParams) (int64, error) {
@@ -492,8 +569,10 @@ func (q *Queries) SettleOfflineEffect(ctx context.Context, arg SettleOfflineEffe
 		arg.BroadcastOfflineDone,
 		arg.DecklogDone,
 		arg.ReleaseLease,
-		arg.EffectID,
 		arg.LeaseToken,
+		arg.DrainDone,
+		arg.StateSuperseded,
+		arg.EffectID,
 	)
 	if err != nil {
 		return 0, err
@@ -505,6 +584,7 @@ const supersedeOfflineEffect = `-- name: SupersedeOfflineEffect :execrows
 UPDATE foghorn.ingest_offline_effects
 SET state = 'superseded', applied_at = NOW(), updated_at = NOW(), leased_until = NULL, lease_token = NULL
 WHERE id = $1 AND state = 'pending'
+  AND (NOT drain_publisher OR drain_done)
   AND lease_token = $2::text::uuid
 `
 

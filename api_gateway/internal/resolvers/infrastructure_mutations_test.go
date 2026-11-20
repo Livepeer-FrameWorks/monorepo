@@ -684,11 +684,11 @@ func TestDoGetStreamingConfig_BuildsDomainsAndSurfacesRoutingFailure(t *testing.
 		t.Fatalf("routing error should yield (nil,error), got (%v,%v)", fcfg, ferr)
 	}
 
-	// No tenant: nil cfg, nil error, no backend call.
+	// An anonymous request is refused before any routing read.
 	noTenant := &clientstest.FakeQuartermaster{}
 	ncfg, nerr := qmR(noTenant).DoGetStreamingConfig(context.Background())
-	if nerr != nil || ncfg != nil {
-		t.Fatalf("no tenant should yield (nil,nil), got (%v,%v)", ncfg, nerr)
+	if nerr == nil || ncfg != nil {
+		t.Fatalf("anonymous routing should yield (nil,error), got (%v,%v)", ncfg, nerr)
 	}
 	if noTenant.Calls != 0 {
 		t.Fatalf("guard leaked a backend call: Calls=%d", noTenant.Calls)

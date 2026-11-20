@@ -61,7 +61,7 @@ func MarkIngestSessionPlayable(ctx context.Context, tenantID, nodeID, internalNa
 		if len(generation) == 1 && generation[0] != "" {
 			bound, markErr := foghorndb.New(tx).MarkBoundIngestSessionPlayable(ctx, foghorndb.MarkBoundIngestSessionPlayableParams{
 				TenantID: tenantID, StreamInternalName: internalName, NodeID: nodeID, EventUnixMillis: eventMillis, Generation: generation[0]})
-			markedRow.StreamID, err = bound.StreamID, markErr
+			markedRow.StreamID, markedRow.SessionID, err = bound.StreamID, bound.SessionID, markErr
 		} else {
 			markedRow, err = foghorndb.New(tx).MarkIngestSessionPlayable(ctx, foghorndb.MarkIngestSessionPlayableParams{
 				TenantID: tenantID, StreamInternalName: internalName, NodeID: nodeID, EventUnixMillis: eventMillis})
@@ -75,7 +75,7 @@ func MarkIngestSessionPlayable(ctx context.Context, tenantID, nodeID, internalNa
 		// A session admitted without a public stream ID records its playable time for the
 		// STREAM_END reaper but emits no stream.live, matching its absent stream.connected.
 		if markedRow.StreamID != "" {
-			if err := domainevents.StreamLive(ctx, tx, tenantID, markedRow.StreamID, playbackID); err != nil {
+			if err := domainevents.StreamLive(ctx, tx, tenantID, markedRow.StreamID, playbackID, markedRow.SessionID); err != nil {
 				return err
 			}
 		}
@@ -89,4 +89,34 @@ func MarkIngestSessionPlayable(ctx context.Context, tenantID, nodeID, internalNa
 		return false, fmt.Errorf("commit ingest session playable: %w", err)
 	}
 	return marked, nil
+}
+
+// markStreamBufferEndedTx runs under the admission lock. The durable marker and
+// outbox insert commit together, so retries cannot duplicate or end a newer session.
+func markStreamBufferEndedTx(ctx context.Context, tx *sql.Tx, tenant, node, internal string, eventMillis int64, pull bool, playbackID string) error {
+	q := foghorndb.New(tx)
+	var streamID, sessionID string
+	if pull {
+		row, err := q.MarkPullBufferEnded(ctx, foghorndb.MarkPullBufferEndedParams{TenantID: tenant, NodeID: node, InternalName: internal, EventMillis: eventMillis})
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		streamID, sessionID = row.StreamID, row.SessionID
+	} else {
+		row, err := q.MarkPushBufferEnded(ctx, foghorndb.MarkPushBufferEndedParams{TenantID: tenant, NodeID: node, InternalName: internal, EventMillis: eventMillis})
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		streamID, sessionID = row.StreamID, row.SessionID
+	}
+	if streamID == "" {
+		return nil
+	}
+	return domainevents.StreamEnded(ctx, tx, tenant, streamID, playbackID, sessionID)
 }

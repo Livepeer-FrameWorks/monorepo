@@ -54,7 +54,7 @@ func TestEventTypes(t *testing.T) {
 	if err != nil || len(got) != 3 || got[0] != "stream.live" || got[1] != "clip.ready" || got[2] != "*" {
 		t.Fatalf("EventTypes = %v, %v", got, err)
 	}
-	for _, bad := range [][]string{nil, {""}, {"stream.*"}, {"recording.chapter_ready"}, {"tenant.created"}, {"nope"}} {
+	for _, bad := range [][]string{nil, {""}, {"stream.*"}, {"artifact.node_copy_changed"}, {"tenant.created"}, {"nope"}} {
 		if _, err := EventTypes(bad); !errors.Is(err, ErrInvalid) {
 			t.Errorf("EventTypes(%v) = %v, want ErrInvalid", bad, err)
 		}
@@ -77,5 +77,13 @@ func TestAPIVersionAndDescription(t *testing.T) {
 	}
 	if d, err := Description(" orders "); err != nil || d != "orders" {
 		t.Fatalf("Description = %q, %v", d, err)
+	}
+}
+
+func TestStreamIntegrationEventsCanBeSubscribed(t *testing.T) {
+	for _, name := range []string{"stream.ended", "stream.ingest_disconnected", "recording.chapter_ready"} {
+		if got, err := EventTypes([]string{name}); err != nil || len(got) != 1 || got[0] != name {
+			t.Fatalf("%s subscription = %v, %v", name, got, err)
+		}
 	}
 }

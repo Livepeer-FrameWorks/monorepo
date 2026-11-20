@@ -7,6 +7,8 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func i32ptr(v int32) *int32 { return &v }
@@ -54,28 +56,20 @@ func TestSetStreamRetentionOverrides_SetDVRUnderCap(t *testing.T) {
 	}
 }
 
-func TestSetStreamRetentionOverrides_ClampsOverCap(t *testing.T) {
+func TestSetStreamRetentionOverrides_RejectsOverCap(t *testing.T) {
 	s, mock, done := newRetentionServer(t)
 	defer done()
 	const tenant = "11111111-1111-1111-1111-111111111111"
 	const stream = "22222222-2222-2222-2222-222222222222"
 
 	expectStreamOwned(mock, stream, tenant)
-	// 90 > cap 30 → clamped to 30 in the UPDATE arg (the contract under test).
-	mock.ExpectQuery(streamUpdateSQL).
-		WithArgs(true, int32(30), false, nil, stream, tenant).
-		WillReturnRows(sqlmock.NewRows([]string{"dvr_retention_days_override", "clip_retention_days_override"}).
-			AddRow(int32(30), nil))
 
-	resp, err := s.SetStreamRetentionOverrides(retentionAuthCtx(tenant), &commodorepb.SetStreamRetentionOverridesRequest{
+	_, err := s.SetStreamRetentionOverrides(retentionAuthCtx(tenant), &commodorepb.SetStreamRetentionOverridesRequest{
 		StreamId:                 stream,
 		DvrRetentionDaysOverride: i32ptr(90),
 	})
-	if err != nil {
-		t.Fatalf("SetStreamRetentionOverrides: %v", err)
-	}
-	if resp.DvrRetentionDaysOverride == nil || *resp.DvrRetentionDaysOverride != 30 {
-		t.Errorf("dvr override = %v, want 30 (clamped to cap)", resp.DvrRetentionDaysOverride)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("over-cap override = %v; want InvalidArgument", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

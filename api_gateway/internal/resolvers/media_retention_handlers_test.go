@@ -129,53 +129,63 @@ func TestDoSetMediaRetentionPolicy(t *testing.T) {
 	}
 }
 
-func TestRetentionOverrideResolversRequireBillingManagementBeforeBackend(t *testing.T) {
-	memberCtx := context.WithValue(clientstest.AuthedCtx("t1"), ctxkeys.KeyRole, "member")
-	ownerTokenCtx := context.WithValue(clientstest.AuthedCtx("t1"), ctxkeys.KeyAuthType, "api_token")
-	ownerTokenCtx = context.WithValue(ownerTokenCtx, ctxkeys.KeyPermissions, []string{"streams:write"})
-
+func TestRetentionOverrideResolversUseStreamsWrite(t *testing.T) {
+	proof := errors.New("scope reached media backend")
 	tests := []struct {
 		name string
 		call func(*Resolver, context.Context) error
 	}{
-		{
-			name: "stream overrides",
-			call: func(r *Resolver, ctx context.Context) error {
-				days := 7
-				_, err := r.DoSetStreamRetentionOverrides(ctx, model.SetStreamRetentionOverridesInput{StreamID: "stream-1", DvrRetentionDaysOverride: &days})
-				return err
-			},
-		},
-		{
-			name: "asset override",
-			call: func(r *Resolver, ctx context.Context) error {
-				days := 7
-				_, err := r.DoUpdateMediaRetention(ctx, model.UpdateMediaRetentionInput{TargetType: model.MediaRetentionTargetDvr, TargetID: "dvr-1", RetentionDays: &days})
-				return err
-			},
-		},
-		{
-			name: "asset reset",
-			call: func(r *Resolver, ctx context.Context) error {
-				_, err := r.DoResetMediaRetentionOverride(ctx, model.ResetMediaRetentionOverrideInput{TargetType: model.MediaRetentionTargetDvr, TargetID: "dvr-1"})
-				return err
-			},
-		},
+		{"stream", func(r *Resolver, ctx context.Context) error {
+			days := 7
+			_, err := r.DoSetStreamRetentionOverrides(ctx, model.SetStreamRetentionOverridesInput{StreamID: "stream-1", DvrRetentionDaysOverride: &days})
+			return err
+		}},
 	}
-	for _, actor := range []struct {
-		name string
-		ctx  context.Context
-	}{{"member", memberCtx}, {"owner token without billing write", ownerTokenCtx}} {
-		for _, tt := range tests {
-			t.Run(actor.name+"/"+tt.name, func(t *testing.T) {
-				client := &clientstest.FakeCommodore{}
-				if err := tt.call(commoW2(client), actor.ctx); err == nil {
-					t.Fatal("unauthorized retention write succeeded")
-				}
-				if client.Calls != 0 {
-					t.Fatalf("authorization denial reached backend: %d calls", client.Calls)
-				}
-			})
+	for _, target := range []model.MediaRetentionTarget{model.MediaRetentionTargetDvr, model.MediaRetentionTargetVod, model.MediaRetentionTargetClip} {
+		tests = append(tests, struct {
+			name string
+			call func(*Resolver, context.Context) error
+		}{"override/" + target.String(), func(r *Resolver, ctx context.Context) error {
+			days := 7
+			_, err := r.DoUpdateMediaRetention(ctx, model.UpdateMediaRetentionInput{TargetType: target, TargetID: "asset-1", RetentionDays: &days})
+			return err
+		}})
+		tests = append(tests, struct {
+			name string
+			call func(*Resolver, context.Context) error
+		}{"reset/" + target.String(), func(r *Resolver, ctx context.Context) error {
+			_, err := r.DoResetMediaRetentionOverride(ctx, model.ResetMediaRetentionOverrideInput{TargetType: target, TargetID: "asset-1"})
+			return err
+		}})
+	}
+	for _, scope := range []string{"streams:write", "billing:write"} {
+		for _, role := range []string{"member", "owner"} {
+			for _, test := range tests {
+				t.Run(scope+"/"+role+"/"+test.name, func(t *testing.T) {
+					ctx := context.WithValue(clientstest.AuthedCtx("t1"), ctxkeys.KeyAuthType, "api_token")
+					ctx = context.WithValue(ctx, ctxkeys.KeyRole, role)
+					ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{scope})
+					client := &clientstest.FakeCommodore{
+						SetStreamRetentionOverridesFn: func(context.Context, *commodorepb.SetStreamRetentionOverridesRequest) (*commodorepb.SetStreamRetentionOverridesResponse, error) {
+							return nil, proof
+						},
+						UpdateAssetRetentionFn: func(context.Context, *commodorepb.UpdateAssetRetentionRequest) (*commodorepb.UpdateAssetRetentionResponse, error) {
+							return nil, proof
+						},
+						ResetAssetRetentionFn: func(context.Context, *commodorepb.ResetAssetRetentionRequest) (*commodorepb.UpdateAssetRetentionResponse, error) {
+							return nil, proof
+						},
+					}
+					err := test.call(commoW2(client), ctx)
+					if scope == "streams:write" {
+						if client.Calls != 1 || !errors.Is(err, proof) {
+							t.Fatalf("media token did not reach backend: calls=%d err=%v", client.Calls, err)
+						}
+					} else if client.Calls != 0 || err == nil {
+						t.Fatalf("billing token reached media write: calls=%d err=%v", client.Calls, err)
+					}
+				})
+			}
 		}
 	}
 }

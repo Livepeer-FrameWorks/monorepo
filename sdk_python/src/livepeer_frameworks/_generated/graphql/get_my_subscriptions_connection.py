@@ -1,7 +1,11 @@
 from pydantic import Field
 
 from .base_model import BaseModel
-from .fragments import ClusterDefault, PageInfoDefault
+from .fragments import (
+    ClusterDefault,
+    ClusterDefaultCapacity,  # noqa: F401
+    PageInfoDefault,
+)
 
 
 class GetMySubscriptionsConnection(BaseModel):

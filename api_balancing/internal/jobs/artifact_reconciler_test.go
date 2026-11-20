@@ -715,9 +715,9 @@ func TestProjectCommodoreArtifactStateRepairsStorageAndThumbnailProjection(t *te
 	// Nullable columns: nil clears; a null tracks column → tracks_present false.
 	rows := sqlmock.NewRows(projectionRowCols).
 		AddRow("vod-hash", "vod", "tenant-1", "media-us-1", true, int64(1024),
-			int64(120500), `[{"type":"video","codec":"h264"}]`, "synced", true, "local", int64(7), "ready", time.Unix(1800000000, 0), nil, "media-official").
+			int64(120500), `[{"type":"video","codec":"h264"}]`, "synced", true, "local", int64(7), "ready", time.Unix(1800000000, 0), nil, "media-official", nil, nil, nil).
 		AddRow("clip-hash", "clip", "tenant-1", nil, nil, nil,
-			nil, nil, "processing", nil, nil, int64(9), "processing", nil, nil, nil)
+			nil, nil, "processing", nil, nil, int64(9), "processing", nil, nil, nil, nil, nil, nil)
 
 	mock.ExpectQuery("FROM foghorn.artifacts").
 		WithArgs(10, "media-us-1").
@@ -821,8 +821,8 @@ func TestProjectCommodoreArtifactState_ReportsScannedForBatchFull(t *testing.T) 
 	r.clusterID = "c1"
 
 	rows := sqlmock.NewRows(projectionRowCols).
-		AddRow("h1", "vod", "t1", "c1", true, int64(1), int64(1000), nil, "synced", true, "local", int64(5), "ready", nil, nil, nil).
-		AddRow("h2", "vod", "t1", "c1", true, int64(1), int64(1000), nil, "synced", true, "local", int64(6), "ready", nil, nil, nil)
+		AddRow("h1", "vod", "t1", "c1", true, int64(1), int64(1000), nil, "synced", true, "local", int64(5), "ready", nil, nil, nil, nil, nil, nil).
+		AddRow("h2", "vod", "t1", "c1", true, int64(1), int64(1000), nil, "synced", true, "local", int64(6), "ready", nil, nil, nil, nil, nil, nil)
 	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs(2, "c1").WillReturnRows(rows)
 	mock.ExpectExec("UPDATE foghorn.artifacts SET catalog_synced_rev").
 		WithArgs(int64(5), "h1").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -856,7 +856,7 @@ func TestProjectCommodoreArtifactState_ProjectsDeletion(t *testing.T) {
 	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs(10, "c1").
 		WillReturnRows(sqlmock.NewRows(projectionRowCols).AddRow(
 			"gone-hash", "vod", "t1", "c1", true, int64(1),
-			int64(1000), nil, "synced", true, "local", int64(8), "deleted", nil, nil, nil))
+			int64(1000), nil, "synced", true, "local", int64(8), "deleted", nil, nil, nil, nil, nil, nil))
 	// Watermark advances once the deletion is projected (mock returns Found:true, rev=8).
 	mock.ExpectExec("UPDATE foghorn.artifacts SET catalog_synced_rev").
 		WithArgs(int64(8), "gone-hash").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -897,7 +897,7 @@ func TestProjectCommodoreArtifactState_DeletionAbsentDoesNotAdvance(t *testing.T
 	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs(10, "c1").
 		WillReturnRows(sqlmock.NewRows(projectionRowCols).AddRow(
 			"gone-hash", "vod", "t1", "c1", true, int64(1),
-			int64(1000), nil, "synced", true, "local", int64(8), "deleted", nil, nil, nil))
+			int64(1000), nil, "synced", true, "local", int64(8), "deleted", nil, nil, nil, nil, nil, nil))
 	// No catalog_synced_rev advance — the absent (uncovered) deletion is backed off.
 	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET catalog_projection_attempts = catalog_projection_attempts \+ 1`).
 		WithArgs(sqlmock.AnyArg(), "gone-hash").
@@ -932,9 +932,9 @@ func TestProjectCommodoreArtifactState_DVRParentHasNoFinalizedState(t *testing.T
 
 	rows := sqlmock.NewRows(projectionRowCols).
 		AddRow("dvr-hash", "dvr", "tenant-1", "media-us-1", true, int64(1024),
-			int64(60000), nil, "synced", true, "s3", int64(3), "completed", nil, nil, nil).
+			int64(60000), nil, "synced", true, "s3", int64(3), "completed", nil, nil, nil, nil, nil, nil).
 		AddRow("vod-hash", "vod", "tenant-1", "media-us-1", true, int64(1024),
-			int64(60000), nil, "synced", true, "s3", int64(4), "ready", nil, nil, nil)
+			int64(60000), nil, "synced", true, "s3", int64(4), "ready", nil, nil, nil, nil, nil, nil)
 	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs(10, "media-us-1").WillReturnRows(rows)
 	mock.ExpectExec("UPDATE foghorn.artifacts SET catalog_synced_rev").
 		WithArgs(int64(3), "dvr-hash").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -959,7 +959,7 @@ func TestProjectCommodoreArtifactState_DVRParentHasNoFinalizedState(t *testing.T
 var projectionRowCols = []string{
 	"artifact_hash", "artifact_type", "tenant_id", "storage_cluster_id", "has_thumbnails", "size_bytes",
 	"duration_ms", "tracks", "sync_status", "dtsh_synced", "storage_location", "catalog_revision",
-	"lifecycle_status", "retention_until", "error_message", "thumbnail_serving_cluster_id",
+	"lifecycle_status", "retention_until", "error_message", "thumbnail_serving_cluster_id", "original_size_bytes", "started_at", "ended_at",
 }
 
 // Fairness: the scan must order by catalog_synced_rev (projection age), not catalog_revision
@@ -1002,7 +1002,7 @@ func TestProjectCommodoreArtifactState_QuarantinesUnsupportedType(t *testing.T) 
 
 	rows := sqlmock.NewRows(projectionRowCols).AddRow(
 		"bad-hash", "weird-type", "t1", nil, nil, nil,
-		nil, nil, "processing", nil, nil, int64(3), false, nil, nil, nil)
+		nil, nil, "processing", nil, nil, int64(3), false, nil, nil, nil, nil, nil, nil)
 	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs(10, "c1").WillReturnRows(rows)
 	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET catalog_quarantined_rev = \$1, catalog_quarantine_error = \$3`).
 		WithArgs(int64(3), "bad-hash", sqlmock.AnyArg()).
@@ -1043,8 +1043,8 @@ func TestProjectCommodoreArtifactState_FailingRowDoesNotBlockValidRow(t *testing
 	r.clusterID = "c1"
 
 	rows := sqlmock.NewRows(projectionRowCols).
-		AddRow("stuck-hash", "vod", "t1", "c1", true, int64(1), int64(1), `[]`, "pending", false, "local", int64(5), "processing", nil, nil, nil).
-		AddRow("good-hash", "vod", "t1", "c1", true, int64(2), int64(2), `[]`, "synced", true, "local", int64(6), "ready", nil, nil, nil)
+		AddRow("stuck-hash", "vod", "t1", "c1", true, int64(1), int64(1), `[]`, "pending", false, "local", int64(5), "processing", nil, nil, nil, nil, nil, nil).
+		AddRow("good-hash", "vod", "t1", "c1", true, int64(2), int64(2), `[]`, "synced", true, "local", int64(6), "ready", nil, nil, nil, nil, nil, nil)
 	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs(10, "c1").WillReturnRows(rows)
 	// stuck-hash backs off (not-found), good-hash advances — the failing row doesn't block it.
 	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET catalog_projection_attempts = catalog_projection_attempts \+ 1`).
@@ -1083,7 +1083,7 @@ func TestProjectCommodoreArtifactState_NotCoveredDoesNotAdvance(t *testing.T) {
 
 	rows := sqlmock.NewRows(projectionRowCols).AddRow(
 		"vod-hash", "vod", "t1", "c1", true, int64(1024),
-		int64(1000), `[]`, "synced", true, "local", int64(7), "ready", nil, nil, nil)
+		int64(1000), `[]`, "synced", true, "local", int64(7), "ready", nil, nil, nil, nil, nil, nil)
 	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs(10, "c1").WillReturnRows(rows)
 	// No watermark advance — but the uncovered row is backed off (exponential) so it can't
 	// head-of-line block.
@@ -1440,8 +1440,8 @@ func TestProjectCommodoreArtifactState_ThumbnailServingClusterAck(t *testing.T) 
 
 	// One row WITH a serving cluster (must NOT advance against the non-echoing Commodore) and one WITHOUT (advances).
 	rows := sqlmock.NewRows(projectionRowCols).
-		AddRow("with-serving", "vod", "t1", "c1", true, int64(1), int64(1000), nil, "synced", true, "local", int64(7), "ready", nil, nil, "media-official").
-		AddRow("no-serving", "vod", "t1", "c1", true, int64(1), int64(1000), nil, "synced", true, "local", int64(8), "ready", nil, nil, nil)
+		AddRow("with-serving", "vod", "t1", "c1", true, int64(1), int64(1000), nil, "synced", true, "local", int64(7), "ready", nil, nil, "media-official", nil, nil, nil).
+		AddRow("no-serving", "vod", "t1", "c1", true, int64(1), int64(1000), nil, "synced", true, "local", int64(8), "ready", nil, nil, nil, nil, nil, nil)
 	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs(10, "c1").WillReturnRows(rows)
 	// with-serving: NOT acked → backed off (no watermark advance).
 	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET catalog_projection_attempts = catalog_projection_attempts \+ 1`).

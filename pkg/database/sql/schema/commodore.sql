@@ -439,25 +439,6 @@ CREATE TABLE IF NOT EXISTS commodore.streams (
 );
 CREATE INDEX IF NOT EXISTS idx_commodore_streams_deleting_range ON commodore.streams(deleted_at ASC) WHERE deleted_at IS NOT NULL;
 
--- Stream authentication keys (multiple keys per stream for rotation)
-CREATE TABLE IF NOT EXISTS commodore.stream_keys (
-    -- ===== IDENTITY =====
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL,
-    user_id UUID,
-    stream_id UUID NOT NULL,
-    
-    -- ===== KEY DETAILS =====
-    key_value VARCHAR(255) UNIQUE NOT NULL,
-    key_name VARCHAR(100),
-    
-    -- ===== STATUS & USAGE =====
-    is_active BOOLEAN DEFAULT TRUE,
-    last_used_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
-);
-
 -- ============================================================================
 -- STREAM INDEXES
 -- ============================================================================
@@ -474,7 +455,6 @@ CREATE INDEX IF NOT EXISTS idx_commodore_streams_ingest_mode
     ON commodore.streams(ingest_mode) WHERE ingest_mode <> 'push';
 CREATE INDEX IF NOT EXISTS idx_commodore_streams_always_on
     ON commodore.streams(ingest_mode) WHERE always_on = TRUE;
-CREATE INDEX IF NOT EXISTS idx_commodore_stream_keys_stream_id ON commodore.stream_keys(stream_id);
 
 -- ============================================================================
 -- PULL STREAMS — upstream source config for ingest_mode='pull' streams
@@ -663,10 +643,6 @@ BEGIN
     INSERT INTO commodore.streams (id, tenant_id, user_id, stream_key, playback_id, internal_name, title)
     VALUES (new_stream_id, p_tenant_id, p_user_id, new_stream_key, new_playback_id, new_internal_name, p_title);
 
-    -- Create primary stream key
-    INSERT INTO commodore.stream_keys (tenant_id, user_id, stream_id, key_value, key_name, is_active)
-    VALUES (p_tenant_id, p_user_id, new_stream_id, new_stream_key, 'Primary Key', TRUE);
-
     RETURN QUERY SELECT new_stream_id, new_stream_key, new_playback_id, new_internal_name;
 END;
 $$ LANGUAGE plpgsql;
@@ -785,6 +761,8 @@ CREATE TABLE IF NOT EXISTS commodore.dvr_recordings (
 
     -- ===== SIZE PROJECTION =====
     size_bytes BIGINT,
+    started_at TIMESTAMPTZ,
+    ended_at TIMESTAMPTZ,
 
     -- Measured media duration (ms), projected by Foghorn at FinalizeDVR from the
     -- recording's media length. NULL until the recording finalizes.
@@ -1883,11 +1861,12 @@ CREATE TABLE IF NOT EXISTS commodore.media_authority_refresh_obligations (
     last_source_service VARCHAR(64) NOT NULL,
     last_source_event_id VARCHAR(255) NOT NULL,
     last_error TEXT,
+    ingest_stop_payload JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (target_key, lane),
     CONSTRAINT chk_media_authority_obligation_lane
-        CHECK (lane IN ('event', 'bulk', 'ingest_revocation', 'object_deadline', 'tenant_deadline')),
+        CHECK (lane IN ('event', 'bulk', 'ingest_revocation', 'ingest_stop', 'object_deadline', 'tenant_deadline')),
     CONSTRAINT chk_media_authority_obligation_kind
         CHECK (target_kind IN ('tenant', 'live_stream', 'artifact', 'tenant_media_objects')),
     CONSTRAINT chk_media_authority_obligation_status
@@ -1897,6 +1876,10 @@ CREATE TABLE IF NOT EXISTS commodore.media_authority_refresh_obligations (
     CONSTRAINT chk_media_authority_obligation_reason
         CHECK (btrim(last_reason) <> '')
 );
+
+CREATE INDEX IF NOT EXISTS idx_commodore_ingest_stop_completed
+ ON commodore.media_authority_refresh_obligations(updated_at ASC,tenant_id,target_key)
+ WHERE lane='ingest_stop' AND status='completed';
 
 CREATE INDEX IF NOT EXISTS idx_media_authority_refresh_obligations_due
     ON commodore.media_authority_refresh_obligations(lane ASC, next_attempt_at ASC, pending_since ASC)
@@ -2442,3 +2425,82 @@ CREATE TABLE IF NOT EXISTS public._schema_baseline (
 );
 INSERT INTO public._schema_baseline (floor)
     SELECT 'v0.3.0' WHERE NOT EXISTS (SELECT 1 FROM public._schema_baseline);
+
+-- A stream's and a tenant's transcode ladder, by name from the purser tier
+-- catalog. Empty (stream) or NULL (tenant) inherits the next level: stream,
+-- then tenant, then the tier default. The ladder decides the stream's process
+-- config, so a stream's ladder change refreshes its media authority like
+-- live_video_abr; tenant_processing_config already refreshes its tenant's
+-- objects on any change.
+ALTER TABLE commodore.streams
+    ADD COLUMN IF NOT EXISTS transcode_ladder VARCHAR(64) NOT NULL DEFAULT '';
+
+ALTER TABLE commodore.tenant_processing_config
+    ADD COLUMN IF NOT EXISTS transcode_ladder VARCHAR(64);
+
+CREATE OR REPLACE FUNCTION commodore.live_stream_media_authority_changed()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    stream_id UUID;
+    tenant_id UUID;
+BEGIN
+    IF current_setting('frameworks.suppress_media_authority_refresh', true) = 'on' THEN
+        RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+    END IF;
+
+    IF TG_OP = 'UPDATE'
+       AND OLD.tenant_id IS NOT DISTINCT FROM NEW.tenant_id
+       AND OLD.user_id IS NOT DISTINCT FROM NEW.user_id
+       AND OLD.internal_name IS NOT DISTINCT FROM NEW.internal_name
+       AND OLD.playback_id IS NOT DISTINCT FROM NEW.playback_id
+       AND OLD.stream_key IS NOT DISTINCT FROM NEW.stream_key
+       AND OLD.ingest_mode IS NOT DISTINCT FROM NEW.ingest_mode
+       AND OLD.live_video_abr IS NOT DISTINCT FROM NEW.live_video_abr
+       AND OLD.transcode_ladder IS NOT DISTINCT FROM NEW.transcode_ladder
+       AND OLD.always_on IS NOT DISTINCT FROM NEW.always_on
+       AND OLD.is_recording_enabled IS NOT DISTINCT FROM NEW.is_recording_enabled
+       AND OLD.requires_auth IS NOT DISTINCT FROM NEW.requires_auth
+       AND OLD.playback_policy IS NOT DISTINCT FROM NEW.playback_policy
+       AND OLD.playback_webhook_secret_enc IS NOT DISTINCT FROM NEW.playback_webhook_secret_enc
+       -- The authority carries the effective origin, not the claim: an ingest
+       -- starting or stopping on the cluster the stream last ingested on
+       -- changes nothing a cell holds.
+       AND COALESCE(NULLIF(OLD.active_ingest_cluster_id, ''), NULLIF(OLD.last_ingest_cluster_id, ''))
+           IS NOT DISTINCT FROM COALESCE(NULLIF(NEW.active_ingest_cluster_id, ''), NULLIF(NEW.last_ingest_cluster_id, ''))
+       AND OLD.deleted_at IS NOT DISTINCT FROM NEW.deleted_at THEN
+        RETURN NEW;
+    END IF;
+    stream_id := CASE WHEN TG_OP = 'DELETE' THEN OLD.id ELSE NEW.id END;
+    tenant_id := CASE WHEN TG_OP = 'DELETE' THEN OLD.tenant_id ELSE NEW.tenant_id END;
+    PERFORM commodore.enqueue_live_stream_media_authority_refresh(stream_id, tenant_id, 'stream_changed');
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_live_stream_media_authority ON commodore.streams;
+CREATE TRIGGER trg_live_stream_media_authority
+AFTER INSERT OR DELETE OR UPDATE OF tenant_id, user_id, internal_name, playback_id, stream_key,
+    ingest_mode, live_video_abr, transcode_ladder, always_on, is_recording_enabled, requires_auth, playback_policy,
+    playback_webhook_secret_enc, active_ingest_cluster_id, last_ingest_cluster_id, deleted_at
+ON commodore.streams
+FOR EACH ROW EXECUTE FUNCTION commodore.live_stream_media_authority_changed();
+
+ALTER TABLE commodore.vod_assets
+    ADD COLUMN IF NOT EXISTS transcode_ladder VARCHAR(64) NOT NULL DEFAULT '';
+
+ALTER TABLE commodore.tenant_media_retention_policies
+    ADD COLUMN IF NOT EXISTS keep_vod_originals BOOLEAN;
+ALTER TABLE commodore.vod_assets
+    ADD COLUMN IF NOT EXISTS original_size_bytes BIGINT;
+
+CREATE TABLE IF NOT EXISTS commodore.vod_original_download_limits (
+    tenant_id UUID PRIMARY KEY,
+    next_grant_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_commodore_dvr_stream_history
+    ON commodore.dvr_recordings(tenant_id,stream_id,created_at DESC,id DESC) WHERE stream_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_commodore_clips_stream_history
+    ON commodore.clips(tenant_id,stream_id,created_at DESC,id DESC) WHERE stream_id IS NOT NULL;

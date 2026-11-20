@@ -21,6 +21,7 @@ WHERE artifact_hash = $1
       OR (artifact_type <> 'dvr'
           AND COALESCE(origin_type, '') <> 'dvr_chapter'
           AND retention_until IS NULL
+          AND status = 'failed'
           AND created_at < NOW() - make_interval(days => $2::integer))
   )
 RETURNING tenant_id::text
@@ -49,6 +50,7 @@ WHERE status IN ('completed', 'completed_partial', 'ready', 'failed')
       OR (artifact_type <> 'dvr'
           AND COALESCE(origin_type, '') <> 'dvr_chapter'
           AND retention_until IS NULL
+          AND status = 'failed'
           AND created_at < NOW() - make_interval(days => $1::integer))
   )
 LIMIT 500

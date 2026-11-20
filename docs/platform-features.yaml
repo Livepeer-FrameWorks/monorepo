@@ -104,13 +104,22 @@ features:
       docs: { required: true }
     surfaces:
       graphql:
-        mutations: [createStream, updateStream, deleteStream, refreshStreamKey]
+        mutations: [createStream, updateStream, deleteStream, refreshStreamKey, disconnectIngest]
         queries: [stream, streamsConnection, streamingConfig]
+        fields: [Stream.ingest]
         subscriptions: [liveStreamEvents, liveTrackListUpdates, tenantEvents]
       mcp:
-        tools: [create_stream, update_stream, delete_stream, refresh_stream_key]
+        tools:
+          [
+            create_stream,
+            update_stream,
+            delete_stream,
+            refresh_stream_key,
+            disconnect_ingest,
+            get_stream_ingest,
+          ]
       webapp:
-        routes: ["/streams", "/streams/:id"]
+        routes: ["/", "/streams", "/streams/:id"]
       docs:
         pages:
           - builders/streams.mdx
@@ -134,17 +143,10 @@ features:
           docs: { required: true }
         surfaces:
           graphql:
-            mutations: [createStreamKey, deleteStreamKey, refreshStreamKey]
-            queries: [streamKeysConnection, validateStreamKey]
+            mutations: [refreshStreamKey]
+            queries: [validateStreamKey]
           mcp:
-            tools:
-              [
-                list_stream_keys,
-                create_stream_key,
-                delete_stream_key,
-                refresh_stream_key,
-                validate_stream_key,
-              ]
+            tools: [refresh_stream_key, validate_stream_key]
           webapp:
             routes: ["/streams/:id"]
           docs:
@@ -557,12 +559,13 @@ features:
     surfaces:
       graphql:
         mutations: [startDVR, stopDVR, deleteDVR]
-        queries: [storageArtifactsConnection]
+        queries: [storageArtifactsConnection, dvrRecording]
+        fields: [Stream.recordings]
         subscriptions: [tenantEvents]
       mcp:
-        tools: [start_dvr, stop_dvr, delete_dvr]
+        tools: [start_dvr, stop_dvr, delete_dvr, list_stream_recordings, get_dvr_recording]
       webapp:
-        routes: ["/library"]
+        routes: ["/library", "/library/:hash", "/streams/:id"]
       docs:
         pages:
           - builders/recordings.mdx
@@ -588,6 +591,7 @@ features:
           graphql:
             mutations: [updateStream]
             queries: [dvrChapter, dvrChapters]
+            fields: [DVRRequest.chapters]
           mcp:
             tools: [update_stream]
           webapp:
@@ -683,6 +687,33 @@ features:
               reason: "Enforcement is invisible except for clearer upload errors.",
             }
           docs: { required: true }
+      - slug: vod-original-retention
+        name: Original upload retention
+        description: Keep a byte-identical original alongside processed video by default, with account and upload opt-outs, attachment download, and original-only deletion.
+        status: shipped
+        note: Originals count toward normal storage usage and the plan cap. URL imports and failed uploads retain no original.
+        depends_on: [vod]
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+        surfaces:
+          graphql:
+            mutations:
+              [createVodUpload, setVodOriginalPolicy, createVodOriginalDownload, deleteVodOriginal]
+            queries: [mediaRetentionPolicy, storageArtifactsConnection]
+          mcp:
+            tools: [create_vod_upload, get_vod_original_download, delete_vod_original]
+          webapp:
+            routes: ["/library", "/account/storage"]
+          docs:
+            pages:
+              [
+                builders/recordings.mdx,
+                builders/storage-and-retention.mdx,
+                operators/media-storage.mdx,
+              ]
 
   - slug: clips
     name: Clips
@@ -698,13 +729,31 @@ features:
       graphql:
         mutations: [createClip, deleteClip]
         queries: [clip, storageArtifactsConnection]
+        fields: [Stream.clips]
         subscriptions: [tenantEvents]
       mcp:
-        tools: [create_clip, delete_clip]
+        tools: [create_clip, delete_clip, list_stream_clips]
       webapp:
-        routes: ["/library"]
+        routes: ["/library", "/streams/:id"]
       docs:
         pages: [builders/clips.mdx]
+    subitems:
+      - slug: frame-accurate-clips
+        name: Frame-accurate clip trimming
+        description: An optional clip flag that re-encodes the clip's first and last GOP so it starts and ends on the requested frame.
+        status: roadmap
+        horizon: later
+        roadmap: frame-accurate-clip-trimming
+        gap_reason: |
+          Not shipped. Clips cut on keyframes, so a clip starts and ends on the nearest GOP boundary. Needed: a clip
+          option that routes the edge GOPs through the processing pipeline, billed as processing, on createClip, the
+          MCP tool, and the library clip dialog. Clips without the option stay GOP-aligned and need no re-encode.
+        depends_on: [clips]
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
 
   - slug: media-retention
     name: Media retention
@@ -876,15 +925,51 @@ features:
       webapp: { required: true }
       docs: { required: true }
     subitems:
+      - slug: transcode-ladders
+        name: Named transcode ladders
+        description: Select standard, qhd, or uhd within the plan's allowed ladders, with account defaults and stream/upload overrides.
+        status: shipped
+        note: Standard is the default. Free allows standard; paid plans allow all three. Live choices apply from the next broadcast; rendition sizes above the source are skipped.
+        depends_on: [processing]
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+        surfaces:
+          graphql:
+            mutations:
+              [
+                setTranscodeLadderPolicy,
+                createStream,
+                updateStream,
+                createVodUpload,
+                importVodAsset,
+              ]
+            queries: [transcodeLadderPolicy]
+          mcp:
+            tools:
+              [
+                get_transcode_ladder_policy,
+                set_transcode_ladder_policy,
+                create_stream,
+                update_stream,
+                create_vod_upload,
+                import_vod_asset,
+              ]
+          webapp:
+            routes: ["/streams", "/streams/[id]", "/library"]
+          docs:
+            pages: [builders/encoder-setup.mdx, builders/streams.mdx, builders/recordings.mdx]
       - slug: gateway-backed-transcoding
         name: Gateway-backed transcoding
         description: Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry.
         status: partial
         gap_reason: |
           The media plane can use Livepeer Gateway-backed processing and the analytics API exposes processing/orchestrator telemetry.
-          What is still missing is a tenant-facing control surface for rendition ladders, plan-aware defaults, per-stream overrides,
-          and agent/dashboard workflows for choosing when Gateway-backed ABR is enabled.
-        note: Renditions follow your plan's processing policy, and a stream can turn its live ladder off. Choosing the ladder per stream is not there yet.
+          Named ladders, account defaults, stream/upload overrides, and agent/dashboard controls are available.
+          A custom profile editor and per-session Gateway placement controls remain outside the named-ladder surface.
+        note: Choose a named ladder within your plan, or turn live video ABR off for a stream.
         roadmap: gateway-backed-transcoding
         showcase:
           order: 80
@@ -1224,14 +1309,15 @@ features:
       docs: { required: true }
     surfaces:
       graphql:
-        mutations: [createEdgeCluster, bootstrapEdge]
+        mutations: [createEdgeCluster, bootstrapEdge, setNodeCapacity]
         queries: [cluster, clustersConnection]
       mcp:
-        tools: [create_edge_cluster]
+        tools: [create_edge_cluster, set_node_capacity]
       cli:
-        commands: ["edge deploy", "edge diagnose", "edge drift"]
+        commands:
+          ["edge deploy", "edge diagnose", "edge drift", "edge capacity show", "edge capacity set"]
       webapp:
-        routes: ["/infrastructure/clusters", "/infrastructure/:clusterId"]
+        routes: ["/infrastructure/clusters", "/infrastructure/:clusterId", "/nodes/:id"]
       docs:
         pages: [hybrid/edge-nodes.mdx, hybrid/connecting.mdx]
     subitems:

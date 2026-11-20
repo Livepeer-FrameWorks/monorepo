@@ -419,7 +419,7 @@ func activeIngestSessionClaims(ctx context.Context) (map[string]LocallyPublished
 	return claims, nil
 }
 
-// LocallyPublishedStreams lists durable open publisher sessions assigned to
+// LocallyPublishedStreams lists durable open push and direct-pull sessions assigned to
 // node control connections owned by this Foghorn replica. The session row is
 // the renewal authority: registry projection, buffer state, and node-health
 // snapshots may all be transiently absent while the publisher remains open.

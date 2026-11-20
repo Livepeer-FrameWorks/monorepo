@@ -593,7 +593,7 @@ func TestStreamCleanupOutbox_ThumbnailPhaseMarkedThenSkipped_RealPG(t *testing.T
 }
 
 // End-to-end DeleteStream: the SYNCHRONOUS phase-two delivery must route through the same multi-cell dispatcher as the
-// outbox (not the tenant primary alone), so a cross-cell stream finalizes ONLY once every owning cell acks. A partial
+// outbox (not the tenant primary alone), so a cross-cell stream finalizes ONLY once every owning cell and the ingest stop ack. A partial
 // ack must leave the stream soft-deleted (deletion_pending), never hard-deleted while an ingest cell's objects survive.
 func TestDeleteStream_RoutesToEveryServingCell_RealPG(t *testing.T) {
 	conn := startCommodoreRealPG(t)
@@ -655,7 +655,7 @@ func TestDeleteStream_RoutesToEveryServingCell_RealPG(t *testing.T) {
 		t.Fatalf("DeleteStream must fan out to EVERY serving cell, got eu=%d us=%d", count("cluster-eu"), count("cluster-us"))
 	}
 
-	// All cells ack: DeleteStream finalizes — deleted + hard-deleted.
+	// All thumbnail cells ack; the independently delivered ingest stop still fences finalization.
 	failUS = false
 	const okStream = "77777777-7777-7777-7777-777777777777"
 	seed(okStream)
@@ -666,8 +666,12 @@ func TestDeleteStream_RoutesToEveryServingCell_RealPG(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteStream (all ack): %v", err)
 	}
-	if resp.GetDeletionStatus() != "deleted" {
-		t.Fatalf("once every owning cell acks, DeleteStream must finalize, got %q", resp.GetDeletionStatus())
+	if resp.GetDeletionStatus() != "deletion_pending" || !exists(okStream) {
+		t.Fatalf("thumbnail acknowledgements must retain identity until the ingest stop settles, got %q", resp.GetDeletionStatus())
+	}
+	server.processAccountIngestRevocations(ctx)
+	if err := server.finalizeStreamDeletion(ctx, okStream, tenantID, ""); err != nil {
+		t.Fatalf("finalize after thumbnail and ingest acknowledgements: %v", err)
 	}
 	if exists(okStream) {
 		t.Fatal("stream must be hard-deleted once every owning cell acks")

@@ -109,7 +109,8 @@ class GatewayClient {
   func graphql<T: Decodable>(
     query: String,
     variables: [String: Any]? = nil,
-    responseType: T.Type
+    responseType: T.Type,
+    partialData: GraphQLPartialDataPolicy = .strict
   ) async throws -> T {
     var payload: [String: Any] = ["query": query]
     if let variables = variables {
@@ -120,13 +121,7 @@ class GatewayClient {
     let data = try await request(method: "POST", path: "/graphql", body: body)
 
     let wrapper = try JSONDecoder().decode(GraphQLResponse<T>.self, from: data)
-    if let errors = wrapper.errors, !errors.isEmpty {
-      throw GatewayError.graphqlErrors(errors.map { $0.message })
-    }
-    guard let result = wrapper.data else {
-      throw GatewayError.noData
-    }
-    return result
+    return try wrapper.resolved(partialData: partialData)
   }
 }
 
@@ -147,10 +142,43 @@ private final class GatewayRedirectPolicy: NSObject, URLSessionTaskDelegate {
 struct GraphQLResponse<T: Decodable>: Decodable {
   let data: T?
   let errors: [GraphQLError]?
+
+  func resolved(partialData: GraphQLPartialDataPolicy = .strict) throws -> T {
+    let rejected = (errors ?? []).filter { !partialData.allows($0) }
+    if !rejected.isEmpty { throw GatewayError.graphqlErrors(rejected.map { $0.message }) }
+    guard let data else { throw GatewayError.noData }
+    return data
+  }
+}
+
+enum GraphQLPartialDataPolicy {
+  case strict
+  case streamList
+
+  func allows(_ error: GraphQLError) -> Bool {
+    guard case .streamList = self, let path = error.path, path.count >= 5,
+      path[0] == .field("streamsConnection"), path[1] == .field("edges"),
+      case .index(let index) = path[2], index >= 0, path[3] == .field("node"),
+      path[4] == .field("ingest") || path[4] == .field("metrics")
+    else { return false }
+    return true
+  }
 }
 
 struct GraphQLError: Decodable {
   let message: String
+  let path: [GraphQLPathComponent]?
+}
+
+enum GraphQLPathComponent: Decodable, Equatable {
+  case field(String)
+  case index(Int)
+
+  init(from decoder: Decoder) throws {
+    let value = try decoder.singleValueContainer()
+    if let field = try? value.decode(String.self) { self = .field(field) }
+    else { self = .index(try value.decode(Int.self)) }
+  }
 }
 
 enum GatewayError: LocalizedError {

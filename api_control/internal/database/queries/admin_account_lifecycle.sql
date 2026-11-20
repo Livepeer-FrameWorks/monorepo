@@ -96,7 +96,7 @@ FROM commodore.streams s
 JOIN commodore.users u ON u.id = s.user_id AND u.tenant_id = s.tenant_id
 LEFT JOIN commodore.tenant_account_states account ON account.tenant_id = s.tenant_id
 WHERE s.tenant_id = sqlc.arg(tenant_id)::uuid AND s.id = sqlc.arg(stream_id)::uuid
-    AND (NOT COALESCE(u.is_active, false) OR account.closed_at IS NOT NULL);
+    AND (s.deleted_at IS NOT NULL OR NOT COALESCE(u.is_active, false) OR account.closed_at IS NOT NULL);
 
 -- name: ListAccountIngestCells :many
 -- Include recorded and historical recipients, even after tenant entitlements are removed.
@@ -127,3 +127,11 @@ SELECT DISTINCT cell_id FROM cells WHERE cell_id IS NOT NULL AND btrim(cell_id)<
 -- Platform-wide recovery metric; a single failed call may recover after backoff.
 SELECT COUNT(*) FROM commodore.tenant_account_states
 WHERE quartermaster_closed_at IS NULL AND closure_error IS NOT NULL AND closure_failures>1;
+
+-- name: HasUnsettledStreamIngestRevocation :one
+SELECT EXISTS (
+    SELECT 1 FROM commodore.media_authority_refresh_obligations
+    WHERE tenant_id = sqlc.arg(tenant_id)::uuid
+      AND target_key = sqlc.arg(target_key)
+      AND lane = 'ingest_revocation' AND status <> 'completed'
+);

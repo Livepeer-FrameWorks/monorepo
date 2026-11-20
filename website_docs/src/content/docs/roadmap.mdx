@@ -76,6 +76,10 @@ FairPlay, Widevine, and PlayReady support is in development, built on playback a
 
 What ships today in this area: [Platform capabilities → Media Library](/platform/feature-matrix#media-library).
 
+### Frame-Accurate Clip Trimming <Badge text="Later" variant="note" />
+
+Clips cut on keyframes today, so they start and end on the nearest GOP boundary. An optional clip setting will re-encode only the first and last GOP so the clip starts and ends on the requested frame, billed as processing. Clips without it stay keyframe-aligned and need no re-encode.
+
 ### Scheduled Programming <Badge text="Next" variant="tip" />
 
 Two scheduling layers are planned on the recording and VOD foundations. Scheduled recordings are calendar-driven DVR captures for places of worship, periodic events, classes, and any workflow where a stream goes live on a known schedule: recording starts and stops automatically against a stream that may already be live 24/7, and the operator does not need to be at the desk when the window opens. Scheduled VOD streams are linear live channels assembled from existing VOD assets: the scheduler selects finalized artifacts, verifies or pre-hydrates frozen assets before their playout window, and materializes a rolling live stream without bypassing artifact ownership, retention, or billing semantics.
@@ -106,7 +110,7 @@ What ships today in this area: [Platform capabilities → Analytics & Observabil
 
 ### View-Level QoE Analytics <Badge text="Now" variant="success" />
 
-Stream and routing analytics already exist, and first-party view-level QoE now ships for the FrameWorks player — rebuffering, frame drops, startup time-to-first-frame, and per-asset VOD retention/watch-density. The active telemetry pass is reducing time-to-first-frame and measuring and reducing cross-region stream-replication time. What's still ahead is the breadth: QoE capture from third-party / non-FrameWorks players and deeper per-view tracing.
+Stream and routing analytics already exist, and first-party view-level QoE now ships for the FrameWorks player — rebuffering, frame drops, startup time-to-first-frame, and per-asset VOD retention/watch-density. The active telemetry pass is reducing time-to-first-frame and measuring and reducing cross-region stream-replication time. What's still ahead is the breadth: QoE beacon adapters for third-party players, starting with hls.js and video.js, and deeper per-view tracing.
 
 ### Incidents and Alerts <Badge text="Now" variant="success" />
 

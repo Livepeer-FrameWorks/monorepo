@@ -18,6 +18,7 @@ import (
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -43,26 +44,28 @@ type PreparedPublisherAdmission struct {
 }
 
 type preparePublisherRequest struct {
-	DecisionExpiresAt    *time.Time               `json:"decision_expires_at,omitempty"`
-	StrictLeaseOwner     bool                     `json:"strict_lease_owner"`
-	PublisherLeaseEpoch  int64                    `json:"publisher_lease_epoch"`
-	RuntimeName          string                   `json:"runtime_name"`
-	RuntimeLayoutVersion int32                    `json:"runtime_layout_version"`
-	TenantID             string                   `json:"tenant_id"`
-	NodeID               string                   `json:"node_id"`
-	InternalName         string                   `json:"internal_name"`
-	StreamID             string                   `json:"stream_id"`
-	ConnectorPID         int64                    `json:"connector_pid"`
-	TriggerUUID          string                   `json:"trigger_uuid"`
-	StartedAtMillis      int64                    `json:"started_at_millis"`
-	DVRIntent            json.RawMessage          `json:"dvr_intent"`
-	IngestClusterID      string                   `json:"ingest_cluster_id"`
-	Authority            *IngestAuthoritySnapshot `json:"authority"`
-	Generation           string                   `json:"generation"`
-	AdmissionWindowMS    int64                    `json:"admission_window_ms"`
-	TakeoverGeneration   string                   `json:"takeover_generation"`
-	ConnectedEvent       *events.Event            `json:"connected_event"`
-	IdleEvent            *events.Event            `json:"idle_event"`
+	DecisionExpiresAt      *time.Time               `json:"decision_expires_at,omitempty"`
+	StrictLeaseOwner       bool                     `json:"strict_lease_owner"`
+	PublisherLeaseEpoch    int64                    `json:"publisher_lease_epoch"`
+	RuntimeName            string                   `json:"runtime_name"`
+	RuntimeLayoutVersion   int32                    `json:"runtime_layout_version"`
+	TenantID               string                   `json:"tenant_id"`
+	NodeID                 string                   `json:"node_id"`
+	InternalName           string                   `json:"internal_name"`
+	StreamID               string                   `json:"stream_id"`
+	ConnectorPID           int64                    `json:"connector_pid"`
+	TriggerUUID            string                   `json:"trigger_uuid"`
+	StartedAtMillis        int64                    `json:"started_at_millis"`
+	DVRIntent              json.RawMessage          `json:"dvr_intent"`
+	IngestClusterID        string                   `json:"ingest_cluster_id"`
+	Authority              *IngestAuthoritySnapshot `json:"authority"`
+	Generation             string                   `json:"generation"`
+	AdmissionWindowMS      int64                    `json:"admission_window_ms"`
+	TakeoverGeneration     string                   `json:"takeover_generation"`
+	ConnectedSessionPrefix []byte                   `json:"connected_session_prefix"`
+	IdleSessionPrefix      []byte                   `json:"idle_session_prefix"`
+	ConnectedEvent         *events.Event            `json:"connected_event"`
+	IdleEvent              *events.Event            `json:"idle_event"`
 }
 
 func (r *PublisherAdmissionRepository) Prepare(ctx context.Context, request IngestSessionRequest, _ logging.Logger) (prepared PreparedPublisherAdmission, resultErr error) {
@@ -119,6 +122,8 @@ func (r *PublisherAdmissionRepository) Prepare(ctx context.Context, request Inge
 		return PreparedPublisherAdmission{}, err
 	}
 	payload.ConnectedEvent, payload.IdleEvent = &connected, &idle
+	payload.ConnectedSessionPrefix = publisherSessionPrefix(&publicv1.StreamConnected{})
+	payload.IdleSessionPrefix = publisherSessionPrefix(&publicv1.StreamIdle{})
 	var guard ingestTakeoverGuard
 	defer guard.releaseGuard()
 	// Each takeover result names the incumbent observed by that transaction.
@@ -258,7 +263,7 @@ func (r *PublisherAdmissionRepository) Settle(ctx context.Context, request Inges
 	}
 	var idle *events.Event
 	if request.StreamID != "" {
-		event, err := events.New(domainevents.Source, request.TenantID, request.StreamID, &publicv1.StreamIdle{StreamId: request.StreamID, PlaybackId: request.PlaybackID})
+		event, err := events.New(domainevents.Source, request.TenantID, request.StreamID, &publicv1.StreamIdle{StreamId: request.StreamID, PlaybackId: request.PlaybackID, SessionId: generation})
 		if err != nil {
 			return false, err
 		}
@@ -294,4 +299,64 @@ func validatePreparedPublisher(prepared PreparedPublisherAdmission) error {
 		return fmt.Errorf("publisher prepare returned unknown outcome %d", prepared.Outcome)
 	}
 	return nil
+}
+
+// CompleteStoppedExecution retires a publisher only after its exact node effect
+// has completed. The abandonment then fences every replay of that execution.
+func (r *PublisherAdmissionRepository) CompleteStoppedExecution(ctx context.Context, request IngestSessionRequest, generation string) error {
+	if r == nil || r.database == nil {
+		return errors.New("publisher admission database unavailable")
+	}
+	if request.TenantID == "" || request.NodeID == "" || request.TriggerUUID == "" || request.ConnectorPID <= 0 {
+		return errors.New("publisher execution identity missing")
+	}
+	err := database.WithRetryablePostgresTx(ctx, r.database, nil, func(tx *sql.Tx) error {
+		q := foghorndb.New(tx)
+		if err := q.LockIngestStream(ctx, ingestAdmissionTriggerLockKey(request.NodeID, request.TriggerUUID)); err != nil {
+			return err
+		}
+		mismatch, err := q.IngestAdmissionExecutionPIDMismatch(ctx, foghorndb.IngestAdmissionExecutionPIDMismatchParams{NodeID: request.NodeID, StartTriggerUuid: request.TriggerUUID, ConnectorPid: request.ConnectorPID})
+		if err != nil {
+			return err
+		}
+		if mismatch {
+			return errors.New("publisher execution connector identity changed")
+		}
+		return q.RecordIngestAdmissionAbandonment(ctx, foghorndb.RecordIngestAdmissionAbandonmentParams{NodeID: request.NodeID, StartTriggerUuid: request.TriggerUUID, ConnectorPid: request.ConnectorPID})
+	})
+	if err != nil {
+		return err
+	}
+	_, err = r.Settle(ctx, request, generation, IngestEndedAdmissionAbandoned)
+	return err
+}
+
+// The SQL transition chooses the winning or retired UUID while holding its
+// execution lock. It appends this protobuf string prefix and that UUID to the
+// event template, keeping the wire field number in the generated descriptor.
+func publisherSessionPrefix(message proto.Message) []byte {
+	field := message.ProtoReflect().Descriptor().Fields().ByName("session_id")
+	return protowire.AppendVarint(protowire.AppendTag(nil, protowire.Number(field.Number()), protowire.BytesType), 36)
+}
+
+// FenceExecution prevents confirmation without ending the session or releasing
+// its capacity while the durable node stop is still pending.
+func (r *PublisherAdmissionRepository) FenceExecution(ctx context.Context, request IngestSessionRequest, generation string) error {
+	if r == nil || r.database == nil {
+		return errors.New("publisher admission database unavailable")
+	}
+	return database.WithRetryablePostgresTx(ctx, r.database, nil, func(tx *sql.Tx) error {
+		q := foghorndb.New(tx)
+		if err := q.LockIngestStream(ctx, ingestAdmissionTriggerLockKey(request.NodeID, request.TriggerUUID)); err != nil {
+			return err
+		}
+		affected, err := q.FenceIngestStopExecution(ctx, foghorndb.FenceIngestStopExecutionParams{TenantID: request.TenantID, SessionID: generation, NodeID: request.NodeID, ClaimID: request.TriggerUUID, InternalName: request.InternalName, ConnectorPid: request.ConnectorPID})
+		if err != nil {
+			return err
+		}
+		if affected != 1 {
+			return errors.New("publisher execution identity no longer matches stop request")
+		}
+		return nil
+	})
 }

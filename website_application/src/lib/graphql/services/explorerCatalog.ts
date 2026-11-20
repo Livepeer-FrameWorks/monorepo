@@ -39,6 +39,40 @@ export type ResolvedExplorerSection = {
 
 export const EXPLORER_CATALOG: ExplorerSection[] = [
   {
+    id: "node-capacity",
+    title: "Node Capacity",
+    description:
+      "Read operator-owned directional budgets, defaults, and the revision applied by the edge.",
+    examples: [
+      {
+        id: "node-capacity-read",
+        title: "Read Node Capacity",
+        description:
+          "Use an owned node's Relay ID. Default budgets are 1 Gbit/s; null appliedRevision means the edge has not reported application.",
+        operationType: "query",
+        templatePath: "operations/queries/GetInfrastructureNode.gql",
+        tags: ["infrastructure", "capacity"],
+      },
+      {
+        id: "node-capacity-write",
+        title: "Set Node Capacity",
+        description:
+          "Requires infrastructure:write. Pass the current revision and budgets in whole bytes/s; null restores the default for that direction.",
+        operationType: "mutation",
+        templatePath: "operations/mutations/SetNodeCapacity.gql",
+        variables: {
+          input: {
+            nodeId: "edge-node-1",
+            expectedRevision: 0,
+            egressBudgetBytesPerSec: null,
+            ingressBudgetBytesPerSec: null,
+          },
+        },
+        tags: ["infrastructure", "capacity"],
+      },
+    ],
+  },
+  {
     id: "media-placement",
     title: "Media Placement",
     description:
@@ -184,17 +218,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         },
         tags: ["core", "developer", "playback"],
       },
-      {
-        id: "stream-keys",
-        title: "Stream Keys",
-        description: "List ingest credentials for a stream.",
-        operationType: "query",
-        templatePath: "operations/queries/GetStreamKeys.gql",
-        variables: {
-          streamId: DEMO_STREAM_GLOBAL_ID,
-        },
-        tags: ["advanced", "stream", "auth"],
-      },
+
       {
         id: "push-targets",
         title: "Push Targets",
@@ -923,20 +947,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         },
         tags: ["advanced", "mutation", "infra"],
       },
-      {
-        id: "create-stream-key",
-        title: "Create Stream Key",
-        description: "Issue a new ingest key for a stream.",
-        operationType: "mutation",
-        templatePath: "operations/mutations/CreateStreamKey.gql",
-        variables: {
-          streamId: DEMO_STREAM_GLOBAL_ID,
-          input: {
-            name: "primary-key",
-          },
-        },
-        tags: ["advanced", "mutation", "stream"],
-      },
+
       {
         id: "create-push-target",
         title: "Create Push Target",

@@ -9,6 +9,7 @@ WHERE status IN ('completed', 'completed_partial', 'ready', 'failed')
       OR (artifact_type <> 'dvr'
           AND COALESCE(origin_type, '') <> 'dvr_chapter'
           AND retention_until IS NULL
+          AND status = 'failed'
           AND created_at < NOW() - make_interval(days => sqlc.arg(retention_days)::integer))
   )
 LIMIT 500;
@@ -24,6 +25,7 @@ WHERE artifact_hash = sqlc.arg(artifact_hash)
       OR (artifact_type <> 'dvr'
           AND COALESCE(origin_type, '') <> 'dvr_chapter'
           AND retention_until IS NULL
+          AND status = 'failed'
           AND created_at < NOW() - make_interval(days => sqlc.arg(retention_days)::integer))
   )
 RETURNING tenant_id::text;

@@ -87,11 +87,14 @@ func TestProtocolFourRestreamTeardownSettlesAfterSuccessfulDispatch(t *testing.T
 		"node-v4": {stream: stream, rawNodeID: "node-v4", canonicalID: "node-v4", protocolVersion: 4},
 	}, log: logging.NewLogger()}
 	const generation = "11111111-1111-4111-8111-111111111111"
+	const tenant = "11111111-1111-4111-8111-111111111112"
+	mock.ExpectQuery("SELECT tenant_id::text AS tenant_id").WithArgs("node-v4", generation).
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(tenant))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE foghorn.ingest_offline_effects")).
-		WithArgs("node-v4", generation).
+		WithArgs(tenant, "node-v4", generation).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE foghorn.ingest_offline_effects")).
-		WithArgs("node-v4", generation).
+		WithArgs(tenant, "node-v4", generation).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := SendLocalDeactivatePushTargets(context.Background(), "node-v4", &ipcpb.DeactivatePushTargets{

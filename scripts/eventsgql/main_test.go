@@ -212,7 +212,11 @@ func TestCheckReportsEditedBlock(t *testing.T) {
 		}
 		content := string(raw)
 		if rel == schemaPath {
-			content = strings.Replace(content, "type StreamLive {\n  streamId: ID!\n  playbackId: ID!\n}", "type StreamLive {\n  streamId: ID!\n  playbackId: ID!\n  nodeId: String\n}", 1)
+			var spliceErr error
+			content, spliceErr = splice(content, schemaBegin, schemaEnd, "type StaleGeneratedEvent {\n  staleField: String\n}\n")
+			if spliceErr != nil {
+				t.Fatal(spliceErr)
+			}
 		}
 		if mkErr := os.MkdirAll(filepath.Dir(filepath.Join(tmp, rel)), 0o755); mkErr != nil {
 			t.Fatal(mkErr)
@@ -225,8 +229,8 @@ func TestCheckReportsEditedBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(edited), "nodeId: String") {
-		t.Fatal("test setup did not edit the StreamLive block")
+	if !strings.Contains(string(edited), "type StaleGeneratedEvent {") {
+		t.Fatal("test setup did not edit the generated event block")
 	}
 
 	stale, err := run(tmp, true)

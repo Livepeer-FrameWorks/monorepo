@@ -116,15 +116,25 @@ func TestRetentionPurgesOnlyUnreferencedHistory_RealPG(t *testing.T) { //nolint:
 	recentDelivered := event("vod_lifecycle", "6 days")
 	undelivered := event("vod_lifecycle", "")
 
+	retentionExec(t, conn, `INSERT INTO foghorn.pull_ingest_sessions
+ (tenant_id,stream_id,stream_internal_name,node_id,ingest_cluster_id,admission_state,buffer_pid,start_event_id,started_at,started_at_unix_millis,playable_at,playable_at_unix_millis,ended_at,ended_at_unix_millis)
+ VALUES ($1::uuid,'22222222-2222-4222-8222-222222222222','pull-old','pull-old-node','cell-a','active',9000,'old-buffer',NOW()-INTERVAL '90 days',1000,NOW()-INTERVAL '90 days',1000,NOW()-INTERVAL '31 days',2000),
+ ($1::uuid,'33333333-3333-4333-8333-333333333333','pull-live','pull-live-node','cell-a','active',9001,'live-buffer',NOW()-INTERVAL '90 days',1000,NOW()-INTERVAL '90 days',1000,NULL,NULL)`, retentionTenant)
 	purged, err := purgeRetainedHistory(ctx, foghorndb.New(conn))
 	if err != nil {
 		t.Fatalf("retention pass: %v", err)
 	}
 	wantSessions := int64(historyPurgeBatch + 200 + 2)
-	if purged.sessions != wantSessions || purged.jobs != 2 || purged.events != 1 {
-		t.Fatalf("purged %+v, want sessions=%d jobs=2 events=1", purged, wantSessions)
+	if purged.sessions != wantSessions || purged.jobs != 2 || purged.events != 1 || purged.pulls != 1 {
+		t.Fatalf("purged %+v, want sessions=%d pulls=1 jobs=2 events=1", purged, wantSessions)
 	}
 
+	if retentionRowExists(t, conn, `SELECT 1 FROM foghorn.pull_ingest_sessions WHERE tenant_id=$1::uuid AND stream_internal_name='pull-old'`, retentionTenant) {
+		t.Fatal("expired pull history survived retention")
+	}
+	if !retentionRowExists(t, conn, `SELECT 1 FROM foghorn.pull_ingest_sessions WHERE tenant_id=$1::uuid AND stream_internal_name='pull-live'`, retentionTenant) {
+		t.Fatal("retention removed an active pull buffer")
+	}
 	session := func(id string) bool {
 		return retentionRowExists(t, conn, `SELECT 1 FROM foghorn.ingest_sessions WHERE id = $1::uuid`, id)
 	}

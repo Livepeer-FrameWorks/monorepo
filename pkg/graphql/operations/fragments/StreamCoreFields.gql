@@ -6,8 +6,18 @@ fragment StreamCoreFields on Stream {
   streamKey
   playbackId
   record
+  transcodeLadder
   liveVideoAbr
   ingestMode
+  ingest {
+    state
+    isLive
+    sessionId
+    connectedAt
+    liveSince
+    endedAt
+    resumableUntil
+  }
   pullSource {
     sourceUriRedacted
     enabled

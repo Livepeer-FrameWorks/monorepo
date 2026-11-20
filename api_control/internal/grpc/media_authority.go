@@ -1840,6 +1840,8 @@ func (s *CommodoreServer) runMediaAuthorityWorkers(ctx context.Context) {
 		s.adoptLegacyMediaAuthorityRefreshInbox,
 		s.processMediaAuthorityEventObligations,
 		s.processAccountIngestRevocations,
+		s.processIngestStopObligations,
+		s.purgeCompletedIngestStops,
 		s.processMediaAuthorityBulkObligations,
 		s.processMediaAuthorityObjectRenewals,
 		s.processMediaAuthorityTenantRenewals,

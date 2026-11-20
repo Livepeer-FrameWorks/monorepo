@@ -118,22 +118,33 @@ Media failure reasons: `MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE`, `_PROCESSING_F
 
 Subject: `streams/<stream id>`.
 
-| Type                 | Fires when                                                        | Payload                                                                                 |
-| -------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `stream.created`     | A stream is created.                                              | `streamId`, `name`, `playbackId`                                                        |
-| `stream.updated`     | Stream settings, stream keys, or multistream targets change.      | `streamId`, `changedFields` (snake_case field identifiers)                              |
-| `stream.deleted`     | A stream is deleted.                                              | `streamId`                                                                              |
-| `stream.key_rotated` | The stream key is replaced. The key itself is never in the event. | `streamId`                                                                              |
-| `stream.connected`   | An encoder or pull source starts a new ingest session.            | `streamId`, `playbackId`, `protocol` (`INGEST_PROTOCOL_RTMP`, `_SRT`, `_WHIP`, `_PULL`) |
-| `stream.live`        | The stream becomes playable.                                      | `streamId`, `playbackId`                                                                |
-| `stream.idle`        | The ingest session ends.                                          | `streamId`, `playbackId`                                                                |
+| Type                         | Fires when                                                        | Payload                                                                                              |
+| ---------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `stream.created`             | A stream is created.                                              | `streamId`, `name`, `playbackId`                                                                     |
+| `stream.updated`             | Stream settings, the primary key, or multistream targets change.  | `streamId`, `changedFields` (snake_case field identifiers)                                           |
+| `stream.deleted`             | A stream is deleted.                                              | `streamId`                                                                                           |
+| `stream.key_rotated`         | The stream key is replaced. The key itself is never in the event. | `streamId`                                                                                           |
+| `stream.connected`           | An encoder or pull source starts a new ingest session.            | `streamId`, `playbackId`, `sessionId`, `protocol` (`INGEST_PROTOCOL_RTMP`, `_SRT`, `_WHIP`, `_PULL`) |
+| `stream.live`                | The stream becomes playable.                                      | `streamId`, `playbackId`, `sessionId`                                                                |
+| `stream.idle`                | The ingest session ends.                                          | `streamId`, `playbackId`, `sessionId`                                                                |
+| `stream.ended`               | The origin unloads the latest ingest buffer.                      | `streamId`, `playbackId`, `sessionId`                                                                |
+| `stream.ingest_disconnected` | An explicit publisher disconnect finishes.                        | `streamId`, `sessionId`, `reason` (`requested` or `key_rotated`)                                     |
 
 `changedFields` values are snake_case identifiers, not GraphQL field names: `title`,
 `description`, `is_recording_enabled`, `live_video_abr`, `pull_source`, `source_location`,
 `dvr_chapter_mode`, `dvr_chapter_interval_seconds`, `monitoring_enabled`, `playback_policy`,
-`stream_keys`, and `push_targets`.
+`stream_key`, and `push_targets`.
 
-`stream.connected`, `stream.live`, and `stream.idle` fire once per ingest session. Their
+For push ingest, `stream.connected`, `stream.live`, and `stream.idle` describe one
+publisher session. For a pull source, connected and live are emitted together
+when its first direct buffer becomes playable in a media cell. Additional direct
+buffers in that cell do not repeat them; idle is emitted when its last buffer
+ends. Each cell emits its own lifecycle, while relay copies emit none. An idle
+event describes ingest ending; buffered playback or DVR replay may still work. `stream.ended`
+means the live buffer was unloaded; saved recordings remain independently playable. Correlate
+connected, live, idle, ended, and explicit-disconnect events by `sessionId`, not by delivery order.
+
+Their
 `playbackId` is the stream's playback ID when the event was emitted; on `stream.live` and
 `stream.idle` it is empty in the rare case the platform could not resolve the stream while its
 control plane was unreachable. A playback ID can be rotated, so key your records on `streamId`.
@@ -141,6 +152,10 @@ control plane was unreachable. A playback ID can be rotated, so key your records
 ## Clips, recordings, and uploads
 
 Subject: `artifacts/<artifact id>`.
+
+`recording.chapter_ready` is public: each saved chapter carries its parent recording and chapter
+identity. Use `dvrRecording(id) { chapters }` to recover the full ordered chapter list after a missed
+event. Live buffer replay and saved chapters are separate playback sources.
 
 | Type                       | Fires when                                                   | Payload                                               |
 | -------------------------- | ------------------------------------------------------------ | ----------------------------------------------------- |

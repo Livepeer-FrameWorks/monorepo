@@ -5,7 +5,7 @@ import { clearServerInfoProbes } from "@livepeer-frameworks/api/gateway-probe";
 import { viewerProtocols, type ViewerProtocol } from "../src/core/ViewerProtocol";
 
 const SELECTING_SERVER = {
-  data: { serverInfo: { version: "v0.3.11", features: ["playback", "viewer-protocol-selection"] } },
+  data: { serverInfo: { version: "v0.3.16", features: ["playback", "viewer-protocol-selection"] } },
 };
 
 function isProbe(init?: RequestInit): boolean {
@@ -175,7 +175,7 @@ describe("protocol-bound gateway placement", () => {
 
   it.each([
     ["is a development build without the slug", { version: "dev", features: ["playback"] }],
-    ["is a supported release without the slug", { version: "v0.3.11", features: ["playback"] }],
+    ["is a supported release without the slug", { version: "v0.3.16", features: ["playback"] }],
   ])(
     "omits the protocol and enforces the format locally when the gateway %s",
     async (_case, serverInfo) => {
@@ -330,7 +330,7 @@ describe("protocol-bound gateway placement", () => {
       const error = await gateway.resolve().catch((e: unknown) => e);
       expect(error).toBeInstanceOf(ServerTooOldError);
       expect((error as ServerTooOldError).serverVersion).toBe(serverVersion);
-      expect((error as ServerTooOldError).minimumVersion).toBe("v0.3.11");
+      expect((error as ServerTooOldError).minimumVersion).toBe("v0.3.16");
       expect(gateway.getStatus()).toBe("error");
       expect(gateway.getEndpoints()).toBeNull();
       expect(published).not.toHaveBeenCalled();

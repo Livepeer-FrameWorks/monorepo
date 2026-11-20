@@ -45,11 +45,11 @@ func TestPublicEventTimestampFieldsAreNilWhenUnset(t *testing.T) {
 
 func TestPublicEventDataRefusesInternalMessages(t *testing.T) {
 	r := &Resolver{Resolver: &resolvers.Resolver{}}
-	internal, err := anypb.New(&internalv1.RecordingChapterReady{ChapterId: "chapter-1"})
+	internal, err := anypb.New(&internalv1.ArtifactNodeCopyChanged{ArtifactHash: "chapter-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, eventType := range []string{"recording.chapter_ready", "recording.ready"} {
+	for _, eventType := range []string{"artifact.node_copy_changed", "recording.ready"} {
 		msg, err := r.PublicEvent().Data(context.Background(), &signalmanpb.TenantEvent{Id: "e", Type: eventType, Data: internal})
 		if !errors.Is(err, resolvers.ErrNotPublicEvent) || msg != nil {
 			t.Fatalf("Data(%s with internal payload) = (%v, %v), want ErrNotPublicEvent", eventType, msg, err)

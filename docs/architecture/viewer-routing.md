@@ -269,6 +269,85 @@ score := cpuScore + ramScore + bwScore + geoScore + streamBonus
 | Geo          | 1000           | `WEIGHT - (WEIGHT * normalized_distance)`                 |
 | Stream bonus | +50            | If node already has the stream                            |
 
+### Node bandwidth budgets
+
+Quartermaster owns one durable record per node, with independent egress and ingress budgets.
+The node's operator (the tenant owning its cluster), or a platform operator, can set either
+budget. An unset direction is **DEFAULT: 125,000,000 bytes/s (1 Gbit/s)**. An explicit
+value is **OPERATOR**. A positive whole-byte budget and an expected revision are required;
+stale writes fail rather than overwriting another operator's change. Resetting a direction
+restores its default. There is no cluster or tenant bandwidth ceiling. The deprecated
+`Cluster.maxBandwidthMbps` is the sum of node egress budgets in decimal Mbit/s; metadata
+without readable node inventory returns zero. Use nullable `Cluster.capacity` to distinguish
+an unavailable capacity read from an empty cluster.
+
+Operators can use the node page, Mac tray, GraphQL `setNodeCapacity`, MCP
+`set_node_capacity`, or `frameworks edge capacity set NODE --egress-mbps 2000
+--ingress-mbps 1000`. CLI values are decimal Mbit/s; `default` resets a direction.
+Manifest `bandwidth_mbps` writes both directions through the API on every provision,
+including an unchanged host; zero restores defaults. Token-only installation refuses the
+bandwidth flag and prints the authenticated capacity command. No provisioning environment
+variable controls the budget.
+
+Foghorn composes the persisted record into ConfigSeed. Commodore requests an immediate
+push after a write, report mismatches trigger a throttled repair, and Foghorn reconciles
+connected nodes against Quartermaster every 60 seconds. Helmsman applies capacity-only
+seeds through Mist's bandwidth command without provisioning or restarting Mist. The
+configured revision and last applied revision are separate: an offline node retains its
+budget, while an unknown or lagging applied revision remains visible.
+
+Helmsman samples network interface counters: Linux sysfs, native macOS routing counters,
+and Linux counters inside the Docker VM on macOS. A sample describes that node/network
+namespace, not all traffic on its physical Mac. NIC measurements include protocol overhead,
+S3 transfers, relays, pulled streams and Livepeer traffic, and exclude local DVR file writes.
+If counters cannot be read, corrected Mist counters supply a sample marked **MIST**;
+normal interface samples are marked **NIC**. Counter resets, interface changes and invalid
+intervals invalidate a sample. Foghorn retains the last valid rate instead of treating a
+failed poll as zero load. Node counters measure routing pressure; finalized session facts
+remain the billing source.
+
+Every admission consumer uses `pkg/capacity`. Usable capacity is 85% of the directional
+budget, rounded down to whole bytes/s. Admission requires observed load, outstanding
+reservations and the new demand to fit within that usable capacity. Nodes at or below
+70% committed load are preferred; nodes beyond 85% cannot admit another session. The
+free-tier redline is also 85%. Federation sends raw directional headroom and the budget;
+the receiving model applies its reserve once. CPU and RAM retain their separate eligibility
+checks.
+
+Reservations cover viewers, VOD/DVR/clip playback, ingest, configured and origin pulls,
+and clip/DVR processing transfers. Recording or processing on the source node has no
+transfer reservation because its local reads do not cross a network interface. A known viewer reserves the stream's top bitrate plus
+10% overhead, rounded upward, with a 64 KiB/s minimum. Unknown ingest reserves 10 Mbit/s.
+All replicas in a cell use an atomic Redis ledger per node and direction. Pending admissions
+expire after 30 seconds; activation holds the reservation for at most 120 seconds, and a
+valid report releases it only when the measurement window includes the activated traffic.
+Redis failure uses each replica's memory mirror, which can oversubscribe across replicas;
+recovery imports those reservations before admitting new work. Redis operations serialize per
+node; unrelated nodes do not wait for one another's round trips. Settlement uses an activation-time
+index to visit eligible held reservations. Reservation updates cannot create node inventory.
+A pull lookup reserves ingress before tenant-cap admission and releases its own reservation if that
+admission fails. Bandwidth refusal returns `offline:bandwidth_capacity` without taking a stream slot.
+Viewer census failures omit audience counts while valid fresh node metrics continue to route traffic. See
+[Foghorn HA](foghorn-ha.md#single-writer-vs-multi-writer-state) for the ownership fences
+and ledger synchronization.
+
+### Fleet capacity and failure tolerance
+
+Cluster capacity is the sum of node budgets and 85% usable budgets, with a count of nodes
+using defaults. Load and capacity summaries use the same fresh, healthy node population.
+An aggregate alone cannot prove that the fleet survives its largest node, facility or
+uplink loss. An operator may reserve additional spare capacity for that purpose; a universal
+50% utilization target does not establish resilience for unequal nodes or correlated sites.
+
+Configurable CPU/RAM reserves, emergency capacity classes, failure-domain loss simulations,
+and dedicated reserve/topology alert rules remain outside this implementation. Such rules
+need trustworthy source metrics, sustained thresholds, maintenance awareness and a named
+receiver. Predictive processing/GPU cost remains in
+[`workload-cost-model.md`](../rfcs/workload-cost-model.md); provider transit/CDN economics
+remain in [`network-egress-peering.md`](../rfcs/network-egress-peering.md). Capacity limits
+constrain tenant placement policy and cannot be widened by a tenant preference. Unknown
+or stale observations remain uncertainty; they cannot justify spillover as proven exhaustion.
+
 ### Weight Configuration
 
 Environment variables (defaults in parentheses):
@@ -330,7 +409,7 @@ A node must pass all filters:
 
 1. **Online**: Has recent heartbeat
 2. **Not in maintenance**: Maintenance flag not set
-3. **Capacity**: Below bandwidth limit
+3. **Capacity**: Projected directional load fits within the 85% usable budget
 4. **Stream availability**: For playback, node must have the stream (or be able to pull it)
 
 ### Fallback Behavior
@@ -461,12 +540,15 @@ of any object, carries its session on all its URLs as Mist's session token
 (`tkn`); Mist copies it into every manifest and segment URL and bundles the
 viewer's connections under it. The viewer's `PLAY_REWRITE` in the node's cell
 activates the reservation; an unused one lapses with the pending-viewer timeout.
+Primary and fallback URLs share the playback ID; each serving node correlates that ID separately and
+admits its own bandwidth. A refused `USER_NEW` abandons the unconfirmed playback intent without
+ending an existing admitted Mist connection.
 A session the cell holds no reservation for is still its own viewer, so players
 behind one address are counted apart. A viewer JWT travels next to it as
-`fwjwt`, because Mist reads a `jwt` parameter as its session token. Because the reservation lives where
-the node's observations are produced, a cross-cell coordinator sees it on its
-next observation, and power of two choices keeps replicas working from the same
-lagged telemetry from herding onto one node.
+`fwjwt`, because Mist reads a `jwt` parameter as its session token. The cell shares these reservations through Redis. A cross-cell coordinator sees
+them on its next observation, and power of two choices spreads decisions made
+from the same lagged telemetry. The destination rechecks capacity atomically
+when it admits the reservation.
 
 See `docs/architecture/stream-replication-topology.md` for the full origin-pull lifecycle and loop prevention.
 
@@ -589,9 +671,12 @@ cell can still route an encoder during a control-plane outage.
 
 Tenant stream capacity is enforced in the same PostgreSQL transaction that
 creates the durable ingest session. All admissions take a tenant advisory lock;
-capped admissions count active sessions and insert only when a slot remains.
-Ending that row releases the slot. Valkey loss therefore cannot revoke a valid
-publisher or admit a second publisher from a torn lease.
+capped admissions count open push sessions and distinct open direct-pull streams,
+including pending dials, and insert only when a slot remains. A pull's node-bound
+`/source` request admits before it returns the upstream URI. Relay destinations
+skip this upstream admission. Ending the last pull row releases that stream's
+slot. Valkey loss therefore cannot revoke a valid publisher or admit a second
+publisher from a torn lease.
 
 An ingest node that loses its control connection keeps its sessions; control
 loss is not evidence that the publisher stopped. The session ends only on

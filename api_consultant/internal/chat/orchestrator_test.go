@@ -296,6 +296,7 @@ func TestModeAllowsTool(t *testing.T) {
 		{"spoke", "delete_stream", false},
 		{"spoke", "update_stream", false},
 		{"spoke", "refresh_stream_key", false},
+		{"spoke", "disconnect_ingest", false},
 		{"spoke", "create_clip", false},
 		{"spoke", "delete_clip", false},
 		{"spoke", "start_dvr", false},

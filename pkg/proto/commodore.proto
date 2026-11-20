@@ -13,6 +13,7 @@ import "cluster_peer.proto";
 import "tenant_limits.proto";
 import "metering_contract.proto";
 import "media_placement.proto";
+import "quartermaster_values.proto";
 
 // ============================================================================
 // COMMODORE CONTROL PLANE - INTERNAL SERVICE APIs
@@ -308,6 +309,9 @@ service InternalService {
   // after finalize push a new retention_until into Foghorn via
   // foghorn.DVRControlService.OverrideArtifactRetention.
   rpc GetMediaRetentionPolicy(GetMediaRetentionPolicyRequest) returns (GetMediaRetentionPolicyResponse);
+  rpc SetVodOriginalPolicy(SetVodOriginalPolicyRequest) returns (GetMediaRetentionPolicyResponse);
+  rpc GetTranscodeLadderPolicy(GetTranscodeLadderPolicyRequest) returns (TranscodeLadderPolicy);
+  rpc SetTenantTranscodeLadder(SetTenantTranscodeLadderRequest) returns (TranscodeLadderPolicy);
   rpc SetMediaRetentionPolicy(SetMediaRetentionPolicyRequest) returns (SetMediaRetentionPolicyResponse);
   rpc UpdateAssetRetention(UpdateAssetRetentionRequest) returns (UpdateAssetRetentionResponse);
   rpc ResetAssetRetention(ResetAssetRetentionRequest) returns (UpdateAssetRetentionResponse);
@@ -1260,6 +1264,12 @@ message UpdateArtifactCatalogSnapshotRequest {
   // COALESCE(thumbnail_serving_cluster_id, storage_cluster_id, origin_cluster_id). An OLD Commodore ignores this unknown
   // field and the reader fallback covers it until the row re-projects — so mixed-version rollout is safe.
   optional string thumbnail_serving_cluster_id = 21;
+  optional int64 original_size_bytes = 22; // Whole-state original size in bytes; absent clears it.
+  optional google.protobuf.Timestamp started_at = 23;
+  optional google.protobuf.Timestamp ended_at = 24;
+  // A legacy producer omits this flag and preserves the recorded capture times.
+  bool recording_times_present = 25;
+
 }
 
 message UpdateArtifactCatalogSnapshotResponse {
@@ -1273,6 +1283,11 @@ message UpdateArtifactCatalogSnapshotResponse {
   // Commodore actually stored the field. An OLD Commodore ignores the unknown request field 21 AND returns "" here, so
   // the caller keeps the row dirty and re-projects after Commodore upgrades. This closes the mixed-version loss window.
   optional string thumbnail_serving_cluster_id = 3;
+  optional google.protobuf.Timestamp started_at = 4;
+  optional google.protobuf.Timestamp ended_at = 5;
+
+  bool recording_times_present = 6; // Confirms support even when both capture times are absent.
+
 }
 
 // Resolve clip hash to tenant context
@@ -1477,6 +1492,8 @@ message StorageArtifactInfo {
   repeated MediaTrack tracks = 27;    // Finalized A/V track summary; empty until finalized
   optional string description = 28;   // User-provided description (VOD uploads); from commodore business row
   optional string error_message = 29; // Processing failure detail; projected from foghorn.artifacts.error_message
+  optional int64 original_size_bytes = 30; // Byte-identical retained upload; absent when not kept.
+  optional string parent_recording_id = 31;
 }
 
 message ListStorageArtifactsResponse {
@@ -1957,6 +1974,8 @@ message User {
 // ============================================================================
 
 service StreamService {
+  rpc ListStreamArtifacts(ListStreamArtifactsRequest) returns (ListStreamArtifactsResponse);
+  rpc GetStreamIngestStates(foghorn_control.GetStreamIngestStatesRequest) returns (foghorn_control.GetStreamIngestStatesResponse);
   // Support metadata only; requires a platform-operator JWT.
   rpc DiagnoseStream(DiagnoseStreamRequest) returns (DiagnoseStreamResponse);
   rpc CreateStream(CreateStreamRequest) returns (CreateStreamResponse);
@@ -1966,6 +1985,9 @@ service StreamService {
   rpc UpdateStream(UpdateStreamRequest) returns (Stream);
   rpc DeleteStream(DeleteStreamRequest) returns (DeleteStreamResponse);
   rpc RefreshStreamKey(RefreshStreamKeyRequest) returns (RefreshStreamKeyResponse);
+  // Older servers must refuse rotate-and-end before changing credentials.
+  rpc RefreshStreamKeyAndEndIngest(RefreshStreamKeyRequest) returns (RefreshStreamKeyResponse);
+  rpc DisconnectIngest(DisconnectIngestRequest) returns (DisconnectIngestResponse);
 }
 
 // Matches pkg/api/commodore/types.go:CreateStreamRequest (lines 114-119)
@@ -1981,6 +2003,7 @@ message CreateStreamRequest {
   // CUSTOM is not accepted as input.
   StreamSourceLocation source_location = 7;
   string live_video_abr = 8;             // INHERIT (default) or OFF
+  string transcode_ladder = 9; // Empty inherits the tenant ladder, then the tier default.
 }
 
 enum SourceLocationMode {
@@ -2133,6 +2156,7 @@ message Stream {
   // call that returned this stream; empty on reads.
   repeated media_placement.Warning source_location_warnings = 32;
   string live_video_abr = 33;            // INHERIT or OFF
+  string transcode_ladder = 34; // Empty inherits the tenant ladder, then the tier default.
 }
 
 // PullSourceAllowedClustersInput wraps the placement-pin list so callers can
@@ -2203,6 +2227,7 @@ message UpdateStreamRequest {
   // CUSTOM rejects source-location writes.
   StreamSourceLocation source_location = 10;
   optional string live_video_abr = 11;   // INHERIT or OFF; absent = preserve
+  optional string transcode_ladder = 12; // Empty inherits; absent preserves the saved choice.
 }
 
 message DeleteStreamRequest {
@@ -2226,9 +2251,9 @@ message DeleteStreamResponse {
 // ============================================================================
 
 service StreamKeyService {
-  rpc CreateStreamKey(CreateStreamKeyRequest) returns (StreamKeyResponse);
-  rpc ListStreamKeys(ListStreamKeysRequest) returns (ListStreamKeysResponse);
-  rpc DeactivateStreamKey(DeactivateStreamKeyRequest) returns (google.protobuf.Empty);
+  rpc CreateStreamKey(CreateStreamKeyRequest) returns (StreamKeyResponse) { option deprecated = true; }
+  rpc ListStreamKeys(ListStreamKeysRequest) returns (ListStreamKeysResponse) { option deprecated = true; }
+  rpc DeactivateStreamKey(DeactivateStreamKeyRequest) returns (google.protobuf.Empty) { option deprecated = true; }
 }
 
 // Matches pkg/api/commodore/types.go:CreateStreamKeyRequest (lines 337-339)
@@ -2481,6 +2506,7 @@ message RevokeAPITokenResponse {
 // Note: Added via extension to StreamService definition above
 
 message RefreshStreamKeyRequest {
+  bool end_active_session = 2;
   string stream_id = 1;                 // Public stream ID (UUID)
 }
 
@@ -2510,6 +2536,7 @@ service ClipService {
 // ============================================================================
 
 service DVRService {
+  rpc GetDVRRecording(GetDVRRecordingRequest) returns (shared.DVRInfo);
   rpc StopDVR(shared.StopDVRRequest) returns (shared.StopDVRResponse);
   rpc DeleteDVR(shared.DeleteDVRRequest) returns (shared.DeleteDVRResponse);
 }
@@ -2543,9 +2570,13 @@ service VodService {
   // VOD-only RPC.
   // Delete VOD asset
   rpc DeleteVodAsset(shared.DeleteVodAssetRequest) returns (shared.DeleteVodAssetResponse);
+  rpc CreateVodOriginalDownload(shared.CreateVodOriginalDownloadRequest) returns (shared.CreateVodOriginalDownloadResponse);
+  rpc DeleteVodOriginal(shared.DeleteVodOriginalRequest) returns (shared.DeleteVodOriginalResponse);
 }
 
 service NodeManagementService {
+  rpc SetNodeCapacity(quartermaster.SetNodeCapacityRequest) returns (quartermaster.NodeCapacity);
+  rpc GetNodeCapacity(quartermaster.GetNodeCapacityRequest) returns (quartermaster.NodeCapacity);
   // Set a node's operational mode (normal, draining, maintenance)
   rpc SetNodeOperationalMode(foghorn_control.SetNodeModeRequest) returns (foghorn_control.SetNodeModeResponse);
   // Get real-time health and routing state for a node
@@ -2639,7 +2670,7 @@ message RecordPullSourceEventRequest {
   string tenant_id = 1;
   string stream_id = 2;            // optional — empty when resolution couldn't reach a tenant
   string internal_name = 3;
-  // 'resolved' | 'not_found' | 'disabled' | 'blocked_uri' | 'cluster_not_allowed_delegate' | 'commodore_error' | 'foghorn_base_unresolved'
+  // 'resolved' | 'stream_cap' | 'not_found' | 'disabled' | 'blocked_uri' | 'cluster_not_allowed_delegate' | 'commodore_error' | 'foghorn_base_unresolved'
   string event_kind = 4;
   string detail = 5;
 }
@@ -2690,6 +2721,8 @@ message GetMediaRetentionPolicyResponse {
   MediaRetentionBounds bounds = 7;
   string updated_by = 8;
   google.protobuf.Timestamp updated_at = 9;
+  optional bool keep_vod_originals = 10; // Absent inherits keep=true.
+  bool effective_keep_vod_originals = 11;
 }
 
 message SetMediaRetentionPolicyRequest {
@@ -3024,3 +3057,48 @@ message StreamPushDiagnosis {
   string status = 4;
   string reason_code = 5;
 }
+
+
+message GetTranscodeLadderPolicyRequest {
+  string tenant_id = 1;
+}
+
+message SetTenantTranscodeLadderRequest {
+  string tenant_id = 1;
+  string transcode_ladder = 2; // ladder name; empty inherits the tier default
+}
+
+message TranscodeLadderOption {
+  string name = 1;
+  string display_name = 2;
+  string description = 3;
+  repeated string rendition_names = 4;
+}
+
+message TranscodeLadderPolicy {
+  repeated TranscodeLadderOption ladders = 1; // allowed by the tenant's tier
+  string tier_default = 2;
+  string tenant_ladder = 3;                   // empty = inherit the tier default
+  string effective_ladder = 4;                // what a stream without its own ladder gets
+}
+
+message SetVodOriginalPolicyRequest {
+  string tenant_id = 1;
+  optional bool keep_vod_originals = 2; // Absent restores the system default (keep).
+}
+
+message ListStreamArtifactsRequest {
+  string stream_id = 1;
+  string kind = 2; // dvr | clip
+  common.CursorPaginationRequest pagination = 3;
+}
+message ListStreamArtifactsResponse {
+  repeated StorageArtifactInfo artifacts = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+message GetDVRRecordingRequest {
+  string id = 1; // Catalog UUID or recording hash.
+}
+
+message DisconnectIngestRequest { string stream_id = 1; }
+message DisconnectIngestResponse { string stream_id = 1; bool stop_requested = 2; }

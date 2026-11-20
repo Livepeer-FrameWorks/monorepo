@@ -197,7 +197,6 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_clusters (
     -- ===== CAPACITY LIMITS =====
     max_concurrent_streams INTEGER DEFAULT 0,
     max_concurrent_viewers INTEGER DEFAULT 0,
-    max_bandwidth_mbps INTEGER DEFAULT 0,
 
     -- ===== STATUS & HEALTH =====
     is_active BOOLEAN DEFAULT TRUE,
@@ -512,6 +511,15 @@ INSERT INTO quartermaster.mesh_topology_state (id, revision)
 VALUES (TRUE, 1)
 ON CONFLICT (id) DO NOTHING;
 
+CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_node_capacity (
+    node_id VARCHAR(100) PRIMARY KEY REFERENCES quartermaster.infrastructure_nodes(node_id) ON DELETE CASCADE,
+    egress_budget_bytes_per_sec BIGINT CHECK (egress_budget_bytes_per_sec > 0),
+    ingress_budget_bytes_per_sec BIGINT CHECK (ingress_budget_bytes_per_sec > 0),
+    revision BIGINT NOT NULL CHECK (revision > 0),
+    updated_by TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS quartermaster.mesh_node_configs (
     node_id VARCHAR(100) PRIMARY KEY REFERENCES quartermaster.infrastructure_nodes(node_id) ON DELETE CASCADE,
     cluster_id VARCHAR(100) NOT NULL REFERENCES quartermaster.infrastructure_clusters(cluster_id) ON DELETE CASCADE,
@@ -711,7 +719,7 @@ CREATE TABLE IF NOT EXISTS quartermaster.tenant_cluster_access (
     access_source VARCHAR(50) NOT NULL DEFAULT 'unknown',
 
     -- ===== RESOURCE LIMITS (Quartermaster-owned capacity enforcement) =====
-    resource_limits JSONB DEFAULT '{}',  -- Tenant-specific limits: {max_streams, max_viewers, max_bandwidth_mbps}
+    resource_limits JSONB DEFAULT '{}',  -- Tenant-specific limits: {max_streams, max_viewers}
 
     -- ===== SUBSCRIPTION STATUS (Approval workflow) =====
     subscription_status VARCHAR(20) DEFAULT 'active',

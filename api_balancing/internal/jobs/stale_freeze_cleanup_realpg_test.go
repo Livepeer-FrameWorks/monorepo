@@ -19,6 +19,13 @@ import (
 
 func startRealPGForCleanup(t *testing.T) *sql.DB {
 	t.Helper()
+	schema, err := dbsql.Content.ReadFile("schema/foghorn.sql")
+	if err != nil {
+		t.Fatalf("read foghorn.sql: %v", err)
+	}
+	if conn, _, ok := dockerpg.OpenNativePostgresBaseline(t, "jobs", schema); ok {
+		return conn
+	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not available")
 	}
@@ -47,10 +54,6 @@ func startRealPGForCleanup(t *testing.T) *sql.DB {
 	t.Cleanup(func() { _ = conn.Close() })
 	if err := dockerpg.WaitReady(conn, name); err != nil {
 		t.Fatalf("%v", err)
-	}
-	schema, rerr := dbsql.Content.ReadFile("schema/foghorn.sql")
-	if rerr != nil {
-		t.Fatalf("read foghorn.sql: %v", rerr)
 	}
 	if _, err := conn.Exec(string(schema)); err != nil {
 		t.Fatalf("apply foghorn.sql: %v", err)

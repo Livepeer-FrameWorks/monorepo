@@ -145,3 +145,17 @@ Validated and classified from the URI before being handed to Mist:
 - **The process cache is not authority.** `triggers.Processor.streamCache` remains a connected-mode/runtime optimization. Ready signed object+tenant projections live in the Foghorn database and survive process restart; trigger and viewer paths use those first.
 - **Source URI encryption purpose is `pull-source-uri`** (HKDF-isolated from `push-target-uri` and `playback-webhook-secret`). The bootstrap CLI must derive with the same purpose string.
 - **Pull stream `stream_key` is a placeholder.** Push doesn't apply to pull, but the column is `NOT NULL`, so bootstrap inserts `pull-<playback_id>` as a stable filler.
+
+## Cell ingest sessions and limits
+
+A direct upstream pull reserves a tenant stream slot when the node asks `/source`, under the
+same cell tenant lock as push admissions. The cap comes from signed tenant authority; no
+Commodore hot-path call is needed. A refusal returns `offline:stream_cap` and records the
+`stream_cap` resolution reason. A relay does not acquire another direct-pull lifecycle.
+
+`pull_ingest_sessions` tracks one direct Mist buffer per node. The first playable buffer in a
+cell publishes connected/live with a cell session UUID; the last ending buffer publishes idle.
+Each cell emits independently. Periodic reports repair missed triggers, and the ten-second
+placement renewal includes active pulls, so DVR remains available after the original placement
+lease. A returned owner is restamped only after the preceding owner is inactive. Buffer unload
+emits `stream.ended`; idle alone does not claim that buffered playback or DVR replay has ended.

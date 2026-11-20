@@ -167,11 +167,15 @@ func observePlacementNodes(req PlacementObservationRequest, capacityOnly bool) (
 			candidate.Location = &placement.Coordinates{Latitude: node.GeoLatitude, Longitude: node.GeoLongitude}
 		}
 		if validPlacementMetrics(node) {
-			candidate.BWLimit = uint64(node.BWLimit)
+			link := node.EgressLink()
+			if req.Verb == placement.Ingest {
+				link = node.IngressLink()
+			}
+			candidate.BWLimit = link.Budget
 			candidate.RAMMax, candidate.RAMUsed = uint64(node.RAMMax), uint64(node.RAMCurrent)
-			candidate.BWAvailable = placementHeadroom(node, req.Verb)
+			candidate.BWAvailable = link.RawAvailable()
 			candidate.Capacity = placement.CapacityAvailable
-			if candidate.BWAvailable == 0 || node.CPU >= 100 || node.RAMCurrent >= node.RAMMax {
+			if placementHeadroom(node, req.Verb) == 0 || node.CPU >= 100 || node.RAMCurrent >= node.RAMMax {
 				candidate.Capacity = placement.CapacityExhausted
 			}
 		}
@@ -245,21 +249,11 @@ func validPlacementMetrics(node state.EnhancedBalancerNodeSnapshot) bool {
 }
 
 func placementHeadroom(node state.EnhancedBalancerNodeSnapshot, verb placement.Verb) uint64 {
-	used := node.UpSpeed
+	link := node.EgressLink()
 	if verb == placement.Ingest {
-		used = node.DownSpeed
+		link = node.IngressLink()
 	}
-	if used >= node.BWLimit {
-		return 0
-	}
-	remaining := uint64(node.BWLimit - used)
-	if verb == placement.Serve {
-		if node.AddBandwidth >= remaining {
-			return 0
-		}
-		remaining -= node.AddBandwidth
-	}
-	return remaining
+	return link.Available()
 }
 
 func placementStreamAllowed(configured []string, stream string) bool {

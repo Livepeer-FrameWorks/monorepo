@@ -1,10 +1,12 @@
-.PHONY: proto proto-check proto-breaking clean install-tools
+.PHONY: proto proto-validate proto-check proto-breaking clean install-tools
 
 BUF_VERSION := v1.72.0
 BUF := go run github.com/bufbuild/buf/cmd/buf@$(BUF_VERSION)
 
 # Proto generation for all services
 # - common.proto: Shared types (cursor pagination, time ranges)
+# - capacity_values.proto: Bandwidth measurement/budget enum values
+# - quartermaster_values.proto: Node capacity values and requests shared by service facades
 # - shared.proto: Shared types between Foghorn and Commodore (clips, DVR, viewer)
 # - cluster_peer.proto: TenantClusterPeer value type (cross-service routing envelope)
 # - tenant_limits.proto: TenantResourceLimits value type (admission caps)
@@ -34,6 +36,9 @@ proto: clean
 	$(BUF) build
 	$(BUF) generate
 
+proto-validate:
+	$(BUF) build
+
 proto-check: proto
 	@git diff --exit-code -- .
 	@test -z "$$(git ls-files --others --exclude-standard .)" || { \
@@ -46,7 +51,7 @@ proto-check: proto
 # per-package subdirectory output, so a stale flat *.pb.go can never linger.
 clean:
 	rm -f *.pb.go *_grpc.pb.go
-	rm -f common/*.pb.go shared/*.pb.go cluster_peer/*.pb.go tenant_limits/*.pb.go metering_contract/*.pb.go media_authority/*.pb.go x402/*.pb.go ipc/*.pb.go dns/*.pb.go commodore/*.pb.go quartermaster/*.pb.go purser/*.pb.go periscope/*.pb.go signalman/*.pb.go foghorn_control/*.pb.go foghorn/*.pb.go foghorn_federation/*.pb.go foghorn_relay/*.pb.go deckhand/*.pb.go skipper/*.pb.go
+	rm -f common/*.pb.go capacity_values/*.pb.go quartermaster_values/*.pb.go shared/*.pb.go cluster_peer/*.pb.go tenant_limits/*.pb.go metering_contract/*.pb.go media_authority/*.pb.go x402/*.pb.go ipc/*.pb.go dns/*.pb.go commodore/*.pb.go quartermaster/*.pb.go purser/*.pb.go periscope/*.pb.go signalman/*.pb.go foghorn_control/*.pb.go foghorn/*.pb.go foghorn_federation/*.pb.go foghorn_relay/*.pb.go deckhand/*.pb.go skipper/*.pb.go
 	rm -f media_placement/*.pb.go lookout/*.pb.go bosun/*.pb.go livepeer_observer/*.pb.go
 	rm -f events/*.pb.go events/public/v1/*.pb.go events/internal/v1/*.pb.go events/internalv1/*.pb.go
 

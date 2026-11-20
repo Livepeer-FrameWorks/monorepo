@@ -17,6 +17,7 @@
   import { pullSourcePlacementClass } from "$lib/utils/pull-source";
   import { getRecordingRetentionMaxDays } from "$lib/stores/capabilities.svelte";
   import SourceLocationControl from "./SourceLocationControl.svelte";
+  import TranscodeLadderSelect from "$lib/components/transcode/TranscodeLadderSelect.svelte";
   import SourceLocationSummary from "./SourceLocationSummary.svelte";
   import {
     anySourceLocation,
@@ -38,6 +39,7 @@
     description?: string | null;
     record?: boolean | null;
     liveVideoAbr?: string | null;
+    transcodeLadder?: string | null;
     ingestMode?: "PUSH" | "PULL" | "MANAGED" | string | null;
     pullSource?: {
       sourceUriRedacted?: string | null;
@@ -58,6 +60,7 @@
     description: string;
     record: boolean;
     liveVideoAbr: string;
+    transcodeLadder: string;
     pullSourceUri: string;
     pullSourceEnabled: boolean;
     /** Present only when the user changed the source location. */
@@ -99,6 +102,7 @@
     description: string;
     record: boolean;
     liveVideoAbr: string;
+    transcodeLadder: string;
     pullSourceUri: string;
     pullSourceEnabled: boolean;
     sourceLocation: SourceLocationDraft;
@@ -111,6 +115,7 @@
     description: "",
     record: false,
     liveVideoAbr: "INHERIT",
+    transcodeLadder: "",
     pullSourceUri: "",
     pullSourceEnabled: true,
     sourceLocation: anySourceLocation(),
@@ -174,6 +179,7 @@
       description: source.description || "",
       record: source.record || false,
       liveVideoAbr: source.liveVideoAbr ?? "INHERIT",
+      transcodeLadder: source.transcodeLadder ?? "",
       pullSourceUri: "",
       pullSourceEnabled: source.pullSource?.enabled ?? true,
       sourceLocation: draftFromSourceLocation(source.sourceLocation) ?? anySourceLocation(),
@@ -239,6 +245,7 @@
       description: formData.description,
       record: formData.record,
       liveVideoAbr: formData.liveVideoAbr,
+      transcodeLadder: formData.transcodeLadder,
       pullSourceUri: formData.pullSourceUri,
       pullSourceEnabled: formData.pullSourceEnabled,
       sourceLocation: sourceLocationChanged
@@ -379,6 +386,11 @@
               renditions turned on.
             </p>
           {/if}
+          <TranscodeLadderSelect
+            id="editTranscodeLadder"
+            bind:value={formData.transcodeLadder}
+            disabled={formData.liveVideoAbr === "OFF"}
+          />
         </div>
       </details>
 

@@ -35,6 +35,9 @@ import (
 
 // RateLimitConfig configures the rate limiter
 type RateLimitConfig struct {
+	// BurstIsCapacity uses burst as the bucket capacity, with limit as the
+	// per-minute refill rate. Existing admission limits use limit + burst.
+	BurstIsCapacity bool
 	// Logger for rate limit events
 	Logger logging.Logger
 	// CleanupInterval is how often to clean up expired entries (default: 1 minute)
@@ -143,9 +146,13 @@ func (rl *RateLimiter) Allow(tenantID string, limit, burst int) (allowed bool, r
 		return true, 0, 0
 	}
 
+	capacity := limit + burst
+	if rl.config.BurstIsCapacity {
+		capacity = burst
+	}
 	// Get or create bucket for tenant
 	bucketI, _ := rl.buckets.LoadOrStore(tenantID, &tokenBucket{
-		tokens:      float64(limit + burst), // Start with full bucket
+		tokens:      float64(capacity), // Start with full bucket
 		lastUpdate:  time.Now(),
 		limit:       limit,
 		burst:       burst,
@@ -172,8 +179,7 @@ func (rl *RateLimiter) Allow(tenantID string, limit, burst int) (allowed bool, r
 	bucket.tokens += tokensToAdd
 	bucket.lastUpdate = now
 
-	// Cap tokens at limit + burst
-	maxTokens := float64(limit + burst)
+	maxTokens := float64(capacity)
 	if bucket.tokens > maxTokens {
 		bucket.tokens = maxTokens
 	}

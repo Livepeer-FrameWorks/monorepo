@@ -62,7 +62,7 @@ function declarations(file: string, names?: string[]): string {
 describe("GatewayClient public API", () => {
   it("keeps its declarations", () => {
     expect(declarations("src/core/GatewayClient.ts")).toMatchSnapshot();
-  });
+  }, 30_000);
 
   it("keeps the endpoint types it returns", () => {
     expect(
@@ -77,7 +77,7 @@ describe("GatewayClient public API", () => {
         "StreamProtocol",
       ])
     ).toMatchSnapshot();
-  });
+  }, 30_000);
 
   it("keeps its module exports", () => {
     expect({

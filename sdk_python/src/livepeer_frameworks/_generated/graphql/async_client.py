@@ -30,9 +30,9 @@ from .create_payment import CreatePayment
 from .create_push_target import CreatePushTarget
 from .create_signing_key import CreateSigningKey
 from .create_stream import CreateStream
-from .create_stream_key import CreateStreamKey
 from .create_stripe_billing_portal import CreateStripeBillingPortal
 from .create_stripe_checkout import CreateStripeCheckout
+from .create_vod_original_download import CreateVodOriginalDownload
 from .create_vod_upload import CreateVodUpload
 from .create_webhook_endpoint import CreateWebhookEndpoint
 from .crypto_topup_status_mutation import CryptoTopupStatusMutation
@@ -41,10 +41,11 @@ from .delete_dvr import DeleteDVR
 from .delete_push_target import DeletePushTarget
 from .delete_skipper_conversation import DeleteSkipperConversation
 from .delete_stream import DeleteStream
-from .delete_stream_key import DeleteStreamKey
 from .delete_vod_asset import DeleteVodAsset
+from .delete_vod_original import DeleteVodOriginal
 from .delete_webhook_endpoint import DeleteWebhookEndpoint
 from .disable_webhook_endpoint import DisableWebhookEndpoint
+from .disconnect_ingest import DisconnectIngest
 from .enable_webhook_endpoint import EnableWebhookEndpoint
 from .enums import (
     DVRChapterMode,
@@ -92,6 +93,7 @@ from .get_conversations_connection import GetConversationsConnection
 from .get_daily_stats import GetDailyStats
 from .get_discover_services_connection import GetDiscoverServicesConnection
 from .get_dvr_chapter import GetDVRChapter
+from .get_dvr_recording import GetDvrRecording
 from .get_federation_events_connection import GetFederationEventsConnection
 from .get_federation_summary import GetFederationSummary
 from .get_geographic_distribution import GetGeographicDistribution
@@ -167,6 +169,7 @@ from .get_stream_events_connection import GetStreamEventsConnection
 from .get_stream_health_5_m_connection import GetStreamHealth5mConnection
 from .get_stream_health_connection import GetStreamHealthConnection
 from .get_stream_health_summary import GetStreamHealthSummary
+from .get_stream_ingest import GetStreamIngest
 from .get_stream_key import GetStreamKey
 from .get_stream_metrics import GetStreamMetrics
 from .get_streaming_config import GetStreamingConfig
@@ -175,6 +178,7 @@ from .get_tenant_analytics_daily_connection import GetTenantAnalyticsDailyConnec
 from .get_tenant_usage import GetTenantUsage
 from .get_top_assets import GetTopAssets
 from .get_track_list_connection import GetTrackListConnection
+from .get_transcode_ladder_policy import GetTranscodeLadderPolicy
 from .get_usage_aggregates import GetUsageAggregates
 from .get_validate_stream_key import GetValidateStreamKey
 from .get_viewer_geo_hourly_connection import GetViewerGeoHourlyConnection
@@ -209,7 +213,6 @@ from .input_types import (
     CreatePushTargetInput,
     CreateSigningKeyInput,
     CreateStreamInput,
-    CreateStreamKeyInput,
     CreateVodUploadInput,
     CreateWebhookEndpointInput,
     ImportVodAssetInput,
@@ -224,9 +227,11 @@ from .input_types import (
     ReviewMediaPlacementChangeInput,
     SendMessageInput,
     SetMediaRetentionPolicyInput,
+    SetNodeCapacityInput,
     SetNodeModeInput,
     SetPlaybackPolicyInput,
     SetStreamRetentionOverridesInput,
+    SetTranscodeLadderPolicyInput,
     SkipperChatInput,
     StorageArtifactsInput,
     TestPlaybackAccessInput,
@@ -246,9 +251,12 @@ from .list_artifacts import ListArtifacts
 from .list_developer_tokens import ListDeveloperTokens
 from .list_dvr_chapters import ListDVRChapters
 from .list_push_targets import ListPushTargets
+from .list_recording_chapters import ListRecordingChapters
 from .list_signing_keys import ListSigningKeys
-from .list_stream_keys import ListStreamKeys
+from .list_stream_clips import ListStreamClips
+from .list_stream_ingest import ListStreamIngest
 from .list_stream_metrics import ListStreamMetrics
+from .list_stream_recordings import ListStreamRecordings
 from .list_streams import ListStreams
 from .list_usage_records import ListUsageRecords
 from .live_connection_events import LiveConnectionEvents
@@ -284,10 +292,13 @@ from .rotate_webhook_endpoint_secret import RotateWebhookEndpointSecret
 from .send_message import SendMessage
 from .server_info import ServerInfo
 from .set_media_retention_policy import SetMediaRetentionPolicy
+from .set_node_capacity import SetNodeCapacity
 from .set_node_mode import SetNodeMode
 from .set_playback_policy import SetPlaybackPolicy
 from .set_preferred_cluster import SetPreferredCluster
 from .set_stream_retention_overrides import SetStreamRetentionOverrides
+from .set_transcode_ladder_policy import SetTranscodeLadderPolicy
+from .set_vod_original_policy import SetVodOriginalPolicy
 from .skipper_chat import SkipperChat
 from .start_dvr import StartDVR
 from .stop_dvr import StopDVR
@@ -1172,7 +1183,13 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 kafkaBrokers
                 maxConcurrentStreams
                 maxConcurrentViewers
-                maxBandwidthMbps
+                capacity {
+                  egressBudgetBytesPerSec
+                  ingressBudgetBytesPerSec
+                  egressUsableBytesPerSec
+                  ingressUsableBytesPerSec
+                  defaultBudgetNodes
+                }
                 healthStatus
                 isActive
                 isDefaultCluster
@@ -1589,6 +1606,57 @@ class AsyncGraphQLClient(AsyncBaseClient):
         data = self.get_data(response)
         return CreateStripeCheckout.model_validate(data)
 
+    async def create_vod_original_download(
+        self, id: str, **kwargs: Any
+    ) -> CreateVodOriginalDownload:
+        """Issue a free, owner-authenticated original download URL valid for 15 minutes. Limited to 20 per minute, burst 5."""
+        query = gql("""
+            mutation CreateVodOriginalDownload($id: ID!) {
+              createVodOriginalDownload(id: $id) {
+                __typename
+                ...VodOriginalDownloadDefaultFields
+                ...ValidationErrorDefaultFields
+                ...NotFoundErrorDefaultFields
+                ...AuthErrorDefaultFields
+              }
+            }
+
+            fragment AuthErrorDefaultFields on AuthError {
+              message
+              code
+            }
+
+            fragment NotFoundErrorDefaultFields on NotFoundError {
+              message
+              code
+              resourceType
+              resourceId
+            }
+
+            fragment ValidationErrorDefaultFields on ValidationError {
+              message
+              code
+              field
+              constraint
+            }
+
+            fragment VodOriginalDownloadDefaultFields on VodOriginalDownload {
+              url
+              expiresAt
+              sizeBytes
+              filename
+            }
+            """)
+        variables: dict[str, object] = {"id": id}
+        response = await self.execute(
+            query=query,
+            operation_name="CreateVodOriginalDownload",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return CreateVodOriginalDownload.model_validate(data)
+
     async def create_webhook_endpoint(
         self, input: CreateWebhookEndpointInput, **kwargs: Any
     ) -> CreateWebhookEndpoint:
@@ -1714,6 +1782,54 @@ class AsyncGraphQLClient(AsyncBaseClient):
         data = self.get_data(response)
         return DeleteSkipperConversation.model_validate(data)
 
+    async def delete_vod_original(self, id: str, **kwargs: Any) -> DeleteVodOriginal:
+        """Permanently delete only the retained upload; processed playback remains available."""
+        query = gql("""
+            mutation DeleteVodOriginal($id: ID!) {
+              deleteVodOriginal(id: $id) {
+                __typename
+                ...DeleteSuccessDefaultFields
+                ...ValidationErrorDefaultFields
+                ...NotFoundErrorDefaultFields
+                ...AuthErrorDefaultFields
+              }
+            }
+
+            fragment AuthErrorDefaultFields on AuthError {
+              message
+              code
+            }
+
+            fragment DeleteSuccessDefaultFields on DeleteSuccess {
+              success
+              deletedId
+              pending
+            }
+
+            fragment NotFoundErrorDefaultFields on NotFoundError {
+              message
+              code
+              resourceType
+              resourceId
+            }
+
+            fragment ValidationErrorDefaultFields on ValidationError {
+              message
+              code
+              field
+              constraint
+            }
+            """)
+        variables: dict[str, object] = {"id": id}
+        response = await self.execute(
+            query=query,
+            operation_name="DeleteVodOriginal",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return DeleteVodOriginal.model_validate(data)
+
     async def delete_webhook_endpoint(
         self, id: str, **kwargs: Any
     ) -> DeleteWebhookEndpoint:
@@ -1809,6 +1925,55 @@ class AsyncGraphQLClient(AsyncBaseClient):
         )
         data = self.get_data(response)
         return DisableWebhookEndpoint.model_validate(data)
+
+    async def disconnect_ingest(
+        self, stream_id: str, **kwargs: Any
+    ) -> DisconnectIngest:
+        """Queue a stop for the current push publisher. Pull streams are stopped with pullSource.enabled=false."""
+        query = gql("""
+            mutation DisconnectIngest($streamId: ID!) {
+              disconnectIngest(streamId: $streamId) {
+                __typename
+                ...IngestDisconnectSuccessDefaultFields
+                ...ValidationErrorDefaultFields
+                ...NotFoundErrorDefaultFields
+                ...AuthErrorDefaultFields
+              }
+            }
+
+            fragment AuthErrorDefaultFields on AuthError {
+              message
+              code
+            }
+
+            fragment IngestDisconnectSuccessDefaultFields on IngestDisconnectSuccess {
+              streamId
+              stopRequested
+            }
+
+            fragment NotFoundErrorDefaultFields on NotFoundError {
+              message
+              code
+              resourceType
+              resourceId
+            }
+
+            fragment ValidationErrorDefaultFields on ValidationError {
+              message
+              code
+              field
+              constraint
+            }
+            """)
+        variables: dict[str, object] = {"streamId": stream_id}
+        response = await self.execute(
+            query=query,
+            operation_name="DisconnectIngest",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return DisconnectIngest.model_validate(data)
 
     async def enable_webhook_endpoint(
         self, id: str, **kwargs: Any
@@ -2786,6 +2951,8 @@ class AsyncGraphQLClient(AsyncBaseClient):
               effectiveVodRetentionDays
               effectiveDvrRetentionDays
               effectiveClipRetentionDays
+              keepVodOriginals
+              effectiveKeepVodOriginals
             }
 
             fragment ValidationErrorDefaultFields on ValidationError {
@@ -2804,6 +2971,103 @@ class AsyncGraphQLClient(AsyncBaseClient):
         )
         data = self.get_data(response)
         return SetMediaRetentionPolicy.model_validate(data)
+
+    async def set_node_capacity(
+        self, input: SetNodeCapacityInput, **kwargs: Any
+    ) -> SetNodeCapacity:
+        """Replace both directional node budgets. Null restores the default 1 Gbit/s budget. Requires infrastructure:write and ownership or platform operator access."""
+        query = gql("""
+            mutation SetNodeCapacity($input: SetNodeCapacityInput!) {
+              setNodeCapacity(input: $input) {
+                __typename
+                ...InfrastructureNodeDefaultFields
+                ...ValidationErrorDefaultFields
+                ...NotFoundErrorDefaultFields
+                ...AuthErrorDefaultFields
+              }
+            }
+
+            fragment AuthErrorDefaultFields on AuthError {
+              message
+              code
+            }
+
+            fragment InfrastructureNodeDefaultFields on InfrastructureNode {
+              id
+              nodeId
+              clusterId
+              nodeName
+              nodeType
+              internalIp
+              externalIp
+              wireguardIp
+              wireguardPublicKey
+              region
+              latitude
+              longitude
+              availabilityZone
+              cpuCores
+              memoryGb
+              diskGb
+              lastHeartbeat
+              tags
+              metadata
+              createdAt
+              updatedAt
+              liveState {
+                nodeId
+                tenantId
+                cpuPercent
+                ramUsedBytes
+                ramTotalBytes
+                diskUsedBytes
+                diskTotalBytes
+                upSpeed
+                downSpeed
+                activeStreams
+                isHealthy
+                latitude
+                longitude
+                location
+                metadata
+                updatedAt
+              }
+              effectiveMode
+              routingImpactPreview {
+                activeStreams
+                activeViewers
+              }
+              capacity {
+                egressBudgetBytesPerSec
+                ingressBudgetBytesPerSec
+                egressSource
+                ingressSource
+                revision
+                updatedAt
+                appliedRevision
+              }
+            }
+
+            fragment NotFoundErrorDefaultFields on NotFoundError {
+              message
+              code
+              resourceType
+              resourceId
+            }
+
+            fragment ValidationErrorDefaultFields on ValidationError {
+              message
+              code
+              field
+              constraint
+            }
+            """)
+        variables: dict[str, object] = {"input": input}
+        response = await self.execute(
+            query=query, operation_name="SetNodeCapacity", variables=variables, **kwargs
+        )
+        data = self.get_data(response)
+        return SetNodeCapacity.model_validate(data)
 
     async def set_node_mode(
         self, input: SetNodeModeInput, **kwargs: Any
@@ -2872,6 +3136,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 activeStreams
                 activeViewers
               }
+              capacity {
+                egressBudgetBytesPerSec
+                ingressBudgetBytesPerSec
+                egressSource
+                ingressSource
+                revision
+                updatedAt
+                appliedRevision
+              }
             }
 
             fragment NotFoundErrorDefaultFields on NotFoundError {
@@ -2928,7 +3201,13 @@ class AsyncGraphQLClient(AsyncBaseClient):
               kafkaBrokers
               maxConcurrentStreams
               maxConcurrentViewers
-              maxBandwidthMbps
+              capacity {
+                egressBudgetBytesPerSec
+                ingressBudgetBytesPerSec
+                egressUsableBytesPerSec
+                ingressUsableBytesPerSec
+                defaultBudgetNodes
+              }
               healthStatus
               isActive
               isDefaultCluster
@@ -3021,6 +3300,108 @@ class AsyncGraphQLClient(AsyncBaseClient):
         )
         data = self.get_data(response)
         return SetStreamRetentionOverrides.model_validate(data)
+
+    async def set_transcode_ladder_policy(
+        self, input: SetTranscodeLadderPolicyInput, **kwargs: Any
+    ) -> SetTranscodeLadderPolicy:
+        """Set the account's video ladder. Empty or null inherits the plan default."""
+        query = gql("""
+            mutation SetTranscodeLadderPolicy($input: SetTranscodeLadderPolicyInput!) {
+              setTranscodeLadderPolicy(input: $input) {
+                __typename
+                ...TranscodeLadderPolicyDefaultFields
+                ...ValidationErrorDefaultFields
+                ...AuthErrorDefaultFields
+              }
+            }
+
+            fragment AuthErrorDefaultFields on AuthError {
+              message
+              code
+            }
+
+            fragment TranscodeLadderPolicyDefaultFields on TranscodeLadderPolicy {
+              ladders {
+                name
+                displayName
+                description
+                renditionNames
+              }
+              planDefault
+              tenantLadder
+              effectiveLadder
+            }
+
+            fragment ValidationErrorDefaultFields on ValidationError {
+              message
+              code
+              field
+              constraint
+            }
+            """)
+        variables: dict[str, object] = {"input": input}
+        response = await self.execute(
+            query=query,
+            operation_name="SetTranscodeLadderPolicy",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return SetTranscodeLadderPolicy.model_validate(data)
+
+    async def set_vod_original_policy(
+        self,
+        keep_vod_originals: Union[Optional[bool], UnsetType] = UNSET,
+        **kwargs: Any,
+    ) -> SetVodOriginalPolicy:
+        """Set the default for retaining original uploads. Null inherits keep=true. Existing assets are unchanged."""
+        query = gql("""
+            mutation SetVodOriginalPolicy($keepVodOriginals: Boolean) {
+              setVodOriginalPolicy(keepVodOriginals: $keepVodOriginals) {
+                __typename
+                ...MediaRetentionPolicyDefaultFields
+                ...ValidationErrorDefaultFields
+                ...AuthErrorDefaultFields
+              }
+            }
+
+            fragment AuthErrorDefaultFields on AuthError {
+              message
+              code
+            }
+
+            fragment MediaRetentionPolicyDefaultFields on MediaRetentionPolicy {
+              bounds {
+                maxRecordingRetentionDays
+              }
+              updatedBy
+              updatedAt
+              defaultVodRetentionDays
+              defaultDvrRetentionDays
+              defaultClipRetentionDays
+              effectiveVodRetentionDays
+              effectiveDvrRetentionDays
+              effectiveClipRetentionDays
+              keepVodOriginals
+              effectiveKeepVodOriginals
+            }
+
+            fragment ValidationErrorDefaultFields on ValidationError {
+              message
+              code
+              field
+              constraint
+            }
+            """)
+        variables: dict[str, object] = {"keepVodOriginals": keep_vod_originals}
+        response = await self.execute(
+            query=query,
+            operation_name="SetVodOriginalPolicy",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return SetVodOriginalPolicy.model_validate(data)
 
     async def submit_x_402_payment(
         self,
@@ -3313,7 +3694,13 @@ class AsyncGraphQLClient(AsyncBaseClient):
               kafkaBrokers
               maxConcurrentStreams
               maxConcurrentViewers
-              maxBandwidthMbps
+              capacity {
+                egressBudgetBytesPerSec
+                ingressBudgetBytesPerSec
+                egressUsableBytesPerSec
+                ingressUsableBytesPerSec
+                defaultBudgetNodes
+              }
               healthStatus
               isActive
               isDefaultCluster
@@ -3792,6 +4179,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -3995,6 +4391,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -4768,6 +5173,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -4921,7 +5335,13 @@ class AsyncGraphQLClient(AsyncBaseClient):
               kafkaBrokers
               maxConcurrentStreams
               maxConcurrentViewers
-              maxBandwidthMbps
+              capacity {
+                egressBudgetBytesPerSec
+                ingressBudgetBytesPerSec
+                egressUsableBytesPerSec
+                ingressUsableBytesPerSec
+                defaultBudgetNodes
+              }
               healthStatus
               isActive
               isDefaultCluster
@@ -5264,6 +5684,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 activeStreams
                 activeViewers
               }
+              capacity {
+                egressBudgetBytesPerSec
+                ingressBudgetBytesPerSec
+                egressSource
+                ingressSource
+                revision
+                updatedAt
+                appliedRevision
+              }
             }
 
             fragment PageInfoDefaultFields on PageInfo {
@@ -5539,7 +5968,13 @@ class AsyncGraphQLClient(AsyncBaseClient):
               kafkaBrokers
               maxConcurrentStreams
               maxConcurrentViewers
-              maxBandwidthMbps
+              capacity {
+                egressBudgetBytesPerSec
+                ingressBudgetBytesPerSec
+                egressUsableBytesPerSec
+                ingressUsableBytesPerSec
+                defaultBudgetNodes
+              }
               healthStatus
               isActive
               isDefaultCluster
@@ -5637,6 +6072,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -6101,6 +6545,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -6978,6 +7431,8 @@ class AsyncGraphQLClient(AsyncBaseClient):
               effectiveVodRetentionDays
               effectiveDvrRetentionDays
               effectiveClipRetentionDays
+              keepVodOriginals
+              effectiveKeepVodOriginals
             }
             """)
         variables: dict[str, object] = {}
@@ -7152,7 +7607,13 @@ class AsyncGraphQLClient(AsyncBaseClient):
               kafkaBrokers
               maxConcurrentStreams
               maxConcurrentViewers
-              maxBandwidthMbps
+              capacity {
+                egressBudgetBytesPerSec
+                ingressBudgetBytesPerSec
+                egressUsableBytesPerSec
+                ingressUsableBytesPerSec
+                defaultBudgetNodes
+              }
               healthStatus
               isActive
               isDefaultCluster
@@ -7213,6 +7674,8 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 currentViewers
                 egressMbps
                 egressCapacityMbps
+                egressUsableMbps
+                defaultBudgetNodes
                 ingressMbps
                 services
               }
@@ -7337,6 +7800,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -7449,6 +7921,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -7547,6 +8028,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -7613,6 +8103,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
               storagePath
               sizeBytes
               status
+              errorMessage
               clipCreatedAt: createdAt
               updatedAt
               clipMode
@@ -7668,7 +8159,13 @@ class AsyncGraphQLClient(AsyncBaseClient):
               kafkaBrokers
               maxConcurrentStreams
               maxConcurrentViewers
-              maxBandwidthMbps
+              capacity {
+                egressBudgetBytesPerSec
+                ingressBudgetBytesPerSec
+                egressUsableBytesPerSec
+                ingressUsableBytesPerSec
+                defaultBudgetNodes
+              }
               healthStatus
               isActive
               isDefaultCluster
@@ -7716,6 +8213,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -7860,6 +8366,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 activeStreams
                 activeViewers
               }
+              infrastructureNodeCapacity: capacity {
+                egressBudgetBytesPerSec
+                ingressBudgetBytesPerSec
+                egressSource
+                ingressSource
+                revision
+                updatedAt
+                appliedRevision
+              }
             }
 
             fragment MessageDefaultFields on Message {
@@ -7957,6 +8472,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -8095,6 +8619,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -8210,6 +8743,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -8328,6 +8870,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -8423,6 +8974,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -8516,6 +9076,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -8656,6 +9225,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -8772,6 +9350,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
               }
               createdAt
               streamUpdatedAt: updatedAt
+              ingest {
+                state
+                isLive
+                sessionId
+                connectedAt
+                liveSince
+                endedAt
+                resumableUntil
+              }
               metrics {
                 status
                 isLive
@@ -8880,6 +9467,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -8999,6 +9595,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -9095,6 +9700,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -9228,6 +9842,9 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 perDay
                 perMonth
                 currency
+              }
+              originalFile {
+                sizeBytes
               }
             }
             """)
@@ -9577,6 +10194,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
               routingImpactPreview {
                 activeStreams
                 activeViewers
+              }
+              capacity {
+                egressBudgetBytesPerSec
+                ingressBudgetBytesPerSec
+                egressSource
+                ingressSource
+                revision
+                updatedAt
+                appliedRevision
               }
             }
 
@@ -10407,6 +11033,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -10603,6 +11238,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -10762,6 +11406,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -11142,6 +11795,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -11752,6 +12414,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -11988,6 +12659,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -12140,6 +12820,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -12299,6 +12988,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -12478,6 +13176,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -12626,6 +13333,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -12876,6 +13592,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -13273,6 +13998,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -13367,6 +14101,39 @@ class AsyncGraphQLClient(AsyncBaseClient):
         )
         data = self.get_data(response)
         return GetTrackListConnection.model_validate(data)
+
+    async def get_transcode_ladder_policy(
+        self, **kwargs: Any
+    ) -> GetTranscodeLadderPolicy:
+        """Allowed video ladders, account choice, and effective default."""
+        query = gql("""
+            query GetTranscodeLadderPolicy {
+              transcodeLadderPolicy {
+                ...TranscodeLadderPolicyDefaultFields
+              }
+            }
+
+            fragment TranscodeLadderPolicyDefaultFields on TranscodeLadderPolicy {
+              ladders {
+                name
+                displayName
+                description
+                renditionNames
+              }
+              planDefault
+              tenantLadder
+              effectiveLadder
+            }
+            """)
+        variables: dict[str, object] = {}
+        response = await self.execute(
+            query=query,
+            operation_name="GetTranscodeLadderPolicy",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return GetTranscodeLadderPolicy.model_validate(data)
 
     async def get_validate_stream_key(
         self, stream_key: str, **kwargs: Any
@@ -13523,6 +14290,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -13681,6 +14457,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -13832,6 +14617,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -13997,6 +14791,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -14468,6 +15271,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -15109,6 +15921,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -15268,6 +16089,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -15392,6 +16222,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -15572,6 +16411,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -15711,6 +16559,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 }
                 createdAt
                 updatedAt
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
                 metrics {
                   status
                   isLive
@@ -17123,11 +17980,16 @@ class AsyncGraphQLClient(AsyncBaseClient):
         data = self.get_data(response)
         return DeleteStream.model_validate(data)
 
-    async def refresh_stream_key(self, id: str, **kwargs: Any) -> RefreshStreamKey:
+    async def refresh_stream_key(
+        self,
+        id: str,
+        end_active_session: Union[Optional[bool], UnsetType] = UNSET,
+        **kwargs: Any,
+    ) -> RefreshStreamKey:
         """Generate a new stream key, invalidating the old one."""
         query = gql("""
-            mutation RefreshStreamKey($id: ID!) {
-              refreshStreamKey(id: $id) {
+            mutation RefreshStreamKey($id: ID!, $endActiveSession: Boolean = false) {
+              refreshStreamKey(id: $id, endActiveSession: $endActiveSession) {
                 __typename
                 ...StreamWithKeyFields
                 ...ValidationErrorFields
@@ -17206,7 +18068,10 @@ class AsyncGraphQLClient(AsyncBaseClient):
               constraint
             }
             """)
-        variables: dict[str, object] = {"id": id}
+        variables: dict[str, object] = {
+            "id": id,
+            "endActiveSession": end_active_session,
+        }
         response = await self.execute(
             query=query,
             operation_name="RefreshStreamKey",
@@ -17215,103 +18080,6 @@ class AsyncGraphQLClient(AsyncBaseClient):
         )
         data = self.get_data(response)
         return RefreshStreamKey.model_validate(data)
-
-    async def create_stream_key(
-        self, stream_id: str, input: CreateStreamKeyInput, **kwargs: Any
-    ) -> CreateStreamKey:
-        """Create an additional stream key for a stream."""
-        query = gql("""
-            mutation CreateStreamKey($streamId: ID!, $input: CreateStreamKeyInput!) {
-              createStreamKey(streamId: $streamId, input: $input) {
-                __typename
-                ...StreamKeyFields
-                ...ValidationErrorFields
-                ...NotFoundErrorFields
-                ...AuthErrorFields
-              }
-            }
-
-            fragment AuthErrorFields on AuthError {
-              __typename
-              message
-              code
-            }
-
-            fragment NotFoundErrorFields on NotFoundError {
-              __typename
-              message
-              code
-              resourceType
-              resourceId
-            }
-
-            fragment StreamKeyFields on StreamKey {
-              __typename
-              id
-              streamId
-              keyValue
-              keyName
-              isActive
-              lastUsedAt
-              createdAt
-            }
-
-            fragment ValidationErrorFields on ValidationError {
-              __typename
-              message
-              code
-              field
-              constraint
-            }
-            """)
-        variables: dict[str, object] = {"streamId": stream_id, "input": input}
-        response = await self.execute(
-            query=query, operation_name="CreateStreamKey", variables=variables, **kwargs
-        )
-        data = self.get_data(response)
-        return CreateStreamKey.model_validate(data)
-
-    async def delete_stream_key(
-        self, stream_id: str, key_id: str, **kwargs: Any
-    ) -> DeleteStreamKey:
-        """Delete a stream key."""
-        query = gql("""
-            mutation DeleteStreamKey($streamId: ID!, $keyId: ID!) {
-              deleteStreamKey(streamId: $streamId, keyId: $keyId) {
-                __typename
-                ...DeleteSuccessFields
-                ...NotFoundErrorFields
-                ...AuthErrorFields
-              }
-            }
-
-            fragment AuthErrorFields on AuthError {
-              __typename
-              message
-              code
-            }
-
-            fragment DeleteSuccessFields on DeleteSuccess {
-              __typename
-              success
-              deletedId
-              pending
-            }
-
-            fragment NotFoundErrorFields on NotFoundError {
-              __typename
-              message
-              code
-              resourceType
-              resourceId
-            }
-            """)
-        variables: dict[str, object] = {"streamId": stream_id, "keyId": key_id}
-        response = await self.execute(
-            query=query, operation_name="DeleteStreamKey", variables=variables, **kwargs
-        )
-        data = self.get_data(response)
-        return DeleteStreamKey.model_validate(data)
 
     async def create_push_target(
         self, stream_id: str, input: CreatePushTargetInput, **kwargs: Any
@@ -18133,6 +18901,8 @@ class AsyncGraphQLClient(AsyncBaseClient):
             }
 
             fragment StorageArtifactFields on StorageArtifact {
+              originType
+              parentRecordingId
               key
               kind
               id
@@ -18168,6 +18938,251 @@ class AsyncGraphQLClient(AsyncBaseClient):
         )
         data = self.get_data(response)
         return ListArtifacts.model_validate(data)
+
+    async def list_stream_recordings(
+        self,
+        id: str,
+        page: Union[Optional[ConnectionInput], UnsetType] = UNSET,
+        **kwargs: Any,
+    ) -> ListStreamRecordings:
+        """Recordings from this stream's tenant catalog, newest first."""
+        query = gql("""
+            query ListStreamRecordings($id: ID!, $page: ConnectionInput) {
+              stream(id: $id) {
+                recordings(page: $page) {
+                  edges {
+                    cursor
+                    node {
+                      ...StorageArtifactFields
+                    }
+                  }
+                  pageInfo {
+                    ...PageInfoFields
+                  }
+                  totalCount
+                }
+              }
+            }
+
+            fragment PageInfoFields on PageInfo {
+              startCursor
+              endCursor
+              hasNextPage
+              hasPreviousPage
+            }
+
+            fragment StorageArtifactFields on StorageArtifact {
+              originType
+              parentRecordingId
+              key
+              kind
+              id
+              hash
+              playbackId
+              streamId
+              streamTitle
+              title
+              description
+              errorMessage
+              sizeBytes
+              status
+              createdAt
+              updatedAt
+              expiresAt
+              deleteId
+              durationSeconds
+              thumbnailAssets {
+                ...ThumbnailAssetsFields
+              }
+            }
+
+            fragment ThumbnailAssetsFields on ThumbnailAssets {
+              posterUrl
+              spriteVttUrl
+              spriteJpgUrl
+              assetKey
+            }
+            """)
+        variables: dict[str, object] = {"id": id, "page": page}
+        response = await self.execute(
+            query=query,
+            operation_name="ListStreamRecordings",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return ListStreamRecordings.model_validate(data)
+
+    async def list_stream_clips(
+        self,
+        id: str,
+        page: Union[Optional[ConnectionInput], UnsetType] = UNSET,
+        **kwargs: Any,
+    ) -> ListStreamClips:
+        """Clips from this stream's tenant catalog, newest first."""
+        query = gql("""
+            query ListStreamClips($id: ID!, $page: ConnectionInput) {
+              stream(id: $id) {
+                clips(page: $page) {
+                  edges {
+                    cursor
+                    node {
+                      ...StorageArtifactFields
+                    }
+                  }
+                  pageInfo {
+                    ...PageInfoFields
+                  }
+                  totalCount
+                }
+              }
+            }
+
+            fragment PageInfoFields on PageInfo {
+              startCursor
+              endCursor
+              hasNextPage
+              hasPreviousPage
+            }
+
+            fragment StorageArtifactFields on StorageArtifact {
+              originType
+              parentRecordingId
+              key
+              kind
+              id
+              hash
+              playbackId
+              streamId
+              streamTitle
+              title
+              description
+              errorMessage
+              sizeBytes
+              status
+              createdAt
+              updatedAt
+              expiresAt
+              deleteId
+              durationSeconds
+              thumbnailAssets {
+                ...ThumbnailAssetsFields
+              }
+            }
+
+            fragment ThumbnailAssetsFields on ThumbnailAssets {
+              posterUrl
+              spriteVttUrl
+              spriteJpgUrl
+              assetKey
+            }
+            """)
+        variables: dict[str, object] = {"id": id, "page": page}
+        response = await self.execute(
+            query=query, operation_name="ListStreamClips", variables=variables, **kwargs
+        )
+        data = self.get_data(response)
+        return ListStreamClips.model_validate(data)
+
+    async def list_recording_chapters(
+        self,
+        id: str,
+        page: Union[Optional[ConnectionInput], UnsetType] = UNSET,
+        range_start_ms: Union[Optional[float], UnsetType] = UNSET,
+        range_end_ms: Union[Optional[float], UnsetType] = UNSET,
+        **kwargs: Any,
+    ) -> ListRecordingChapters:
+        """Saved chapters, paged by their start time and ID. Range bounds are UTC epoch milliseconds."""
+        query = gql("""
+            query ListRecordingChapters($id: ID!, $page: ConnectionInput, $rangeStartMs: Float, $rangeEndMs: Float) {
+              dvrRecording(id: $id) {
+                id
+                dvrHash
+                chapters(page: $page, rangeStartMs: $rangeStartMs, rangeEndMs: $rangeEndMs) {
+                  edges {
+                    cursor
+                    node {
+                      ...DVRChapterRefFields
+                    }
+                  }
+                  pageInfo {
+                    ...PageInfoFields
+                  }
+                  totalCount
+                }
+              }
+            }
+
+            fragment DVRChapterRefFields on DVRChapterRef {
+              chapterId
+              mode
+              intervalSeconds
+              startMs
+              endMs
+              isCurrent
+              state
+              playbackId
+              hasGaps
+              segmentCount
+              lastFailureReason
+            }
+
+            fragment PageInfoFields on PageInfo {
+              startCursor
+              endCursor
+              hasNextPage
+              hasPreviousPage
+            }
+            """)
+        variables: dict[str, object] = {
+            "id": id,
+            "page": page,
+            "rangeStartMs": range_start_ms,
+            "rangeEndMs": range_end_ms,
+        }
+        response = await self.execute(
+            query=query,
+            operation_name="ListRecordingChapters",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return ListRecordingChapters.model_validate(data)
+
+    async def get_dvr_recording(self, id: str, **kwargs: Any) -> GetDvrRecording:
+        """A recording from the tenant catalog, readable with streams:read."""
+        query = gql("""
+            query GetDvrRecording($id: ID!) {
+              dvrRecording(id: $id) {
+                ...DVRRequestFields
+              }
+            }
+
+            fragment DVRRequestFields on DVRRequest {
+              __typename
+              id
+              dvrHash
+              playbackId
+              streamId
+              title
+              status
+              createdAt
+              updatedAt
+              startedAt
+              endedAt
+              expiresAt
+              isExpired
+              durationSeconds
+              sizeBytes
+              errorMessage
+            }
+            """)
+        variables: dict[str, object] = {"id": id}
+        response = await self.execute(
+            query=query, operation_name="GetDvrRecording", variables=variables, **kwargs
+        )
+        data = self.get_data(response)
+        return GetDvrRecording.model_validate(data)
 
     async def server_info(self, **kwargs: Any) -> ServerInfo:
         """Platform release and shipped product features. Readable without
@@ -18443,53 +19458,6 @@ class AsyncGraphQLClient(AsyncBaseClient):
         data = self.get_data(response)
         return ListStreamMetrics.model_validate(data)
 
-    async def list_stream_keys(
-        self,
-        stream_id: str,
-        page: Union[Optional[ConnectionInput], UnsetType] = UNSET,
-        **kwargs: Any,
-    ) -> ListStreamKeys:
-        """List all stream keys for a specific stream.
-        Stream keys are publishing credentials, so an API token needs the
-        streams:write scope."""
-        query = gql("""
-            query ListStreamKeys($streamId: ID!, $page: ConnectionInput) {
-              streamKeysConnection(streamId: $streamId, page: $page) {
-                nodes {
-                  ...StreamKeyFields
-                }
-                pageInfo {
-                  ...PageInfoFields
-                }
-                totalCount
-              }
-            }
-
-            fragment PageInfoFields on PageInfo {
-              startCursor
-              endCursor
-              hasNextPage
-              hasPreviousPage
-            }
-
-            fragment StreamKeyFields on StreamKey {
-              __typename
-              id
-              streamId
-              keyValue
-              keyName
-              isActive
-              lastUsedAt
-              createdAt
-            }
-            """)
-        variables: dict[str, object] = {"streamId": stream_id, "page": page}
-        response = await self.execute(
-            query=query, operation_name="ListStreamKeys", variables=variables, **kwargs
-        )
-        data = self.get_data(response)
-        return ListStreamKeys.model_validate(data)
-
     async def list_push_targets(self, stream_id: str, **kwargs: Any) -> ListPushTargets:
         """Configured multistream push targets for this stream."""
         query = gql("""
@@ -18522,6 +19490,79 @@ class AsyncGraphQLClient(AsyncBaseClient):
         )
         data = self.get_data(response)
         return ListPushTargets.model_validate(data)
+
+    async def get_stream_ingest(self, id: str, **kwargs: Any) -> GetStreamIngest:
+        """Ingest state under streams:read; null with a field error when the owning cell is unavailable."""
+        query = gql("""
+            query GetStreamIngest($id: ID!) {
+              stream(id: $id) {
+                id
+                streamId
+                ingest {
+                  state
+                  isLive
+                  sessionId
+                  connectedAt
+                  liveSince
+                  endedAt
+                  resumableUntil
+                }
+              }
+            }
+            """)
+        variables: dict[str, object] = {"id": id}
+        response = await self.execute(
+            query=query, operation_name="GetStreamIngest", variables=variables, **kwargs
+        )
+        data = self.get_data(response)
+        return GetStreamIngest.model_validate(data)
+
+    async def list_stream_ingest(
+        self,
+        page: Union[Optional[ConnectionInput], UnsetType] = UNSET,
+        search: Union[Optional[str], UnsetType] = UNSET,
+        **kwargs: Any,
+    ) -> ListStreamIngest:
+        """Ingest state under streams:read; null with a field error when the owning cell is unavailable."""
+        query = gql("""
+            query ListStreamIngest($page: ConnectionInput, $search: String) {
+              streamsConnection(page: $page, search: $search) {
+                nodes {
+                  id
+                  streamId
+                  ingest {
+                    state
+                    isLive
+                    sessionId
+                    connectedAt
+                    liveSince
+                    endedAt
+                    resumableUntil
+                  }
+                }
+                pageInfo {
+                  ...PageInfoFields
+                }
+                totalCount
+              }
+            }
+
+            fragment PageInfoFields on PageInfo {
+              startCursor
+              endCursor
+              hasNextPage
+              hasPreviousPage
+            }
+            """)
+        variables: dict[str, object] = {"page": page, "search": search}
+        response = await self.execute(
+            query=query,
+            operation_name="ListStreamIngest",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return ListStreamIngest.model_validate(data)
 
     async def tenant_events(
         self,
@@ -18636,9 +19677,29 @@ class AsyncGraphQLClient(AsyncBaseClient):
                     }
                     mediaFailureReason: reason
                   }
+                  ... on StreamEnded {
+                    streamId
+                    playbackId
+                    sessionId
+                  }
+                  ... on StreamIngestDisconnected {
+                    streamId
+                    sessionId
+                    disconnectReason: reason
+                  }
+                  ... on RecordingChapterReady {
+                    artifact {
+                      ...EventArtifactFields
+                    }
+                    chapterId
+                    startMs
+                    endMs
+                    sizeBytes
+                  }
                   ... on StreamConnected {
                     streamId
                     protocol
+                    sessionId
                   }
                   ... on StreamCreated {
                     streamId
@@ -18650,12 +19711,14 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   }
                   ... on StreamIdle {
                     streamId
+                    sessionId
                   }
                   ... on StreamKeyRotated {
                     streamId
                   }
                   ... on StreamLive {
                     streamId
+                    sessionId
                   }
                   ... on StreamUpdated {
                     streamId

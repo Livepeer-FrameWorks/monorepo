@@ -181,6 +181,7 @@ var (
 
 var (
 	processingSourceOverrides   = map[string]string{}
+	processingRetiringSources   = map[string]uint{}
 	processingSourceOverridesMu sync.Mutex
 )
 
@@ -885,6 +886,29 @@ type processingPushLister interface {
 	PushList() ([]mist.PushInfo, error)
 }
 
+// A retiring process may ask Mist to reconnect while NukeStream is stopping it.
+// Refuse source resolution until the old writer drains, so it cannot boot the retry early.
+func pauseProcessingSource(stream string) func() {
+	processingSourceOverridesMu.Lock()
+	processingRetiringSources[stream]++
+	processingSourceOverridesMu.Unlock()
+	return func() {
+		processingSourceOverridesMu.Lock()
+		if processingRetiringSources[stream] <= 1 {
+			delete(processingRetiringSources, stream)
+		} else {
+			processingRetiringSources[stream]--
+		}
+		processingSourceOverridesMu.Unlock()
+	}
+}
+
+func processingSourceRetiring(stream string) bool {
+	processingSourceOverridesMu.Lock()
+	defer processingSourceOverridesMu.Unlock()
+	return processingRetiringSources[stream] != 0
+}
+
 // restartProcessingStreamForLocalFallback tears down the retired generation and
 // clears its broken artifact, in order: kill the push, stop sessions, nuke the
 // stream, confirm the generation has drained, and only THEN remove the output
@@ -892,6 +916,8 @@ type processingPushLister interface {
 // drain or remove failures abort the fallback rather than racing a half-torn-down
 // generation against the local retry.
 func (h *ProcessingJobHandler) restartProcessingStreamForLocalFallback(log *logrus.Entry, mistClient processingRuntimeClient, streamName, outputPath string, pushID int) error {
+	resumeSource := pauseProcessingSource(streamName)
+	defer resumeSource()
 	targetURI := processingMuxTargetURI(outputPath)
 	h.killProcessingPush(log, mistClient, streamName, targetURI, pushID)
 	h.stopProcessingSessions(log, mistClient, streamName)
@@ -1132,7 +1158,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	// process policy: the persisted STREAM_PROCESS override (so a buffer reboot
 	// keeps it), Foghorn's cached config, and the readiness expectations.
 	adoptLocalProcessingPolicy := func() bool {
-		localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
+		localConfig := mist.ReplaceLivepeerWithLocal(effectiveProcessesJSON)
 		if err := setProcessingProcessOverride(streamName, localConfig, req.GetJobId(), processingOverrideExpiry(req)); err != nil {
 			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("persist fallback processing policy: %v", err), nil, "", 0)
 			return false
@@ -1197,6 +1223,53 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 			h.sendResult(send, req.GetJobId(), processingReadinessFailureStatus(waitErr), waitErr.Error(), processingReadinessFailureOutputs(waitErr), "", 0)
 			return
+		}
+	}
+	// A rotated source below every rung needs one source-size render before
+	// the recording starts; otherwise protocols without orientation stay sideways.
+	source, _ := sourceFromReadinessOutputs(outputs)
+	uprightConfig, uprightErr := mist.EnsureRotatedSourceRendition(effectiveProcessesJSON, source)
+	if uprightErr != nil {
+		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+		h.sendResult(send, req.GetJobId(), "failed", uprightErr.Error(), nil, "", 0)
+		return
+	}
+	if uprightConfig != effectiveProcessesJSON {
+		effectiveProcessesJSON = localEncoderConfig(uprightConfig)
+		if err := setProcessingProcessOverride(streamName, effectiveProcessesJSON, req.GetJobId(), processingOverrideExpiry(req)); err != nil {
+			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("persist rotation policy: %v", err), nil, "", 0)
+			return
+		}
+		h.updateProcessConfigCache(send, req.GetJobId(), req.GetArtifactHash(), effectiveProcessesJSON)
+		if err := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath, 0); err != nil {
+			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("restart rotation render: %v", err), nil, "", 0)
+			return
+		}
+		drainRetiredProcessEvents(processExitCh, processAVCh, processReplaceCh)
+		priorDuration := sourceDurationMs
+		outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(context.Background(), log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
+		sourceDurationMs = max(priorDuration, sourceDurationMs)
+		if waitErr != nil {
+			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+			h.sendResult(send, req.GetJobId(), processingReadinessFailureStatus(waitErr), fmt.Sprintf("rotation readiness: %v", waitErr), processingReadinessFailureOutputs(waitErr), "", 0)
+			return
+		}
+	}
+	sourceStartMs := float64(0)
+	if first, err := strconv.ParseFloat(outputs["source_first_ms"], 64); err == nil {
+		sourceStartMs = first
+	}
+	sourceEndMs := sourceStartMs + float64(sourceDurationMs)
+	sampleSourceEnd := func() {
+		if data, err := h.getActiveProcessingStreamData(mistClient, streamName); err == nil {
+			if first, ok := mapInt64(data, "firstms"); ok {
+				sourceStartMs = float64(first)
+			}
+			if end, ok := mapInt64(data, "lastms"); ok {
+				sourceEndMs = max(sourceEndMs, float64(end))
+			}
 		}
 	}
 	h.sendSourceStaged(send, req.GetJobId(), sourceDurationMs, stagedProcessingSourceSize(req.GetArtifactHash(), stagedSourcePath))
@@ -1270,6 +1343,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 			h.sendResult(send, req.GetJobId(), processingReadinessFailureStatus(waitErr), fmt.Sprintf("livepeer fallback readiness: %v", waitErr), processingReadinessFailureOutputs(waitErr), "", 0)
 			return false
 		}
+		sourceEndMs = max(sourceEndMs, sourceStartMs+float64(sourceDurationMs))
 		currentPushStartedAt = time.Now().Unix()
 		activePushID, pushErr = h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath)
 		if pushErr != nil {
@@ -1291,8 +1365,9 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		if recordingEnd == nil {
 			return false, false
 		}
-		srcInfo, srcSpan := sourceFromReadinessOutputs(outputs)
-		if hasLivepeer && !fallbackAttempted && !livepeerRenditionsCompleteFromTracks(log, req.GetProcessesJson(), recordingEnd.Tracks, srcInfo, srcSpan) {
+		sampleSourceEnd()
+		srcInfo, _ := sourceFromReadinessOutputs(outputs)
+		if hasLivepeer && !fallbackAttempted && !renditionsComplete(log, effectiveProcessesJSON, recordingEnd.Tracks, srcInfo, sourceEndMs, sourceStartMs, recordingEnd.MediaDurationMs) {
 			h.logProcessingTrackDivergence(log, mistClient, streamName, recordingEnd.Tracks)
 			if inPlaceReplaced || inPlacePending != nil {
 				log.Warn("In-place local replacement produced an incomplete rendition set, restarting on local MistProcAV before publish")
@@ -1440,6 +1515,7 @@ loop:
 			}
 
 		case <-progressTicker.C:
+			sampleSourceEnd()
 			if inPlacePending != nil {
 				if reason := inPlacePending.expiredReason(time.Now(), processReplaceConfirmWindow, processingReadinessWindow); reason != "" {
 					log.WithField("reason", reason).Warn("In-place Livepeer replacement abandoned; restarting on local MistProcAV")
@@ -1521,6 +1597,12 @@ loop:
 		}
 	}
 
+	if !recordedBrowserAudioComplete(effectiveProcessesJSON, outputs, recordingEnd.FullTracks) {
+		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+		h.sendResult(send, req.GetJobId(), "failed", "output browser audio incomplete: required AAC missing", nil, "", 0)
+		return
+	}
+
 	outputSizeBytes, err := waitForProcessingOutput(outputPath, 5*time.Second)
 	if err != nil {
 		log.WithError(err).Error("Processed output validation failed")
@@ -1529,53 +1611,15 @@ loop:
 		return
 	}
 
-	// Final whole-output completeness gate. The source span used here is raised from
-	// the readiness snapshot (which can fire before a VOD input runs to EOF, so it
-	// can understate the true length) to the source passthrough track span probed at
-	// completion, authoritative once the source has been fully read.
-	if fallbackAttempted {
-		// After a Livepeer→local fallback the in-loop per-rendition check no longer
-		// runs (hasLivepeer=false), and a stale RECORDING_END from the retired push
-		// could otherwise bless a truncated retry — so validate the produced
-		// renditions directly. The local AV output mirrors the original
-		// target_profiles 1:1, so livepeerRenditionsComplete (which excludes one
-		// source-height track and requires every rendition to cover the source span)
-		// validates it; fail closed if incomplete.
-		srcInfo, srcSpan := sourceFromReadinessOutputs(outputs)
-		if !livepeerRenditionsCompleteFromTracks(log, req.GetProcessesJson(), recordingEnd.Tracks, srcInfo, srcSpan) {
-			h.logProcessingTrackDivergence(log, mistClient, streamName, recordingEnd.Tracks)
-			log.Error("Post-fallback local output is missing or has truncated renditions; refusing to publish")
-			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), "failed", "post-fallback output renditions incomplete", nil, "", 0)
-			return
-		}
-	} else if !hasLivepeer {
-		// Pure local-AV job (no Livepeer process ever ran, so the in-loop rendition
-		// check never validated coverage): this whole-output duration gate is the only
-		// completeness proof. Prove the output spans the authoritative completion-time
-		// source span and fail closed if that span cannot be determined — trusting the
-		// partial readiness snapshot is exactly how a 2s-readiness 2s-output truncation
-		// of a longer source would slip through. A Livepeer job that reached here
-		// without a fallback already passed the in-loop rendition check, so it needs
-		// nothing more.
-		srcInfo, _ := sourceFromReadinessOutputs(outputs)
-		authoritativeSpan, ok := authoritativeSourceSpanFromTracks(log, recordingEnd.Tracks, sourceDurationMs, srcInfo.Height)
-		if !ok {
-			log.Error("Could not determine authoritative source span for local-AV output; refusing to publish")
-			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), "failed", "could not determine source span for completeness check", nil, "", 0)
-			return
-		}
-		if recordingEnd != nil && authoritativeSpan-recordingEnd.MediaDurationMs > maxRenditionSpanShortfallMs {
-			log.WithFields(logging.Fields{
-				"media_duration_ms":  recordingEnd.MediaDurationMs,
-				"source_duration_ms": authoritativeSpan,
-			}).Error("Processed output is materially shorter than source; refusing to publish")
-			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), "failed",
-				fmt.Sprintf("output duration %dms short of source %dms", recordingEnd.MediaDurationMs, authoritativeSpan), nil, "", 0)
-			return
-		}
+	// One final gate covers local AV, Livepeer and replacement output. The
+	// controller lists the masked source, while RECORDING_END lists only outputs.
+	sampleSourceEnd()
+	srcInfo, _ := sourceFromReadinessOutputs(outputs)
+	if !renditionsComplete(log, effectiveProcessesJSON, recordingEnd.Tracks, srcInfo, sourceEndMs, sourceStartMs, recordingEnd.MediaDurationMs) {
+		h.logProcessingTrackDivergence(log, mistClient, streamName, recordingEnd.Tracks)
+		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+		h.sendResult(send, req.GetJobId(), "failed", "output renditions incomplete", nil, "", 0)
+		return
 	}
 	h.sendProgress(send, req.GetJobId(), 100, sourceDurationMs, sourceDurationMs)
 
@@ -2061,6 +2105,9 @@ func inspectProcessingActiveStream(streamData map[string]interface{}) processing
 				p.videoCodecs[codec] = true
 				p.sourceMedia = true
 				t := processingMetaVideoTrack{codec: codec, name: name}
+				if rotation, ok := mapInt64(track, "rotation"); ok {
+					t.rotation = int(rotation)
+				}
 				if v, ok := track["width"].(float64); ok {
 					t.width = int(v)
 				}
@@ -2106,28 +2153,6 @@ func inspectProcessingActiveStream(streamData map[string]interface{}) processing
 // VOD lose many seconds).
 const maxRenditionSpanShortfallMs = 2000
 
-// renditionResolutionToleranceMin absorbs codec/profile rounding around requested
-// rendition dimensions while still keeping distinct ladder rungs separate.
-const renditionResolutionToleranceMin = 32
-
-func absInt(v int) int {
-	if v < 0 {
-		return -v
-	}
-	return v
-}
-
-func renditionHeightsClose(actual, expected int) bool {
-	if actual <= 0 || expected <= 0 {
-		return false
-	}
-	tolerance := renditionResolutionToleranceMin
-	if pct := expected / 20; pct > tolerance {
-		tolerance = pct
-	}
-	return absInt(actual-expected) <= tolerance
-}
-
 func videoTrackHeights(tracks []processingMetaVideoTrack) []int {
 	heights := make([]int, 0, len(tracks))
 	for _, t := range tracks {
@@ -2145,6 +2170,7 @@ type processingMetaVideoTrack struct {
 	source        string
 	width         int
 	height        int
+	rotation      int
 	firstms       float64
 	lastms        float64
 	trackID       int64
@@ -2191,98 +2217,56 @@ func mapInt64(values map[string]interface{}, keys ...string) (int64, bool) {
 	return 0, false
 }
 
-// livepeerRenditionsComplete fetches the finished processing stream's JSON
-// metadata and reports whether the requested renditions are present enough to
-// publish. The caller supplies source dims + a readiness span lower bound when
-// available; outputs that intentionally hide the source track still validate by
-// the requested rendition heights.
-//
-// Two failure modes are caught:
-//   - missing/wrong renditions: a requested target-profile resolution has no
-//     distinct matching output track (a known source track is excluded first,
-//     and each track satisfies at most one profile);
-//   - truncated renditions: a matched track whose span falls more than
-//     maxRenditionSpanShortfallMs below a known source span.
-//
-// Missing/wrong tracks return false so the caller can run the one
-// local-MistProcAV fallback rather than publishing an incomplete Livepeer output.
-// "No renditions requested" returns true because there is nothing to prove.
-func livepeerRenditionsCompleteFromTracks(log *logrus.Entry, processesJSON string, tracks []processingMetaVideoTrack, source mist.SourceMediaInfo, sourceSpanMs float64) bool {
-	expectedHeights, err := mist.RequestedRenditionHeights(processesJSON, source)
+// renditionsComplete requires every requested video rung to reach the observed
+// source end. Source tracks are excluded by lineage even when their dimensions
+// match a requested rung.
+func renditionsComplete(log *logrus.Entry, processesJSON string, tracks []processingMetaVideoTrack, source mist.SourceMediaInfo, sourceEndMs, sourceStartMs float64, recordedDurationMs int64) bool {
+	expected, err := mist.ExpectedVideoRenditions(processesJSON, source)
 	if err != nil {
-		log.WithError(err).Warn("Malformed Livepeer process config; treating renditions as incomplete")
+		log.WithError(err).Warn("Cannot determine requested rendition ladder")
 		return false
 	}
-	if len(expectedHeights) == 0 {
-		return true
-	}
-	return renditionsCompleteFromTracks(log, expectedHeights, tracks, sourceSpanMs)
-}
-
-// renditionsCompleteFromTracks is the pure rendition-completeness decision,
-// split out so it can be unit-tested without a MistServer. It takes the requested
-// ladder intent as raw heights (the dimension a Livepeer profile actually
-// specifies; width follows the source aspect and is Mist's authority), so the
-// check never depends on Mist's normalized pixel math. Each requested height must
-// map to a distinct output track. Source tracks (by Mist lineage) are
-// excluded from the candidate pool and their span tightens the
-// truncation check.
-//
-// It fails closed on missing/invalid heights and missing tracks. Span validation
-// is applied only when a source-span baseline is known; a normalized output that
-// omits the source track should not be rejected solely because there is no
-// separate source track in the final artifact.
-func renditionsCompleteFromTracks(log *logrus.Entry, expectedHeights []int, videoTracks []processingMetaVideoTrack, sourceSpanMs float64) bool {
-	if len(videoTracks) == 0 {
-		log.Warn("Finished processing stream exposes no video tracks; renditions incomplete")
-		return false
-	}
-
-	var sourceTrackSpanMs float64
-	for _, idx := range sourceVideoTrackIndexes(videoTracks, nil) {
-		if span := videoTracks[idx].spanMs(); span > sourceTrackSpanMs {
-			sourceTrackSpanMs = span
-		}
-	}
-	pool := nonSourceVideoTracks(videoTracks, nil)
-
-	baseline := sourceSpanMs
-	if sourceTrackSpanMs > baseline {
-		baseline = sourceTrackSpanMs
-	}
-	spanBaselineKnown := baseline > 0
-
-	consumed := make([]bool, len(pool))
-	for _, eh := range expectedHeights {
-		if eh <= 0 {
-			// A requested rendition whose height cannot be determined cannot be
-			// proven present — fail closed rather than skipping it.
-			log.Warn("Cannot determine a requested Livepeer rendition height; treating renditions as incomplete")
+	if len(expected) == 0 {
+		if sourceEndMs <= 0 || recordedDurationMs <= 0 || (sourceEndMs-sourceStartMs)-float64(recordedDurationMs) > maxRenditionSpanShortfallMs {
+			log.WithFields(logrus.Fields{"source_end_ms": sourceEndMs, "recorded_duration_ms": recordedDurationMs}).Warn("Whole recording does not cover the observed source")
 			return false
 		}
+		return true
+	}
+	return renditionsCompleteFromTracks(log, renditionShortSides(expected), tracks, sourceEndMs)
+}
+
+func renditionShortSides(expected []mist.ExpectedRendition) []int {
+	out := make([]int, len(expected))
+	for i, r := range expected {
+		out[i] = r.ShortSide
+	}
+	return out
+}
+
+func renditionsCompleteFromTracks(log *logrus.Entry, expectedShortSides []int, videoTracks []processingMetaVideoTrack, sourceEndMs float64) bool {
+	for _, idx := range sourceVideoTrackIndexes(videoTracks, nil) {
+		sourceEndMs = max(sourceEndMs, videoTracks[idx].lastms)
+	}
+	if sourceEndMs <= 0 {
+		log.Warn("Source end unavailable; refusing to prove rendition completeness")
+		return false
+	}
+	pool := nonSourceVideoTracks(videoTracks, nil)
+	consumed := make([]bool, len(pool))
+	for _, short := range expectedShortSides {
 		idx := -1
-		for i, t := range pool {
-			if !consumed[i] && renditionHeightsClose(t.height, eh) {
+		for i, track := range pool {
+			if !consumed[i] && mist.RenditionShortSideMatches(track.width, track.height, short) && sourceEndMs-track.lastms <= maxRenditionSpanShortfallMs {
 				idx = i
 				break
 			}
 		}
 		if idx < 0 {
-			log.WithFields(logrus.Fields{
-				"available_video_heights":  videoTrackHeights(pool),
-				"missing_rendition_height": eh,
-			}).Warn("Finished processing stream is missing a requested Livepeer rendition")
+			log.WithFields(logrus.Fields{"expected_short_side": short, "source_end_ms": sourceEndMs, "recorded_video_heights": videoTrackHeights(pool)}).Warn("Output rendition missing or truncated")
 			return false
 		}
 		consumed[idx] = true
-		if spanBaselineKnown && baseline-pool[idx].spanMs() > maxRenditionSpanShortfallMs {
-			log.WithFields(logrus.Fields{
-				"rendition_height": eh,
-				"track_span_ms":    int64(pool[idx].spanMs()),
-				"source_span_ms":   int64(baseline),
-			}).Warn("Finished processing stream has a truncated Livepeer rendition")
-			return false
-		}
 	}
 	return true
 }
@@ -2302,10 +2286,8 @@ func (h *ProcessingJobHandler) logProcessingTrackDivergence(log *logrus.Entry, m
 	log.WithFields(fields).Warn("Rendition completeness failed: recorded vs live stream video tracks")
 }
 
-// sourceFromReadinessOutputs builds the pre-transcode source baseline (dims +
-// span) from the readiness metadata map. The span is a LOWER BOUND, not
-// authoritative: readiness can fire before a VOD input runs to EOF, so callers
-// raise it to the completion-time source passthrough track span.
+// sourceFromReadinessOutputs restores coded dimensions when rotation metadata
+// supplies display dimensions, so DisplaySize applies the rotation exactly once.
 func sourceFromReadinessOutputs(outputs map[string]string) (mist.SourceMediaInfo, float64) {
 	var src mist.SourceMediaInfo
 	if w, err := strconv.Atoi(outputs["width"]); err == nil {
@@ -2317,44 +2299,20 @@ func sourceFromReadinessOutputs(outputs map[string]string) (mist.SourceMediaInfo
 	if f, err := strconv.ParseFloat(outputs["fps"], 64); err == nil {
 		src.FPS = f
 	}
+	if rotation, rotationErr := strconv.Atoi(outputs["source_rotation"]); rotationErr == nil {
+		src.Rotation = rotation
+	}
+	if mirror, mirrorErr := strconv.ParseBool(outputs["source_mirror"]); mirrorErr == nil {
+		src.Mirror = mirror
+	}
+	if src.Rotation == 90 || src.Rotation == 270 {
+		src.Width, src.Height = src.Height, src.Width
+	}
 	var span float64
 	if d, err := strconv.Atoi(outputs["duration_ms"]); err == nil {
 		span = float64(d)
 	}
 	return src, span
-}
-
-func authoritativeSourceSpanFromTracks(log *logrus.Entry, tracks []processingMetaVideoTrack, readinessSpanMs int64, sourceHeight int) (int64, bool) {
-	srcHeight := sourceHeight
-	if srcHeight <= 0 {
-		for _, t := range tracks {
-			if t.height > srcHeight {
-				srcHeight = t.height
-			}
-		}
-	}
-	sourceTrackSpanMs := int64(-1)
-	for _, t := range tracks {
-		if srcHeight > 0 && renditionHeightsClose(t.height, srcHeight) {
-			if span := int64(t.spanMs()); span > sourceTrackSpanMs {
-				sourceTrackSpanMs = span
-			}
-		}
-	}
-	if sourceTrackSpanMs < 0 {
-		// Log what the summary did carry: without it this refusal cannot be
-		// distinguished from an empty summary or a wrong source height.
-		log.WithFields(logrus.Fields{
-			"source_height":       srcHeight,
-			"video_track_heights": videoTrackHeights(tracks),
-			"video_tracks":        len(tracks),
-		}).Warn("RECORDING_END did not include a source-height video track; refusing to prove output completeness")
-		return 0, false
-	}
-	if readinessSpanMs > sourceTrackSpanMs {
-		return readinessSpanMs, true
-	}
-	return sourceTrackSpanMs, true
 }
 
 // sourceVideoTrackIndexes returns the indexes of the source video tracks,
@@ -2443,6 +2401,9 @@ func parseProcessingMetaVideoTracks(meta map[string]interface{}) []processingMet
 		if v, ok := track["firstms"].(float64); ok {
 			t.firstms = v
 		}
+		if rotation, ok := mapInt64(track, "rotation"); ok {
+			t.rotation = int(rotation)
+		}
 		if v, ok := track["lastms"].(float64); ok {
 			t.lastms = v
 		}
@@ -2524,10 +2485,33 @@ func processingTracksFromProto(tracks []*ipcpb.StreamTrack) []processingMetaVide
 	return out
 }
 
+// A browser-incompatible source must have its configured AAC rendition before
+// publication. Compatible source audio needs no additional AAC encode.
+func sourceRequiresAAC(outputs map[string]string, req processingTrackRequirements) bool {
+	codec := normalizeTrackCodec(outputs["audio_codec"])
+	return codec != "" && codec != "AAC" && codec != "opus" && codec != "MP3" && codec != "FLAC" && codec != "vorbis" && req.expectedAudioCodecs["AAC"]
+}
+
+func recordedBrowserAudioComplete(processesJSON string, outputs map[string]string, tracks []*ipcpb.StreamTrack) bool {
+	if !sourceRequiresAAC(outputs, expectedProcessingTracks(processesJSON)) {
+		return true
+	}
+	for _, track := range tracks {
+		if normalizeTrackCodec(track.GetCodec()) == "AAC" {
+			return true
+		}
+	}
+	return false
+}
+
 func processingRequiredTracksReady(p processingTrackPresence, req processingTrackRequirements) bool {
 	if !p.sourceMedia {
 		return false
 	}
+	if sourceRequiresAAC(p.outputs, req) && !p.audioCodecs["AAC"] {
+		return false
+	}
+
 	for codec := range req.requiredAudioCodecs {
 		if !p.audioCodecs[codec] {
 			return false
@@ -2546,40 +2530,6 @@ func processingRequiredTracksReady(p processingTrackPresence, req processingTrac
 
 func processingTracksComplete(p processingTrackPresence, req processingTrackRequirements) bool {
 	return processingRequiredTracksReady(p, req) && len(missingProcessingTracks(p, req)) == 0
-}
-
-func processingLivepeerRenditionsReady(p processingTrackPresence, processesJSON string) (bool, []int, error) {
-	source, _ := sourceFromReadinessOutputs(p.outputs)
-	expectedHeights, err := mist.RequestedRenditionHeights(processesJSON, source)
-	if err != nil {
-		return false, nil, err
-	}
-	if len(expectedHeights) == 0 {
-		return true, nil, nil
-	}
-	missing := missingRenditionHeightsForPush(expectedHeights, p.videoTracks)
-	return len(missing) == 0, missing, nil
-}
-
-func missingRenditionHeightsForPush(expectedHeights []int, videoTracks []processingMetaVideoTrack) []int {
-	pool := nonSourceVideoTracks(videoTracks, nil)
-
-	consumed := make([]bool, len(pool))
-	var missing []int
-	for _, expected := range expectedHeights {
-		found := false
-		for i, track := range pool {
-			if !consumed[i] && renditionHeightsClose(track.height, expected) {
-				consumed[i] = true
-				found = true
-				break
-			}
-		}
-		if !found {
-			missing = append(missing, expected)
-		}
-	}
-	return missing
 }
 
 func missingProcessingTracks(p processingTrackPresence, req processingTrackRequirements) []string {
@@ -2639,6 +2589,12 @@ func normalizeTrackCodec(codec string) string {
 		return "HEVC"
 	case "opus":
 		return "opus"
+	case "vorbis":
+		return "vorbis"
+	case "flac":
+		return "FLAC"
+	case "eac3", "e-ac3", "eac-3":
+		return "EAC3"
 	case "jpeg", "mjpeg":
 		return "JPEG"
 	case "thumbvtt":
@@ -2650,7 +2606,7 @@ func normalizeTrackCodec(codec string) string {
 
 func isAudioCodec(codec string) bool {
 	switch normalizeTrackCodec(codec) {
-	case "AAC", "opus", "MP3", "MP2", "AC3", "FLAC", "PCM":
+	case "AAC", "opus", "MP3", "MP2", "AC3", "EAC3", "FLAC", "vorbis", "PCM":
 		return true
 	default:
 		return false
@@ -2694,6 +2650,15 @@ func waitForProcessingOutput(outputPath string, timeout time.Duration) (int64, e
 
 func extractActiveStreamMetadata(streamData map[string]interface{}) map[string]string {
 	outputs := map[string]string{}
+	if last, ok := streamData["lastms"].(float64); ok && last > 0 {
+		first := float64(0)
+		if value, ok := streamData["firstms"].(float64); ok {
+			first = value
+		}
+		outputs["source_first_ms"] = strconv.FormatFloat(first, 'f', -1, 64)
+		outputs["duration_ms"] = strconv.Itoa(int(max(float64(0), last-first)))
+	}
+
 	health, ok := streamData["health"].(map[string]interface{})
 	if !ok {
 		return outputs
@@ -2758,6 +2723,15 @@ func extractActiveStreamMetadata(streamData map[string]interface{}) map[string]s
 		if v, ok := track["height"].(float64); ok {
 			outputs["height"] = strconv.Itoa(int(v))
 		}
+		if mirror, ok := track["mirror"].(bool); ok && mirror {
+			outputs["source_mirror"] = "true"
+		}
+		if rotation, ok := mapInt64(track, "rotation"); ok && rotation != 0 {
+			outputs["source_rotation"] = strconv.FormatInt(rotation, 10)
+			if rotation == 90 || rotation == 270 {
+				outputs["width"], outputs["height"] = outputs["height"], outputs["width"]
+			}
+		}
 		if w, ok := outputs["width"]; ok {
 			if ht, ok := outputs["height"]; ok {
 				outputs["resolution"] = w + "x" + ht
@@ -2788,9 +2762,7 @@ func extractActiveStreamMetadata(streamData map[string]interface{}) map[string]s
 			outputs["audio_sample_rate"] = strconv.Itoa(int(v))
 		}
 	}
-	if v, ok := streamData["lastms"].(float64); ok && v > 0 {
-		outputs["duration_ms"] = strconv.Itoa(int(v))
-	}
+
 	return outputs
 }
 
@@ -2898,6 +2870,16 @@ func logLivepeerProcessingExit(log *logrus.Entry, evt ProcessExitEvent, decision
 	fields["short_reason"] = evt.ShortReason
 	fields["fallback_decision"] = string(decision)
 	fields["phase"] = phase
+	if evt.ShortReason == "SOURCE_ROTATED" && evt.ProcessType == "Livepeer" {
+		fields["routing"] = "source_rotated"
+		log.WithFields(fields).Info("Rotated source routed to local MistProcAV; the local ladder renders it upright")
+		return
+	}
+	if expectedSourceCodecRoute(evt.ProcessType, evt.ShortReason, evt.Reason) {
+		fields["routing"] = "source_codec_unsupported"
+		log.WithFields(fields).Info("Source codec routed to local MistProcAV for decoding")
+		return
+	}
 	if decision == livepeerFallbackNone {
 		log.WithFields(fields).Info("Livepeer process exited")
 		return
@@ -3128,6 +3110,16 @@ func logUnroutedProcessExit(evt ProcessExitEvent) {
 		return
 	}
 	incMistWebhook("PROCESS_EXIT", "telemetry")
+	if evt.ProcessType == "Livepeer" && evt.ShortReason == "SOURCE_ROTATED" {
+		fields["routing"] = "source_rotated"
+		logger.WithFields(fields).Info("Rotated source routed to local MistProcAV; the local ladder renders it upright")
+		return
+	}
+	if expectedSourceCodecRoute(evt.ProcessType, evt.ShortReason, evt.Reason) {
+		fields["routing"] = "source_codec_unsupported"
+		logger.WithFields(fields).Info("Source codec routed to local MistProcAV for decoding")
+		return
+	}
 	switch evt.Status {
 	case "clean", "stopped":
 		logger.WithFields(fields).Info("Stream process exited")

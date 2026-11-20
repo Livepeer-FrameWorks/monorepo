@@ -2,11 +2,13 @@
   import { getIconComponent } from "$lib/iconUtils";
   import { getShareUrl } from "$lib/config";
   import BufferStateIndicator from "$lib/components/health/BufferStateIndicator.svelte";
-  import { StreamStatus } from "$houdini";
   import type { StreamCoreFields$data, StreamMetricsFields$data } from "$houdini";
   import { streamCurrentViewers } from "$lib/utils/stream-metrics-display";
 
-  type StreamCardData = Pick<StreamCoreFields$data, "id" | "streamId" | "name" | "playbackId"> & {
+  type StreamCardData = Pick<
+    StreamCoreFields$data,
+    "id" | "streamId" | "name" | "ingest" | "playbackId"
+  > & {
     metrics: Pick<
       StreamMetricsFields$data,
       | "status"
@@ -44,9 +46,8 @@
 
   let { stream, selected, deleting, healthData, onSelect, onDelete }: Props = $props();
 
-  // Derive status from metrics edge
-  const status = $derived(stream.metrics?.status);
-  const isLive = $derived(status === StreamStatus.LIVE);
+  const status = $derived(stream.ingest?.state);
+  const isLive = $derived(status === "LIVE");
   const displayStreamId = $derived(stream.streamId || stream.id);
   const displayViewers = $derived(streamCurrentViewers(stream.metrics));
 
@@ -99,7 +100,13 @@
         class="w-2 h-2 rounded-full shrink-0 {isLive
           ? 'bg-success animate-pulse'
           : 'bg-muted-foreground/30'}"
-        title={isLive ? "Live" : "Offline"}
+        title={status
+          ? isLive
+            ? "Live"
+            : status === "CONNECTED"
+              ? "Connected"
+              : "Offline"
+          : "Unavailable"}
       ></div>
 
       <button
@@ -125,7 +132,7 @@
       <div>
         <p class="text-xs text-muted-foreground uppercase tracking-wider mb-1">Status</p>
         <p class="font-medium text-foreground capitalize">
-          {status?.toLowerCase() || "offline"}
+          {status?.toLowerCase() || "unavailable"}
         </p>
       </div>
       <div>

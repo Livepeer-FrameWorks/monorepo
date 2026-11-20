@@ -1,0 +1,18 @@
+mutation DisconnectIngest($streamId: ID!) {
+  disconnectIngest(streamId: $streamId) {
+    __typename
+    ... on IngestDisconnectSuccess {
+      streamId
+      stopRequested
+    }
+    ... on ValidationError {
+      message
+    }
+    ... on NotFoundError {
+      message
+    }
+    ... on AuthError {
+      message
+    }
+  }
+}

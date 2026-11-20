@@ -4,11 +4,18 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/lib/pq"
 )
 
 type ClusterUpdate struct {
 	ClusterName             *string
 	BaseURL                 *string
+	DatabaseURL             *string
+	PeriscopeURL            *string
+	KafkaBrokers            []string
+	MaxConcurrentStreams    *int32
+	MaxConcurrentViewers    *int32
 	HealthStatus            *string
 	IsActive                *bool
 	OwnerTenantIDSet        bool
@@ -33,6 +40,21 @@ func (q *Queries) UpdateClusterFields(ctx context.Context, clusterID string, pat
 	}
 	if patch.BaseURL != nil {
 		add("base_url", *patch.BaseURL)
+	}
+	if patch.DatabaseURL != nil {
+		add("database_url", *patch.DatabaseURL)
+	}
+	if patch.PeriscopeURL != nil {
+		add("periscope_url", *patch.PeriscopeURL)
+	}
+	if len(patch.KafkaBrokers) > 0 {
+		add("kafka_brokers", pq.Array(patch.KafkaBrokers))
+	}
+	if patch.MaxConcurrentStreams != nil {
+		add("max_concurrent_streams", *patch.MaxConcurrentStreams)
+	}
+	if patch.MaxConcurrentViewers != nil {
+		add("max_concurrent_viewers", *patch.MaxConcurrentViewers)
 	}
 	if patch.HealthStatus != nil {
 		add("health_status", *patch.HealthStatus)

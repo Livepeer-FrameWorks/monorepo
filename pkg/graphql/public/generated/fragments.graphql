@@ -46,6 +46,15 @@ fragment ArtifactEventDefaultFields on ArtifactEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -148,6 +157,15 @@ fragment ArtifactEventInNodeDefaultFields on ArtifactEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -248,6 +266,15 @@ fragment ArtifactStateDefaultFields on ArtifactState {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -849,6 +876,15 @@ fragment ClientMetrics5mDefaultFields on ClientMetrics5m {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -956,6 +992,15 @@ fragment ClipInNodeDefaultFields on Clip {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -1022,6 +1067,7 @@ fragment ClipInNodeDefaultFields on Clip {
   storagePath
   sizeBytes
   status
+  errorMessage
   clipCreatedAt: createdAt
   updatedAt
   clipMode
@@ -1095,7 +1141,13 @@ fragment ClusterDefaultFields on Cluster {
   kafkaBrokers
   maxConcurrentStreams
   maxConcurrentViewers
-  maxBandwidthMbps
+  capacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressUsableBytesPerSec
+    ingressUsableBytesPerSec
+    defaultBudgetNodes
+  }
   healthStatus
   isActive
   isDefaultCluster
@@ -1124,7 +1176,13 @@ fragment ClusterInNodeDefaultFields on Cluster {
   kafkaBrokers
   maxConcurrentStreams
   maxConcurrentViewers
-  maxBandwidthMbps
+  capacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressUsableBytesPerSec
+    ingressUsableBytesPerSec
+    defaultBudgetNodes
+  }
   healthStatus
   isActive
   isDefaultCluster
@@ -1245,6 +1303,15 @@ fragment ConnectionEventDefaultFields on ConnectionEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -1359,6 +1426,15 @@ fragment ConnectionEventInNodeDefaultFields on ConnectionEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -1487,7 +1563,13 @@ fragment CreateEdgeClusterResponseDefaultFields on CreateEdgeClusterResponse {
     kafkaBrokers
     maxConcurrentStreams
     maxConcurrentViewers
-    maxBandwidthMbps
+    capacity {
+      egressBudgetBytesPerSec
+      ingressBudgetBytesPerSec
+      egressUsableBytesPerSec
+      ingressUsableBytesPerSec
+      defaultBudgetNodes
+    }
     healthStatus
     isActive
     isDefaultCluster
@@ -1669,6 +1751,15 @@ fragment GeographicDistributionDefaultFields on GeographicDistribution {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -1877,6 +1968,15 @@ fragment InfrastructureNodeDefaultFields on InfrastructureNode {
     activeStreams
     activeViewers
   }
+  capacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressSource
+    ingressSource
+    revision
+    updatedAt
+    appliedRevision
+  }
 }
 
 fragment InfrastructureNodeInNodeDefaultFields on InfrastructureNode {
@@ -1924,6 +2024,20 @@ fragment InfrastructureNodeInNodeDefaultFields on InfrastructureNode {
     activeStreams
     activeViewers
   }
+  infrastructureNodeCapacity: capacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressSource
+    ingressSource
+    revision
+    updatedAt
+    appliedRevision
+  }
+}
+
+fragment IngestDisconnectSuccessDefaultFields on IngestDisconnectSuccess {
+  streamId
+  stopRequested
 }
 
 fragment InvoiceDefaultFields on Invoice {
@@ -2334,6 +2448,8 @@ fragment MediaRetentionPolicyDefaultFields on MediaRetentionPolicy {
   effectiveVodRetentionDays
   effectiveDvrRetentionDays
   effectiveClipRetentionDays
+  keepVodOriginals
+  effectiveKeepVodOriginals
 }
 
 fragment MessageDefaultFields on Message {
@@ -2388,6 +2504,8 @@ fragment NetworkStatusDefaultFields on NetworkStatus {
     currentViewers
     egressMbps
     egressCapacityMbps
+    egressUsableMbps
+    defaultBudgetNodes
     ingressMbps
     services
   }
@@ -2736,6 +2854,15 @@ fragment ProcessingUsageRecordDefaultFields on ProcessingUsageRecord {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -2875,6 +3002,15 @@ fragment ProcessingUsageRecordInNodeDefaultFields on ProcessingUsageRecord {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -3029,6 +3165,15 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -3137,6 +3282,15 @@ fragment RebufferingEventDefaultFields on RebufferingEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -3252,6 +3406,15 @@ fragment RoutingEventDefaultFields on RoutingEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -3546,6 +3709,15 @@ fragment StorageEventDefaultFields on StorageEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -3649,6 +3821,15 @@ fragment StorageEventInNodeDefaultFields on StorageEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -3767,6 +3948,15 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -3860,6 +4050,15 @@ fragment StreamAnalyticsSummaryDefaultFields on StreamAnalyticsSummary {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -3987,6 +4186,15 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -4080,6 +4288,15 @@ fragment StreamEventDefaultFields on StreamEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -4204,6 +4421,15 @@ fragment StreamEventInNodeDefaultFields on StreamEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -4360,6 +4586,15 @@ fragment StreamHealthMetricDefaultFields on StreamHealthMetric {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -4476,6 +4711,15 @@ fragment StreamHealthMetricInNodeDefaultFields on StreamHealthMetric {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -4603,6 +4847,15 @@ fragment StreamInNodeDefaultFields on Stream {
   }
   createdAt
   streamUpdatedAt: updatedAt
+  ingest {
+    state
+    isLive
+    sessionId
+    connectedAt
+    liveSince
+    endedAt
+    resumableUntil
+  }
   metrics {
     status
     isLive
@@ -5200,6 +5453,15 @@ fragment TrackListEventDefaultFields on TrackListEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -5309,6 +5571,15 @@ fragment TrackListEventInNodeDefaultFields on TrackListEvent {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -5417,6 +5688,15 @@ fragment TrackListUpdateDefaultFields on TrackListUpdate {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -5506,6 +5786,18 @@ fragment TrackListUpdateDefaultFields on TrackListUpdate {
   primaryAudioSampleRate
 }
 
+fragment TranscodeLadderPolicyDefaultFields on TranscodeLadderPolicy {
+  ladders {
+    name
+    displayName
+    description
+    renditionNames
+  }
+  planDefault
+  tenantLadder
+  effectiveLadder
+}
+
 fragment ViewerCountBucketDefaultFields on ViewerCountBucket {
   timestamp
   viewerCount
@@ -5536,6 +5828,15 @@ fragment ViewerCountBucketDefaultFields on ViewerCountBucket {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -5643,6 +5944,15 @@ fragment ViewerGeographicDefaultFields on ViewerGeographic {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -5745,6 +6055,15 @@ fragment ViewerHoursHourlyDefaultFields on ViewerHoursHourly {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -5841,6 +6160,15 @@ fragment ViewerHoursHourlyInNodeDefaultFields on ViewerHoursHourly {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -5936,6 +6264,15 @@ fragment ViewerMetricsDefaultFields on ViewerMetrics {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -6044,6 +6381,15 @@ fragment ViewerSessionDefaultFields on ViewerSession {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -6152,6 +6498,15 @@ fragment ViewerSessionInNodeDefaultFields on ViewerSession {
     }
     createdAt
     updatedAt
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     metrics {
       status
       isLive
@@ -6286,6 +6641,16 @@ fragment VodAssetInNodeDefaultFields on VodAsset {
     perMonth
     currency
   }
+  originalFile {
+    sizeBytes
+  }
+}
+
+fragment VodOriginalDownloadDefaultFields on VodOriginalDownload {
+  url
+  expiresAt
+  sizeBytes
+  filename
 }
 
 fragment VodRetentionAssetDefaultFields on VodRetentionAsset {

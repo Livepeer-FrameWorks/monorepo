@@ -170,3 +170,13 @@ Bandwidth is tracked at multiple granularities:
 | Stream  | `stream_analytics_daily`   | Daily per-stream totals      |
 | Tenant  | `tenant_viewer_daily`      | Billing rollups              |
 | Node    | `node_metrics_samples`     | Infrastructure capacity      |
+
+## Upload originals and named ladders
+
+Commodore stores stream/upload ladder names and the tenant default. Purser's billing catalog owns
+allowed named ladder definitions and the tier default. Foghorn snapshots the upload retention
+choice in `vod_metadata.keep_original`, then stamps `original_s3_key` and `original_size_bytes`
+on successful processing. The original key/positive size pair is constrained together. Commodore
+projects original size into its VOD catalog; download URLs are issued by the origin cell and are
+never persisted as playback endpoints. Original-only deletion clears the pair and queues object
+cleanup in the same transaction.

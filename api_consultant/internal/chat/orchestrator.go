@@ -550,6 +550,7 @@ var spokeMutationBlocklist = map[string]bool{
 	"update_stream":          true,
 	"delete_stream":          true,
 	"refresh_stream_key":     true,
+	"disconnect_ingest":      true,
 	"create_clip":            true,
 	"delete_clip":            true,
 	"start_dvr":              true,
@@ -739,7 +740,7 @@ func mcpToolCategory(name string) string {
 		return "Payment"
 	case "topup_balance", "check_topup":
 		return "Billing"
-	case "create_stream", "update_stream", "delete_stream", "refresh_stream_key":
+	case "create_stream", "update_stream", "delete_stream", "refresh_stream_key", "disconnect_ingest":
 		return "Streams"
 	case "create_clip", "delete_clip":
 		return "Clips"
@@ -757,7 +758,7 @@ func mcpToolCategory(name string) string {
 		return "Schema"
 	case "ask_consultant":
 		return "Knowledge"
-	case "browse_marketplace", "subscribe_to_cluster", "set_preferred_cluster", "create_private_cluster", "create_enrollment_token", "get_node_info", "manage_node", "set_node_mode", "get_node_health":
+	case "browse_marketplace", "subscribe_to_cluster", "set_preferred_cluster", "create_private_cluster", "create_enrollment_token", "get_node_info", "manage_node", "set_node_mode", "set_node_capacity", "get_node_health":
 		return "Infrastructure"
 	case "list_mcp_tools", "search_knowledge", "search_web":
 		return "Skipper Internal"

@@ -155,6 +155,9 @@ func (j *IngestSessionReaperJob) reapLostNodes(ctx context.Context) {
 		clear(j.absence)
 		return
 	}
+	if err := control.ReapLapsedPullAdmissions(ctx, j.logger); err != nil {
+		j.logger.WithError(err).Warn("Pull admission expiry pass failed")
+	}
 	if _, err := control.ReapLostNodeIngestSessionsOnce(ctx, j.lostDeps, j.absence, j.now(), j.logger); err != nil {
 		j.logger.WithError(err).Warn("Ingest session reaper: lost-node pass failed")
 	}

@@ -9,6 +9,7 @@ export const RECORDING_EVENT_TYPES = [
   "recording.ready",
   "recording.failed",
   "recording.chapter_failed",
+  "recording.chapter_ready",
 ];
 export const UPLOAD_EVENT_TYPES = [
   "upload.created",

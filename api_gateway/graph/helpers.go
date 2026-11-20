@@ -2,6 +2,8 @@ package graph
 
 import (
 	"context"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"strings"
 
 	"frameworks/api_gateway/internal/loaders"
@@ -12,54 +14,31 @@ import (
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 )
 
-// getLifecycleData fetches artifact lifecycle data from the ArtifactLifecycleLoader.
-// Used by clip resolvers to get processing status, file paths, etc.
-func (r *clipResolver) getLifecycleData(ctx context.Context, requestID string) *periscopepb.ArtifactState {
-	if requestID == "" {
-		return nil
+// artifactPlacement reads the analytics overlay after checking the caller's scope.
+func artifactPlacement(ctx context.Context, requestID string) (*periscopepb.ArtifactState, error) {
+	if err := gwmiddleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
 	}
-
+	if gwmiddleware.IsDemoMode(ctx) || requestID == "" {
+		return nil, nil
+	}
 	tenantID := middleware.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil
+		return nil, status.Error(codes.Unauthenticated, "tenant context is required")
 	}
-
 	lds := loaders.FromContext(ctx)
 	if lds == nil || lds.ArtifactLifecycle == nil {
-		return nil
+		return nil, status.Error(codes.Unavailable, "artifact placement is unavailable")
 	}
-
-	state, err := lds.ArtifactLifecycle.Load(ctx, tenantID, requestID)
-	if err != nil {
-		return nil
-	}
-
-	return state
+	return lds.ArtifactLifecycle.Load(ctx, tenantID, requestID)
 }
 
-// getLifecycleData fetches artifact lifecycle data from the ArtifactLifecycleLoader.
-// Used by DVR resolvers to get processing status, file paths, etc.
-func (r *dVRRequestResolver) getLifecycleData(ctx context.Context, requestID string) *periscopepb.ArtifactState {
-	if requestID == "" {
-		return nil
-	}
+func (r *clipResolver) getLifecycleData(ctx context.Context, requestID string) (*periscopepb.ArtifactState, error) {
+	return artifactPlacement(ctx, requestID)
+}
 
-	tenantID := middleware.GetTenantID(ctx)
-	if tenantID == "" {
-		return nil
-	}
-
-	lds := loaders.FromContext(ctx)
-	if lds == nil || lds.ArtifactLifecycle == nil {
-		return nil
-	}
-
-	state, err := lds.ArtifactLifecycle.Load(ctx, tenantID, requestID)
-	if err != nil {
-		return nil
-	}
-
-	return state
+func (r *dVRRequestResolver) getLifecycleData(ctx context.Context, requestID string) (*periscopepb.ArtifactState, error) {
+	return artifactPlacement(ctx, requestID)
 }
 
 // resolveArtifactPlaybackID resolves an artifact playbackId from a content type + hash.

@@ -563,6 +563,7 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 - Member: [CustomDomainVerified](/builders/api-schema/live/#customdomainverified)
 - Member: [MultistreamStatusChanged](/builders/api-schema/live/#multistreamstatuschanged)
 - Member: [RecordingChapterFailed](/builders/api-schema/live/#recordingchapterfailed)
+- Member: [RecordingChapterReady](/builders/api-schema/live/#recordingchapterready)
 - Member: [RecordingFailed](/builders/api-schema/live/#recordingfailed)
 - Member: [RecordingReady](/builders/api-schema/live/#recordingready)
 - Member: [RecordingStarted](/builders/api-schema/live/#recordingstarted)
@@ -570,7 +571,9 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 - Member: [StreamConnected](/builders/api-schema/live/#streamconnected)
 - Member: [StreamCreated](/builders/api-schema/live/#streamcreated)
 - Member: [StreamDeleted](/builders/api-schema/live/#streamdeleted)
+- Member: [StreamEnded](/builders/api-schema/live/#streamended)
 - Member: [StreamIdle](/builders/api-schema/live/#streamidle)
+- Member: [StreamIngestDisconnected](/builders/api-schema/live/#streamingestdisconnected)
 - Member: [StreamKeyRotated](/builders/api-schema/live/#streamkeyrotated)
 - Member: [StreamLive](/builders/api-schema/live/#streamlive)
 - Member: [StreamUpdated](/builders/api-schema/live/#streamupdated)
@@ -591,6 +594,18 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 - **startMs**: `Int!`
 - **endMs**: `Int!`
 - **reason**: `EventMediaFailureReason!` ([EventMediaFailureReason](/builders/api-schema/live/#eventmediafailurereason))
+
+### RecordingChapterReady
+
+**object**
+
+`recording.chapter_ready` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/live/#eventartifact))
+- **chapterId**: `ID!`
+- **startMs**: `Int!`
+- **endMs**: `Int!`
+- **sizeBytes**: `Int!`
 
 ### RecordingFailed
 
@@ -739,6 +754,7 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 - **streamId**: `ID!`
 - **protocol**: `EventIngestProtocol!` ([EventIngestProtocol](/builders/api-schema/live/#eventingestprotocol))
 - **playbackId**: `ID!`
+- **sessionId**: `ID!`
 
 ### StreamCreated
 
@@ -758,6 +774,16 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 
 - **streamId**: `ID!`
 
+### StreamEnded
+
+**object**
+
+`stream.ended` event. Aggregate: `streams`.
+
+- **streamId**: `ID!`
+- **playbackId**: `ID!`
+- **sessionId**: `ID!`
+
 ### StreamIdle
 
 **object**
@@ -766,6 +792,17 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 
 - **streamId**: `ID!`
 - **playbackId**: `ID!`
+- **sessionId**: `ID!`
+
+### StreamIngestDisconnected
+
+**object**
+
+`stream.ingest_disconnected` event. Aggregate: `streams`.
+
+- **streamId**: `ID!`
+- **sessionId**: `ID!`
+- **reason**: `String!`
 
 ### StreamKeyRotated
 
@@ -783,6 +820,7 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 
 - **streamId**: `ID!`
 - **playbackId**: `ID!`
+- **sessionId**: `ID!`
 
 ### StreamUpdated
 
@@ -933,8 +971,8 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 - **sessionId**: `String`
 - **connectionTime**: `Float`
 - **position**: `Float`
-- **bandwidthInBps**: `Int`
-- **bandwidthOutBps**: `Int`
+- **bandwidthInBps**: `Int` — Bandwidth in bytes per second sent to the viewer; legacy field name.
+- **bandwidthOutBps**: `Int` — Bandwidth in bytes per second received from the viewer; legacy field name.
 - **bytesDownloaded**: `Float`
 - **bytesUploaded**: `Float`
 - **packetsSent**: `Int`

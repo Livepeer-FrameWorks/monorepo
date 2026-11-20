@@ -27,7 +27,14 @@ SELECT c.id, c.clip_hash, c.playback_id, c.stream_id::text, c.title, c.descripti
        c.size_bytes, c.retention_until, COALESCE(c.retention_source, '')::text AS retention_source,
        c.created_at, c.updated_at,
        COALESCE(c.thumbnail_serving_cluster_id, c.storage_cluster_id, c.origin_cluster_id, '')::text AS thumbnail_cluster,
-       c.has_thumbnails
+       c.has_thumbnails,
+       CASE WHEN c.retention_until IS NOT NULL AND c.retention_until <= NOW() THEN 'expired'
+            WHEN c.lifecycle_status IN ('failed', 'aborted') OR c.sync_status IN ('failed', 'lost_local') THEN 'failed'
+            WHEN c.lifecycle_status IN ('requested', 'queued', 'starting', 'recording', 'stopping', 'finalizing', 'uploading', 'processing') THEN 'processing'
+            WHEN c.lifecycle_status IN ('ready', 'completed', 'completed_partial') OR COALESCE(c.is_synced, false) THEN 'ready'
+            ELSE 'processing' END::text AS status,
+       c.error_message, c.storage_location, c.sync_status, c.is_synced, c.is_finalized,
+       COALESCE(c.storage_cluster_id, c.origin_cluster_id, '')::text AS storage_cluster_id
 FROM commodore.clips c
 WHERE c.tenant_id = $1 AND c.clip_hash = $2;
 

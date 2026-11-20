@@ -265,15 +265,11 @@ func edgeRoleVarsFrom(config *EdgeProvisionConfig, remoteOS, remoteArch string, 
 	}
 	vars["edge_helmsman_required_env"] = requiredEnv
 	vars["edge_image_env"] = templates.EdgeImageEnv()
-	if config.BandwidthMbps < 0 {
-		return nil, fmt.Errorf("edge: bandwidth_mbps must be non-negative")
-	}
+
 	if config.MaxTranscodes < 0 {
 		return nil, fmt.Errorf("edge: max_transcodes must be non-negative")
 	}
-	if config.BandwidthMbps > 0 {
-		vars["edge_bandwidth_limit_bytes_per_sec"] = uint64(config.BandwidthMbps) * 1000 * 1000 / 8
-	}
+
 	if config.MaxTranscodes > 0 {
 		vars["edge_max_transcodes"] = config.MaxTranscodes
 	}

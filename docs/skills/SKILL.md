@@ -54,8 +54,8 @@ Multi-tenant live streaming platform with three access layers and crypto-native 
 | Category        | MCP Tools                                     | MCP Resources                                      | GraphQL                             |
 | --------------- | --------------------------------------------- | -------------------------------------------------- | ----------------------------------- |
 | Streams         | create, update, delete, refresh keys          | list, details, health                              | mutations + queries + subscriptions |
-| Clips           | create from live/recorded, delete             | —                                                  | mutations + queries                 |
-| DVR             | start/stop catch-up recording                 | —                                                  | mutation                            |
+| Clips           | create, list by stream, delete                | —                                                  | mutations + queries                 |
+| DVR             | start/stop, list recordings, read chapters    | —                                                  | mutation                            |
 | VOD             | upload, complete, abort, delete               | list, details                                      | mutations + queries                 |
 | Playback        | resolve viewer endpoints (geo-routed)         | —                                                  | query                               |
 | Billing         | top up, submit payment, check deposits        | balance, pricing, transactions, invoices, payments | queries                             |
@@ -256,6 +256,13 @@ Agents that provision their own edge infrastructure can manage node lifecycle:
 5. **Set mode via API**: `set_node_mode` — no SSH needed, goes through Gateway → Commodore → Foghorn
 6. **Set mode via CLI**: `frameworks edge mode draining` / `maintenance` / `normal` (local or `--ssh user@host`)
 7. **Diagnose**: `frameworks edge doctor` + `frameworks edge logs`
+
+Bandwidth budgets are owned by the node's operator. Use `get_node_info` to read capacity and its
+revision, then `set_node_capacity` with `expected_revision` and egress/ingress budgets in bytes per
+second. Null restores the default 125000000 B/s (1 Gbit/s) for that direction. The write needs
+`infrastructure:write` and ownership or platform-operator access. A live edge applies it without
+restarting Mist; `get_node_health` reports composed/applied revisions, budget source, observed source,
+and usable/reserved egress.
 
 Two management paths: use `set_node_mode` / `get_node_health` MCP tools when you don't have SSH access. Use CLI commands when you're on the edge or have SSH. Use `manage_node` for guided CLI command generation.
 

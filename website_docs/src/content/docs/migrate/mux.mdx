@@ -33,9 +33,9 @@ worth keeping during the cut-over.
 - **Available today, working differently:** view-level QoE ships for the FrameWorks player, while
   QoE from third-party players is still ahead · custom domains follow the plan's entitlement ·
   referrer and user-agent restrictions go through the webhook playback policy.
-- **Later, on the roadmap:** more server-side SDK languages. FrameWorks ships TypeScript, Go, and
-  Python; Mux also covers Ruby, PHP, Elixir, Java, and .NET.
-- **Not planned:** Master Access download · frame-accurate clip trimming. See
+- **Original uploads:** retained by default with account and upload opt-outs; owners can [download or delete the original](/builders/recordings#original-uploads).
+- **Later, on the roadmap:** more server-side SDK languages (FrameWorks ships TypeScript, Go, and
+  Python; Mux also covers Ruby, PHP, Elixir, Java, and .NET) · frame-accurate clip trimming. See
   [what's up next](#whats-up-next-and-whats-not-planned) before cutting over production traffic.
 
 <Aside type="caution" title="Read before cutting over production traffic">
@@ -67,14 +67,14 @@ The Mux shapes you know, mapped to FrameWorks:
 | Mux                                                                                            | FrameWorks                                                                                                                          |
 | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /video/v1/assets` with `input: { url: "mux://assets/{asset_id}", start_time, end_time }` | `createClip(input)` mutation                                                                                                        |
-| Instant clipping (segment-level) vs asset clips (frame-accurate)                               | FrameWorks clips are GOP-aligned today; frame-accurate trimming is not exposed                                                      |
+| Instant clipping (segment-level) vs asset clips (frame-accurate)                               | FrameWorks clips are GOP-aligned today; [frame-accurate trimming](/roadmap#frame-accurate-clip-trimming) is on the roadmap          |
 | `POST /video/v1/uploads` (one-shot HTTP PUT URL)                                               | `createVodUpload(input)` → S3 multipart upload                                                                                      |
 | `POST /video/v1/assets` with `input.url: "https://..."` (URL ingest)                           | `importVodAsset(input: { url, filename, title })` — see [Import a video from a URL](/builders/recordings#import-a-video-from-a-url) |
 | `GET /video/v1/assets/{id}`                                                                    | `vodAsset(id)` query                                                                                                                |
 | `DELETE /video/v1/assets/{id}`                                                                 | `deleteVodAsset(id)` mutation                                                                                                       |
 | Storyboard `.vtt` + JPG sprite                                                                 | Sprite-sheet (10×10) + WebVTT cue file, generated on every recording                                                                |
 | `mp4_support: "standard" \| "high"` for static MP4 renditions                                  | `/play/{id}.mp4` progressive — always available, no gated tier                                                                      |
-| Master Access (downloadable original)                                                          | Not exposed today                                                                                                                   |
+| Master Access (downloadable original)                                                          | [Original downloads](/builders/recordings#original-uploads), retained by default with account and upload opt-outs                   |
 
 FrameWorks DVR is not just live-to-VOD asset creation. A long-running stream can keep one DVR
 archive for the full stream session: live viewers use the bounded DVR window, and replay viewers
@@ -206,7 +206,14 @@ for the full surface.
 
 ### 4. Rewire REST as GraphQL
 
-Pick your client:
+The control API is one public GraphQL schema. You do not have to write GraphQL to use it: the
+[SDKs](/builders/sdks) for TypeScript, Go, and Python expose every operation as a typed method,
+and other languages generate a client from the same schema. What your viewers and encoders touch
+stays on open standards: HLS, DASH, WebRTC (WHEP/WHIP), RTMP and SRT for media, and
+[Standard Webhooks](/builders/webhooks) for events, so leaving FrameWorks never means rewriting
+your players or encoders.
+
+If you call GraphQL directly, pick your client:
 
 - **Houdini** (SvelteKit-native GraphQL codegen)
 - **urql** or **Apollo** for React
@@ -403,12 +410,9 @@ shows relative order, not dates. None of the up-next items are available today.
   [SDKs](/builders/sdks) for TypeScript (Node and browsers), Go, and Python, plus the player
   packages. Mux also covers Ruby, PHP, Elixir, Java, and .NET; for those, use GraphQL codegen
   against the public schema until generated SDKs land.
-
-### Not planned
-
-- **Master Access.** There is no downloadable copy of the original upload.
-- **Frame-accurate clip trimming.** Clips are GOP-aligned. Mux offers frame-accurate asset
-  clips alongside segment-level instant clips.
+- **[Frame-accurate clip trimming](/roadmap#frame-accurate-clip-trimming).** Clips are
+  GOP-aligned. Mux offers frame-accurate asset clips alongside segment-level instant clips; here an
+  optional setting will re-encode only a clip's edge GOPs.
 
 ## Beta and tricky bits
 

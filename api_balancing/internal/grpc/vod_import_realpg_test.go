@@ -23,6 +23,18 @@ import (
 // the staged source), and the relay queries resolving the source. A retry
 // records nothing new.
 func TestVodImportRecordsSourceAndQueuesProcessing_RealPG(t *testing.T) { //nolint:funlen // One database follows the whole accept.
+	for _, tc := range []struct{ source, filename string }{
+		{"https://cdn.example/talks/keynote.mp4?sig=abc", "keynote.mp4"},
+		{"https://gw.example/ipfs/bafy", "keynote.mp4"},
+		{"https://cdn.example/x?id=1", "keynote.mp4"},
+		{"https://cdn.example/talks/keynote.mp4?sig=abc", ""},
+	} {
+		t.Run(tc.source+"/"+tc.filename, func(t *testing.T) { verifyVodImportSource(t, tc.source, tc.filename) })
+	}
+}
+
+func verifyVodImportSource(t *testing.T, source, filename string) {
+	t.Helper()
 	conn := startFoghornGRPCRealPG(t)
 	t.Cleanup(control.SetupTestRegistry("", nil))
 	srv := NewFoghornGRPCServer(conn, logging.NewLogger(), nil, nil, nil, nil, &fakeVodS3Client{}, nil)
@@ -35,11 +47,10 @@ func TestVodImportRecordsSourceAndQueuesProcessing_RealPG(t *testing.T) { //noli
 	const (
 		hash     = "vodimport00000000000000000000001"
 		playback = "pbimport0001"
-		source   = "https://cdn.example/talks/keynote.mp4?sig=abc"
 	)
 	hashArg, playbackArg, internal, requestID := hash, playback, "vodimportinternal0001", uuid.NewString()
 	req := &sharedpb.ImportVodAssetRequest{
-		TenantId: tenantID, UserId: userID, SourceUrl: source, Filename: "keynote.mp4",
+		TenantId: tenantID, UserId: userID, SourceUrl: source, Filename: filename,
 		VodHash: &hashArg, PlaybackId: &playbackArg, InternalName: &internal,
 		ClusterId: "central-primary", RequestId: &requestID,
 	}

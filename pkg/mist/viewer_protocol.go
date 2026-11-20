@@ -23,6 +23,8 @@ func ViewerProtocol(connector string) (string, error) {
 			continue
 		case "hls", "dash", "cmaf", "mp4", "webm", "mkv", "flv", "rtmp", "rtsp", "srt", "dtsc", "dtscquic", "webrtc", "whep", "h264", "aac", "mp3", "flac", "wav", "ogg", "opus":
 			protocol = part
+		case "subrip":
+			protocol = "webvtt"
 		case "hss":
 			protocol = "smoothstreaming"
 		case "ts", "httpts":

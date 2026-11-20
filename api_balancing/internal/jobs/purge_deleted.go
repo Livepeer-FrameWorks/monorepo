@@ -220,7 +220,7 @@ func (j *PurgeDeletedJob) purgeArtifactBytesAndRows(ctx context.Context) {
 		hash, artifactType, tenantID, streamInternal, format string
 		storageClusterID, originClusterID                    string
 		vodS3Key, s3URL, pendingObjectKey, activeObjectKey   string
-		activeDtshKey                                        string
+		activeDtshKey, originalObjectKey                     string
 		durableBackendLocal                                  bool
 		backendID                                            string
 		status                                               string
@@ -234,7 +234,7 @@ func (j *PurgeDeletedJob) purgeArtifactBytesAndRows(ctx context.Context) {
 			return
 		}
 		for _, r := range rows {
-			batch = append(batch, purgeRow{r.ArtifactHash, r.ArtifactType, r.ATenantID, r.StreamInternalName, r.Format, r.StorageClusterID, r.OriginClusterID, r.VodS3Key, r.S3Url, r.SyncObjectKey, r.ActiveObjectKey, r.ActiveDtshKey, r.DurableBackendLocal, r.BackendID, r.Status.String})
+			batch = append(batch, purgeRow{r.ArtifactHash, r.ArtifactType, r.ATenantID, r.StreamInternalName, r.Format, r.StorageClusterID, r.OriginClusterID, r.VodS3Key, r.S3Url, r.SyncObjectKey, r.ActiveObjectKey, r.ActiveDtshKey, r.OriginalS3Key, r.DurableBackendLocal, r.BackendID, r.Status.String})
 		}
 	} else if localBackendID != "" {
 		rows, err := queries.ListPurgeableLocalArtifacts(ctx, foghorndb.ListPurgeableLocalArtifactsParams{RetentionInterval: j.retentionAge.String(), BackendID: localBackendID})
@@ -243,7 +243,7 @@ func (j *PurgeDeletedJob) purgeArtifactBytesAndRows(ctx context.Context) {
 			return
 		}
 		for _, r := range rows {
-			batch = append(batch, purgeRow{r.ArtifactHash, r.ArtifactType, r.ATenantID, r.StreamInternalName, r.Format, r.StorageClusterID, r.OriginClusterID, r.VodS3Key, r.S3Url, r.SyncObjectKey, r.ActiveObjectKey, r.ActiveDtshKey, r.DurableBackendLocal, r.BackendID, r.Status.String})
+			batch = append(batch, purgeRow{r.ArtifactHash, r.ArtifactType, r.ATenantID, r.StreamInternalName, r.Format, r.StorageClusterID, r.OriginClusterID, r.VodS3Key, r.S3Url, r.SyncObjectKey, r.ActiveObjectKey, r.ActiveDtshKey, r.OriginalS3Key, r.DurableBackendLocal, r.BackendID, r.Status.String})
 		}
 	}
 
@@ -261,6 +261,7 @@ func (j *PurgeDeletedJob) purgeArtifactBytesAndRows(ctx context.Context) {
 			S3URL:               r.s3URL,
 			ActiveObjectKey:     r.activeObjectKey,
 			ActiveDtshKey:       r.activeDtshKey,
+			OriginalObjectKey:   r.originalObjectKey,
 			DurableBackendLocal: r.durableBackendLocal,
 			PendingObjectKey:    r.pendingObjectKey,
 			BackendID:           r.backendID,

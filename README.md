@@ -4,7 +4,7 @@
 [![codecov](https://img.shields.io/codecov/c/github/Livepeer-FrameWorks/monorepo)](https://codecov.io/gh/Livepeer-FrameWorks/monorepo)
 [![license](https://img.shields.io/github/license/Livepeer-FrameWorks/monorepo)](LICENSE.md)
 
-> Warning: This stack is in active beta. Interfaces and schemas change frequently. If deploying in a production environment, be careful with data migrations when updating major versions. Plan ahead for stuff to break.
+> Beta: interfaces and schemas can change between minor releases. Upgrades follow the release catalog (`cli/internal/releases/catalog.yaml`), which declares each version's minimum CLI, required transitions and rollback limits; read the release notes before upgrading a production deployment.
 
 **Open live video platform:** apps, real‑time APIs, and analytics, released into the public domain. Three ways to run it:
 

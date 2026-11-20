@@ -790,6 +790,8 @@ export interface Capabilities {
     __typename: 'Capabilities'
 }
 
+export type CapacityBudgetSource = 'DEFAULT' | 'OPERATOR'
+
 
 /** Card payment provider for top-ups. */
 export type CardPaymentProvider = 'STRIPE' | 'MOLLIE'
@@ -924,6 +926,8 @@ export interface Clip {
     sizeBytes: (Scalars['Float'] | null)
     /** Processing status (queued, processing, ready, failed). */
     status: Scalars['String']
+    /** Processing failure detail from the artifact catalog. */
+    errorMessage: (Scalars['String'] | null)
     /** When the clip was requested. */
     createdAt: (Scalars['Time'] | null)
     /** When the clip was last updated. */
@@ -1030,8 +1034,13 @@ export interface Cluster {
     maxConcurrentStreams: Scalars['Int']
     /** Maximum allowed concurrent viewers. */
     maxConcurrentViewers: Scalars['Int']
-    /** Maximum allowed bandwidth in Mbps. */
+    /**
+     * @deprecated Use capacity; bandwidth is managed per node.
+     * Sum of node egress budgets in decimal Mbit/s.
+     */
     maxBandwidthMbps: Scalars['Int']
+    /** Aggregate node budgets and usable capacity; null when the control plane is unavailable. */
+    capacity: (ClusterCapacity | null)
     /** Cluster health status (healthy, degraded, critical). */
     healthStatus: Scalars['String']
     /** Whether the cluster is operational. */
@@ -1117,6 +1126,15 @@ export interface ClusterCapabilities {
     accessLevel: Scalars['String']
     media: ClusterMediaCapabilities
     __typename: 'ClusterCapabilities'
+}
+
+export interface ClusterCapacity {
+    egressBudgetBytesPerSec: Scalars['Float']
+    ingressBudgetBytesPerSec: Scalars['Float']
+    egressUsableBytesPerSec: Scalars['Float']
+    ingressUsableBytesPerSec: Scalars['Float']
+    defaultBudgetNodes: Scalars['Int']
+    __typename: 'ClusterCapacity'
 }
 
 export interface ClusterEdge {
@@ -1430,9 +1448,13 @@ export interface CreateSigningKeySuccess {
     __typename: 'CreateSigningKeySuccess'
 }
 
+
+/** Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey. */
 export type CreateStreamKeyResult = (StreamKey | ValidationError | NotFoundError | AuthError) & { __isUnion?: true }
 
 export type CreateStreamResult = (Stream | ValidationError | AuthError) & { __isUnion?: true }
+
+export type CreateVodOriginalDownloadResult = (VodOriginalDownload | ValidationError | NotFoundError | AuthError) & { __isUnion?: true }
 
 export type CreateVodUploadResult = (VodUploadSession | ValidationError | AuthError) & { __isUnion?: true }
 
@@ -1623,6 +1645,22 @@ export interface DVRChapter {
 }
 
 
+/** A keyset-paginated view of a recording's saved chapters. */
+export interface DVRChapterConnection {
+    edges: DVRChapterEdge[]
+    nodes: DVRChapterRef[]
+    pageInfo: PageInfo
+    totalCount: Scalars['Int']
+    __typename: 'DVRChapterConnection'
+}
+
+export interface DVRChapterEdge {
+    cursor: Scalars['String']
+    node: DVRChapterRef
+    __typename: 'DVRChapterEdge'
+}
+
+
 /**
  * How a recording is saved as chapters. Determines how chapter (startMs,
  * endMs) ranges are produced for replay after the broadcast. Configured at
@@ -1673,6 +1711,8 @@ export interface DVRChaptersPage {
 }
 
 export interface DVRRequest {
+    /** Saved chapters, paged by their start time and ID. Range bounds are UTC epoch milliseconds. */
+    chapters: (DVRChapterConnection | null)
     id: (Scalars['ID'] | null)
     dvrHash: Scalars['ID']
     playbackId: Scalars['String']
@@ -1729,7 +1769,9 @@ export type DeleteClipResult = (DeleteSuccess | NotFoundError | AuthError) & { _
 
 export type DeleteDVRResult = (DeleteSuccess | NotFoundError | AuthError) & { __isUnion?: true }
 
-export type DeleteStreamKeyResult = (DeleteSuccess | NotFoundError | AuthError) & { __isUnion?: true }
+
+/** Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey. */
+export type DeleteStreamKeyResult = (DeleteSuccess | ValidationError | NotFoundError | AuthError) & { __isUnion?: true }
 
 export type DeleteStreamResult = (DeleteSuccess | NotFoundError | AuthError) & { __isUnion?: true }
 
@@ -1745,6 +1787,8 @@ export interface DeleteSuccess {
 }
 
 export type DeleteVodAssetResult = (DeleteSuccess | NotFoundError | AuthError) & { __isUnion?: true }
+
+export type DeleteVodOriginalResult = (DeleteSuccess | ValidationError | NotFoundError | AuthError) & { __isUnion?: true }
 
 export type DeleteWebhookEndpointResult = (DeleteSuccess | NotFoundError | AuthError) & { __isUnion?: true }
 
@@ -1786,6 +1830,8 @@ export interface DeveloperTokensConnection {
     totalCount: Scalars['Int']
     __typename: 'DeveloperTokensConnection'
 }
+
+export type DisconnectIngestResult = (IngestDisconnectSuccess | ValidationError | NotFoundError | AuthError) & { __isUnion?: true }
 
 export interface EdgeTelemetrySetup {
     enabled: Scalars['Boolean']
@@ -2137,7 +2183,17 @@ export interface InfrastructureNode {
      * Counts come from Foghorn's GetNodeHealth.
      */
     routingImpactPreview: RoutingImpactPreview
+    /** Operator-owned directional budgets; null when the control plane is unavailable. */
+    capacity: (NodeCapacity | null)
     __typename: 'InfrastructureNode'
+}
+
+
+/** An accepted request to stop the currently claimed push publisher. */
+export interface IngestDisconnectSuccess {
+    streamId: Scalars['ID']
+    stopRequested: Scalars['Boolean']
+    __typename: 'IngestDisconnectSuccess'
 }
 
 export interface IngestEndpoint {
@@ -2830,6 +2886,10 @@ export interface MediaRetentionPolicy {
     effectiveDvrRetentionDays: Scalars['Int']
     /** Effective clip horizon the cascade resolves to today (0 = keep forever). */
     effectiveClipRetentionDays: Scalars['Int']
+    /** Account default for new uploads. Null inherits the system default (keep). */
+    keepVodOriginals: (Scalars['Boolean'] | null)
+    /** Effective original-retention default for new uploads. */
+    effectiveKeepVodOriginals: Scalars['Boolean']
     __typename: 'MediaRetentionPolicy'
 }
 
@@ -2844,7 +2904,7 @@ export type MediaRetentionTarget = 'DVR' | 'CLIP' | 'VOD'
 
 
 /** Playback format required when selecting and preparing a viewer destination. */
-export type MediaViewerProtocol = 'WEBRTC' | 'WHEP' | 'HLS' | 'DASH' | 'HLS_CMAF' | 'MEWS' | 'MEWS_WEBM' | 'MP4' | 'WEBM' | 'MKV' | 'TS' | 'AAC' | 'H264' | 'H264_WS' | 'RAW_WS' | 'JSON_WS' | 'FLV' | 'HDS' | 'SMOOTHSTREAMING' | 'SDP' | 'MIST_HTML' | 'RTMP' | 'RTSP' | 'SRT' | 'DTSC'
+export type MediaViewerProtocol = 'WEBVTT' | 'WEBRTC' | 'WHEP' | 'HLS' | 'DASH' | 'HLS_CMAF' | 'MEWS' | 'MEWS_WEBM' | 'MP4' | 'WEBM' | 'MKV' | 'TS' | 'AAC' | 'H264' | 'H264_WS' | 'RAW_WS' | 'JSON_WS' | 'FLV' | 'HDS' | 'SMOOTHSTREAMING' | 'SDP' | 'MIST_HTML' | 'RTMP' | 'RTSP' | 'SRT' | 'DTSC'
 
 
 /** A message within a support conversation. */
@@ -2996,6 +3056,8 @@ export interface Mutation {
     deleteStream: DeleteStreamResult
     /** Generate a new stream key, invalidating the old one. */
     refreshStreamKey: UpdateStreamResult
+    /** Queue a stop for the current push publisher. Pull streams are stopped with pullSource.enabled=false. */
+    disconnectIngest: DisconnectIngestResult
     /**
      * Create a clip from a live or recorded stream.
      * Clips are short video segments extracted from a stream.
@@ -3196,9 +3258,15 @@ export interface Mutation {
      * affected sessions; valid viewers continue, invalid ones are denied.
      */
     setPlaybackPolicy: SetPlaybackPolicyResult
-    /** Create an additional stream key for a stream. */
+    /**
+     * @deprecated A stream has one key. Use Stream.streamKey (streams:write) and refreshStreamKey.
+     * Deprecated. A stream has one key; this operation refuses creation. Use refreshStreamKey.
+     */
     createStreamKey: CreateStreamKeyResult
-    /** Delete a stream key. */
+    /**
+     * @deprecated A stream has one key. Use Stream.streamKey (streams:write) and refreshStreamKey.
+     * Deprecated. A stream has one key; this operation refuses deletion. Use refreshStreamKey.
+     */
     deleteStreamKey: DeleteStreamKeyResult
     /**
      * Add a multistream push target to a stream.
@@ -3282,6 +3350,8 @@ export interface Mutation {
      * recorded in Foghorn's audit trail.
      */
     setNodeMode: SetNodeModeResult
+    /** Replace both directional node budgets. Null restores the default 1 Gbit/s budget. Requires infrastructure:write and ownership or platform operator access. */
+    setNodeCapacity: SetNodeCapacityResult
     /**
      * Open the MistServer admin UI on a specific edge node. Returns a short-TTL
      * session token plus the per-edge POST URL the webapp must submit the token
@@ -3313,6 +3383,14 @@ export interface Mutation {
      * cap is exposed via `mediaRetentionPolicy.bounds.maxRecordingRetentionDays`.
      */
     setMediaRetentionPolicy: SetMediaRetentionPolicyResult
+    /** Set the account's video ladder. Empty or null inherits the plan default. */
+    setTranscodeLadderPolicy: SetTranscodeLadderPolicyResult
+    /** Set the default for retaining original uploads. Null inherits keep=true. Existing assets are unchanged. */
+    setVodOriginalPolicy: SetMediaRetentionPolicyResult
+    /** Issue a free, owner-authenticated original download URL valid for 15 minutes. Limited to 20 per minute, burst 5. */
+    createVodOriginalDownload: CreateVodOriginalDownloadResult
+    /** Permanently delete only the retained upload; processed playback remains available. */
+    deleteVodOriginal: DeleteVodOriginalResult
     /** Atomically saves the requested verbs. Saved does not mean effective on every cell. */
     applyMediaPlacementChange: MediaPlacementChangeResult
     applyClusterMediaConsentChange: MediaCapacityConsentChangeResult
@@ -3385,6 +3463,8 @@ export interface NetworkClusterStatus {
     currentViewers: Scalars['Int']
     egressMbps: Scalars['Int']
     egressCapacityMbps: Scalars['Int']
+    egressUsableMbps: Scalars['Int']
+    defaultBudgetNodes: Scalars['Int']
     ingressMbps: Scalars['Int']
     services: Scalars['String'][]
     __typename: 'NetworkClusterStatus'
@@ -3436,6 +3516,20 @@ export interface NetworkStatus {
  * All fetchable objects implement this interface and can be retrieved by their global ID.
  */
 export type Node = (APIUsageRecord | ArtifactEvent | BufferEvent | ClientMetrics5m | Clip | Cluster | ConnectionEvent | Conversation | InfrastructureNode | Message | NodeMetric | NodeMetricHourly | NodePerformance5m | ProcessingUsageRecord | QualityTierDaily | SigningKey | StorageEvent | StorageUsageRecord | Stream | StreamAnalyticsDaily | StreamConnectionHourly | StreamEvent | StreamHealth5m | StreamHealthMetric | TenantDailyStat | TrackListEvent | ViewerGeoHourly | ViewerHoursHourly | ViewerSession | VodAsset) & { __isUnion?: true }
+
+export interface NodeCapacity {
+    /** Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s). */
+    egressBudgetBytesPerSec: Scalars['Float']
+    /** Effective ingress budget in bytes per second. Default: 125000000 (1 Gbit/s). */
+    ingressBudgetBytesPerSec: Scalars['Float']
+    egressSource: CapacityBudgetSource
+    ingressSource: CapacityBudgetSource
+    revision: Scalars['Int']
+    updatedAt: (Scalars['Time'] | null)
+    /** Last revision applied by Helmsman; null when the node does not report one. */
+    appliedRevision: (Scalars['Int'] | null)
+    __typename: 'NodeCapacity'
+}
 
 export interface NodeEdge {
     cursor: Scalars['String']
@@ -4188,7 +4282,7 @@ export interface PublicEvent {
  * name can have different types across members (reason is a different enum per
  * event family); alias them when one selection covers several.
  */
-export type PublicEventData = (AccountSuspended | ApiTokenCreated | ApiTokenRevoked | BillingDetailsUpdated | InvoiceCreated | InvoicePaid | PaymentFailed | TopupCredited | ClipFailed | ClipReady | ClipRequested | CustomDomainFailed | CustomDomainVerified | MultistreamStatusChanged | RecordingChapterFailed | RecordingFailed | RecordingReady | RecordingStarted | RecordingStopped | StreamConnected | StreamCreated | StreamDeleted | StreamIdle | StreamKeyRotated | StreamLive | StreamUpdated | UploadAborted | UploadCompleted | UploadCreated | UploadFailed | UploadReady) & { __isUnion?: true }
+export type PublicEventData = (AccountSuspended | ApiTokenCreated | ApiTokenRevoked | BillingDetailsUpdated | InvoiceCreated | InvoicePaid | PaymentFailed | TopupCredited | ClipFailed | ClipReady | ClipRequested | CustomDomainFailed | CustomDomainVerified | MultistreamStatusChanged | RecordingChapterFailed | RecordingChapterReady | RecordingFailed | RecordingReady | RecordingStarted | RecordingStopped | StreamConnected | StreamCreated | StreamDeleted | StreamEnded | StreamIdle | StreamIngestDisconnected | StreamKeyRotated | StreamLive | StreamUpdated | UploadAborted | UploadCompleted | UploadCreated | UploadFailed | UploadReady) & { __isUnion?: true }
 
 
 /**
@@ -4346,7 +4440,8 @@ export interface Query {
     /** Validate a stream key and return the associated stream info. */
     validateStreamKey: (StreamValidation | null)
     /**
-     * List all stream keys for a specific stream.
+     * @deprecated A stream has one key. Use Stream.streamKey (streams:write) and refreshStreamKey.
+     * Deprecated compatibility view of the current primary key for a stream.
      * Stream keys are publishing credentials, so an API token needs the
      * streams:write scope.
      */
@@ -4548,6 +4643,8 @@ export interface Query {
      * lifetime — default 200 per page, max 1000.
      */
     dvrChapters: (DVRChaptersPage | null)
+    /** A recording from the tenant catalog, readable with streams:read. */
+    dvrRecording: (DVRRequest | null)
     /** Fetch a single VOD asset by ID. */
     vodAsset: (VodAsset | null)
     /**
@@ -4608,6 +4705,8 @@ export interface Query {
      * panel to size sliders and explain the allowed range.
      */
     mediaRetentionPolicy: MediaRetentionPolicy
+    /** Allowed video ladders, account choice, and effective default. */
+    transcodeLadderPolicy: TranscodeLadderPolicy
     /** Tenant-bound placement intent and actual enforcement progress. */
     mediaPlacementPolicy: MediaPlacementPolicyResult
     mediaPlacementOptions: MediaPlacementOptionsResult
@@ -4671,6 +4770,17 @@ export interface RecordingChapterFailed {
     endMs: Scalars['Int']
     reason: EventMediaFailureReason
     __typename: 'RecordingChapterFailed'
+}
+
+
+/** `recording.chapter_ready` event. Aggregate: `artifacts`. */
+export interface RecordingChapterReady {
+    artifact: (EventArtifact | null)
+    chapterId: Scalars['ID']
+    startMs: Scalars['Int']
+    endMs: Scalars['Int']
+    sizeBytes: Scalars['Int']
+    __typename: 'RecordingChapterReady'
 }
 
 
@@ -4946,6 +5056,8 @@ export interface SessionQoeTimeSeriesBucket {
 
 export type SetMediaRetentionPolicyResult = (MediaRetentionPolicy | ValidationError | AuthError) & { __isUnion?: true }
 
+export type SetNodeCapacityResult = (InfrastructureNode | ValidationError | NotFoundError | AuthError) & { __isUnion?: true }
+
 export type SetNodeModeResult = (InfrastructureNode | ValidationError | NotFoundError | AuthError) & { __isUnion?: true }
 
 export type SetPlaybackPolicyResult = (Stream | VodAsset | Clip | ValidationError | NotFoundError | AuthError) & { __isUnion?: true }
@@ -4953,6 +5065,8 @@ export type SetPlaybackPolicyResult = (Stream | VodAsset | Clip | ValidationErro
 export type SetPreferredClusterResult = (Cluster | ValidationError | NotFoundError | AuthError) & { __isUnion?: true }
 
 export type SetStreamRetentionOverridesResult = (StreamRetentionOverrides | ValidationError | NotFoundError | AuthError) & { __isUnion?: true }
+
+export type SetTranscodeLadderPolicyResult = (TranscodeLadderPolicy | ValidationError | AuthError) & { __isUnion?: true }
 
 
 /**
@@ -5153,6 +5267,10 @@ export type StartDVRResult = (DVRRequest | ValidationError | NotFoundError | Aut
 export type StopDVRResult = (DeleteSuccess | NotFoundError | AuthError) & { __isUnion?: true }
 
 export interface StorageArtifact {
+    /** How the artifact was produced, such as dvr_chapter. */
+    originType: (Scalars['String'] | null)
+    /** Catalog ID of the parent DVR recording, present on saved chapters. */
+    parentRecordingId: (Scalars['ID'] | null)
     key: Scalars['ID']
     kind: StorageArtifactKind
     id: Scalars['ID']
@@ -5190,6 +5308,8 @@ export interface StorageArtifact {
     durationSeconds: (Scalars['Float'] | null)
     /** Finalized A/V track summary (per track), captured from the completion-validated processing result and projected onto the catalog. Empty until finalized. */
     tracks: ArtifactTrack[]
+    /** Retained original upload, when this VOD has one. */
+    originalFile: (VodOriginalFile | null)
     __typename: 'StorageArtifact'
 }
 
@@ -5359,6 +5479,8 @@ export interface Stream {
     createdAt: Scalars['Time']
     /** When this stream was last modified. */
     updatedAt: Scalars['Time']
+    /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+    ingest: (StreamIngest | null)
     /**
      * Real-time operational metrics from the data plane.
      * Includes viewer counts, quality metrics, and throughput data.
@@ -5367,6 +5489,10 @@ export interface Stream {
      * carries a FORBIDDEN error at its path.
      */
     metrics: (StreamMetrics | null)
+    /** Recordings from this stream's tenant catalog, newest first. */
+    recordings: (StreamArtifactsConnection | null)
+    /** Clips from this stream's tenant catalog, newest first. */
+    clips: (StreamArtifactsConnection | null)
     /** Configured multistream push targets for this stream. */
     pushTargets: PushTarget[]
     /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
@@ -5405,6 +5531,8 @@ export interface Stream {
      * stream-bound, so they don't appear here.
      */
     retentionOverrides: (StreamRetentionOverrides | null)
+    /** Saved video ladder name; empty inherits the account, then plan default. */
+    transcodeLadder: Scalars['String']
     __typename: 'Stream'
 }
 
@@ -5488,12 +5616,29 @@ export interface StreamAnalyticsSummaryEdge {
     __typename: 'StreamAnalyticsSummaryEdge'
 }
 
+export interface StreamArtifactEdge {
+    cursor: Scalars['String']
+    node: StorageArtifact
+    __typename: 'StreamArtifactEdge'
+}
+
+
+/** A keyset-paginated collection of one stream's saved recordings or clips. */
+export interface StreamArtifactsConnection {
+    edges: StreamArtifactEdge[]
+    nodes: StorageArtifact[]
+    pageInfo: PageInfo
+    totalCount: Scalars['Int']
+    __typename: 'StreamArtifactsConnection'
+}
+
 
 /** `stream.connected` event. Aggregate: `streams`. */
 export interface StreamConnected {
     streamId: Scalars['ID']
     protocol: EventIngestProtocol
     playbackId: Scalars['ID']
+    sessionId: Scalars['ID']
     __typename: 'StreamConnected'
 }
 
@@ -5542,6 +5687,15 @@ export interface StreamEdge {
     cursor: Scalars['String']
     node: Stream
     __typename: 'StreamEdge'
+}
+
+
+/** `stream.ended` event. Aggregate: `streams`. */
+export interface StreamEnded {
+    streamId: Scalars['ID']
+    playbackId: Scalars['ID']
+    sessionId: Scalars['ID']
+    __typename: 'StreamEnded'
 }
 
 export interface StreamEvent {
@@ -5702,9 +5856,36 @@ export interface StreamHealthSummary {
 export interface StreamIdle {
     streamId: Scalars['ID']
     playbackId: Scalars['ID']
+    sessionId: Scalars['ID']
     __typename: 'StreamIdle'
 }
 
+
+/** Current ingest-session state, readable with streams:read. */
+export interface StreamIngest {
+    state: StreamIngestState
+    isLive: Scalars['Boolean']
+    sessionId: (Scalars['ID'] | null)
+    connectedAt: (Scalars['Time'] | null)
+    liveSince: (Scalars['Time'] | null)
+    endedAt: (Scalars['Time'] | null)
+    resumableUntil: (Scalars['Time'] | null)
+    __typename: 'StreamIngest'
+}
+
+
+/** `stream.ingest_disconnected` event. Aggregate: `streams`. */
+export interface StreamIngestDisconnected {
+    streamId: Scalars['ID']
+    sessionId: Scalars['ID']
+    reason: Scalars['String']
+    __typename: 'StreamIngestDisconnected'
+}
+
+export type StreamIngestState = 'IDLE' | 'CONNECTED' | 'LIVE'
+
+
+/** Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey. */
 export interface StreamKey {
     id: Scalars['ID']
     streamId: Scalars['ID']
@@ -5718,6 +5899,8 @@ export interface StreamKey {
     __typename: 'StreamKey'
 }
 
+
+/** Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey. */
 export interface StreamKeyEdge {
     cursor: Scalars['String']
     node: StreamKey
@@ -5731,6 +5914,8 @@ export interface StreamKeyRotated {
     __typename: 'StreamKeyRotated'
 }
 
+
+/** Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey. */
 export interface StreamKeysConnection {
     edges: StreamKeyEdge[]
     nodes: StreamKey[]
@@ -5744,6 +5929,7 @@ export interface StreamKeysConnection {
 export interface StreamLive {
     streamId: Scalars['ID']
     playbackId: Scalars['ID']
+    sessionId: Scalars['ID']
     __typename: 'StreamLive'
 }
 
@@ -6285,6 +6471,24 @@ export interface TrackListUpdate {
     __typename: 'TrackListUpdate'
 }
 
+
+/** A named video rendition ladder, with rungs skipped for smaller sources. */
+export interface TranscodeLadder {
+    name: Scalars['String']
+    displayName: Scalars['String']
+    description: Scalars['String']
+    renditionNames: Scalars['String'][]
+    __typename: 'TranscodeLadder'
+}
+
+export interface TranscodeLadderPolicy {
+    ladders: TranscodeLadder[]
+    planDefault: Scalars['String']
+    tenantLadder: (Scalars['String'] | null)
+    effectiveLadder: Scalars['String']
+    __typename: 'TranscodeLadderPolicy'
+}
+
 export type UnlinkWalletResult = (DeleteSuccess | NotFoundError | AuthError) & { __isUnion?: true }
 
 export type UpdateClusterResult = (Cluster | ValidationError | NotFoundError | AuthError) & { __isUnion?: true }
@@ -6533,7 +6737,9 @@ export interface ViewerMetrics {
     sessionId: (Scalars['String'] | null)
     connectionTime: (Scalars['Float'] | null)
     position: (Scalars['Float'] | null)
+    /** Bandwidth in bytes per second sent to the viewer; legacy field name. */
     bandwidthInBps: (Scalars['Int'] | null)
+    /** Bandwidth in bytes per second received from the viewer; legacy field name. */
     bandwidthOutBps: (Scalars['Int'] | null)
     bytesDownloaded: (Scalars['Float'] | null)
     bytesUploaded: (Scalars['Float'] | null)
@@ -6668,12 +6874,31 @@ export interface VodAsset {
      * cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month.
      */
     storageCost: (StorageCostProjection | null)
+    /** Retained byte-identical upload. Null for imports, failed uploads, and assets without a kept original. */
+    originalFile: (VodOriginalFile | null)
     __typename: 'VodAsset'
 }
 
 
 /** VOD asset processing status. */
 export type VodAssetStatus = 'UPLOADING' | 'PROCESSING' | 'READY' | 'FAILED' | 'DELETED' | 'EXPIRED'
+
+
+/** Short-lived download of the byte-identical original upload, without playback metering. */
+export interface VodOriginalDownload {
+    url: Scalars['String']
+    expiresAt: Scalars['Time']
+    sizeBytes: Scalars['Float']
+    filename: Scalars['String']
+    __typename: 'VodOriginalDownload'
+}
+
+
+/** Metadata of the byte-identical retained upload. */
+export interface VodOriginalFile {
+    sizeBytes: Scalars['Float']
+    __typename: 'VodOriginalFile'
+}
 
 
 /**
@@ -6764,6 +6989,8 @@ export interface VodUploadSession {
     parts: VodUploadPart[]
     /** When presigned URLs expire (typically 2 hours). */
     expiresAt: Scalars['Time']
+    /** Effective original-retention policy accepted for this upload. Null when an older server cannot report it. */
+    keepOriginal: (Scalars['Boolean'] | null)
     __typename: 'VodUploadSession'
 }
 
@@ -8014,6 +8241,8 @@ export interface ClipGenqlSelection{
     sizeBytes?: boolean | number
     /** Processing status (queued, processing, ready, failed). */
     status?: boolean | number
+    /** Processing failure detail from the artifact catalog. */
+    errorMessage?: boolean | number
     /** When the clip was requested. */
     createdAt?: boolean | number
     /** When the clip was last updated. */
@@ -8120,8 +8349,13 @@ export interface ClusterGenqlSelection{
     maxConcurrentStreams?: boolean | number
     /** Maximum allowed concurrent viewers. */
     maxConcurrentViewers?: boolean | number
-    /** Maximum allowed bandwidth in Mbps. */
+    /**
+     * @deprecated Use capacity; bandwidth is managed per node.
+     * Sum of node egress budgets in decimal Mbit/s.
+     */
     maxBandwidthMbps?: boolean | number
+    /** Aggregate node budgets and usable capacity; null when the control plane is unavailable. */
+    capacity?: ClusterCapacityGenqlSelection
     /** Cluster health status (healthy, degraded, critical). */
     healthStatus?: boolean | number
     /** Whether the cluster is operational. */
@@ -8211,6 +8445,16 @@ export interface ClusterCapabilitiesGenqlSelection{
     /** Access level of the tenant's grant (shared, dedicated, priority). */
     accessLevel?: boolean | number
     media?: ClusterMediaCapabilitiesGenqlSelection
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+export interface ClusterCapacityGenqlSelection{
+    egressBudgetBytesPerSec?: boolean | number
+    ingressBudgetBytesPerSec?: boolean | number
+    egressUsableBytesPerSec?: boolean | number
+    ingressUsableBytesPerSec?: boolean | number
+    defaultBudgetNodes?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -8781,14 +9025,18 @@ ingestMode?: (IngestMode | null),
 /** Pull-source configuration. Required when ingestMode is PULL. */
 pullSource?: (PullSourceInput | null),
 /** Where the source may be ingested. Omitted means ANY. Required for private and multicast pull sources. */
-sourceLocation?: (SourceLocationInput | null)}
+sourceLocation?: (SourceLocationInput | null),
+/** Ladder name allowed by the plan. Empty inherits the account, then plan default. */
+transcodeLadder?: (Scalars['String'] | null)}
 
 
-/** Input for creating an additional stream key. */
+/** Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey. */
 export interface CreateStreamKeyInput {
 /** Human-readable name for the key. */
 name: Scalars['String']}
 
+
+/** Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey. */
 export interface CreateStreamKeyResultGenqlSelection{
     on_StreamKey?:StreamKeyGenqlSelection,
     on_ValidationError?:ValidationErrorGenqlSelection,
@@ -8807,13 +9055,22 @@ export interface CreateStreamResultGenqlSelection{
     __typename?: boolean | number
 }
 
+export interface CreateVodOriginalDownloadResultGenqlSelection{
+    on_VodOriginalDownload?:VodOriginalDownloadGenqlSelection,
+    on_ValidationError?:ValidationErrorGenqlSelection,
+    on_NotFoundError?:NotFoundErrorGenqlSelection,
+    on_AuthError?:AuthErrorGenqlSelection,
+    on_Error?: ErrorGenqlSelection,
+    __typename?: boolean | number
+}
+
 
 /**
  * Input for initiating a multipart VOD upload.
  * Returns presigned S3 URLs for uploading file parts.
  */
 export interface CreateVodUploadInput {
-/** Original filename (for metadata and content-type detection). */
+/** Original filename. Supported containers: mp4, mov, mkv, webm, ts, m2ts, mts, avi, flv, m4v. Playlists are refused. */
 filename: Scalars['String'],
 /** Total file size in bytes (required for part calculation). */
 sizeBytes: Scalars['Float'],
@@ -8822,7 +9079,11 @@ contentType?: (Scalars['String'] | null),
 /** Optional display title for the asset. */
 title?: (Scalars['String'] | null),
 /** Optional description for the asset. */
-description?: (Scalars['String'] | null)}
+description?: (Scalars['String'] | null),
+/** Video ladder for this upload; empty inherits the account, then plan default. */
+transcodeLadder?: (Scalars['String'] | null),
+/** Keep the byte-identical original, billed as storage and counted toward the cap. Omitted inherits the account default. */
+keepOriginal?: (Scalars['Boolean'] | null)}
 
 export interface CreateVodUploadResultGenqlSelection{
     on_VodUploadSession?:VodUploadSessionGenqlSelection,
@@ -9036,6 +9297,24 @@ export interface DVRChapterGenqlSelection{
 }
 
 
+/** A keyset-paginated view of a recording's saved chapters. */
+export interface DVRChapterConnectionGenqlSelection{
+    edges?: DVRChapterEdgeGenqlSelection
+    nodes?: DVRChapterRefGenqlSelection
+    pageInfo?: PageInfoGenqlSelection
+    totalCount?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+export interface DVRChapterEdgeGenqlSelection{
+    cursor?: boolean | number
+    node?: DVRChapterRefGenqlSelection
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+
 /**
  * A reference to a chapter for the chapter list UI. Same shape as
  * DVRChapter without the timeline-zero derivations.
@@ -9070,6 +9349,8 @@ export interface DVRChaptersPageGenqlSelection{
 }
 
 export interface DVRRequestGenqlSelection{
+    /** Saved chapters, paged by their start time and ID. Range bounds are UTC epoch milliseconds. */
+    chapters?: (DVRChapterConnectionGenqlSelection & { __args?: {page?: (ConnectionInput | null), rangeStartMs?: (Scalars['Float'] | null), rangeEndMs?: (Scalars['Float'] | null)} })
     id?: boolean | number
     dvrHash?: boolean | number
     playbackId?: boolean | number
@@ -9139,8 +9420,11 @@ export interface DeleteDVRResultGenqlSelection{
     __typename?: boolean | number
 }
 
+
+/** Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey. */
 export interface DeleteStreamKeyResultGenqlSelection{
     on_DeleteSuccess?:DeleteSuccessGenqlSelection,
+    on_ValidationError?:ValidationErrorGenqlSelection,
     on_NotFoundError?:NotFoundErrorGenqlSelection,
     on_AuthError?:AuthErrorGenqlSelection,
     on_Error?: ErrorGenqlSelection,
@@ -9169,6 +9453,15 @@ export interface DeleteSuccessGenqlSelection{
 
 export interface DeleteVodAssetResultGenqlSelection{
     on_DeleteSuccess?:DeleteSuccessGenqlSelection,
+    on_NotFoundError?:NotFoundErrorGenqlSelection,
+    on_AuthError?:AuthErrorGenqlSelection,
+    on_Error?: ErrorGenqlSelection,
+    __typename?: boolean | number
+}
+
+export interface DeleteVodOriginalResultGenqlSelection{
+    on_DeleteSuccess?:DeleteSuccessGenqlSelection,
+    on_ValidationError?:ValidationErrorGenqlSelection,
     on_NotFoundError?:NotFoundErrorGenqlSelection,
     on_AuthError?:AuthErrorGenqlSelection,
     on_Error?: ErrorGenqlSelection,
@@ -9223,6 +9516,15 @@ export interface DeveloperTokensConnectionGenqlSelection{
     totalCount?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
+}
+
+export interface DisconnectIngestResultGenqlSelection{
+    on_IngestDisconnectSuccess?:IngestDisconnectSuccessGenqlSelection,
+    on_ValidationError?:ValidationErrorGenqlSelection,
+    on_NotFoundError?:NotFoundErrorGenqlSelection,
+    on_AuthError?:AuthErrorGenqlSelection,
+    on_Error?: ErrorGenqlSelection,
+    __typename?: boolean | number
 }
 
 export interface EdgeTelemetrySetupGenqlSelection{
@@ -9395,13 +9697,15 @@ export interface ImportVodAssetInput {
 url: Scalars['String'],
 /**
  * Filename to store the video under. Required when the URL path does not end
- * in a supported video extension (mp4, mov, mkv, webm, ts).
+ * in a supported video extension (mp4, mov, mkv, webm, ts, m2ts, mts).
  */
 filename?: (Scalars['String'] | null),
 /** Optional display title for the asset. */
 title?: (Scalars['String'] | null),
 /** Optional description for the asset. */
-description?: (Scalars['String'] | null)}
+description?: (Scalars['String'] | null),
+/** Video ladder for this import; empty inherits the account, then plan default. */
+transcodeLadder?: (Scalars['String'] | null)}
 
 export interface ImportVodAssetResultGenqlSelection{
     on_VodAsset?:VodAssetGenqlSelection,
@@ -9596,6 +9900,17 @@ export interface InfrastructureNodeGenqlSelection{
      * Counts come from Foghorn's GetNodeHealth.
      */
     routingImpactPreview?: RoutingImpactPreviewGenqlSelection
+    /** Operator-owned directional budgets; null when the control plane is unavailable. */
+    capacity?: NodeCapacityGenqlSelection
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+
+/** An accepted request to stop the currently claimed push publisher. */
+export interface IngestDisconnectSuccessGenqlSelection{
+    streamId?: boolean | number
+    stopRequested?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -10404,6 +10719,10 @@ export interface MediaRetentionPolicyGenqlSelection{
     effectiveDvrRetentionDays?: boolean | number
     /** Effective clip horizon the cascade resolves to today (0 = keep forever). */
     effectiveClipRetentionDays?: boolean | number
+    /** Account default for new uploads. Null inherits the system default (keep). */
+    keepVodOriginals?: boolean | number
+    /** Effective original-retention default for new uploads. */
+    effectiveKeepVodOriginals?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -10581,7 +10900,11 @@ export interface MutationGenqlSelection{
     /** Generate a new stream key, invalidating the old one. */
     refreshStreamKey?: (UpdateStreamResultGenqlSelection & { __args: {
     /** The stream ID. */
-    id: Scalars['ID']} })
+    id: Scalars['ID'],
+    /** Also end the publisher active when rotation is requested. Delivery retries preserve its generation. */
+    endActiveSession?: (Scalars['Boolean'] | null)} })
+    /** Queue a stop for the current push publisher. Pull streams are stopped with pullSource.enabled=false. */
+    disconnectIngest?: (DisconnectIngestResultGenqlSelection & { __args: {streamId: Scalars['ID']} })
     /**
      * Create a clip from a live or recorded stream.
      * Clips are short video segments extracted from a stream.
@@ -10889,13 +11212,19 @@ export interface MutationGenqlSelection{
      * affected sessions; valid viewers continue, invalid ones are denied.
      */
     setPlaybackPolicy?: (SetPlaybackPolicyResultGenqlSelection & { __args: {input: SetPlaybackPolicyInput} })
-    /** Create an additional stream key for a stream. */
+    /**
+     * @deprecated A stream has one key. Use Stream.streamKey (streams:write) and refreshStreamKey.
+     * Deprecated. A stream has one key; this operation refuses creation. Use refreshStreamKey.
+     */
     createStreamKey?: (CreateStreamKeyResultGenqlSelection & { __args: {
     /** The stream ID (Stream.id, Relay global ID). */
     streamId: Scalars['ID'],
     /** Stream key configuration. */
     input: CreateStreamKeyInput} })
-    /** Delete a stream key. */
+    /**
+     * @deprecated A stream has one key. Use Stream.streamKey (streams:write) and refreshStreamKey.
+     * Deprecated. A stream has one key; this operation refuses deletion. Use refreshStreamKey.
+     */
     deleteStreamKey?: (DeleteStreamKeyResultGenqlSelection & { __args: {
     /** The stream ID (Stream.id, Relay global ID). */
     streamId: Scalars['ID'],
@@ -11013,6 +11342,8 @@ export interface MutationGenqlSelection{
      * recorded in Foghorn's audit trail.
      */
     setNodeMode?: (SetNodeModeResultGenqlSelection & { __args: {input: SetNodeModeInput} })
+    /** Replace both directional node budgets. Null restores the default 1 Gbit/s budget. Requires infrastructure:write and ownership or platform operator access. */
+    setNodeCapacity?: (SetNodeCapacityResultGenqlSelection & { __args: {input: SetNodeCapacityInput} })
     /**
      * Open the MistServer admin UI on a specific edge node. Returns a short-TTL
      * session token plus the per-edge POST URL the webapp must submit the token
@@ -11044,6 +11375,14 @@ export interface MutationGenqlSelection{
      * cap is exposed via `mediaRetentionPolicy.bounds.maxRecordingRetentionDays`.
      */
     setMediaRetentionPolicy?: (SetMediaRetentionPolicyResultGenqlSelection & { __args: {input: SetMediaRetentionPolicyInput} })
+    /** Set the account's video ladder. Empty or null inherits the plan default. */
+    setTranscodeLadderPolicy?: (SetTranscodeLadderPolicyResultGenqlSelection & { __args: {input: SetTranscodeLadderPolicyInput} })
+    /** Set the default for retaining original uploads. Null inherits keep=true. Existing assets are unchanged. */
+    setVodOriginalPolicy?: (SetMediaRetentionPolicyResultGenqlSelection & { __args?: {keepVodOriginals?: (Scalars['Boolean'] | null)} })
+    /** Issue a free, owner-authenticated original download URL valid for 15 minutes. Limited to 20 per minute, burst 5. */
+    createVodOriginalDownload?: (CreateVodOriginalDownloadResultGenqlSelection & { __args: {id: Scalars['ID']} })
+    /** Permanently delete only the retained upload; processed playback remains available. */
+    deleteVodOriginal?: (DeleteVodOriginalResultGenqlSelection & { __args: {id: Scalars['ID']} })
     /** Atomically saves the requested verbs. Saved does not mean effective on every cell. */
     applyMediaPlacementChange?: (MediaPlacementChangeResultGenqlSelection & { __args: {input: ApplyMediaPlacementChangeInput} })
     applyClusterMediaConsentChange?: (MediaCapacityConsentChangeResultGenqlSelection & { __args: {input: ApplyMediaCapacityConsentInput} })
@@ -11119,6 +11458,8 @@ export interface NetworkClusterStatusGenqlSelection{
     currentViewers?: boolean | number
     egressMbps?: boolean | number
     egressCapacityMbps?: boolean | number
+    egressUsableMbps?: boolean | number
+    defaultBudgetNodes?: boolean | number
     ingressMbps?: boolean | number
     services?: boolean | number
     __typename?: boolean | number
@@ -11207,6 +11548,21 @@ export interface NodeGenqlSelection{
     on_ViewerHoursHourly?: ViewerHoursHourlyGenqlSelection
     on_ViewerSession?: ViewerSessionGenqlSelection
     on_VodAsset?: VodAssetGenqlSelection
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+export interface NodeCapacityGenqlSelection{
+    /** Effective egress budget in bytes per second. Default: 125000000 (1 Gbit/s). */
+    egressBudgetBytesPerSec?: boolean | number
+    /** Effective ingress budget in bytes per second. Default: 125000000 (1 Gbit/s). */
+    ingressBudgetBytesPerSec?: boolean | number
+    egressSource?: boolean | number
+    ingressSource?: boolean | number
+    revision?: boolean | number
+    updatedAt?: boolean | number
+    /** Last revision applied by Helmsman; null when the node does not report one. */
+    appliedRevision?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -12056,6 +12412,7 @@ export interface PublicEventDataGenqlSelection{
     on_CustomDomainVerified?:CustomDomainVerifiedGenqlSelection,
     on_MultistreamStatusChanged?:MultistreamStatusChangedGenqlSelection,
     on_RecordingChapterFailed?:RecordingChapterFailedGenqlSelection,
+    on_RecordingChapterReady?:RecordingChapterReadyGenqlSelection,
     on_RecordingFailed?:RecordingFailedGenqlSelection,
     on_RecordingReady?:RecordingReadyGenqlSelection,
     on_RecordingStarted?:RecordingStartedGenqlSelection,
@@ -12063,7 +12420,9 @@ export interface PublicEventDataGenqlSelection{
     on_StreamConnected?:StreamConnectedGenqlSelection,
     on_StreamCreated?:StreamCreatedGenqlSelection,
     on_StreamDeleted?:StreamDeletedGenqlSelection,
+    on_StreamEnded?:StreamEndedGenqlSelection,
     on_StreamIdle?:StreamIdleGenqlSelection,
+    on_StreamIngestDisconnected?:StreamIngestDisconnectedGenqlSelection,
     on_StreamKeyRotated?:StreamKeyRotatedGenqlSelection,
     on_StreamLive?:StreamLiveGenqlSelection,
     on_StreamUpdated?:StreamUpdatedGenqlSelection,
@@ -12259,7 +12618,8 @@ export interface QueryGenqlSelection{
     /** The stream key to validate. */
     streamKey: Scalars['String']} })
     /**
-     * List all stream keys for a specific stream.
+     * @deprecated A stream has one key. Use Stream.streamKey (streams:write) and refreshStreamKey.
+     * Deprecated compatibility view of the current primary key for a stream.
      * Stream keys are publishing credentials, so an API token needs the
      * streams:write scope.
      */
@@ -12571,6 +12931,8 @@ export interface QueryGenqlSelection{
     pageSize?: (Scalars['Int'] | null),
     /** Keyset cursor from a previous page's nextPageToken. */
     pageToken?: (Scalars['String'] | null)} })
+    /** A recording from the tenant catalog, readable with streams:read. */
+    dvrRecording?: (DVRRequestGenqlSelection & { __args: {id: Scalars['ID']} })
     /** Fetch a single VOD asset by ID. */
     vodAsset?: (VodAssetGenqlSelection & { __args: {
     /** The VOD asset ID. */
@@ -12649,6 +13011,8 @@ export interface QueryGenqlSelection{
      * panel to size sliders and explain the allowed range.
      */
     mediaRetentionPolicy?: MediaRetentionPolicyGenqlSelection
+    /** Allowed video ladders, account choice, and effective default. */
+    transcodeLadderPolicy?: TranscodeLadderPolicyGenqlSelection
     /** Tenant-bound placement intent and actual enforcement progress. */
     mediaPlacementPolicy?: (MediaPlacementPolicyResultGenqlSelection & { __args: {scope: MediaPlacementScopeInput} })
     mediaPlacementOptions?: (MediaPlacementOptionsResultGenqlSelection & { __args: {scope: MediaPlacementScopeInput, filter?: (MediaPlacementOptionsFilter | null), after?: (Scalars['String'] | null), first?: (Scalars['Int'] | null)} })
@@ -12716,6 +13080,18 @@ export interface RecordingChapterFailedGenqlSelection{
     startMs?: boolean | number
     endMs?: boolean | number
     reason?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+
+/** `recording.chapter_ready` event. Aggregate: `artifacts`. */
+export interface RecordingChapterReadyGenqlSelection{
+    artifact?: EventArtifactGenqlSelection
+    chapterId?: boolean | number
+    startMs?: boolean | number
+    endMs?: boolean | number
+    sizeBytes?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -13109,6 +13485,24 @@ export interface SetMediaRetentionPolicyResultGenqlSelection{
     __typename?: boolean | number
 }
 
+export interface SetNodeCapacityInput {nodeId: Scalars['ID'],
+/** Positive whole bytes per second, or null to restore the default. */
+egressBudgetBytesPerSec?: (Scalars['Float'] | null),
+/** Positive whole bytes per second, or null to restore the default. */
+ingressBudgetBytesPerSec?: (Scalars['Float'] | null),
+/** Revision from the current capacity; a stale revision rejects the write. */
+expectedRevision: Scalars['Int']}
+
+export interface SetNodeCapacityResultGenqlSelection{
+    on_InfrastructureNode?:InfrastructureNodeGenqlSelection,
+    on_ValidationError?:ValidationErrorGenqlSelection,
+    on_NotFoundError?:NotFoundErrorGenqlSelection,
+    on_AuthError?:AuthErrorGenqlSelection,
+    on_Node?: NodeGenqlSelection,
+    on_Error?: ErrorGenqlSelection,
+    __typename?: boolean | number
+}
+
 export interface SetNodeModeInput {
 /** Node identifier — accepts the InfrastructureNode.id (Relay global) or nodeId (raw UUID). */
 nodeId: Scalars['ID'],mode: NodeOperationalMode,
@@ -13164,6 +13558,16 @@ export interface SetStreamRetentionOverridesResultGenqlSelection{
     on_StreamRetentionOverrides?:StreamRetentionOverridesGenqlSelection,
     on_ValidationError?:ValidationErrorGenqlSelection,
     on_NotFoundError?:NotFoundErrorGenqlSelection,
+    on_AuthError?:AuthErrorGenqlSelection,
+    on_Error?: ErrorGenqlSelection,
+    __typename?: boolean | number
+}
+
+export interface SetTranscodeLadderPolicyInput {ladder?: (Scalars['String'] | null)}
+
+export interface SetTranscodeLadderPolicyResultGenqlSelection{
+    on_TranscodeLadderPolicy?:TranscodeLadderPolicyGenqlSelection,
+    on_ValidationError?:ValidationErrorGenqlSelection,
     on_AuthError?:AuthErrorGenqlSelection,
     on_Error?: ErrorGenqlSelection,
     __typename?: boolean | number
@@ -13404,6 +13808,10 @@ export interface StopDVRResultGenqlSelection{
 }
 
 export interface StorageArtifactGenqlSelection{
+    /** How the artifact was produced, such as dvr_chapter. */
+    originType?: boolean | number
+    /** Catalog ID of the parent DVR recording, present on saved chapters. */
+    parentRecordingId?: boolean | number
     key?: boolean | number
     kind?: boolean | number
     id?: boolean | number
@@ -13441,6 +13849,8 @@ export interface StorageArtifactGenqlSelection{
     durationSeconds?: boolean | number
     /** Finalized A/V track summary (per track), captured from the completion-validated processing result and projected onto the catalog. Empty until finalized. */
     tracks?: ArtifactTrackGenqlSelection
+    /** Retained original upload, when this VOD has one. */
+    originalFile?: VodOriginalFileGenqlSelection
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -13628,6 +14038,8 @@ export interface StreamGenqlSelection{
     createdAt?: boolean | number
     /** When this stream was last modified. */
     updatedAt?: boolean | number
+    /** Ingest state under streams:read; null with a field error when the owning cell is unavailable. */
+    ingest?: StreamIngestGenqlSelection
     /**
      * Real-time operational metrics from the data plane.
      * Includes viewer counts, quality metrics, and throughput data.
@@ -13636,6 +14048,10 @@ export interface StreamGenqlSelection{
      * carries a FORBIDDEN error at its path.
      */
     metrics?: StreamMetricsGenqlSelection
+    /** Recordings from this stream's tenant catalog, newest first. */
+    recordings?: (StreamArtifactsConnectionGenqlSelection & { __args?: {page?: (ConnectionInput | null)} })
+    /** Clips from this stream's tenant catalog, newest first. */
+    clips?: (StreamArtifactsConnectionGenqlSelection & { __args?: {page?: (ConnectionInput | null)} })
     /** Configured multistream push targets for this stream. */
     pushTargets?: PushTargetGenqlSelection
     /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
@@ -13674,6 +14090,8 @@ export interface StreamGenqlSelection{
      * stream-bound, so they don't appear here.
      */
     retentionOverrides?: StreamRetentionOverridesGenqlSelection
+    /** Saved video ladder name; empty inherits the account, then plan default. */
+    transcodeLadder?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -13764,12 +14182,31 @@ export interface StreamAnalyticsSummaryEdgeGenqlSelection{
     __scalar?: boolean | number
 }
 
+export interface StreamArtifactEdgeGenqlSelection{
+    cursor?: boolean | number
+    node?: StorageArtifactGenqlSelection
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+
+/** A keyset-paginated collection of one stream's saved recordings or clips. */
+export interface StreamArtifactsConnectionGenqlSelection{
+    edges?: StreamArtifactEdgeGenqlSelection
+    nodes?: StorageArtifactGenqlSelection
+    pageInfo?: PageInfoGenqlSelection
+    totalCount?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
 
 /** `stream.connected` event. Aggregate: `streams`. */
 export interface StreamConnectedGenqlSelection{
     streamId?: boolean | number
     protocol?: boolean | number
     playbackId?: boolean | number
+    sessionId?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -13823,6 +14260,16 @@ export interface StreamDeletedGenqlSelection{
 export interface StreamEdgeGenqlSelection{
     cursor?: boolean | number
     node?: StreamGenqlSelection
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+
+/** `stream.ended` event. Aggregate: `streams`. */
+export interface StreamEndedGenqlSelection{
+    streamId?: boolean | number
+    playbackId?: boolean | number
+    sessionId?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -13991,10 +14438,37 @@ export interface StreamHealthSummaryGenqlSelection{
 export interface StreamIdleGenqlSelection{
     streamId?: boolean | number
     playbackId?: boolean | number
+    sessionId?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
 
+
+/** Current ingest-session state, readable with streams:read. */
+export interface StreamIngestGenqlSelection{
+    state?: boolean | number
+    isLive?: boolean | number
+    sessionId?: boolean | number
+    connectedAt?: boolean | number
+    liveSince?: boolean | number
+    endedAt?: boolean | number
+    resumableUntil?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+
+/** `stream.ingest_disconnected` event. Aggregate: `streams`. */
+export interface StreamIngestDisconnectedGenqlSelection{
+    streamId?: boolean | number
+    sessionId?: boolean | number
+    reason?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+
+/** Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey. */
 export interface StreamKeyGenqlSelection{
     id?: boolean | number
     streamId?: boolean | number
@@ -14009,6 +14483,8 @@ export interface StreamKeyGenqlSelection{
     __scalar?: boolean | number
 }
 
+
+/** Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey. */
 export interface StreamKeyEdgeGenqlSelection{
     cursor?: boolean | number
     node?: StreamKeyGenqlSelection
@@ -14024,6 +14500,8 @@ export interface StreamKeyRotatedGenqlSelection{
     __scalar?: boolean | number
 }
 
+
+/** Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey. */
 export interface StreamKeysConnectionGenqlSelection{
     edges?: StreamKeyEdgeGenqlSelection
     nodes?: StreamKeyGenqlSelection
@@ -14038,6 +14516,7 @@ export interface StreamKeysConnectionGenqlSelection{
 export interface StreamLiveGenqlSelection{
     streamId?: boolean | number
     playbackId?: boolean | number
+    sessionId?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -14681,6 +15160,26 @@ export interface TrackListUpdateGenqlSelection{
     __scalar?: boolean | number
 }
 
+
+/** A named video rendition ladder, with rungs skipped for smaller sources. */
+export interface TranscodeLadderGenqlSelection{
+    name?: boolean | number
+    displayName?: boolean | number
+    description?: boolean | number
+    renditionNames?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+export interface TranscodeLadderPolicyGenqlSelection{
+    ladders?: TranscodeLadderGenqlSelection
+    planDefault?: boolean | number
+    tenantLadder?: boolean | number
+    effectiveLadder?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
 export interface UnlinkWalletResultGenqlSelection{
     on_DeleteSuccess?:DeleteSuccessGenqlSelection,
     on_NotFoundError?:NotFoundErrorGenqlSelection,
@@ -14788,7 +15287,9 @@ dvrChapterMode?: (DVRChapterMode | null),
  */
 dvrChapterIntervalSeconds?: (Scalars['Int'] | null),
 /** Per-stream Skipper monitoring override. INHERIT follows the tenant tier. */
-monitoring?: (MonitoringToggle | null)}
+monitoring?: (MonitoringToggle | null),
+/** Ladder name; empty inherits the account, then plan. Applies from the next broadcast. */
+transcodeLadder?: (Scalars['String'] | null)}
 
 export interface UpdateStreamResultGenqlSelection{
     on_Stream?:StreamGenqlSelection,
@@ -15098,7 +15599,9 @@ export interface ViewerMetricsGenqlSelection{
     sessionId?: boolean | number
     connectionTime?: boolean | number
     position?: boolean | number
+    /** Bandwidth in bytes per second sent to the viewer; legacy field name. */
     bandwidthInBps?: boolean | number
+    /** Bandwidth in bytes per second received from the viewer; legacy field name. */
     bandwidthOutBps?: boolean | number
     bytesDownloaded?: boolean | number
     bytesUploaded?: boolean | number
@@ -15238,6 +15741,27 @@ export interface VodAssetGenqlSelection{
      * cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month.
      */
     storageCost?: StorageCostProjectionGenqlSelection
+    /** Retained byte-identical upload. Null for imports, failed uploads, and assets without a kept original. */
+    originalFile?: VodOriginalFileGenqlSelection
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+
+/** Short-lived download of the byte-identical original upload, without playback metering. */
+export interface VodOriginalDownloadGenqlSelection{
+    url?: boolean | number
+    expiresAt?: boolean | number
+    sizeBytes?: boolean | number
+    filename?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+
+/** Metadata of the byte-identical retained upload. */
+export interface VodOriginalFileGenqlSelection{
+    sizeBytes?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -15345,6 +15869,8 @@ export interface VodUploadSessionGenqlSelection{
     parts?: VodUploadPartGenqlSelection
     /** When presigned URLs expire (typically 2 hours). */
     expiresAt?: boolean | number
+    /** Effective original-retention policy accepted for this upload. Null when an older server cannot report it. */
+    keepOriginal?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -16194,6 +16720,14 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
+    const ClusterCapacity_possibleTypes: string[] = ['ClusterCapacity']
+    export const isClusterCapacity = (obj?: { __typename?: any } | null): obj is ClusterCapacity => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isClusterCapacity"')
+      return ClusterCapacity_possibleTypes.includes(obj.__typename)
+    }
+
+
+
     const ClusterEdge_possibleTypes: string[] = ['ClusterEdge']
     export const isClusterEdge = (obj?: { __typename?: any } | null): obj is ClusterEdge => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isClusterEdge"')
@@ -16490,6 +17024,14 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
+    const CreateVodOriginalDownloadResult_possibleTypes: string[] = ['VodOriginalDownload','ValidationError','NotFoundError','AuthError']
+    export const isCreateVodOriginalDownloadResult = (obj?: { __typename?: any } | null): obj is CreateVodOriginalDownloadResult => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isCreateVodOriginalDownloadResult"')
+      return CreateVodOriginalDownloadResult_possibleTypes.includes(obj.__typename)
+    }
+
+
+
     const CreateVodUploadResult_possibleTypes: string[] = ['VodUploadSession','ValidationError','AuthError']
     export const isCreateVodUploadResult = (obj?: { __typename?: any } | null): obj is CreateVodUploadResult => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isCreateVodUploadResult"')
@@ -16562,6 +17104,22 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
+    const DVRChapterConnection_possibleTypes: string[] = ['DVRChapterConnection']
+    export const isDVRChapterConnection = (obj?: { __typename?: any } | null): obj is DVRChapterConnection => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isDVRChapterConnection"')
+      return DVRChapterConnection_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const DVRChapterEdge_possibleTypes: string[] = ['DVRChapterEdge']
+    export const isDVRChapterEdge = (obj?: { __typename?: any } | null): obj is DVRChapterEdge => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isDVRChapterEdge"')
+      return DVRChapterEdge_possibleTypes.includes(obj.__typename)
+    }
+
+
+
     const DVRChapterRef_possibleTypes: string[] = ['DVRChapterRef']
     export const isDVRChapterRef = (obj?: { __typename?: any } | null): obj is DVRChapterRef => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isDVRChapterRef"')
@@ -16602,7 +17160,7 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
-    const DeleteStreamKeyResult_possibleTypes: string[] = ['DeleteSuccess','NotFoundError','AuthError']
+    const DeleteStreamKeyResult_possibleTypes: string[] = ['DeleteSuccess','ValidationError','NotFoundError','AuthError']
     export const isDeleteStreamKeyResult = (obj?: { __typename?: any } | null): obj is DeleteStreamKeyResult => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isDeleteStreamKeyResult"')
       return DeleteStreamKeyResult_possibleTypes.includes(obj.__typename)
@@ -16630,6 +17188,14 @@ export interface X402PaymentResultGenqlSelection{
     export const isDeleteVodAssetResult = (obj?: { __typename?: any } | null): obj is DeleteVodAssetResult => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isDeleteVodAssetResult"')
       return DeleteVodAssetResult_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const DeleteVodOriginalResult_possibleTypes: string[] = ['DeleteSuccess','ValidationError','NotFoundError','AuthError']
+    export const isDeleteVodOriginalResult = (obj?: { __typename?: any } | null): obj is DeleteVodOriginalResult => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isDeleteVodOriginalResult"')
+      return DeleteVodOriginalResult_possibleTypes.includes(obj.__typename)
     }
 
 
@@ -16662,6 +17228,14 @@ export interface X402PaymentResultGenqlSelection{
     export const isDeveloperTokensConnection = (obj?: { __typename?: any } | null): obj is DeveloperTokensConnection => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isDeveloperTokensConnection"')
       return DeveloperTokensConnection_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const DisconnectIngestResult_possibleTypes: string[] = ['IngestDisconnectSuccess','ValidationError','NotFoundError','AuthError']
+    export const isDisconnectIngestResult = (obj?: { __typename?: any } | null): obj is DisconnectIngestResult => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isDisconnectIngestResult"')
+      return DisconnectIngestResult_possibleTypes.includes(obj.__typename)
     }
 
 
@@ -16854,6 +17428,14 @@ export interface X402PaymentResultGenqlSelection{
     export const isInfrastructureNode = (obj?: { __typename?: any } | null): obj is InfrastructureNode => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isInfrastructureNode"')
       return InfrastructureNode_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const IngestDisconnectSuccess_possibleTypes: string[] = ['IngestDisconnectSuccess']
+    export const isIngestDisconnectSuccess = (obj?: { __typename?: any } | null): obj is IngestDisconnectSuccess => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isIngestDisconnectSuccess"')
+      return IngestDisconnectSuccess_possibleTypes.includes(obj.__typename)
     }
 
 
@@ -17482,6 +18064,14 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
+    const NodeCapacity_possibleTypes: string[] = ['NodeCapacity']
+    export const isNodeCapacity = (obj?: { __typename?: any } | null): obj is NodeCapacity => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isNodeCapacity"')
+      return NodeCapacity_possibleTypes.includes(obj.__typename)
+    }
+
+
+
     const NodeEdge_possibleTypes: string[] = ['NodeEdge']
     export const isNodeEdge = (obj?: { __typename?: any } | null): obj is NodeEdge => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isNodeEdge"')
@@ -17842,7 +18432,7 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
-    const PublicEventData_possibleTypes: string[] = ['AccountSuspended','ApiTokenCreated','ApiTokenRevoked','BillingDetailsUpdated','InvoiceCreated','InvoicePaid','PaymentFailed','TopupCredited','ClipFailed','ClipReady','ClipRequested','CustomDomainFailed','CustomDomainVerified','MultistreamStatusChanged','RecordingChapterFailed','RecordingFailed','RecordingReady','RecordingStarted','RecordingStopped','StreamConnected','StreamCreated','StreamDeleted','StreamIdle','StreamKeyRotated','StreamLive','StreamUpdated','UploadAborted','UploadCompleted','UploadCreated','UploadFailed','UploadReady']
+    const PublicEventData_possibleTypes: string[] = ['AccountSuspended','ApiTokenCreated','ApiTokenRevoked','BillingDetailsUpdated','InvoiceCreated','InvoicePaid','PaymentFailed','TopupCredited','ClipFailed','ClipReady','ClipRequested','CustomDomainFailed','CustomDomainVerified','MultistreamStatusChanged','RecordingChapterFailed','RecordingChapterReady','RecordingFailed','RecordingReady','RecordingStarted','RecordingStopped','StreamConnected','StreamCreated','StreamDeleted','StreamEnded','StreamIdle','StreamIngestDisconnected','StreamKeyRotated','StreamLive','StreamUpdated','UploadAborted','UploadCompleted','UploadCreated','UploadFailed','UploadReady']
     export const isPublicEventData = (obj?: { __typename?: any } | null): obj is PublicEventData => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isPublicEventData"')
       return PublicEventData_possibleTypes.includes(obj.__typename)
@@ -17950,6 +18540,14 @@ export interface X402PaymentResultGenqlSelection{
     export const isRecordingChapterFailed = (obj?: { __typename?: any } | null): obj is RecordingChapterFailed => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isRecordingChapterFailed"')
       return RecordingChapterFailed_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const RecordingChapterReady_possibleTypes: string[] = ['RecordingChapterReady']
+    export const isRecordingChapterReady = (obj?: { __typename?: any } | null): obj is RecordingChapterReady => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isRecordingChapterReady"')
+      return RecordingChapterReady_possibleTypes.includes(obj.__typename)
     }
 
 
@@ -18226,6 +18824,14 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
+    const SetNodeCapacityResult_possibleTypes: string[] = ['InfrastructureNode','ValidationError','NotFoundError','AuthError']
+    export const isSetNodeCapacityResult = (obj?: { __typename?: any } | null): obj is SetNodeCapacityResult => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isSetNodeCapacityResult"')
+      return SetNodeCapacityResult_possibleTypes.includes(obj.__typename)
+    }
+
+
+
     const SetNodeModeResult_possibleTypes: string[] = ['InfrastructureNode','ValidationError','NotFoundError','AuthError']
     export const isSetNodeModeResult = (obj?: { __typename?: any } | null): obj is SetNodeModeResult => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isSetNodeModeResult"')
@@ -18254,6 +18860,14 @@ export interface X402PaymentResultGenqlSelection{
     export const isSetStreamRetentionOverridesResult = (obj?: { __typename?: any } | null): obj is SetStreamRetentionOverridesResult => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isSetStreamRetentionOverridesResult"')
       return SetStreamRetentionOverridesResult_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const SetTranscodeLadderPolicyResult_possibleTypes: string[] = ['TranscodeLadderPolicy','ValidationError','AuthError']
+    export const isSetTranscodeLadderPolicyResult = (obj?: { __typename?: any } | null): obj is SetTranscodeLadderPolicyResult => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isSetTranscodeLadderPolicyResult"')
+      return SetTranscodeLadderPolicyResult_possibleTypes.includes(obj.__typename)
     }
 
 
@@ -18594,6 +19208,22 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
+    const StreamArtifactEdge_possibleTypes: string[] = ['StreamArtifactEdge']
+    export const isStreamArtifactEdge = (obj?: { __typename?: any } | null): obj is StreamArtifactEdge => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isStreamArtifactEdge"')
+      return StreamArtifactEdge_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const StreamArtifactsConnection_possibleTypes: string[] = ['StreamArtifactsConnection']
+    export const isStreamArtifactsConnection = (obj?: { __typename?: any } | null): obj is StreamArtifactsConnection => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isStreamArtifactsConnection"')
+      return StreamArtifactsConnection_possibleTypes.includes(obj.__typename)
+    }
+
+
+
     const StreamConnected_possibleTypes: string[] = ['StreamConnected']
     export const isStreamConnected = (obj?: { __typename?: any } | null): obj is StreamConnected => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamConnected"')
@@ -18646,6 +19276,14 @@ export interface X402PaymentResultGenqlSelection{
     export const isStreamEdge = (obj?: { __typename?: any } | null): obj is StreamEdge => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamEdge"')
       return StreamEdge_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const StreamEnded_possibleTypes: string[] = ['StreamEnded']
+    export const isStreamEnded = (obj?: { __typename?: any } | null): obj is StreamEnded => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isStreamEnded"')
+      return StreamEnded_possibleTypes.includes(obj.__typename)
     }
 
 
@@ -18734,6 +19372,22 @@ export interface X402PaymentResultGenqlSelection{
     export const isStreamIdle = (obj?: { __typename?: any } | null): obj is StreamIdle => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamIdle"')
       return StreamIdle_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const StreamIngest_possibleTypes: string[] = ['StreamIngest']
+    export const isStreamIngest = (obj?: { __typename?: any } | null): obj is StreamIngest => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isStreamIngest"')
+      return StreamIngest_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const StreamIngestDisconnected_possibleTypes: string[] = ['StreamIngestDisconnected']
+    export const isStreamIngestDisconnected = (obj?: { __typename?: any } | null): obj is StreamIngestDisconnected => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isStreamIngestDisconnected"')
+      return StreamIngestDisconnected_possibleTypes.includes(obj.__typename)
     }
 
 
@@ -19058,6 +19712,22 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
+    const TranscodeLadder_possibleTypes: string[] = ['TranscodeLadder']
+    export const isTranscodeLadder = (obj?: { __typename?: any } | null): obj is TranscodeLadder => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isTranscodeLadder"')
+      return TranscodeLadder_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const TranscodeLadderPolicy_possibleTypes: string[] = ['TranscodeLadderPolicy']
+    export const isTranscodeLadderPolicy = (obj?: { __typename?: any } | null): obj is TranscodeLadderPolicy => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isTranscodeLadderPolicy"')
+      return TranscodeLadderPolicy_possibleTypes.includes(obj.__typename)
+    }
+
+
+
     const UnlinkWalletResult_possibleTypes: string[] = ['DeleteSuccess','NotFoundError','AuthError']
     export const isUnlinkWalletResult = (obj?: { __typename?: any } | null): obj is UnlinkWalletResult => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isUnlinkWalletResult"')
@@ -19354,6 +20024,22 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
+    const VodOriginalDownload_possibleTypes: string[] = ['VodOriginalDownload']
+    export const isVodOriginalDownload = (obj?: { __typename?: any } | null): obj is VodOriginalDownload => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isVodOriginalDownload"')
+      return VodOriginalDownload_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const VodOriginalFile_possibleTypes: string[] = ['VodOriginalFile']
+    export const isVodOriginalFile = (obj?: { __typename?: any } | null): obj is VodOriginalFile => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isVodOriginalFile"')
+      return VodOriginalFile_possibleTypes.includes(obj.__typename)
+    }
+
+
+
     const VodRetention_possibleTypes: string[] = ['VodRetention']
     export const isVodRetention = (obj?: { __typename?: any } | null): obj is VodRetention => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isVodRetention"')
@@ -19574,6 +20260,11 @@ export const enumBufferState = {
    DRY: 'DRY' as const,
    RECOVER: 'RECOVER' as const,
    UNKNOWN: 'UNKNOWN' as const
+}
+
+export const enumCapacityBudgetSource = {
+   DEFAULT: 'DEFAULT' as const,
+   OPERATOR: 'OPERATOR' as const
 }
 
 export const enumCardPaymentProvider = {
@@ -19848,6 +20539,7 @@ export const enumMediaRetentionTarget = {
 }
 
 export const enumMediaViewerProtocol = {
+   WEBVTT: 'WEBVTT' as const,
    WEBRTC: 'WEBRTC' as const,
    WHEP: 'WHEP' as const,
    HLS: 'HLS' as const,
@@ -20005,6 +20697,12 @@ export const enumStreamEventType = {
    TRACK_LIST_UPDATE: 'TRACK_LIST_UPDATE' as const,
    PLAY_REWRITE: 'PLAY_REWRITE' as const,
    STREAM_SOURCE: 'STREAM_SOURCE' as const
+}
+
+export const enumStreamIngestState = {
+   IDLE: 'IDLE' as const,
+   CONNECTED: 'CONNECTED' as const,
+   LIVE: 'LIVE' as const
 }
 
 export const enumStreamStatus = {

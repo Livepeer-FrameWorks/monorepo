@@ -59,13 +59,18 @@ stream(
 | --- | --- | --- | --- | --- |
 | GetRecentPullSourceEvents | `stream.recentPullSourceEvents` | `GetRecentPullSourceEventsDocument` | `GetRecentPullSourceEvents` | `get_recent_pull_source_events` |
 | GetStream | `stream` | `GetStreamDocument` | `GetStream` | `get_stream` |
+| GetStreamIngest | `stream.ingest` | `GetStreamIngestDocument` | `GetStreamIngest` | `get_stream_ingest` |
 | GetStreamKey | `stream.streamKey` | `GetStreamKeyDocument` | `GetStreamKey` | `get_stream_key` |
 | GetStreamMetrics | `stream.metrics` | `GetStreamMetricsDocument` | `GetStreamMetrics` | `get_stream_metrics` |
 | ListPushTargets | `stream.pushTargets` | `ListPushTargetsDocument` | `ListPushTargets` | `list_push_targets` |
+| ListStreamClips | `stream.clips` | `ListStreamClipsDocument` | `ListStreamClips` | `list_stream_clips` |
+| ListStreamRecordings | `stream.recordings` | `ListStreamRecordingsDocument` | `ListStreamRecordings` | `list_stream_recordings` |
 
 ### Query.streamKeysConnection
 
-List all stream keys for a specific stream. Stream keys are publishing credentials, so an API token needs the streams:write scope.
+**Deprecated:** A stream has one key. Use Stream.streamKey (streams:write) and refreshStreamKey.
+
+Deprecated compatibility view of the current primary key for a stream. Stream keys are publishing credentials, so an API token needs the streams:write scope.
 
 ```graphql
 streamKeysConnection(
@@ -81,11 +86,7 @@ streamKeysConnection(
 - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput)) — Pagination options.
 - `streamId`: `ID!` — The stream ID to list keys for (Stream.id, Relay global ID).
 
-**SDK**
-
-| Operation | TypeScript | Go | Python |
-| --- | --- | --- | --- |
-| ListStreamKeys | `ListStreamKeysDocument` | `ListStreamKeys` | `list_stream_keys` |
+**SDK:** none; deprecated fields get no generated operation. Use the replacement the deprecation names, or send a GraphQL document through the SDK's raw client.
 
 ### Query.streamingConfig
 
@@ -125,6 +126,7 @@ streamsConnection(
 
 | Operation | Selects | TypeScript | Go | Python |
 | --- | --- | --- | --- | --- |
+| ListStreamIngest | `streamsConnection.nodes.ingest` | `ListStreamIngestDocument` | `ListStreamIngest` | `list_stream_ingest` |
 | ListStreamMetrics | `streamsConnection.nodes.metrics` | `ListStreamMetricsDocument` | `ListStreamMetrics` | `list_stream_metrics` |
 | ListStreams | `streamsConnection` | `ListStreamsDocument` | `ListStreams` | `list_streams` |
 
@@ -200,7 +202,9 @@ createStream(
 
 ### Mutation.createStreamKey
 
-Create an additional stream key for a stream.
+**Deprecated:** A stream has one key. Use Stream.streamKey (streams:write) and refreshStreamKey.
+
+Deprecated. A stream has one key; this operation refuses creation. Use refreshStreamKey.
 
 ```graphql
 createStreamKey(
@@ -216,11 +220,7 @@ createStreamKey(
 - `streamId`: `ID!` — The stream ID (Stream.id, Relay global ID).
 - `input`: `CreateStreamKeyInput!` ([CreateStreamKeyInput](/builders/api-schema/streams/#createstreamkeyinput)) — Stream key configuration.
 
-**SDK**
-
-| Operation | TypeScript | Go | Python |
-| --- | --- | --- | --- |
-| CreateStreamKey | `CreateStreamKeyDocument` | `CreateStreamKey` | `create_stream_key` |
+**SDK:** none; deprecated fields get no generated operation. Use the replacement the deprecation names, or send a GraphQL document through the SDK's raw client.
 
 ### Mutation.deletePushTarget
 
@@ -268,7 +268,9 @@ deleteStream(
 
 ### Mutation.deleteStreamKey
 
-Delete a stream key.
+**Deprecated:** A stream has one key. Use Stream.streamKey (streams:write) and refreshStreamKey.
+
+Deprecated. A stream has one key; this operation refuses deletion. Use refreshStreamKey.
 
 ```graphql
 deleteStreamKey(
@@ -284,11 +286,29 @@ deleteStreamKey(
 - `streamId`: `ID!` — The stream ID (Stream.id, Relay global ID).
 - `keyId`: `ID!` — The key ID to delete.
 
+**SDK:** none; deprecated fields get no generated operation. Use the replacement the deprecation names, or send a GraphQL document through the SDK's raw client.
+
+### Mutation.disconnectIngest
+
+Queue a stop for the current push publisher. Pull streams are stopped with pullSource.enabled=false.
+
+```graphql
+disconnectIngest(
+  streamId: ID!
+): DisconnectIngestResult!
+```
+
+**Returns:** `DisconnectIngestResult!` ([DisconnectIngestResult](/builders/api-schema/streams/#disconnectingestresult))
+
+**Arguments**
+
+- `streamId`: `ID!`
+
 **SDK**
 
 | Operation | TypeScript | Go | Python |
 | --- | --- | --- | --- |
-| DeleteStreamKey | `DeleteStreamKeyDocument` | `DeleteStreamKey` | `delete_stream_key` |
+| DisconnectIngest | `DisconnectIngestDocument` | `DisconnectIngest` | `disconnect_ingest` |
 
 ### Mutation.refreshStreamKey
 
@@ -297,6 +317,7 @@ Generate a new stream key, invalidating the old one.
 ```graphql
 refreshStreamKey(
   id: ID!
+  endActiveSession: Boolean = false
 ): UpdateStreamResult!
 ```
 
@@ -305,6 +326,7 @@ refreshStreamKey(
 **Arguments**
 
 - `id`: `ID!` — The stream ID.
+- `endActiveSession`: `Boolean` (default `false`) — Also end the publisher active when rotation is requested. Delivery retries preserve its generation.
 
 **SDK**
 
@@ -384,18 +406,21 @@ Input for creating a new live stream.
 - **ingestMode**: `IngestMode` ([IngestMode](/builders/api-schema/shared/#ingestmode)) — Source ingest model. Defaults to PUSH.
 - **pullSource**: `PullSourceInput` ([PullSourceInput](/builders/api-schema/streams/#pullsourceinput)) — Pull-source configuration. Required when ingestMode is PULL.
 - **sourceLocation**: `SourceLocationInput` ([SourceLocationInput](/builders/api-schema/streams/#sourcelocationinput)) — Where the source may be ingested. Omitted means ANY. Required for private and multicast pull sources.
+- **transcodeLadder**: `String` — Ladder name allowed by the plan. Empty inherits the account, then plan default.
 
 ### CreateStreamKeyInput
 
 **input_object**
 
-Input for creating an additional stream key.
+Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey.
 
 - **name**: `String!` — Human-readable name for the key.
 
 ### CreateStreamKeyResult
 
 **union**
+
+Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey.
 
 - Member: [StreamKey](/builders/api-schema/streams/#streamkey)
 - Member: [ValidationError](/builders/api-schema/shared/#validationerror)
@@ -414,7 +439,10 @@ Input for creating an additional stream key.
 
 **union**
 
+Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey.
+
 - Member: [DeleteSuccess](/builders/api-schema/shared/#deletesuccess)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
 - Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
 - Member: [AuthError](/builders/api-schema/shared/#autherror)
 
@@ -425,6 +453,24 @@ Input for creating an additional stream key.
 - Member: [DeleteSuccess](/builders/api-schema/shared/#deletesuccess)
 - Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
 - Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### DisconnectIngestResult
+
+**union**
+
+- Member: [IngestDisconnectSuccess](/builders/api-schema/streams/#ingestdisconnectsuccess)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### IngestDisconnectSuccess
+
+**object**
+
+An accepted request to stop the currently claimed push publisher.
+
+- **streamId**: `ID!`
+- **stopRequested**: `Boolean!`
 
 ### IngestEndpoint
 
@@ -513,6 +559,8 @@ Replaces the stream&#39;s own ingest restriction. Private and multicast pull sou
 
 **object**
 
+Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey.
+
 - **id**: `ID!`
 - **streamId**: `ID!`
 - **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
@@ -526,12 +574,16 @@ Replaces the stream&#39;s own ingest restriction. Private and multicast pull sou
 
 **object**
 
+Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey.
+
 - **cursor**: `String!`
 - **node**: `StreamKey!` ([StreamKey](/builders/api-schema/streams/#streamkey))
 
 ### StreamKeysConnection
 
 **object**
+
+Deprecated compatibility type. Use Stream.streamKey and refreshStreamKey.
 
 - **edges**: `[StreamKeyEdge!]!` ([StreamKeyEdge](/builders/api-schema/streams/#streamkeyedge))
 - **nodes**: `[StreamKey!]!` ([StreamKey](/builders/api-schema/streams/#streamkey))
@@ -603,6 +655,7 @@ Input for updating an existing stream. All fields are optional - only provided f
 - **dvrChapterMode**: `DVRChapterMode` ([DVRChapterMode](/builders/api-schema/shared/#dvrchaptermode)) — How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast, not to a recording in progress. NONE keeps live rewind only: viewers can rewind while live, but nothing is kept after the broadcast.
 - **dvrChapterIntervalSeconds**: `Int` — Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL. Minimum 3600 (1 hour). Send 0 with any other mode to clear a stored interval.
 - **monitoring**: `MonitoringToggle` ([MonitoringToggle](/builders/api-schema/shared/#monitoringtoggle)) — Per-stream Skipper monitoring override. INHERIT follows the tenant tier.
+- **transcodeLadder**: `String` — Ladder name; empty inherits the account, then plan. Applies from the next broadcast.
 
 ### UpdateStreamResult
 

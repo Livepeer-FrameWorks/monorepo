@@ -17,6 +17,9 @@ import (
 // DoSkipperChat opens a streaming gRPC Chat call to Skipper and relays
 // events to a channel suitable for a GraphQL subscription.
 func (r *Resolver) DoSkipperChat(ctx context.Context, input model.SkipperChatInput) (<-chan model.SkipperChatEvent, error) {
+	if err := middleware.RequirePermission(ctx, "consultant:use"); err != nil {
+		return nil, err
+	}
 	if r.Clients.Skipper == nil {
 		return nil, fmt.Errorf("skipper service unavailable")
 	}
@@ -142,6 +145,9 @@ func convertSkipperEvent(evt *skipperpb.SkipperChatEvent) model.SkipperChatEvent
 
 // DoSkipperConversations lists Skipper conversations for the current user.
 func (r *Resolver) DoSkipperConversations(ctx context.Context, limit *int, offset *int) ([]*model.SkipperConversationSummary, error) {
+	if err := middleware.RequirePermission(ctx, "consultant:use"); err != nil {
+		return nil, err
+	}
 	if r.Clients.Skipper == nil {
 		return nil, fmt.Errorf("skipper service unavailable")
 	}
@@ -176,6 +182,9 @@ func (r *Resolver) DoSkipperConversations(ctx context.Context, limit *int, offse
 
 // DoSkipperConversation gets a single Skipper conversation with messages.
 func (r *Resolver) DoSkipperConversation(ctx context.Context, id string) (*model.SkipperConversation, error) {
+	if err := middleware.RequirePermission(ctx, "consultant:use"); err != nil {
+		return nil, err
+	}
 	if r.Clients.Skipper == nil {
 		return nil, fmt.Errorf("skipper service unavailable")
 	}
@@ -340,6 +349,9 @@ func isSkipperSensitiveKey(key string) bool {
 
 // DoDeleteSkipperConversation deletes a Skipper conversation.
 func (r *Resolver) DoDeleteSkipperConversation(ctx context.Context, id string) (bool, error) {
+	if err := middleware.RequirePermission(ctx, "consultant:use"); err != nil {
+		return false, err
+	}
 	if r.Clients.Skipper == nil {
 		return false, fmt.Errorf("skipper service unavailable")
 	}
@@ -355,6 +367,9 @@ func (r *Resolver) DoDeleteSkipperConversation(ctx context.Context, id string) (
 
 // DoUpdateSkipperConversation updates the title of a Skipper conversation.
 func (r *Resolver) DoUpdateSkipperConversation(ctx context.Context, id, title string) (*model.SkipperConversationSummary, error) {
+	if err := middleware.RequirePermission(ctx, "consultant:use"); err != nil {
+		return nil, err
+	}
 	if r.Clients.Skipper == nil {
 		return nil, fmt.Errorf("skipper service unavailable")
 	}
@@ -376,6 +391,9 @@ func (r *Resolver) DoUpdateSkipperConversation(ctx context.Context, id, title st
 
 // DoSkipperReports lists investigation reports for the current tenant.
 func (r *Resolver) DoSkipperReports(ctx context.Context, limit, offset *int) (*model.SkipperReportsConnection, error) {
+	if err := middleware.RequirePermission(ctx, "consultant:use"); err != nil {
+		return nil, err
+	}
 	if r.Clients.Skipper == nil {
 		return nil, fmt.Errorf("skipper service unavailable")
 	}
@@ -407,6 +425,9 @@ func (r *Resolver) DoSkipperReports(ctx context.Context, limit, offset *int) (*m
 // Lookups are tenant-scoped by the Skipper service, so any failure (including a
 // missing or cross-tenant id) surfaces as an error to the caller.
 func (r *Resolver) DoSkipperReport(ctx context.Context, id string) (*skipperpb.SkipperReport, error) {
+	if err := middleware.RequirePermission(ctx, "consultant:use"); err != nil {
+		return nil, err
+	}
 	if r.Clients.Skipper == nil {
 		return nil, fmt.Errorf("skipper service unavailable")
 	}
@@ -423,6 +444,9 @@ func (r *Resolver) DoSkipperReport(ctx context.Context, id string) (*skipperpb.S
 
 // DoSkipperUnreadReportCount returns the unread investigation report count.
 func (r *Resolver) DoSkipperUnreadReportCount(ctx context.Context) (int, error) {
+	if err := middleware.RequirePermission(ctx, "consultant:use"); err != nil {
+		return 0, err
+	}
 	if r.Clients.Skipper == nil {
 		return 0, fmt.Errorf("skipper service unavailable")
 	}
@@ -439,6 +463,9 @@ func (r *Resolver) DoSkipperUnreadReportCount(ctx context.Context) (int, error) 
 
 // DoMarkSkipperReportsRead marks investigation reports as read.
 func (r *Resolver) DoMarkSkipperReportsRead(ctx context.Context, ids []string) (int, error) {
+	if err := middleware.RequirePermission(ctx, "consultant:use"); err != nil {
+		return 0, err
+	}
 	if r.Clients.Skipper == nil {
 		return 0, fmt.Errorf("skipper service unavailable")
 	}

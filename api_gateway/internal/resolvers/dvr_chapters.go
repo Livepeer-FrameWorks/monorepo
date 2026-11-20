@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"frameworks/api_gateway/graph/model"
+	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 )
@@ -108,7 +109,7 @@ func (r *Resolver) DoListDVRChapters(
 	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo: list DVR chapters")
-		return &model.DVRChaptersPage{Chapters: nil}, nil
+		return &model.DVRChaptersPage{Chapters: demo.GenerateDVRChapterConnection().Nodes}, nil
 	}
 	req := &foghorncontrolpb.ListDVRChaptersRequest{
 		DvrArtifactId:   dvrHash,
@@ -125,41 +126,7 @@ func (r *Resolver) DoListDVRChapters(
 	}
 	chapters := make([]*model.DVRChapterRef, 0, len(resp.GetChapters()))
 	for _, c := range resp.GetChapters() {
-		var iv *int
-		if c.GetIntervalSeconds() > 0 {
-			v := int(c.GetIntervalSeconds())
-			iv = &v
-		}
-		// A finalized chapter reports the media it holds, as DoGetDVRChapter does: the
-		// terminal chapter's scheduled end is the stop claim, which Mist's resume window
-		// places past the last recorded media.
-		startMs := c.GetStartMs()
-		if actual := c.GetActualMediaStartMs(); actual > 0 {
-			startMs = actual
-		}
-		endMs := c.GetEndMs()
-		if actual := c.GetActualMediaEndMs(); actual > startMs {
-			endMs = actual
-		}
-		ref := &model.DVRChapterRef{
-			ChapterID:       c.GetChapterId(),
-			Mode:            chapterModeFromString(c.GetMode()),
-			IntervalSeconds: iv,
-			StartMs:         float64(startMs),
-			EndMs:           float64(endMs),
-			IsCurrent:       c.GetIsCurrent(),
-			State:           chapterStateFromString(c.GetState()),
-			HasGaps:         c.GetHasGaps(),
-			SegmentCount:    int(c.GetSegmentCount()),
-		}
-		// Commodore-minted public playback ID; populated for any
-		// chapter that has been dispatched for finalization.
-		if pid := c.GetPlaybackId(); pid != "" {
-			ref.PlaybackID = &pid
-		}
-		if reason := c.GetLastFailureReason(); reason != "" {
-			ref.LastFailureReason = &reason
-		}
+		ref := chapterRefFromProto(c)
 		chapters = append(chapters, ref)
 	}
 	out := &model.DVRChaptersPage{Chapters: chapters}
@@ -229,4 +196,43 @@ func ChapterModeFromString(s string) model.DVRChapterMode {
 	default:
 		return model.DVRChapterModeNone
 	}
+}
+
+func chapterRefFromProto(c *foghorncontrolpb.ChapterRef) *model.DVRChapterRef {
+	var iv *int
+	if c.GetIntervalSeconds() > 0 {
+		v := int(c.GetIntervalSeconds())
+		iv = &v
+	}
+	// A finalized chapter reports the media it holds, as DoGetDVRChapter does: the
+	// terminal chapter's scheduled end is the stop claim, which Mist's resume window
+	// places past the last recorded media.
+	startMs := c.GetStartMs()
+	if actual := c.GetActualMediaStartMs(); actual > 0 {
+		startMs = actual
+	}
+	endMs := c.GetEndMs()
+	if actual := c.GetActualMediaEndMs(); actual > startMs {
+		endMs = actual
+	}
+	ref := &model.DVRChapterRef{
+		ChapterID:       c.GetChapterId(),
+		Mode:            chapterModeFromString(c.GetMode()),
+		IntervalSeconds: iv,
+		StartMs:         float64(startMs),
+		EndMs:           float64(endMs),
+		IsCurrent:       c.GetIsCurrent(),
+		State:           chapterStateFromString(c.GetState()),
+		HasGaps:         c.GetHasGaps(),
+		SegmentCount:    int(c.GetSegmentCount()),
+	}
+	// Commodore-minted public playback ID; populated for any
+	// chapter that has been dispatched for finalization.
+	if pid := c.GetPlaybackId(); pid != "" {
+		ref.PlaybackID = &pid
+	}
+	if reason := c.GetLastFailureReason(); reason != "" {
+		ref.LastFailureReason = &reason
+	}
+	return ref
 }

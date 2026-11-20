@@ -186,8 +186,8 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 	// Post-processing race: when a job rewrites an artifact to a new
 	// container, format/size/sync_status flip immediately but s3_url
 	// keeps pointing at the *original upload* until the new file is
-	// durably synced (server.go's "Keep original upload URL in s3_url
-	// until the replacement upload is durably synced"). A resolving
+	// durably synced (CompleteMainArtifactSync swaps s3_url and
+	// active_object_key with sync_status='synced'). A resolving
 	// node without a local processed copy would otherwise stream the
 	// stale upload — wrong codec, wrong size, wrong contents. Gate S3
 	// authority on sync_status='synced'; anything else falls through to
@@ -747,7 +747,7 @@ func contentTypeForFormat(format string) string {
 		return "video/x-matroska"
 	case "webm":
 		return "video/webm"
-	case "ts", "m2ts":
+	case "ts", "m2ts", "mts":
 		return "video/mp2t"
 	case "m3u8", "m3u":
 		return "application/vnd.apple.mpegurl"

@@ -108,6 +108,61 @@ the last-good record for the next pass.
    register those, so Helmsman scans the staged file's blocks and leaves them out by the same rule
    (no frames, or video without a keyframe). A mapping that still does not line up fails the clip.
 
+### Rendition completeness
+
+`mist.ExpectedVideoRenditions` models both local MistProcAV and Livepeer/LPMS output sizes.
+Height-only ladder profiles name the short side for portrait video. Named ladders use
+`video=<0xN` inhibitors to compare the source short side with rung N, including square and
+ultrawide sources. Explicit `video=<WxH` selectors retain their pixel-area comparison.
+The model applies those inhibitors before matching each expected rung to a distinct recorded process
+output; source tracks and thumbnails cannot satisfy a rung. Codec rounding is tolerated
+within `max(32, shortSide/20)` pixels.
+
+For VOD, Helmsman retains the largest source end timestamp observed at readiness, on each
+five-second progress tick, and at completion. Fallback never lowers that baseline. Every
+expected rendition must end within two seconds of it; an unknown source end fails closed.
+This proof works when the recording masks the source and when a source sits between ladder
+sizes. Clip and DVR selectors use the same geometry model, selecting the complete ladder
+or the source passthrough, with their requested-span coverage checked separately.
+
+### Rotated sources
+
+Helmsman reads clockwise `rotation` from Mist health metadata. Missing metadata means zero,
+so the same Helmsman works with Mist builds that do not report orientation. Width, height,
+and resolution in VOD metadata describe display dimensions; `source_rotation` retains the
+coded source orientation for diagnostics. The sizing model restores the coded dimensions
+and applies `SourceMediaInfo.DisplaySize()` once.
+
+A `mirror` flag reflects left-right after clockwise rotation and does not change display
+dimensions. `source_mirror` retains that flag for the source-size rendition fallback.
+
+`SOURCE_ROTATED` routes Livepeer work to local MistProcAV because MPEG-TS cannot carry the
+orientation. Mirror-only sources take the same local route. This is normal routing and emits no transcode-degraded event. A rotated or mirrored source
+below every rung gets a source-size AV entry before recording begins. The platform bundle
+includes matching Helmsman and Mist support for source decoding and upright pixel processing.
+
+Mist stores `rotation` as an unsigned 16-bit clockwise multiple of 90 and `mirror` as an
+unsigned 8-bit boolean. It always writes both keys for video on the DTSC wire, with integer
+mirror values 0/1. Track JSON omits zero rotation and false mirror. A change to either field
+makes a resumed track incompatible. Older metadata without the fields reads as identity;
+process-controlled inputs rebuild cached headers lacking either explicit key.
+
+MP4/MOV track and movie matrices compose in track-then-movie order, including reflection.
+Matroska converts its flip-first projection into rotate-then-mirror order; its roll stays
+within (-180, 180]. FFmpeg input decomposes the full display matrix, preserving mirrored
+0° and 180° sources.
+
+Local AV and thumbnails apply orientation once at source resolution, before scaling.
+Software decoding uses FFmpeg CPU transpose/flip filters. On macOS, the actual transcoder
+uses VideoToolbox decoding, `transpose_vt`/`scale_vt`, and hardware encoding. CUDA may download
+before CPU filtering. VAAPI is not a selectable ProcAV backend or a mandatory release dependency;
+the generic filter helper supports caller-supplied VAAPI frames. Processed outputs carry upright
+pixels and identity orientation. Progressive MP4 and Matroska passthrough retain full
+orientation. CMAF and fragmented MP4 signal rotation only; reflected sources need a baked
+rendition. Safari native HLS ignores the track matrix, and TS, FLV and SRT have no orientation
+field, so those paths depend on the upright transcode. Mist does not inject orientation SEI
+or negotiate WebRTC CVO.
+
 ### VOD upload
 
 Commodore returns an opaque upload session ID containing the artifact locator
@@ -120,6 +175,30 @@ accepted by the public control API. No schema migration is needed for this route
 the VOD catalog already records `origin_cluster_id` at creation.
 
 An S3 multipart lifecycle, both RPCs on Foghorn's gRPC server:
+
+Upload and import container admission comes from `pkg/vodupload/formats.go`. Uploads allow
+MP4, MOV, MKV, WebM, TS, M2TS, MTS, AVI, FLV and M4V. Imports allow the relay-readable subset
+(MP4 through MTS); AVI/FLV/M4V uploads stage to local disk. Playlists are refused before any
+upload row or multipart session. The dashboard's extensions, precheck and help text are
+generated from that source by `make vod-formats`, checked by `verify-generated-contracts`.
+Container admission does not supply a decoder: the installed Mist/FFmpeg build owns codec
+support. An AC3/E-AC3 or other non-browser audio source requires a recorded AAC output when
+the processing policy includes AAC; optional enrichment cannot publish silent browser video.
+AAC output preserves supported source channel layouts, including 5.1; Opus output is stereo.
+The pinned FFmpeg build includes the MPEG-4 Part 2, MPEG-1/2, AC3, E-AC3 and MP2 decoders,
+and local AV and thumbnails select the source decoder explicitly, including HEVC.
+
+SubRip and WebVTT Matroska cues and MP4 tx3g cues carry their explicit duration through DTSC
+and recording. Matroska writes subtitle BlockGroups with BlockDuration; WebM excludes subtitle
+tracks. Native transport input detects 188-byte TS or 192-byte M2TS framing and indexes physical
+packet boundaries, including HTTP range seeks. DVB E-AC3 descriptors and Blu-ray HDMV evidence
+control interpretation of private audio stream types. Subtitle viewing uses its own `webvtt`
+protocol in analytics.
+
+The codec and orientation changes ship together in Mist. Validate the combined source in the
+remotedev stack before publishing Mist. The v0.3.16 platform release workflow resolves the
+published Mist once and bundles it into the edge artifacts and release manifest. No manual Mist
+pin or separate platform release is needed. Stack scenarios 78 and 79 are required validation.
 
 1. `CreateVodUpload` in `api_balancing/internal/grpc/server.go` creates the S3 multipart,
    mints/accepts the `vod` `artifact_hash`, and inserts the artifact row
@@ -137,7 +216,7 @@ Foghorn never fetches it.
 
 1. Commodore `ImportVodAsset` (`api_control/internal/grpc/vod_import.go`) validates the URL
    (http/https, no credentials, public destination via `validatePublicDestinationHost`) and the
-   filename extension (mp4, mov, mkv, webm, ts: the relay-safe formats; avi/flv/m4v need a local
+   filename extension (mp4, mov, mkv, webm, ts, m2ts, mts: the relay-safe formats; avi/flv/m4v need a local
    file and are refused), registers the asset and its creation intent like an upload, and calls
    Foghorn.
 2. Foghorn `ImportVodAsset` (`api_balancing/internal/grpc/vod_import.go`) writes, in one
@@ -505,3 +584,33 @@ the stored file. No `vod+` artifact row is ever created; it is purely a resoluti
 | Completion authority           | `api_balancing/internal/control/server.go` (`processProcessingJobResult`), `api_balancing/internal/control/dvr_chapter_finalize_hook.go` (`handleChapterFinalizeResult`) |
 | Identity / prefixes            | `pkg/streamident/parse.go`                                                                                                                                               |
 | Durable catalog projection     | `api_balancing/internal/jobs/artifact_reconciler.go`, [`clips-dvr.md`](./clips-dvr.md)                                                                                   |
+
+## Original upload retention
+
+The processed recording masks source A/V tracks and proves every expected rendition independently.
+Original quality is retained as a separate opaque object, with no track identity or lineage.
+Upload retention resolves upload override → tenant policy → keep. Foghorn snapshots that decision;
+an omitted field from an older Commodore means false. URL imports and failed processing never stamp
+an original. At successful processing completion, HEAD verification and original key/size stamping
+precede the processed-size update on the same transaction. The original is counted once while the
+processed output is local, then both objects after sync. Named ladders resolve per stream/upload →
+tenant → tier and modify only tier-derived video profiles; operator overrides stay independent.
+
+Published output uses an attempt-specific key even for an uploaded `.mkv`. Sync cleanup excludes the
+retained original. Full delete, retention, and purge free it; original-only deletion clears metadata,
+bumps the catalog revision and enqueues durable object cleanup together. It refuses to remove the
+original while it is still the active key. Download grants require tenant ownership, recorded backend
+ownership and an object size check, last 15 minutes, and use attachment disposition without playback
+metering. Upgrades leave original retention inactive until the v0.3.16 Foghorn postdeploy
+migration runs, after service upgrades and retirement of stale placements. Before activation, uploads
+are accepted with original retention disabled for that upload. The upload response reports the accepted
+`keepOriginal` policy and the dashboard warns if requested retention is unavailable. Once activated,
+retention does not depend on capability heartbeats; a database read error returns a retryable failure.
+Processing-completion stamping still
+requires durable activation; a replica aging out of the heartbeat window cannot activate retention. Fresh baseline installs start activated because no older worker exists.
+Rollback to older Foghorn cleanup code is prohibited by the release catalog.
+
+Commodore enforces original-download grants at 20 per minute with a burst of five in a
+database bucket shared across replicas and gateways. The gateway also rejects excess requests
+locally. Original-download metadata reads do not lock the artifact or VOD metadata rows;
+original deletion takes the artifact lock before rechecking and changing retention metadata.

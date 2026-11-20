@@ -19,6 +19,7 @@ func TestContentTypeForFormat(t *testing.T) {
 		{"webm", "video/webm"},
 		{"ts", "video/mp2t"},
 		{"m2ts", "video/mp2t"},
+		{"mts", "video/mp2t"},
 		{"m3u8", "application/vnd.apple.mpegurl"},
 		{"m3u", "application/vnd.apple.mpegurl"},
 		{"unknown", ""},

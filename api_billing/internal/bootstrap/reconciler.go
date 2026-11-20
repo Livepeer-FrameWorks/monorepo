@@ -99,6 +99,10 @@ func upsertBillingTier(ctx context.Context, exec DBTX, t CatalogTier) (string, e
 	if err != nil {
 		return "", fmt.Errorf("features: %w", err)
 	}
+	ladders, err := transcodeLaddersJSON(t.TranscodeLadders)
+	if err != nil {
+		return "", fmt.Errorf("transcode ladders: %w", err)
+	}
 
 	queries := purserdb.New(exec)
 	var tierID uuid.UUID
@@ -124,7 +128,8 @@ func upsertBillingTier(ctx context.Context, exec DBTX, t CatalogTier) (string, e
 			IsDefaultPrepaid: t.IsDefaultPrepaid, IsDefaultPostpaid: t.IsDefaultPostpaid,
 			ProcessesLive: processOrEmpty(t.ProcessesLive), ProcessesDvr: processOrEmpty(t.ProcessesDVR),
 			ProcessesClip: processOrEmpty(t.ProcessesClip), ProcessesDvrFinalize: processOrEmpty(t.ProcessesDVRFinalize),
-			ProcessesVod: processOrEmpty(t.ProcessesVOD),
+			ProcessesVod:     processOrEmpty(t.ProcessesVOD),
+			TranscodeLadders: ladders, DefaultTranscodeLadder: t.DefaultTranscodeLadder,
 		})
 		if err != nil {
 			return "", err
@@ -136,7 +141,7 @@ func upsertBillingTier(ctx context.Context, exec DBTX, t CatalogTier) (string, e
 			return "", fmt.Errorf("compare row: %w", getErr)
 		}
 
-		if !billingTierMatches(current, t, features) {
+		if !billingTierMatches(current, t, features, ladders) {
 			rows, updateErr := queries.UpdateBootstrapBillingTier(ctx, purserdb.UpdateBootstrapBillingTierParams{
 				DisplayName: t.DisplayName, Description: t.Description, BasePrice: moneyText(t.BasePrice),
 				Currency: t.Currency, BillingPeriod: defaultPeriod(t.BillingPeriod), Features: features,
@@ -146,6 +151,7 @@ func upsertBillingTier(ctx context.Context, exec DBTX, t CatalogTier) (string, e
 				ProcessesLive: processOrEmpty(t.ProcessesLive), ProcessesDvr: processOrEmpty(t.ProcessesDVR),
 				ProcessesClip: processOrEmpty(t.ProcessesClip), ProcessesDvrFinalize: processOrEmpty(t.ProcessesDVRFinalize),
 				ProcessesVod: processOrEmpty(t.ProcessesVOD), TierName: t.TierName,
+				TranscodeLadders: ladders, DefaultTranscodeLadder: t.DefaultTranscodeLadder,
 			})
 			if updateErr != nil {
 				return "", updateErr
@@ -175,7 +181,7 @@ func upsertBillingTier(ctx context.Context, exec DBTX, t CatalogTier) (string, e
 	return "noop", nil
 }
 
-func billingTierMatches(current purserdb.GetBootstrapBillingTierStateRow, desired CatalogTier, features []byte) bool {
+func billingTierMatches(current purserdb.GetBootstrapBillingTierStateRow, desired CatalogTier, features []byte, ladders string) bool {
 	return current.DisplayName == desired.DisplayName &&
 		current.Description == desired.Description &&
 		moneyEq(current.BasePrice, desired.BasePrice) &&
@@ -193,7 +199,22 @@ func billingTierMatches(current purserdb.GetBootstrapBillingTierStateRow, desire
 		jsonEq(string(current.ProcessesDvr), []byte(processOrEmpty(desired.ProcessesDVR))) &&
 		jsonEq(string(current.ProcessesClip), []byte(processOrEmpty(desired.ProcessesClip))) &&
 		jsonEq(string(current.ProcessesDvrFinalize), []byte(processOrEmpty(desired.ProcessesDVRFinalize))) &&
-		jsonEq(string(current.ProcessesVod), []byte(processOrEmpty(desired.ProcessesVOD)))
+		jsonEq(string(current.ProcessesVod), []byte(processOrEmpty(desired.ProcessesVOD))) &&
+		jsonEq(string(current.TranscodeLadders), []byte(ladders)) &&
+		current.DefaultTranscodeLadder == desired.DefaultTranscodeLadder
+}
+
+// transcodeLaddersJSON is the transcode_ladders column value of a tier's
+// allowed ladders.
+func transcodeLaddersJSON(ladders []CatalogTranscodeLadder) (string, error) {
+	if len(ladders) == 0 {
+		return "[]", nil
+	}
+	encoded, err := json.Marshal(ladders)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
 }
 
 // reconcileTierEntitlements ensures (tier_id, key) rows match the desired map.

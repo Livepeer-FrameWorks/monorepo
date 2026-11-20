@@ -9,8 +9,6 @@ import (
 	"sync"
 	"testing"
 
-	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
-
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -58,10 +56,9 @@ func TestReconcileDisablesDeviceDiscoveryBeforeSave(t *testing.T) {
 	}
 }
 
-func TestReconcileAppliesConfiguredBandwidthLimit(t *testing.T) {
-	appconfigtest.Setenv(t, "HELMSMAN_BW_LIMIT_MBPS", "1000")
+func TestReconcileAppliesSeedBandwidthLimit(t *testing.T) {
 	fake := &recordingMistAPI{}
-	m := &Manager{mistClient: fake, logger: logging.NewLogger(), lastSeed: reconcileSeed()}
+	m := &Manager{mistClient: fake, logger: logging.NewLogger(), lastSeed: capacityTestSeed()}
 
 	m.reconcile()
 
@@ -71,14 +68,14 @@ func TestReconcileAppliesConfiguredBandwidthLimit(t *testing.T) {
 	assertNoDroppedConfigKeys(t, fake.updatedConfigs)
 }
 
-func TestReconcileCountsEveryConnectionWithoutConfiguredLimit(t *testing.T) {
+func TestReconcileExcludesInternalBandwidthWithoutConfiguredLimit(t *testing.T) {
 	fake := &recordingMistAPI{}
 	m := &Manager{mistClient: fake, logger: logging.NewLogger(), lastSeed: reconcileSeed()}
 
 	m.reconcile()
 
-	if len(fake.exceptionSets) != 1 || !slices.Equal(fake.exceptionSets[0], mist.CountEveryConnection) {
-		t.Fatalf("SetBandwidthExceptions calls = %q, want one setting %q", fake.exceptionSets, mist.CountEveryConnection)
+	if len(fake.exceptionSets) != 1 || !slices.Equal(fake.exceptionSets[0], []string{"::/127"}) {
+		t.Fatalf("SetBandwidthExceptions calls = %q, want [::/127] to exclude file and input sessions", fake.exceptionSets)
 	}
 }
 
@@ -141,12 +138,11 @@ func TestRepairConfigDriftReassertsDeviceDiscovery(t *testing.T) {
 }
 
 func TestRepairConfigDriftReassertsBandwidthLimit(t *testing.T) {
-	appconfigtest.Setenv(t, "HELMSMAN_BW_LIMIT_BYTES_PER_SEC", "125000000")
 	fake := &recordingMistAPI{backupResult: map[string]interface{}{
 		"config":    map[string]interface{}{"device_discovery": false, "triggers": desiredTriggers()},
 		"bandwidth": map[string]interface{}{"exceptions": []interface{}{"::1"}},
 	}}
-	m := &Manager{mistClient: fake, logger: logging.NewLogger(), lastSeed: &ipcpb.ConfigSeed{}}
+	m := &Manager{mistClient: fake, logger: logging.NewLogger(), lastSeed: &ipcpb.ConfigSeed{Capacity: capacityTestSeed().GetCapacity()}}
 
 	m.repairConfigDrift()
 
@@ -161,12 +157,10 @@ func TestRepairConfigDriftReassertsBandwidthLimit(t *testing.T) {
 
 // The drift loop against Mist's HTTP API: config_backup shows discovery on,
 // a bandwidth exception list and no bandwidth limit, and the repair must send
-// exactly Mist's dedicated commands, then save. Mist leaves a connection from an
-// excepted address out of its stream's byte totals, so a publisher on a private
-// network would report no ingest bytes; the list that matches no address is
-// [""], because Mist refills an empty list with its private-range defaults.
+// exactly Mist's dedicated commands, then save. The explicit ::/127 exception
+// excludes internal loopback reads without hiding private-network publishers;
+// an empty list would restore Mist's broad private-range defaults.
 func TestRepairConfigDriftSendsMistDedicatedCommands(t *testing.T) {
-	appconfigtest.Setenv(t, "HELMSMAN_BW_LIMIT_BYTES_PER_SEC", "125000000")
 	triggers, err := json.Marshal(desiredTriggers())
 	if err != nil {
 		t.Fatal(err)
@@ -214,7 +208,7 @@ func TestRepairConfigDriftSendsMistDedicatedCommands(t *testing.T) {
 	m := &Manager{
 		mistClient: mist.NewClient(logging.NewLogger(), mist.ClientConfig{BaseURL: srv.URL}),
 		logger:     logging.NewLogger(),
-		lastSeed:   &ipcpb.ConfigSeed{},
+		lastSeed:   &ipcpb.ConfigSeed{Capacity: capacityTestSeed().GetCapacity()},
 	}
 	m.repairConfigDrift()
 
@@ -222,7 +216,7 @@ func TestRepairConfigDriftSendsMistDedicatedCommands(t *testing.T) {
 	defer mu.Unlock()
 	want := []string{
 		`{"camera_config":{"device_discovery":false}}`,
-		`{"bandwidth":{"exceptions":[""]}}`,
+		`{"bandwidth":{"exceptions":["::/127"]}}`,
 		`{"bandwidth":{"limit":125000000}}`,
 		`{"save":true}`,
 	}

@@ -308,10 +308,11 @@ func (q *Queries) ListNodeProjectedIngestSessionsBefore(ctx context.Context, arg
 }
 
 const listOpenProjectedIngestSessions = `-- name: ListOpenProjectedIngestSessions :many
-SELECT id::text AS session_id, tenant_id::text AS tenant_id, node_id, stream_internal_name
-FROM foghorn.ingest_sessions
-WHERE ended_at IS NULL AND projection_state = 'active'
-ORDER BY node_id, started_at
+SELECT id::text AS session_id,tenant_id::text AS tenant_id,node_id,stream_internal_name,FALSE AS is_pull
+FROM foghorn.ingest_sessions WHERE ended_at IS NULL AND projection_state='active'
+UNION ALL
+SELECT id::text AS session_id,tenant_id::text AS tenant_id,node_id,stream_internal_name,TRUE AS is_pull
+FROM foghorn.pull_ingest_sessions WHERE ended_at IS NULL AND admission_state='active'
 `
 
 type ListOpenProjectedIngestSessionsRow struct {
@@ -319,6 +320,7 @@ type ListOpenProjectedIngestSessionsRow struct {
 	TenantID           string `db:"tenant_id" json:"tenant_id"`
 	NodeID             string `db:"node_id" json:"node_id"`
 	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	IsPull             bool   `db:"is_pull" json:"is_pull"`
 }
 
 func (q *Queries) ListOpenProjectedIngestSessions(ctx context.Context) ([]ListOpenProjectedIngestSessionsRow, error) {
@@ -335,6 +337,7 @@ func (q *Queries) ListOpenProjectedIngestSessions(ctx context.Context) ([]ListOp
 			&i.TenantID,
 			&i.NodeID,
 			&i.StreamInternalName,
+			&i.IsPull,
 		); err != nil {
 			return nil, err
 		}
@@ -417,7 +420,8 @@ SET ended_at = NOW(), ended_at_unix_millis = (EXTRACT(EPOCH FROM NOW()) * 1000):
 WHERE tenant_id = $1::text::uuid
   AND stream_internal_name = $2
   AND start_trigger_uuid = $3 AND ended_at IS NULL
-RETURNING id::text AS session_id, node_id, COALESCE(stream_id::text, '')::text AS stream_id
+RETURNING id::text AS session_id, node_id, COALESCE(stream_id::text, '')::text AS stream_id,
+          COALESCE(NULLIF(runtime_name,''),'live+'||stream_internal_name)::text AS runtime_name
 `
 
 type RetireIngestSessionByClaimParams struct {
@@ -427,15 +431,21 @@ type RetireIngestSessionByClaimParams struct {
 }
 
 type RetireIngestSessionByClaimRow struct {
-	SessionID string `db:"session_id" json:"session_id"`
-	NodeID    string `db:"node_id" json:"node_id"`
-	StreamID  string `db:"stream_id" json:"stream_id"`
+	SessionID   string `db:"session_id" json:"session_id"`
+	NodeID      string `db:"node_id" json:"node_id"`
+	StreamID    string `db:"stream_id" json:"stream_id"`
+	RuntimeName string `db:"runtime_name" json:"runtime_name"`
 }
 
 func (q *Queries) RetireIngestSessionByClaim(ctx context.Context, arg RetireIngestSessionByClaimParams) (RetireIngestSessionByClaimRow, error) {
 	row := q.db.QueryRowContext(ctx, retireIngestSessionByClaim, arg.TenantID, arg.StreamInternalName, arg.ClaimToken)
 	var i RetireIngestSessionByClaimRow
-	err := row.Scan(&i.SessionID, &i.NodeID, &i.StreamID)
+	err := row.Scan(
+		&i.SessionID,
+		&i.NodeID,
+		&i.StreamID,
+		&i.RuntimeName,
+	)
 	return i, err
 }
 

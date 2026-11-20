@@ -706,9 +706,10 @@ type ClipInfo struct {
 	RetentionSource *string `protobuf:"bytes,23,opt,name=retention_source,json=retentionSource,proto3,oneof" json:"retention_source,omitempty"`
 	SyncStatus      *string `protobuf:"bytes,24,opt,name=sync_status,json=syncStatus,proto3,oneof" json:"sync_status,omitempty"`
 	// has_local_copy: a node holds a present full local copy (origin or cache); nullable = unknown.
-	HasLocalCopy  *bool `protobuf:"varint,25,opt,name=has_local_copy,json=hasLocalCopy,proto3,oneof" json:"has_local_copy,omitempty"`
-	IsSynced      *bool `protobuf:"varint,26,opt,name=is_synced,json=isSynced,proto3,oneof" json:"is_synced,omitempty"`
-	IsFinalized   *bool `protobuf:"varint,27,opt,name=is_finalized,json=isFinalized,proto3,oneof" json:"is_finalized,omitempty"`
+	HasLocalCopy  *bool   `protobuf:"varint,25,opt,name=has_local_copy,json=hasLocalCopy,proto3,oneof" json:"has_local_copy,omitempty"`
+	IsSynced      *bool   `protobuf:"varint,26,opt,name=is_synced,json=isSynced,proto3,oneof" json:"is_synced,omitempty"`
+	IsFinalized   *bool   `protobuf:"varint,27,opt,name=is_finalized,json=isFinalized,proto3,oneof" json:"is_finalized,omitempty"`
+	ErrorMessage  *string `protobuf:"bytes,29,opt,name=error_message,json=errorMessage,proto3,oneof" json:"error_message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -916,6 +917,13 @@ func (x *ClipInfo) GetIsFinalized() bool {
 		return *x.IsFinalized
 	}
 	return false
+}
+
+func (x *ClipInfo) GetErrorMessage() string {
+	if x != nil && x.ErrorMessage != nil {
+		return *x.ErrorMessage
+	}
+	return ""
 }
 
 // GetClipRequest - request to get a single clip
@@ -3262,9 +3270,11 @@ type CreateVodUploadRequest struct {
 	RequestId *string `protobuf:"bytes,13,opt,name=request_id,json=requestId,proto3,oneof" json:"request_id,omitempty"`
 	// Principal the calling service creates the upload for; Foghorn attributes
 	// upload.created to it.
-	Actor         *common.RequestActor `protobuf:"bytes,14,opt,name=actor,proto3" json:"actor,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Actor           *common.RequestActor `protobuf:"bytes,14,opt,name=actor,proto3" json:"actor,omitempty"`
+	TranscodeLadder string               `protobuf:"bytes,15,opt,name=transcode_ladder,json=transcodeLadder,proto3" json:"transcode_ladder,omitempty"` // Empty inherits the account ladder, then the plan default.
+	KeepOriginal    *bool                `protobuf:"varint,16,opt,name=keep_original,json=keepOriginal,proto3,oneof" json:"keep_original,omitempty"`   // Commodore resolves upload -> tenant -> true; absent at Foghorn means false.
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *CreateVodUploadRequest) Reset() {
@@ -3395,17 +3405,33 @@ func (x *CreateVodUploadRequest) GetActor() *common.RequestActor {
 	return nil
 }
 
+func (x *CreateVodUploadRequest) GetTranscodeLadder() string {
+	if x != nil {
+		return x.TranscodeLadder
+	}
+	return ""
+}
+
+func (x *CreateVodUploadRequest) GetKeepOriginal() bool {
+	if x != nil && x.KeepOriginal != nil {
+		return *x.KeepOriginal
+	}
+	return false
+}
+
 // CreateVodUploadResponse - multipart upload instructions
 type CreateVodUploadResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Opaque session ID at Commodore; storage-native multipart ID within Foghorn.
-	UploadId      string                 `protobuf:"bytes,1,opt,name=upload_id,json=uploadId,proto3" json:"upload_id,omitempty"`
-	ArtifactId    string                 `protobuf:"bytes,2,opt,name=artifact_id,json=artifactId,proto3" json:"artifact_id,omitempty"`       // ID in live_artifacts table
-	ArtifactHash  string                 `protobuf:"bytes,3,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"` // Hash for playback URL resolution
-	PartSize      int64                  `protobuf:"varint,4,opt,name=part_size,json=partSize,proto3" json:"part_size,omitempty"`            // Recommended part size (bytes)
-	Parts         []*VodUploadPart       `protobuf:"bytes,5,rep,name=parts,proto3" json:"parts,omitempty"`                                   // Presigned URLs for each part
-	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`          // When URLs expire
-	PlaybackId    string                 `protobuf:"bytes,7,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`       // Public playback key (artifact playback ID)
+	UploadId     string                 `protobuf:"bytes,1,opt,name=upload_id,json=uploadId,proto3" json:"upload_id,omitempty"`
+	ArtifactId   string                 `protobuf:"bytes,2,opt,name=artifact_id,json=artifactId,proto3" json:"artifact_id,omitempty"`       // ID in live_artifacts table
+	ArtifactHash string                 `protobuf:"bytes,3,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"` // Hash for playback URL resolution
+	PartSize     int64                  `protobuf:"varint,4,opt,name=part_size,json=partSize,proto3" json:"part_size,omitempty"`            // Recommended part size (bytes)
+	Parts        []*VodUploadPart       `protobuf:"bytes,5,rep,name=parts,proto3" json:"parts,omitempty"`                                   // Presigned URLs for each part
+	ExpiresAt    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`          // When URLs expire
+	PlaybackId   string                 `protobuf:"bytes,7,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`       // Public playback key (artifact playback ID)
+	// Effective policy accepted for this upload; absent on older Foghorn replicas.
+	KeepOriginal  *bool `protobuf:"varint,8,opt,name=keep_original,json=keepOriginal,proto3,oneof" json:"keep_original,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3489,6 +3515,13 @@ func (x *CreateVodUploadResponse) GetPlaybackId() string {
 	return ""
 }
 
+func (x *CreateVodUploadResponse) GetKeepOriginal() bool {
+	if x != nil && x.KeepOriginal != nil {
+		return *x.KeepOriginal
+	}
+	return false
+}
+
 // VodUploadPart - presigned URL for a single part
 type VodUploadPart struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -3567,9 +3600,10 @@ type ImportVodAssetRequest struct {
 	RequestId *string              `protobuf:"bytes,12,opt,name=request_id,json=requestId,proto3,oneof" json:"request_id,omitempty"`
 	Actor     *common.RequestActor `protobuf:"bytes,13,opt,name=actor,proto3" json:"actor,omitempty"`
 	// Processing spec (JSON) the import's completion dispatches, as a completed upload's.
-	ProcessesJson *string `protobuf:"bytes,14,opt,name=processes_json,json=processesJson,proto3,oneof" json:"processes_json,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ProcessesJson   *string `protobuf:"bytes,14,opt,name=processes_json,json=processesJson,proto3,oneof" json:"processes_json,omitempty"`
+	TranscodeLadder string  `protobuf:"bytes,15,opt,name=transcode_ladder,json=transcodeLadder,proto3" json:"transcode_ladder,omitempty"` // Empty inherits the account ladder, then the plan default.
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ImportVodAssetRequest) Reset() {
@@ -3696,6 +3730,13 @@ func (x *ImportVodAssetRequest) GetActor() *common.RequestActor {
 func (x *ImportVodAssetRequest) GetProcessesJson() string {
 	if x != nil && x.ProcessesJson != nil {
 		return *x.ProcessesJson
+	}
+	return ""
+}
+
+func (x *ImportVodAssetRequest) GetTranscodeLadder() string {
+	if x != nil {
+		return x.TranscodeLadder
 	}
 	return ""
 }
@@ -4424,11 +4465,12 @@ type VodAssetInfo struct {
 	OriginId        *string `protobuf:"bytes,26,opt,name=origin_id,json=originId,proto3,oneof" json:"origin_id,omitempty"`       // origin entity id (chapter_id for dvr_chapter)
 	SyncStatus      string  `protobuf:"bytes,27,opt,name=sync_status,json=syncStatus,proto3" json:"sync_status,omitempty"`
 	// has_local_copy: a node holds a present full local copy (origin or cache).
-	HasLocalCopy  bool `protobuf:"varint,28,opt,name=has_local_copy,json=hasLocalCopy,proto3" json:"has_local_copy,omitempty"`
-	IsSynced      bool `protobuf:"varint,29,opt,name=is_synced,json=isSynced,proto3" json:"is_synced,omitempty"`
-	IsFinalized   bool `protobuf:"varint,30,opt,name=is_finalized,json=isFinalized,proto3" json:"is_finalized,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	HasLocalCopy      bool   `protobuf:"varint,28,opt,name=has_local_copy,json=hasLocalCopy,proto3" json:"has_local_copy,omitempty"`
+	IsSynced          bool   `protobuf:"varint,29,opt,name=is_synced,json=isSynced,proto3" json:"is_synced,omitempty"`
+	IsFinalized       bool   `protobuf:"varint,30,opt,name=is_finalized,json=isFinalized,proto3" json:"is_finalized,omitempty"`
+	OriginalSizeBytes *int64 `protobuf:"varint,32,opt,name=original_size_bytes,json=originalSizeBytes,proto3,oneof" json:"original_size_bytes,omitempty"` // Size in bytes of the byte-identical retained upload.
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *VodAssetInfo) Reset() {
@@ -4669,6 +4711,13 @@ func (x *VodAssetInfo) GetIsFinalized() bool {
 		return x.IsFinalized
 	}
 	return false
+}
+
+func (x *VodAssetInfo) GetOriginalSizeBytes() int64 {
+	if x != nil && x.OriginalSizeBytes != nil {
+		return *x.OriginalSizeBytes
+	}
+	return 0
 }
 
 // VodMetadata - metadata extracted from video file (returned by validation)
@@ -5196,6 +5245,239 @@ func (x *AckArtifactCreationCommandResponse) GetOutcome() ArtifactCreationOutcom
 	return ArtifactCreationOutcome_ARTIFACT_CREATION_OUTCOME_UNSPECIFIED
 }
 
+// Original access is tenant-owner authenticated, independent of playback policy.
+type CreateVodOriginalDownloadRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	ArtifactHash  string                 `protobuf:"bytes,2,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"`
+	Actor         *common.RequestActor   `protobuf:"bytes,3,opt,name=actor,proto3" json:"actor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateVodOriginalDownloadRequest) Reset() {
+	*x = CreateVodOriginalDownloadRequest{}
+	mi := &file_shared_proto_msgTypes[52]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateVodOriginalDownloadRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateVodOriginalDownloadRequest) ProtoMessage() {}
+
+func (x *CreateVodOriginalDownloadRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_shared_proto_msgTypes[52]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateVodOriginalDownloadRequest.ProtoReflect.Descriptor instead.
+func (*CreateVodOriginalDownloadRequest) Descriptor() ([]byte, []int) {
+	return file_shared_proto_rawDescGZIP(), []int{52}
+}
+
+func (x *CreateVodOriginalDownloadRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *CreateVodOriginalDownloadRequest) GetArtifactHash() string {
+	if x != nil {
+		return x.ArtifactHash
+	}
+	return ""
+}
+
+func (x *CreateVodOriginalDownloadRequest) GetActor() *common.RequestActor {
+	if x != nil {
+		return x.Actor
+	}
+	return nil
+}
+
+type CreateVodOriginalDownloadResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Url           string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"` // Signed attachment GET; never a public playback URL.
+	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	SizeBytes     int64                  `protobuf:"varint,3,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	Filename      string                 `protobuf:"bytes,4,opt,name=filename,proto3" json:"filename,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateVodOriginalDownloadResponse) Reset() {
+	*x = CreateVodOriginalDownloadResponse{}
+	mi := &file_shared_proto_msgTypes[53]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateVodOriginalDownloadResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateVodOriginalDownloadResponse) ProtoMessage() {}
+
+func (x *CreateVodOriginalDownloadResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_shared_proto_msgTypes[53]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateVodOriginalDownloadResponse.ProtoReflect.Descriptor instead.
+func (*CreateVodOriginalDownloadResponse) Descriptor() ([]byte, []int) {
+	return file_shared_proto_rawDescGZIP(), []int{53}
+}
+
+func (x *CreateVodOriginalDownloadResponse) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *CreateVodOriginalDownloadResponse) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *CreateVodOriginalDownloadResponse) GetSizeBytes() int64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
+func (x *CreateVodOriginalDownloadResponse) GetFilename() string {
+	if x != nil {
+		return x.Filename
+	}
+	return ""
+}
+
+type DeleteVodOriginalRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	ArtifactHash  string                 `protobuf:"bytes,2,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"`
+	Actor         *common.RequestActor   `protobuf:"bytes,3,opt,name=actor,proto3" json:"actor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteVodOriginalRequest) Reset() {
+	*x = DeleteVodOriginalRequest{}
+	mi := &file_shared_proto_msgTypes[54]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteVodOriginalRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteVodOriginalRequest) ProtoMessage() {}
+
+func (x *DeleteVodOriginalRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_shared_proto_msgTypes[54]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteVodOriginalRequest.ProtoReflect.Descriptor instead.
+func (*DeleteVodOriginalRequest) Descriptor() ([]byte, []int) {
+	return file_shared_proto_rawDescGZIP(), []int{54}
+}
+
+func (x *DeleteVodOriginalRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *DeleteVodOriginalRequest) GetArtifactHash() string {
+	if x != nil {
+		return x.ArtifactHash
+	}
+	return ""
+}
+
+func (x *DeleteVodOriginalRequest) GetActor() *common.RequestActor {
+	if x != nil {
+		return x.Actor
+	}
+	return nil
+}
+
+type DeleteVodOriginalResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteVodOriginalResponse) Reset() {
+	*x = DeleteVodOriginalResponse{}
+	mi := &file_shared_proto_msgTypes[55]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteVodOriginalResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteVodOriginalResponse) ProtoMessage() {}
+
+func (x *DeleteVodOriginalResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_shared_proto_msgTypes[55]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteVodOriginalResponse.ProtoReflect.Descriptor instead.
+func (*DeleteVodOriginalResponse) Descriptor() ([]byte, []int) {
+	return file_shared_proto_rawDescGZIP(), []int{55}
+}
+
+func (x *DeleteVodOriginalResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
 var File_shared_proto protoreflect.FileDescriptor
 
 const file_shared_proto_rawDesc = "" +
@@ -5263,7 +5545,8 @@ const file_shared_proto_rawDesc = "" +
 	"\x12effective_start_ms\x18\b \x01(\x03R\x10effectiveStartMs\x122\n" +
 	"\x15effective_duration_ms\x18\t \x01(\x03R\x13effectiveDurationMs\x12\x18\n" +
 	"\apartial\x18\n" +
-	" \x01(\bR\apartial\"\xcb\t\n" +
+	" \x01(\bR\apartial\"\x87\n" +
+	"\n" +
 	"\bClipInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\tclip_hash\x18\x02 \x01(\tR\bclipHash\x12\x1b\n" +
@@ -5298,7 +5581,8 @@ const file_shared_proto_rawDesc = "" +
 	"\x0ehas_local_copy\x18\x19 \x01(\bH\bR\fhasLocalCopy\x88\x01\x01\x12 \n" +
 	"\tis_synced\x18\x1a \x01(\bH\tR\bisSynced\x88\x01\x01\x12&\n" +
 	"\fis_finalized\x18\x1b \x01(\bH\n" +
-	"R\visFinalized\x88\x01\x01B\r\n" +
+	"R\visFinalized\x88\x01\x01\x12(\n" +
+	"\rerror_message\x18\x1d \x01(\tH\vR\ferrorMessage\x88\x01\x01B\r\n" +
 	"\v_size_bytesB\f\n" +
 	"\n" +
 	"_clip_modeB\x13\n" +
@@ -5311,7 +5595,8 @@ const file_shared_proto_rawDesc = "" +
 	"\x0f_has_local_copyB\f\n" +
 	"\n" +
 	"_is_syncedB\x0f\n" +
-	"\r_is_finalizedJ\x04\b\f\x10\rJ\x04\b\x13\x10\x14J\x04\b\x1c\x10\x1dR\faccess_countR\rlast_accessed\"J\n" +
+	"\r_is_finalizedB\x10\n" +
+	"\x0e_error_messageJ\x04\b\f\x10\rJ\x04\b\x13\x10\x14J\x04\b\x1c\x10\x1dR\faccess_countR\rlast_accessed\"J\n" +
 	"\x0eGetClipRequest\x12\x1b\n" +
 	"\tclip_hash\x18\x01 \x01(\tR\bclipHash\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\"~\n" +
@@ -5594,7 +5879,7 @@ const file_shared_proto_rawDesc = "" +
 	"\aprimary\x18\x01 \x01(\v2\x16.shared.IngestEndpointR\aprimary\x124\n" +
 	"\tfallbacks\x18\x02 \x03(\v2\x16.shared.IngestEndpointR\tfallbacks\x127\n" +
 	"\bmetadata\x18\x03 \x01(\v2\x16.shared.IngestMetadataH\x00R\bmetadata\x88\x01\x01B\v\n" +
-	"\t_metadata\"\xfa\x04\n" +
+	"\t_metadata\"\xe1\x05\n" +
 	"\x16CreateVodUploadRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1a\n" +
@@ -5614,7 +5899,9 @@ const file_shared_proto_rawDesc = "" +
 	"\x0eretention_days\x18\f \x01(\x05H\x06R\rretentionDays\x88\x01\x01\x12\"\n" +
 	"\n" +
 	"request_id\x18\r \x01(\tH\aR\trequestId\x88\x01\x01\x12*\n" +
-	"\x05actor\x18\x0e \x01(\v2\x14.common.RequestActorR\x05actorB\x0f\n" +
+	"\x05actor\x18\x0e \x01(\v2\x14.common.RequestActorR\x05actor\x12)\n" +
+	"\x10transcode_ladder\x18\x0f \x01(\tR\x0ftranscodeLadder\x12(\n" +
+	"\rkeep_original\x18\x10 \x01(\bH\bR\fkeepOriginal\x88\x01\x01B\x0f\n" +
 	"\r_content_typeB\b\n" +
 	"\x06_titleB\x0e\n" +
 	"\f_descriptionB\v\n" +
@@ -5622,7 +5909,8 @@ const file_shared_proto_rawDesc = "" +
 	"\f_playback_idB\x10\n" +
 	"\x0e_internal_nameB\x11\n" +
 	"\x0f_retention_daysB\r\n" +
-	"\v_request_id\"\xa2\x02\n" +
+	"\v_request_idB\x10\n" +
+	"\x0e_keep_original\"\xde\x02\n" +
 	"\x17CreateVodUploadResponse\x12\x1b\n" +
 	"\tupload_id\x18\x01 \x01(\tR\buploadId\x12\x1f\n" +
 	"\vartifact_id\x18\x02 \x01(\tR\n" +
@@ -5633,11 +5921,13 @@ const file_shared_proto_rawDesc = "" +
 	"\n" +
 	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x1f\n" +
 	"\vplayback_id\x18\a \x01(\tR\n" +
-	"playbackId\"U\n" +
+	"playbackId\x12(\n" +
+	"\rkeep_original\x18\b \x01(\bH\x00R\fkeepOriginal\x88\x01\x01B\x10\n" +
+	"\x0e_keep_original\"U\n" +
 	"\rVodUploadPart\x12\x1f\n" +
 	"\vpart_number\x18\x01 \x01(\x05R\n" +
 	"partNumber\x12#\n" +
-	"\rpresigned_url\x18\x02 \x01(\tR\fpresignedUrl\"\xff\x04\n" +
+	"\rpresigned_url\x18\x02 \x01(\tR\fpresignedUrl\"\xaa\x05\n" +
 	"\x15ImportVodAssetRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1d\n" +
@@ -5657,7 +5947,8 @@ const file_shared_proto_rawDesc = "" +
 	"\n" +
 	"request_id\x18\f \x01(\tH\x06R\trequestId\x88\x01\x01\x12*\n" +
 	"\x05actor\x18\r \x01(\v2\x14.common.RequestActorR\x05actor\x12*\n" +
-	"\x0eprocesses_json\x18\x0e \x01(\tH\aR\rprocessesJson\x88\x01\x01B\b\n" +
+	"\x0eprocesses_json\x18\x0e \x01(\tH\aR\rprocessesJson\x88\x01\x01\x12)\n" +
+	"\x10transcode_ladder\x18\x0f \x01(\tR\x0ftranscodeLadderB\b\n" +
 	"\x06_titleB\x0e\n" +
 	"\f_descriptionB\v\n" +
 	"\t_vod_hashB\x0e\n" +
@@ -5714,7 +6005,7 @@ const file_shared_proto_rawDesc = "" +
 	"\x14requested_by_user_id\x18\x03 \x01(\tR\x11requestedByUserId\"L\n" +
 	"\x16DeleteVodAssetResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xb9\v\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\x86\f\n" +
 	"\fVodAssetInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x12\x14\n" +
@@ -5760,7 +6051,8 @@ const file_shared_proto_rawDesc = "" +
 	"syncStatus\x12$\n" +
 	"\x0ehas_local_copy\x18\x1c \x01(\bR\fhasLocalCopy\x12\x1b\n" +
 	"\tis_synced\x18\x1d \x01(\bR\bisSynced\x12!\n" +
-	"\fis_finalized\x18\x1e \x01(\bR\visFinalizedB\r\n" +
+	"\fis_finalized\x18\x1e \x01(\bR\visFinalized\x123\n" +
+	"\x13original_size_bytes\x18  \x01(\x03H\x10R\x11originalSizeBytes\x88\x01\x01B\r\n" +
 	"\v_size_bytesB\x0e\n" +
 	"\f_duration_msB\r\n" +
 	"\v_resolutionB\x0e\n" +
@@ -5778,7 +6070,8 @@ const file_shared_proto_rawDesc = "" +
 	"_stream_idB\x0e\n" +
 	"\f_origin_typeB\f\n" +
 	"\n" +
-	"_origin_idJ\x04\b\x1f\x10 \"\xa5\x03\n" +
+	"_origin_idB\x16\n" +
+	"\x14_original_size_bytesJ\x04\b\x1f\x10 \"\xa5\x03\n" +
 	"\vVodMetadata\x12\x1f\n" +
 	"\vduration_ms\x18\x01 \x01(\x05R\n" +
 	"durationMs\x12\x1e\n" +
@@ -5834,7 +6127,24 @@ const file_shared_proto_rawDesc = "" +
 	"\n" +
 	"request_id\x18\x04 \x01(\tR\trequestId\"l\n" +
 	"\"AckArtifactCreationCommandResponse\x129\n" +
-	"\aoutcome\x18\x02 \x01(\x0e2\x1f.shared.ArtifactCreationOutcomeR\aoutcomeJ\x04\b\x01\x10\x02R\x05acked*\x85\x01\n" +
+	"\aoutcome\x18\x02 \x01(\x0e2\x1f.shared.ArtifactCreationOutcomeR\aoutcomeJ\x04\b\x01\x10\x02R\x05acked\"\x90\x01\n" +
+	" CreateVodOriginalDownloadRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12#\n" +
+	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x12*\n" +
+	"\x05actor\x18\x03 \x01(\v2\x14.common.RequestActorR\x05actor\"\xab\x01\n" +
+	"!CreateVodOriginalDownloadResponse\x12\x10\n" +
+	"\x03url\x18\x01 \x01(\tR\x03url\x129\n" +
+	"\n" +
+	"expires_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x03 \x01(\x03R\tsizeBytes\x12\x1a\n" +
+	"\bfilename\x18\x04 \x01(\tR\bfilename\"\x88\x01\n" +
+	"\x18DeleteVodOriginalRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12#\n" +
+	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x12*\n" +
+	"\x05actor\x18\x03 \x01(\v2\x14.common.RequestActorR\x05actor\"5\n" +
+	"\x19DeleteVodOriginalResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess*\x85\x01\n" +
 	"\bClipMode\x12\x19\n" +
 	"\x15CLIP_MODE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12CLIP_MODE_ABSOLUTE\x10\x01\x12\x16\n" +
@@ -5884,7 +6194,7 @@ func file_shared_proto_rawDescGZIP() []byte {
 }
 
 var file_shared_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_shared_proto_msgTypes = make([]protoimpl.MessageInfo, 54)
+var file_shared_proto_msgTypes = make([]protoimpl.MessageInfo, 58)
 var file_shared_proto_goTypes = []any{
 	(ClipMode)(0),                              // 0: shared.ClipMode
 	(IngestProtocol)(0),                        // 1: shared.IngestProtocol
@@ -5943,32 +6253,36 @@ var file_shared_proto_goTypes = []any{
 	(*GetArtifactCreationStatusResponse)(nil),  // 54: shared.GetArtifactCreationStatusResponse
 	(*AckArtifactCreationCommandRequest)(nil),  // 55: shared.AckArtifactCreationCommandRequest
 	(*AckArtifactCreationCommandResponse)(nil), // 56: shared.AckArtifactCreationCommandResponse
-	nil,                           // 57: shared.ViewerEndpoint.OutputsEntry
-	nil,                           // 58: shared.WebhookRequest.HeadersEntry
-	(*common.RequestActor)(nil),   // 59: common.RequestActor
-	(*timestamppb.Timestamp)(nil), // 60: google.protobuf.Timestamp
+	(*CreateVodOriginalDownloadRequest)(nil),   // 57: shared.CreateVodOriginalDownloadRequest
+	(*CreateVodOriginalDownloadResponse)(nil),  // 58: shared.CreateVodOriginalDownloadResponse
+	(*DeleteVodOriginalRequest)(nil),           // 59: shared.DeleteVodOriginalRequest
+	(*DeleteVodOriginalResponse)(nil),          // 60: shared.DeleteVodOriginalResponse
+	nil,                                        // 61: shared.ViewerEndpoint.OutputsEntry
+	nil,                                        // 62: shared.WebhookRequest.HeadersEntry
+	(*common.RequestActor)(nil),                // 63: common.RequestActor
+	(*timestamppb.Timestamp)(nil),              // 64: google.protobuf.Timestamp
 }
 var file_shared_proto_depIdxs = []int32{
 	0,  // 0: shared.CreateClipRequest.mode:type_name -> shared.ClipMode
-	59, // 1: shared.CreateClipRequest.actor:type_name -> common.RequestActor
-	60, // 2: shared.ClipInfo.created_at:type_name -> google.protobuf.Timestamp
-	60, // 3: shared.ClipInfo.updated_at:type_name -> google.protobuf.Timestamp
-	60, // 4: shared.ClipInfo.expires_at:type_name -> google.protobuf.Timestamp
+	63, // 1: shared.CreateClipRequest.actor:type_name -> common.RequestActor
+	64, // 2: shared.ClipInfo.created_at:type_name -> google.protobuf.Timestamp
+	64, // 3: shared.ClipInfo.updated_at:type_name -> google.protobuf.Timestamp
+	64, // 4: shared.ClipInfo.expires_at:type_name -> google.protobuf.Timestamp
 	28, // 5: shared.ClipInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
 	13, // 6: shared.StartDVRRequest.dvr_policy:type_name -> shared.DVRPolicy
-	60, // 7: shared.DVRInfo.started_at:type_name -> google.protobuf.Timestamp
-	60, // 8: shared.DVRInfo.ended_at:type_name -> google.protobuf.Timestamp
-	60, // 9: shared.DVRInfo.created_at:type_name -> google.protobuf.Timestamp
-	60, // 10: shared.DVRInfo.updated_at:type_name -> google.protobuf.Timestamp
-	60, // 11: shared.DVRInfo.frozen_at:type_name -> google.protobuf.Timestamp
-	60, // 12: shared.DVRInfo.expires_at:type_name -> google.protobuf.Timestamp
+	64, // 7: shared.DVRInfo.started_at:type_name -> google.protobuf.Timestamp
+	64, // 8: shared.DVRInfo.ended_at:type_name -> google.protobuf.Timestamp
+	64, // 9: shared.DVRInfo.created_at:type_name -> google.protobuf.Timestamp
+	64, // 10: shared.DVRInfo.updated_at:type_name -> google.protobuf.Timestamp
+	64, // 11: shared.DVRInfo.frozen_at:type_name -> google.protobuf.Timestamp
+	64, // 12: shared.DVRInfo.expires_at:type_name -> google.protobuf.Timestamp
 	28, // 13: shared.DVRInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
 	22, // 14: shared.OutputEndpoint.capabilities:type_name -> shared.OutputCapability
-	57, // 15: shared.ViewerEndpoint.outputs:type_name -> shared.ViewerEndpoint.OutputsEntry
-	60, // 16: shared.PlaybackInstance.last_update:type_name -> google.protobuf.Timestamp
+	61, // 15: shared.ViewerEndpoint.outputs:type_name -> shared.ViewerEndpoint.OutputsEntry
+	64, // 16: shared.PlaybackInstance.last_update:type_name -> google.protobuf.Timestamp
 	25, // 17: shared.PlaybackMetadata.tracks:type_name -> shared.PlaybackTrack
 	26, // 18: shared.PlaybackMetadata.instances:type_name -> shared.PlaybackInstance
-	60, // 19: shared.PlaybackMetadata.created_at:type_name -> google.protobuf.Timestamp
+	64, // 19: shared.PlaybackMetadata.created_at:type_name -> google.protobuf.Timestamp
 	28, // 20: shared.PlaybackMetadata.thumbnail_assets:type_name -> shared.ThumbnailAssets
 	24, // 21: shared.ViewerEndpointResponse.primary:type_name -> shared.ViewerEndpoint
 	24, // 22: shared.ViewerEndpointResponse.fallbacks:type_name -> shared.ViewerEndpoint
@@ -5978,37 +6292,40 @@ var file_shared_proto_depIdxs = []int32{
 	31, // 26: shared.IngestEndpointResponse.primary:type_name -> shared.IngestEndpoint
 	31, // 27: shared.IngestEndpointResponse.fallbacks:type_name -> shared.IngestEndpoint
 	32, // 28: shared.IngestEndpointResponse.metadata:type_name -> shared.IngestMetadata
-	59, // 29: shared.CreateVodUploadRequest.actor:type_name -> common.RequestActor
+	63, // 29: shared.CreateVodUploadRequest.actor:type_name -> common.RequestActor
 	36, // 30: shared.CreateVodUploadResponse.parts:type_name -> shared.VodUploadPart
-	60, // 31: shared.CreateVodUploadResponse.expires_at:type_name -> google.protobuf.Timestamp
-	59, // 32: shared.ImportVodAssetRequest.actor:type_name -> common.RequestActor
+	64, // 31: shared.CreateVodUploadResponse.expires_at:type_name -> google.protobuf.Timestamp
+	63, // 32: shared.ImportVodAssetRequest.actor:type_name -> common.RequestActor
 	49, // 33: shared.ImportVodAssetResponse.asset:type_name -> shared.VodAssetInfo
 	40, // 34: shared.CompleteVodUploadRequest.parts:type_name -> shared.VodCompletedPart
-	59, // 35: shared.CompleteVodUploadRequest.actor:type_name -> common.RequestActor
+	63, // 35: shared.CompleteVodUploadRequest.actor:type_name -> common.RequestActor
 	49, // 36: shared.CompleteVodUploadResponse.asset:type_name -> shared.VodAssetInfo
 	3,  // 37: shared.GetVodUploadStatusResponse.state:type_name -> shared.VodStatus
-	60, // 38: shared.GetVodUploadStatusResponse.expires_at:type_name -> google.protobuf.Timestamp
-	60, // 39: shared.GetVodUploadStatusResponse.retention_until:type_name -> google.protobuf.Timestamp
+	64, // 38: shared.GetVodUploadStatusResponse.expires_at:type_name -> google.protobuf.Timestamp
+	64, // 39: shared.GetVodUploadStatusResponse.retention_until:type_name -> google.protobuf.Timestamp
 	43, // 40: shared.GetVodUploadStatusResponse.uploaded_parts:type_name -> shared.VodUploadedPart
-	59, // 41: shared.AbortVodUploadRequest.actor:type_name -> common.RequestActor
+	63, // 41: shared.AbortVodUploadRequest.actor:type_name -> common.RequestActor
 	3,  // 42: shared.VodAssetInfo.status:type_name -> shared.VodStatus
-	60, // 43: shared.VodAssetInfo.created_at:type_name -> google.protobuf.Timestamp
-	60, // 44: shared.VodAssetInfo.updated_at:type_name -> google.protobuf.Timestamp
-	60, // 45: shared.VodAssetInfo.expires_at:type_name -> google.protobuf.Timestamp
+	64, // 43: shared.VodAssetInfo.created_at:type_name -> google.protobuf.Timestamp
+	64, // 44: shared.VodAssetInfo.updated_at:type_name -> google.protobuf.Timestamp
+	64, // 45: shared.VodAssetInfo.expires_at:type_name -> google.protobuf.Timestamp
 	28, // 46: shared.VodAssetInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
-	58, // 47: shared.WebhookRequest.headers:type_name -> shared.WebhookRequest.HeadersEntry
+	62, // 47: shared.WebhookRequest.headers:type_name -> shared.WebhookRequest.HeadersEntry
 	4,  // 48: shared.GetArtifactCreationStatusResponse.outcome:type_name -> shared.ArtifactCreationOutcome
 	4,  // 49: shared.AckArtifactCreationCommandResponse.outcome:type_name -> shared.ArtifactCreationOutcome
-	23, // 50: shared.ViewerEndpoint.OutputsEntry.value:type_name -> shared.OutputEndpoint
-	53, // 51: shared.ArtifactCreationStatusService.GetArtifactCreationStatus:input_type -> shared.GetArtifactCreationStatusRequest
-	55, // 52: shared.ArtifactCreationStatusService.AckArtifactCreationCommand:input_type -> shared.AckArtifactCreationCommandRequest
-	54, // 53: shared.ArtifactCreationStatusService.GetArtifactCreationStatus:output_type -> shared.GetArtifactCreationStatusResponse
-	56, // 54: shared.ArtifactCreationStatusService.AckArtifactCreationCommand:output_type -> shared.AckArtifactCreationCommandResponse
-	53, // [53:55] is the sub-list for method output_type
-	51, // [51:53] is the sub-list for method input_type
-	51, // [51:51] is the sub-list for extension type_name
-	51, // [51:51] is the sub-list for extension extendee
-	0,  // [0:51] is the sub-list for field type_name
+	63, // 50: shared.CreateVodOriginalDownloadRequest.actor:type_name -> common.RequestActor
+	64, // 51: shared.CreateVodOriginalDownloadResponse.expires_at:type_name -> google.protobuf.Timestamp
+	63, // 52: shared.DeleteVodOriginalRequest.actor:type_name -> common.RequestActor
+	23, // 53: shared.ViewerEndpoint.OutputsEntry.value:type_name -> shared.OutputEndpoint
+	53, // 54: shared.ArtifactCreationStatusService.GetArtifactCreationStatus:input_type -> shared.GetArtifactCreationStatusRequest
+	55, // 55: shared.ArtifactCreationStatusService.AckArtifactCreationCommand:input_type -> shared.AckArtifactCreationCommandRequest
+	54, // 56: shared.ArtifactCreationStatusService.GetArtifactCreationStatus:output_type -> shared.GetArtifactCreationStatusResponse
+	56, // 57: shared.ArtifactCreationStatusService.AckArtifactCreationCommand:output_type -> shared.AckArtifactCreationCommandResponse
+	56, // [56:58] is the sub-list for method output_type
+	54, // [54:56] is the sub-list for method input_type
+	54, // [54:54] is the sub-list for extension type_name
+	54, // [54:54] is the sub-list for extension extendee
+	0,  // [0:54] is the sub-list for field type_name
 }
 
 func init() { file_shared_proto_init() }
@@ -6030,6 +6347,7 @@ func file_shared_proto_init() {
 	file_shared_proto_msgTypes[27].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[28].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[29].OneofWrappers = []any{}
+	file_shared_proto_msgTypes[30].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[32].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[44].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[45].OneofWrappers = []any{}
@@ -6039,7 +6357,7 @@ func file_shared_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_shared_proto_rawDesc), len(file_shared_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   54,
+			NumMessages:   58,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

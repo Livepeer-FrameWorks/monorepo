@@ -8,70 +8,9 @@ package commodoredb
 import (
 	"context"
 	"database/sql"
-	"time"
 
 	"github.com/lib/pq"
 )
-
-const countStreamKeys = `-- name: CountStreamKeys :one
-SELECT COUNT(*)::integer
-FROM commodore.stream_keys
-WHERE stream_id = $1 AND user_id = $2 AND tenant_id = $3
-`
-
-type CountStreamKeysParams struct {
-	StreamID string         `db:"stream_id" json:"stream_id"`
-	UserID   sql.NullString `db:"user_id" json:"user_id"`
-	TenantID string         `db:"tenant_id" json:"tenant_id"`
-}
-
-func (q *Queries) CountStreamKeys(ctx context.Context, arg CountStreamKeysParams) (int32, error) {
-	row := q.db.QueryRowContext(ctx, countStreamKeys, arg.StreamID, arg.UserID, arg.TenantID)
-	var column_1 int32
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
-const deactivateStreamKey = `-- name: DeactivateStreamKey :execrows
-UPDATE commodore.stream_keys
-SET is_active = false, updated_at = NOW()
-WHERE id = $1 AND stream_id = $2 AND user_id = $3 AND tenant_id = $4
-`
-
-type DeactivateStreamKeyParams struct {
-	ID       string         `db:"id" json:"id"`
-	StreamID string         `db:"stream_id" json:"stream_id"`
-	UserID   sql.NullString `db:"user_id" json:"user_id"`
-	TenantID string         `db:"tenant_id" json:"tenant_id"`
-}
-
-func (q *Queries) DeactivateStreamKey(ctx context.Context, arg DeactivateStreamKeyParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deactivateStreamKey,
-		arg.ID,
-		arg.StreamID,
-		arg.UserID,
-		arg.TenantID,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const deleteStreamKeysForDeletion = `-- name: DeleteStreamKeysForDeletion :exec
-DELETE FROM commodore.stream_keys
-WHERE stream_id = $1 AND tenant_id = $2
-`
-
-type DeleteStreamKeysForDeletionParams struct {
-	StreamID string `db:"stream_id" json:"stream_id"`
-	TenantID string `db:"tenant_id" json:"tenant_id"`
-}
-
-func (q *Queries) DeleteStreamKeysForDeletion(ctx context.Context, arg DeleteStreamKeysForDeletionParams) error {
-	_, err := q.db.ExecContext(ctx, deleteStreamKeysForDeletion, arg.StreamID, arg.TenantID)
-	return err
-}
 
 const enableCreatedStreamRecording = `-- name: EnableCreatedStreamRecording :exec
 UPDATE commodore.streams
@@ -101,6 +40,42 @@ func (q *Queries) FenceParentStreamLive(ctx context.Context, arg FenceParentStre
 	var live bool
 	err := row.Scan(&live)
 	return live, err
+}
+
+const getCurrentPrimaryStreamKey = `-- name: GetCurrentPrimaryStreamKey :one
+SELECT id, tenant_id, user_id, stream_key, created_at, updated_at
+FROM commodore.streams
+WHERE id = $1 AND user_id = $2 AND tenant_id = $3
+  AND ingest_mode = 'push' AND deleted_at IS NULL
+`
+
+type GetCurrentPrimaryStreamKeyParams struct {
+	ID       string `db:"id" json:"id"`
+	UserID   string `db:"user_id" json:"user_id"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+}
+
+type GetCurrentPrimaryStreamKeyRow struct {
+	ID        string       `db:"id" json:"id"`
+	TenantID  string       `db:"tenant_id" json:"tenant_id"`
+	UserID    string       `db:"user_id" json:"user_id"`
+	StreamKey string       `db:"stream_key" json:"stream_key"`
+	CreatedAt sql.NullTime `db:"created_at" json:"created_at"`
+	UpdatedAt sql.NullTime `db:"updated_at" json:"updated_at"`
+}
+
+func (q *Queries) GetCurrentPrimaryStreamKey(ctx context.Context, arg GetCurrentPrimaryStreamKeyParams) (GetCurrentPrimaryStreamKeyRow, error) {
+	row := q.db.QueryRowContext(ctx, getCurrentPrimaryStreamKey, arg.ID, arg.UserID, arg.TenantID)
+	var i GetCurrentPrimaryStreamKeyRow
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.UserID,
+		&i.StreamKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getStreamDVRChapterInterval = `-- name: GetStreamDVRChapterInterval :one
@@ -232,264 +207,6 @@ func (q *Queries) InsertCreatedPullSource(ctx context.Context, arg InsertCreated
 	return err
 }
 
-const insertStreamKey = `-- name: InsertStreamKey :exec
-INSERT INTO commodore.stream_keys (
-    id, tenant_id, user_id, stream_id, key_value, key_name, is_active
-)
-VALUES ($1, $2, $3, $4, $5, $6, true)
-`
-
-type InsertStreamKeyParams struct {
-	ID       string         `db:"id" json:"id"`
-	TenantID string         `db:"tenant_id" json:"tenant_id"`
-	UserID   sql.NullString `db:"user_id" json:"user_id"`
-	StreamID string         `db:"stream_id" json:"stream_id"`
-	KeyValue string         `db:"key_value" json:"key_value"`
-	KeyName  sql.NullString `db:"key_name" json:"key_name"`
-}
-
-func (q *Queries) InsertStreamKey(ctx context.Context, arg InsertStreamKeyParams) error {
-	_, err := q.db.ExecContext(ctx, insertStreamKey,
-		arg.ID,
-		arg.TenantID,
-		arg.UserID,
-		arg.StreamID,
-		arg.KeyValue,
-		arg.KeyName,
-	)
-	return err
-}
-
-const listStreamKeysBackward = `-- name: ListStreamKeysBackward :many
-SELECT id, tenant_id, user_id, stream_id, key_value, key_name,
-       is_active, last_used_at, created_at, updated_at
-FROM commodore.stream_keys
-WHERE stream_id = $1 AND user_id = $2 AND tenant_id = $3
-ORDER BY created_at ASC, id ASC
-LIMIT $4
-`
-
-type ListStreamKeysBackwardParams struct {
-	StreamID string         `db:"stream_id" json:"stream_id"`
-	UserID   sql.NullString `db:"user_id" json:"user_id"`
-	TenantID string         `db:"tenant_id" json:"tenant_id"`
-	Limit    int32          `db:"limit" json:"limit"`
-}
-
-func (q *Queries) ListStreamKeysBackward(ctx context.Context, arg ListStreamKeysBackwardParams) ([]CommodoreStreamKey, error) {
-	rows, err := q.db.QueryContext(ctx, listStreamKeysBackward,
-		arg.StreamID,
-		arg.UserID,
-		arg.TenantID,
-		arg.Limit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []CommodoreStreamKey{}
-	for rows.Next() {
-		var i CommodoreStreamKey
-		if err := rows.Scan(
-			&i.ID,
-			&i.TenantID,
-			&i.UserID,
-			&i.StreamID,
-			&i.KeyValue,
-			&i.KeyName,
-			&i.IsActive,
-			&i.LastUsedAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listStreamKeysBackwardBefore = `-- name: ListStreamKeysBackwardBefore :many
-SELECT id, tenant_id, user_id, stream_id, key_value, key_name,
-       is_active, last_used_at, created_at, updated_at
-FROM commodore.stream_keys
-WHERE stream_id = $1 AND user_id = $2 AND tenant_id = $3
-  AND (created_at, id) > ($4::timestamp, $5::uuid)
-ORDER BY created_at ASC, id ASC
-LIMIT $6
-`
-
-type ListStreamKeysBackwardBeforeParams struct {
-	StreamID string         `db:"stream_id" json:"stream_id"`
-	UserID   sql.NullString `db:"user_id" json:"user_id"`
-	TenantID string         `db:"tenant_id" json:"tenant_id"`
-	Column4  time.Time      `db:"column_4" json:"column_4"`
-	Column5  string         `db:"column_5" json:"column_5"`
-	Limit    int32          `db:"limit" json:"limit"`
-}
-
-func (q *Queries) ListStreamKeysBackwardBefore(ctx context.Context, arg ListStreamKeysBackwardBeforeParams) ([]CommodoreStreamKey, error) {
-	rows, err := q.db.QueryContext(ctx, listStreamKeysBackwardBefore,
-		arg.StreamID,
-		arg.UserID,
-		arg.TenantID,
-		arg.Column4,
-		arg.Column5,
-		arg.Limit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []CommodoreStreamKey{}
-	for rows.Next() {
-		var i CommodoreStreamKey
-		if err := rows.Scan(
-			&i.ID,
-			&i.TenantID,
-			&i.UserID,
-			&i.StreamID,
-			&i.KeyValue,
-			&i.KeyName,
-			&i.IsActive,
-			&i.LastUsedAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listStreamKeysForward = `-- name: ListStreamKeysForward :many
-SELECT id, tenant_id, user_id, stream_id, key_value, key_name,
-       is_active, last_used_at, created_at, updated_at
-FROM commodore.stream_keys
-WHERE stream_id = $1 AND user_id = $2 AND tenant_id = $3
-ORDER BY created_at DESC, id DESC
-LIMIT $4
-`
-
-type ListStreamKeysForwardParams struct {
-	StreamID string         `db:"stream_id" json:"stream_id"`
-	UserID   sql.NullString `db:"user_id" json:"user_id"`
-	TenantID string         `db:"tenant_id" json:"tenant_id"`
-	Limit    int32          `db:"limit" json:"limit"`
-}
-
-func (q *Queries) ListStreamKeysForward(ctx context.Context, arg ListStreamKeysForwardParams) ([]CommodoreStreamKey, error) {
-	rows, err := q.db.QueryContext(ctx, listStreamKeysForward,
-		arg.StreamID,
-		arg.UserID,
-		arg.TenantID,
-		arg.Limit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []CommodoreStreamKey{}
-	for rows.Next() {
-		var i CommodoreStreamKey
-		if err := rows.Scan(
-			&i.ID,
-			&i.TenantID,
-			&i.UserID,
-			&i.StreamID,
-			&i.KeyValue,
-			&i.KeyName,
-			&i.IsActive,
-			&i.LastUsedAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listStreamKeysForwardAfter = `-- name: ListStreamKeysForwardAfter :many
-SELECT id, tenant_id, user_id, stream_id, key_value, key_name,
-       is_active, last_used_at, created_at, updated_at
-FROM commodore.stream_keys
-WHERE stream_id = $1 AND user_id = $2 AND tenant_id = $3
-  AND (created_at, id) < ($4::timestamp, $5::uuid)
-ORDER BY created_at DESC, id DESC
-LIMIT $6
-`
-
-type ListStreamKeysForwardAfterParams struct {
-	StreamID string         `db:"stream_id" json:"stream_id"`
-	UserID   sql.NullString `db:"user_id" json:"user_id"`
-	TenantID string         `db:"tenant_id" json:"tenant_id"`
-	Column4  time.Time      `db:"column_4" json:"column_4"`
-	Column5  string         `db:"column_5" json:"column_5"`
-	Limit    int32          `db:"limit" json:"limit"`
-}
-
-func (q *Queries) ListStreamKeysForwardAfter(ctx context.Context, arg ListStreamKeysForwardAfterParams) ([]CommodoreStreamKey, error) {
-	rows, err := q.db.QueryContext(ctx, listStreamKeysForwardAfter,
-		arg.StreamID,
-		arg.UserID,
-		arg.TenantID,
-		arg.Column4,
-		arg.Column5,
-		arg.Limit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []CommodoreStreamKey{}
-	for rows.Next() {
-		var i CommodoreStreamKey
-		if err := rows.Scan(
-			&i.ID,
-			&i.TenantID,
-			&i.UserID,
-			&i.StreamID,
-			&i.KeyValue,
-			&i.KeyName,
-			&i.IsActive,
-			&i.LastUsedAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const markCreatedStreamPull = `-- name: MarkCreatedStreamPull :exec
 UPDATE commodore.streams
 SET ingest_mode = 'pull', updated_at = NOW()
@@ -562,6 +279,22 @@ type SetCreatedStreamLiveVideoABRParams struct {
 
 func (q *Queries) SetCreatedStreamLiveVideoABR(ctx context.Context, arg SetCreatedStreamLiveVideoABRParams) error {
 	_, err := q.db.ExecContext(ctx, setCreatedStreamLiveVideoABR, arg.LiveVideoAbr, arg.ID, arg.TenantID)
+	return err
+}
+
+const setCreatedStreamTranscodeLadder = `-- name: SetCreatedStreamTranscodeLadder :exec
+UPDATE commodore.streams SET transcode_ladder=$1, updated_at=NOW()
+WHERE id=$2::uuid AND tenant_id=$3::uuid
+`
+
+type SetCreatedStreamTranscodeLadderParams struct {
+	TranscodeLadder string `db:"transcode_ladder" json:"transcode_ladder"`
+	StreamID        string `db:"stream_id" json:"stream_id"`
+	TenantID        string `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) SetCreatedStreamTranscodeLadder(ctx context.Context, arg SetCreatedStreamTranscodeLadderParams) error {
+	_, err := q.db.ExecContext(ctx, setCreatedStreamTranscodeLadder, arg.TranscodeLadder, arg.StreamID, arg.TenantID)
 	return err
 }
 
@@ -645,10 +378,11 @@ SET title = CASE WHEN $1::boolean THEN $2 ELSE title END,
     dvr_chapter_interval_seconds = CASE WHEN $9::boolean THEN $10::integer ELSE dvr_chapter_interval_seconds END,
     monitoring_enabled = CASE WHEN $11::boolean THEN $12::boolean ELSE monitoring_enabled END,
     live_video_abr = CASE WHEN $13::boolean THEN $14::varchar ELSE live_video_abr END,
+    transcode_ladder = CASE WHEN $15::boolean THEN $16::varchar ELSE transcode_ladder END,
     updated_at = NOW()
-WHERE id = $15::uuid
-  AND user_id = $16::uuid
-  AND tenant_id = $17::uuid
+WHERE id = $17::uuid
+  AND user_id = $18::uuid
+  AND tenant_id = $19::uuid
   AND deleted_at IS NULL
 `
 
@@ -667,6 +401,8 @@ type UpdateStreamFieldsParams struct {
 	MonitoringEnabled    sql.NullBool   `db:"monitoring_enabled" json:"monitoring_enabled"`
 	ApplyLiveVideoAbr    bool           `db:"apply_live_video_abr" json:"apply_live_video_abr"`
 	LiveVideoAbr         string         `db:"live_video_abr" json:"live_video_abr"`
+	ApplyTranscodeLadder bool           `db:"apply_transcode_ladder" json:"apply_transcode_ladder"`
+	TranscodeLadder      string         `db:"transcode_ladder" json:"transcode_ladder"`
 	StreamID             string         `db:"stream_id" json:"stream_id"`
 	UserID               string         `db:"user_id" json:"user_id"`
 	TenantID             string         `db:"tenant_id" json:"tenant_id"`
@@ -688,6 +424,8 @@ func (q *Queries) UpdateStreamFields(ctx context.Context, arg UpdateStreamFields
 		arg.MonitoringEnabled,
 		arg.ApplyLiveVideoAbr,
 		arg.LiveVideoAbr,
+		arg.ApplyTranscodeLadder,
+		arg.TranscodeLadder,
 		arg.StreamID,
 		arg.UserID,
 		arg.TenantID,

@@ -312,6 +312,7 @@ SELECT a.artifact_hash, a.artifact_type, a.tenant_id::text,
        COALESCE(a.storage_cluster_id, '')::text AS storage_cluster_id,
        COALESCE(a.origin_cluster_id, '')::text AS origin_cluster_id,
        COALESCE(v.s3_key, '')::text AS vod_s3_key,
+       COALESCE(v.original_s3_key, '')::text AS original_s3_key,
        COALESCE(a.s3_url, '')::text AS s3_url,
        COALESCE(a.sync_object_key, '')::text AS sync_object_key,
        COALESCE(a.active_object_key, '')::text AS active_object_key,
@@ -345,6 +346,7 @@ type ListPurgeableArtifactsRow struct {
 	StorageClusterID    string         `db:"storage_cluster_id" json:"storage_cluster_id"`
 	OriginClusterID     string         `db:"origin_cluster_id" json:"origin_cluster_id"`
 	VodS3Key            string         `db:"vod_s3_key" json:"vod_s3_key"`
+	OriginalS3Key       string         `db:"original_s3_key" json:"original_s3_key"`
 	S3Url               string         `db:"s3_url" json:"s3_url"`
 	SyncObjectKey       string         `db:"sync_object_key" json:"sync_object_key"`
 	ActiveObjectKey     string         `db:"active_object_key" json:"active_object_key"`
@@ -372,6 +374,7 @@ func (q *Queries) ListPurgeableArtifacts(ctx context.Context, retentionInterval 
 			&i.StorageClusterID,
 			&i.OriginClusterID,
 			&i.VodS3Key,
+			&i.OriginalS3Key,
 			&i.S3Url,
 			&i.SyncObjectKey,
 			&i.ActiveObjectKey,
@@ -400,6 +403,7 @@ SELECT a.artifact_hash, a.artifact_type, a.tenant_id::text,
        COALESCE(a.storage_cluster_id, '')::text AS storage_cluster_id,
        COALESCE(a.origin_cluster_id, '')::text AS origin_cluster_id,
        COALESCE(v.s3_key, '')::text AS vod_s3_key,
+       COALESCE(v.original_s3_key, '')::text AS original_s3_key,
        COALESCE(a.s3_url, '')::text AS s3_url,
        COALESCE(a.sync_object_key, '')::text AS sync_object_key,
        COALESCE(a.active_object_key, '')::text AS active_object_key,
@@ -439,6 +443,7 @@ type ListPurgeableLocalArtifactsRow struct {
 	StorageClusterID    string         `db:"storage_cluster_id" json:"storage_cluster_id"`
 	OriginClusterID     string         `db:"origin_cluster_id" json:"origin_cluster_id"`
 	VodS3Key            string         `db:"vod_s3_key" json:"vod_s3_key"`
+	OriginalS3Key       string         `db:"original_s3_key" json:"original_s3_key"`
 	S3Url               string         `db:"s3_url" json:"s3_url"`
 	SyncObjectKey       string         `db:"sync_object_key" json:"sync_object_key"`
 	ActiveObjectKey     string         `db:"active_object_key" json:"active_object_key"`
@@ -466,6 +471,7 @@ func (q *Queries) ListPurgeableLocalArtifacts(ctx context.Context, arg ListPurge
 			&i.StorageClusterID,
 			&i.OriginClusterID,
 			&i.VodS3Key,
+			&i.OriginalS3Key,
 			&i.S3Url,
 			&i.SyncObjectKey,
 			&i.ActiveObjectKey,

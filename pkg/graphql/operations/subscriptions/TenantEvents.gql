@@ -25,15 +25,37 @@ subscription TenantEvents($types: [String!], $streamId: ID) {
       ... on StreamKeyRotated {
         streamId
       }
+      ... on StreamEnded {
+        streamId
+        playbackId
+        sessionId
+      }
+      ... on StreamIngestDisconnected {
+        streamId
+        sessionId
+        disconnectReason: reason
+      }
+      ... on RecordingChapterReady {
+        artifact {
+          ...EventArtifactFields
+        }
+        chapterId
+        startMs
+        endMs
+        sizeBytes
+      }
       ... on StreamConnected {
         streamId
         protocol
+        sessionId
       }
       ... on StreamLive {
         streamId
+        sessionId
       }
       ... on StreamIdle {
         streamId
+        sessionId
       }
       ... on ClipRequested {
         artifact {

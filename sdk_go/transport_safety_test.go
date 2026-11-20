@@ -50,7 +50,7 @@ func TestSharedProbeWaitHonorsCallerCancellation(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(entered)
 		<-release
-		_, _ = io.WriteString(w, `{"data":{"serverInfo":{"version":"v0.3.11","features":[]}}}`)
+		_, _ = io.WriteString(w, `{"data":{"serverInfo":{"version":"v0.3.16","features":[]}}}`)
 	}))
 	defer srv.Close()
 	defer close(release)

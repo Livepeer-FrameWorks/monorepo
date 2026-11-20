@@ -4,7 +4,7 @@
 
   let { stream } = $props();
 
-  const resolvedStatus = $derived(stream?.status ?? stream?.metrics?.status);
+  const resolvedStatus = $derived(stream?.ingest?.state);
   const statusIcon = $derived(getStatusIcon(resolvedStatus));
   const statusColor = $derived(getStatusColor(resolvedStatus));
   const StatusIconComponent = $derived(getIconComponent(statusIcon));

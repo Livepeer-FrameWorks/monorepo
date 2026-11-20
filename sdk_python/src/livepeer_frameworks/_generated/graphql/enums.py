@@ -24,6 +24,11 @@ class BufferState(OpenEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class CapacityBudgetSource(OpenEnum):
+    DEFAULT = "DEFAULT"
+    OPERATOR = "OPERATOR"
+
+
 class CardPaymentProvider(OpenEnum):
     STRIPE = "STRIPE"
     MOLLIE = "MOLLIE"
@@ -306,6 +311,7 @@ class MediaRetentionTarget(OpenEnum):
 
 
 class MediaViewerProtocol(OpenEnum):
+    WEBVTT = "WEBVTT"
     WEBRTC = "WEBRTC"
     WHEP = "WHEP"
     HLS = "HLS"
@@ -463,6 +469,12 @@ class StreamEventType(OpenEnum):
     TRACK_LIST_UPDATE = "TRACK_LIST_UPDATE"
     PLAY_REWRITE = "PLAY_REWRITE"
     STREAM_SOURCE = "STREAM_SOURCE"
+
+
+class StreamIngestState(OpenEnum):
+    IDLE = "IDLE"
+    CONNECTED = "CONNECTED"
+    LIVE = "LIVE"
 
 
 class StreamStatus(OpenEnum):

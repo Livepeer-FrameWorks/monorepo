@@ -126,14 +126,14 @@ func TestBuildCreateClusterRequest(t *testing.T) {
 	// No bool flags changed → those pointers stay nil; scalars and lists set.
 	c := newCmd()
 	req := buildCreateClusterRequest(c, "cl-1", "Cluster One", "edge", "https://base", "h1:9092,h2:9092",
-		"", "", "", "managed", 10, 20, 100, 0, false, false)
+		"", "", "", "managed", 10, 20, 0, false, false)
 	if req.ClusterId != "cl-1" || req.ClusterName != "Cluster One" || req.DeploymentModel != "managed" {
 		t.Fatalf("base fields wrong: %+v", req)
 	}
 	if len(req.KafkaBrokers) != 2 {
 		t.Fatalf("kafka brokers should parse to 2, got %v", req.KafkaBrokers)
 	}
-	if req.MaxConcurrentStreams != 10 || req.MaxConcurrentViewers != 20 || req.MaxBandwidthMbps != 100 {
+	if req.MaxConcurrentStreams != 10 || req.MaxConcurrentViewers != 20 {
 		t.Fatalf("limits wrong: %+v", req)
 	}
 	if req.IsPlatformOfficial != nil || req.IsDefaultCluster != nil {
@@ -148,7 +148,7 @@ func TestBuildCreateClusterRequest(t *testing.T) {
 	_ = c.Flags().Set("is-platform-official", "true")
 	_ = c.Flags().Set("is-default-cluster", "true")
 	req = buildCreateClusterRequest(c, "cl-2", "Two", "central", "https://b", "",
-		"postgres://db", "https://peri", "owner-1", "shared", 0, 0, 0, 3, true, true)
+		"postgres://db", "https://peri", "owner-1", "shared", 0, 0, 3, true, true)
 	if req.GetIsPlatformOfficial() != true || req.GetIsDefaultCluster() != true {
 		t.Fatalf("changed bool flags should set pointers: %+v", req)
 	}

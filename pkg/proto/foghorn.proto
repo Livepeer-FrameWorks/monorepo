@@ -218,6 +218,8 @@ service VodControlService {
   rpc GetVodUploadStatus(shared.GetVodUploadStatusRequest) returns (shared.GetVodUploadStatusResponse);
   // DeleteVodAsset deletes a VOD asset
   rpc DeleteVodAsset(shared.DeleteVodAssetRequest) returns (shared.DeleteVodAssetResponse);
+  rpc CreateVodOriginalDownload(shared.CreateVodOriginalDownloadRequest) returns (shared.CreateVodOriginalDownloadResponse);
+  rpc DeleteVodOriginal(shared.DeleteVodOriginalRequest) returns (shared.DeleteVodOriginalResponse);
 }
 
 // EdgeProvisioningService handles pre-registration of edge nodes during CLI provisioning.
@@ -250,6 +252,8 @@ message PreRegisterEdgeResponse {
 // Fronts the existing HTTP handlers with tenant ownership validation.
 // Commodore proxies this as NodeManagementService for Gateway access.
 service NodeControlService {
+  // Re-compose the node's seed from Quartermaster and deliver it through its owning control connection.
+  rpc PushNodeCapacity(PushNodeCapacityRequest) returns (PushNodeCapacityResponse);
   // SetNodeOperationalMode changes a node's operational mode (normal, draining, maintenance).
   rpc SetNodeOperationalMode(foghorn_control.SetNodeModeRequest) returns (foghorn_control.SetNodeModeResponse);
   // GetNodeHealth returns real-time health and routing state for a node.
@@ -261,12 +265,24 @@ service NodeControlService {
   rpc ListNodeUpdateStatus(foghorn_control.ListNodeUpdateStatusRequest) returns (foghorn_control.ListNodeUpdateStatusResponse);
 }
 
+message PushNodeCapacityRequest {
+  string node_id = 1;
+}
+
+message PushNodeCapacityResponse {
+  uint64 composed_revision = 1;
+  bool delivered = 2;
+}
+
 // TenantControlService handles tenant-level operations called by Purser
 service TenantControlService {
+  rpc GetStreamIngestStates(foghorn_control.GetStreamIngestStatesRequest) returns (foghorn_control.GetStreamIngestStatesResponse);
   // TerminateTenantStreams stops all active streams for a tenant (called when suspended)
   rpc TerminateTenantStreams(foghorn_control.TerminateTenantStreamsRequest) returns (foghorn_control.TerminateTenantStreamsResponse);
   // TerminateStreamSessions stops only the specified tenant-owned streams.
   rpc TerminateStreamSessions(foghorn_control.TerminateStreamSessionsRequest) returns (foghorn_control.TerminateTenantStreamsResponse);
+  // A separate method makes older cells refuse generation-fenced user requests.
+  rpc TerminateClaimedStreamSessions(foghorn_control.TerminateStreamSessionsRequest) returns (foghorn_control.TerminateTenantStreamsResponse);
   // InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
   rpc InvalidateTenantCache(foghorn_control.InvalidateTenantCacheRequest) returns (foghorn_control.InvalidateTenantCacheResponse);
   // InvalidatePlaybackAuth tells Foghorn to send invalidate_sessions to every

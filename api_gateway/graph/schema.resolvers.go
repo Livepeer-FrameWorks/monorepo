@@ -889,48 +889,42 @@ func (r *clipResolver) Stream(ctx context.Context, obj *sharedpb.ClipInfo) (*com
 
 // NodeID is the resolver for the nodeId field.
 func (r *clipResolver) NodeID(ctx context.Context, obj *sharedpb.ClipInfo) (*string, error) {
-	if state := r.getLifecycleData(ctx, obj.ClipHash); state != nil && state.ProcessingNodeId != nil && *state.ProcessingNodeId != "" {
-		return state.ProcessingNodeId, nil
+	state, err := r.getLifecycleData(ctx, obj.ClipHash)
+	if err != nil {
+		return nil, err
 	}
-	if obj.NodeId != "" {
-		return &obj.NodeId, nil
+	if state != nil {
+		return state.ProcessingNodeId, nil
 	}
 	return nil, nil
 }
 
 // StoragePath is the resolver for the storagePath field.
 func (r *clipResolver) StoragePath(ctx context.Context, obj *sharedpb.ClipInfo) (*string, error) {
+	state, err := r.getLifecycleData(ctx, obj.ClipHash)
+	if err != nil {
+		return nil, err
+	}
 	if !r.CanViewSensitiveTenantData(ctx) {
 		return nil, nil
 	}
-	if state := r.getLifecycleData(ctx, obj.ClipHash); state != nil && state.FilePath != nil && *state.FilePath != "" {
+	if state != nil {
 		return state.FilePath, nil
-	}
-	if obj.StoragePath != "" {
-		return &obj.StoragePath, nil
 	}
 	return nil, nil
 }
 
 // SizeBytes is the resolver for the sizeBytes field.
 func (r *clipResolver) SizeBytes(ctx context.Context, obj *sharedpb.ClipInfo) (*float64, error) {
-	if state := r.getLifecycleData(ctx, obj.ClipHash); state != nil && state.SizeBytes != nil {
-		size := float64(*state.SizeBytes)
-		return &size, nil
+	if obj.SizeBytes == nil {
+		return nil, nil
 	}
-	if obj.SizeBytes != nil {
-		size := float64(*obj.SizeBytes)
-		return &size, nil
-	}
-	return nil, nil
+	size := float64(*obj.SizeBytes)
+	return &size, nil
 }
 
 // Status is the resolver for the status field.
-// Fetches lifecycle data from Periscope - the source of truth for processing status.
 func (r *clipResolver) Status(ctx context.Context, obj *sharedpb.ClipInfo) (string, error) {
-	if state := r.getLifecycleData(ctx, obj.ClipHash); state != nil && state.Stage != "" {
-		return state.Stage, nil
-	}
 	if obj.Status != "" {
 		return obj.Status, nil
 	}
@@ -969,18 +963,19 @@ func (r *clipResolver) RequestedParams(ctx context.Context, obj *sharedpb.ClipIn
 
 // StorageLocation is the resolver for the storageLocation field.
 func (r *clipResolver) StorageLocation(ctx context.Context, obj *sharedpb.ClipInfo) (*string, error) {
-	if obj.StorageLocation != nil && *obj.StorageLocation != "" {
-		return obj.StorageLocation, nil
+	return obj.StorageLocation, nil
+}
+
+// HasLocalCopy is the resolver for the hasLocalCopy field.
+func (r *clipResolver) HasLocalCopy(ctx context.Context, obj *sharedpb.ClipInfo) (*bool, error) {
+	state, err := r.getLifecycleData(ctx, obj.ClipHash)
+	if err != nil {
+		return nil, err
 	}
-	state := r.getLifecycleData(ctx, obj.ClipHash)
-	if state == nil {
-		return nil, nil
+	if state != nil {
+		return state.HasLocalCopy, nil
 	}
-	if state.StorageLocation != nil && *state.StorageLocation != "" {
-		return state.StorageLocation, nil
-	}
-	loc := "local"
-	return &loc, nil
+	return nil, nil
 }
 
 // ExpiresAt is the resolver for the expiresAt field.
@@ -1037,6 +1032,16 @@ func (r *clipResolver) StorageCost(ctx context.Context, obj *sharedpb.ClipInfo) 
 // ID is the resolver for the id field.
 func (r *clusterResolver) ID(ctx context.Context, obj *quartermasterpb.InfrastructureCluster) (string, error) {
 	return globalid.Encode(globalid.TypeCluster, obj.Id), nil
+}
+
+// MaxBandwidthMbps is the resolver for the maxBandwidthMbps field.
+func (r *clusterResolver) MaxBandwidthMbps(ctx context.Context, obj *quartermasterpb.InfrastructureCluster) (int, error) {
+	return r.DoClusterMaxBandwidthMbps(ctx, obj)
+}
+
+// Capacity is the resolver for the capacity field.
+func (r *clusterResolver) Capacity(ctx context.Context, obj *quartermasterpb.InfrastructureCluster) (*model.ClusterCapacity, error) {
+	return r.DoClusterCapacity(ctx, obj)
 }
 
 // IsSubscribed is the resolver for the isSubscribed field.
@@ -1235,6 +1240,11 @@ func (r *countryMetricResolver) Percentage(ctx context.Context, obj *periscopepb
 	return float64(obj.GetPercentage()), nil
 }
 
+// Chapters is the resolver for the chapters field.
+func (r *dVRRequestResolver) Chapters(ctx context.Context, obj *sharedpb.DVRInfo, page *model.ConnectionInput, rangeStartMs *float64, rangeEndMs *float64) (*model.DVRChapterConnection, error) {
+	return r.DoSavedDVRChapters(ctx, obj, page, rangeStartMs, rangeEndMs)
+}
+
 // StreamID is the resolver for the streamId field.
 func (r *dVRRequestResolver) StreamID(ctx context.Context, obj *sharedpb.DVRInfo) (string, error) {
 	return encodeStreamID(obj.GetStreamId())
@@ -1303,125 +1313,100 @@ func (r *dVRRequestResolver) StorageCost(ctx context.Context, obj *sharedpb.DVRI
 }
 
 // StorageNodeID is the resolver for the storageNodeId field.
-// Lifecycle data - from Periscope.
 func (r *dVRRequestResolver) StorageNodeID(ctx context.Context, obj *sharedpb.DVRInfo) (*string, error) {
-	if state := r.getLifecycleData(ctx, obj.DvrHash); state != nil && state.ProcessingNodeId != nil && *state.ProcessingNodeId != "" {
+	state, err := r.getLifecycleData(ctx, obj.DvrHash)
+	if err != nil {
+		return nil, err
+	}
+	if state != nil {
 		return state.ProcessingNodeId, nil
 	}
 	return nil, nil
 }
 
 // Status is the resolver for the status field.
-// Lifecycle data - from Periscope.
 func (r *dVRRequestResolver) Status(ctx context.Context, obj *sharedpb.DVRInfo) (*string, error) {
-	if state := r.getLifecycleData(ctx, obj.DvrHash); state != nil && state.Stage != "" {
-		return &state.Stage, nil
-	}
 	if obj.Status != "" {
 		return &obj.Status, nil
 	}
-	status := "unknown"
-	return &status, nil
+	unknown := "unknown"
+	return &unknown, nil
 }
 
 // StartedAt is the resolver for the startedAt field.
-// Lifecycle data - from Periscope.
 func (r *dVRRequestResolver) StartedAt(ctx context.Context, obj *sharedpb.DVRInfo) (*time.Time, error) {
-	if state := r.getLifecycleData(ctx, obj.DvrHash); state != nil && state.StartedAt != nil {
-		t := state.StartedAt.AsTime()
-		return &t, nil
+	if obj.StartedAt == nil {
+		return nil, nil
 	}
-	if obj.StartedAt != nil {
-		t := obj.StartedAt.AsTime()
-		return &t, nil
-	}
-	return nil, nil
+	t := obj.StartedAt.AsTime()
+	return &t, nil
 }
 
 // EndedAt is the resolver for the endedAt field.
-// Lifecycle data - from Periscope (CompletedAt maps to EndedAt).
 func (r *dVRRequestResolver) EndedAt(ctx context.Context, obj *sharedpb.DVRInfo) (*time.Time, error) {
-	if state := r.getLifecycleData(ctx, obj.DvrHash); state != nil && state.CompletedAt != nil {
-		t := state.CompletedAt.AsTime()
-		return &t, nil
+	if obj.EndedAt == nil {
+		return nil, nil
 	}
-	if obj.EndedAt != nil {
-		t := obj.EndedAt.AsTime()
-		return &t, nil
-	}
-	return nil, nil
+	t := obj.EndedAt.AsTime()
+	return &t, nil
 }
 
 // DurationSeconds is the resolver for the durationSeconds field.
-// Note: Duration may need to be computed from start/end times in lifecycle data.
-// For now, we rely on business registry data as duration is often stored there.
 func (r *dVRRequestResolver) DurationSeconds(ctx context.Context, obj *sharedpb.DVRInfo) (*int, error) {
-	// Try to calculate from lifecycle data timestamps
-	state := r.getLifecycleData(ctx, obj.DvrHash)
-	if state != nil && state.StartedAt != nil && state.CompletedAt != nil {
-		duration := int(state.CompletedAt.AsTime().Sub(state.StartedAt.AsTime()).Seconds())
-		if duration > 0 {
-			return &duration, nil
-		}
+	if obj.DurationSeconds == nil {
+		return nil, nil
 	}
-	// Fallback to business data
-	if obj.DurationSeconds != nil {
-		duration := int(*obj.DurationSeconds)
-		return &duration, nil
-	}
-	return nil, nil
+	duration := int(*obj.DurationSeconds)
+	return &duration, nil
 }
 
 // SizeBytes is the resolver for the sizeBytes field.
-// Lifecycle data - from Periscope.
 func (r *dVRRequestResolver) SizeBytes(ctx context.Context, obj *sharedpb.DVRInfo) (*float64, error) {
-	if state := r.getLifecycleData(ctx, obj.DvrHash); state != nil && state.SizeBytes != nil {
-		size := float64(*state.SizeBytes)
-		return &size, nil
+	if obj.SizeBytes == nil {
+		return nil, nil
 	}
-	if obj.SizeBytes != nil {
-		size := float64(*obj.SizeBytes)
-		return &size, nil
-	}
-	return nil, nil
+	size := float64(*obj.SizeBytes)
+	return &size, nil
 }
 
 // ManifestPath is the resolver for the manifestPath field.
-// Lifecycle data - from Periscope.
 func (r *dVRRequestResolver) ManifestPath(ctx context.Context, obj *sharedpb.DVRInfo) (*string, error) {
+	state, err := r.getLifecycleData(ctx, obj.DvrHash)
+	if err != nil {
+		return nil, err
+	}
 	if !r.CanViewSensitiveTenantData(ctx) {
 		return nil, nil
 	}
-	if state := r.getLifecycleData(ctx, obj.DvrHash); state != nil && state.ManifestPath != nil && *state.ManifestPath != "" {
+	if state != nil {
 		return state.ManifestPath, nil
 	}
 	return nil, nil
 }
 
 // ErrorMessage is the resolver for the errorMessage field.
-// Lifecycle data - from Periscope.
 func (r *dVRRequestResolver) ErrorMessage(ctx context.Context, obj *sharedpb.DVRInfo) (*string, error) {
-	if state := r.getLifecycleData(ctx, obj.DvrHash); state != nil && state.ErrorMessage != nil && *state.ErrorMessage != "" {
-		return state.ErrorMessage, nil
+	if obj.ErrorMessage == "" {
+		return nil, nil
 	}
-	return nil, nil
+	return &obj.ErrorMessage, nil
 }
 
 // StorageLocation is the resolver for the storageLocation field.
-// Lifecycle data - derived from S3 URL presence.
 func (r *dVRRequestResolver) StorageLocation(ctx context.Context, obj *sharedpb.DVRInfo) (*string, error) {
-	if obj.StorageLocation != nil && *obj.StorageLocation != "" {
-		return obj.StorageLocation, nil
+	return obj.StorageLocation, nil
+}
+
+// HasLocalCopy is the resolver for the hasLocalCopy field.
+func (r *dVRRequestResolver) HasLocalCopy(ctx context.Context, obj *sharedpb.DVRInfo) (*bool, error) {
+	state, err := r.getLifecycleData(ctx, obj.DvrHash)
+	if err != nil {
+		return nil, err
 	}
-	state := r.getLifecycleData(ctx, obj.DvrHash)
-	if state == nil {
-		return nil, nil
+	if state != nil {
+		return state.HasLocalCopy, nil
 	}
-	if state.StorageLocation != nil && *state.StorageLocation != "" {
-		return state.StorageLocation, nil
-	}
-	loc := "local"
-	return &loc, nil
+	return nil, nil
 }
 
 // FrozenAt is the resolver for the frozenAt field.
@@ -1435,12 +1420,15 @@ func (r *dVRRequestResolver) FrozenAt(ctx context.Context, obj *sharedpb.DVRInfo
 }
 
 // S3Url is the resolver for the s3Url field.
-// Lifecycle data - from Periscope.
 func (r *dVRRequestResolver) S3Url(ctx context.Context, obj *sharedpb.DVRInfo) (*string, error) {
+	state, err := r.getLifecycleData(ctx, obj.DvrHash)
+	if err != nil {
+		return nil, err
+	}
 	if !r.CanViewSensitiveTenantData(ctx) {
 		return nil, nil
 	}
-	if state := r.getLifecycleData(ctx, obj.DvrHash); state != nil && state.S3Url != nil && *state.S3Url != "" {
+	if state != nil {
 		return state.S3Url, nil
 	}
 	return nil, nil
@@ -1760,6 +1748,11 @@ func (r *infrastructureNodeResolver) EffectiveMode(ctx context.Context, obj *qua
 // RoutingImpactPreview is the resolver for the routingImpactPreview field.
 func (r *infrastructureNodeResolver) RoutingImpactPreview(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (*model.RoutingImpactPreview, error) {
 	return r.DoNodeRoutingImpactPreview(ctx, obj)
+}
+
+// Capacity is the resolver for the capacity field.
+func (r *infrastructureNodeResolver) Capacity(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (*model.NodeCapacity, error) {
+	return r.DoNodeCapacity(ctx, obj)
 }
 
 // StreamID is the resolver for the streamId field.
@@ -2167,12 +2160,21 @@ func (r *mutationResolver) DeleteStream(ctx context.Context, id string) (model.D
 }
 
 // RefreshStreamKey is the resolver for the refreshStreamKey field.
-func (r *mutationResolver) RefreshStreamKey(ctx context.Context, id string) (model.UpdateStreamResult, error) {
+func (r *mutationResolver) RefreshStreamKey(ctx context.Context, id string, endActiveSession *bool) (model.UpdateStreamResult, error) {
 	rawID, err := resolvers.NormalizeStreamID(id)
 	if err != nil {
 		return nil, err
 	}
-	return r.DoRefreshStreamKey(ctx, rawID)
+	return r.DoRefreshStreamKey(ctx, rawID, endActiveSession != nil && *endActiveSession)
+}
+
+// DisconnectIngest is the resolver for the disconnectIngest field.
+func (r *mutationResolver) DisconnectIngest(ctx context.Context, streamID string) (model.DisconnectIngestResult, error) {
+	rawID, err := resolvers.NormalizeStreamID(streamID)
+	if err != nil {
+		return &model.ValidationError{Message: err.Error()}, nil
+	}
+	return r.DoDisconnectIngest(ctx, rawID)
 }
 
 // CreateClip is the resolver for the createClip field.
@@ -2577,6 +2579,11 @@ func (r *mutationResolver) SetNodeMode(ctx context.Context, input model.SetNodeM
 	return r.DoSetNodeMode(ctx, input)
 }
 
+// SetNodeCapacity is the resolver for the setNodeCapacity field.
+func (r *mutationResolver) SetNodeCapacity(ctx context.Context, input model.SetNodeCapacityInput) (model.SetNodeCapacityResult, error) {
+	return r.DoSetNodeCapacity(ctx, input)
+}
+
 // OpenMistAdminSession is the resolver for the openMistAdminSession field.
 func (r *mutationResolver) OpenMistAdminSession(ctx context.Context, input model.OpenMistAdminSessionInput) (model.OpenMistAdminSessionResult, error) {
 	return r.DoOpenMistAdminSession(ctx, input)
@@ -2590,6 +2597,26 @@ func (r *mutationResolver) TestPlaybackAccess(ctx context.Context, input model.T
 // SetMediaRetentionPolicy is the resolver for the setMediaRetentionPolicy field.
 func (r *mutationResolver) SetMediaRetentionPolicy(ctx context.Context, input model.SetMediaRetentionPolicyInput) (model.SetMediaRetentionPolicyResult, error) {
 	return r.DoSetMediaRetentionPolicy(ctx, input)
+}
+
+// SetTranscodeLadderPolicy is the resolver for the setTranscodeLadderPolicy field.
+func (r *mutationResolver) SetTranscodeLadderPolicy(ctx context.Context, input model.SetTranscodeLadderPolicyInput) (model.SetTranscodeLadderPolicyResult, error) {
+	return r.DoSetTranscodeLadderPolicy(ctx, input)
+}
+
+// SetVodOriginalPolicy is the resolver for the setVodOriginalPolicy field.
+func (r *mutationResolver) SetVodOriginalPolicy(ctx context.Context, keepVodOriginals *bool) (model.SetMediaRetentionPolicyResult, error) {
+	return r.DoSetVodOriginalPolicy(ctx, keepVodOriginals)
+}
+
+// CreateVodOriginalDownload is the resolver for the createVodOriginalDownload field.
+func (r *mutationResolver) CreateVodOriginalDownload(ctx context.Context, id string) (model.CreateVodOriginalDownloadResult, error) {
+	return r.DoCreateVodOriginalDownload(ctx, id)
+}
+
+// DeleteVodOriginal is the resolver for the deleteVodOriginal field.
+func (r *mutationResolver) DeleteVodOriginal(ctx context.Context, id string) (model.DeleteVodOriginalResult, error) {
+	return r.DoDeleteVodOriginal(ctx, id)
 }
 
 // ApplyMediaPlacementChange is the resolver for the applyMediaPlacementChange field.
@@ -4472,6 +4499,11 @@ func (r *queryResolver) DvrChapters(ctx context.Context, dvrID string, mode *mod
 	return r.DoListDVRChapters(ctx, dvrHash, modeArg, interval, startBound, endBound, pageSizeArg, tokenArg)
 }
 
+// DvrRecording is the resolver for the dvrRecording field.
+func (r *queryResolver) DvrRecording(ctx context.Context, id string) (*sharedpb.DVRInfo, error) {
+	return r.DoGetDVRRecording(ctx, id)
+}
+
 // VodAsset is the resolver for the vodAsset field.
 func (r *queryResolver) VodAsset(ctx context.Context, id string) (*model.VodAsset, error) {
 	rawID, err := resolvers.NormalizeVodHash(id)
@@ -4564,6 +4596,11 @@ func (r *queryResolver) MessagesConnection(ctx context.Context, conversationID s
 // MediaRetentionPolicy is the resolver for the mediaRetentionPolicy field.
 func (r *queryResolver) MediaRetentionPolicy(ctx context.Context) (*model.MediaRetentionPolicy, error) {
 	return r.DoMediaRetentionPolicy(ctx)
+}
+
+// TranscodeLadderPolicy is the resolver for the transcodeLadderPolicy field.
+func (r *queryResolver) TranscodeLadderPolicy(ctx context.Context) (*model.TranscodeLadderPolicy, error) {
+	return r.DoTranscodeLadderPolicy(ctx)
 }
 
 // MediaPlacementPolicy is the resolver for the mediaPlacementPolicy field.
@@ -5026,6 +5063,11 @@ func (r *streamResolver) UpdatedAt(ctx context.Context, obj *commodorepb.Stream)
 	return &t, nil
 }
 
+// Ingest is the resolver for the ingest field.
+func (r *streamResolver) Ingest(ctx context.Context, obj *commodorepb.Stream) (*model.StreamIngest, error) {
+	return r.DoStreamIngest(ctx, obj)
+}
+
 // Metrics is the resolver for the metrics field.
 func (r *streamResolver) Metrics(ctx context.Context, obj *commodorepb.Stream) (*periscopepb.StreamStatusResponse, error) {
 	// In demo mode, return metrics from the stream object itself (set by demo.GenerateStreams)
@@ -5090,6 +5132,16 @@ func (r *streamResolver) Metrics(ctx context.Context, obj *commodorepb.Stream) (
 
 	resp, err := loaders.StreamMetrics.Load(ctx, tenantID, obj.StreamId)
 	return resolvers.ObservedStreamMetrics(resp), err
+}
+
+// Recordings is the resolver for the recordings field.
+func (r *streamResolver) Recordings(ctx context.Context, obj *commodorepb.Stream, page *model.ConnectionInput) (*model.StreamArtifactsConnection, error) {
+	return r.DoStreamArtifacts(ctx, obj, "dvr", page)
+}
+
+// Clips is the resolver for the clips field.
+func (r *streamResolver) Clips(ctx context.Context, obj *commodorepb.Stream, page *model.ConnectionInput) (*model.StreamArtifactsConnection, error) {
+	return r.DoStreamArtifacts(ctx, obj, "clip", page)
 }
 
 // PushTargets is the resolver for the pushTargets field.
@@ -5770,6 +5822,11 @@ func (r *subscriptionResolver) LiveIncidentUpdates(ctx context.Context) (<-chan 
 
 // LiveFirehose is the resolver for the liveFirehose field.
 func (r *subscriptionResolver) LiveFirehose(ctx context.Context) (<-chan *model.TenantEvent, error) {
+	for _, scope := range []string{"streams:read", "analytics:read", "infrastructure:read", "consultant:use"} {
+		if err := middleware.RequirePermission(ctx, scope); err != nil {
+			return nil, err
+		}
+	}
 	if r.Metrics != nil {
 		r.Metrics.Operations.WithLabelValues("subscription_firehose", "requested").Inc()
 	}
@@ -6709,7 +6766,11 @@ func (r *vodAssetResolver) StorageCost(ctx context.Context, obj *model.VodAsset)
 	if obj == nil || obj.SizeBytes == nil {
 		return nil, nil
 	}
-	return r.ProjectStorageCostForCaller(ctx, int64(*obj.SizeBytes))
+	size := int64(*obj.SizeBytes)
+	if obj.OriginalFile != nil {
+		size += int64(obj.OriginalFile.SizeBytes)
+	}
+	return r.ProjectStorageCostForCaller(ctx, size)
 }
 
 // SizeBytes is the resolver for the sizeBytes field.

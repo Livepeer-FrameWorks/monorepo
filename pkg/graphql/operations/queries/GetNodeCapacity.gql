@@ -1,0 +1,10 @@
+query GetNodeCapacity($id: ID!) {
+  node(id: $id) {
+    ... on InfrastructureNode {
+      nodeId
+      capacity {
+        ...NodeCapacityFields @mask_disable
+      }
+    }
+  }
+}

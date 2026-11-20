@@ -1,15 +1,25 @@
 -- name: GetStreamRuntimeDiagnosis :one
 SELECT jsonb_build_object(
  'tenant_id', sqlc.arg(tenant_id)::text, 'stream_id', sqlc.arg(stream_id)::text,
- 'session_count', (SELECT count(*) FROM foghorn.ingest_sessions i WHERE i.tenant_id = sqlc.arg(tenant_id)::uuid AND i.stream_internal_name = sqlc.arg(internal_name)::text),
- 'sessions', COALESCE((SELECT jsonb_agg(page.item ORDER BY page.started_at DESC, page.id DESC) FROM (
-   SELECT i.id, i.started_at, jsonb_build_object('id', i.id, 'node_id', i.node_id,
-     'cluster_id', COALESCE(i.ingest_cluster_id, ''), 'claim_id', i.start_trigger_uuid,
-     'projection_state', i.projection_state, 'started_at', i.started_at::text,
-     'ended_at', COALESCE(i.ended_at::text, ''), 'ended_reason', COALESCE(i.ended_reason, '')) AS item
-   FROM foghorn.ingest_sessions i
-   WHERE i.tenant_id = sqlc.arg(tenant_id)::uuid AND i.stream_internal_name = sqlc.arg(internal_name)::text
-   ORDER BY i.started_at DESC, i.id DESC LIMIT 20) page), '[]'::jsonb),
+ 'session_count', (SELECT count(*) FROM foghorn.ingest_sessions i WHERE i.tenant_id = sqlc.arg(tenant_id)::uuid AND i.stream_internal_name = sqlc.arg(internal_name)::text) + (SELECT count(*) FROM foghorn.pull_ingest_sessions p WHERE p.tenant_id=sqlc.arg(tenant_id)::uuid AND p.stream_id=sqlc.arg(stream_id)::uuid AND p.stream_internal_name=sqlc.arg(internal_name)::text),
+ 'sessions', COALESCE((SELECT jsonb_agg(page.item ORDER BY page.started_at DESC,page.id DESC) FROM (
+   SELECT * FROM (
+     (SELECT i.id,i.started_at,jsonb_build_object('id',i.id,'node_id',i.node_id,
+       'cluster_id',COALESCE(i.ingest_cluster_id,''),'claim_id',i.start_trigger_uuid,
+       'projection_state',i.projection_state,'started_at',i.started_at::text,
+       'ended_at',COALESCE(i.ended_at::text,''),'ended_reason',COALESCE(i.ended_reason,'')) AS item
+      FROM foghorn.ingest_sessions i WHERE i.tenant_id=sqlc.arg(tenant_id)::uuid AND i.stream_internal_name=sqlc.arg(internal_name)::text
+      ORDER BY i.started_at DESC,i.id DESC LIMIT 20)
+     UNION ALL
+     (SELECT p.id,p.started_at,jsonb_build_object('id',p.id,'node_id',p.node_id,
+       'cluster_id',p.ingest_cluster_id,'claim_id','pull:'||p.stream_id::text,
+       'projection_state',p.admission_state,'started_at',p.started_at::text,
+       'ended_at',COALESCE(p.ended_at::text,''),'ended_reason',COALESCE(p.ended_reason,'')) AS item
+      FROM foghorn.pull_ingest_sessions p WHERE p.tenant_id=sqlc.arg(tenant_id)::uuid AND p.stream_id=sqlc.arg(stream_id)::uuid
+        AND p.stream_internal_name=sqlc.arg(internal_name)::text
+      ORDER BY p.started_at DESC,p.id DESC LIMIT 20)
+   ) combined ORDER BY started_at DESC,id DESC LIMIT 20
+ ) page),'[]'::jsonb),
  'authorities', COALESCE((SELECT jsonb_agg(jsonb_build_object(
    'kind', a.authority_kind, 'authority_id', a.authority_id, 'version', a.authority_version,
    'issued_at', a.issued_at::text, 'refresh_after', a.refresh_after::text, 'valid_until', a.valid_until::text,

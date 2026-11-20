@@ -44,6 +44,7 @@ type ForwardCommandRequest struct {
 	//	*ForwardCommandRequest_RetractManagedStream
 	//	*ForwardCommandRequest_DrainStream
 	//	*ForwardCommandRequest_ReclaimDvrSegment
+	//	*ForwardCommandRequest_StopClaimedSessions
 	Command       isForwardCommandRequest_Command `protobuf_oneof:"command"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -246,6 +247,15 @@ func (x *ForwardCommandRequest) GetReclaimDvrSegment() *ipc.ReclaimDVRSegment {
 	return nil
 }
 
+func (x *ForwardCommandRequest) GetStopClaimedSessions() *ipc.StopSessionsRequest {
+	if x != nil {
+		if x, ok := x.Command.(*ForwardCommandRequest_StopClaimedSessions); ok {
+			return x.StopClaimedSessions
+		}
+	}
+	return nil
+}
+
 type isForwardCommandRequest_Command interface {
 	isForwardCommandRequest_Command()
 }
@@ -329,6 +339,10 @@ type ForwardCommandRequest_ReclaimDvrSegment struct {
 	ReclaimDvrSegment *ipc.ReclaimDVRSegment `protobuf:"bytes,30,opt,name=reclaim_dvr_segment,json=reclaimDvrSegment,proto3,oneof"`
 }
 
+type ForwardCommandRequest_StopClaimedSessions struct {
+	StopClaimedSessions *ipc.StopSessionsRequest `protobuf:"bytes,31,opt,name=stop_claimed_sessions,json=stopClaimedSessions,proto3,oneof"`
+}
+
 func (*ForwardCommandRequest_ConfigSeed) isForwardCommandRequest_Command() {}
 
 func (*ForwardCommandRequest_DvrStart) isForwardCommandRequest_Command() {}
@@ -362,6 +376,8 @@ func (*ForwardCommandRequest_RetractManagedStream) isForwardCommandRequest_Comma
 func (*ForwardCommandRequest_DrainStream) isForwardCommandRequest_Command() {}
 
 func (*ForwardCommandRequest_ReclaimDvrSegment) isForwardCommandRequest_Command() {}
+
+func (*ForwardCommandRequest_StopClaimedSessions) isForwardCommandRequest_Command() {}
 
 type ForwardCommandResponse struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
@@ -435,7 +451,7 @@ var File_foghorn_relay_proto protoreflect.FileDescriptor
 
 const file_foghorn_relay_proto_rawDesc = "" +
 	"\n" +
-	"\x13foghorn_relay.proto\x12\rfoghorn_relay\x1a\tipc.proto\"\xb6\v\n" +
+	"\x13foghorn_relay.proto\x12\rfoghorn_relay\x1a\tipc.proto\"\x92\f\n" +
 	"\x15ForwardCommandRequest\x12$\n" +
 	"\x0etarget_node_id\x18\x01 \x01(\tR\ftargetNodeId\x12>\n" +
 	"\vconfig_seed\x18\n" +
@@ -459,7 +475,8 @@ const file_foghorn_relay_proto_rawDesc = "" +
 	"\x14apply_managed_stream\x18\x1a \x01(\v2#.helmsmancontrol.ApplyManagedStreamH\x00R\x12applyManagedStream\x12]\n" +
 	"\x16retract_managed_stream\x18\x1b \x01(\v2%.helmsmancontrol.RetractManagedStreamH\x00R\x14retractManagedStream\x12H\n" +
 	"\fdrain_stream\x18\x1c \x01(\v2#.helmsmancontrol.DrainStreamRequestH\x00R\vdrainStream\x12T\n" +
-	"\x13reclaim_dvr_segment\x18\x1e \x01(\v2\".helmsmancontrol.ReclaimDVRSegmentH\x00R\x11reclaimDvrSegmentB\t\n" +
+	"\x13reclaim_dvr_segment\x18\x1e \x01(\v2\".helmsmancontrol.ReclaimDVRSegmentH\x00R\x11reclaimDvrSegment\x12Z\n" +
+	"\x15stop_claimed_sessions\x18\x1f \x01(\v2$.helmsmancontrol.StopSessionsRequestH\x00R\x13stopClaimedSessionsB\t\n" +
 	"\acommandJ\x04\b\x11\x10\x12J\x04\b\v\x10\fJ\x04\b\x1d\x10\x1eJ\x04\b\x14\x10\x15R\adefrostR\tclip_pullR\x11dvr_update_sourceR\x15activate_push_targets\"\xa5\x01\n" +
 	"\x16ForwardCommandResponse\x12\x1c\n" +
 	"\tdelivered\x18\x01 \x01(\bR\tdelivered\x12\x14\n" +
@@ -521,13 +538,14 @@ var file_foghorn_relay_proto_depIdxs = []int32{
 	16, // 14: foghorn_relay.ForwardCommandRequest.retract_managed_stream:type_name -> helmsmancontrol.RetractManagedStream
 	17, // 15: foghorn_relay.ForwardCommandRequest.drain_stream:type_name -> helmsmancontrol.DrainStreamRequest
 	18, // 16: foghorn_relay.ForwardCommandRequest.reclaim_dvr_segment:type_name -> helmsmancontrol.ReclaimDVRSegment
-	0,  // 17: foghorn_relay.FoghornRelay.ForwardCommand:input_type -> foghorn_relay.ForwardCommandRequest
-	1,  // 18: foghorn_relay.FoghornRelay.ForwardCommand:output_type -> foghorn_relay.ForwardCommandResponse
-	18, // [18:19] is the sub-list for method output_type
-	17, // [17:18] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	9,  // 17: foghorn_relay.ForwardCommandRequest.stop_claimed_sessions:type_name -> helmsmancontrol.StopSessionsRequest
+	0,  // 18: foghorn_relay.FoghornRelay.ForwardCommand:input_type -> foghorn_relay.ForwardCommandRequest
+	1,  // 19: foghorn_relay.FoghornRelay.ForwardCommand:output_type -> foghorn_relay.ForwardCommandResponse
+	19, // [19:20] is the sub-list for method output_type
+	18, // [18:19] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_foghorn_relay_proto_init() }
@@ -553,6 +571,7 @@ func file_foghorn_relay_proto_init() {
 		(*ForwardCommandRequest_RetractManagedStream)(nil),
 		(*ForwardCommandRequest_DrainStream)(nil),
 		(*ForwardCommandRequest_ReclaimDvrSegment)(nil),
+		(*ForwardCommandRequest_StopClaimedSessions)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

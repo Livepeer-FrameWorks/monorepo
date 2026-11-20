@@ -50,6 +50,12 @@ autobind:
 # Map GraphQL types to existing Go models (comprehensive mapping)
 # NOTE: Using pb.* proto types for all analytics/streaming types
 models:
+  NodeCapacity:
+    forceGenerate: true
+  TranscodeLadderPolicy:
+    forceGenerate: true
+  TranscodeLadder:
+    forceGenerate: true
   AuthSession:
     forceGenerate: true
   SecurityActivityEvent:
@@ -520,12 +526,14 @@ models:
         resolver: true
       streamId:
         resolver: true
-      # Lifecycle fields resolved from Periscope (batch lookup by clipHash)
+      # Catalog lifecycle fields and scoped placement overlays.
       status:
         resolver: true
       sizeBytes:
         resolver: true
       storageLocation:
+        resolver: true
+      hasLocalCopy:
         resolver: true
       nodeId:
         resolver: true
@@ -539,12 +547,14 @@ models:
     fields:
       streamId:
         resolver: true
-      # Lifecycle fields resolved from Periscope (batch lookup by dvrHash)
+      # Catalog lifecycle fields and scoped placement overlays.
       status:
         resolver: true
       sizeBytes:
         resolver: true
       storageLocation:
+        resolver: true
+      hasLocalCopy:
         resolver: true
       storageNodeId:
         resolver: true
@@ -768,6 +778,10 @@ models:
     fields:
       id:
         resolver: true
+      capacity:
+        resolver: true
+      maxBandwidthMbps:
+        resolver: true
   Node:
     model:
       - frameworks/api_gateway/graph/model.Node
@@ -784,6 +798,8 @@ models:
       wireguardIp:
         resolver: true
       wireguardPublicKey:
+        resolver: true
+      capacity:
         resolver: true
 
   # Cluster Marketplace types - bound to proto types
@@ -1010,6 +1026,9 @@ models:
   RecordingChapterFailed:
     model:
       - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1.RecordingChapterFailed
+  RecordingChapterReady:
+    model:
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1.RecordingChapterReady
   RecordingFailed:
     model:
       - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1.RecordingFailed
@@ -1031,9 +1050,15 @@ models:
   StreamDeleted:
     model:
       - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1.StreamDeleted
+  StreamEnded:
+    model:
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1.StreamEnded
   StreamIdle:
     model:
       - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1.StreamIdle
+  StreamIngestDisconnected:
+    model:
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1.StreamIngestDisconnected
   StreamKeyRotated:
     model:
       - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1.StreamKeyRotated

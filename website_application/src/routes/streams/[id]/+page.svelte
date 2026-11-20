@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
-  import { get } from "svelte/store";
   import { page } from "$app/state";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
@@ -8,14 +7,14 @@
     fragment,
     GetStreamStore,
     GetClustersAccessStore,
-    GetStreamKeysStore,
     GetStorageArtifactsConnectionStore,
+    GetStreamRecordingsStore,
+    GetStreamClipsStore,
     UpdateStreamStore,
     SetStreamRetentionOverridesStore,
     DeleteStreamStore,
     RefreshStreamKeyStore,
-    CreateStreamKeyStore,
-    DeleteStreamKeyStore,
+    DisconnectIngestStore,
     StreamEventsStore,
     GetPushTargetsStore,
     CreatePushTargetStore,
@@ -29,6 +28,7 @@
     StreamEvents$result,
     TrackListUpdates$result,
     GetStorageArtifactsConnection$result,
+    GetStreamRecordings$result,
   } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
@@ -38,7 +38,6 @@
   import {
     StreamEditModal,
     StreamDeleteModal,
-    StreamCreateKeyModal,
     StreamStatusCard,
     StreamKeyCard,
     StreamSourceCard,
@@ -64,19 +63,34 @@
     DropdownMenuLabel,
     DropdownMenuSeparator,
   } from "$lib/components/ui/dropdown-menu";
+  import IngestStopDialog from "$lib/components/stream-details/IngestStopDialog.svelte";
   import { MoreVertical } from "lucide-svelte";
 
   // Houdini stores
   const streamStore = new GetStreamStore();
   const clustersAccessStore = new GetClustersAccessStore();
-  const streamKeysStore = new GetStreamKeysStore();
   const storageArtifactsStore = new GetStorageArtifactsConnectionStore();
+  const recordingsStore = new GetStreamRecordingsStore();
+  const clipsStore = new GetStreamClipsStore();
+  type SavedMediaNode = NonNullable<
+    NonNullable<GetStreamRecordings$result["stream"]>["recordings"]
+  >["nodes"][number];
+  let recordingRows = $state<SavedMediaNode[]>([]);
+  let clipRows = $state<SavedMediaNode[]>([]);
+  let pendingMedia = $state(0);
+  let loadingMedia = $derived(pendingMedia > 0);
+  let recordingCursor = $state<string | null>(null);
+  let clipCursor = $state<string | null>(null);
+  let moreRecordings = $state(false);
+  let moreClips = $state(false);
+
   const updateStreamMutation = new UpdateStreamStore();
   const setStreamRetentionOverridesMutation = new SetStreamRetentionOverridesStore();
   const deleteStreamMutation = new DeleteStreamStore();
   const refreshStreamKeyMutation = new RefreshStreamKeyStore();
-  const createStreamKeyMutation = new CreateStreamKeyStore();
-  const deleteStreamKeyMutation = new DeleteStreamKeyStore();
+  const disconnectIngestMutation = new DisconnectIngestStore();
+  let showIngestStop = $state(false);
+  let ingestAction = $state<"rotate" | "disconnect">("disconnect");
   const pushTargetsStore = new GetPushTargetsStore();
   const createPushTargetMutation = new CreatePushTargetStore();
   const updatePushTargetMutation = new UpdatePushTargetStore();
@@ -90,11 +104,6 @@
 
   // Types from Houdini
   type _StreamType = NonNullable<NonNullable<typeof $streamStore.data>["stream"]>;
-  type _StreamKeyType = NonNullable<
-    NonNullable<
-      NonNullable<NonNullable<typeof $streamKeysStore.data>["streamKeysConnection"]>["edges"]
-    >[0]
-  >["node"];
   type TrackInfo = NonNullable<TrackListUpdates$result["liveTrackListUpdates"]>;
   type StorageArtifactNode =
     NonNullable<GetStorageArtifactsConnection$result>["storageArtifactsConnection"]["nodes"][number];
@@ -116,6 +125,9 @@
     createdAt?: string | null;
     updatedAt?: string | null;
     expiresAt?: string | null;
+    durationSeconds?: number | null;
+    originType?: string | null;
+    parentRecordingId?: string | null;
   };
 
   // page is a store; derive the param so it stays in sync with navigation
@@ -150,17 +162,6 @@
 
   // Derived state from Houdini stores
   // Map to create mutable objects (Houdini returns readonly types)
-  let streamKeys = $derived(
-    $streamKeysStore.data?.streamKeysConnection?.edges?.map((e) => ({
-      id: e.node.id,
-      streamId: e.node.streamId,
-      keyValue: e.node.keyValue,
-      keyName: e.node.keyName ?? "",
-      isActive: e.node.isActive,
-      createdAt: e.node.createdAt,
-      lastUsedAt: e.node.lastUsedAt ?? undefined,
-    })) ?? []
-  );
   let clusterOptions = $derived(
     ($clustersAccessStore.data?.clustersAccess ?? []).map((cluster) => ({
       clusterId: cluster.clusterId,
@@ -186,9 +187,11 @@
     })) ?? []
   );
   let storageArtifacts = $derived(
-    ($storageArtifactsStore.data?.storageArtifactsConnection?.nodes ?? []).map(
-      normalizeStreamArtifact
-    )
+    [
+      ...recordingRows,
+      ...clipRows,
+      ...($storageArtifactsStore.data?.storageArtifactsConnection?.nodes ?? []),
+    ].map(normalizeStreamArtifact)
   );
   let recordings = $derived(
     storageArtifacts
@@ -203,7 +206,7 @@
         createdAt: asset.createdAt,
         updatedAt: asset.updatedAt,
         expiresAt: asset.expiresAt,
-        durationSeconds: null,
+        durationSeconds: asset.durationSeconds,
         sizeBytes: asset.sizeBytes,
         storageLocation: asset.storageLocation,
         isSynced: asset.isSynced,
@@ -223,7 +226,7 @@
         createdAt: asset.createdAt,
         updatedAt: asset.updatedAt,
         expiresAt: asset.expiresAt,
-        duration: null,
+        duration: asset.durationSeconds,
         sizeBytes: asset.sizeBytes,
         storageLocation: asset.storageLocation,
         isSynced: asset.isSynced,
@@ -238,8 +241,8 @@
         artifactHash: asset.hash,
         playbackId: asset.playbackId,
         streamId: asset.streamId,
-        originType: asset.kind === "chapter" ? "dvr_chapter" : null,
-        originId: null,
+        originType: asset.originType,
+        originId: asset.parentRecordingId,
         title: asset.title,
         filename: asset.secondaryLabel,
         status: asset.status,
@@ -255,29 +258,24 @@
   // on the dedicated /streams/[id]/analytics and /streams/[id]/health routes.
 
   let error = $state<string | null>(null);
-  let loading = $derived(
-    !error &&
-      ($streamStore.fetching || (stream?.ingestMode === "PUSH" && $streamKeysStore.fetching))
-  );
+  let loading = $derived(!error && $streamStore.fetching);
   let showEditModal = $state(false);
   let showDeleteModal = $state(false);
-  let showCreateKeyModal = $state(false);
   let showCreatePushTargetModal = $state(false);
   let showEditPushTargetModal = $state(false);
   let editingPushTarget = $state<(typeof pushTargets)[number] | null>(null);
   let actionLoading = $state({
     refreshKey: false,
+    disconnectIngest: false,
     deleteStream: false,
     editStream: false,
-    createKey: false,
-    deleteKey: null as string | null,
     createPushTarget: false,
     updatePushTarget: false,
     deletePushTarget: null as string | null,
     togglePushTarget: null as string | null,
   });
 
-  function normalizeStreamArtifact(asset: StorageArtifactNode): StreamArtifact {
+  function normalizeStreamArtifact(asset: StorageArtifactNode | SavedMediaNode): StreamArtifact {
     const rawKind = asset.kind.toLowerCase() as StreamArtifactKind;
     return {
       key: asset.key,
@@ -292,7 +290,10 @@
       status: asset.status,
       storageLocation: asset.storageLocation,
       isSynced: asset.isSynced,
-      hasLocalCopy: asset.hasLocalCopy,
+      hasLocalCopy: "hasLocalCopy" in asset ? asset.hasLocalCopy : null,
+      durationSeconds: asset.durationSeconds,
+      originType: asset.originType,
+      parentRecordingId: asset.parentRecordingId,
       createdAt: asset.createdAt,
       updatedAt: asset.updatedAt,
       expiresAt: asset.expiresAt,
@@ -300,7 +301,7 @@
   }
 
   function storageKindsForStream(): ("DVR" | "CHAPTER" | "CLIP")[] {
-    return ["DVR", "CHAPTER", "CLIP"];
+    return ["CHAPTER"];
   }
 
   // Auto-refresh interval for live data (fallback)
@@ -311,7 +312,7 @@
   let currentTracks = $state<TrackInfo | null>(null);
 
   // Derived: is stream live?
-  let isLive = $derived(stream?.metrics?.isLive ?? false);
+  let isLive = $derived(stream?.ingest?.isLive ?? false);
 
   // Fallback track info from StreamMetricsFields when subscription hasn't fired yet
   // This uses the primary track data that's already fetched with the stream query
@@ -434,6 +435,42 @@
     }, 300);
   }
 
+  async function loadSavedMedia(kind: "dvr" | "clip", more = false) {
+    pendingMedia += 1;
+    try {
+      const variables = {
+        id: streamId,
+        first: 25,
+        after: more ? (kind === "dvr" ? recordingCursor : clipCursor) : null,
+      };
+      if (kind === "dvr") {
+        const result = await recordingsStore.fetch({ policy: "NetworkOnly", variables });
+        const connection = result.data?.stream?.recordings;
+        if (!connection) throw new Error("Recordings are unavailable");
+        recordingRows = more ? [...recordingRows, ...connection.nodes] : [...connection.nodes];
+        recordingCursor = connection.pageInfo.endCursor;
+        moreRecordings = connection.pageInfo.hasNextPage;
+      } else {
+        const result = await clipsStore.fetch({ policy: "NetworkOnly", variables });
+        const connection = result.data?.stream?.clips;
+        if (!connection) throw new Error("Clips are unavailable");
+        clipRows = more ? [...clipRows, ...connection.nodes] : [...connection.nodes];
+        clipCursor = connection.pageInfo.endCursor;
+        moreClips = connection.pageInfo.hasNextPage;
+      }
+    } finally {
+      pendingMedia -= 1;
+    }
+  }
+
+  async function loadMoreMedia(kind: "dvr" | "clip") {
+    try {
+      await loadSavedMedia(kind, true);
+    } catch {
+      toast.error("Could not load more saved media");
+    }
+  }
+
   async function loadStreamData() {
     try {
       error = null;
@@ -450,7 +487,6 @@
         error = "Stream not found";
         return;
       }
-      const fetchedCore = get(fragment(result.data.stream, streamCoreStore));
       const fetchedStreamId = (result.data.stream as { streamId?: string | null }).streamId;
       const resolvedStreamId = resolveOperationalStreamId({
         routeParamId: streamId,
@@ -463,9 +499,8 @@
       }
 
       await Promise.all([
-        fetchedCore.ingestMode === "PUSH"
-          ? streamKeysStore.fetch({ variables: { streamId: resolvedStreamId } })
-          : Promise.resolve(),
+        loadSavedMedia("dvr"),
+        loadSavedMedia("clip"),
         pushTargetsStore.fetch({ variables: { streamId } }),
         storageArtifactsStore.fetch({
           policy: "NetworkOnly",
@@ -504,14 +539,50 @@
     }
   }
 
-  async function handleRefreshStreamKey() {
+  function openIngestStop(action: "rotate" | "disconnect") {
+    ingestAction = action;
+    showIngestStop = true;
+  }
+
+  async function handleDisconnectIngest() {
+    if (!stream) return;
+    actionLoading.disconnectIngest = true;
+    try {
+      const result = await disconnectIngestMutation.mutate({ streamId });
+      const response = result.data?.disconnectIngest;
+      if (response?.__typename === "IngestDisconnectSuccess") {
+        toast.success(
+          response.stopRequested
+            ? "Encoder disconnect requested."
+            : "No active encoder to disconnect."
+        );
+        showIngestStop = false;
+        await loadLiveData();
+      } else {
+        toast.error(
+          response && "message" in response ? response.message : "Could not disconnect encoder."
+        );
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not disconnect encoder.");
+    } finally {
+      actionLoading.disconnectIngest = false;
+    }
+  }
+
+  async function handleRefreshStreamKey(endActiveSession = false) {
     if (!stream) return;
 
     try {
       actionLoading.refreshKey = true;
-      const result = await refreshStreamKeyMutation.mutate({ id: streamId });
+      const result = await refreshStreamKeyMutation.mutate({ id: streamId, endActiveSession });
       if (result.data?.refreshStreamKey?.__typename === "Stream") {
-        toast.success("Stream key refreshed successfully!");
+        toast.success(
+          endActiveSession
+            ? "Stream key rotated; encoder disconnect requested."
+            : "Stream key rotated."
+        );
+        showIngestStop = false;
         const analyticsStreamId = resolveOperationalStreamId({
           routeParamId: streamId,
           streamUuid: stream?.streamId,
@@ -536,6 +607,7 @@
     description?: string;
     record?: boolean;
     liveVideoAbr?: string;
+    transcodeLadder?: string;
     pullSourceUri?: string;
     pullSourceEnabled?: boolean;
     sourceLocation?: SourceLocationDraft;
@@ -566,6 +638,10 @@
         description: formData.description,
         record: formData.record,
         liveVideoAbr: formData.liveVideoAbr,
+        transcodeLadder:
+          formData.transcodeLadder !== (stream.transcodeLadder ?? "")
+            ? formData.transcodeLadder
+            : undefined,
         ingestMode: stream.ingestMode,
         pullSource,
         sourceLocation: stream.ingestMode === "PULL" ? formData.sourceLocation : undefined,
@@ -661,48 +737,6 @@
       console.error("Failed to delete stream:", err);
       toast.error("Failed to delete stream");
       actionLoading.deleteStream = false;
-    }
-  }
-
-  async function handleCreateStreamKey(formData: { keyName: string; isActive: boolean }) {
-    try {
-      actionLoading.createKey = true;
-      const result = await createStreamKeyMutation.mutate({
-        streamId,
-        input: { name: formData.keyName },
-      });
-      if (result.data?.createStreamKey?.__typename === "StreamKey") {
-        showCreateKeyModal = false;
-        toast.success("Stream key created successfully!");
-        await streamKeysStore.fetch({ variables: { streamId } });
-      } else {
-        const errorResult = result.data?.createStreamKey as unknown as { message?: string };
-        toast.error(errorResult?.message || "Failed to create stream key");
-      }
-    } catch (err) {
-      console.error("Failed to create stream key:", err);
-      toast.error("Failed to create stream key");
-    } finally {
-      actionLoading.createKey = false;
-    }
-  }
-
-  async function handleDeleteStreamKey(keyId: string) {
-    try {
-      actionLoading.deleteKey = keyId;
-      const result = await deleteStreamKeyMutation.mutate({ streamId, keyId });
-      if (result.data?.deleteStreamKey?.__typename === "DeleteSuccess") {
-        toast.success("Stream key deleted successfully!");
-        await streamKeysStore.fetch({ variables: { streamId } });
-      } else {
-        const errorResult = result.data?.deleteStreamKey as unknown as { message?: string };
-        toast.error(errorResult?.message || "Failed to delete stream key");
-      }
-    } catch (err) {
-      console.error("Failed to delete stream key:", err);
-      toast.error("Failed to delete stream key");
-    } finally {
-      actionLoading.deleteKey = null;
     }
   }
 
@@ -906,6 +940,15 @@
               {/snippet}
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              {#if stream.ingestMode === "PUSH"}
+                <DropdownMenuItem onclick={() => openIngestStop("rotate")}
+                  >Rotate stream key</DropdownMenuItem
+                >
+                <DropdownMenuItem onclick={() => openIngestStop("disconnect")}
+                  >Disconnect encoder</DropdownMenuItem
+                >
+                <DropdownMenuSeparator />
+              {/if}
               <DropdownMenuLabel>View</DropdownMenuLabel>
               <DropdownMenuItem onclick={() => goto(resolve(`/streams/${streamId}/analytics`))}>
                 <BarChart2Icon class="w-4 h-4 mr-2" />
@@ -969,7 +1012,7 @@
               <StreamKeyCard
                 {stream}
                 loading={actionLoading.refreshKey}
-                onRefresh={handleRefreshStreamKey}
+                onRefresh={() => openIngestStop("rotate")}
                 onCopy={copyToClipboard}
               />
             {:else}
@@ -1034,27 +1077,18 @@
               </TabsList>
 
               <TabsContent value="overview" class="p-0 min-h-[20rem]">
-                <OverviewTabPanel
-                  {stream}
-                  {streamKeys}
-                  {recordings}
-                  tracks={currentTracks ?? fallbackTracks}
-                />
+                <OverviewTabPanel {stream} {recordings} tracks={currentTracks ?? fallbackTracks} />
               </TabsContent>
 
               <TabsContent value="ingest" class="p-0 min-h-[20rem]">
                 <StreamSetupPanel
                   {stream}
-                  {streamKeys}
                   {clusterOptions}
                   placementHref={resolve("/streams/[id]/placement", { id: streamId }) +
                     "?verb=ingest"}
-                  onRefreshKey={handleRefreshStreamKey}
+                  onRefreshKey={() => openIngestStop("rotate")}
                   refreshingKey={actionLoading.refreshKey}
-                  onCreateKey={() => (showCreateKeyModal = true)}
                   onCopyKey={copyToClipboard}
-                  onDeleteKey={handleDeleteStreamKey}
-                  deleteLoading={actionLoading.deleteKey}
                 />
               </TabsContent>
 
@@ -1065,6 +1099,22 @@
                   {vodArtifacts}
                   onEnableRecording={() => (showEditModal = true)}
                 />
+                {#if moreRecordings || moreClips}
+                  <div class="flex gap-2 p-4">
+                    {#if moreRecordings}<Button
+                        variant="outline"
+                        size="sm"
+                        disabled={loadingMedia}
+                        onclick={() => loadMoreMedia("dvr")}>Load more recordings</Button
+                      >{/if}
+                    {#if moreClips}<Button
+                        variant="outline"
+                        size="sm"
+                        disabled={loadingMedia}
+                        onclick={() => loadMoreMedia("clip")}>Load more clips</Button
+                      >{/if}
+                  </div>
+                {/if}
               </TabsContent>
 
               <TabsContent value="multistream" class="p-0 min-h-[20rem]">
@@ -1113,16 +1163,20 @@
     loading={actionLoading.editStream}
     onSave={handleEditStream}
   />
+  <IngestStopDialog
+    bind:open={showIngestStop}
+    action={ingestAction}
+    loading={actionLoading.refreshKey || actionLoading.disconnectIngest}
+    onConfirm={(endActiveSession) => {
+      if (ingestAction === "rotate") void handleRefreshStreamKey(endActiveSession);
+      else void handleDisconnectIngest();
+    }}
+  />
   <StreamDeleteModal
     bind:open={showDeleteModal}
     streamName={stream?.name || ""}
     loading={actionLoading.deleteStream}
     onConfirm={handleDeleteStream}
-  />
-  <StreamCreateKeyModal
-    bind:open={showCreateKeyModal}
-    loading={actionLoading.createKey}
-    onCreate={handleCreateStreamKey}
   />
   <PushTargetCreateModal
     bind:open={showCreatePushTargetModal}

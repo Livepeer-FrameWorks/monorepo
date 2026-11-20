@@ -83,7 +83,7 @@ describe("IngestClient gateway version gate", () => {
     const error = await client.resolve().catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ServerTooOldError);
     expect((error as ServerTooOldError).serverVersion).toBe(serverVersion);
-    expect((error as ServerTooOldError).minimumVersion).toBe("v0.3.11");
+    expect((error as ServerTooOldError).minimumVersion).toBe("v0.3.16");
     expect(statuses).toHaveBeenLastCalledWith({
       status: "error",
       error: (error as Error).message,
@@ -103,7 +103,7 @@ describe("IngestClient gateway version gate", () => {
       if (!isProbe(init)) return ingestReply();
       await probeHeld;
       return new Response(
-        JSON.stringify({ data: { serverInfo: { version: "v0.3.11", features: [] } } })
+        JSON.stringify({ data: { serverInfo: { version: "v0.3.16", features: [] } } })
       );
     });
     vi.stubGlobal("fetch", fetcher);
@@ -131,10 +131,10 @@ describe("IngestClient gateway version gate", () => {
   });
 
   it("asks the gateway again at once when it rejects the resolve against its schema", async () => {
-    const versions = ["v0.3.11", "v0.3.10"];
+    const versions = ["v0.3.16", "v0.3.10"];
     const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
       if (isProbe(init)) {
-        const version = versions.shift() ?? "v0.3.11";
+        const version = versions.shift() ?? "v0.3.16";
         return new Response(JSON.stringify({ data: { serverInfo: { version, features: [] } } }));
       }
       return new Response(

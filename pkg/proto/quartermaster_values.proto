@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package quartermaster;
+
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster_values;quartermastervaluespb";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+enum CapacitySource {
+  CAPACITY_SOURCE_UNSPECIFIED = 0;
+  CAPACITY_SOURCE_OPERATOR = 1;
+  CAPACITY_SOURCE_DEFAULT = 2;
+}
+
+// Budgets and effective values are bytes per second. Unset budgets resolve to the platform default.
+message NodeCapacity {
+  optional uint64 egress_budget_bytes_per_sec = 1;
+  optional uint64 ingress_budget_bytes_per_sec = 2;
+  CapacitySource egress_source = 3;
+  CapacitySource ingress_source = 4;
+  uint64 revision = 5;
+  string updated_by = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  uint64 effective_egress_bytes_per_sec = 8;
+  uint64 effective_ingress_bytes_per_sec = 9;
+}
+
+message SetNodeCapacityRequest {
+  string node_id = 1;
+  // Unset resets this direction to the platform default; a present value must be positive.
+  optional uint64 egress_budget_bytes_per_sec = 2;
+  optional uint64 ingress_budget_bytes_per_sec = 3;
+  // Compare-and-swap revision; 0 creates the first override. Stale writes return Aborted.
+  uint64 expected_revision = 4;
+  common.RequestActor actor = 5;
+  // Fences a proxy's ownership check against a later ownership transfer. Empty means platform-owned.
+  optional string expected_owner_tenant_id = 6;
+}
+
+message GetNodeCapacityRequest {
+  string node_id = 1;
+  optional string expected_owner_tenant_id = 2;
+}
+
+// Filters select the union of the requested nodes and clusters; at least one filter is required.
+message ListNodeCapacitiesRequest {
+  repeated string node_ids = 1;
+  repeated string cluster_ids = 2;
+}
+
+message ListNodeCapacitiesResponse {
+  map<string, NodeCapacity> capacities = 1;
+}

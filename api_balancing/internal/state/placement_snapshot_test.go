@@ -111,10 +111,6 @@ func TestPlacementSnapshotPreservesStreamEvidenceAndProtocols(t *testing.T) {
 	if stream.TenantID != "tenant" || stream.BufferState != "DRY" || stream.Status != "live" || !stream.ObservedAt.Equal(observed) || stream.Inputs != 0 || !stream.Replicated {
 		t.Fatalf("lost replica evidence: %+v", stream)
 	}
-	legacy := sm.GetBalancerNodeSnapshots()[0].Streams["stream"]
-	if legacy != stream {
-		t.Fatalf("snapshot variants disagree on source evidence: %+v, %+v", legacy, stream)
-	}
 	snapshot.Outputs["HLS"].(map[string]any)["url"] = "corrupted"
 	if sm.GetNodeState("node").Outputs["HLS"].(map[string]any)["url"] != "/hls/$" {
 		t.Fatal("snapshot protocol map aliases live state")

@@ -96,7 +96,8 @@ SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.descriptio
        mn.placement_count AS managed_placement_count,
        COALESCE(mn.allowed_cluster_ids, '{}') AS managed_allowed_cluster_ids,
        s.active_ingest_cluster_id, s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
-       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled, s.live_video_abr
+       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled, s.live_video_abr,
+       s.transcode_ladder
 FROM commodore.streams s
 LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 LEFT JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
@@ -134,6 +135,7 @@ type GetStreamConfigRow struct {
 	ClipRetentionDaysOverride sql.NullInt32  `db:"clip_retention_days_override" json:"clip_retention_days_override"`
 	MonitoringEnabled         sql.NullBool   `db:"monitoring_enabled" json:"monitoring_enabled"`
 	LiveVideoAbr              string         `db:"live_video_abr" json:"live_video_abr"`
+	TranscodeLadder           string         `db:"transcode_ladder" json:"transcode_ladder"`
 }
 
 func (q *Queries) GetStreamConfig(ctx context.Context, arg GetStreamConfigParams) (GetStreamConfigRow, error) {
@@ -164,8 +166,52 @@ func (q *Queries) GetStreamConfig(ctx context.Context, arg GetStreamConfigParams
 		&i.ClipRetentionDaysOverride,
 		&i.MonitoringEnabled,
 		&i.LiveVideoAbr,
+		&i.TranscodeLadder,
 	)
 	return i, err
+}
+
+const getStreamIngestRoutes = `-- name: GetStreamIngestRoutes :many
+SELECT id, ingest_mode,
+       COALESCE(NULLIF(active_ingest_cluster_id, ''), NULLIF(last_ingest_cluster_id, ''), '')::text AS cluster_id
+FROM commodore.streams
+WHERE tenant_id = $1::uuid AND user_id = $2::uuid
+  AND id = ANY($3::uuid[]) AND deleted_at IS NULL
+`
+
+type GetStreamIngestRoutesParams struct {
+	TenantID  string   `db:"tenant_id" json:"tenant_id"`
+	UserID    string   `db:"user_id" json:"user_id"`
+	StreamIds []string `db:"stream_ids" json:"stream_ids"`
+}
+
+type GetStreamIngestRoutesRow struct {
+	ID         string `db:"id" json:"id"`
+	IngestMode string `db:"ingest_mode" json:"ingest_mode"`
+	ClusterID  string `db:"cluster_id" json:"cluster_id"`
+}
+
+func (q *Queries) GetStreamIngestRoutes(ctx context.Context, arg GetStreamIngestRoutesParams) ([]GetStreamIngestRoutesRow, error) {
+	rows, err := q.db.QueryContext(ctx, getStreamIngestRoutes, arg.TenantID, arg.UserID, pq.Array(arg.StreamIds))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetStreamIngestRoutesRow{}
+	for rows.Next() {
+		var i GetStreamIngestRoutesRow
+		if err := rows.Scan(&i.ID, &i.IngestMode, &i.ClusterID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getStreamsConfigBatch = `-- name: GetStreamsConfigBatch :many
@@ -177,7 +223,8 @@ SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.descriptio
        mn.placement_count AS managed_placement_count,
        COALESCE(mn.allowed_cluster_ids, '{}') AS managed_allowed_cluster_ids,
        s.active_ingest_cluster_id, s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
-       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled, s.live_video_abr
+       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled, s.live_video_abr,
+       s.transcode_ladder
 FROM commodore.streams s
 LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 LEFT JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
@@ -215,6 +262,7 @@ type GetStreamsConfigBatchRow struct {
 	ClipRetentionDaysOverride sql.NullInt32  `db:"clip_retention_days_override" json:"clip_retention_days_override"`
 	MonitoringEnabled         sql.NullBool   `db:"monitoring_enabled" json:"monitoring_enabled"`
 	LiveVideoAbr              string         `db:"live_video_abr" json:"live_video_abr"`
+	TranscodeLadder           string         `db:"transcode_ladder" json:"transcode_ladder"`
 }
 
 func (q *Queries) GetStreamsConfigBatch(ctx context.Context, arg GetStreamsConfigBatchParams) ([]GetStreamsConfigBatchRow, error) {
@@ -251,6 +299,7 @@ func (q *Queries) GetStreamsConfigBatch(ctx context.Context, arg GetStreamsConfi
 			&i.ClipRetentionDaysOverride,
 			&i.MonitoringEnabled,
 			&i.LiveVideoAbr,
+			&i.TranscodeLadder,
 		); err != nil {
 			return nil, err
 		}
@@ -274,7 +323,8 @@ SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.descriptio
        mn.placement_count AS managed_placement_count,
        COALESCE(mn.allowed_cluster_ids, '{}') AS managed_allowed_cluster_ids,
        s.active_ingest_cluster_id, s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
-       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled, s.live_video_abr
+       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled, s.live_video_abr,
+       s.transcode_ladder
 FROM commodore.streams s
 LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 LEFT JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
@@ -319,6 +369,7 @@ type ListStreamsBackwardRow struct {
 	ClipRetentionDaysOverride sql.NullInt32  `db:"clip_retention_days_override" json:"clip_retention_days_override"`
 	MonitoringEnabled         sql.NullBool   `db:"monitoring_enabled" json:"monitoring_enabled"`
 	LiveVideoAbr              string         `db:"live_video_abr" json:"live_video_abr"`
+	TranscodeLadder           string         `db:"transcode_ladder" json:"transcode_ladder"`
 }
 
 func (q *Queries) ListStreamsBackward(ctx context.Context, arg ListStreamsBackwardParams) ([]ListStreamsBackwardRow, error) {
@@ -361,6 +412,7 @@ func (q *Queries) ListStreamsBackward(ctx context.Context, arg ListStreamsBackwa
 			&i.ClipRetentionDaysOverride,
 			&i.MonitoringEnabled,
 			&i.LiveVideoAbr,
+			&i.TranscodeLadder,
 		); err != nil {
 			return nil, err
 		}
@@ -384,7 +436,8 @@ SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.descriptio
        mn.placement_count AS managed_placement_count,
        COALESCE(mn.allowed_cluster_ids, '{}') AS managed_allowed_cluster_ids,
        s.active_ingest_cluster_id, s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
-       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled, s.live_video_abr
+       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled, s.live_video_abr,
+       s.transcode_ladder
 FROM commodore.streams s
 LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 LEFT JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
@@ -432,6 +485,7 @@ type ListStreamsBackwardBeforeRow struct {
 	ClipRetentionDaysOverride sql.NullInt32  `db:"clip_retention_days_override" json:"clip_retention_days_override"`
 	MonitoringEnabled         sql.NullBool   `db:"monitoring_enabled" json:"monitoring_enabled"`
 	LiveVideoAbr              string         `db:"live_video_abr" json:"live_video_abr"`
+	TranscodeLadder           string         `db:"transcode_ladder" json:"transcode_ladder"`
 }
 
 func (q *Queries) ListStreamsBackwardBefore(ctx context.Context, arg ListStreamsBackwardBeforeParams) ([]ListStreamsBackwardBeforeRow, error) {
@@ -476,6 +530,7 @@ func (q *Queries) ListStreamsBackwardBefore(ctx context.Context, arg ListStreams
 			&i.ClipRetentionDaysOverride,
 			&i.MonitoringEnabled,
 			&i.LiveVideoAbr,
+			&i.TranscodeLadder,
 		); err != nil {
 			return nil, err
 		}
@@ -499,7 +554,8 @@ SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.descriptio
        mn.placement_count AS managed_placement_count,
        COALESCE(mn.allowed_cluster_ids, '{}') AS managed_allowed_cluster_ids,
        s.active_ingest_cluster_id, s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
-       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled, s.live_video_abr
+       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled, s.live_video_abr,
+       s.transcode_ladder
 FROM commodore.streams s
 LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 LEFT JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
@@ -544,6 +600,7 @@ type ListStreamsForwardRow struct {
 	ClipRetentionDaysOverride sql.NullInt32  `db:"clip_retention_days_override" json:"clip_retention_days_override"`
 	MonitoringEnabled         sql.NullBool   `db:"monitoring_enabled" json:"monitoring_enabled"`
 	LiveVideoAbr              string         `db:"live_video_abr" json:"live_video_abr"`
+	TranscodeLadder           string         `db:"transcode_ladder" json:"transcode_ladder"`
 }
 
 func (q *Queries) ListStreamsForward(ctx context.Context, arg ListStreamsForwardParams) ([]ListStreamsForwardRow, error) {
@@ -586,6 +643,7 @@ func (q *Queries) ListStreamsForward(ctx context.Context, arg ListStreamsForward
 			&i.ClipRetentionDaysOverride,
 			&i.MonitoringEnabled,
 			&i.LiveVideoAbr,
+			&i.TranscodeLadder,
 		); err != nil {
 			return nil, err
 		}
@@ -609,7 +667,8 @@ SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.descriptio
        mn.placement_count AS managed_placement_count,
        COALESCE(mn.allowed_cluster_ids, '{}') AS managed_allowed_cluster_ids,
        s.active_ingest_cluster_id, s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
-       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled, s.live_video_abr
+       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled, s.live_video_abr,
+       s.transcode_ladder
 FROM commodore.streams s
 LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 LEFT JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
@@ -657,6 +716,7 @@ type ListStreamsForwardAfterRow struct {
 	ClipRetentionDaysOverride sql.NullInt32  `db:"clip_retention_days_override" json:"clip_retention_days_override"`
 	MonitoringEnabled         sql.NullBool   `db:"monitoring_enabled" json:"monitoring_enabled"`
 	LiveVideoAbr              string         `db:"live_video_abr" json:"live_video_abr"`
+	TranscodeLadder           string         `db:"transcode_ladder" json:"transcode_ladder"`
 }
 
 func (q *Queries) ListStreamsForwardAfter(ctx context.Context, arg ListStreamsForwardAfterParams) ([]ListStreamsForwardAfterRow, error) {
@@ -701,6 +761,7 @@ func (q *Queries) ListStreamsForwardAfter(ctx context.Context, arg ListStreamsFo
 			&i.ClipRetentionDaysOverride,
 			&i.MonitoringEnabled,
 			&i.LiveVideoAbr,
+			&i.TranscodeLadder,
 		); err != nil {
 			return nil, err
 		}

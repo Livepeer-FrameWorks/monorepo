@@ -63,10 +63,6 @@ type EdgeRuntime struct {
 	ChandlerUpstream string `env:"CHANDLER_URL" default:"chandler:@port(chandler)" desc:"Chandler host:port that the Caddyfile rendered from the config seed reverse-proxies to." introduced:"v0.3.0"`
 	MistHTTPUpstream string `env:"MISTSERVER_HTTP_URL" default:"http://mistserver:@port(mistserver)" desc:"MistServer HTTP output URL that the rendered Caddyfile reverse-proxies to. An http:// prefix is stripped." introduced:"v0.3.0"`
 
-	BandwidthLimitBytesPerSec string `env:"HELMSMAN_BW_LIMIT_BYTES_PER_SEC" desc:"Operator-pinned node bandwidth limit in bytes per second, written to MistServer and reported to Foghorn. Takes precedence over the other bandwidth limit keys." introduced:"v0.3.0"`
-	BandwidthLimitBytes       string `env:"HELMSMAN_BW_LIMIT_BYTES" desc:"Node bandwidth limit in bytes per second, used when HELMSMAN_BW_LIMIT_BYTES_PER_SEC is empty or 0." introduced:"v0.3.0"`
-	BandwidthLimitMbps        string `env:"HELMSMAN_BW_LIMIT_MBPS" desc:"Node bandwidth limit in megabits per second, used when neither byte-based bandwidth limit key is set." introduced:"v0.3.0"`
-
 	Supervisor      string `env:"HELMSMAN_SUPERVISOR" desc:"Process supervisor used for in-place component updates: s6, systemd, or launchd. Any other value detects s6 supervision, then uses launchd on macOS and systemd elsewhere." introduced:"v0.3.0"`
 	DeployMode      string `env:"DEPLOY_MODE" default:"native" desc:"Deployment mode reported to Foghorn. A value other than native without s6 supervision refuses in-place component updates." introduced:"v0.3.0"`
 	MistONNXProfile string `env:"MIST_ONNX_PROFILE" default:"cpu" desc:"ONNX runtime profile of the bundled MistServer, reported to Foghorn in node lifecycle updates." introduced:"v0.3.0"`
@@ -210,22 +206,6 @@ func (r EdgeRuntime) StoragePathOrDefault() string {
 		return "/var/lib/frameworks/edge-storage"
 	}
 	return r.StorageLocalPath
-}
-
-// BandwidthLimitBytesPerSecond returns the operator-pinned bandwidth limit in
-// bytes per second, or 0 when none of the bandwidth keys holds a positive
-// integer.
-func (r EdgeRuntime) BandwidthLimitBytesPerSecond() uint64 {
-	if v := uintOr(r.BandwidthLimitBytesPerSec); v > 0 {
-		return v
-	}
-	if v := uintOr(r.BandwidthLimitBytes); v > 0 {
-		return v
-	}
-	if mbps := uintOr(r.BandwidthLimitMbps); mbps > 0 {
-		return mbps * 1000 * 1000 / 8
-	}
-	return 0
 }
 
 // ComponentVersionEnv returns the environment-provided version for a component

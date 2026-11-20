@@ -5,6 +5,8 @@
 mutation SetMediaRetentionPolicy($input: SetMediaRetentionPolicyInput!) {
   setMediaRetentionPolicy(input: $input) {
     ... on MediaRetentionPolicy {
+      keepVodOriginals
+      effectiveKeepVodOriginals
       defaultVodRetentionDays
       defaultDvrRetentionDays
       defaultClipRetentionDays

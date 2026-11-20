@@ -77,6 +77,10 @@ func connectionComplexity(childComplexity int, page *model.ConnectionInput) int 
 //
 // See: https://shopify.engineering/rate-limiting-graphql-apis-calculating-query-complexity
 func SetupComplexity(c *generated.ComplexityRoot) {
+	c.Cluster.Capacity = func(child int) int { return child + PerItemFetchCost }
+	c.Cluster.MaxBandwidthMbps = func(child int) int { return child + PerItemFetchCost }
+	c.InfrastructureNode.Capacity = func(child int) int { return child + PerItemFetchCost }
+	c.Mutation.SetNodeCapacity = func(child int, _ model.SetNodeCapacityInput) int { return child + 3*PerItemFetchCost }
 	c.Query.AuthSessionsConnection = func(childComplexity int, first *int, _ *string) int {
 		return connectionComplexity(childComplexity, &model.ConnectionInput{First: first})
 	}
@@ -321,6 +325,13 @@ func SetupComplexity(c *generated.ComplexityRoot) {
 	// row, so they carry PerItemFetchCost which the enclosing connection multiplies by
 	// the page size. Scalar/struct-projection fields (pullSource, thumbnailAssets,
 	// retentionOverrides) have no resolver I/O and keep the default object cost.
+	c.Stream.Recordings = func(child int, page *model.ConnectionInput) int { return connectionComplexity(child, page) }
+	c.Stream.Clips = func(child int, page *model.ConnectionInput) int { return connectionComplexity(child, page) }
+	c.DVRRequest.Chapters = func(child int, page *model.ConnectionInput, _, _ *float64) int {
+		return connectionComplexity(child, page)
+	}
+	c.Query.DvrRecording = func(child int, _ string) int { return child + PerItemFetchCost }
+	c.Stream.Ingest = func(child int) int { return child + PerItemFetchCost }
 	c.Stream.Metrics = func(childComplexity int) int {
 		return PerItemFetchCost + childComplexity
 	}

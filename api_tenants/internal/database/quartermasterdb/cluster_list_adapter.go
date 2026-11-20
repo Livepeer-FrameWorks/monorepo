@@ -36,7 +36,7 @@ type ClusterListRow struct {
 	DeploymentModel, BaseURL                                                                string
 	DatabaseURL, PeriscopeURL                                                               sql.NullString
 	KafkaBrokers                                                                            []string
-	MaxConcurrentStreams, MaxConcurrentViewers, MaxBandwidthMbps                            int32
+	MaxConcurrentStreams, MaxConcurrentViewers                                              int32
 	HealthStatus                                                                            string
 	IsActive, IsDefaultCluster, IsPlatformOfficial, PublicTopology, AllowPrivatePullSources bool
 	CreatedAt, UpdatedAt                                                                    time.Time
@@ -101,7 +101,7 @@ func (q *Queries) ListClustersPage(ctx context.Context, filter ClusterListFilter
 	query := fmt.Sprintf(`
 		SELECT c.id, c.cluster_id, c.cluster_name, c.cluster_type, c.owner_tenant_id, c.deployment_model,
 		       c.base_url, c.database_url, c.periscope_url, c.kafka_brokers, c.max_concurrent_streams,
-		       c.max_concurrent_viewers, c.max_bandwidth_mbps, c.health_status, c.is_active, c.is_default_cluster,
+		       c.max_concurrent_viewers, c.health_status, c.is_active, c.is_default_cluster,
 		       c.is_platform_official, c.public_topology, c.allow_private_pull_sources, c.created_at, c.updated_at
 		FROM quartermaster.infrastructure_clusters c %s %s ORDER BY c.created_at %s, c.id %s LIMIT $%d
 	`, baseWhere, where, direction, direction, len(args)+1)
@@ -116,7 +116,7 @@ func (q *Queries) ListClustersPage(ctx context.Context, filter ClusterListFilter
 		var row ClusterListRow
 		if err := rows.Scan(&row.ID, &row.ClusterID, &row.ClusterName, &row.ClusterType,
 			&row.OwnerTenantID, &row.DeploymentModel, &row.BaseURL, &row.DatabaseURL, &row.PeriscopeURL, database.ArrayScan(&row.KafkaBrokers),
-			&row.MaxConcurrentStreams, &row.MaxConcurrentViewers, &row.MaxBandwidthMbps, &row.HealthStatus, &row.IsActive,
+			&row.MaxConcurrentStreams, &row.MaxConcurrentViewers, &row.HealthStatus, &row.IsActive,
 			&row.IsDefaultCluster, &row.IsPlatformOfficial, &row.PublicTopology, &row.AllowPrivatePullSources, &row.CreatedAt, &row.UpdatedAt); err != nil {
 			return nil, 0, err
 		}
@@ -239,7 +239,7 @@ func (q *Queries) ListSubscribedClustersPage(ctx context.Context, filter SimpleP
 	query := fmt.Sprintf(`
 		SELECT c.id, c.cluster_id, c.cluster_name, c.cluster_type, c.owner_tenant_id, c.deployment_model,
 		       c.base_url, c.database_url, c.periscope_url, c.kafka_brokers, c.max_concurrent_streams,
-		       c.max_concurrent_viewers, c.max_bandwidth_mbps, c.health_status, c.is_active,
+		       c.max_concurrent_viewers, c.health_status, c.is_active,
 		       (c.cluster_id = COALESCE(t.primary_cluster_id, '') OR (t.primary_cluster_id IS NULL AND c.is_default_cluster)) AS is_default_cluster,
 		       c.is_platform_official, c.public_topology, c.allow_private_pull_sources, c.created_at, c.updated_at
 		FROM quartermaster.infrastructure_clusters c LEFT JOIN quartermaster.tenants t ON t.id = $1
@@ -255,7 +255,7 @@ func (q *Queries) ListSubscribedClustersPage(ctx context.Context, filter SimpleP
 		var row ClusterListRow
 		if err := rows.Scan(&row.ID, &row.ClusterID, &row.ClusterName, &row.ClusterType,
 			&row.OwnerTenantID, &row.DeploymentModel, &row.BaseURL, &row.DatabaseURL, &row.PeriscopeURL, database.ArrayScan(&row.KafkaBrokers),
-			&row.MaxConcurrentStreams, &row.MaxConcurrentViewers, &row.MaxBandwidthMbps, &row.HealthStatus, &row.IsActive,
+			&row.MaxConcurrentStreams, &row.MaxConcurrentViewers, &row.HealthStatus, &row.IsActive,
 			&row.IsDefaultCluster, &row.IsPlatformOfficial, &row.PublicTopology, &row.AllowPrivatePullSources, &row.CreatedAt, &row.UpdatedAt); err != nil {
 			return nil, 0, err
 		}

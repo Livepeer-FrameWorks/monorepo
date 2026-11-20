@@ -287,6 +287,7 @@ type StreamConnected struct {
 	Protocol IngestProtocol         `protobuf:"varint,2,opt,name=protocol,proto3,enum=frameworks.events.public.v1.IngestProtocol" json:"protocol,omitempty"`
 	// playback_id is the stream's public playback ID.
 	PlaybackId    string `protobuf:"bytes,3,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`
+	SessionId     string `protobuf:"bytes,4,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -342,6 +343,13 @@ func (x *StreamConnected) GetPlaybackId() string {
 	return ""
 }
 
+func (x *StreamConnected) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
 // StreamLive reports that the stream became playable.
 type StreamLive struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
@@ -349,6 +357,7 @@ type StreamLive struct {
 	// playback_id is the stream's public playback ID; empty when Foghorn could
 	// not resolve the stream while the control plane was unreachable.
 	PlaybackId    string `protobuf:"bytes,2,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`
+	SessionId     string `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -397,6 +406,13 @@ func (x *StreamLive) GetPlaybackId() string {
 	return ""
 }
 
+func (x *StreamLive) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
 // StreamIdle reports that the stream's ingest session ended.
 type StreamIdle struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
@@ -404,6 +420,7 @@ type StreamIdle struct {
 	// playback_id is the stream's public playback ID; empty when Foghorn could
 	// not resolve the stream while the control plane was unreachable.
 	PlaybackId    string `protobuf:"bytes,2,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`
+	SessionId     string `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -452,6 +469,135 @@ func (x *StreamIdle) GetPlaybackId() string {
 	return ""
 }
 
+func (x *StreamIdle) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+// StreamEnded reports that the origin unloaded the latest ingest buffer.
+type StreamEnded struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	StreamId      string                 `protobuf:"bytes,1,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	PlaybackId    string                 `protobuf:"bytes,2,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`
+	SessionId     string                 `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StreamEnded) Reset() {
+	*x = StreamEnded{}
+	mi := &file_events_public_v1_streams_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StreamEnded) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StreamEnded) ProtoMessage() {}
+
+func (x *StreamEnded) ProtoReflect() protoreflect.Message {
+	mi := &file_events_public_v1_streams_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StreamEnded.ProtoReflect.Descriptor instead.
+func (*StreamEnded) Descriptor() ([]byte, []int) {
+	return file_events_public_v1_streams_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *StreamEnded) GetStreamId() string {
+	if x != nil {
+		return x.StreamId
+	}
+	return ""
+}
+
+func (x *StreamEnded) GetPlaybackId() string {
+	if x != nil {
+		return x.PlaybackId
+	}
+	return ""
+}
+
+func (x *StreamEnded) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+// StreamIngestDisconnected reports an explicitly requested publisher disconnect.
+type StreamIngestDisconnected struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	StreamId      string                 `protobuf:"bytes,1,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	SessionId     string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Reason        string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StreamIngestDisconnected) Reset() {
+	*x = StreamIngestDisconnected{}
+	mi := &file_events_public_v1_streams_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StreamIngestDisconnected) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StreamIngestDisconnected) ProtoMessage() {}
+
+func (x *StreamIngestDisconnected) ProtoReflect() protoreflect.Message {
+	mi := &file_events_public_v1_streams_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StreamIngestDisconnected.ProtoReflect.Descriptor instead.
+func (*StreamIngestDisconnected) Descriptor() ([]byte, []int) {
+	return file_events_public_v1_streams_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *StreamIngestDisconnected) GetStreamId() string {
+	if x != nil {
+		return x.StreamId
+	}
+	return ""
+}
+
+func (x *StreamIngestDisconnected) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *StreamIngestDisconnected) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 var File_events_public_v1_streams_proto protoreflect.FileDescriptor
 
 const file_events_public_v1_streams_proto_rawDesc = "" +
@@ -472,25 +618,44 @@ const file_events_public_v1_streams_proto_rawDesc = "" +
 	"\x0estream.deleted\x10\x01\x18\x01\"\astreams\"V\n" +
 	"\x10StreamKeyRotated\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId:%\xc2\xf3\x18!\n" +
-	"\x12stream.key_rotated\x10\x01\x18\x01\"\astreams\"\xbd\x01\n" +
+	"\x12stream.key_rotated\x10\x01\x18\x01\"\astreams\"\xdc\x01\n" +
 	"\x0fStreamConnected\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12G\n" +
 	"\bprotocol\x18\x02 \x01(\x0e2+.frameworks.events.public.v1.IngestProtocolR\bprotocol\x12\x1f\n" +
 	"\vplayback_id\x18\x03 \x01(\tR\n" +
-	"playbackId:#\xc2\xf3\x18\x1f\n" +
-	"\x10stream.connected\x10\x01\x18\x01\"\astreams\"j\n" +
+	"playbackId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x04 \x01(\tR\tsessionId:#\xc2\xf3\x18\x1f\n" +
+	"\x10stream.connected\x10\x01\x18\x01\"\astreams\"\x89\x01\n" +
 	"\n" +
 	"StreamLive\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12\x1f\n" +
 	"\vplayback_id\x18\x02 \x01(\tR\n" +
-	"playbackId:\x1e\xc2\xf3\x18\x1a\n" +
-	"\vstream.live\x10\x01\x18\x01\"\astreams\"j\n" +
+	"playbackId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x03 \x01(\tR\tsessionId:\x1e\xc2\xf3\x18\x1a\n" +
+	"\vstream.live\x10\x01\x18\x01\"\astreams\"\x89\x01\n" +
 	"\n" +
 	"StreamIdle\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12\x1f\n" +
 	"\vplayback_id\x18\x02 \x01(\tR\n" +
-	"playbackId:\x1e\xc2\xf3\x18\x1a\n" +
-	"\vstream.idle\x10\x01\x18\x01\"\astreams*\x98\x01\n" +
+	"playbackId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x03 \x01(\tR\tsessionId:\x1e\xc2\xf3\x18\x1a\n" +
+	"\vstream.idle\x10\x01\x18\x01\"\astreams\"\x8b\x01\n" +
+	"\vStreamEnded\x12\x1b\n" +
+	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12\x1f\n" +
+	"\vplayback_id\x18\x02 \x01(\tR\n" +
+	"playbackId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x03 \x01(\tR\tsessionId:\x1f\xc2\xf3\x18\x1b\n" +
+	"\fstream.ended\x10\x01\x18\x01\"\astreams\"\x9d\x01\n" +
+	"\x18StreamIngestDisconnected\x12\x1b\n" +
+	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason:-\xc2\xf3\x18)\n" +
+	"\x1astream.ingest_disconnected\x10\x01\x18\x01\"\astreams*\x98\x01\n" +
 	"\x0eIngestProtocol\x12\x1f\n" +
 	"\x1bINGEST_PROTOCOL_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14INGEST_PROTOCOL_RTMP\x10\x01\x12\x17\n" +
@@ -511,16 +676,18 @@ func file_events_public_v1_streams_proto_rawDescGZIP() []byte {
 }
 
 var file_events_public_v1_streams_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_events_public_v1_streams_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_events_public_v1_streams_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_events_public_v1_streams_proto_goTypes = []any{
-	(IngestProtocol)(0),      // 0: frameworks.events.public.v1.IngestProtocol
-	(*StreamCreated)(nil),    // 1: frameworks.events.public.v1.StreamCreated
-	(*StreamUpdated)(nil),    // 2: frameworks.events.public.v1.StreamUpdated
-	(*StreamDeleted)(nil),    // 3: frameworks.events.public.v1.StreamDeleted
-	(*StreamKeyRotated)(nil), // 4: frameworks.events.public.v1.StreamKeyRotated
-	(*StreamConnected)(nil),  // 5: frameworks.events.public.v1.StreamConnected
-	(*StreamLive)(nil),       // 6: frameworks.events.public.v1.StreamLive
-	(*StreamIdle)(nil),       // 7: frameworks.events.public.v1.StreamIdle
+	(IngestProtocol)(0),              // 0: frameworks.events.public.v1.IngestProtocol
+	(*StreamCreated)(nil),            // 1: frameworks.events.public.v1.StreamCreated
+	(*StreamUpdated)(nil),            // 2: frameworks.events.public.v1.StreamUpdated
+	(*StreamDeleted)(nil),            // 3: frameworks.events.public.v1.StreamDeleted
+	(*StreamKeyRotated)(nil),         // 4: frameworks.events.public.v1.StreamKeyRotated
+	(*StreamConnected)(nil),          // 5: frameworks.events.public.v1.StreamConnected
+	(*StreamLive)(nil),               // 6: frameworks.events.public.v1.StreamLive
+	(*StreamIdle)(nil),               // 7: frameworks.events.public.v1.StreamIdle
+	(*StreamEnded)(nil),              // 8: frameworks.events.public.v1.StreamEnded
+	(*StreamIngestDisconnected)(nil), // 9: frameworks.events.public.v1.StreamIngestDisconnected
 }
 var file_events_public_v1_streams_proto_depIdxs = []int32{
 	0, // 0: frameworks.events.public.v1.StreamConnected.protocol:type_name -> frameworks.events.public.v1.IngestProtocol
@@ -542,7 +709,7 @@ func file_events_public_v1_streams_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_events_public_v1_streams_proto_rawDesc), len(file_events_public_v1_streams_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   7,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

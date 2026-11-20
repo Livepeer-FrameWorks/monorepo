@@ -49,7 +49,7 @@ func TestUpdateStreamFromBuffer_BackfillsIdentityOnExistingEntry(t *testing.T) {
 	}
 }
 
-func TestUpdateTrackListAndUserConnection_DoNotClobberTenant(t *testing.T) {
+func TestUpdateTrackListAndViewerIdentity_DoNotClobberTenant(t *testing.T) {
 	sm := NewStreamStateManager()
 	if err := sm.UpdateStreamFromBuffer("s2", "s2", "node-1", "tenant-1", "FULL", ""); err != nil {
 		t.Fatal(err)
@@ -60,9 +60,9 @@ func TestUpdateTrackListAndUserConnection_DoNotClobberTenant(t *testing.T) {
 		t.Fatalf("UpdateTrackList clobbered tenant: %q", ss.TenantID)
 	}
 
-	sm.UpdateUserConnection("s2", "node-1", "", 1)
+	sm.EnsureViewerStreamIdentity("s2", "node-1", "")
 	if ss := sm.GetStreamState("s2"); ss.TenantID != "tenant-1" {
-		t.Fatalf("UpdateUserConnection clobbered tenant: %q", ss.TenantID)
+		t.Fatalf("UpdateViewerIdentity clobbered tenant: %q", ss.TenantID)
 	}
 
 	// And both still set it when they have it.

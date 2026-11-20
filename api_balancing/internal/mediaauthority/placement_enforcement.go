@@ -28,7 +28,9 @@ const (
 	// an authority the cell does not hold, and reports the authorities it
 	// decides on. The three ship together because Commodore stops keeping every
 	// object in every cell only when a cell does all of them.
-	replicaAuthorityFeatureLevel = 1
+	// Level 2 also preserves retained VOD originals during sync and cleanup.
+	// Creates that request retention wait until every live replica advertises it.
+	replicaAuthorityFeatureLevel = 2
 )
 
 // placementEnforced is process state: startup sets it only after the public

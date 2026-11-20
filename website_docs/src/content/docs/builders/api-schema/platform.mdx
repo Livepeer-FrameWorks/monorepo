@@ -85,6 +85,30 @@ serverInfo: ServerInfo!
 | --- | --- | --- | --- |
 | ServerInfo | `ServerInfoDocument` | `ServerInfo` | `server_info` |
 
+## Mutations
+
+### Mutation.setNodeCapacity
+
+Replace both directional node budgets. Null restores the default 1 Gbit/s budget. Requires infrastructure:write and ownership or platform operator access.
+
+```graphql
+setNodeCapacity(
+  input: SetNodeCapacityInput!
+): SetNodeCapacityResult!
+```
+
+**Returns:** `SetNodeCapacityResult!` ([SetNodeCapacityResult](/builders/api-schema/platform/#setnodecapacityresult))
+
+**Arguments**
+
+- `input`: `SetNodeCapacityInput!` ([SetNodeCapacityInput](/builders/api-schema/platform/#setnodecapacityinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| SetNodeCapacity | `SetNodeCapacityDocument` | `SetNodeCapacity` | `set_node_capacity` |
+
 ## Types
 
 ### Capabilities
@@ -139,6 +163,8 @@ Media verbs a cluster accepts for the tenant now. Each is true only when the cap
 - **currentViewers**: `Int!`
 - **egressMbps**: `Int!`
 - **egressCapacityMbps**: `Int!`
+- **egressUsableMbps**: `Int!`
+- **defaultBudgetNodes**: `Int!`
 - **ingressMbps**: `Int!`
 - **services**: `[String!]!`
 
@@ -203,6 +229,24 @@ Release and shipped feature set of this server.
 
 - **version**: `String!` — Platform release version, for example v0.3.11.
 - **features**: `[String!]!` — Sorted slugs of shipped product features in the platform feature registry.
+
+### SetNodeCapacityInput
+
+**input_object**
+
+- **nodeId**: `ID!`
+- **egressBudgetBytesPerSec**: `Float` — Positive whole bytes per second, or null to restore the default.
+- **ingressBudgetBytesPerSec**: `Float` — Positive whole bytes per second, or null to restore the default.
+- **expectedRevision**: `Int!` — Revision from the current capacity; a stale revision rejects the write.
+
+### SetNodeCapacityResult
+
+**union**
+
+- Member: [InfrastructureNode](/builders/api-schema/shared/#infrastructurenode)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
 
 ### TenantCapabilities
 

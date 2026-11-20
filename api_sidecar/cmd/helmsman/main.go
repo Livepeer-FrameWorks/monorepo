@@ -209,6 +209,7 @@ func main() {
 		managementRouter.POST("/triggers/wal/replay", handlers.HandleTriggerWALReplay)
 	}
 	managementRouter.GET("/node/mode", handlers.HandleGetNodeMode)
+	managementRouter.GET("/node/capacity", handlers.HandleGetNodeCapacity)
 	managementRouter.POST("/node/mode", handlers.HandleSetNodeMode)
 
 	// Edge API — read-only endpoints for tray app / CLI, authenticated via Foghorn

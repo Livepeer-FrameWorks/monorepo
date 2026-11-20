@@ -9,6 +9,7 @@ package quartermasterpb
 import (
 	context "context"
 	media_placement "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
+	quartermaster_values "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster_values"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -3034,6 +3035,9 @@ var ClusterService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	NodeService_SetNodeCapacity_FullMethodName         = "/quartermaster.NodeService/SetNodeCapacity"
+	NodeService_GetNodeCapacity_FullMethodName         = "/quartermaster.NodeService/GetNodeCapacity"
+	NodeService_ListNodeCapacities_FullMethodName      = "/quartermaster.NodeService/ListNodeCapacities"
 	NodeService_GetNode_FullMethodName                 = "/quartermaster.NodeService/GetNode"
 	NodeService_ListNodes_FullMethodName               = "/quartermaster.NodeService/ListNodes"
 	NodeService_ListHealthyNodesForDNS_FullMethodName  = "/quartermaster.NodeService/ListHealthyNodesForDNS"
@@ -3055,6 +3059,10 @@ const (
 //
 // NodeService handles infrastructure node management
 type NodeServiceClient interface {
+	// Capacity writes require the cluster owner or a platform operator. Null budgets use platform defaults.
+	SetNodeCapacity(ctx context.Context, in *quartermaster_values.SetNodeCapacityRequest, opts ...grpc.CallOption) (*quartermaster_values.NodeCapacity, error)
+	GetNodeCapacity(ctx context.Context, in *quartermaster_values.GetNodeCapacityRequest, opts ...grpc.CallOption) (*quartermaster_values.NodeCapacity, error)
+	ListNodeCapacities(ctx context.Context, in *quartermaster_values.ListNodeCapacitiesRequest, opts ...grpc.CallOption) (*quartermaster_values.ListNodeCapacitiesResponse, error)
 	GetNode(ctx context.Context, in *GetNodeRequest, opts ...grpc.CallOption) (*NodeResponse, error)
 	ListNodes(ctx context.Context, in *ListNodesRequest, opts ...grpc.CallOption) (*ListNodesResponse, error)
 	ListHealthyNodesForDNS(ctx context.Context, in *ListHealthyNodesForDNSRequest, opts ...grpc.CallOption) (*ListHealthyNodesForDNSResponse, error)
@@ -3093,6 +3101,36 @@ type nodeServiceClient struct {
 
 func NewNodeServiceClient(cc grpc.ClientConnInterface) NodeServiceClient {
 	return &nodeServiceClient{cc}
+}
+
+func (c *nodeServiceClient) SetNodeCapacity(ctx context.Context, in *quartermaster_values.SetNodeCapacityRequest, opts ...grpc.CallOption) (*quartermaster_values.NodeCapacity, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(quartermaster_values.NodeCapacity)
+	err := c.cc.Invoke(ctx, NodeService_SetNodeCapacity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nodeServiceClient) GetNodeCapacity(ctx context.Context, in *quartermaster_values.GetNodeCapacityRequest, opts ...grpc.CallOption) (*quartermaster_values.NodeCapacity, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(quartermaster_values.NodeCapacity)
+	err := c.cc.Invoke(ctx, NodeService_GetNodeCapacity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nodeServiceClient) ListNodeCapacities(ctx context.Context, in *quartermaster_values.ListNodeCapacitiesRequest, opts ...grpc.CallOption) (*quartermaster_values.ListNodeCapacitiesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(quartermaster_values.ListNodeCapacitiesResponse)
+	err := c.cc.Invoke(ctx, NodeService_ListNodeCapacities_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *nodeServiceClient) GetNode(ctx context.Context, in *GetNodeRequest, opts ...grpc.CallOption) (*NodeResponse, error) {
@@ -3231,6 +3269,10 @@ func (c *nodeServiceClient) UnbindNodeFingerprint(ctx context.Context, in *Unbin
 //
 // NodeService handles infrastructure node management
 type NodeServiceServer interface {
+	// Capacity writes require the cluster owner or a platform operator. Null budgets use platform defaults.
+	SetNodeCapacity(context.Context, *quartermaster_values.SetNodeCapacityRequest) (*quartermaster_values.NodeCapacity, error)
+	GetNodeCapacity(context.Context, *quartermaster_values.GetNodeCapacityRequest) (*quartermaster_values.NodeCapacity, error)
+	ListNodeCapacities(context.Context, *quartermaster_values.ListNodeCapacitiesRequest) (*quartermaster_values.ListNodeCapacitiesResponse, error)
 	GetNode(context.Context, *GetNodeRequest) (*NodeResponse, error)
 	ListNodes(context.Context, *ListNodesRequest) (*ListNodesResponse, error)
 	ListHealthyNodesForDNS(context.Context, *ListHealthyNodesForDNSRequest) (*ListHealthyNodesForDNSResponse, error)
@@ -3271,6 +3313,15 @@ type NodeServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedNodeServiceServer struct{}
 
+func (UnimplementedNodeServiceServer) SetNodeCapacity(context.Context, *quartermaster_values.SetNodeCapacityRequest) (*quartermaster_values.NodeCapacity, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetNodeCapacity not implemented")
+}
+func (UnimplementedNodeServiceServer) GetNodeCapacity(context.Context, *quartermaster_values.GetNodeCapacityRequest) (*quartermaster_values.NodeCapacity, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetNodeCapacity not implemented")
+}
+func (UnimplementedNodeServiceServer) ListNodeCapacities(context.Context, *quartermaster_values.ListNodeCapacitiesRequest) (*quartermaster_values.ListNodeCapacitiesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListNodeCapacities not implemented")
+}
 func (UnimplementedNodeServiceServer) GetNode(context.Context, *GetNodeRequest) (*NodeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetNode not implemented")
 }
@@ -3329,6 +3380,60 @@ func RegisterNodeServiceServer(s grpc.ServiceRegistrar, srv NodeServiceServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&NodeService_ServiceDesc, srv)
+}
+
+func _NodeService_SetNodeCapacity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(quartermaster_values.SetNodeCapacityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServiceServer).SetNodeCapacity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeService_SetNodeCapacity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServiceServer).SetNodeCapacity(ctx, req.(*quartermaster_values.SetNodeCapacityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NodeService_GetNodeCapacity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(quartermaster_values.GetNodeCapacityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServiceServer).GetNodeCapacity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeService_GetNodeCapacity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServiceServer).GetNodeCapacity(ctx, req.(*quartermaster_values.GetNodeCapacityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NodeService_ListNodeCapacities_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(quartermaster_values.ListNodeCapacitiesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServiceServer).ListNodeCapacities(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeService_ListNodeCapacities_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServiceServer).ListNodeCapacities(ctx, req.(*quartermaster_values.ListNodeCapacitiesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _NodeService_GetNode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -3572,6 +3677,18 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "quartermaster.NodeService",
 	HandlerType: (*NodeServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "SetNodeCapacity",
+			Handler:    _NodeService_SetNodeCapacity_Handler,
+		},
+		{
+			MethodName: "GetNodeCapacity",
+			Handler:    _NodeService_GetNodeCapacity_Handler,
+		},
+		{
+			MethodName: "ListNodeCapacities",
+			Handler:    _NodeService_ListNodeCapacities_Handler,
+		},
 		{
 			MethodName: "GetNode",
 			Handler:    _NodeService_GetNode_Handler,

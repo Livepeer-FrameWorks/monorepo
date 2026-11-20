@@ -13,4 +13,25 @@ export function multistreamLine(tier) {
   return "Multistreaming with no destination cap; each destination counts toward delivered minutes";
 }
 
+export const videoLine = (tier) =>
+  `Up to ${(tier?.maxVideoHeight ?? 1080) >= 2160 ? "4K" : `${tier?.maxVideoHeight ?? 1080}p`} video`;
+
 export const abrLine = "Adaptive bitrate included";
+
+const formatHours = (seconds) => {
+  const hours = seconds / 3600;
+  return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+};
+
+// Plan-card lines for an uncapped plan: the absence of stream/viewer caps and
+// the catalog's maximum live rewind window. A capped plan (Free) lists its
+// caps on its own card instead.
+export function capacityLines(tier) {
+  const limits = tier?.limits ?? {};
+  if ((limits.maxConcurrentStreams ?? 0) > 0 || viewerCap(tier) > 0) return [];
+  const lines = ["No cap on concurrent streams or viewers"];
+  if ((limits.dvrMaxWindowSeconds ?? 0) > 0) {
+    lines.push(`Live rewind (DVR) up to ${formatHours(limits.dvrMaxWindowSeconds)}`);
+  }
+  return lines;
+}

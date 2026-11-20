@@ -11,7 +11,9 @@ fragment ClusterFields on Cluster {
   kafkaBrokers
   maxConcurrentStreams
   maxConcurrentViewers
-  maxBandwidthMbps
+  capacity {
+    ...ClusterCapacityFields @mask_disable
+  }
   healthStatus
   isActive
   isDefaultCluster

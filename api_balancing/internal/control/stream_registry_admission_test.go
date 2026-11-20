@@ -272,3 +272,18 @@ func markReplicatingForTest(t *testing.T, r *StreamRegistry, internalName, peerC
 		t.Fatalf("record inbound pull for %s: %v", internalName, err)
 	}
 }
+
+func TestMarkSourceOwnerRestampsAfterInactive(t *testing.T) {
+	r := newPopulatedRegistry(t)
+	const internal = "60546679b497415db2338cd5cae54992"
+	if owner, stamped := r.MarkSourceOwnerIfUnset(internal, "node-a"); !stamped || owner != "node-a" {
+		t.Fatalf("initial owner=%q stamped=%v", owner, stamped)
+	}
+	markSourceInactiveForTest(t, r, internal, "node-a", "", 1)
+	if owner, stamped := r.MarkSourceOwnerIfUnset(internal, "node-b"); !stamped || owner != "node-b" {
+		t.Fatalf("inactive pull owner never moved: owner=%q stamped=%v", owner, stamped)
+	}
+	if owner, stamped := r.MarkSourceOwnerIfUnset(internal, "node-c"); stamped || owner != "node-b" {
+		t.Fatalf("live pull owner changed: owner=%q stamped=%v", owner, stamped)
+	}
+}

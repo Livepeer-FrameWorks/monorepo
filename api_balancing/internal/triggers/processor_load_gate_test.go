@@ -81,12 +81,12 @@ func TestFloatInRange(t *testing.T) {
 // over-allowance at 80% and all free at 95%.
 func TestLoadThresholdDefaults(t *testing.T) {
 	ingest := ingestLoadThresholds()
-	if ingest.rejectOverAllowance != 0.5 || ingest.rejectAnyFree != 0.95 {
-		t.Errorf("ingest defaults = %+v, want {0.5, 0.95}", ingest)
+	if ingest.rejectOverAllowance != 0.5 || ingest.rejectAnyFree != 0.85 {
+		t.Errorf("ingest defaults = %+v, want {0.5, 0.85}", ingest)
 	}
 	viewer := viewerLoadThresholds()
-	if viewer.rejectOverAllowance != 0.8 || viewer.rejectAnyFree != 0.95 {
-		t.Errorf("viewer defaults = %+v, want {0.8, 0.95}", viewer)
+	if viewer.rejectOverAllowance != 0.8 || viewer.rejectAnyFree != 0.85 {
+		t.Errorf("viewer defaults = %+v, want {0.8, 0.85}", viewer)
 	}
 }
 

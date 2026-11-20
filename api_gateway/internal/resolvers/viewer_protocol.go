@@ -11,7 +11,7 @@ func viewerProtocolRequirement(requested string) (string, error) {
 	switch requested {
 	case "":
 		return "", nil
-	case "WEBRTC", "WHEP", "HLS", "DASH", "HLS_CMAF", "MEWS", "MEWS_WEBM", "MP4", "WEBM", "MKV", "TS", "AAC", "H264", "H264_WS", "RAW_WS", "JSON_WS", "FLV", "HDS", "SMOOTHSTREAMING", "SDP", "MIST_HTML", "RTMP", "RTSP", "SRT", "DTSC":
+	case "WEBVTT", "WEBRTC", "WHEP", "HLS", "DASH", "HLS_CMAF", "MEWS", "MEWS_WEBM", "MP4", "WEBM", "MKV", "TS", "AAC", "H264", "H264_WS", "RAW_WS", "JSON_WS", "FLV", "HDS", "SMOOTHSTREAMING", "SDP", "MIST_HTML", "RTMP", "RTSP", "SRT", "DTSC":
 		return mist.PlaybackProtocol(requested), nil
 	default:
 		return "", fmt.Errorf("unsupported viewer protocol")

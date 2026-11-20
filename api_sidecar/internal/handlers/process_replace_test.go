@@ -135,6 +135,45 @@ func TestProcessReplaceLeavesOtherProcessesDisabled(t *testing.T) {
 	}
 }
 
+func TestProcessReplaceRoutesRotatedSourceWithoutDegradation(t *testing.T) {
+	testSourceRoutingWithoutDegradation(t, "SOURCE_ROTATED", "source must rotate locally")
+}
+
+func TestProcessReplaceRoutesUnsupportedSourceCodecWithoutDegradation(t *testing.T) {
+	testSourceRoutingWithoutDegradation(t, "FORMAT_SPECIFIC", "SOURCE_CODEC_UNSUPPORTED: Livepeer transport cannot carry VP9; local AV must decode this source")
+}
+
+func testSourceRoutingWithoutDegradation(t *testing.T, shortReason, reason string) {
+	t.Helper()
+	oldLogger := logger
+	logger = logging.NewLogger()
+	t.Cleanup(func() { logger = oldLogger })
+	old := reportStreamTranscodeDegraded
+	reports := make(chan ProcessReplaceEvent, 1)
+	reportStreamTranscodeDegraded = func(evt ProcessReplaceEvent) error { reports <- evt; return nil }
+	t.Cleanup(func() { reportStreamTranscodeDegraded = old })
+	body := strings.Join([]string{"processing+rotated", "Livepeer", failedLivepeerConfig, "2", shortReason, reason}, "\n")
+	ch := RegisterProcessReplaceListener("processing+rotated")
+	defer UnregisterProcessReplaceListener("processing+rotated")
+	code, replacement := callProcessReplace(t, body)
+	if code != http.StatusOK || replacement == noProcessReplacement {
+		t.Fatalf("replacement = %d %s", code, replacement)
+	}
+	select {
+	case evt := <-ch:
+		if evt.ReplacementCount != 2 {
+			t.Fatalf("replacement count = %d", evt.ReplacementCount)
+		}
+	default:
+		t.Fatal("routing event did not reach processing job")
+	}
+	select {
+	case evt := <-reports:
+		t.Fatalf("rotated source reported as degraded: %+v", evt)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestLivepeerExitFallbackDecision(t *testing.T) {
 	for _, tc := range []struct {
 		name string

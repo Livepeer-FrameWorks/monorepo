@@ -1,0 +1,9 @@
+fragment NodeCapacityFields on NodeCapacity {
+  egressBudgetBytesPerSec
+  ingressBudgetBytesPerSec
+  egressSource
+  ingressSource
+  revision
+  updatedAt
+  appliedRevision
+}

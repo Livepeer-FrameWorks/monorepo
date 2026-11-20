@@ -1,0 +1,25 @@
+mutation CreateVodOriginalDownload($id: ID!) {
+  createVodOriginalDownload(id: $id) {
+    ... on VodOriginalDownload {
+      url
+      expiresAt
+      sizeBytes
+      filename
+    }
+    ... on ValidationError {
+      message
+      field
+      code
+    }
+    ... on NotFoundError {
+      message
+      code
+      resourceType
+      resourceId
+    }
+    ... on AuthError {
+      message
+      code
+    }
+  }
+}

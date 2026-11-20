@@ -2394,11 +2394,10 @@ func (x *StreamAdvertisement) GetSourceActive() bool {
 type PeerStreamEdge struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	NodeId      string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	BaseUrl     string                 `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`              // Public HTTPS URL
-	DtscUrl     string                 `protobuf:"bytes,3,opt,name=dtsc_url,json=dtscUrl,proto3" json:"dtsc_url,omitempty"`              // DTSC pull URL for origin-pull cascading
-	IsOrigin    bool                   `protobuf:"varint,4,opt,name=is_origin,json=isOrigin,proto3" json:"is_origin,omitempty"`          // True if node has original ingest input
-	BwAvailable uint64                 `protobuf:"varint,5,opt,name=bw_available,json=bwAvailable,proto3" json:"bw_available,omitempty"` // Available bandwidth (bytes/sec)
-	CpuPercent  float64                `protobuf:"fixed64,6,opt,name=cpu_percent,json=cpuPercent,proto3" json:"cpu_percent,omitempty"`   // 0-100
+	BaseUrl     string                 `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`            // Public HTTPS URL
+	DtscUrl     string                 `protobuf:"bytes,3,opt,name=dtsc_url,json=dtscUrl,proto3" json:"dtsc_url,omitempty"`            // DTSC pull URL for origin-pull cascading
+	IsOrigin    bool                   `protobuf:"varint,4,opt,name=is_origin,json=isOrigin,proto3" json:"is_origin,omitempty"`        // True if node has original ingest input
+	CpuPercent  float64                `protobuf:"fixed64,6,opt,name=cpu_percent,json=cpuPercent,proto3" json:"cpu_percent,omitempty"` // 0-100
 	ViewerCount uint32                 `protobuf:"varint,7,opt,name=viewer_count,json=viewerCount,proto3" json:"viewer_count,omitempty"`
 	GeoLat      float64                `protobuf:"fixed64,8,opt,name=geo_lat,json=geoLat,proto3" json:"geo_lat,omitempty"`
 	GeoLon      float64                `protobuf:"fixed64,9,opt,name=geo_lon,json=geoLon,proto3" json:"geo_lon,omitempty"`
@@ -2480,13 +2479,6 @@ func (x *PeerStreamEdge) GetIsOrigin() bool {
 		return x.IsOrigin
 	}
 	return false
-}
-
-func (x *PeerStreamEdge) GetBwAvailable() uint64 {
-	if x != nil {
-		return x.BwAvailable
-	}
-	return 0
 }
 
 func (x *PeerStreamEdge) GetCpuPercent() float64 {
@@ -2721,7 +2713,6 @@ func (x *PeerHeartbeat) GetFoghornRegion() string {
 // consumed silently alongside the retired telemetry payloads.
 type CapacitySummary struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
-	TotalBandwidth     uint64                 `protobuf:"varint,1,opt,name=total_bandwidth,json=totalBandwidth,proto3" json:"total_bandwidth,omitempty"`             // Total cluster bandwidth (bytes/sec)
 	AvailableBandwidth uint64                 `protobuf:"varint,2,opt,name=available_bandwidth,json=availableBandwidth,proto3" json:"available_bandwidth,omitempty"` // Available bandwidth (bytes/sec)
 	TotalEdges         uint32                 `protobuf:"varint,3,opt,name=total_edges,json=totalEdges,proto3" json:"total_edges,omitempty"`
 	AvailableEdges     uint32                 `protobuf:"varint,4,opt,name=available_edges,json=availableEdges,proto3" json:"available_edges,omitempty"`
@@ -2760,13 +2751,6 @@ func (x *CapacitySummary) ProtoReflect() protoreflect.Message {
 // Deprecated: Use CapacitySummary.ProtoReflect.Descriptor instead.
 func (*CapacitySummary) Descriptor() ([]byte, []int) {
 	return file_foghorn_federation_proto_rawDescGZIP(), []int{22}
-}
-
-func (x *CapacitySummary) GetTotalBandwidth() uint64 {
-	if x != nil {
-		return x.TotalBandwidth
-	}
-	return 0
 }
 
 func (x *CapacitySummary) GetAvailableBandwidth() uint64 {
@@ -3953,13 +3937,12 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x0esource_node_id\x18\r \x01(\tR\fsourceNodeId\x12*\n" +
 	"\x11source_cluster_id\x18\x0e \x01(\tR\x0fsourceClusterId\x12.\n" +
 	"\x13source_runtime_name\x18\x0f \x01(\tR\x11sourceRuntimeName\x12#\n" +
-	"\rsource_active\x18\x10 \x01(\bR\fsourceActive\"\xb3\x05\n" +
+	"\rsource_active\x18\x10 \x01(\bR\fsourceActive\"\xa4\x05\n" +
 	"\x0ePeerStreamEdge\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x19\n" +
 	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12\x19\n" +
 	"\bdtsc_url\x18\x03 \x01(\tR\adtscUrl\x12\x1b\n" +
-	"\tis_origin\x18\x04 \x01(\bR\bisOrigin\x12!\n" +
-	"\fbw_available\x18\x05 \x01(\x04R\vbwAvailable\x12\x1f\n" +
+	"\tis_origin\x18\x04 \x01(\bR\bisOrigin\x12\x1f\n" +
 	"\vcpu_percent\x18\x06 \x01(\x01R\n" +
 	"cpuPercent\x12!\n" +
 	"\fviewer_count\x18\a \x01(\rR\vviewerCount\x12\x17\n" +
@@ -3977,7 +3960,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x12source_observed_at\x18\x11 \x01(\x03R\x10sourceObservedAt\x12\x1a\n" +
 	"\bplayable\x18\x12 \x01(\bR\bplayable\x12,\n" +
 	"\x12source_lease_epoch\x18\x13 \x01(\x03R\x10sourceLeaseEpoch\x12.\n" +
-	"\x13source_runtime_name\x18\x14 \x01(\tR\x11sourceRuntimeName\"\x89\x03\n" +
+	"\x13source_runtime_name\x18\x14 \x01(\tR\x11sourceRuntimeNameJ\x04\b\x05\x10\x06R\fbw_available\"\x89\x03\n" +
 	"\rPeerHeartbeat\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12!\n" +
 	"\fstream_count\x18\x02 \x01(\rR\vstreamCount\x12,\n" +
@@ -3992,16 +3975,15 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"foghornLon\x12)\n" +
 	"\x10foghorn_location\x18\t \x01(\tR\x0ffoghornLocation\x12%\n" +
 	"\x0efoghorn_region\x18\n" +
-	" \x01(\tR\rfoghornRegion\"\xab\x02\n" +
-	"\x0fCapacitySummary\x12'\n" +
-	"\x0ftotal_bandwidth\x18\x01 \x01(\x04R\x0etotalBandwidth\x12/\n" +
+	" \x01(\tR\rfoghornRegion\"\x99\x02\n" +
+	"\x0fCapacitySummary\x12/\n" +
 	"\x13available_bandwidth\x18\x02 \x01(\x04R\x12availableBandwidth\x12\x1f\n" +
 	"\vtotal_edges\x18\x03 \x01(\rR\n" +
 	"totalEdges\x12'\n" +
 	"\x0favailable_edges\x18\x04 \x01(\rR\x0eavailableEdges\x12#\n" +
 	"\rtotal_storage\x18\x05 \x01(\x04R\ftotalStorage\x12+\n" +
 	"\x11available_storage\x18\x06 \x01(\x04R\x10availableStorage\x12\x1c\n" +
-	"\ttimestamp\x18\b \x01(\x03R\ttimestampJ\x04\b\a\x10\b\"h\n" +
+	"\ttimestamp\x18\b \x01(\x03R\ttimestampJ\x04\b\x01\x10\x02J\x04\b\a\x10\bR\x0ftotal_bandwidth\"h\n" +
 	"\x1aListTenantArtifactsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12-\n" +
 	"\x12requesting_cluster\x18\x02 \x01(\tR\x11requestingCluster\"a\n" +

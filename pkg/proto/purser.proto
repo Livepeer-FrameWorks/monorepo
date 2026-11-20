@@ -347,6 +347,8 @@ message BillingTier {
   string processes_dvr = 30;          // Rolling DVR STREAM_PROCESS config
   string processes_clip = 31;         // Clip materialization config
   string processes_dvr_finalize = 32; // DVR chapter/finalization materialization config
+  repeated TranscodeLadder transcode_ladders = 33;
+  string default_transcode_ladder = 34;
 }
 
 // PricingRule is one priced behavior on a tier (or override on a subscription).
@@ -2453,4 +2455,12 @@ message AdminRetryProviderWebhookResponse {
   bool eligible = 7;
   bool retry_requested = 8;
   string audit_id = 9;
+}
+
+
+message TranscodeLadder {
+  string name = 1;
+  string display_name = 2;
+  string description = 3;
+  string renditions_json = 4; // JSON array of Transcode renditions (Mist process option names)
 }

@@ -14,8 +14,8 @@ class StreamService {
             node {
               id
               name
+              ingest { state isLive }
               metrics {
-                isLive
                 currentViewers
               }
             }
@@ -27,14 +27,9 @@ class StreamService {
 
     let response = try await gateway.graphql(
       query: query,
-      responseType: StreamsQueryResponse.self)
+      responseType: StreamsQueryResponse.self,
+      partialData: .streamList)
 
-    return response.streamsConnection.edges.map { edge in
-      StreamSummary(
-        id: edge.node.id,
-        name: edge.node.name,
-        isActive: edge.node.isActive,
-        viewerCount: edge.node.viewerCount ?? 0)
-    }
+    return response.streamsConnection.edges.map { $0.node.summary }
   }
 }

@@ -1,3 +1,5 @@
+import { isSupportedVodFilename } from "./formats";
+
 export interface DropZoneOptions {
   onFiles: (files: File[]) => void;
   accept?: (file: File) => boolean;
@@ -52,6 +54,5 @@ export function attachDropZone(node: HTMLElement, opts: DropZoneOptions): { dest
 }
 
 export function isVideoFile(file: File): boolean {
-  if (file.type.startsWith("video/")) return true;
-  return /\.(mp4|mov|m4v|webm|mkv|avi|flv|wmv|mpeg|mpg|ts)$/i.test(file.name);
+  return isSupportedVodFilename(file.name);
 }

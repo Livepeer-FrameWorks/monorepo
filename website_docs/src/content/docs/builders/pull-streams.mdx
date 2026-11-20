@@ -297,13 +297,22 @@ query PullSourceEvents($id: ID!) {
 }
 ```
 
-`eventKind` is one of `resolved`, `not_found`, `disabled`, `blocked_uri`,
+`eventKind` is one of `resolved`, `not_found`, `disabled`, `stream_cap`, `blocked_uri`,
 `cluster_not_allowed_delegate`, `commodore_error`, or `foghorn_base_unresolved`.
 `cluster_not_allowed_delegate` means the source location does not allow the requesting edge to dial
 the upstream, so that edge tries to relay the stream from an allowed cluster that is already
 pulling it. These are source
-resolution events: they explain whether Foghorn handed MistServer a source. Upstream
-connect/disconnect/retry telemetry depends on MistServer emitting additional trigger types.
+resolution events: they explain whether Foghorn handed MistServer a source. A `stream_cap` entry
+means the tenant's per-cell stream limit refused the pull; the viewer receives `offline:stream_cap`
+instead of the upstream URL.
+
+When a direct pull buffer becomes playable, the cell emits `stream.connected` and `stream.live`
+with one shared `sessionId`. Additional buffers in that cell do not repeat them. `stream.idle`
+fires when the last direct buffer for that stream in the cell ends; each cell owns its own
+lifecycle, while relay copies emit none. `stream.ended` means its live buffer was unloaded.
+Periodic node reports repair missed lifecycle triggers and renew active pull placement, including
+pulls that have run longer than the placement lease. `Stream.ingest` exposes current state under
+`streams:read`; source-resolution history and live ingest state answer different questions.
 
 ## Failure Modes
 

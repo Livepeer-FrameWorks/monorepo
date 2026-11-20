@@ -758,7 +758,7 @@ on the `frameworks edge provision` command when an explicit key is needed.
 - `fetch_cert` (deprecated) - Ignored for edge manifests; enrolled edge TLS is delivered by Foghorn `ConfigSeed`
 - `mode` (optional) - Default node mode: `container` (default; single edge image) or `native`. `docker` is a deprecated alias for `container`.
 - `capabilities` (optional) - Default enabled Helmsman capabilities: `ingest`, `edge`, `storage`, `processing`. Empty means all capabilities enabled.
-- `bandwidth_mbps` (optional) - Default node bandwidth limit advertised by Helmsman and reconciled into MistServer `bwlimit`.
+- `bandwidth_mbps` (optional) - Operator-owned budget for both egress and ingress in decimal Mbit/s. Every provision writes it through the capacity API after the node connects, including unchanged hosts. `0` restores the default 1 Gbit/s per direction.
 - `max_transcodes` (optional) - Default local transcoding concurrency limit reported by Helmsman.
 - `storage_capacity_bytes` (optional) - Default local storage capacity reported by Helmsman.
 - `nodes` (required)
@@ -779,7 +779,7 @@ Edge telemetry ingress is control-plane managed. Enrolled edge nodes receive rem
 - `register_qm` (optional)
 - `mode` (optional) - Per-node override, `container` or `native` (`docker` is a deprecated alias for `container`)
 - `capabilities` (optional) - Per-node override for enabled capabilities
-- `bandwidth_mbps` (optional) - Per-node bandwidth override
+- `bandwidth_mbps` (optional) - Per-node override of `bandwidth_mbps`, written through the API on each provision
 - `max_transcodes` (optional) - Per-node transcode limit override
 - `storage_capacity_bytes` (optional) - Per-node storage capacity override
 - `labels` (optional)

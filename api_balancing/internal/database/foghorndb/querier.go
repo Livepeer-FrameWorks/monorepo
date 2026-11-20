@@ -24,6 +24,7 @@ type Querier interface {
 	ActiveProcessingTranscodeJobContext(ctx context.Context, artifactHash string) (ActiveProcessingTranscodeJobContextRow, error)
 	AdmissionGenerationActive(ctx context.Context, arg AdmissionGenerationActiveParams) (bool, error)
 	AdmissionPushTargetAttemptCurrent(ctx context.Context, arg AdmissionPushTargetAttemptCurrentParams) (bool, error)
+	AdmitPullUpstream(ctx context.Context, arg AdmitPullUpstreamParams) (json.RawMessage, error)
 	AdoptRemoteArtifact(ctx context.Context, arg AdoptRemoteArtifactParams) (int64, error)
 	// A publisher that reconnects to the same Mist buffer within its resume window
 	// continues the recording the previous session started on that source node:
@@ -65,6 +66,7 @@ type Querier interface {
 	BindAdmissionPushTargetMistID(ctx context.Context, arg BindAdmissionPushTargetMistIDParams) (int64, error)
 	BindAdmissionPushTargetMistIDIfAbsent(ctx context.Context, arg BindAdmissionPushTargetMistIDIfAbsentParams) (int64, error)
 	BindDVRDispatchOwner(ctx context.Context, arg BindDVRDispatchOwnerParams) (int64, error)
+	BindPendingPullBuffer(ctx context.Context, arg BindPendingPullBufferParams) (string, error)
 	// Advances the artifact's domain-event revision inside the transition's
 	// transaction. The row lock is held until commit, so a concurrent transition
 	// of the same artifact reads the committed value and takes the next one.
@@ -104,6 +106,7 @@ type Querier interface {
 	ClearDVRStopObligation(ctx context.Context, arg ClearDVRStopObligationParams) error
 	ClearDtshAttempt(ctx context.Context, arg ClearDtshAttemptParams) (string, error)
 	ClearThumbnailReassert(ctx context.Context, attemptID string) error
+	ClearVodOriginal(ctx context.Context, arg ClearVodOriginalParams) (int64, error)
 	ClipNeedsDtshSync(ctx context.Context, artifactHash string) (bool, error)
 	CloseCurrentDVRChapterForArtifact(ctx context.Context, artifactHash string) (int64, error)
 	CloseDVRChapter(ctx context.Context, chapterID string) (int64, error)
@@ -129,12 +132,14 @@ type Querier interface {
 	ConfirmSourceProjection(ctx context.Context, arg ConfirmSourceProjectionParams) (int64, error)
 	ConsumeNodeAdmissionProofNonce(ctx context.Context, arg ConsumeNodeAdmissionProofNonceParams) (int64, error)
 	ConsumeTerminalArtifactCreationCommand(ctx context.Context, arg ConsumeTerminalArtifactCreationCommandParams) error
+	CountActivePullStreamSessions(ctx context.Context, arg CountActivePullStreamSessionsParams) (int32, error)
 	CountActiveTenantIngestSessions(ctx context.Context, tenantID string) (int32, error)
 	CountActiveThumbnailJobs(ctx context.Context) (int64, error)
 	CountDVRFinalSegments(ctx context.Context, artifactHash string) (CountDVRFinalSegmentsRow, error)
 	CountFederatedPointersWithUnnormalizedPurgeEligibility(ctx context.Context) (int64, error)
 	CountLegacyFederatedArtifactPointers(ctx context.Context) (int64, error)
 	CountOtherCompleteArtifactCopies(ctx context.Context, arg CountOtherCompleteArtifactCopiesParams) (int64, error)
+	CountSavedDVRChapters(ctx context.Context, arg CountSavedDVRChaptersParams) (int32, error)
 	CountStaleUnconsumedCreationCommands(ctx context.Context, retentionSeconds int64) (int64, error)
 	CountTerminalArtifactsWithSyncInProgress(ctx context.Context) (int64, error)
 	CountUnreclaimedDVRSegments(ctx context.Context, arg CountUnreclaimedDVRSegmentsParams) (int64, error)
@@ -197,8 +202,10 @@ type Querier interface {
 	DetachEndedWriterFromLiveSession(ctx context.Context, artifactHash string) (DetachEndedWriterFromLiveSessionRow, error)
 	DtshSyncedForArtifact(ctx context.Context, artifactHash string) (bool, error)
 	EndLapsedPendingIngestSession(ctx context.Context, arg EndLapsedPendingIngestSessionParams) (EndLapsedPendingIngestSessionRow, error)
+	EndPullBuffersForEvent(ctx context.Context, arg EndPullBuffersForEventParams) ([]EndPullBuffersForEventRow, error)
 	EndSupersededNodeIngestSession(ctx context.Context, arg EndSupersededNodeIngestSessionParams) (string, error)
 	EndSupersededPIDIngestSession(ctx context.Context, arg EndSupersededPIDIngestSessionParams) error
+	EndSupersededPullBuffers(ctx context.Context, arg EndSupersededPullBuffersParams) ([]EndSupersededPullBuffersRow, error)
 	EnqueueAdmissionEffect(ctx context.Context, arg EnqueueAdmissionEffectParams) error
 	EnqueueArtifactEvent(ctx context.Context, arg EnqueueArtifactEventParams) error
 	// The legacy row of a transition that also publishes a domain event carries
@@ -247,6 +254,7 @@ type Querier interface {
 	FailVodCompletion(ctx context.Context, arg FailVodCompletionParams) (int64, error)
 	FailVodCompletionSizeMismatch(ctx context.Context, arg FailVodCompletionSizeMismatchParams) (int64, error)
 	FederatedArtifactStreamID(ctx context.Context, arg FederatedArtifactStreamIDParams) (string, error)
+	FenceIngestStopExecution(ctx context.Context, arg FenceIngestStopExecutionParams) (int64, error)
 	FenceInterruptedActiveFederatedArtifactPointerPurge(ctx context.Context, arg FenceInterruptedActiveFederatedArtifactPointerPurgeParams) (int64, error)
 	FenceStaleFederatedArtifactPointerForPurge(ctx context.Context, arg FenceStaleFederatedArtifactPointerForPurgeParams) (int64, error)
 	FenceTombstonedFederatedArtifactPointerForPurge(ctx context.Context, arg FenceTombstonedFederatedArtifactPointerForPurgeParams) (int64, error)
@@ -340,6 +348,7 @@ type Querier interface {
 	// An existing import of this hash, for an idempotent retry of ImportVodAsset.
 	GetImportedVodForTenant(ctx context.Context, arg GetImportedVodForTenantParams) (GetImportedVodForTenantRow, error)
 	GetIngestSessionAuthoritySnapshot(ctx context.Context, sessionID string) (GetIngestSessionAuthoritySnapshotRow, error)
+	GetKeptVodOriginalKey(ctx context.Context, arg GetKeptVodOriginalKeyParams) (string, error)
 	GetLastConfigSeed(ctx context.Context, nodeID string) (GetLastConfigSeedRow, error)
 	GetLatestDVRChapterBefore(ctx context.Context, arg GetLatestDVRChapterBeforeParams) (GetLatestDVRChapterBeforeRow, error)
 	// A live adopted pointer and the cell that originated it, which alone can say
@@ -384,6 +393,7 @@ type Querier interface {
 	GetRelayArtifact(ctx context.Context, artifactHash string) (GetRelayArtifactRow, error)
 	GetRelayVodMetadata(ctx context.Context, artifactHash string) (GetRelayVodMetadataRow, error)
 	GetStopSessionsGeneration(ctx context.Context, arg GetStopSessionsGenerationParams) (string, error)
+	GetStreamIngestStates(ctx context.Context, arg GetStreamIngestStatesParams) ([]GetStreamIngestStatesRow, error)
 	GetStreamRuntimeDiagnosis(ctx context.Context, arg GetStreamRuntimeDiagnosisParams) (json.RawMessage, error)
 	GetSyncCompletionAttempt(ctx context.Context, arg GetSyncCompletionAttemptParams) (GetSyncCompletionAttemptRow, error)
 	GetTenantAuthorityProjection(ctx context.Context, tenantID string) (GetTenantAuthorityProjectionRow, error)
@@ -396,6 +406,8 @@ type Querier interface {
 	GetVodAsset(ctx context.Context, artifactHash string) (GetVodAssetRow, error)
 	GetVodCompletionContract(ctx context.Context, artifactHash string) (GetVodCompletionContractRow, error)
 	GetVodForDeletion(ctx context.Context, arg GetVodForDeletionParams) (GetVodForDeletionRow, error)
+	GetVodOriginal(ctx context.Context, arg GetVodOriginalParams) (GetVodOriginalRow, error)
+	GetVodOriginalToStamp(ctx context.Context, arg GetVodOriginalToStampParams) (GetVodOriginalToStampRow, error)
 	GetVodUploadStatusRow(ctx context.Context, arg GetVodUploadStatusRowParams) (GetVodUploadStatusRowRow, error)
 	HasActiveIngestSession(ctx context.Context, arg HasActiveIngestSessionParams) (bool, error)
 	HasActiveStreamIngestSession(ctx context.Context, arg HasActiveStreamIngestSessionParams) (bool, error)
@@ -424,6 +436,7 @@ type Querier interface {
 	InsertMigratedArtifactMetadata(ctx context.Context, arg InsertMigratedArtifactMetadataParams) (int64, error)
 	InsertMintArtifactShell(ctx context.Context, arg InsertMintArtifactShellParams) error
 	InsertPendingDVRSegment(ctx context.Context, arg InsertPendingDVRSegmentParams) error
+	InsertPlayablePullBuffer(ctx context.Context, arg InsertPlayablePullBufferParams) (string, error)
 	InsertProcessingJob(ctx context.Context, arg InsertProcessingJobParams) error
 	InsertQueuedClipArtifact(ctx context.Context, arg InsertQueuedClipArtifactParams) error
 	InsertRequestedDVRArtifact(ctx context.Context, arg InsertRequestedDVRArtifactParams) error
@@ -436,6 +449,7 @@ type Querier interface {
 	InsertVodMultipartMetadata(ctx context.Context, arg InsertVodMultipartMetadataParams) error
 	IsArtifactSynced(ctx context.Context, artifactHash string) (bool, error)
 	IsDVRRecordingSource(ctx context.Context, arg IsDVRRecordingSourceParams) (bool, error)
+	IsVodOriginalRetentionActivated(ctx context.Context) (bool, error)
 	LatestActiveProcessingConfig(ctx context.Context, artifactHash sql.NullString) (sql.NullString, error)
 	LatestActiveProcessingSourceURL(ctx context.Context, artifactHash sql.NullString) (sql.NullString, error)
 	LatestArtifactNodeID(ctx context.Context, artifactHash string) (string, error)
@@ -443,6 +457,7 @@ type Querier interface {
 	LatestEndedNodeIngestSession(ctx context.Context, arg LatestEndedNodeIngestSessionParams) (LatestEndedNodeIngestSessionRow, error)
 	LatestLiveOriginNode(ctx context.Context, artifactHash string) (LatestLiveOriginNodeRow, error)
 	LatestPlayableDVRChapterID(ctx context.Context, artifactHash string) (sql.NullString, error)
+	LatestPullNodeEnd(ctx context.Context, arg LatestPullNodeEndParams) (int64, error)
 	LatestRecordingNode(ctx context.Context, artifactHash string) (string, error)
 	ListActiveAdmissionPushTargetEffectsForUpdate(ctx context.Context, arg ListActiveAdmissionPushTargetEffectsForUpdateParams) ([]ListActiveAdmissionPushTargetEffectsForUpdateRow, error)
 	ListActiveArtifactNodes(ctx context.Context, artifactHash string) ([]string, error)
@@ -470,6 +485,7 @@ type Querier interface {
 	ListArtifactsMissingThumbnails(ctx context.Context, arg ListArtifactsMissingThumbnailsParams) ([]ListArtifactsMissingThumbnailsRow, error)
 	ListAssetThumbnailObjectKeys(ctx context.Context, arg ListAssetThumbnailObjectKeysParams) ([]ListAssetThumbnailObjectKeysRow, error)
 	ListCapacityPendingPushTargetEffectsForRearm(ctx context.Context) ([]ListCapacityPendingPushTargetEffectsForRearmRow, error)
+	ListClaimedIngestStopTargets(ctx context.Context, arg ListClaimedIngestStopTargetsParams) ([]ListClaimedIngestStopTargetsRow, error)
 	ListColdStorageUsage(ctx context.Context) ([]ListColdStorageUsageRow, error)
 	// Authorities this cell can forget: past their validity, and issued so long ago
 	// that no older signed version of them can still verify, so forgetting the
@@ -511,6 +527,8 @@ type Querier interface {
 	// What this cell holds as valid at as_of, to tell the control plane whether it
 	// has anything to repeat.
 	ListHeldMediaAuthorityVersions(ctx context.Context, asOf time.Time) ([]ListHeldMediaAuthorityVersionsRow, error)
+	// Cell-scoped maintenance; each candidate carries the tenant used by the retirement transaction.
+	ListLapsedPullAdmissions(ctx context.Context) ([]ListLapsedPullAdmissionsRow, error)
 	ListLegacyAdmissionPushTargetsForEncryption(ctx context.Context, rowLimit int32) ([]ListLegacyAdmissionPushTargetsForEncryptionRow, error)
 	// A node execution's abandonment precedes tenant discovery. Every returned
 	// legacy owner is released with its own tenant, stream, cluster and claim.
@@ -522,8 +540,13 @@ type Querier interface {
 	ListNodeFinalizingDVRChapters(ctx context.Context, arg ListNodeFinalizingDVRChaptersParams) ([]ListNodeFinalizingDVRChaptersRow, error)
 	ListNodeIngestGenerations(ctx context.Context, arg ListNodeIngestGenerationsParams) ([]ListNodeIngestGenerationsRow, error)
 	ListNodeMaintenance(ctx context.Context) ([]ListNodeMaintenanceRow, error)
+	// Node-scoped registration reconciliation; returned tenant scopes each retirement.
+	ListNodeOpenPullSessionsBefore(ctx context.Context, arg ListNodeOpenPullSessionsBeforeParams) ([]ListNodeOpenPullSessionsBeforeRow, error)
 	ListNodeProjectedIngestSessionsBefore(ctx context.Context, arg ListNodeProjectedIngestSessionsBeforeParams) ([]ListNodeProjectedIngestSessionsBeforeRow, error)
 	ListNodeUpdateStatuses(ctx context.Context, nodeIds []string) ([]ListNodeUpdateStatusesRow, error)
+	// Legacy edge replies carry the authenticated node and generation, not a tenant.
+	// Resolve only that immutable identity; every following mutation remains tenant-scoped.
+	ListOfflineAcknowledgementTenants(ctx context.Context, arg ListOfflineAcknowledgementTenantsParams) ([]string, error)
 	// Node-scoped: the node reports an abandoned execution before it can know the tenant. The trigger
 	// UUID identifies one Mist execution on that node, which minted at most one session per tenant.
 	ListOpenIngestSessionsByTrigger(ctx context.Context, arg ListOpenIngestSessionsByTriggerParams) ([]ListOpenIngestSessionsByTriggerRow, error)
@@ -553,6 +576,8 @@ type Querier interface {
 	// discovery would use: tombstone wins, active authority restores only after
 	// cleanup settlement, and an authority-free old pointer remains a stale purge.
 	ListRecoverableFederatedArtifactPointerPurges(ctx context.Context, retentionInterval string) ([]ListRecoverableFederatedArtifactPointerPurgesRow, error)
+	ListSavedDVRChaptersBackward(ctx context.Context, arg ListSavedDVRChaptersBackwardParams) ([]ListSavedDVRChaptersBackwardRow, error)
+	ListSavedDVRChaptersForward(ctx context.Context, arg ListSavedDVRChaptersForwardParams) ([]ListSavedDVRChaptersForwardRow, error)
 	ListStaleAbortingVODs(ctx context.Context, arg ListStaleAbortingVODsParams) ([]ListStaleAbortingVODsRow, error)
 	ListStaleCompletingVODs(ctx context.Context, arg ListStaleCompletingVODsParams) ([]ListStaleCompletingVODsRow, error)
 	ListStaleDVRStartObligations(ctx context.Context, arg ListStaleDVRStartObligationsParams) ([]ListStaleDVRStartObligationsRow, error)
@@ -613,6 +638,7 @@ type Querier interface {
 	LockThumbnailAttemptAsset(ctx context.Context, arg LockThumbnailAttemptAssetParams) error
 	LockThumbnailParentTerminal(ctx context.Context, artifactHash string) (bool, error)
 	LockUnemittedArtifactNode(ctx context.Context, arg LockUnemittedArtifactNodeParams) (LockUnemittedArtifactNodeRow, error)
+	LockVodOriginalArtifact(ctx context.Context, arg LockVodOriginalArtifactParams) (string, error)
 	LookupDVRSegmentsByName(ctx context.Context, arg LookupDVRSegmentsByNameParams) ([]FoghornDvrSegment, error)
 	// Fenced on the instant the caller confirmed against, so a fence raised again
 	// after that confirmation stays up.
@@ -651,6 +677,8 @@ type Querier interface {
 	MarkDVRStopPending(ctx context.Context, arg MarkDVRStopPendingParams) error
 	MarkExhaustedArtifactFailed(ctx context.Context, arg MarkExhaustedArtifactFailedParams) (int64, error)
 	MarkFailedArtifactsDeleted(ctx context.Context, retentionInterval string) (int64, error)
+	MarkIngestDisconnectRequested(ctx context.Context, arg MarkIngestDisconnectRequestedParams) (int64, error)
+	MarkIngestDisconnected(ctx context.Context, arg MarkIngestDisconnectedParams) (int64, error)
 	// First playable buffer of the active session, from the session's own node only.
 	// The playable_at IS NULL guard makes a repeated or replayed buffer trigger match
 	// nothing; the start fence keeps a delayed trigger of an earlier session on the
@@ -664,6 +692,7 @@ type Querier interface {
 	MarkMediaObjectAuthorityLocalIngestReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalIngestReadyParams) (int64, error)
 	MarkMediaObjectAuthorityLocalReadReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalReadReadyParams) (int64, error)
 	MarkMediaObjectAuthorityLocalSourceReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalSourceReadyParams) (int64, error)
+	MarkOfflinePublisherDrainDone(ctx context.Context, arg MarkOfflinePublisherDrainDoneParams) (int64, error)
 	MarkOfflineTeardownDone(ctx context.Context, arg MarkOfflineTeardownDoneParams) (int64, error)
 	MarkProcessingArtifactFailed(ctx context.Context, arg MarkProcessingArtifactFailedParams) (int64, error)
 	MarkProcessingArtifactReady(ctx context.Context, arg MarkProcessingArtifactReadyParams) (int64, error)
@@ -674,6 +703,8 @@ type Querier interface {
 	// The durable marker prevents a later mint; keep local work queued while any
 	// previously committed generation for this node execution is still open.
 	MarkPublisherSessionsSettled(ctx context.Context, arg MarkPublisherSessionsSettledParams) (int64, error)
+	MarkPullBufferEnded(ctx context.Context, arg MarkPullBufferEndedParams) (MarkPullBufferEndedRow, error)
+	MarkPushBufferEnded(ctx context.Context, arg MarkPushBufferEndedParams) (MarkPushBufferEndedRow, error)
 	MarkQueuedClipArtifact(ctx context.Context, arg MarkQueuedClipArtifactParams) error
 	MarkRemainingDVRSegmentsLost(ctx context.Context, arg MarkRemainingDVRSegmentsLostParams) (int64, error)
 	MarkStoragePairLocallyAttributed(ctx context.Context, arg MarkStoragePairLocallyAttributedParams) (int64, error)
@@ -706,12 +737,14 @@ type Querier interface {
 	PropagateDVRChapterRetention(ctx context.Context, arg PropagateDVRChapterRetentionParams) (int64, error)
 	PruneMediaAuthorityApplyAudit(ctx context.Context, arg PruneMediaAuthorityApplyAuditParams) (int64, error)
 	PublisherAdmissionStillLapsed(ctx context.Context, arg PublisherAdmissionStillLapsedParams) (bool, error)
+	PullSessionForBuffer(ctx context.Context, arg PullSessionForBufferParams) (PullSessionForBufferRow, error)
 	PurgeAdmissionPushTargetRevisions(ctx context.Context, olderThanMs int64) (int64, error)
 	PurgeCompletedArtifactEvents(ctx context.Context, arg PurgeCompletedArtifactEventsParams) (int64, error)
 	// An ended generation stays while a recording still references it (the artifacts FK) or its
 	// admission obligation is still pending; every trigger path that resolves a generation by id
 	// runs within seconds of its end, far inside the retention horizon.
 	PurgeEndedIngestSessions(ctx context.Context, arg PurgeEndedIngestSessionsParams) (int64, error)
+	PurgeEndedPullIngestSessions(ctx context.Context, arg PurgeEndedPullIngestSessionsParams) (int64, error)
 	PurgeExpiredCloseTombstones(ctx context.Context, olderThanSeconds float64) (int64, error)
 	PurgeExpiredIngestAdmissionAbandonments(ctx context.Context, olderThanSeconds float64) (int64, error)
 	PurgeStaleArtifactNodes(ctx context.Context) (int64, error)
@@ -802,6 +835,7 @@ type Querier interface {
 	RetireIngestSession(ctx context.Context, arg RetireIngestSessionParams) (RetireIngestSessionRow, error)
 	RetireIngestSessionByClaim(ctx context.Context, arg RetireIngestSessionByClaimParams) (RetireIngestSessionByClaimRow, error)
 	RetireNeverProjectedIngestSession(ctx context.Context, arg RetireNeverProjectedIngestSessionParams) (RetireNeverProjectedIngestSessionRow, error)
+	RetirePullIngestSession(ctx context.Context, arg RetirePullIngestSessionParams) (RetirePullIngestSessionRow, error)
 	RetryConfigSeedApplyAck(ctx context.Context, arg RetryConfigSeedApplyAckParams) (int64, error)
 	RetryDVRChapterFinalize(ctx context.Context, arg RetryDVRChapterFinalizeParams) (int64, error)
 	RetryManagedStreamPlacement(ctx context.Context, arg RetryManagedStreamPlacementParams) (int64, error)
@@ -837,6 +871,7 @@ type Querier interface {
 	SoftDeleteDVRChapterArtifacts(ctx context.Context, arg SoftDeleteDVRChapterArtifactsParams) ([]string, error)
 	SoftDeleteDVRParent(ctx context.Context, arg SoftDeleteDVRParentParams) (int64, error)
 	SoftDeleteVodArtifact(ctx context.Context, arg SoftDeleteVodArtifactParams) (int64, error)
+	StampVodOriginal(ctx context.Context, arg StampVodOriginalParams) (int64, error)
 	StoreAdmissionPushTargetRevision(ctx context.Context, arg StoreAdmissionPushTargetRevisionParams) error
 	// Writes only a different revision observed no earlier than the stored one, so
 	// an unchanged membership costs no write and a replica that received an older
@@ -851,6 +886,7 @@ type Querier interface {
 	TombstoneFederatedArtifact(ctx context.Context, arg TombstoneFederatedArtifactParams) (int64, error)
 	TouchDVRRecordingNode(ctx context.Context, arg TouchDVRRecordingNodeParams) error
 	TouchStartedDVR(ctx context.Context, arg TouchStartedDVRParams) (int64, error)
+	TouchVodOriginalCatalog(ctx context.Context, arg TouchVodOriginalCatalogParams) error
 	TryAcquireRestreamCapacityRearmLock(ctx context.Context) (bool, error)
 	UnprojectedThumbnailEligible(ctx context.Context, attemptID string) (bool, error)
 	UnprojectedThumbnailRecoveryBacklog(ctx context.Context, updatedAt time.Time) (int32, error)

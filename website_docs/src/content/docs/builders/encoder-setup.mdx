@@ -180,14 +180,16 @@ FrameWorks generates lower-quality renditions of your stream so viewers on slowe
 ### How It Works
 
 When you go live, the control plane attaches your tier's live process configuration to the stream.
-Every billing tier ships the same standard ladder, for both live streams and VOD processing:
+Every tier defaults to the **standard** ladder for live streams and VOD processing. Paid tiers also allow **qhd** and **uhd**:
 
-| Rendition | Bitrate   | Added when the source is at least |
-| --------- | --------- | --------------------------------- |
-| 360p      | 900 kbps  | 640×360                           |
-| 480p      | 1600 kbps | 850×480                           |
-| 720p      | 4500 kbps | 1280×720                          |
-| 1080p     | 7800 kbps | 1920×1080                         |
+| Rendition       | Bitrate     | Added when the source is at least |
+| --------------- | ----------- | --------------------------------- |
+| 360p            | 900 kbps    | 640×360                           |
+| 480p            | 1600 kbps   | 850×480                           |
+| 720p            | 4500 kbps   | 1280×720                          |
+| 1080p           | 7800 kbps   | 1920×1080                         |
+| 1440p (qhd/uhd) | 10,800 kbps | 2560×1440                         |
+| 2160p (uhd)     | 15,000 kbps | 3840×2160                         |
 
 Sources smaller than 640×360 get no video renditions. Renditions keep the source frame rate and use
 `H264ConstrainedHigh`. Audio compatibility processes generate Opus when the incoming audio is not
@@ -205,14 +207,23 @@ media node encodes the same ladder itself.
 ### What This Means for You
 
 - **Stream at the highest quality your upload supports.** The default ladder adds lower
-  renditions, up to 1080p, when the source is large enough.
+  renditions up to the chosen ladder’s ceiling when the source is large enough.
 - **Viewers automatically get the best available quality their connection supports** via HLS ABR,
   with DASH and LL-HLS available alongside on every cluster.
 
 ### Custom Transcoding Profiles
 
-The standard ladder is configured at the billing tier level. Enterprise tiers can use tenant-level
-processing overrides when `processing_customizable` is enabled.
+Choose a named ladder in stream create/edit settings, under **Streams → Default transcode ladder**,
+or for an individual library upload. Resolution follows the stream or upload choice, then the account
+choice, then the plan default. `transcodeLadderPolicy` lists the allowed ladders; use
+`setTranscodeLadderPolicy(input: { ladder: "uhd" })` to set the account default. Empty means inherit.
+A stream's choice applies on its next broadcast. A plan downgrade preserves a stored choice but
+uses the next allowed default until the account upgrades again. Custom process overrides remain
+independent of these named ladders. Live video ABR `OFF` still suppresses video renditions.
+
+The source track is masked in processed playback so it cannot conceal a missing rendition.
+Keep the [original upload](/builders/recordings#original-uploads) when source quality is needed.
+Named ladders preserve frame rate; they do not add a separate 60 fps profile.
 
 ## Avoid Common Pitfalls
 

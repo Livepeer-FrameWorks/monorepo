@@ -36,25 +36,27 @@ import (
 
 // Manager maintains desired vs current MistServer configuration and reconciles them via the Mist API.
 type Manager struct {
-	mu               sync.Mutex
-	reconcileMu      sync.Mutex
-	ackDeliveryMu    sync.Mutex
-	mistClient       mistAPI
-	logger           logging.Logger
-	lastSeed         *ipcpb.ConfigSeed
-	lastAppliedSum   string
-	retryTimer       *time.Timer
-	retryAttempt     int
-	driftRepairOnce  sync.Once
-	lastCaddyHash    string
-	caddyActivated   bool
-	ackSender        ApplySeedSender
-	lastAckedSeedVer uint64
-	lastAckedSeedSum string
-	ackRetryTimer    *time.Timer
-	ackRetryAttempt  int
-	pendingApplyAck  *ipcpb.ControlMessage
-	pendingAckSender ApplySeedSender
+	mu                      sync.Mutex
+	reconcileMu             sync.Mutex
+	ackDeliveryMu           sync.Mutex
+	mistClient              mistAPI
+	logger                  logging.Logger
+	lastSeed                *ipcpb.ConfigSeed
+	lastAppliedSum          string
+	lastSeedReady           bool
+	capacityRevisionApplied *uint64
+	retryTimer              *time.Timer
+	retryAttempt            int
+	driftRepairOnce         sync.Once
+	lastCaddyHash           string
+	caddyActivated          bool
+	ackSender               ApplySeedSender
+	lastAckedSeedVer        uint64
+	lastAckedSeedSum        string
+	ackRetryTimer           *time.Timer
+	ackRetryAttempt         int
+	pendingApplyAck         *ipcpb.ControlMessage
+	pendingAckSender        ApplySeedSender
 }
 
 type mistAPI interface {
@@ -157,6 +159,7 @@ func (m *Manager) applySeed(seed *ipcpb.ConfigSeed, sender ApplySeedSender) {
 		m.logger.WithField("seed_version", seed.GetSeedVersion()).Error("Refusing conflicting ConfigSeed at the applied version")
 		return
 	}
+	capacityOnly := current != nil && m.lastSeedReady && capacityOnlySeedChange(current, seed)
 	m.mu.Unlock()
 	if err := persistConfigSeed(seed); err != nil {
 		m.reconcileMu.Unlock()
@@ -165,6 +168,7 @@ func (m *Manager) applySeed(seed *ipcpb.ConfigSeed, sender ApplySeedSender) {
 	}
 	m.mu.Lock()
 	m.lastSeed = seed
+	m.lastSeedReady = false
 	if sender != nil {
 		m.ackSender = sender
 	}
@@ -179,6 +183,26 @@ func (m *Manager) applySeed(seed *ipcpb.ConfigSeed, sender ApplySeedSender) {
 	}
 	m.cancelRetryLocked()
 	m.mu.Unlock()
+	if capacityOnly {
+		if err := m.applySeedCapacity(seed); err != nil {
+			m.logger.WithError(err).Warn("Could not apply live node capacity")
+			m.scheduleRetry()
+		} else {
+			m.mu.Lock()
+			m.lastAppliedSum, m.lastSeedReady = hashSeed(seed), true
+			m.mu.Unlock()
+			if sender != nil && len(seed.GetTlsBundles()) > 0 {
+				results := make([]bundleApplyResult, 0, len(seed.GetTlsBundles()))
+				for _, bundle := range seed.GetTlsBundles() {
+					results = append(results, bundleApplyResult{BundleID: bundle.GetBundleId(), Version: bundle.GetVersion(), Success: true})
+				}
+				m.sendApplyResultLocked(seed, results, true, sender)
+			}
+		}
+		m.reconcileMu.Unlock()
+		m.startDriftRepairLoop()
+		return
+	}
 	m.reconcileMu.Unlock()
 	m.startDriftRepairLoop()
 	m.reconcile()
@@ -466,6 +490,7 @@ func (m *Manager) reconcile() {
 	if sum := hashSeed(seed); sum != "" {
 		m.mu.Lock()
 		m.lastAppliedSum = sum
+		m.lastSeedReady = caddyReloadOK
 		m.retryAttempt = 0
 		m.mu.Unlock()
 	}
@@ -563,29 +588,26 @@ func applyBaselineMistConfig(desiredConfig map[string]any) {
 // use Mist's NDI/ONVIF/VISCA camera auto-discovery, whose probe loop sends UDP
 // broadcast and multicast datagrams every few seconds, so discovery is always
 // off; enabling cameras later flips this managed value, not an app-level
-// toggle. Every connection counts toward the byte totals that stream
-// analytics and node load read, whatever network it comes from, so the
-// exception list matches nothing. A zero configured bandwidth limit leaves
-// Mist's own limit in place.
+// toggle. The ::/127 exception excludes only Mist's internal IPv6 loopback
+// reads from stream byte totals; external traffic remains counted. Seeds
+// without capacity leave Mist's limit in place.
 func (m *Manager) applyDedicatedMistSettings() error {
 	if err := m.mistClient.SetDeviceDiscovery(false); err != nil {
 		return fmt.Errorf("device discovery: %w", err)
 	}
-	if err := m.mistClient.SetBandwidthExceptions(mist.CountEveryConnection); err != nil {
+	if err := m.mistClient.SetBandwidthExceptions(mist.ExcludeInternalConnections); err != nil {
 		return fmt.Errorf("bandwidth exceptions: %w", err)
 	}
-	if limit := ConfiguredBandwidthLimitBytesPerSec(); limit > 0 {
-		if err := m.mistClient.SetBandwidthLimit(limit); err != nil {
-			return fmt.Errorf("bandwidth limit: %w", err)
-		}
-	}
-	return nil
+	m.mu.Lock()
+	seed := m.lastSeed
+	m.mu.Unlock()
+	return m.applySeedCapacity(seed)
 }
 
 // dedicatedMistSettingsDrifted reports whether a config_backup shows device
 // discovery not disabled, or a bandwidth exception list or limit other than
 // the managed one. Mist treats an absent device_discovery key as enabled.
-func dedicatedMistSettingsDrifted(current map[string]any) (discovery, bandwidth bool) {
+func dedicatedMistSettingsDrifted(current map[string]any, limit uint64) (discovery, bandwidth bool) {
 	discovery = true
 	if configSection, ok := current["config"].(map[string]any); ok {
 		if enabled, isBool := configSection["device_discovery"].(bool); isBool {
@@ -593,8 +615,8 @@ func dedicatedMistSettingsDrifted(current map[string]any) (discovery, bandwidth 
 		}
 	}
 	bandwidthSection, hasBandwidth := current["bandwidth"].(map[string]any)
-	bandwidth = !hasBandwidth || !mist.BandwidthExceptionsEqual(bandwidthSection["exceptions"], mist.CountEveryConnection)
-	if limit := ConfiguredBandwidthLimitBytesPerSec(); limit > 0 {
+	bandwidth = !hasBandwidth || !mist.BandwidthExceptionsEqual(bandwidthSection["exceptions"], mist.ExcludeInternalConnections)
+	if limit > 0 {
 		got, isNumber := bandwidthSection["limit"].(float64)
 		bandwidth = bandwidth || !isNumber || uint64(got) != limit
 	}
@@ -607,7 +629,10 @@ func (m *Manager) repairDedicatedMistSettings() {
 		m.logger.WithError(err).Warn("Mist settings drift check: ConfigBackup failed")
 		return
 	}
-	discovery, bandwidth := dedicatedMistSettingsDrifted(current)
+	m.mu.Lock()
+	limit := m.lastSeed.GetCapacity().GetEgressBudgetBytesPerSec()
+	m.mu.Unlock()
+	discovery, bandwidth := dedicatedMistSettingsDrifted(current, limit)
 	if !discovery && !bandwidth {
 		return
 	}
@@ -2049,12 +2074,12 @@ func streamConfigsFromSeed(seed *ipcpb.ConfigSeed, base, nodeID string) map[stri
 		if def.GetName() == "live" {
 			entry["DVR"] = 120000
 			entry["resume"] = 1
-			entry["inputtimeout"] = 12
+			entry["inputtimeout"] = int(mist.LiveInputTimeout / time.Second)
 		}
 		if def.GetName() == "dvr" {
 			entry["DVR"] = 120000
 			entry["bufferTime"] = 120000
-			entry["inputtimeout"] = 12
+			entry["inputtimeout"] = int(mist.LiveInputTimeout / time.Second)
 		}
 
 		// All stream types use STREAM_PROCESS trigger for per-instance process config.
@@ -2171,16 +2196,18 @@ func hashSeed(seed *ipcpb.ConfigSeed) string {
 	}
 	// Create a stable representation of seed fields we care about
 	flat := struct {
-		Node   string   `json:"n"`
-		Lat    float64  `json:"a"`
-		Lon    float64  `json:"o"`
-		Loc    string   `json:"l"`
-		TplIDs []string `json:"t"`
+		Node     string                       `json:"n"`
+		Lat      float64                      `json:"a"`
+		Lon      float64                      `json:"o"`
+		Loc      string                       `json:"l"`
+		TplIDs   []string                     `json:"t"`
+		Capacity *ipcpb.NodeBandwidthCapacity `json:"capacity,omitempty"`
 	}{
-		Node: seed.GetNodeId(),
-		Lat:  seed.GetLatitude(),
-		Lon:  seed.GetLongitude(),
-		Loc:  seed.GetLocationName(),
+		Node:     seed.GetNodeId(),
+		Lat:      seed.GetLatitude(),
+		Lon:      seed.GetLongitude(),
+		Loc:      seed.GetLocationName(),
+		Capacity: seed.GetCapacity(),
 	}
 	ids := make([]string, 0, len(seed.GetTemplates()))
 	for _, t := range seed.GetTemplates() {

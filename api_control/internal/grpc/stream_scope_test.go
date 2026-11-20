@@ -8,6 +8,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -30,7 +31,7 @@ func scopeTestStreamRow() *sqlmock.Rows {
 		"s1", "live+abc", scopeTestStreamKey, "pb-1", "Title", nil,
 		false, fixedTS, fixedTS, "push",
 		nil, nil, "{}", nil, false, nil, "{}", nil,
-		nil, nil, nil, nil, nil, "INHERIT")
+		nil, nil, nil, nil, nil, "INHERIT", "")
 }
 
 func TestStreamReadRPCsRejectAPITokenWithoutStreamScope(t *testing.T) {
@@ -39,6 +40,10 @@ func TestStreamReadRPCsRejectAPITokenWithoutStreamScope(t *testing.T) {
 	ctx := streamScopeCtx("api_token", "analytics:read")
 
 	calls := map[string]func() error{
+		"GetClip": func() error {
+			_, err := s.GetClip(ctx, &sharedpb.GetClipRequest{ClipHash: "clip-1"})
+			return err
+		},
 		"GetStream": func() error {
 			_, err := s.GetStream(ctx, &commodorepb.GetStreamRequest{StreamId: "s1"})
 			return err

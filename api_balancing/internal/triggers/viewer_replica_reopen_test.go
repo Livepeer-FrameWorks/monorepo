@@ -50,7 +50,7 @@ func TestDirectViewerReopensClearedReplica(t *testing.T) {
 					Observe: func(context.Context, balancer.PlacementCell, balancer.PlacementRouteRequest) (balancer.PlacementCellObservation, error) {
 						return balancer.PlacementCellObservation{Complete: true, ObservedAt: now, ExpiresAt: now.Add(10 * time.Second), Candidates: []placement.Candidate{{
 							TenantID: "tenant", ClusterID: "us", NodeID: "edge", OwnerTenantID: "tenant", AllowedVerbs: []placement.Verb{placement.Serve},
-							ObservedAt: now, ExpiresAt: now.Add(10 * time.Second), Capacity: placement.CapacityAvailable, BWAvailable: 100, BWLimit: 1000,
+							ObservedAt: now, ExpiresAt: now.Add(10 * time.Second), Capacity: placement.CapacityAvailable, BWAvailable: 900, BWLimit: 1000,
 							RAMUsed: 1, RAMMax: 100, Presence: placement.Present, SourceFeasible: true,
 						}}}, nil
 					},

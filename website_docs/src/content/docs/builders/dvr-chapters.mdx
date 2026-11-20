@@ -64,6 +64,47 @@ A chapter becomes playable at `FINALIZED` (canonical `.mkv` produced on the reco
 
 `playableNow` is true when `state ∈ {FINALIZED, FROZEN, RECLAIMED}`.
 
+## Browse saved chapters
+
+With `streams:read`, `dvrRecording(id:)` reads a recording from the catalog and its
+`chapters` connection lists materialized chapters in chronological order. This includes
+chapters still being finalized; use a chapter's `playbackId` once its state is
+`FINALIZED`, `FROZEN` or `RECLAIMED`. The playback identifier addresses a VOD asset.
+
+```graphql
+query SavedChapters($id: ID!, $after: String) {
+  dvrRecording(id: $id) {
+    id
+    startedAt
+    endedAt
+    chapters(page: { first: 20, after: $after }) {
+      nodes {
+        chapterId
+        startMs
+        endMs
+        state
+        playbackId
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      totalCount
+    }
+  }
+}
+```
+
+Optional `rangeStartMs` and `rangeEndMs` select chapters overlapping the half-open UTC
+range `[start, end)`. Omit either bound for an open range. Cursors preserve start-time
+and chapter-ID ties and work in both directions (`first`/`after` or `last`/`before`).
+The legacy `dvrChapters` player index continues to include virtual chapter boundaries.
+
+Every finalized chapter emits the public `recording.chapter_ready` event with its
+parent recording identity, chapter ID, range and size. Refresh the saved chapter list
+when that event arrives. In the library, a chapter's `parentRecordingId` links to the
+recording; `originType` is `dvr_chapter`.
+
 ## Retrieve a chapter
 
 `dvrChapter` returns a chapter only when `startMs` and `endMs` are exactly that chapter's

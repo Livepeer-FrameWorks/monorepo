@@ -46,10 +46,47 @@ import (
 // No-arg invocation of the binary itself still starts the gRPC server — the
 // dispatcher in main() only branches when "bootstrap" is the first arg.
 func runBootstrapCommand(args []string) int {
+	if len(args) > 0 && args[0] == "tier-processes" {
+		return runBootstrapTierProcesses(args[1:], os.Stdout)
+	}
 	if len(args) > 0 && args[0] == "validate" {
 		return runBootstrapValidate(args[1:])
 	}
 	return runBootstrapApply(args)
+}
+
+// runBootstrapTierProcesses prints an embedded catalog tier's process config
+// for one lifecycle as reconcile stores it, with its default transcode
+// ladder's renditions in the Livepeer entries. It reads no database.
+func runBootstrapTierProcesses(args []string, out io.Writer) int {
+	fs := flag.NewFlagSet("purser bootstrap tier-processes", flag.ContinueOnError)
+	tierName := fs.String("tier", "", "catalog tier name")
+	lifecycle := fs.String("lifecycle", "live", "live, dvr, clip, dvr_finalize or vod")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	tiers, err := bootstrap.EmbeddedTiers()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "purser bootstrap tier-processes: %v\n", err)
+		return 1
+	}
+	for _, tier := range tiers {
+		if tier.TierName != *tierName {
+			continue
+		}
+		processes, ok := map[string]string{
+			"live": tier.ProcessesLive, "dvr": tier.ProcessesDVR, "clip": tier.ProcessesClip,
+			"dvr_finalize": tier.ProcessesDVRFinalize, "vod": tier.ProcessesVOD,
+		}[*lifecycle]
+		if !ok {
+			fmt.Fprintf(os.Stderr, "purser bootstrap tier-processes: unknown lifecycle %q\n", *lifecycle)
+			return 2
+		}
+		fmt.Fprintln(out, processes)
+		return 0
+	}
+	fmt.Fprintf(os.Stderr, "purser bootstrap tier-processes: no catalog tier %q\n", *tierName)
+	return 1
 }
 
 // errBootstrapDryRun makes the retrying transaction helper roll back a

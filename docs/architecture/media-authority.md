@@ -879,8 +879,15 @@ prepare`, perform the native restore, then use `cluster restore-fence complete`
   and another cell may admit a publisher even while the unreachable cell keeps
   its old durable session.
 - **The concurrent-stream cap is enforced per media cell.** The durable
-  PostgreSQL count covers all Foghorn replicas sharing that cell database; it
-  is not a tenant-global cross-cell counter. Cross-cell placement still limits
+  PostgreSQL count covers open push sessions plus distinct open direct-pull
+  streams across all Foghorn replicas sharing that cell database. Several
+  nodes pulling the same source in the cell share one slot; relay destinations
+  consume no ingest slot. The node-bound `/source` endpoint takes the same
+  tenant lock as push admission before handing out an upstream. It uses the
+  signed tenant authority's effective limit for the dialing cluster. A refused
+  dial returns `offline:stream_cap` without a placement stamp. Pending dials
+  expire after 60 seconds if no buffer binds. This is not a tenant-global
+  cross-cell counter. Cross-cell placement still limits
   one active owner per stream, but a tenant publishing distinct streams into
   multiple cells can consume the configured cap in each cell.
 - **Unattributed events cannot mutate tenant state.** A lifecycle event whose

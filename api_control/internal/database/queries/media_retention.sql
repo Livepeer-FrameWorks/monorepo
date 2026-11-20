@@ -3,7 +3,7 @@ SELECT default_vod_retention_days,
        default_dvr_retention_days,
        default_clip_retention_days,
        COALESCE(updated_by::text, ''::text)::text AS updated_by,
-       updated_at
+       updated_at, keep_vod_originals
 FROM commodore.tenant_media_retention_policies
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid;
 
@@ -144,3 +144,13 @@ SET retention_override_days = sqlc.narg(override_days)::integer,
     updated_at = NOW()
 WHERE vod_hash = sqlc.arg(artifact_hash)
   AND tenant_id = sqlc.arg(tenant_id)::uuid;
+
+-- name: UpsertVodOriginalPolicy :exec
+INSERT INTO commodore.tenant_media_retention_policies (tenant_id, keep_vod_originals, updated_by)
+VALUES (sqlc.arg(tenant_id)::uuid, sqlc.narg(keep_vod_originals)::boolean, NULLIF(sqlc.arg(updated_by)::text, '')::uuid)
+ON CONFLICT (tenant_id) DO UPDATE SET keep_vod_originals = EXCLUDED.keep_vod_originals,
+ updated_by = EXCLUDED.updated_by, updated_at = NOW();
+
+-- name: GetVodOriginalPolicy :one
+SELECT keep_vod_originals FROM commodore.tenant_media_retention_policies
+WHERE tenant_id = sqlc.arg(tenant_id)::uuid;

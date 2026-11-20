@@ -94,7 +94,6 @@ type EdgeCandidate struct {
 	BaseURL     string
 	DTSCURL     string
 	IsOrigin    bool
-	BWAvailable int64
 	CPUPercent  float64
 	ViewerCount int32
 	GeoLat      float64

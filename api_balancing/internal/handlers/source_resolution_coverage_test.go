@@ -51,6 +51,10 @@ func (f *pullSourceFakeSourceRes) ResolvePullSourceByInternalName(ctx context.Co
 	return &commodorepb.ResolvePullSourceByInternalNameResponse{}, nil
 }
 
+func (f *pullSourceFakeSourceRes) ResolveStreamContext(context.Context, *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {
+	return &commodorepb.ResolveStreamContextResponse{Admitted: true}, nil
+}
+
 // startPullCommodoreSourceRes serves the fake on a localhost gRPC listener,
 // builds a real *commodore.GRPCClient against it, and points
 // control.CommodoreClient (the global resolvePullSourceForSource reads) at it.
@@ -145,6 +149,7 @@ func TestHandleGetPullSourceUpstreamReturnedWhenPlaceable(t *testing.T) {
 				Found:     true,
 				Enabled:   true,
 				SourceUri: upstream,
+				TenantId:  "tenant-pull", StreamId: "6cb1c1de-0000-4000-8000-000000000009",
 				// no AllowedClusterIds ⇒ public source placeable on any edge.
 			}, nil
 		},
@@ -243,6 +248,7 @@ func TestHandleGetSourcePullDispatchReturnsUpstream(t *testing.T) {
 				Found:     true,
 				Enabled:   true,
 				SourceUri: upstream,
+				TenantId:  "tenant-pull", StreamId: "6cb1c1de-0000-4000-8000-000000000009",
 			}, nil
 		},
 	})

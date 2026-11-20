@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/capacity"
 	pkgredis "github.com/Livepeer-FrameWorks/monorepo/pkg/redis"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -61,10 +62,12 @@ type StateEntity string
 type StateOperation string
 
 const (
-	StateEntityNode           StateEntity = "node"
-	StateEntityStream         StateEntity = "stream"
-	StateEntityStreamInstance StateEntity = "stream_instance"
-	StateEntityArtifact       StateEntity = "artifact"
+	StateEntityNode             StateEntity = "node"
+	StateEntityNodeReservation  StateEntity = "node_reservation"
+	StateEntityNodeStreamCounts StateEntity = "node_stream_counts"
+	StateEntityStream           StateEntity = "stream"
+	StateEntityStreamInstance   StateEntity = "stream_instance"
+	StateEntityArtifact         StateEntity = "artifact"
 	// StateEntityNodeMode carries a node's operational mode as its own keyed
 	// record. The mode is multi-writer (operator API / orchestrator on any
 	// instance) and must not ride the whole-node snapshot: an in-flight
@@ -224,7 +227,11 @@ func (r *RedisStateStore) GetAllNodesContext(ctx context.Context) (map[string]*N
 }
 
 func (r *RedisStateStore) DeleteNode(nodeID string) error {
-	return r.client.Del(context.Background(), r.keyNode(nodeID)).Err()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	nodeErr := r.client.Del(ctx, r.keyNode(nodeID)).Err()
+	_, reservationErr := r.mutateBandwidth(ctx, "evict", "", nodeID, "", bandwidthReservation{}, capacity.Link{}, 0, time.Now())
+	return errors.Join(nodeErr, reservationErr)
 }
 
 func (r *RedisStateStore) GetAllNodeModes() (map[string]*nodeModeRecord, error) {

@@ -5,6 +5,7 @@ import {
   SystemHealthStore,
   TrackListUpdatesStore,
   TenantEventsStore,
+  GetStreamIngestStore,
 } from "$houdini";
 import type { StreamEvents$result, TrackListUpdates$result } from "$houdini";
 import { browser } from "$app/environment";
@@ -73,9 +74,7 @@ interface StreamData {
   id: string;
   name: string;
   status?: string;
-  metrics?: {
-    isLive?: boolean;
-  } | null;
+  ingest?: { state?: string; isLive?: boolean } | null;
 }
 
 // Connection state
@@ -119,6 +118,7 @@ export function initializeWebSocket(): void {
   if (!browser) return;
 
   disconnectWebSocket();
+  cleanupFunctions.push(subscribeToStreamIngestEvents());
 
   console.log("Initializing Houdini GraphQL subscriptions");
   wsConnected.set(true);
@@ -206,7 +206,6 @@ export function initializeWebSocket(): void {
             updatedStreams[existingStreamIndex] = {
               ...updatedStreams[existingStreamIndex],
               status,
-              metrics: { isLive },
             };
             return updatedStreams;
           }
@@ -216,7 +215,7 @@ export function initializeWebSocket(): void {
               id: streamId,
               name: streamId,
               status,
-              metrics: { isLive },
+              ingest: null,
             },
           ];
         });
@@ -393,6 +392,73 @@ export function subscribeToTrackListUpdates(streamId: string): () => void {
   }
 }
 
+// A cell's idle event cannot decide a multi-cell pull's state. Refresh the
+// tenant aggregate and let Houdini update every view of that stream entity.
+export function subscribeToStreamIngestEvents(): () => void {
+  if (!browser) return () => {};
+  const store = new TenantEventsStore();
+  const busy = new Set<string>();
+  const dirty = new Set<string>();
+  let active = true;
+  const refresh = async (id: string) => {
+    if (busy.has(id)) {
+      dirty.add(id);
+      return;
+    }
+    busy.add(id);
+    try {
+      do {
+        dirty.delete(id);
+        const result = await new GetStreamIngestStore().fetch({
+          variables: { id: btoa(`Stream:${id}`) },
+          policy: "NetworkOnly",
+        });
+        const stream = result.data?.stream;
+        if (active && stream) {
+          realtimeStreams.update((streams) => {
+            const index = streams.findIndex(
+              (row) => row.id === stream.streamId || row.id === stream.id
+            );
+            const row = {
+              id: stream.streamId,
+              name: stream.name,
+              status: stream.ingest?.state ?? "UNAVAILABLE",
+              ingest: stream.ingest,
+            };
+            if (index < 0) return [...streams, row];
+            return streams.map((existing, i) => (i === index ? { ...existing, ...row } : existing));
+          });
+        }
+      } while (active && dirty.has(id));
+    } catch (error) {
+      console.warn("Unable to refresh stream ingest state", error);
+    } finally {
+      busy.delete(id);
+      dirty.delete(id);
+    }
+  };
+  store.listen({
+    types: [
+      "stream.connected",
+      "stream.live",
+      "stream.idle",
+      "stream.ended",
+      "stream.ingest_disconnected",
+    ],
+  });
+  const unsubscribe = store.subscribe((result) => {
+    const payload = result.data?.tenantEvents?.data;
+    if (active && payload && "streamId" in payload && payload.streamId)
+      void refresh(payload.streamId);
+  });
+  return () => {
+    active = false;
+    unsubscribe();
+    store.unlisten();
+    dirty.clear();
+  };
+}
+
 // subscribeToArtifactEvents listens to the stream's public events of types and
 // keeps the latest event per artifact in target.
 function subscribeToArtifactEvents(
@@ -529,7 +595,7 @@ export const connectionStatus = derived(
 
 export const liveStreamCount = derived(
   realtimeStreams,
-  ($streams) => $streams.filter((s) => s.metrics?.isLive).length
+  ($streams) => $streams.filter((s) => s.ingest?.isLive).length
 );
 
 export const totalBandwidth = derived(streamMetrics, ($metrics) => {

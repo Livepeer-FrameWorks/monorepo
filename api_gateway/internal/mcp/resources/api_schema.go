@@ -307,7 +307,6 @@ func curatedCatalogSections() []CatalogSection {
 			Examples: []CatalogExample{
 				{ID: "streams-list", Title: "List Streams", Description: "Paginated list of all streams", OperationType: "query", FieldPath: "streamsConnection", Tags: []string{"core"}},
 				{ID: "stream-detail", Title: "Stream Details", Description: "Full details for a single stream", OperationType: "query", FieldPath: "stream", Tags: []string{"core"}},
-				{ID: "stream-keys", Title: "Stream Keys", Description: "Ingest keys for a stream", OperationType: "query", FieldPath: "streamKeysConnection", Tags: []string{"core"}},
 			},
 		},
 		{

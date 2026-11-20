@@ -52,6 +52,10 @@ struct EdgeStatusView: View {
             metricsSection
           }
 
+          if let nodeId = appState.edgeNodeId, GatewayClient.shared.accessToken != nil {
+            NodeCapacityView(nodeId: nodeId)
+          }
+
           // Active streams
           if !streams.isEmpty {
             activeStreamsSection

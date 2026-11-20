@@ -175,13 +175,17 @@ Haversine distance matters, but network topology matters more. An edge 100km awa
 
 ### Capacity Planning (N×2 Rule)
 
-Never exceed 50% utilization on any resource (CPU, RAM, bandwidth). This ensures:
+A 50% utilization target can provide spare capacity when nodes and failure domains are
+balanced. Operators must check the actual capacity remaining after a failure to provide:
 
 - Headroom for traffic spikes (viral streams, concurrent events)
 - Graceful degradation if an edge goes offline (remaining edges absorb load without saturation)
 - Maintenance windows without impacting service
 
-Foghorn's scoring deprioritizes saturated nodes via gradient scoring but doesn't exclude them. Operators should provision enough edges that the gradient never reaches the danger zone. See `rfcs/capacity-planning.md` for proposed configurable exclusion thresholds.
+Foghorn prefers nodes below 70% committed bandwidth and rejects new admissions beyond
+the 85% usable budget. Additional spare capacity for node or facility loss remains an
+operator planning decision; aggregate utilization alone does not prove resilience. See
+[node bandwidth budgets](viewer-routing.md#node-bandwidth-budgets).
 
 ### Hardware Diversity
 

@@ -192,7 +192,7 @@ func endLapsedPendingIngestSessionTx(ctx context.Context, tx *sql.Tx, tenantID, 
 		}
 		return row, fmt.Errorf("end lapsed pending ingest session: %w", err)
 	}
-	if err := domainevents.StreamIdle(ctx, tx, tenantID, row.StreamID, playbackID); err != nil {
+	if err := domainevents.StreamIdle(ctx, tx, tenantID, row.StreamID, playbackID, row.SessionID); err != nil {
 		return row, err
 	}
 	return row, nil

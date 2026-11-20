@@ -89,7 +89,10 @@ Viewer request → Foghorn instance (any)
   → Returns ranked node list
 ```
 
-The local viewer-routing hot path reads the in-memory cache. Redis is still read directly for startup rehydration, HA command relay ownership, and federation caches such as remote replications, remote live streams and remote artifacts.
+The local viewer-routing scorer reads the in-memory cache. Exact admission uses the shared
+Redis bandwidth ledger atomically; Redis is also read for startup rehydration, HA command
+relay ownership, and federation caches such as remote replications, remote live streams
+and remote artifacts.
 
 ### Command Relay (HA Forwarding)
 
@@ -279,7 +282,8 @@ or rewrite it in scientific notation.
 
 - **Derived at read time** — the stream-union aggregates (`Viewers`, `TotalConnections`, `Inputs`, `BytesUp`, `BytesDown`). Per-(stream,node) instances are single-writer and replicate; the union is their sum, computed in the state getters (`deriveUnionStatsLocked`). The stored union fields still serialize (old-peer wire compat, each writer stores its own derived view) but are never served from an incoming snapshot.
 - **Own keyed changelog entity** — `NodeState.OperationalMode` travels as `node_mode` entries with an independent watermark (`{cluster_id}:node_mode:{node_id}` write-through key). Incoming **node snapshots never overwrite a locally-known mode** (an in-flight heartbeat marshaled before a mode change would otherwise republish the old mode at a newer entry ID); first sight of an unknown node still adopts the snapshot's mode. `SetNodeOperationalMode` stays Postgres-first (`foghorn.node_maintenance`) and publishes both the dedicated entity and the node snapshot, so mixed-version peers converge during a rolling deploy; a mode set through an old-version instance reaches new instances via the 180s Postgres reconcile.
-- **Local-only soft state** — `AddBandwidth`/`PendingRedirects` (the bandwidth penalty for this instance's pending redirects). They derive from the virtual-viewer set, which is never replicated, so a peer's values are meaningless here: the node-snapshot merge keeps local values and zeroes them for unknown nodes (a fresh replica has no pending redirects; a restarted instance's penalties died with its process). Peer redirects surface in `UpSpeed` within one heartbeat. The non-serialized scoring inputs (`BinHost`, `EstBandwidthPerUser`, `LastPollTime`) are carried over in the same merge for the same reason.
+- **Shared bandwidth ledger** — `AddBandwidth` and ingress reservations are the per-direction sums from `node_reservation` changelog entries. Whole-node snapshots cannot overwrite them. Redis stores pending/held reservations under `{cell}:bw_resv:<node>` (expiry ZSET) and `{cell}:bw_resv_amt:<node>` (amounts and exact running totals); `{cell}:bw_resv_revision` supplies monotonic revisions across node eviction. Admission atomically includes observed load and every replica's reservations against the 85% usable budget. Events coalesce at 250 ms; connection owners sweep expiry every 10 seconds. Restart rehydrates the ledger before replay. A Redis outage uses each replica's memory mirror, so cross-replica overshoot is possible until Redis recovers; already-admitted fallback traffic is imported before accepting new work.
+- **Local viewer correlation** — `PendingRedirects`, virtual viewer/session maps, `BinHost`, `EstBandwidthPerUser` and `LastPollTime` stay local. Activating a viewer changes its shared reservation from PENDING (30-second TTL) to HELD (120-second cap), without releasing it. A valid node report releases HELD traffic only when activation predates `received_at - measurement_window - 1 second`; older sidecars use a 10-second window. Invalid observations retain the last valid load. Node eviction and delete retries acquire the registration barrier before deleting the ledger, so another replica's reconnect wins.
 
 The merge exceptions live in one place: `mergeIncomingNode` (`internal/state/cache.go`), used by both the changelog apply path and rehydration. Specs: `internal/state/union_viewers_test.go`, `internal/state/node_mode_sync_test.go`.
 

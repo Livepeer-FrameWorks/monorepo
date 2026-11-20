@@ -456,7 +456,7 @@ func (s *FederationServer) QueryStream(ctx context.Context, req *foghornfederati
 			GeoLon:            n.GeoLongitude,
 			ViewerCount:       viewerCount,
 			CpuPercent:        ns.CPU,
-			BwAvailable:       AvailBandwidthFromNodeState(ns),
+			BwAvailable:       ns.EgressLink().RawAvailable(),
 			RamUsed:           uint64(ns.RAMCurrent),
 			RamMax:            uint64(ns.RAMMax),
 			SourceGeneration:  sourceGeneration,
@@ -691,6 +691,14 @@ func (s *FederationServer) prepareOriginPull(ctx context.Context, req *foghornfe
 		return nil, status.FromContextError(ctxErr).Err()
 	}
 
+	reservationID := "origin-out:" + recorded.AttemptID + ":" + req.StreamName + ":" + req.DestClusterId + ":" + req.DestNodeId
+	allowed, reserveErr := state.DefaultManager().HoldNodeBandwidth(ctx, reservationID, sourceNodeID, req.StreamName, state.BandwidthEgress, state.DefaultManager().EstimateStreamBandwidth(sourceNodeID, req.StreamName))
+	if reserveErr != nil {
+		return nil, reserveErr
+	}
+	if !allowed {
+		return &foghornfederationpb.OriginPullAck{Accepted: false, Reason: "source egress capacity exhausted"}, nil
+	}
 	log.WithFields(logging.Fields{
 		"source_node": sourceNodeID,
 		"dtsc_url":    dtscURL,
@@ -2359,20 +2367,6 @@ func artifactTypeForForwardCommand(command string) (string, error) {
 	default:
 		return "", status.Error(codes.InvalidArgument, "unknown command: "+command)
 	}
-}
-
-// AvailBandwidthFromNodeState returns available bandwidth for a NodeState.
-// Extracted to avoid reaching into unexported fields.
-func AvailBandwidthFromNodeState(ns *state.NodeState) uint64 {
-	if ns.BWLimit <= 0 {
-		return 0
-	}
-	used := ns.UpSpeed + ns.DownSpeed
-	avail := ns.BWLimit - used
-	if avail < 0 {
-		return 0
-	}
-	return uint64(avail)
 }
 
 func requireFederationServiceAuth(ctx context.Context) error {

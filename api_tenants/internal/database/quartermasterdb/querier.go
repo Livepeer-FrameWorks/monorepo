@@ -92,6 +92,7 @@ type Querier interface {
 	GetInfrastructureNode(ctx context.Context, nodeID string) (GetInfrastructureNodeRow, error)
 	GetMediaAuthorityRefreshOutboxStats(ctx context.Context) (GetMediaAuthorityRefreshOutboxStatsRow, error)
 	GetMediaPlacementInventory(ctx context.Context, arg GetMediaPlacementInventoryParams) ([]GetMediaPlacementInventoryRow, error)
+	GetNodeCapacity(ctx context.Context, arg GetNodeCapacityParams) (GetNodeCapacityRow, error)
 	GetNodeOwnerRecord(ctx context.Context, nodeID string) (GetNodeOwnerRecordRow, error)
 	GetOwnedMediaCapacityConsent(ctx context.Context, arg GetOwnedMediaCapacityConsentParams) (GetOwnedMediaCapacityConsentRow, error)
 	GetOwnedMediaCapacityConsentChange(ctx context.Context, arg GetOwnedMediaCapacityConsentChangeParams) (QuartermasterMediaCapacityConsentChange, error)
@@ -157,6 +158,8 @@ type Querier interface {
 	ListGRPCHealthWatchCandidates(ctx context.Context) ([]ListGRPCHealthWatchCandidatesRow, error)
 	ListHealthPollCandidates(ctx context.Context) ([]ListHealthPollCandidatesRow, error)
 	ListIngressSitesForNode(ctx context.Context, nodeID string) ([]ListIngressSitesForNodeRow, error)
+	ListNodeCapacitiesByClusters(ctx context.Context, arg ListNodeCapacitiesByClustersParams) ([]ListNodeCapacitiesByClustersRow, error)
+	ListNodeCapacitiesByNodes(ctx context.Context, arg ListNodeCapacitiesByNodesParams) ([]ListNodeCapacitiesByNodesRow, error)
 	ListPeerClusters(ctx context.Context, requestingClusterID string) ([]ListPeerClustersRow, error)
 	ListRunningServiceClusterAssignments(ctx context.Context, arg ListRunningServiceClusterAssignmentsParams) ([]string, error)
 	ListServedClustersForInstance(ctx context.Context, arg ListServedClustersForInstanceParams) ([]string, error)
@@ -168,6 +171,7 @@ type Querier interface {
 	ListTenantIDsForCluster(ctx context.Context, clusterID string) ([]string, error)
 	LockActiveTenantDomains(ctx context.Context, tenantID string) (LockActiveTenantDomainsRow, error)
 	LockManifestRegistryOwner(ctx context.Context, owner string) error
+	LockNodeCapacityOwner(ctx context.Context, nodeID string) (LockNodeCapacityOwnerRow, error)
 	LockOwnedMediaCapacityConsent(ctx context.Context, arg LockOwnedMediaCapacityConsentParams) (LockOwnedMediaCapacityConsentRow, error)
 	LockServiceBootstrapToken(ctx context.Context, tokenHash string) (LockServiceBootstrapTokenRow, error)
 	LockServiceType(ctx context.Context, serviceType string) error
@@ -257,6 +261,7 @@ type Querier interface {
 	UpdateTenantPrimaryCluster(ctx context.Context, arg UpdateTenantPrimaryClusterParams) (int64, error)
 	UpsertAcceptedClusterSubscription(ctx context.Context, arg UpsertAcceptedClusterSubscriptionParams) (string, error)
 	UpsertBootstrapTenantAlias(ctx context.Context, arg UpsertBootstrapTenantAliasParams) (int64, error)
+	UpsertNodeCapacity(ctx context.Context, arg UpsertNodeCapacityParams) (int64, error)
 	UpsertRequestedClusterSubscription(ctx context.Context, arg UpsertRequestedClusterSubscriptionParams) (string, error)
 	ValidateTenantRecord(ctx context.Context, tenantID string) (ValidateTenantRecordRow, error)
 }

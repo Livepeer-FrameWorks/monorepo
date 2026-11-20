@@ -29,6 +29,9 @@ func TestFinalizeStreamDeletion(t *testing.T) {
 	mock.ExpectQuery("SET status = 'completed'").
 		WithArgs("stream-1", "", testTenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(testTenantID))
+	mock.ExpectQuery("SELECT EXISTS.*FROM commodore.media_authority_refresh_obligations").
+		WithArgs(testTenantID, "media_object:live_stream:stream-1").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectQuery("SELECT COALESCE.user_id.*FROM commodore.streams WHERE id = .* AND tenant_id =").
 		WithArgs("stream-1", testTenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"user_id"}).AddRow("user-1"))

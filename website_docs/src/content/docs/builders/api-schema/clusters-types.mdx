@@ -115,7 +115,8 @@ Implements [Node](/builders/api-schema/shared/#node).
 - **kafkaBrokers**: `[String!]` — Kafka broker addresses for event streaming.
 - **maxConcurrentStreams**: `Int!` — Maximum allowed concurrent streams.
 - **maxConcurrentViewers**: `Int!` — Maximum allowed concurrent viewers.
-- **maxBandwidthMbps**: `Int!` — Maximum allowed bandwidth in Mbps.
+- **maxBandwidthMbps**: `Int!` — Sum of node egress budgets in decimal Mbit/s. **Deprecated:** Use capacity; bandwidth is managed per node.
+- **capacity**: `ClusterCapacity` ([ClusterCapacity](/builders/api-schema/clusters-types/#clustercapacity)) — Aggregate node budgets and usable capacity; null when the control plane is unavailable.
 - **healthStatus**: `String!` — Cluster health status (healthy, degraded, critical).
 - **isActive**: `Boolean!` — Whether the cluster is operational.
 - **isDefaultCluster**: `Boolean!` — Whether this is the tenant&#39;s default cluster.
@@ -158,6 +159,16 @@ Implements [Node](/builders/api-schema/shared/#node).
 
 - **cursor**: `String!`
 - **node**: `ClusterAccess!` ([ClusterAccess](/builders/api-schema/clusters-types/#clusteraccess))
+
+## ClusterCapacity
+
+**object**
+
+- **egressBudgetBytesPerSec**: `Float!`
+- **ingressBudgetBytesPerSec**: `Float!`
+- **egressUsableBytesPerSec**: `Float!`
+- **ingressUsableBytesPerSec**: `Float!`
+- **defaultBudgetNodes**: `Int!`
 
 ## ClusterEdge
 
@@ -348,66 +359,6 @@ Input for creating a cluster access invite.
 - **writeUrl**: `String`
 - **bearerToken**: `String`
 
-## InfrastructureNode
-
-**object**
-
-An infrastructure node in a cluster (edge server, origin, transcoder). Nodes handle stream ingest, transcoding, and delivery to viewers.
-
-Implements [Node](/builders/api-schema/shared/#node).
-
-- **id**: `ID!` — Global unique identifier for Relay compatibility.
-- **nodeId**: `String!` — Internal node identifier (UUID).
-- **clusterId**: `String!` — Cluster this node belongs to.
-- **nodeName**: `String!` — Human-readable node name.
-- **nodeType**: `String!` — Node role (edge, origin, transcoder, hybrid).
-- **internalIp**: `String` — Private network IP address.
-- **externalIp**: `String` — Public IP address for external access.
-- **wireguardIp**: `String` — WireGuard mesh network IP.
-- **wireguardPublicKey**: `String` — WireGuard public key for mesh peering.
-- **region**: `String` — Geographic region (us-east, eu-west, etc.).
-- **latitude**: `Float` — GPS latitude.
-- **longitude**: `Float` — GPS longitude.
-- **availabilityZone**: `String` — Availability zone within region.
-- **cpuCores**: `Int` — Number of CPU cores.
-- **memoryGb**: `Int` — Memory in gigabytes.
-- **diskGb**: `Int` — Disk storage in gigabytes.
-- **lastHeartbeat**: `Time` ([Time](/builders/api-schema/shared/#time)) — Last heartbeat timestamp from node agent.
-- **tags**: `JSON` ([JSON](/builders/api-schema/shared/#json)) — Custom tags for node organization.
-- **metadata**: `JSON` ([JSON](/builders/api-schema/shared/#json)) — Additional node metadata.
-- **createdAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the node was registered.
-- **updatedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the node was last updated.
-- **metricsConnection**: `NodeMetricsConnection!` ([NodeMetricsConnection](/builders/api-schema/shared/#nodemetricsconnection)) — Paginated time-series metrics for this node.
-  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
-  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
-- **metrics1hConnection**: `NodeMetrics1hConnection!` ([NodeMetrics1hConnection](/builders/api-schema/shared/#nodemetrics1hconnection)) — Hourly aggregated metrics for this node.
-  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
-  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
-- **liveState**: `LiveNode` ([LiveNode](/builders/api-schema/clusters-types/#livenode)) — Real-time state from the analytics data plane.
-- **effectiveMode**: `NodeOperationalMode!` ([NodeOperationalMode](/builders/api-schema/clusters-types/#nodeoperationalmode)) — Current operational mode (normal / draining / maintenance). Read from Foghorn&#39;s per-node heartbeat. Changes via setNodeMode.
-- **routingImpactPreview**: `RoutingImpactPreview!` ([RoutingImpactPreview](/builders/api-schema/clusters-types/#routingimpactpreview)) — Current traffic on this node. Operators use these counts to understand how much live traffic is affected before draining or entering maintenance. Counts come from Foghorn&#39;s GetNodeHealth.
-
-## LiveNode
-
-**object**
-
-- **nodeId**: `String!`
-- **tenantId**: `ID!`
-- **cpuPercent**: `Float!`
-- **ramUsedBytes**: `Float!` — Used memory in MiB (field name is historical).
-- **ramTotalBytes**: `Float!` — Total memory in MiB (field name is historical).
-- **diskUsedBytes**: `Float!`
-- **diskTotalBytes**: `Float!`
-- **upSpeed**: `Float!`
-- **downSpeed**: `Float!`
-- **activeStreams**: `Int!`
-- **isHealthy**: `Boolean!`
-- **latitude**: `Float!`
-- **longitude**: `Float!`
-- **location**: `String!`
-- **metadata**: `JSON` ([JSON](/builders/api-schema/shared/#json))
-- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
-
 ## MarketplaceCluster
 
 **object**
@@ -475,24 +426,14 @@ Short-lived credentials that let an authorized operator open the MistServer admi
 **object**
 
 - **cursor**: `String!`
-- **node**: `InfrastructureNode!` ([InfrastructureNode](/builders/api-schema/clusters-types/#infrastructurenode))
-
-## NodeOperationalMode
-
-**enum**
-
-Operational mode controlling whether a node accepts new sessions. The mode is set via setNodeMode and snapshotted onto the node&#39;s heartbeat; routing inspects it via GetNodeHealth and steers around drained / maintenance nodes.
-
-- `NORMAL` — Accepts new viewers and ingest. Default.
-- `DRAINING` — Existing viewers continue; new viewers are routed elsewhere. Use before maintenance to bleed load gracefully.
-- `MAINTENANCE` — Hard out — node is removed from routing entirely. Existing sessions terminate.
+- **node**: `InfrastructureNode!` ([InfrastructureNode](/builders/api-schema/shared/#infrastructurenode))
 
 ## NodesConnection
 
 **object**
 
 - **edges**: `[NodeEdge!]!` ([NodeEdge](/builders/api-schema/clusters-types/#nodeedge))
-- **nodes**: `[InfrastructureNode!]!` ([InfrastructureNode](/builders/api-schema/clusters-types/#infrastructurenode))
+- **nodes**: `[InfrastructureNode!]!` ([InfrastructureNode](/builders/api-schema/shared/#infrastructurenode))
 - **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
 - **totalCount**: `Int!`
 
@@ -628,28 +569,19 @@ Pagination wrapper for orchestrator listing.
 - Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
 - Member: [AuthError](/builders/api-schema/shared/#autherror)
 
-## RoutingImpactPreview
-
-**object**
-
-Snapshot of how much traffic a node is currently serving.
-
-- **activeStreams**: `Int!`
-- **activeViewers**: `Int!`
-
 ## SetNodeModeInput
 
 **input_object**
 
 - **nodeId**: `ID!` — Node identifier — accepts the InfrastructureNode.id (Relay global) or nodeId (raw UUID).
-- **mode**: `NodeOperationalMode!` ([NodeOperationalMode](/builders/api-schema/clusters-types/#nodeoperationalmode))
+- **mode**: `NodeOperationalMode!` ([NodeOperationalMode](/builders/api-schema/shared/#nodeoperationalmode))
 - **reason**: `String` — Free-text reason recorded in Foghorn&#39;s audit trail. Defaults to the calling user/agent identity.
 
 ## SetNodeModeResult
 
 **union**
 
-- Member: [InfrastructureNode](/builders/api-schema/clusters-types/#infrastructurenode)
+- Member: [InfrastructureNode](/builders/api-schema/shared/#infrastructurenode)
 - Member: [ValidationError](/builders/api-schema/shared/#validationerror)
 - Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
 - Member: [AuthError](/builders/api-schema/shared/#autherror)

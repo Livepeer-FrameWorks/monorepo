@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"frameworks/api_analytics_ingest/internal/database/periscopeingestdb"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/capacity"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -2407,7 +2409,33 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 	if baseUrl := nodeLifecycle.GetBaseUrl(); baseUrl != "" {
 		metadata["base_url"] = baseUrl
 	}
+	budget := nodeLifecycle.GetEgressBudgetBytesPerSec()
+	budgetSource := "DEFAULT"
+	if budget == 0 {
+		budget = capacity.DefaultBudget
+	} else if nodeLifecycle.GetBudgetSource() == ipcpb.BandwidthBudgetSource_BANDWIDTH_BUDGET_SOURCE_OPERATOR {
+		budgetSource = "OPERATOR"
+	}
+	observedSource := strings.TrimPrefix(nodeLifecycle.GetObservedSource().String(), "OBSERVED_SOURCE_")
+	if observedSource == "UNSPECIFIED" {
+		observedSource = "MIST"
+	}
+	metadata["observed_source"] = observedSource
+	metadata["observed_valid"] = nodeLifecycle.ObservedValid == nil || nodeLifecycle.GetObservedValid()
 	metadataJSON, _ := json.Marshal(metadata)
+
+	viewers := uint64(0)
+	for _, stream := range nodeLifecycle.GetStreams() {
+		count := stream.GetTotal()
+		if stream.AudienceViewers != nil {
+			count = uint64(stream.GetAudienceViewers())
+		}
+		if count > uint64(math.MaxUint32)-viewers {
+			viewers = uint64(math.MaxUint32)
+			break
+		}
+		viewers += count
+	}
 
 	clusterID := mt.GetClusterId()
 	if appendErr := stateBatch.Append(periscopeingestdb.NodeStateRow{
@@ -2418,6 +2446,7 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 		ActiveStreams: uint32(nodeLifecycle.GetActiveStreams()), IsHealthy: boolToUint8(nodeLifecycle.GetIsHealthy()),
 		OperationalMode: modeStr, Latitude: nodeLifecycle.GetLatitude(), Longitude: nodeLifecycle.GetLongitude(),
 		Location: nodeLifecycle.GetLocation(), Metadata: metadataJSON, UpdatedAt: event.Timestamp,
+		EgressBudget: budget, BudgetSource: budgetSource, Viewers: uint32(viewers),
 	}); appendErr != nil {
 		h.logger.Errorf("Failed to append to live_nodes batch: %v", appendErr)
 		if h.metrics != nil {

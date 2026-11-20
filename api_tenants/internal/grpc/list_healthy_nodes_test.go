@@ -37,14 +37,14 @@ var nodeColumns = append([]string{
 
 // queryNodeColumns matches the SELECT column order in queryNode, which also
 // returns the node's stored WireGuard listen port.
-var queryNodeColumns = append([]string{
+var queryNodeColumns = append(append([]string{
 	"id", "node_id", "cluster_id", "node_name", "node_type",
 	"internal_ip", "external_ip", "wireguard_ip", "wireguard_public_key", "wireguard_listen_port",
 	"region", "availability_zone", "latitude", "longitude",
 	"cpu_cores", "memory_gb", "disk_gb",
 	"last_heartbeat", "enrollment_origin", "applied_mesh_revision", "status", "created_at", "updated_at",
 	"owner_tenant_id",
-}, nodeSnapshotTestColumns...)
+}, nodeSnapshotTestColumns...), "egress_budget_bytes_per_sec", "ingress_budget_bytes_per_sec", "capacity_revision", "capacity_updated_by", "capacity_updated_at")
 
 func newNodeRow(id, nodeID, clusterID, nodeName, nodeType, externalIP string) []driver.Value {
 	now := time.Now()
@@ -772,4 +772,8 @@ func TestListHealthyNodesForDNS_QueriesCastInetAddressesForAdvertiseHost(t *test
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
 	}
+}
+
+func newQueryNodeRow(id, nodeID, clusterID, nodeName, nodeType, externalIP string) []driver.Value {
+	return append(newNodeRow(id, nodeID, clusterID, nodeName, nodeType, externalIP), nil, nil, nil, nil, nil)
 }

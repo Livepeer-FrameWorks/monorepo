@@ -202,3 +202,59 @@ func TestStopSessionsOlderEdgeBestEffortRemainsPending(t *testing.T) {
 		t.Fatal("legacy edge did not receive its best-effort compatibility command")
 	}
 }
+
+func TestClaimedStopPreservesCapturedGenerationThroughAuthorization(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		stream := &stopResultStream{captureStream: &captureStream{}}
+		t.Cleanup(SetupTestRegistry("claimed-edge", stream))
+		registry.conns["claimed-edge"].protocolVersion = ClaimedPublisherStopProtocolMin
+		previous := db
+		db = nil
+		t.Cleanup(func() { db = previous })
+		generation := uuid.NewString()
+		permits := 0
+		stream.afterSend = func(request *ipcpb.StopSessionsRequest) {
+			if len(request.GetTargets()) != 1 || request.Targets[0].GetSourceGeneration() != generation {
+				t.Errorf("retry replaced the captured generation: %v", request.GetTargets())
+			}
+			if request.GetAuthorizationNonce() != "" {
+				permits++
+			}
+			CompleteTestStopSessions("claimed-edge", request, "")
+		}
+		request := &ipcpb.StopSessionsRequest{TenantId: "tenant", StreamNames: []string{"stream"}, Targets: []*ipcpb.StopSessionsTarget{{InternalName: "stream", SourceGeneration: generation, ConnectorPid: 123, FenceAdmission: true}}}
+		if err := SendClaimedStopSessionsContext(t.Context(), "claimed-edge", request); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if permits != 1 {
+			t.Fatalf("confirmed generation stop had %d owner permits", permits)
+		}
+	})
+}
+
+func TestClaimedStopNeverSendsUnsafeLegacyFallback(t *testing.T) {
+	stream := &captureStream{}
+	t.Cleanup(SetupTestRegistry("legacy-claimed-edge", stream))
+	registry.conns["legacy-claimed-edge"].protocolVersion = StopSessionsAckProtocolMin - 1
+	request := &ipcpb.StopSessionsRequest{TenantId: "tenant", StreamNames: []string{"stream"}, Targets: []*ipcpb.StopSessionsTarget{{InternalName: "stream", SourceGeneration: uuid.NewString()}}}
+	if err := SendClaimedStopSessionsContext(t.Context(), "legacy-claimed-edge", request); err == nil {
+		t.Fatal("legacy edge acknowledged a claim-fenced stop")
+	}
+	if len(stream.sent) != 0 {
+		t.Fatal("a generation-unaware edge received an unsafe stop command")
+	}
+}
+
+func TestClaimedStopRequiresNodeAdmissionFenceProtocol(t *testing.T) {
+	stream := &captureStream{}
+	t.Cleanup(SetupTestRegistry("pre-fence-edge", stream))
+	registry.conns["pre-fence-edge"].protocolVersion = ClaimedPublisherStopProtocolMin - 1
+	request := &ipcpb.StopSessionsRequest{TenantId: "tenant", StreamNames: []string{"stream"}, Targets: []*ipcpb.StopSessionsTarget{{InternalName: "stream", SourceGeneration: uuid.NewString(), ConnectorPid: 123, FenceAdmission: true}}}
+	if err := SendClaimedStopSessionsContext(t.Context(), "pre-fence-edge", request); err == nil {
+		t.Fatal("old edge could acknowledge a stop before rejecting delayed admissions")
+	}
+	if len(stream.sent) != 0 {
+		t.Fatal("unsafe claimed stop reached an older edge")
+	}
+}

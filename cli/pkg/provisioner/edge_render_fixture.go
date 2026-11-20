@@ -78,7 +78,6 @@ func edgeRenderFixtureConfig(mode string) *EdgeProvisionConfig {
 		TelemetryToken:           "telemetry-token-fixture",
 		TelemetryAddress:         "192.0.2.10",
 		Capabilities:             []string{"ingest", "edge", "storage", "processing"},
-		BandwidthMbps:            1000,
 		MaxTranscodes:            4,
 		StorageBytes:             1 << 40,
 		Version:                  edgeRenderFixtureVersion,

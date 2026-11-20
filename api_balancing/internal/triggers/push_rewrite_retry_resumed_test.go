@@ -175,7 +175,7 @@ func TestApplyAdmissionEffect_DrainsPriorOwnerAndBroadcasts(t *testing.T) {
 	p.SetPeerNotifier(peer)
 	p.nodeOwnedLocally = func(string) bool { return true }
 	var drained []string
-	p.drainStream = func(_ context.Context, nodeID, runtimeName, reason, sourceGeneration, priorOwnerSourceGeneration string) error {
+	p.drainStream = func(_ context.Context, nodeID, runtimeName, reason, sourceGeneration, priorOwnerSourceGeneration, tenantID string) error {
 		drained = append(drained, nodeID+"|"+runtimeName+"|"+reason+"|"+sourceGeneration)
 		return nil
 	}
@@ -253,7 +253,7 @@ func TestApplyAdmissionEffect_NotOwnerSkipsNodeAffineLegs(t *testing.T) {
 	p.SetPeerNotifier(peer)
 	p.nodeOwnedLocally = func(string) bool { return false }
 	var drained []string
-	p.drainStream = func(_ context.Context, nodeID, runtimeName, reason, sourceGeneration, priorOwnerSourceGeneration string) error {
+	p.drainStream = func(_ context.Context, nodeID, runtimeName, reason, sourceGeneration, priorOwnerSourceGeneration, tenantID string) error {
 		drained = append(drained, nodeID)
 		return nil
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"mime"
 	"strings"
 	"time"
 
@@ -820,4 +821,17 @@ func (c *S3Client) BuildVodS3Key(tenantID, artifactHash, filename string) string
 		ext = filename[idx+1:]
 	}
 	return fmt.Sprintf("vod/%s/%s/%s.%s", tenantID, artifactHash, artifactHash, ext)
+}
+
+// GeneratePresignedGETAttachment keeps browser downloads separate from playback delivery.
+func (c *S3Client) GeneratePresignedGETAttachment(ctx context.Context, key, filename string, expiry time.Duration) (string, error) {
+	disposition := mime.FormatMediaType("attachment", map[string]string{"filename": filename})
+	req, err := c.presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(c.config.Bucket), Key: aws.String(c.fullKey(key)),
+		ResponseContentDisposition: aws.String(disposition),
+	}, s3.WithPresignExpires(expiry))
+	if err != nil {
+		return "", fmt.Errorf("presign original download: %w", err)
+	}
+	return req.URL, nil
 }

@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package helmsmancontrol;
+
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/capacity_values;capacityvaluespb";
+
+enum BandwidthBudgetSource {
+  BANDWIDTH_BUDGET_SOURCE_UNSPECIFIED = 0;
+  BANDWIDTH_BUDGET_SOURCE_OPERATOR = 1;
+  BANDWIDTH_BUDGET_SOURCE_DEFAULT = 2;
+}
+
+enum ObservedSource {
+  OBSERVED_SOURCE_UNSPECIFIED = 0;
+  OBSERVED_SOURCE_NIC = 1;
+  OBSERVED_SOURCE_MIST = 2;
+}

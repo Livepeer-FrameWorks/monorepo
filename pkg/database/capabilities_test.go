@@ -49,8 +49,8 @@ func TestPeriscopeIngestDeclaresBothRuntimeStores(t *testing.T) {
 	if got := len(CapabilitiesFor("periscope-ingest", EnginePostgres)); got != 1 {
 		t.Fatalf("periscope-ingest PostgreSQL capabilities = %d, want 1", got)
 	}
-	if got := len(CapabilitiesFor("periscope-ingest", EngineClickHouse)); got != 5 {
-		t.Fatalf("periscope-ingest ClickHouse capabilities = %d, want 5", got)
+	if got := len(CapabilitiesFor("periscope-ingest", EngineClickHouse)); got != 6 {
+		t.Fatalf("periscope-ingest ClickHouse capabilities = %d, want 6", got)
 	}
 }
 

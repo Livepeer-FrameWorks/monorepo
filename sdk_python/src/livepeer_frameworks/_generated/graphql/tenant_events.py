@@ -61,6 +61,7 @@ class TenantEventsTenantEvents(BaseModel):
             "TenantEventsTenantEventsDataCustomDomainVerified",
             "TenantEventsTenantEventsDataMultistreamStatusChanged",
             "TenantEventsTenantEventsDataRecordingChapterFailed",
+            "TenantEventsTenantEventsDataRecordingChapterReady",
             "TenantEventsTenantEventsDataRecordingFailed",
             "TenantEventsTenantEventsDataRecordingReady",
             "TenantEventsTenantEventsDataRecordingStarted",
@@ -68,7 +69,9 @@ class TenantEventsTenantEvents(BaseModel):
             "TenantEventsTenantEventsDataStreamConnected",
             "TenantEventsTenantEventsDataStreamCreated",
             "TenantEventsTenantEventsDataStreamDeleted",
+            "TenantEventsTenantEventsDataStreamEnded",
             "TenantEventsTenantEventsDataStreamIdle",
+            "TenantEventsTenantEventsDataStreamIngestDisconnected",
             "TenantEventsTenantEventsDataStreamKeyRotated",
             "TenantEventsTenantEventsDataStreamLive",
             "TenantEventsTenantEventsDataStreamUpdated",
@@ -290,6 +293,25 @@ class TenantEventsTenantEventsDataRecordingChapterFailed(BaseModel):
     typename__: Literal["RecordingChapterFailed"] = Field(alias="__typename")
 
 
+class TenantEventsTenantEventsDataRecordingChapterReady(BaseModel):
+    """Payload of a PublicEvent: one member per public event type. Fields of the same
+    name can have different types across members (reason is a different enum per
+    event family); alias them when one selection covers several."""
+
+    typename__: Literal["RecordingChapterReady"] = Field(alias="__typename")
+    artifact: Optional["TenantEventsTenantEventsDataRecordingChapterReadyArtifact"]
+    chapter_id: str = Field(alias="chapterId")
+    start_ms: int = Field(alias="startMs")
+    end_ms: int = Field(alias="endMs")
+    size_bytes: int = Field(alias="sizeBytes")
+
+
+class TenantEventsTenantEventsDataRecordingChapterReadyArtifact(EventArtifact):
+    """Part of a public event payload (frameworks.events.public.v1.Artifact)."""
+
+    pass
+
+
 class TenantEventsTenantEventsDataRecordingFailed(BaseModel):
     """Payload of a PublicEvent: one member per public event type. Fields of the same
     name can have different types across members (reason is a different enum per
@@ -347,6 +369,7 @@ class TenantEventsTenantEventsDataStreamConnected(BaseModel):
     typename__: Literal["StreamConnected"] = Field(alias="__typename")
     stream_id: str = Field(alias="streamId")
     protocol: EventIngestProtocol
+    session_id: str = Field(alias="sessionId")
 
 
 class TenantEventsTenantEventsDataStreamCreated(BaseModel):
@@ -369,6 +392,17 @@ class TenantEventsTenantEventsDataStreamDeleted(BaseModel):
     stream_id: str = Field(alias="streamId")
 
 
+class TenantEventsTenantEventsDataStreamEnded(BaseModel):
+    """Payload of a PublicEvent: one member per public event type. Fields of the same
+    name can have different types across members (reason is a different enum per
+    event family); alias them when one selection covers several."""
+
+    typename__: Literal["StreamEnded"] = Field(alias="__typename")
+    stream_id: str = Field(alias="streamId")
+    playback_id: str = Field(alias="playbackId")
+    session_id: str = Field(alias="sessionId")
+
+
 class TenantEventsTenantEventsDataStreamIdle(BaseModel):
     """Payload of a PublicEvent: one member per public event type. Fields of the same
     name can have different types across members (reason is a different enum per
@@ -376,6 +410,18 @@ class TenantEventsTenantEventsDataStreamIdle(BaseModel):
 
     typename__: Literal["StreamIdle"] = Field(alias="__typename")
     stream_id: str = Field(alias="streamId")
+    session_id: str = Field(alias="sessionId")
+
+
+class TenantEventsTenantEventsDataStreamIngestDisconnected(BaseModel):
+    """Payload of a PublicEvent: one member per public event type. Fields of the same
+    name can have different types across members (reason is a different enum per
+    event family); alias them when one selection covers several."""
+
+    typename__: Literal["StreamIngestDisconnected"] = Field(alias="__typename")
+    stream_id: str = Field(alias="streamId")
+    session_id: str = Field(alias="sessionId")
+    disconnect_reason: str = Field(alias="disconnectReason")
 
 
 class TenantEventsTenantEventsDataStreamKeyRotated(BaseModel):
@@ -394,6 +440,7 @@ class TenantEventsTenantEventsDataStreamLive(BaseModel):
 
     typename__: Literal["StreamLive"] = Field(alias="__typename")
     stream_id: str = Field(alias="streamId")
+    session_id: str = Field(alias="sessionId")
 
 
 class TenantEventsTenantEventsDataStreamUpdated(BaseModel):
@@ -496,6 +543,7 @@ TenantEventsTenantEventsDataTopupCredited.model_rebuild()
 TenantEventsTenantEventsDataClipFailed.model_rebuild()
 TenantEventsTenantEventsDataClipReady.model_rebuild()
 TenantEventsTenantEventsDataClipRequested.model_rebuild()
+TenantEventsTenantEventsDataRecordingChapterReady.model_rebuild()
 TenantEventsTenantEventsDataRecordingFailed.model_rebuild()
 TenantEventsTenantEventsDataRecordingReady.model_rebuild()
 TenantEventsTenantEventsDataUploadAborted.model_rebuild()

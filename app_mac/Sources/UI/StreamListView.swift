@@ -8,17 +8,17 @@ struct StreamListView: View {
       ForEach(appState.streams) { stream in
         HStack {
           Circle()
-            .fill(stream.isActive ? Color.tnGreen : Color.secondary.opacity(0.3))
+            .fill(stream.ingestState == nil ? Color.tnYellow : (stream.isActive ? Color.tnGreen : Color.secondary.opacity(0.3)))
             .frame(width: 8, height: 8)
           VStack(alignment: .leading, spacing: 2) {
             Text(stream.name).font(.body)
             Text(stream.id).font(.caption2).foregroundStyle(.tertiary)
           }
           Spacer()
-          if stream.isActive {
+          if stream.isActive, let viewerCount = stream.viewerCount {
             HStack(spacing: 4) {
               Image(systemName: "person.2").font(.caption2)
-              Text("\(stream.viewerCount)")
+              Text("\(viewerCount)")
             }
             .font(.caption)
             .foregroundStyle(Color.tnGreen)
@@ -27,7 +27,7 @@ struct StreamListView: View {
             .background(Color.tnGreen.opacity(0.1))
             .clipShape(Capsule())
           } else {
-            Text("offline")
+            Text(stream.liveStateLabel)
               .font(.caption)
               .foregroundStyle(.tertiary)
           }

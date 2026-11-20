@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/capacity"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockervalkey"
 	goredis "github.com/redis/go-redis/v9"
 )
@@ -18,6 +19,88 @@ func TestRedisStateContracts_RealValkey(t *testing.T) {
 	engine := dockervalkey.Start(t)
 	ctx := context.Background()
 	store := NewRedisStateStore(engine.Client, "state-contract")
+
+	t.Run("bandwidth reservations", func(t *testing.T) {
+		now := time.Now()
+		link := capacity.Link{Budget: 20000000000000000}
+		for _, tc := range []struct {
+			id      string
+			bytes   uint64
+			allowed bool
+		}{
+			{"above", link.Usable() + 1, false}, {"exact", link.Usable(), true}, {"overflow", 1, false},
+		} {
+			result, err := store.mutateBandwidth(ctx, "reserve", tc.id, "capacity-node", "replica-a", bandwidthReservation{Bytes: tc.bytes, Direction: BandwidthEgress, Stream: "stream", State: "PENDING", ExpiresMS: now.Add(30 * time.Second).UnixMilli()}, link, 0, now)
+			if err != nil || result.Allowed != tc.allowed {
+				t.Fatalf("%s admission=%v err=%v", tc.id, result.Allowed, err)
+			}
+		}
+		if result, err := store.mutateBandwidth(ctx, "activate", "exact", "capacity-node", "replica-b", bandwidthReservation{}, link, 0, now); err != nil || !result.Allowed {
+			t.Fatalf("cross-replica activation=%+v %v", result, err)
+		}
+		if result, err := store.mutateBandwidth(ctx, "release_pending", "exact", "capacity-node", "replica-a", bandwidthReservation{}, link, 0, now); err != nil || result.Sums.Egress != link.Usable() {
+			t.Fatalf("stale pending release=%+v %v", result, err)
+		}
+		if result, err := store.mutateBandwidth(ctx, "settle", "", "capacity-node", "replica-b", bandwidthReservation{}, link, now.Add(-time.Second).UnixMilli(), now); err != nil || result.Sums.Egress != link.Usable() {
+			t.Fatalf("predating window=%+v %v", result, err)
+		}
+		if result, err := store.mutateBandwidth(ctx, "settle", "", "capacity-node", "replica-b", bandwidthReservation{}, link, now.Add(time.Second).UnixMilli(), now.Add(12*time.Second)); err != nil || result.Sums.Egress != 0 {
+			t.Fatalf("complete window=%+v %v", result, err)
+		}
+	})
+
+	t.Run("node audience census", func(t *testing.T) {
+		env := NodeStreamCountsSnapshot{NodeID: "audience-node", Fence: 5, Seq: 10, Streams: map[string]uint32{"stream": 2}}
+		write := func(snapshot NodeStreamCountsSnapshot) bool {
+			payload, err := json.Marshal(snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			change, err := json.Marshal(StateChange{Entity: StateEntityNodeStreamCounts, NodeID: snapshot.NodeID, Operation: StateOpUpsert, Payload: payload})
+			if err != nil {
+				t.Fatal(err)
+			}
+			accepted, err := store.setNodeStreamCountsFenced(ctx, snapshot, payload, change)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return accepted
+		}
+		if !write(env) {
+			t.Fatal("first census rejected")
+		}
+		before, err := engine.Client.XLen(ctx, store.changelog.Key()).Result()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stale := env
+		stale.Fence = 4
+		stale.Seq = 99
+		stale.Streams = map[string]uint32{"stream": 50}
+		if write(stale) {
+			t.Fatal("old owner replaced audience")
+		}
+		after, err := engine.Client.XLen(ctx, store.changelog.Key()).Result()
+		if err != nil || before != after {
+			t.Fatalf("stale census appended changelog: %d -> %d (%v)", before, after, err)
+		}
+		restored, err := store.getAllNodeStreamCounts()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := restored[env.NodeID]; got == nil || got.Fence != 5 || got.Seq != 10 || got.Streams["stream"] != 2 {
+			t.Fatalf("stored census: %+v", got)
+		}
+		if watermark, err := engine.Client.Get(ctx, store.keyNodeStreamCountsWatermark(env.NodeID)).Result(); err != nil || watermark != "5-10" {
+			t.Fatalf("watermark %q: %v", watermark, err)
+		}
+		if err := store.deleteNodeStreamCounts(env.NodeID); err != nil {
+			t.Fatal(err)
+		}
+		if present, err := engine.Client.Exists(ctx, store.keyNodeStreamCounts(env.NodeID), store.keyNodeStreamCountsWatermark(env.NodeID)).Result(); err != nil || present != 0 {
+			t.Fatalf("evicted census keys=%d: %v", present, err)
+		}
+	})
 
 	acquired, err := store.TryAcquireLease(ctx, "worker", "owner-a", time.Minute)
 	if err != nil || !acquired {

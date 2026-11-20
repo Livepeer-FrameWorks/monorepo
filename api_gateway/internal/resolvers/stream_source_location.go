@@ -62,6 +62,9 @@ func streamPlacementValidationError(err error) *model.ValidationError {
 		return &model.ValidationError{Message: nodePlacementNotReadyMessage, Field: strPtr("sourceLocation")}
 	}
 	if vErr := mapInvalidArgument(err); vErr != nil {
+		if strings.Contains(strings.ToLower(vErr.Message), "transcode ladder") {
+			vErr.Field = strPtr("transcodeLadder")
+		}
 		return vErr
 	}
 	return mapFailedPrecondition(err)

@@ -119,6 +119,16 @@ enum GQL {
   }
   """
 
+  static let ClusterCapacityFields = """
+  fragment ClusterCapacityFields on ClusterCapacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressUsableBytesPerSec
+    ingressUsableBytesPerSec
+    defaultBudgetNodes
+  }
+  """
+
   static let ClusterFields = """
   # All fields available on Cluster type (excludes nodesConnection edge)
   fragment ClusterFields on Cluster {
@@ -133,7 +143,9 @@ enum GQL {
     kafkaBrokers
     maxConcurrentStreams
     maxConcurrentViewers
-    maxBandwidthMbps
+    capacity {
+      ...ClusterCapacityFields
+    }
     healthStatus
     isActive
     isDefaultCluster
@@ -422,6 +434,18 @@ enum GQL {
   }
   """
 
+  static let NodeCapacityFields = """
+  fragment NodeCapacityFields on NodeCapacity {
+    egressBudgetBytesPerSec
+    ingressBudgetBytesPerSec
+    egressSource
+    ingressSource
+    revision
+    updatedAt
+    appliedRevision
+  }
+  """
+
   static let NodeCoreFields = """
   fragment NodeCoreFields on InfrastructureNode {
     id
@@ -693,8 +717,18 @@ enum GQL {
     streamKey
     playbackId
     record
+    transcodeLadder
     liveVideoAbr
     ingestMode
+    ingest {
+      state
+      isLive
+      sessionId
+      connectedAt
+      liveSince
+      endedAt
+      resumableUntil
+    }
     pullSource {
       sourceUriRedacted
       enabled
@@ -1954,6 +1988,9 @@ enum GQL {
         diskGb
         lastHeartbeat
         tags
+        capacity {
+          ...NodeCapacityFields
+        }
         effectiveMode
         routingImpactPreview {
           activeStreams
@@ -1996,7 +2033,9 @@ enum GQL {
           deploymentModel
           maxConcurrentStreams
           maxConcurrentViewers
-          maxBandwidthMbps
+          capacity {
+            ...ClusterCapacityFields
+          }
           healthStatus
           createdAt
           visibility
@@ -2307,6 +2346,8 @@ enum GQL {
         currentViewers
         egressMbps
         egressCapacityMbps
+        egressUsableMbps
+        defaultBudgetNodes
         ingressMbps
       }
       peerConnections {
@@ -2390,6 +2431,8 @@ enum GQL {
         currentViewers
         egressMbps
         egressCapacityMbps
+        egressUsableMbps
+        defaultBudgetNodes
         ingressMbps
         services
       }
@@ -2419,6 +2462,19 @@ enum GQL {
       totalNodes
       healthyNodes
       updatedAt
+    }
+  }
+  """
+
+  static let GetNodeCapacity = """
+  query GetNodeCapacity($id: ID!) {
+    node(id: $id) {
+      ... on InfrastructureNode {
+        nodeId
+        capacity {
+          ...NodeCapacityFields
+        }
+      }
     }
   }
   """
@@ -2736,7 +2792,10 @@ enum GQL {
           uploadBytesPerSec
           downloadBytesPerSec
           activeNodes
-          egressCapacityBps
+          egressBudgetBytesPerSec
+          egressUsableBytesPerSec
+          egressObservedBytesPerSec
+          defaultBudgetNodes
         }
         tenants {
           id
@@ -3206,6 +3265,34 @@ enum GQL {
   }
   """
 
+  static let GetRecordingChapters = """
+  query GetRecordingChapters($id: ID!, $first: Int = 25, $after: String) {
+    dvrRecording(id: $id) {
+      id
+      dvrHash
+      status
+      startedAt
+      endedAt
+      chapters(page: { first: $first, after: $after }) {
+        nodes {
+          chapterId
+          startMs
+          endMs
+          state
+          playbackId
+          isCurrent
+          hasGaps
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        totalCount
+      }
+    }
+  }
+  """
+
   static let GetRoutingEfficiency = """
   # Pre-aggregated routing efficiency summary (replaces client-side aggregation of raw events)
   query GetRoutingEfficiency($streamId: ID, $timeRange: TimeRangeInput) {
@@ -3597,6 +3684,8 @@ enum GQL {
     storageArtifactsConnection(input: $input) {
       nodes {
         key
+        originType
+        parentRecordingId
         kind
         id
         hash
@@ -3607,6 +3696,9 @@ enum GQL {
         secondaryLabel
         description
         errorMessage
+        originalFile {
+          sizeBytes
+        }
         sizeBytes
         status
         storageLocation
@@ -4005,6 +4097,40 @@ enum GQL {
   }
   """
 
+  static let GetStreamClips = """
+  query GetStreamClips($id: ID!, $first: Int = 25, $after: String) {
+    stream(id: $id) {
+      clips(page: { first: $first, after: $after }) {
+        nodes {
+          key
+          kind
+          id
+          hash
+          playbackId
+          streamId
+          title
+          secondaryLabel
+          status
+          createdAt
+          updatedAt
+          expiresAt
+          sizeBytes
+          durationSeconds
+          storageLocation
+          isSynced
+          originType
+          parentRecordingId
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        totalCount
+      }
+    }
+  }
+  """
+
   static let GetStreamEvents = """
   # Fetch stream lifecycle events (historical)
   query GetStreamEvents($streamId: ID!, $timeRange: TimeRangeInput, $first: Int = 50) {
@@ -4285,30 +4411,21 @@ enum GQL {
   }
   """
 
-  static let GetStreamKeys = """
-  # Fetch paginated list of stream keys for a specific stream
-  # Returns active/inactive keys with usage timestamps for credential management
-  query GetStreamKeys($streamId: ID!, $first: Int = 50, $after: String) {
-    streamKeysConnection(streamId: $streamId, page: { first: $first, after: $after }) {
-      edges {
-        cursor
-        node {
-          id
-          streamId
-          keyValue
-          keyName
-          isActive
-          lastUsedAt
-          createdAt
-        }
+  static let GetStreamIngest = """
+  query GetStreamIngest($id: ID!) {
+    stream(id: $id) {
+      id
+      streamId
+      name
+      ingest {
+        state
+        isLive
+        sessionId
+        connectedAt
+        liveSince
+        endedAt
+        resumableUntil
       }
-      pageInfo {
-        hasNextPage
-        hasPreviousPage
-        startCursor
-        endCursor
-      }
-      totalCount
     }
   }
   """
@@ -4444,6 +4561,40 @@ enum GQL {
           nodeIds
         }
         avoidNodeIds
+      }
+    }
+  }
+  """
+
+  static let GetStreamRecordings = """
+  query GetStreamRecordings($id: ID!, $first: Int = 25, $after: String) {
+    stream(id: $id) {
+      recordings(page: { first: $first, after: $after }) {
+        nodes {
+          key
+          kind
+          id
+          hash
+          playbackId
+          streamId
+          title
+          secondaryLabel
+          status
+          createdAt
+          updatedAt
+          expiresAt
+          sizeBytes
+          durationSeconds
+          storageLocation
+          isSynced
+          originType
+          parentRecordingId
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        totalCount
       }
     }
   }
@@ -4928,6 +5079,8 @@ enum GQL {
   # defaults" panel.
   query MediaRetentionPolicy {
     mediaRetentionPolicy {
+      keepVodOriginals
+      effectiveKeepVodOriginals
       defaultVodRetentionDays
       defaultDvrRetentionDays
       defaultClipRetentionDays
@@ -5127,6 +5280,25 @@ enum GQL {
       ... on NotFoundError {
         message
       }
+    }
+  }
+  """
+
+  static let TranscodeLadderPolicy = """
+  # Transcode ladders the tenant's plan allows, the plan default and the ladder
+  # the tenant's streams and VOD uploads inherit. Used by the stream create and
+  # edit dialogs and the tenant transcoding panel.
+  query TranscodeLadderPolicy {
+    transcodeLadderPolicy {
+      ladders {
+        name
+        displayName
+        description
+        renditionNames
+      }
+      planDefault
+      tenantLadder
+      effectiveLadder
     }
   }
   """
@@ -5711,33 +5883,6 @@ enum GQL {
   }
   """
 
-  static let CreateStreamKey = """
-  # Create a new stream key for a stream
-  mutation CreateStreamKey($streamId: ID!, $input: CreateStreamKeyInput!) {
-    createStreamKey(streamId: $streamId, input: $input) {
-      __typename
-      ... on StreamKey {
-        id
-        streamId
-        keyValue
-        keyName
-        isActive
-        lastUsedAt
-        createdAt
-      }
-      ... on ValidationError {
-        ...ValidationErrorFields
-      }
-      ... on NotFoundError {
-        ...NotFoundErrorFields
-      }
-      ... on AuthError {
-        ...AuthErrorFields
-      }
-    }
-  }
-  """
-
   static let CreateStripeBillingPortal = """
   # Open the Stripe customer portal to update the payment method of a Stripe subscription.
   mutation CreateStripeBillingPortal($returnUrl: String!) {
@@ -5796,6 +5941,34 @@ enum GQL {
   }
   """
 
+  static let CreateVodOriginalDownload = """
+  mutation CreateVodOriginalDownload($id: ID!) {
+    createVodOriginalDownload(id: $id) {
+      ... on VodOriginalDownload {
+        url
+        expiresAt
+        sizeBytes
+        filename
+      }
+      ... on ValidationError {
+        message
+        field
+        code
+      }
+      ... on NotFoundError {
+        message
+        code
+        resourceType
+        resourceId
+      }
+      ... on AuthError {
+        message
+        code
+      }
+    }
+  }
+  """
+
   static let CreateVodUpload = """
   mutation CreateVodUpload($input: CreateVodUploadInput!) {
     createVodUpload(input: $input) {
@@ -5810,6 +5983,7 @@ enum GQL {
           presignedUrl
         }
         expiresAt
+        keepOriginal
       }
       ... on ValidationError {
         message
@@ -5913,30 +6087,38 @@ enum GQL {
   }
   """
 
-  static let DeleteStreamKey = """
-  # Delete a stream key from a stream
-  mutation DeleteStreamKey($streamId: ID!, $keyId: ID!) {
-    deleteStreamKey(streamId: $streamId, keyId: $keyId) {
-      __typename
-      ... on DeleteSuccess {
-        ...DeleteSuccessFields
-      }
-      ... on NotFoundError {
-        ...NotFoundErrorFields
-      }
-      ... on AuthError {
-        ...AuthErrorFields
-      }
-    }
-  }
-  """
-
   static let DeleteVodAsset = """
   mutation DeleteVodAsset($id: ID!) {
     deleteVodAsset(id: $id) {
       ... on DeleteSuccess {
         success
         deletedId
+      }
+      ... on NotFoundError {
+        message
+        code
+        resourceType
+        resourceId
+      }
+      ... on AuthError {
+        message
+        code
+      }
+    }
+  }
+  """
+
+  static let DeleteVodOriginal = """
+  mutation DeleteVodOriginal($id: ID!) {
+    deleteVodOriginal(id: $id) {
+      ... on DeleteSuccess {
+        success
+        deletedId
+      }
+      ... on ValidationError {
+        message
+        field
+        code
       }
       ... on NotFoundError {
         message
@@ -5983,6 +6165,27 @@ enum GQL {
       }
       ... on AuthError {
         ...AuthErrorFields
+      }
+    }
+  }
+  """
+
+  static let DisconnectIngest = """
+  mutation DisconnectIngest($streamId: ID!) {
+    disconnectIngest(streamId: $streamId) {
+      __typename
+      ... on IngestDisconnectSuccess {
+        streamId
+        stopRequested
+      }
+      ... on ValidationError {
+        message
+      }
+      ... on NotFoundError {
+        message
+      }
+      ... on AuthError {
+        message
       }
     }
   }
@@ -6162,8 +6365,8 @@ enum GQL {
 
   static let RefreshStreamKey = """
   # Regenerate a new stream key for a stream
-  mutation RefreshStreamKey($id: ID!) {
-    refreshStreamKey(id: $id) {
+  mutation RefreshStreamKey($id: ID!, $endActiveSession: Boolean = false) {
+    refreshStreamKey(id: $id, endActiveSession: $endActiveSession) {
       __typename
       ... on Stream {
         id
@@ -6174,12 +6377,14 @@ enum GQL {
         record
         createdAt
         updatedAt
-        metrics {
-          status
+        ingest {
+          state
           isLive
-          currentViewers
-          startedAt
-          updatedAt
+          sessionId
+          connectedAt
+          liveSince
+          endedAt
+          resumableUntil
         }
       }
       ... on ValidationError {
@@ -6499,6 +6704,8 @@ enum GQL {
   mutation SetMediaRetentionPolicy($input: SetMediaRetentionPolicyInput!) {
     setMediaRetentionPolicy(input: $input) {
       ... on MediaRetentionPolicy {
+        keepVodOriginals
+        effectiveKeepVodOriginals
         defaultVodRetentionDays
         defaultDvrRetentionDays
         defaultClipRetentionDays
@@ -6514,6 +6721,31 @@ enum GQL {
       ... on ValidationError {
         message
         field
+      }
+      ... on AuthError {
+        message
+      }
+    }
+  }
+  """
+
+  static let SetNodeCapacity = """
+  mutation SetNodeCapacity($input: SetNodeCapacityInput!) {
+    setNodeCapacity(input: $input) {
+      __typename
+      ... on InfrastructureNode {
+        id
+        nodeId
+        capacity {
+          ...NodeCapacityFields
+        }
+      }
+      ... on ValidationError {
+        message
+        field
+      }
+      ... on NotFoundError {
+        message
       }
       ... on AuthError {
         message
@@ -6639,6 +6871,64 @@ enum GQL {
       }
       ... on AuthError {
         message
+      }
+    }
+  }
+  """
+
+  static let SetTranscodeLadderPolicy = """
+  # Set the transcode ladder the tenant's streams and VOD uploads inherit; an
+  # empty ladder returns to the plan default.
+  mutation SetTranscodeLadderPolicy($input: SetTranscodeLadderPolicyInput!) {
+    setTranscodeLadderPolicy(input: $input) {
+      ... on TranscodeLadderPolicy {
+        ladders {
+          name
+          displayName
+          description
+          renditionNames
+        }
+        planDefault
+        tenantLadder
+        effectiveLadder
+      }
+      ... on ValidationError {
+        message
+        field
+      }
+      ... on AuthError {
+        message
+      }
+    }
+  }
+  """
+
+  static let SetVodOriginalPolicy = """
+  mutation SetVodOriginalPolicy($keepVodOriginals: Boolean) {
+    setVodOriginalPolicy(keepVodOriginals: $keepVodOriginals) {
+      ... on MediaRetentionPolicy {
+        keepVodOriginals
+        effectiveKeepVodOriginals
+        defaultVodRetentionDays
+        defaultDvrRetentionDays
+        defaultClipRetentionDays
+        effectiveVodRetentionDays
+        effectiveDvrRetentionDays
+        effectiveClipRetentionDays
+        bounds {
+          maxRecordingRetentionDays
+        }
+        updatedBy
+        updatedAt
+      }
+      ... on ValidationError {
+        message
+        field
+        code
+      }
+      ... on AuthError {
+        message
+        code
       }
     }
   }
@@ -7119,15 +7409,37 @@ enum GQL {
         ... on StreamKeyRotated {
           streamId
         }
+        ... on StreamEnded {
+          streamId
+          playbackId
+          sessionId
+        }
+        ... on StreamIngestDisconnected {
+          streamId
+          sessionId
+          disconnectReason: reason
+        }
+        ... on RecordingChapterReady {
+          artifact {
+            ...EventArtifactFields
+          }
+          chapterId
+          startMs
+          endMs
+          sizeBytes
+        }
         ... on StreamConnected {
           streamId
           protocol
+          sessionId
         }
         ... on StreamLive {
           streamId
+          sessionId
         }
         ... on StreamIdle {
           streamId
+          sessionId
         }
         ... on ClipRequested {
           artifact {

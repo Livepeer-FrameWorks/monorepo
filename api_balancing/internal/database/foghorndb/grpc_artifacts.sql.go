@@ -687,7 +687,7 @@ func (q *Queries) GetExistingClipStatus(ctx context.Context, arg GetExistingClip
 
 const getExistingVodUpload = `-- name: GetExistingVodUpload :one
 SELECT m.s3_upload_id, m.s3_key, m.total_parts, m.upload_expires_at,
-       COALESCE(a.backend_id, '')::text AS backend_id
+       COALESCE(a.backend_id, '')::text AS backend_id, m.keep_original
 FROM foghorn.artifacts a
 JOIN foghorn.vod_metadata m ON m.artifact_hash = a.artifact_hash
 WHERE a.artifact_hash = $1
@@ -707,6 +707,7 @@ type GetExistingVodUploadRow struct {
 	TotalParts      sql.NullInt32  `db:"total_parts" json:"total_parts"`
 	UploadExpiresAt sql.NullTime   `db:"upload_expires_at" json:"upload_expires_at"`
 	BackendID       string         `db:"backend_id" json:"backend_id"`
+	KeepOriginal    bool           `db:"keep_original" json:"keep_original"`
 }
 
 func (q *Queries) GetExistingVodUpload(ctx context.Context, arg GetExistingVodUploadParams) (GetExistingVodUploadRow, error) {
@@ -718,6 +719,7 @@ func (q *Queries) GetExistingVodUpload(ctx context.Context, arg GetExistingVodUp
 		&i.TotalParts,
 		&i.UploadExpiresAt,
 		&i.BackendID,
+		&i.KeepOriginal,
 	)
 	return i, err
 }
@@ -766,7 +768,7 @@ SELECT a.artifact_hash AS id, a.artifact_hash, a.status, a.size_bytes,
        COALESCE(v.description, '')::text AS description,
        v.duration_ms, v.resolution, v.video_codec, v.audio_codec, v.bitrate_kbps,
        COALESCE(v.s3_upload_id, '')::text AS s3_upload_id,
-       COALESCE(v.s3_key, '')::text AS s3_key
+       COALESCE(v.s3_key, '')::text AS s3_key, v.original_size_bytes
 FROM foghorn.artifacts a
 LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
 WHERE a.artifact_hash = $1
@@ -775,26 +777,27 @@ WHERE a.artifact_hash = $1
 `
 
 type GetVodAssetRow struct {
-	ID              string         `db:"id" json:"id"`
-	ArtifactHash    string         `db:"artifact_hash" json:"artifact_hash"`
-	Status          sql.NullString `db:"status" json:"status"`
-	SizeBytes       sql.NullInt64  `db:"size_bytes" json:"size_bytes"`
-	StorageLocation string         `db:"storage_location" json:"storage_location"`
-	S3Url           string         `db:"s3_url" json:"s3_url"`
-	ErrorMessage    sql.NullString `db:"error_message" json:"error_message"`
-	CreatedAt       sql.NullTime   `db:"created_at" json:"created_at"`
-	UpdatedAt       sql.NullTime   `db:"updated_at" json:"updated_at"`
-	RetentionUntil  sql.NullTime   `db:"retention_until" json:"retention_until"`
-	Filename        string         `db:"filename" json:"filename"`
-	Title           string         `db:"title" json:"title"`
-	Description     string         `db:"description" json:"description"`
-	DurationMs      sql.NullInt32  `db:"duration_ms" json:"duration_ms"`
-	Resolution      sql.NullString `db:"resolution" json:"resolution"`
-	VideoCodec      sql.NullString `db:"video_codec" json:"video_codec"`
-	AudioCodec      sql.NullString `db:"audio_codec" json:"audio_codec"`
-	BitrateKbps     sql.NullInt32  `db:"bitrate_kbps" json:"bitrate_kbps"`
-	S3UploadID      string         `db:"s3_upload_id" json:"s3_upload_id"`
-	S3Key           string         `db:"s3_key" json:"s3_key"`
+	ID                string         `db:"id" json:"id"`
+	ArtifactHash      string         `db:"artifact_hash" json:"artifact_hash"`
+	Status            sql.NullString `db:"status" json:"status"`
+	SizeBytes         sql.NullInt64  `db:"size_bytes" json:"size_bytes"`
+	StorageLocation   string         `db:"storage_location" json:"storage_location"`
+	S3Url             string         `db:"s3_url" json:"s3_url"`
+	ErrorMessage      sql.NullString `db:"error_message" json:"error_message"`
+	CreatedAt         sql.NullTime   `db:"created_at" json:"created_at"`
+	UpdatedAt         sql.NullTime   `db:"updated_at" json:"updated_at"`
+	RetentionUntil    sql.NullTime   `db:"retention_until" json:"retention_until"`
+	Filename          string         `db:"filename" json:"filename"`
+	Title             string         `db:"title" json:"title"`
+	Description       string         `db:"description" json:"description"`
+	DurationMs        sql.NullInt32  `db:"duration_ms" json:"duration_ms"`
+	Resolution        sql.NullString `db:"resolution" json:"resolution"`
+	VideoCodec        sql.NullString `db:"video_codec" json:"video_codec"`
+	AudioCodec        sql.NullString `db:"audio_codec" json:"audio_codec"`
+	BitrateKbps       sql.NullInt32  `db:"bitrate_kbps" json:"bitrate_kbps"`
+	S3UploadID        string         `db:"s3_upload_id" json:"s3_upload_id"`
+	S3Key             string         `db:"s3_key" json:"s3_key"`
+	OriginalSizeBytes sql.NullInt64  `db:"original_size_bytes" json:"original_size_bytes"`
 }
 
 func (q *Queries) GetVodAsset(ctx context.Context, artifactHash string) (GetVodAssetRow, error) {
@@ -821,6 +824,7 @@ func (q *Queries) GetVodAsset(ctx context.Context, artifactHash string) (GetVodA
 		&i.BitrateKbps,
 		&i.S3UploadID,
 		&i.S3Key,
+		&i.OriginalSizeBytes,
 	)
 	return i, err
 }
@@ -852,7 +856,7 @@ SELECT a.status, COALESCE(v.s3_key, '')::text AS s3_key, a.s3_url, a.format,
        a.size_bytes, a.retention_until, a.user_id, a.storage_cluster_id,
        a.origin_cluster_id, COALESCE(a.origin_type, '')::text AS origin_type,
        a.active_object_key, a.active_dtsh_key, a.sync_object_key,
-       a.durable_backend_local, a.backend_id
+       a.durable_backend_local, a.backend_id, v.original_s3_key
 FROM foghorn.artifacts a
 LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
 WHERE a.artifact_hash = $1
@@ -882,6 +886,7 @@ type GetVodForDeletionRow struct {
 	SyncObjectKey       sql.NullString `db:"sync_object_key" json:"sync_object_key"`
 	DurableBackendLocal bool           `db:"durable_backend_local" json:"durable_backend_local"`
 	BackendID           sql.NullString `db:"backend_id" json:"backend_id"`
+	OriginalS3Key       sql.NullString `db:"original_s3_key" json:"original_s3_key"`
 }
 
 func (q *Queries) GetVodForDeletion(ctx context.Context, arg GetVodForDeletionParams) (GetVodForDeletionRow, error) {
@@ -903,6 +908,7 @@ func (q *Queries) GetVodForDeletion(ctx context.Context, arg GetVodForDeletionPa
 		&i.SyncObjectKey,
 		&i.DurableBackendLocal,
 		&i.BackendID,
+		&i.OriginalS3Key,
 	)
 	return i, err
 }
@@ -1176,12 +1182,12 @@ func (q *Queries) InsertVodImportMetadata(ctx context.Context, arg InsertVodImpo
 const insertVodMultipartMetadata = `-- name: InsertVodMultipartMetadata :exec
 INSERT INTO foghorn.vod_metadata (
     artifact_hash, filename, title, description, content_type,
-    s3_upload_id, s3_key, upload_expires_at, total_parts, created_at, updated_at
+    s3_upload_id, s3_key, upload_expires_at, total_parts, keep_original, created_at, updated_at
 )
 VALUES (
     $1, $2, $3, $4,
     $5, $6, $7,
-    $8, $9, NOW(), NOW()
+    $8, $9, $10, NOW(), NOW()
 )
 `
 
@@ -1195,6 +1201,7 @@ type InsertVodMultipartMetadataParams struct {
 	S3Key           sql.NullString `db:"s3_key" json:"s3_key"`
 	UploadExpiresAt sql.NullTime   `db:"upload_expires_at" json:"upload_expires_at"`
 	TotalParts      sql.NullInt32  `db:"total_parts" json:"total_parts"`
+	KeepOriginal    bool           `db:"keep_original" json:"keep_original"`
 }
 
 func (q *Queries) InsertVodMultipartMetadata(ctx context.Context, arg InsertVodMultipartMetadataParams) error {
@@ -1208,6 +1215,7 @@ func (q *Queries) InsertVodMultipartMetadata(ctx context.Context, arg InsertVodM
 		arg.S3Key,
 		arg.UploadExpiresAt,
 		arg.TotalParts,
+		arg.KeepOriginal,
 	)
 	return err
 }
@@ -1528,8 +1536,9 @@ func (q *Queries) SoftDeleteVodArtifact(ctx context.Context, arg SoftDeleteVodAr
 }
 
 const sumTenantActiveArtifactBytes = `-- name: SumTenantActiveArtifactBytes :one
-SELECT COALESCE(SUM(size_bytes), 0)::bigint AS total_bytes
-FROM foghorn.artifacts
+SELECT COALESCE(SUM(COALESCE(a.size_bytes, 0) + COALESCE(v.original_size_bytes, 0)), 0)::bigint AS total_bytes
+FROM foghorn.artifacts a
+LEFT JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
 WHERE tenant_id = $1::uuid
   AND federated_pointer = false
   AND status NOT IN ('failed', 'expired', 'deleted', 'aborted')

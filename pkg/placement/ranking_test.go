@@ -30,7 +30,7 @@ func TestNoGeoViewerStaysOnTheArrivalCellsOrigin(t *testing.T) {
 // inside the bound.
 func TestLoadBoundDecidesPullsAndCellSpill(t *testing.T) {
 	origin := edge("eu-origin", "eu-cell", 52.4, 4.9)
-	origin.BWAvailable = 150 // 85% used: past the bound
+	origin.BWAvailable = 160 // 84% used: past the target but below the hard cap
 	sibling := edge("eu-sibling", "eu-cell", 52.4, 4.9)
 	sibling.Presence, sibling.BWAvailable = Absent, 700
 	remote := edge("us-edge", "us-cell", 38.9, -77)
@@ -39,12 +39,12 @@ func TestLoadBoundDecidesPullsAndCellSpill(t *testing.T) {
 	if d := evaluate(t, noGeo("eu-cell", origin, sibling, remote)); winner(d) != "eu-sibling" || !d.Choices[0].RequiresPull {
 		t.Fatalf("overloaded origin should hand the viewer to a local pull: %+v", d.Choices)
 	}
-	sibling.BWAvailable = 100
+	sibling.BWAvailable = 170
 	if d := evaluate(t, noGeo("eu-cell", origin, sibling, remote)); winner(d) != "us-edge" {
 		t.Fatalf("with no local node inside the bound the viewer should go to the other cell: %+v", d.Choices)
 	}
-	remote.BWAvailable = 100
-	if d := evaluate(t, noGeo("eu-cell", origin, sibling, remote)); winner(d) != "eu-origin" {
+	remote.BWAvailable = 165
+	if d := evaluate(t, noGeo("eu-cell", origin, sibling, remote)); winner(d) != "eu-sibling" {
 		t.Fatalf("with every node past the bound, the least loaded local node should serve: %+v", d.Choices)
 	}
 }

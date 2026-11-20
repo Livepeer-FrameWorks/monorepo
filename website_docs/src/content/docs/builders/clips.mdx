@@ -203,24 +203,32 @@ Changing the stream's policy later does not change clips that already exist. See
 
 ### List and delete clips
 
-Clips are listed with the other stored media through `storageArtifactsConnection`:
+List one stream’s clips with `streams:read` using the keyset-paginated `Stream.clips` connection.
+Pass `pageInfo.endCursor` as `page.after` to continue. The account-wide
+`storageArtifactsConnection` remains available for the library.
+MCP exposes `list_stream_clips`; SDK 0.6 exposes `ListStreamClips` (v0.3.16 server).
 
 ```graphql
-query {
-  storageArtifactsConnection(input: { kinds: [CLIP], streamId: "<stream global id>", first: 20 }) {
-    nodes {
-      id
-      hash
-      title
-      playbackId
-      status
-      durationSeconds
-      sizeBytes
-      createdAt
-      expiresAt
+query Clips($id: ID!, $after: String) {
+  stream(id: $id) {
+    clips(page: { first: 20, after: $after }) {
+      nodes {
+        id
+        hash
+        title
+        playbackId
+        status
+        durationSeconds
+        sizeBytes
+        createdAt
+        expiresAt
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      totalCount
     }
-    totalCount
-    hasNextPage
   }
 }
 ```

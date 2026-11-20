@@ -252,3 +252,25 @@ func TestStreamPresenceAdvertisesChangesMadeOnAnotherReplica(t *testing.T) {
 		})
 	}
 }
+
+func TestStreamPresenceWaitsForNodeClusterIdentity(t *testing.T) {
+	sm := state.NewStreamStateManager()
+	t.Cleanup(sm.Shutdown)
+	registry := control.NewStreamRegistry(nil, presenceCluster, time.Minute)
+	installPresenceRegistry(t, registry)
+	messages := presenceLeader(t, sm, registry)
+	sm.SetNodeInfo(presenceNode, "https://eu.example", true, nil, nil, "", "", map[string]any{"DTSC": "dtsc://HOST:14200/$"})
+	sm.TouchNode(presenceNode, true)
+	sm.UpdateNodeStats(presenceStream, presenceNode, 0, 1, 0, 0, false)
+	if err := sm.UpdateStreamFromBuffer(presenceStream, presenceStream, presenceNode, presenceTenant, "FULL", ""); err != nil {
+		t.Fatal(err)
+	}
+	confirmPresenceBinding(t, registry)
+	select {
+	case message := <-messages:
+		t.Errorf("advertised a publisher before its node cluster identity: %v", message.GetStreamAd())
+	case <-time.After(100 * time.Millisecond):
+	}
+	sm.SetNodeConnectionInfo(context.Background(), presenceNode, "", presenceTenant, presenceCluster, nil)
+	assertPresentOriginAd(t, awaitPresenceAd(t, messages))
+}

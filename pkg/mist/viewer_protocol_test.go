@@ -4,7 +4,7 @@ import "testing"
 
 func TestViewerProtocolUsesConnectorEvidence(t *testing.T) {
 	for input, want := range map[string]string{
-		"HLS": "hls", "HTTP, HLS": "hls", "WebRTC,JSON": "webrtc", "WHEP": "whep", "CMAF": "cmaf", "DASH": "dash", "HSS": "smoothstreaming",
+		"SubRip": "webvtt", "HTTP, SubRip": "webvtt", "HLS": "hls", "HTTP, HLS": "hls", "WebRTC,JSON": "webrtc", "WHEP": "whep", "CMAF": "cmaf", "DASH": "dash", "HSS": "smoothstreaming",
 		"RTMP": "rtmp", "RTSP": "rtsp", "SRT": "srt", "DTSC": "dtsc", "DTSCQUIC": "dtscquic", "MP4": "mp4", "WEBM": "webm", "EBML": "mkv",
 		"Raw/WS": "raw_ws", "WSRaw": "raw_ws", "HTTPTS,TS": "ts", "AAC": "aac", "H264": "h264", "FLV": "flv", "MP3": "mp3", "OPUS": "opus",
 		"WebRTC/WS": "webrtc", "WebRTC/WS,JSON": "webrtc", "MP4/WS": "wsmp4", "EBML/WS": "mews_webm", "H264/WS": "h264_ws", "JSON/WS": "json_ws",

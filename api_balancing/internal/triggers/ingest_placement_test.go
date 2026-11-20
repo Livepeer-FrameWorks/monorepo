@@ -243,7 +243,7 @@ func TestIngestPlacementAdapterAdmitsFromObservedConnectorOnly(t *testing.T) {
 						return result, nil
 					}
 					result.Candidates = []placement.Candidate{{TenantID: "tenant", ClusterID: cell.ClusterIDs[0], NodeID: "node", OwnerTenantID: "tenant", AllowedVerbs: []placement.Verb{placement.Ingest, placement.Serve},
-						ObservedAt: observed, ExpiresAt: result.ExpiresAt, Capacity: placement.CapacityAvailable, BWAvailable: 100, BWLimit: 1000, RAMUsed: 1, RAMMax: 100, Presence: placement.Present, SourceFeasible: true}}
+						ObservedAt: observed, ExpiresAt: result.ExpiresAt, Capacity: placement.CapacityAvailable, BWAvailable: 900, BWLimit: 1000, RAMUsed: 1, RAMMax: 100, Presence: placement.Present, SourceFeasible: true}}
 					return result, nil
 				}}}
 			adapter := &IngestPlacementAdapter{Authority: viewerPlacementPairReader{pair: pair}, Gate: gate}

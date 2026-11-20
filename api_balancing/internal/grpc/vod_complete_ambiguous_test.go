@@ -33,6 +33,15 @@ func (e *smithyAPIErrorStub) ErrorFault() smithy.ErrorFault { return e.fault }
 // reconciliation, NOT an immediate 'failed'. With Exists=true the RPC converges idempotently to
 // 'processing' by running ONLY the durable transition; it never re-completes and never marks failed.
 func TestCompleteVodUpload_AmbiguousErrorWithObjectConvergesToProcessing(t *testing.T) {
+	testCompleteVodUploadConverges(t, "", "")
+}
+
+func TestCompleteVodUploadPolicyChangeKeepsTheFirstContract(t *testing.T) {
+	testCompleteVodUploadConverges(t, `[{"process":"AV","codec":"AAC","bitrate":128000}]`, `[{"process":"AV","codec":"AAC","bitrate":192000}]`)
+}
+
+func testCompleteVodUploadConverges(t *testing.T, savedPolicy, retryPolicy string) {
+	t.Helper()
 	s3 := &completeVodS3Stub{
 		completeErr:  errors.New("operation error S3: CompleteMultipartUpload, read tcp 10.0.0.1: connection reset by peer"),
 		existsResult: true,
@@ -49,7 +58,9 @@ func TestCompleteVodUpload_AmbiguousErrorWithObjectConvergesToProcessing(t *test
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "size_bytes", "user_id", "status"}).
 			AddRow("hash-1", "vod/t1/hash-1/video.mp4", int64(2048), "user-1", "completing"))
 	// An already-'completing' retry loads the persisted contract and uses ITS parts/upload-id.
-	expectVodCompletionContractLoad(mock, "hash-1", `{"s3_key":"vod/t1/hash-1/video.mp4","upload_id":"up-1","parts":[{"part_number":1,"etag":"et-1"}]}`)
+	mock.ExpectQuery(`SELECT COALESCE\(v.vod_completion_descriptor::text`).WithArgs("hash-1").
+		WillReturnRows(sqlmock.NewRows([]string{"vod_completion_descriptor", "processes_json", "backend_id"}).
+			AddRow(`{"s3_key":"vod/t1/hash-1/video.mp4","upload_id":"up-1","parts":[{"part_number":1,"etag":"et-1"}]}`, savedPolicy, testStubBackendID))
 	// Ambiguous S3 error + Exists=true -> skip re-completion, run 'completing' -> 'processing' + job + event.
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn\.artifacts AS a\s+SET status = 'processing'`).
@@ -59,7 +70,12 @@ func TestCompleteVodUpload_AmbiguousErrorWithObjectConvergesToProcessing(t *test
 		WithArgs("hash-1", "process").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT job_id\s+FROM foghorn\.processing_jobs`).
 		WithArgs("hash-1", "process").WillReturnError(sql.ErrNoRows)
+	var expectedPolicy any
+	if savedPolicy != "" {
+		expectedPolicy = savedPolicy
+	}
 	mock.ExpectExec(`INSERT INTO foghorn\.processing_jobs`).
+		WithArgs(sqlmock.AnyArg(), mockTenantUUID, "hash-1", "process", nil, expectedPolicy, nil, nil, nil).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'queued'`).
 		WithArgs("hash-1", mockTenantUUID).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -74,19 +90,20 @@ func TestCompleteVodUpload_AmbiguousErrorWithObjectConvergesToProcessing(t *test
 			"filename", "title", "description",
 			"duration_ms", "resolution", "video_codec", "audio_codec", "bitrate_kbps",
 			"s3_upload_id", "s3_key",
-		}).AddRow(
+			"original_size_bytes"}).AddRow(
 			"hash-1", "hash-1", "processing", int64(2048),
 			"s3", "s3://bucket/vod/t1/hash-1/video.mp4", "",
 			time.Now(), time.Now(), nil,
 			"video.mp4", "Video", "",
 			nil, nil, nil, nil, nil,
-			"up-1", "vod/t1/hash-1/video.mp4",
+			"up-1", "vod/t1/hash-1/video.mp4", nil,
 		))
 
 	resp, err := srv.CompleteVodUpload(context.Background(), &sharedpb.CompleteVodUploadRequest{
-		TenantId: mockTenantUUID,
-		UploadId: "up-1",
-		Parts:    []*sharedpb.VodCompletedPart{{PartNumber: 1, Etag: "et-1"}},
+		TenantId:      mockTenantUUID,
+		UploadId:      "up-1",
+		Parts:         []*sharedpb.VodCompletedPart{{PartNumber: 1, Etag: "et-1"}},
+		ProcessesJson: retryPolicy,
 	})
 	if err != nil {
 		t.Fatalf("ambiguous+present should converge, got error: %v", err)

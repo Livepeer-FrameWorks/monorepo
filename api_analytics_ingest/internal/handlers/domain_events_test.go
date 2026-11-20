@@ -143,7 +143,6 @@ const streamIDForTest = "5b0c1f0e-7a55-4c55-9d7c-2f3f7c0f0a11"
 // never reach the tenant audit table.
 var notAuditedInternalTypes = map[string]string{
 	"artifact.node_copy_changed": "names the storage node holding a transient copy",
-	"recording.chapter_ready":    "a processing step of a recording, not a tenant action or a tenant-visible state change",
 }
 
 // TestInternalDomainEventsReachTheAuditTableOnlyWhenAudited decides every
@@ -225,5 +224,43 @@ func TestArtifactStateVersionOrdersEventsOfOneProducer(t *testing.T) {
 	}
 	if got := artifactStateVersion(uuid.NewString(), 0); got != 0 {
 		t.Fatalf("a non-v7 event ID has no order, got %s", strconv.FormatUint(got, 10))
+	}
+}
+
+func TestStreamIntegrationPublicEventsReachAudit(t *testing.T) {
+	for _, name := range []string{"stream.ended", "stream.ingest_disconnected", "recording.chapter_ready"} {
+		t.Run(name, func(t *testing.T) {
+			spec, ok := events.Lookup(name)
+			if !ok || !spec.Public() {
+				t.Fatalf("missing public contract %s", name)
+			}
+			conn := newFakeClickhouseConn()
+			h := NewAnalyticsHandler(conn, logging.NewLogger(), domainEventMetrics())
+			ev := newDomainEvent(t, uuid.NewString(), streamIDForTest, spec.NewMessage())
+			if err := h.HandleDomainEventMessage(t.Context(), domainEventMessage(t, "domain.events", ev)); err != nil {
+				t.Fatal(err)
+			}
+			if batch := conn.batches["api_events"]; batch == nil || len(batch.rows) != 1 {
+				t.Fatalf("%s missing audit row", name)
+			}
+		})
+	}
+}
+
+func TestLegacyInternalChapterReadyIsIgnoredDuringConsumerFirstRollout(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	h := NewAnalyticsHandler(conn, logging.NewLogger(), domainEventMetrics())
+	ev := newDomainEvent(t, uuid.NewString(), "recording", &publicv1.RecordingChapterReady{ChapterId: "chapter"})
+	message := domainEventMessage(t, "domain.events", ev)
+	message.Headers[events.HeaderVisibility] = events.VisibilityInternal
+	// Both valid old wire data and an opaque retiring payload are ignored.
+	for _, payload := range [][]byte{message.Value, {0xff}} {
+		message.Value = payload
+		if err := h.HandleDomainEventMessage(t.Context(), message); err != nil {
+			t.Fatalf("consumer-first upgrade rejects the old internal chapter event: %v", err)
+		}
+	}
+	if conn.batches["api_events"] != nil {
+		t.Fatal("legacy internal chapter event became a tenant audit event")
 	}
 }

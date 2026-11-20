@@ -17,6 +17,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/vodupload"
 	"github.com/google/uuid"
 
 	"github.com/sirupsen/logrus"
@@ -38,12 +39,10 @@ func unsafeWrapperExt(sourceURL string) string {
 		return ""
 	}
 	ext := strings.ToLower(filepath.Ext(u.Path))
-	switch ext {
-	case ".avi", ".flv", ".m4v":
+	if vodupload.NeedsStaging(ext) {
 		return ext
-	default:
-		return ""
 	}
+	return ""
 }
 
 func (h *ProcessingJobHandler) buildLocalProcessingSourceURL(req *ipcpb.ProcessingJobRequest) string {

@@ -35,7 +35,7 @@ func (f *fakeControlStream) Send(msg *ipcpb.ControlMessage) error {
 func setupLocalRegistry(t *testing.T, nodeID string) *fakeControlStream {
 	t.Helper()
 	stream := &fakeControlStream{}
-	cleanup := control.SetupTestRegistry(nodeID, stream)
+	cleanup := control.SetupTestRegistry(nodeID, stream, control.ClaimedPublisherStopProtocolMin)
 	t.Cleanup(cleanup)
 	return stream
 }
@@ -102,6 +102,7 @@ func TestForwardCommand_AllCommandTypes(t *testing.T) {
 		{"dvr_delete", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_DvrDelete{DvrDelete: &ipcpb.DVRDeleteRequest{}}}, "dvr_delete"},
 		{"vod_delete", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_VodDelete{VodDelete: &ipcpb.VodDeleteRequest{}}}, "vod_delete"},
 		{"dtsh_sync", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_DtshSync{DtshSync: &ipcpb.DtshSyncRequest{}}}, "dtsh_sync_request"},
+		{"stop_claimed_sessions", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_StopClaimedSessions{StopClaimedSessions: &ipcpb.StopSessionsRequest{TenantId: "tenant", StreamNames: []string{"stream"}, Targets: []*ipcpb.StopSessionsTarget{{InternalName: "stream", SourceGeneration: "10000000-0000-0000-0000-000000000001", ConnectorPid: 123, FenceAdmission: true}}}}}, "stop_sessions_request"},
 		{"stop_sessions", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_StopSessions{StopSessions: &ipcpb.StopSessionsRequest{TenantId: "tenant", StreamNames: []string{"stream"}}}}, "stop_sessions_request"},
 		{"invalidate_sessions", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_InvalidateSessions{InvalidateSessions: &ipcpb.InvalidateSessionsRequest{}}}, "invalidate_sessions_request"},
 		{"deactivate_push_targets", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_DeactivatePushTargets{DeactivatePushTargets: &ipcpb.DeactivatePushTargets{}}}, "deactivate_push_targets"},

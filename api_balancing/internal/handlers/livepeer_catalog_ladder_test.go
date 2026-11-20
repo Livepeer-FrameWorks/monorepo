@@ -1,40 +1,79 @@
 package handlers
 
 import (
+	"encoding/json"
+	"go.yaml.in/yaml/v3"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/transcode/contract"
 )
 
-// catalogProcessesJSON returns the raw process JSON anchored under key in the
-// billing catalog. The anchored block holds the one-line JSON array that every
-// tier aliases, so reading it avoids a YAML dependency in this module.
-func catalogProcessesJSON(t *testing.T, key string) string {
+// catalogProcessesJSON composes the named ladder into the catalog's default
+// tier policy, matching Purser's bootstrap output consumed by Foghorn.
+func catalogProcessesJSON(t *testing.T, key string, choice ...string) string {
 	t.Helper()
-	path := filepath.Join("..", "..", "..", "api_billing", "internal", "bootstrap", "catalog", "billing_tiers.yaml")
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "api_billing", "internal", "bootstrap", "catalog", "billing_tiers.yaml"))
 	if err != nil {
-		t.Fatalf("read catalog: %v", err)
+		t.Fatal(err)
 	}
-	lines := strings.Split(string(raw), "\n")
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, key+": &") && strings.HasSuffix(trimmed, "|") && i+1 < len(lines) {
-			return strings.TrimSpace(lines[i+1])
+	var catalog struct {
+		Ladders []struct {
+			Name       string           `yaml:"name"`
+			Renditions []map[string]any `yaml:"renditions"`
+		} `yaml:"transcode_ladders"`
+		Tiers []struct {
+			Name    string `yaml:"tier_name"`
+			Live    string `yaml:"processes_live"`
+			VOD     string `yaml:"processes_vod"`
+			Default string `yaml:"default_transcode_ladder"`
+		} `yaml:"tiers"`
+	}
+	if err := yaml.Unmarshal(raw, &catalog); err != nil {
+		t.Fatal(err)
+	}
+	for _, tier := range catalog.Tiers {
+		if tier.Name != "payg" {
+			continue
+		}
+		name := tier.Default
+		if len(choice) > 0 {
+			name = choice[0]
+		}
+		for _, ladder := range catalog.Ladders {
+			if ladder.Name != name {
+				continue
+			}
+			raw, err := json.Marshal(ladder.Renditions)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var renditions []contract.RenditionSpec
+			if parseErr := json.Unmarshal(raw, &renditions); parseErr != nil {
+				t.Fatal(parseErr)
+			}
+			policy := tier.Live
+			if key == "processes_vod" {
+				policy = tier.VOD
+			}
+			composed, err := mist.SetTranscodeLadder(policy, renditions)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return composed
 		}
 	}
-	t.Fatalf("catalog key %q with anchored block not found", key)
+	t.Fatalf("catalog policy %s not found", key)
 	return ""
 }
 
 // The catalog ABR ladder must yield exactly the renditions at or below the
 // source for common sources: Foghorn's Livepeer auth spec (normalized
-// profiles) and the Helmsman completeness ladder (requested heights) are both
-// derived from the same config and the same area inhibitor rule as Mist.
+// profiles) and the Helmsman completeness ladder (short sides) are both
+// derived from the same config and the same short-side inhibitor rule as Mist.
 func TestCatalogABRLadderPerSource(t *testing.T) {
 	sources := []struct {
 		name   string
@@ -44,10 +83,15 @@ func TestCatalogABRLadderPerSource(t *testing.T) {
 		{"1080p30", mist.SourceMediaInfo{Width: 1920, Height: 1080, FPS: 30}, []int{360, 480, 720, 1080}},
 		{"720p30", mist.SourceMediaInfo{Width: 1280, Height: 720, FPS: 30}, []int{360, 480, 720}},
 		{"480p30", mist.SourceMediaInfo{Width: 854, Height: 480, FPS: 30}, []int{360, 480}},
-		// Portrait 720x1280 has the area of 720p: the 1080p rung is an upscale.
-		// The auth spec maps each rung onto the portrait axis, so only the
-		// requested ladder heights are compared for it.
 		{"portrait 720x1280", mist.SourceMediaInfo{Width: 720, Height: 1280, FPS: 30}, []int{360, 480, 720}},
+		{"1440p", mist.SourceMediaInfo{Width: 2560, Height: 1440}, []int{360, 480, 720, 1080}},
+		{"2160p", mist.SourceMediaInfo{Width: 3840, Height: 2160}, []int{360, 480, 720, 1080}},
+		{"1920x1200", mist.SourceMediaInfo{Width: 1920, Height: 1200}, []int{360, 480, 720, 1080}},
+		{"960x540", mist.SourceMediaInfo{Width: 960, Height: 540}, []int{360, 480}},
+		{"square", mist.SourceMediaInfo{Width: 1080, Height: 1080}, []int{360, 480, 720, 1080}},
+		{"4:3", mist.SourceMediaInfo{Width: 1440, Height: 1080}, []int{360, 480, 720, 1080}},
+		{"ultrawide", mist.SourceMediaInfo{Width: 3840, Height: 1080}, []int{360, 480, 720, 1080}},
+		{"portrait 1080x1920", mist.SourceMediaInfo{Width: 1080, Height: 1920}, []int{360, 480, 720, 1080}},
 	}
 	// Foghorn stamps the workload contract before the config reaches Mist or
 	// the auth spec, so the test stamps it the same way.
@@ -72,17 +116,48 @@ func TestCatalogABRLadderPerSource(t *testing.T) {
 				if !ok {
 					t.Fatalf("%s/%s: normalized profile %v has no int height", key, tc.name, p)
 				}
-				got = append(got, h)
+				w, _ := p["width"].(int)
+				got = append(got, min(w, h))
 			}
-			if tc.source.Width >= tc.source.Height && !reflect.DeepEqual(got, tc.want) {
+			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("%s/%s: auth profile heights = %v, want %v", key, tc.name, got, tc.want)
 			}
-			heights, err := mist.RequestedRenditionHeights(processesJSON, tc.source)
-			if err != nil {
-				t.Fatalf("%s/%s: requested heights: %v", key, tc.name, err)
+			for _, policy := range []string{processesJSON, mist.ReplaceLivepeerWithLocal(processesJSON)} {
+				expected, err := mist.ExpectedVideoRenditions(policy, tc.source)
+				if err != nil {
+					t.Fatalf("%s/%s: %v", key, tc.name, err)
+				}
+				if len(expected) != len(tc.want) {
+					t.Fatalf("%s/%s: %d renditions, want %d", key, tc.name, len(expected), len(tc.want))
+				}
+				for i, r := range expected {
+					if !mist.RenditionShortSideMatches(r.Width, r.Height, tc.want[i]) {
+						t.Errorf("%s/%s: %dx%d does not match rung %d", key, tc.name, r.Width, r.Height, tc.want[i])
+					}
+				}
 			}
-			if !reflect.DeepEqual(heights, tc.want) {
-				t.Errorf("%s/%s: requested heights = %v, want %v", key, tc.name, heights, tc.want)
+		}
+	}
+}
+
+func TestCatalogLargeLadders(t *testing.T) {
+	for _, ladder := range []string{"qhd", "uhd"} {
+		for _, source := range []mist.SourceMediaInfo{{Width: 2560, Height: 1440}, {Width: 3840, Height: 2160}, {Width: 1440, Height: 2560}, {Width: 2160, Height: 3840}} {
+			for _, lifecycle := range []string{"processes_live", "processes_vod"} {
+				policy := catalogProcessesJSON(t, lifecycle, ladder)
+				for _, path := range []string{policy, mist.ReplaceLivepeerWithLocal(policy)} {
+					expected, err := mist.ExpectedVideoRenditions(path, source)
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := 5
+					if ladder == "uhd" && source.Width*source.Height >= 3840*2160 {
+						want = 6
+					}
+					if len(expected) != want {
+						t.Fatalf("%s/%dx%d: %v, want %d rungs", ladder, source.Width, source.Height, expected, want)
+					}
+				}
 			}
 		}
 	}

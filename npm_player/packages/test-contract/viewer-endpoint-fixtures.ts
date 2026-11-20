@@ -24,7 +24,7 @@ export function viewerReply(protocol: "HLS" | "DASH", node = protocol.toLowerCas
 }
 
 const SUPPORTED_SERVER_INFO = {
-  data: { serverInfo: { version: "v0.3.11", features: ["playback", "viewer-protocol-selection"] } },
+  data: { serverInfo: { version: "v0.3.16", features: ["playback", "viewer-protocol-selection"] } },
 };
 
 /**

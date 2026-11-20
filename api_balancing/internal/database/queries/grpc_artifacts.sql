@@ -236,7 +236,7 @@ LIMIT 1;
 
 -- name: GetExistingVodUpload :one
 SELECT m.s3_upload_id, m.s3_key, m.total_parts, m.upload_expires_at,
-       COALESCE(a.backend_id, '')::text AS backend_id
+       COALESCE(a.backend_id, '')::text AS backend_id, m.keep_original
 FROM foghorn.artifacts a
 JOIN foghorn.vod_metadata m ON m.artifact_hash = a.artifact_hash
 WHERE a.artifact_hash = sqlc.arg(artifact_hash)
@@ -296,12 +296,12 @@ WHERE a.artifact_hash = sqlc.arg(artifact_hash)
 -- name: InsertVodMultipartMetadata :exec
 INSERT INTO foghorn.vod_metadata (
     artifact_hash, filename, title, description, content_type,
-    s3_upload_id, s3_key, upload_expires_at, total_parts, created_at, updated_at
+    s3_upload_id, s3_key, upload_expires_at, total_parts, keep_original, created_at, updated_at
 )
 VALUES (
     sqlc.arg(artifact_hash), sqlc.arg(filename), sqlc.arg(title), sqlc.arg(description),
     sqlc.arg(content_type), sqlc.arg(s3_upload_id), sqlc.arg(s3_key),
-    sqlc.arg(upload_expires_at), sqlc.arg(total_parts), NOW(), NOW()
+    sqlc.arg(upload_expires_at), sqlc.arg(total_parts), sqlc.arg(keep_original), NOW(), NOW()
 );
 
 -- name: GetVodUploadStatusRow :one
@@ -422,7 +422,7 @@ SELECT a.status, COALESCE(v.s3_key, '')::text AS s3_key, a.s3_url, a.format,
        a.size_bytes, a.retention_until, a.user_id, a.storage_cluster_id,
        a.origin_cluster_id, COALESCE(a.origin_type, '')::text AS origin_type,
        a.active_object_key, a.active_dtsh_key, a.sync_object_key,
-       a.durable_backend_local, a.backend_id
+       a.durable_backend_local, a.backend_id, v.original_s3_key
 FROM foghorn.artifacts a
 LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
 WHERE a.artifact_hash = sqlc.arg(artifact_hash)
@@ -455,7 +455,7 @@ SELECT a.artifact_hash AS id, a.artifact_hash, a.status, a.size_bytes,
        COALESCE(v.description, '')::text AS description,
        v.duration_ms, v.resolution, v.video_codec, v.audio_codec, v.bitrate_kbps,
        COALESCE(v.s3_upload_id, '')::text AS s3_upload_id,
-       COALESCE(v.s3_key, '')::text AS s3_key
+       COALESCE(v.s3_key, '')::text AS s3_key, v.original_size_bytes
 FROM foghorn.artifacts a
 LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
 WHERE a.artifact_hash = sqlc.arg(artifact_hash)
@@ -493,8 +493,9 @@ WHERE node_id = sqlc.arg(node_id)
 ORDER BY component;
 
 -- name: SumTenantActiveArtifactBytes :one
-SELECT COALESCE(SUM(size_bytes), 0)::bigint AS total_bytes
-FROM foghorn.artifacts
+SELECT COALESCE(SUM(COALESCE(a.size_bytes, 0) + COALESCE(v.original_size_bytes, 0)), 0)::bigint AS total_bytes
+FROM foghorn.artifacts a
+LEFT JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid
   AND federated_pointer = false
   AND status NOT IN ('failed', 'expired', 'deleted', 'aborted');

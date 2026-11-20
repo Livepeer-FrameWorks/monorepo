@@ -112,6 +112,9 @@ func (s *FoghornGRPCServer) ListDVRChapters(ctx context.Context, req *foghorncon
 	if err := s.assertChapterTenant(ctx, req.GetDvrArtifactId(), req.GetTenantId()); err != nil {
 		return nil, err
 	}
+	if req.GetPagination() != nil {
+		return s.listSavedDVRChapters(ctx, req)
+	}
 	pageSize := int(req.GetPageSize())
 	if pageSize <= 0 {
 		pageSize = 200

@@ -102,6 +102,10 @@ func (r *Resolver) DoStorageArtifactsConnection(ctx context.Context, input *mode
 		req.Limit = 25
 		limit = 25
 	}
+	if req.GetLimit() > 100 {
+		req.Limit = 100
+		limit = 100
+	}
 	if req.GetOffset() < 0 {
 		req.Offset = 0
 		offset = 0
@@ -198,8 +202,8 @@ func (r *Resolver) storageArtifactFromProto(ctx context.Context, artifact *commo
 	var sizeBytes *float64
 	var storageCost *model.StorageCostProjection
 	if artifact.SizeBytes != nil {
-		size := artifact.GetSizeBytes()
-		value := float64(size)
+		size := artifact.GetSizeBytes() + artifact.GetOriginalSizeBytes()
+		value := float64(artifact.GetSizeBytes())
 		sizeBytes = &value
 		projected, err := r.ProjectStorageCostForCaller(ctx, size)
 		if err != nil {
@@ -238,25 +242,32 @@ func (r *Resolver) storageArtifactFromProto(ctx context.Context, artifact *commo
 		durationSeconds = &secs
 	}
 
+	var originalFile *model.VodOriginalFile
+	if artifact.GetOriginalSizeBytes() > 0 {
+		originalFile = &model.VodOriginalFile{SizeBytes: float64(artifact.GetOriginalSizeBytes())}
+	}
 	return &model.StorageArtifact{
-		Key:              fmt.Sprintf("%s:%s", strings.ToLower(kind.String()), hash),
-		Kind:             kind,
-		ID:               artifact.GetId(),
-		Hash:             hash,
-		PlaybackID:       artifact.PlaybackId,
-		StreamID:         artifact.StreamId,
-		StreamTitle:      artifact.GetStreamTitle(),
-		Title:            artifact.GetTitle(),
-		SecondaryLabel:   artifact.GetSecondaryLabel(),
-		Description:      artifact.Description,
-		ErrorMessage:     artifact.ErrorMessage,
-		SizeBytes:        sizeBytes,
-		Status:           artifact.GetStatus(),
-		StorageLocation:  artifact.StorageLocation,
-		StorageClusterID: storageClusterID,
-		SyncStatus:       artifact.SyncStatus,
-		IsSynced:         artifact.IsSynced,
-		IsFinalized:      artifact.IsFinalized,
+		OriginalFile:      originalFile,
+		OriginType:        artifact.OriginType,
+		ParentRecordingID: artifact.ParentRecordingId,
+		Key:               fmt.Sprintf("%s:%s", strings.ToLower(kind.String()), hash),
+		Kind:              kind,
+		ID:                artifact.GetId(),
+		Hash:              hash,
+		PlaybackID:        artifact.PlaybackId,
+		StreamID:          artifact.StreamId,
+		StreamTitle:       artifact.GetStreamTitle(),
+		Title:             artifact.GetTitle(),
+		SecondaryLabel:    artifact.GetSecondaryLabel(),
+		Description:       artifact.Description,
+		ErrorMessage:      artifact.ErrorMessage,
+		SizeBytes:         sizeBytes,
+		Status:            artifact.GetStatus(),
+		StorageLocation:   artifact.StorageLocation,
+		StorageClusterID:  storageClusterID,
+		SyncStatus:        artifact.SyncStatus,
+		IsSynced:          artifact.IsSynced,
+		IsFinalized:       artifact.IsFinalized,
 		// hasLocalCopy is the present-full-local-node-copy overlay (origin or cache);
 		// null = placement overlay unavailable/unknown.
 		HasLocalCopy:       artifact.HasLocalCopy,

@@ -22,7 +22,8 @@
                 "subject": "streams/5b0e6a2c",
                 "data": {
                   "__typename": "StreamLive",
-                  "streamId": "5b0e6a2c"
+                  "streamId": "5b0e6a2c",
+                  "sessionId": "session-fixture-1"
                 }
               }
             }
@@ -75,7 +76,8 @@
                 "subject": "streams/5b0e6a2c",
                 "data": {
                   "__typename": "StreamLive",
-                  "streamId": "5b0e6a2c"
+                  "streamId": "5b0e6a2c",
+                  "sessionId": "session-fixture-1"
                 }
               }
             }
@@ -107,7 +109,8 @@
                 "subject": "streams/5b0e6a2c",
                 "data": {
                   "__typename": "StreamLive",
-                  "streamId": "5b0e6a2c"
+                  "streamId": "5b0e6a2c",
+                  "sessionId": "session-fixture-1"
                 }
               }
             }
@@ -170,7 +173,8 @@
                 "subject": "streams/5b0e6a2c",
                 "data": {
                   "__typename": "StreamLive",
-                  "streamId": "5b0e6a2c"
+                  "streamId": "5b0e6a2c",
+                  "sessionId": "session-fixture-1"
                 }
               }
             }
@@ -189,7 +193,8 @@
                 "subject": "streams/5b0e6a2c",
                 "data": {
                   "__typename": "StreamIdle",
-                  "streamId": "5b0e6a2c"
+                  "streamId": "5b0e6a2c",
+                  "sessionId": "session-fixture-1"
                 }
               }
             }
@@ -245,7 +250,8 @@
                 "subject": "streams/5b0e6a2c",
                 "data": {
                   "__typename": "StreamLive",
-                  "streamId": "5b0e6a2c"
+                  "streamId": "5b0e6a2c",
+                  "sessionId": "session-fixture-1"
                 }
               }
             }
@@ -274,7 +280,8 @@
                 "subject": "streams/5b0e6a2c",
                 "data": {
                   "__typename": "StreamLive",
-                  "streamId": "5b0e6a2c"
+                  "streamId": "5b0e6a2c",
+                  "sessionId": "session-fixture-1"
                 }
               }
             }
@@ -293,7 +300,8 @@
                 "subject": "streams/5b0e6a2c",
                 "data": {
                   "__typename": "StreamLive",
-                  "streamId": "5b0e6a2c"
+                  "streamId": "5b0e6a2c",
+                  "sessionId": "session-fixture-1"
                 }
               }
             }
@@ -312,7 +320,8 @@
                 "subject": "streams/5b0e6a2c",
                 "data": {
                   "__typename": "StreamLive",
-                  "streamId": "5b0e6a2c"
+                  "streamId": "5b0e6a2c",
+                  "sessionId": "session-fixture-1"
                 }
               }
             }
@@ -331,7 +340,8 @@
                 "subject": "streams/5b0e6a2c",
                 "data": {
                   "__typename": "StreamLive",
-                  "streamId": "5b0e6a2c"
+                  "streamId": "5b0e6a2c",
+                  "sessionId": "session-fixture-1"
                 }
               }
             }
@@ -350,7 +360,8 @@
                 "subject": "streams/5b0e6a2c",
                 "data": {
                   "__typename": "StreamLive",
-                  "streamId": "5b0e6a2c"
+                  "streamId": "5b0e6a2c",
+                  "sessionId": "session-fixture-1"
                 }
               }
             }
@@ -369,7 +380,8 @@
                 "subject": "streams/5b0e6a2c",
                 "data": {
                   "__typename": "StreamLive",
-                  "streamId": "5b0e6a2c"
+                  "streamId": "5b0e6a2c",
+                  "sessionId": "session-fixture-1"
                 }
               }
             }

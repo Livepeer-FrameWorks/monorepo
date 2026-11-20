@@ -65,9 +65,19 @@ const LivepeerVODMinSpeed = 0.5
 // SourceMediaInfo is the source video track metadata used to complete
 // height-only or width-only Livepeer target_profiles.
 type SourceMediaInfo struct {
-	Width  int
-	Height int
-	FPS    float64
+	Width    int
+	Height   int
+	FPS      float64
+	Rotation int
+	Mirror   bool
+}
+
+// DisplaySize returns the dimensions after applying the source display matrix.
+func (s SourceMediaInfo) DisplaySize() (int, int) {
+	if s.Rotation%180 == 90 || s.Rotation%180 == -90 {
+		return s.Height, s.Width
+	}
+	return s.Width, s.Height
 }
 
 // LivepeerJobSpec is the token-bound, Foghorn-authoritative transcode policy.
@@ -283,7 +293,9 @@ func SoftwareEncodingOnly(processesJSON string) string {
 }
 
 // MaskLivepeerSourceForVOD hides the source video track from processing output
-// recordings while keeping it readable by Mist processes. The mask is attached
+// recordings while keeping it readable by Mist processes. Source codecs and GOPs
+// are not guaranteed to be compatible with the delivery ladder; original upload
+// retention preserves source quality separately. The mask is attached
 // to Livepeer process entries only; if a gateway is unavailable,
 // ReplaceLivepeerWithLocal inherits it into the generated MistProcAV entries.
 func MaskLivepeerSourceForVOD(processesJSON string) string {
@@ -668,84 +680,11 @@ func LivepeerProfilesFromProcessesJSON(processesJSON string, source SourceMediaI
 	return nil
 }
 
-// RequestedRenditionHeights returns the requested rendition-ladder heights across
-// EVERY Livepeer process in the config as the validation intent, deliberately
-// decoupled from the concrete pixel dimensions MistProcLivepeer/MistProcAV
-// resolve. The raw requested height is returned verbatim (a profile asking for
-// height 360 yields 360, never a normalized/even-rounded derivative), so
-// completeness validation can never drift as Mist's aspect math evolves. A
-// width-only profile derives its height from the source aspect; a profile with
-// neither dimension is the source passthrough height. Resolution-bound
-// video=<WxH inhibitors are evaluated at the process and profile level; other
-// selector forms are not evaluated by this validation helper.
-//
-// It returns an error on a MALFORMED config (unparseable JSON, or a Livepeer
-// process with a present-but-invalid target_profiles block) so the caller can
-// fail closed, rather than silently treating it as "no renditions requested".
-// An empty result with a nil error means there is legitimately nothing to
-// produce (no Livepeer process, or every profile inhibited by source dims).
-func RequestedRenditionHeights(processesJSON string, source SourceMediaInfo) ([]int, error) {
-	var processes []map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
-		return nil, fmt.Errorf("parse process config: %w", err)
-	}
-	var out []int
-	for _, proc := range processes {
-		var processName string
-		if err := json.Unmarshal(proc["process"], &processName); err != nil || processName != "Livepeer" {
-			continue
-		}
-		raw, ok := proc["target_profiles"]
-		if !ok {
-			// A Livepeer process with no target_profiles requests no transcode —
-			// not a meaningful config. Treat it as malformed so the validator
-			// fails closed rather than concluding "nothing to prove".
-			return nil, fmt.Errorf("missing target_profiles on Livepeer process")
-		}
-		var profiles []LivepeerJSONProfile
-		if err := json.Unmarshal(raw, &profiles); err != nil {
-			return nil, fmt.Errorf("malformed target_profiles in Livepeer process: %w", err)
-		}
-		if len(profiles) == 0 {
-			// An explicitly empty target_profiles requests no transcode — as
-			// meaningless as a missing field. Fail closed; this is distinct from
-			// a non-empty set that all gets inhibited by source dims below.
-			return nil, fmt.Errorf("empty target_profiles on Livepeer process")
-		}
-		if processTrackInhibited(proc, source) {
-			continue
-		}
-		for _, p := range profiles {
-			if shouldInhibitLivepeerProfile(p, source) {
-				continue
-			}
-			out = append(out, requestedRenditionHeight(p, source))
-		}
-	}
-	return out, nil
-}
-
-// requestedRenditionHeight resolves one profile's ladder-intent height: the raw
-// requested height when set, else derived from a width-only request via the
-// source aspect, else the source passthrough height. Returns 0 when it cannot be
-// determined (width-only with unknown source dims), which the validator treats as
-// fail-closed.
-func requestedRenditionHeight(p LivepeerJSONProfile, source SourceMediaInfo) int {
-	if height, ok := livepeerProfileInt(p, "height"); ok && height > 0 {
-		return height
-	}
-	if width, ok := livepeerProfileInt(p, "width"); ok && width > 0 {
-		if source.Width > 0 && source.Height > 0 {
-			return evenScaledDimension(source.Height, width, source.Width)
-		}
-		return 0
-	}
-	return source.Height
-}
-
 // NormalizeLivepeerProfiles mirrors MistProcLivepeer's target_profiles defaults
 // before it sets the Livepeer-Transcode-Configuration header.
 func NormalizeLivepeerProfiles(profiles []LivepeerJSONProfile, source SourceMediaInfo) []LivepeerJSONProfile {
+	source.Width, source.Height = source.DisplaySize()
+	source.Rotation = 0
 	if len(profiles) == 0 {
 		return nil
 	}
@@ -966,7 +905,7 @@ func avCodecKind(value interface{}) string {
 		return ""
 	}
 	switch strings.ToLower(codec) {
-	case "aac", "opus", "mp3", "mp2", "ac3", "eac3", "flac", "wav", "pcm", "vorbis":
+	case "aac", "opus", "mp3", "mp2", "ac3", "eac3", "e-ac3", "eac-3", "flac", "wav", "pcm", "vorbis":
 		return "audio"
 	case "h264", "h265", "hevc", "vp8", "vp9", "av1", "mpeg2":
 		return "video"
@@ -1085,6 +1024,9 @@ func shouldInhibitLivepeerSelector(raw string, source SourceMediaInfo) bool {
 	maxHeight, errH := strconv.Atoi(parts[1])
 	if errW != nil || errH != nil {
 		return false
+	}
+	if maxWidth == 0 && maxHeight > 0 {
+		return min(source.Width, source.Height) < maxHeight
 	}
 	// Area comparison matches Mist's "video=<WxH" selector, so Foghorn's
 	// expected ladder and the rendition set Mist actually produces agree for

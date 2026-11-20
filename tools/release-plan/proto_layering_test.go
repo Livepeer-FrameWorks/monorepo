@@ -14,17 +14,19 @@ import (
 // own. Keeping these importable is what lets service protos share types without
 // pulling each other's full surface into the release-hash / compile closure.
 var valueProtos = map[string]bool{
-	"common":            true,
-	"shared":            true,
-	"cluster_peer":      true,
-	"tenant_limits":     true,
-	"metering_contract": true,
-	"media_authority":   true,
-	"media_placement":   true,
-	"x402":              true,
-	"foghorn_control":   true,
-	"events/envelope":   true,
-	"events/options":    true,
+	"common":               true,
+	"capacity_values":      true,
+	"quartermaster_values": true,
+	"shared":               true,
+	"cluster_peer":         true,
+	"tenant_limits":        true,
+	"metering_contract":    true,
+	"media_authority":      true,
+	"media_placement":      true,
+	"x402":                 true,
+	"foghorn_control":      true,
+	"events/envelope":      true,
+	"events/options":       true,
 }
 
 // allowedServiceEdges are the only permitted imports of one Layer-2 service /

@@ -31,6 +31,10 @@ func (r *Resolver) DoCreateVodUpload(ctx context.Context, input model.CreateVodU
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
 		return nil, err
 	}
+	if err := vodupload.ValidateFilename(input.Filename); err != nil {
+		return &model.ValidationError{Message: err.Error(), Field: strPtr("filename")}, nil //nolint:nilerr // Validation is represented by the GraphQL result union.
+	}
+
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo VOD upload session")
 		return demo.GenerateVodUploadSession(input.Filename, input.SizeBytes), nil
@@ -51,6 +55,10 @@ func (r *Resolver) DoCreateVodUpload(ctx context.Context, input model.CreateVodU
 		Filename:  input.Filename,
 		SizeBytes: int64(input.SizeBytes),
 	}
+	if input.TranscodeLadder != nil {
+		req.TranscodeLadder = *input.TranscodeLadder
+	}
+	req.KeepOriginal = input.KeepOriginal
 	if input.ContentType != nil {
 		req.ContentType = input.ContentType
 	}
@@ -71,6 +79,9 @@ func (r *Resolver) DoCreateVodUpload(ctx context.Context, input model.CreateVodU
 
 		if st, ok := status.FromError(err); ok {
 			switch st.Code() {
+			case codes.InvalidArgument:
+				return handled(&model.ValidationError{Message: st.Message(), Field: vodValidationField(st.Message(), "filename")})
+
 			case codes.FailedPrecondition:
 				if strings.Contains(st.Message(), "S3 storage not configured") {
 					return handled(&model.ValidationError{
@@ -106,6 +117,7 @@ func (r *Resolver) DoCreateVodUpload(ctx context.Context, input model.CreateVodU
 		PartSize:     float64(resp.PartSize),
 		Parts:        resp.Parts, // VodUploadPart autobind
 		ExpiresAt:    resp.ExpiresAt.AsTime(),
+		KeepOriginal: resp.KeepOriginal,
 	}, nil
 }
 
@@ -131,12 +143,16 @@ func (r *Resolver) DoImportVodAsset(ctx context.Context, input model.ImportVodAs
 		Title:       input.Title,
 		Description: input.Description,
 	}
+	if input.TranscodeLadder != nil {
+		req.TranscodeLadder = *input.TranscodeLadder
+	}
+
 	resp, err := r.Clients.Commodore.ImportVodAsset(ctx, req)
 	if err != nil {
 		if st, ok := status.FromError(err); ok {
 			switch st.Code() {
 			case codes.InvalidArgument:
-				return &model.ValidationError{Message: st.Message(), Field: strPtr("url")}, nil
+				return &model.ValidationError{Message: st.Message(), Field: vodValidationField(st.Message(), "url")}, nil
 			case codes.FailedPrecondition:
 				if strings.Contains(st.Message(), "S3 storage not configured") {
 					return &model.ValidationError{
@@ -478,6 +494,10 @@ func (r *Resolver) DoGetVodAsset(ctx context.Context, id string) (*model.VodAsse
 		return demo.GenerateVodAsset(), nil
 	}
 
+	if err := middleware.RequirePermission(ctx, "streams:read"); err != nil {
+		return nil, err
+	}
+
 	// Get tenant from context
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
@@ -603,6 +623,9 @@ func storageArtifactToVodAsset(a *commodorepb.StorageArtifactInfo) *model.VodAss
 		asset.ExpiresAt = &t
 	}
 	asset.EffectiveRetention = buildVodEffectiveRetention(asset.ExpiresAt, a.RetentionSource)
+	if a.GetOriginalSizeBytes() > 0 {
+		asset.OriginalFile = &model.VodOriginalFile{SizeBytes: float64(a.GetOriginalSizeBytes())}
+	}
 	return asset
 }
 
@@ -712,6 +735,9 @@ func protoToVodAsset(p *sharedpb.VodAssetInfo) *model.VodAsset {
 	}
 	asset.EffectiveRetention = buildVodEffectiveRetention(asset.ExpiresAt, p.RetentionSource)
 
+	if p.GetOriginalSizeBytes() > 0 {
+		asset.OriginalFile = &model.VodOriginalFile{SizeBytes: float64(p.GetOriginalSizeBytes())}
+	}
 	return asset
 }
 
@@ -756,4 +782,11 @@ func vodRetentionSource(s *string) model.RetentionSource {
 	default:
 		return model.RetentionSourceTierEntitlement
 	}
+}
+
+func vodValidationField(message, fallback string) *string {
+	if strings.Contains(strings.ToLower(message), "transcode ladder") {
+		return strPtr("transcodeLadder")
+	}
+	return strPtr(fallback)
 }

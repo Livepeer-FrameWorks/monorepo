@@ -128,7 +128,7 @@ func TestViewerPlacementAdapterTrustedInputsAndLifetime(t *testing.T) {
 					until := now.Add(15 * time.Second)
 					return balancer.PlacementCellObservation{Complete: true, ObservedAt: now, ExpiresAt: until, Candidates: []placement.Candidate{{
 						TenantID: "tenant", ClusterID: "us", NodeID: "edge", OwnerTenantID: "tenant", AllowedVerbs: []placement.Verb{placement.Serve},
-						ObservedAt: now, ExpiresAt: until, Capacity: placement.CapacityAvailable, BWAvailable: 100, BWLimit: 1000,
+						ObservedAt: now, ExpiresAt: until, Capacity: placement.CapacityAvailable, BWAvailable: 900, BWLimit: 1000,
 						RAMUsed: 1, RAMMax: 100, Presence: placement.Present, SourceFeasible: true, Location: &placement.Coordinates{Latitude: 40.7, Longitude: -74},
 					}}}, nil
 				}, Prepare: func(_ context.Context, cell balancer.PlacementCell, request balancer.PlacementPreparationRequest) (balancer.PlacementPreparationResult, error) {

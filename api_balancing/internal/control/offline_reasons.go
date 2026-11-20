@@ -11,6 +11,10 @@ package control
 // Add new reasons here rather than ad-hoc strings at call sites so the
 // taxonomy stays bounded and grep-discoverable.
 const (
+	// OfflineBandwidthCapacity means the node cannot admit the upstream ingress demand.
+	OfflineBandwidthCapacity = "offline:bandwidth_capacity"
+	// OfflineStreamCap means the tenant has no free stream slot in this cell.
+	OfflineStreamCap = "offline:stream_cap"
 	// OfflineNotConfigured: stream/source not known to Commodore (not in
 	// DB, not enabled, or otherwise unrecognized). Persistent — won't
 	// recover without a config change.

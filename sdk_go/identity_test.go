@@ -26,8 +26,13 @@ func TestDocumentIdentities(t *testing.T) {
 }
 
 func TestSameNameCustomDocumentGate(t *testing.T) {
+	original := operations["GetBillingLifecycle"]
+	future := original
+	future.Since = "v99.0.0"
+	operations["GetBillingLifecycle"] = future
+	t.Cleanup(func() { operations["GetBillingLifecycle"] = original })
 	transport := newScripted(map[string][]fixtureResponse{
-		"ServerInfo":          {{Status: 200, Body: []byte(`{"data":{"serverInfo":{"version":"v0.3.11","features":[]}}}`)}, {Status: 200, Body: []byte(`{"data":{"serverInfo":{"version":"v0.3.11","features":[]}}}`)}},
+		"ServerInfo":          {{Status: 200, Body: []byte(`{"data":{"serverInfo":{"version":"v0.3.16","features":[]}}}`)}, {Status: 200, Body: []byte(`{"data":{"serverInfo":{"version":"v0.3.16","features":[]}}}`)}},
 		"GetBillingLifecycle": {{Status: 200, Body: []byte(`{"data":{"tenant":{"id":"tenant"}}}`)}},
 	})
 	client, err := NewClient(ClientOptions{URL: "https://identity-go.test/graphql", HTTPClient: &http.Client{Transport: transport}})

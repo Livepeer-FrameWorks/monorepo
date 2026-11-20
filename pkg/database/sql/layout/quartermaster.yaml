@@ -12,6 +12,7 @@ colocated_tables:
   - quartermaster.referral_codes
   - quartermaster.infrastructure_clusters
   - quartermaster.infrastructure_nodes
+  - quartermaster.infrastructure_node_capacity
   - quartermaster.services
   - quartermaster.cluster_services
   - quartermaster.service_instances

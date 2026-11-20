@@ -411,7 +411,7 @@ describe("select: queries and mutations over the SDK transport", () => {
   it("checks the server version before a mutation", async () => {
     const { select, requests } = selectClient(
       {
-        ServerInfo: [{ body: { data: { serverInfo: { version: "v0.3.11", features: [] } } } }],
+        ServerInfo: [{ body: { data: { serverInfo: { version: "v0.3.16", features: [] } } } }],
         "*": [{ body: { data: { deleteStream: { __typename: "DeleteSuccess" } } } }],
       },
       { checkServer: true }

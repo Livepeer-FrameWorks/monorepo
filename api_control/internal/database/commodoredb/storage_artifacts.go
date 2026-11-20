@@ -18,11 +18,14 @@ type StorageArtifactFilter struct {
 	Kinds, ArtifactHashes                            []string
 	SortField, SortDirection                         string
 	Limit, Offset                                    int
+	Keyset, Reverse                                  bool
+	CursorTime                                       time.Time
+	CursorID                                         string
 }
 
 type StorageArtifactRow struct {
 	Kind, ID, ArtifactHash, PlaybackID, StreamID, StreamTitle, Title, SecondaryLabel string
-	SizeBytes                                                                        sql.NullInt64
+	SizeBytes, OriginalSizeBytes                                                     sql.NullInt64
 	Status, StorageLocation, SyncStatus                                              sql.NullString
 	CreatedAt, UpdatedAt                                                             time.Time
 	ExpiresAt                                                                        sql.NullTime
@@ -47,7 +50,7 @@ type StorageArtifactCatalog struct {
 // is_synced alone marks ready only rows whose lifecycle is terminal or unknown.
 const storageArtifactBaseSQL = `
 SELECT kind, id, artifact_hash, playback_id, stream_id, stream_title, title, secondary_label,
-       size_bytes, status, storage_location, created_at, updated_at, expires_at,
+       size_bytes, original_size_bytes, status, storage_location, created_at, updated_at, expires_at,
        retention_source, origin_type, origin_id, storage_cluster_id, has_thumbnails, duration_ms,
        tracks, sync_status, is_synced, is_finalized, description, error_message, thumbnail_serving_cluster
 FROM (
@@ -57,7 +60,7 @@ FROM (
         COALESCE(v.stream_id::text, '') AS stream_id, COALESCE(st.title, '') AS stream_title,
         COALESCE(NULLIF(v.title, ''), NULLIF(v.filename, ''), v.vod_hash) AS title,
         COALESCE(NULLIF(v.filename, ''), v.content_type, '') AS secondary_label,
-        v.size_bytes,
+        v.size_bytes, v.original_size_bytes,
         CASE WHEN v.retention_until IS NOT NULL AND v.retention_until <= NOW() THEN 'expired'
              WHEN v.lifecycle_status IN ('failed', 'aborted') OR v.sync_status IN ('failed', 'lost_local') THEN 'failed'
              WHEN v.lifecycle_status IN ('requested', 'queued', 'starting', 'recording', 'stopping', 'finalizing', 'uploading', 'processing') THEN 'processing'
@@ -77,7 +80,7 @@ FROM (
     SELECT
         'dvr', d.id::text, d.dvr_hash, COALESCE(d.playback_id, ''), COALESCE(d.stream_id::text, ''),
         COALESCE(st.title, ''), COALESCE(st.title, d.internal_name, d.dvr_hash), COALESCE(d.internal_name, ''),
-        d.size_bytes,
+        d.size_bytes, NULL::bigint AS original_size_bytes,
         CASE WHEN d.retention_until IS NOT NULL AND d.retention_until <= NOW() THEN 'expired'
              WHEN d.lifecycle_status IN ('failed', 'aborted') OR d.sync_status IN ('failed', 'lost_local') THEN 'failed'
              WHEN d.lifecycle_status IN ('requested', 'queued', 'starting', 'recording', 'stopping', 'finalizing', 'uploading', 'processing') THEN 'processing'
@@ -95,7 +98,7 @@ FROM (
     SELECT
         'clip', c.id::text, c.clip_hash, COALESCE(c.playback_id, ''), COALESCE(c.stream_id::text, ''),
         COALESCE(st.title, ''), COALESCE(NULLIF(c.title, ''), c.clip_hash), COALESCE(c.clip_mode, ''),
-        c.size_bytes,
+        c.size_bytes, NULL::bigint AS original_size_bytes,
         CASE WHEN c.retention_until IS NOT NULL AND c.retention_until <= NOW() THEN 'expired'
              WHEN c.lifecycle_status IN ('failed', 'aborted') OR c.sync_status IN ('failed', 'lost_local') THEN 'failed'
              WHEN c.lifecycle_status IN ('requested', 'queued', 'starting', 'recording', 'stopping', 'finalizing', 'uploading', 'processing') THEN 'processing'
@@ -178,23 +181,37 @@ func (q *Queries) ListStorageArtifactCatalog(ctx context.Context, arg StorageArt
 		return out, closeErr
 	}
 
-	sortField := map[string]bool{"created_at": true, "title": true, "kind": true, "size_bytes": true, "expires_at": true}
-	if !sortField[arg.SortField] {
-		return out, fmt.Errorf("unsupported storage artifact sort field %q", arg.SortField)
-	}
-	direction := strings.ToUpper(arg.SortDirection)
-	if direction != "ASC" && direction != "DESC" {
-		return out, fmt.Errorf("unsupported storage artifact sort direction %q", arg.SortDirection)
-	}
-	nulls := "NULLS LAST"
-	if arg.SortField == "created_at" && direction == "DESC" {
-		nulls = ""
-	}
 	dataArgs := append([]any(nil), args...)
-	limitArg, offsetArg := len(dataArgs)+1, len(dataArgs)+2
-	dataArgs = append(dataArgs, arg.Limit+1, arg.Offset)
-	dataSQL := fmt.Sprintf("%s WHERE %s ORDER BY %s %s %s, created_at DESC, artifact_hash DESC LIMIT $%d OFFSET $%d",
-		storageArtifactBaseSQL, where, arg.SortField, direction, nulls, limitArg, offsetArg)
+	var dataSQL string
+	if arg.Keyset {
+		direction, comparison := "DESC", "<"
+		if arg.Reverse {
+			direction, comparison = "ASC", ">"
+		}
+		if arg.CursorID != "" {
+			where += fmt.Sprintf(" AND (created_at, id) %s ($%d, $%d)", comparison, len(dataArgs)+1, len(dataArgs)+2)
+			dataArgs = append(dataArgs, arg.CursorTime, arg.CursorID)
+		}
+		dataArgs = append(dataArgs, arg.Limit+1)
+		dataSQL = fmt.Sprintf("%s WHERE %s ORDER BY created_at %s, id %s LIMIT $%d", storageArtifactBaseSQL, where, direction, direction, len(dataArgs))
+	} else {
+		sortField := map[string]bool{"created_at": true, "title": true, "kind": true, "size_bytes": true, "expires_at": true}
+		if !sortField[arg.SortField] {
+			return out, fmt.Errorf("unsupported storage artifact sort field %q", arg.SortField)
+		}
+		direction := strings.ToUpper(arg.SortDirection)
+		if direction != "ASC" && direction != "DESC" {
+			return out, fmt.Errorf("unsupported storage artifact sort direction %q", arg.SortDirection)
+		}
+		nulls := "NULLS LAST"
+		if arg.SortField == "created_at" && direction == "DESC" {
+			nulls = ""
+		}
+		limitArg, offsetArg := len(dataArgs)+1, len(dataArgs)+2
+		dataArgs = append(dataArgs, arg.Limit+1, arg.Offset)
+		dataSQL = fmt.Sprintf("%s WHERE %s ORDER BY %s %s %s, created_at DESC, artifact_hash DESC LIMIT $%d OFFSET $%d",
+			storageArtifactBaseSQL, where, arg.SortField, direction, nulls, limitArg, offsetArg)
+	}
 	rows, err := q.db.QueryContext(ctx, dataSQL, dataArgs...)
 	if err != nil {
 		return out, err
@@ -204,7 +221,7 @@ func (q *Queries) ListStorageArtifactCatalog(ctx context.Context, arg StorageArt
 		var row StorageArtifactRow
 		if err := rows.Scan(
 			&row.Kind, &row.ID, &row.ArtifactHash, &row.PlaybackID, &row.StreamID, &row.StreamTitle, &row.Title, &row.SecondaryLabel,
-			&row.SizeBytes, &row.Status, &row.StorageLocation, &row.CreatedAt, &row.UpdatedAt, &row.ExpiresAt,
+			&row.SizeBytes, &row.OriginalSizeBytes, &row.Status, &row.StorageLocation, &row.CreatedAt, &row.UpdatedAt, &row.ExpiresAt,
 			&row.RetentionSource, &row.OriginType, &row.OriginID, &row.StorageClusterID, &row.HasThumbnails, &row.DurationMs,
 			&row.Tracks, &row.SyncStatus, &row.IsSynced, &row.IsFinalized, &row.Description, &row.ErrorMessage, &row.ThumbnailServingCluster,
 		); err != nil {

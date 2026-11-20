@@ -35,6 +35,7 @@ func TestGetNode_Success(t *testing.T) {
 			nil, "gitops_seed", nil, "active", now, now,
 			"tenant-1",
 			nil, nil, nil, nil, nil, nil, nil,
+			nil, nil, nil, nil, nil,
 		}...))
 
 	resp, err := server.GetNode(serviceCtx(), &quartermasterpb.GetNodeRequest{NodeId: "node-1"})
@@ -188,6 +189,7 @@ func TestGetNodeByLogicalName_Success(t *testing.T) {
 			nil, "gitops_seed", nil, "active", now, now,
 			"tenant-1",
 			nil, nil, nil, nil, nil, nil, nil,
+			nil, nil, nil, nil, nil,
 		}...))
 
 	resp, err := server.GetNodeByLogicalName(serviceCtx(), &quartermasterpb.GetNodeByLogicalNameRequest{NodeId: "edge-node-1"})

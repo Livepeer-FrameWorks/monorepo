@@ -11,6 +11,7 @@ import "common.proto";
 import "cluster_peer.proto";
 import "tenant_limits.proto";
 import "media_placement.proto";
+import "quartermaster_values.proto";
 
 // ============================================================================
 // QUARTERMASTER CONTROL PLANE - TENANT & INFRASTRUCTURE MANAGEMENT
@@ -288,6 +289,10 @@ message SetNodeEnrollmentOriginResponse {
 
 // NodeService handles infrastructure node management
 service NodeService {
+  // Capacity writes require the cluster owner or a platform operator. Null budgets use platform defaults.
+  rpc SetNodeCapacity(SetNodeCapacityRequest) returns (NodeCapacity);
+  rpc GetNodeCapacity(GetNodeCapacityRequest) returns (NodeCapacity);
+  rpc ListNodeCapacities(ListNodeCapacitiesRequest) returns (ListNodeCapacitiesResponse);
   rpc GetNode(GetNodeRequest) returns (NodeResponse);
   rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
   rpc ListHealthyNodesForDNS(ListHealthyNodesForDNSRequest) returns (ListHealthyNodesForDNSResponse);
@@ -782,7 +787,8 @@ message InfrastructureCluster {
   repeated string kafka_brokers = 10;   // json:"kafka_brokers,omitempty"
   int32 max_concurrent_streams = 11;    // json:"max_concurrent_streams"
   int32 max_concurrent_viewers = 12;    // json:"max_concurrent_viewers"
-  int32 max_bandwidth_mbps = 13;        // json:"max_bandwidth_mbps"
+  reserved 13;
+  reserved "max_bandwidth_mbps";
   string health_status = 14;            // json:"health_status"
   bool is_active = 15;                  // json:"is_active"
   google.protobuf.Timestamp created_at = 16; // json:"created_at"
@@ -872,7 +878,8 @@ message CreateClusterRequest {
   repeated string kafka_brokers = 7;    // json:"kafka_brokers,omitempty"
   int32 max_concurrent_streams = 8;     // json:"max_concurrent_streams"
   int32 max_concurrent_viewers = 9;     // json:"max_concurrent_viewers"
-  int32 max_bandwidth_mbps = 10;        // json:"max_bandwidth_mbps"
+  reserved 10;
+  reserved "max_bandwidth_mbps";
   // Cluster ownership for dedicated B2B clusters
   optional string owner_tenant_id = 20; // json:"owner_tenant_id,omitempty" - UUID of owning tenant
   string deployment_model = 21;         // json:"deployment_model" - 'shared' or 'managed' (default: 'managed')
@@ -893,7 +900,8 @@ message UpdateClusterRequest {
   repeated string kafka_brokers = 6;    // json:"kafka_brokers,omitempty"
   optional int32 max_concurrent_streams = 7;  // json:"max_concurrent_streams,omitempty"
   optional int32 max_concurrent_viewers = 8;  // json:"max_concurrent_viewers,omitempty"
-  optional int32 max_bandwidth_mbps = 9;      // json:"max_bandwidth_mbps,omitempty"
+  reserved 9;
+  reserved "max_bandwidth_mbps";
   optional string health_status = 10;   // json:"health_status,omitempty"
   optional bool is_active = 11;         // json:"is_active,omitempty"
   optional string owner_tenant_id = 12; // json:"owner_tenant_id,omitempty" - Set/clear ownership (empty string clears)
@@ -1371,6 +1379,7 @@ message InfrastructureNode {
   NodeResourceSnapshot resource_snapshot = 26;
   // Owning tenant of the node's cluster, resolved by Quartermaster.
   optional string owner_tenant_id = 27;  // json:"owner_tenant_id,omitempty"
+  NodeCapacity capacity = 28;
 }
 
 message NodeResponse {

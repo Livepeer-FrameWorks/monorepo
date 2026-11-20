@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -28,6 +29,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/capacity"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
@@ -207,7 +209,7 @@ type Processor struct {
 	// over the long-lived Connect(stream ControlMessage) channel. Set by
 	// the gRPC server bootstrap once the Helmsman control stream router
 	// is available. A missing dispatcher is reported as a bootstrap failure.
-	drainStream func(ctx context.Context, nodeID, runtimeName, reason, sourceGeneration, priorOwnerSourceGeneration string) error
+	drainStream func(ctx context.Context, nodeID, runtimeName, reason, sourceGeneration, priorOwnerSourceGeneration, tenantID string) error
 	// nodeOwnedLocally overrides control.NodeConnOwnedLocally for the node-affine admission legs
 	// (tests inject ownership; production leaves it nil).
 	nodeOwnedLocally func(nodeID string) bool
@@ -325,7 +327,7 @@ func (p *Processor) SetSigningKeyUseRecorder(recorder SigningKeyUseRecorder) {
 // SetDrainStreamDispatcher wires the command used to clear a replaced publisher's lingering
 // buffer and viewer sessions. The gRPC bootstrap installs it after constructing the Helmsman
 // control-stream router.
-func (p *Processor) SetDrainStreamDispatcher(fn func(ctx context.Context, nodeID, runtimeName, reason, sourceGeneration, priorOwnerSourceGeneration string) error) {
+func (p *Processor) SetDrainStreamDispatcher(fn func(ctx context.Context, nodeID, runtimeName, reason, sourceGeneration, priorOwnerSourceGeneration, tenantID string) error) {
 	if p == nil {
 		return
 	}
@@ -2140,6 +2142,20 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 	if admissionRepository != nil && localValidation.GetValid() && (placementDecision.TenantAuthorityVersion != localAuthority.tenant.Version || placementDecision.ObjectAuthorityVersion != localAuthority.object.Version || placementDecision.ObjectID != localAuthority.object.AuthorityID) {
 		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "publisher authority changed while checking placement; retry")
 	}
+	ingestBandwidthID := "ingest:" + streamValidation.InternalName
+	bandwidthAllowed, bandwidthErr := state.DefaultManager().ReserveNodeBandwidth(admissionCtx, ingestBandwidthID, trigger.GetNodeId(), streamValidation.InternalName, state.BandwidthIngress, capacity.DefaultIngestEstimate)
+	if bandwidthErr != nil || !bandwidthAllowed {
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "node ingress capacity exhausted; retry another node")
+	}
+	defer func() {
+		if !admitted {
+			releaseCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if releaseErr := state.DefaultManager().ReleasePendingNodeBandwidth(releaseCtx, ingestBandwidthID, trigger.GetNodeId()); releaseErr != nil {
+				p.logger.WithError(releaseErr).Warn("Could not release refused ingest bandwidth")
+			}
+		}
+	}()
 	liveProcessesJSON := streamValidation.GetProcessesJson()
 	if liveProcessesJSON != "" {
 		// Gateway discovery never takes the budget the session mint and
@@ -2246,8 +2262,8 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 	// the durable admission-effect obligation, so its final (geo-enriched, credential-redacted)
 	// bytes must exist when the projection confirmation persists the intent. Pure trigger
 	// mutations — no side effects — so running them ahead of a possible deny is harmless.
-	// Detect protocol from push URL
-	protocol := p.detectProtocol(pushRewrite.GetPushUrl())
+	// The observed connector is attested by Mist; an encoder controls its push URL.
+	protocol := ingestEventProtocol(pushRewrite.GetObservedConnector())
 
 	// Get geographic data from node configuration
 	var latitude, longitude *float64
@@ -2768,6 +2784,11 @@ func (p *Processor) ProcessPublisher(ctx context.Context, trigger *ipcpb.MistTri
 	// obligation, applied by the admission-effects worker.
 
 	// Return wildcard stream name for MistServer routing (live+ format)
+	activationCtx, cancelActivation := context.WithTimeout(context.Background(), time.Second)
+	if _, err := state.DefaultManager().ActivateNodeBandwidth(activationCtx, ingestBandwidthID, trigger.GetNodeId()); err != nil {
+		p.logger.WithError(err).Warn("Could not activate accepted ingest bandwidth reservation")
+	}
+	cancelActivation()
 	admitted = true
 	return publisherRuntime, false, nil
 }
@@ -2973,10 +2994,14 @@ func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 		playRewrite.StreamId = &target.StreamID
 	}
 	isLivePlayback := target.ContentType == "live" || strings.HasPrefix(target.InternalName, "live+")
-	if isLivePlayback && !acceptedProcessingRead && mist.IsPlaybackViewerRequest(playRewrite.GetOutputType(), playRewrite.GetRequestUrl()) {
+	if !acceptedProcessingRead && mist.IsPlaybackViewerRequest(playRewrite.GetOutputType(), playRewrite.GetRequestUrl()) {
 		correlationID := mist.ViewerSessionID(playRewrite.GetRequestUrl())
-		if viewerID, started := state.DefaultManager().StartVirtualViewerByID(correlationID, trigger.GetNodeId(), resolvedName, playRewrite.GetViewerHost()); started {
-			state.DefaultManager().UpdateUserConnection(resolvedName, trigger.GetNodeId(), target.TenantID, 1)
+		viewerID, started := state.DefaultManager().StartVirtualViewerByID(correlationID, trigger.GetNodeId(), resolvedName, playRewrite.GetViewerHost())
+		if viewerID == "" {
+			return "", false, errors.New("node egress capacity exhausted")
+		}
+		if started && isLivePlayback {
+			state.DefaultManager().EnsureViewerStreamIdentity(resolvedName, trigger.GetNodeId(), target.TenantID)
 			p.logger.WithFields(logging.Fields{
 				"viewer_id":     viewerID,
 				"internal_name": resolvedName,
@@ -3004,7 +3029,7 @@ func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 	}
 
 	if target.ContentType == "live" && control.StreamRegistryInstance != nil {
-		runtimeName, runtimeErr := control.StreamRegistryInstance.NodeRuntimeName(requestCtx, target.TenantID, resolvedName, trigger.GetNodeId())
+		runtimeName, runtimeErr := playbackSourceRuntime(requestCtx, target.TenantID, target.InternalName, trigger.GetNodeId())
 		if runtimeErr != nil {
 			return "", false, runtimeErr
 		}
@@ -3844,13 +3869,8 @@ func (p *Processor) placeResolvedPullSource(requestCtx context.Context, streamNa
 		"cluster_id":    triggerClusterID,
 	}).Info("Resolved pull+ source to balance: URI; /source will pick origin")
 
-	// No fallback param — /source resolves the upstream URI server-side from
-	// Commodore. Trusting a fallback param here would be a source-injection vector.
-	// Local authority replaces the control-plane lookup, not the placement
-	// side effect. This asynchronous event is what stamps and renews the pull
-	// stream's active ingest cluster; its sender already no-ops while Commodore
-	// is disconnected, so it never gates source resolution.
-	p.recordPullSourceEvent(resp, internalName, "resolved", triggerClusterID)
+	// The node-bound /source request admits the dial before recording the resolved
+	// event that stamps its owning cluster. STREAM_SOURCE only supplies the resolver.
 	return "balance:" + base, false, nil
 }
 
@@ -4773,7 +4793,7 @@ func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, err
 	// Viewer-side load gate: when the broadcaster is on free tier and the
 	// serving cluster is under load, deny new viewers. Over-allowance free
 	// streams are gated sooner (80%) than within-allowance free streams
-	// (95% redline). Paying broadcasters' viewers are always admitted. The
+	// (85% redline). Paying broadcasters' viewers are always admitted. The
 	// broadcaster's allowance state was cached in streamContext at
 	// PUSH_REWRITE time so no Commodore round-trip is needed here.
 	//
@@ -4837,6 +4857,30 @@ func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, err
 		}
 	} else if placementDecision != nil && !time.Now().Before(placementDecision.ExpiresAt) {
 		return "false", false, nil
+	}
+
+	if !acceptedPull {
+		bandwidthID := capacityID
+		if mist.ViewerSessionID(userNew.GetRequestUrl()) == "" {
+			for _, viewer := range state.DefaultManager().GetVirtualViewersForNode(trigger.GetNodeId()) {
+				if viewer.State == state.VirtualViewerActive && viewer.StreamName == internalName && viewer.ClientIP == userNew.GetHost() {
+					bandwidthID = viewer.ID
+					break
+				}
+			}
+		}
+		if bandwidthID == "" {
+			bandwidthID = uuid.NewString()
+		}
+		allowed, bandwidthErr := state.DefaultManager().HoldNodeBandwidth(requestCtx, bandwidthID, trigger.GetNodeId(), internalName, state.BandwidthEgress, state.DefaultManager().EstimateStreamBandwidth(trigger.GetNodeId(), internalName))
+		if bandwidthErr != nil || !allowed {
+			state.DefaultManager().RejectUnconfirmedVirtualViewer(bandwidthID, trigger.GetNodeId(), internalName)
+			_, _, _, releaseErr := state.DefaultTenantCapacity().ReleaseViewerSession(info.TenantID, trigger.GetNodeId(), userNew.GetSessionId())
+			if releaseErr != nil {
+				p.logger.WithError(releaseErr).Warn("Could not release rejected viewer capacity")
+			}
+			return "false", false, nil
+		}
 	}
 
 	// Enrich ViewerConnect payload directly
@@ -4992,7 +5036,9 @@ func (p *Processor) handleStreamBuffer(trigger *ipcpb.MistTrigger) (string, bool
 	// session's own node. STREAM_BUFFER is best-effort, so a failed write loses this session's
 	// stream.live rather than blocking the trigger.
 	if state.NativeBufferStatePlayable(streamBuffer.GetBufferState()) {
-		if binding, bound := streamident.ParseRuntimeBinding(streamBuffer.GetStreamName()); bound {
+		if strings.HasPrefix(streamBuffer.GetStreamName(), "pull+") {
+			p.observePlayablePull(info, trigger.GetNodeId(), internalName, trigger.GetClusterId(), streamBuffer.GetBufferPid(), trigger.GetTriggerUuid(), trigger.GetTriggerUnixMillis())
+		} else if binding, bound := streamident.ParseRuntimeBinding(streamBuffer.GetStreamName()); bound {
 			if binding.Role == streamident.RuntimePublisher {
 				p.markIngestSessionPlayable(info.TenantID, trigger.GetNodeId(), internalName, trigger.GetTriggerUnixMillis(), binding.ExecutionID)
 			}
@@ -5065,6 +5111,10 @@ func (p *Processor) handleStreamEnd(trigger *ipcpb.MistTrigger) (string, bool, e
 	// durable) via reapErr below. When Mist supplies no event time it is a no-op.
 	var reaped int
 	var reapErr error
+	endMode := control.IngestPush
+	if strings.HasPrefix(streamEnd.GetStreamName(), "pull+") {
+		endMode = control.IngestPull
+	}
 	if _, bound := streamident.ParseRuntimeBinding(streamEnd.GetStreamName()); bound {
 		reaped, reapErr = control.EndBoundPublisherRuntime(context.Background(), trigger.GetTenantId(), nodeID, streamEnd.GetStreamName(), offlineEventUnixMillis(trigger), p.logger)
 		if reapErr != nil {
@@ -5075,7 +5125,7 @@ func (p *Processor) handleStreamEnd(trigger *ipcpb.MistTrigger) (string, bool, e
 			return "", false, err
 		}
 	} else {
-		reaped, reapErr = control.EndIngestSessionsForStreamEnd(context.Background(), trigger.GetTenantId(), nodeID, internalName, streamEnd.GetTriggerUnixMillis(), p.logger)
+		reaped, reapErr = control.EndIngestSessionsForStreamEnd(context.Background(), trigger.GetTenantId(), nodeID, internalName, streamEnd.GetTriggerUnixMillis(), p.logger, endMode)
 	}
 	if reapErr != nil {
 		p.logger.WithError(reapErr).WithFields(logging.Fields{
@@ -5228,13 +5278,28 @@ func (p *Processor) broadcastStreamOffline(ctx context.Context, internalName, te
 	return nil
 }
 
-// ApplyOfflineEffect applies one durable transition while the control layer holds the stream
-// advisory lock. Every operation is idempotent; an error leaves the outbox row pending for retry.
+// ApplyOfflineEffect dispatches idempotent work between the control layer's
+// locked authority and settlement phases. Node acknowledgement settles stop legs.
 func (p *Processor) ApplyOfflineEffect(ctx context.Context, effect control.OfflineEffect) (control.OfflineEffectLegResults, error) {
 	var legs control.OfflineEffectLegResults
+	var effectErr error
+	if err := ctx.Err(); err != nil {
+		return legs, err
+	}
+	if effect.DrainPublisher && !effect.DrainDone {
+		if p.drainStream == nil {
+			effectErr = errors.New("publisher drain dispatcher unavailable")
+		} else if err := p.drainStream(ctx, effect.NodeID, effect.DrainRuntimeName, "placement_claim_lost", effect.SourceGeneration, effect.SourceGeneration, effect.TenantID); err != nil {
+			effectErr = fmt.Errorf("drain retired publisher: %w", err)
+		}
+	}
+	if effect.StateSuperseded {
+		legs.StateSuperseded = true
+		return legs, effectErr
+	}
 	registry := control.StreamRegistryInstance
 	if registry == nil {
-		return legs, errors.New("stream registry unavailable")
+		return legs, errors.Join(effectErr, errors.New("stream registry unavailable"))
 	}
 	// The peer-facing parts (federation offline broadcast, stream-scoped peer untrack inside the
 	// teardown) are LEADER-owned: only the PeerManager leader holds open peer channels, so a
@@ -5242,16 +5307,20 @@ func (p *Processor) ApplyOfflineEffect(ctx context.Context, effect control.Offli
 	// the leader when peer-facing work is owed — the remaining state mutations (registry publish,
 	// SetOffline, capacity) are Redis-synced and equally correct on the leader.
 	if p.peerNotifier != nil && effect.BroadcastOffline && !effect.BroadcastOfflineDone && !p.peerNotifier.IsLeader() {
-		return legs, control.ErrOfflineEffectDeferred
+		return legs, errors.Join(effectErr, control.ErrOfflineEffectDeferred)
 	}
 	applied, err := registry.PublishSourceInactiveContext(ctx, effect.InternalName, effect.NodeID, effect.SourceGeneration, effect.SourceRevision)
 	if err != nil {
-		return legs, fmt.Errorf("publish inactive source revision: %w", err)
+		return legs, errors.Join(effectErr, fmt.Errorf("publish inactive source revision: %w", err))
 	}
 	if !applied {
-		return p.forwardSupersededStreamEnd(ctx, registry, effect)
+		supersededLegs, supersededErr := p.forwardSupersededStreamEnd(ctx, registry, effect)
+		if effect.DrainPublisher && errors.Is(supersededErr, control.ErrOfflineEffectSuperseded) {
+			supersededLegs.StateSuperseded = true
+			return supersededLegs, effectErr
+		}
+		return supersededLegs, errors.Join(effectErr, supersededErr)
 	}
-	var effectErr error
 	if !effect.DecklogDone && len(effect.DecklogTrigger) > 0 {
 		var trigger ipcpb.MistTrigger
 		if err := proto.Unmarshal(effect.DecklogTrigger, &trigger); err != nil {
@@ -5563,7 +5632,7 @@ func (p *Processor) ApplyAdmissionEffect(ctx context.Context, effect control.Adm
 			}
 			if p.drainStream == nil {
 				effectErr = errors.Join(effectErr, errors.New("drain dispatcher unavailable"))
-			} else if err := p.drainStream(ctx, prior, runtimeName, fmt.Sprintf("publisher_replaced_by_node:%s", effect.NodeID), effect.SourceGeneration, effect.PriorOwnerSourceGeneration); err != nil {
+			} else if err := p.drainStream(ctx, prior, runtimeName, fmt.Sprintf("publisher_replaced_by_node:%s", effect.NodeID), effect.SourceGeneration, effect.PriorOwnerSourceGeneration, effect.TenantID); err != nil {
 				if p.metrics != nil && p.metrics.DrainDispatch != nil {
 					p.metrics.DrainDispatch.WithLabelValues("failed").Inc()
 				}
@@ -5894,9 +5963,7 @@ func (p *Processor) handleUserEnd(trigger *ipcpb.MistTrigger) (string, bool, err
 	}
 
 	clientIP := userEnd.GetHost()
-	if disconnected := state.DefaultManager().DisconnectVirtualViewerBySessionID(userEnd.GetSessionId(), trigger.GetNodeId(), internalStreamName, clientIP); disconnected {
-		state.DefaultManager().UpdateUserConnection(internalStreamName, trigger.GetNodeId(), info.TenantID, -1)
-	}
+	state.DefaultManager().DisconnectVirtualViewerBySessionID(userEnd.GetSessionId(), trigger.GetNodeId(), internalStreamName, clientIP)
 	if _, _, _, capacityErr := state.DefaultTenantCapacity().ReleaseViewerSession(info.TenantID, trigger.GetNodeId(), userEnd.GetSessionId()); capacityErr != nil {
 		p.logger.WithError(capacityErr).WithFields(logging.Fields{"tenant_id": info.TenantID, "session_id": userEnd.GetSessionId()}).Warn("Failed to release viewer capacity correlation")
 	}
@@ -6241,8 +6308,13 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 					}
 				}
 			} else {
-				reaped, reapErr = control.EndIngestSessionsForStreamEnd(
-					context.Background(), finalizationTenant, nodeID, internal, eventMillis, p.logger,
+				reaped, reapErr = control.EndIngestSessionsForSourceAbsence(
+					context.Background(), finalizationTenant, nodeID, internal, eventMillis, p.logger, func() control.IngestMode {
+						if strings.HasPrefix(runtimeName, "pull+") {
+							return control.IngestPull
+						}
+						return control.IngestPush
+					}(),
 				)
 			}
 			if reapErr != nil {
@@ -6376,7 +6448,9 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 		// edge. A playable buffer fed by a connected input, sampled after the
 		// session started, is the new session's first playable buffer.
 		if slu.GetBufferPlayable() && slu.GetTotalInputs() > 0 && !slu.GetReplicated() && !suppressUnverifiedForward {
-			if binding, bound := streamident.ParseRuntimeBinding(runtimeName); bound {
+			if strings.HasPrefix(runtimeName, "pull+") {
+				p.observePlayablePull(info, nodeID, internal, trigger.GetClusterId(), slu.GetProcessObservation().GetBufferPid(), "", slu.GetBufferSampledUnixMillis())
+			} else if binding, bound := streamident.ParseRuntimeBinding(runtimeName); bound {
 				if binding.Role == streamident.RuntimePublisher {
 					p.markIngestSessionPlayable(info.TenantID, nodeID, internal, slu.GetBufferSampledUnixMillis(), binding.ExecutionID)
 				}
@@ -6386,6 +6460,19 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 		}
 	}
 	return "", false, nil
+}
+
+func (p *Processor) observePlayablePull(info streamContext, node, internal, cluster string, pid int64, eventID string, eventMillis int64) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if cluster == "" {
+		if observed := state.DefaultManager().GetNodeState(node); observed != nil {
+			cluster = observed.ClusterID
+		}
+	}
+	if _, err := control.ObservePlayablePullBuffer(ctx, control.PullIngestObservation{TenantID: info.TenantID, StreamID: info.StreamID, InternalName: internal, NodeID: node, ClusterID: cluster, BufferPID: pid, EventID: eventID, EventMillis: eventMillis}); err != nil {
+		p.logger.WithError(err).WithFields(logging.Fields{"internal_name": internal, "node_id": node}).Warn("Failed to reconcile playable pull session")
+	}
 }
 
 // markIngestSessionPlayable records the first playable buffer of the node's
@@ -6544,6 +6631,7 @@ func (p *Processor) handleClientLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 		return "", false, nil
 	}
 	if sessionID := strings.TrimSpace(clu.GetSessionId()); sessionID != "" && clu.GetAction() != "disconnect" {
+		state.DefaultManager().RenewVirtualViewerSession(trigger.GetNodeId(), sessionID)
 		if err := state.DefaultTenantCapacity().RenewViewerSession(clu.GetTenantId(), trigger.GetNodeId(), sessionID, info.MaxViewers); err != nil {
 			p.logger.WithError(err).WithFields(logging.Fields{"tenant_id": clu.GetTenantId(), "session_id": sessionID}).Warn("Failed to renew viewer capacity lease from Mist client inventory")
 		}
@@ -6597,170 +6685,210 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *ipcpb.MistTrigger) (strin
 		return "", false, nil
 	}
 
-	if err := state.DefaultManager().ApplyNodeLifecycle(context.Background(), nu); err != nil {
-		p.logger.WithError(err).WithField("node_id", nu.GetNodeId()).Warn("Failed to persist node lifecycle snapshot")
-	}
-
-	// Log mismatch between Helmsman-reported mode and Foghorn-authoritative mode.
-	// Foghorn owns operational mode; Helmsman's heartbeat is confirmation only.
-	if reportedMode, ok := mapOperationalMode(nu.GetOperationalMode()); ok {
-		authoritativeMode := state.DefaultManager().GetNodeOperationalMode(nu.GetNodeId())
-		if authoritativeMode != reportedMode {
-			p.logger.WithFields(logging.Fields{
-				"node_id":            nu.GetNodeId(),
-				"reported_mode":      reportedMode,
-				"authoritative_mode": authoritativeMode,
-				"trigger_id":         trigger.GetRequestId(),
-			}).Warn("Helmsman reported mode differs from Foghorn authoritative mode (may need ConfigSeed push)")
-		}
-	}
-
-	// Update storage paths if present
-	if storage := nu.GetStorage(); storage != nil {
-		state.DefaultManager().SetNodeStoragePaths(nu.GetNodeId(), storage.GetLocalPath(), storage.GetS3Bucket(), storage.GetS3Prefix())
-	}
-
-	// Update GPU info if present (TODO: Add GPU field to NodeLifecycleUpdate protobuf)
-	// if gpu := nu.GetGpu(); gpu != nil {
-	//     state.DefaultManager().SetNodeGPUInfo(nu.GetNodeId(), gpu.GetVendor(), int(gpu.GetCount()), int(gpu.GetMemoryMb()), gpu.GetComputeCapability())
-	// }
-
-	// Calculate total connections across all streams for virtual viewer reconciliation
-	var totalConnections int
-	for _, s := range nu.GetStreams() {
-		totalConnections += int(s.GetTotal())
-	}
-
-	// Reconcile virtual viewers with real metrics from Helmsman: times out
-	// stale PENDING viewers and updates bandwidth estimates
-	state.DefaultManager().ReconcileVirtualViewers(nu.GetNodeId(), totalConnections, nu.GetUpSpeed())
-
-	// Update stream stats for each stream
-	// CRITICAL: Extract internal name to match state keys (e.g., "live+demo_stream" -> "demo_stream")
-	observedStreams := make(map[string]struct{}, len(nu.GetStreams()))
-	for streamName, s := range nu.GetStreams() {
-		internalName := mist.ExtractInternalName(streamName)
-		if allowed, err := runtimeObservationAllowed(context.Background(), nu.GetNodeId(), streamName); err != nil || !allowed {
+	audience := make(map[string]uint32, len(nu.GetStreams()))
+	for name, stream := range nu.GetStreams() {
+		if allowed, err := runtimeObservationAllowed(context.Background(), nu.GetNodeId(), name); err != nil || !allowed {
 			continue
 		}
-		observedStreams[internalName] = struct{}{}
-		replicated := s.GetReplicated()
-		if !replicated && control.StreamRegistryInstance != nil {
-			if _, ok := control.StreamRegistryInstance.LocalReplicationForNode(context.Background(), internalName, nu.GetNodeId()); ok {
-				replicated = true
+		internal := mist.ExtractInternalName(name)
+		count := stream.GetTotal()
+		if stream.AudienceViewers != nil {
+			count = uint64(stream.GetAudienceViewers())
+		}
+		if count > uint64(math.MaxUint32)-uint64(audience[internal]) {
+			audience[internal] = math.MaxUint32
+		} else {
+			audience[internal] += uint32(count)
+		}
+	}
+	reportErr := state.DefaultManager().ApplyNodeStreamReport(context.Background(), state.NodeStreamCountsSnapshot{
+		NodeID: nu.GetNodeId(), Fence: nu.GetArtifactsConnectionFence(), Seq: nu.GetArtifactsReportSeq(), Streams: audience,
+	}, func() {
+
+		if err := state.DefaultManager().ApplyNodeLifecycle(context.Background(), nu); err != nil {
+			p.logger.WithError(err).WithField("node_id", nu.GetNodeId()).Warn("Failed to persist node lifecycle snapshot")
+		}
+		control.ReconcileNodeCapacityReport(nu.GetNodeId(), nu.CapacityRevisionApplied, p.logger)
+
+		// Log mismatch between Helmsman-reported mode and Foghorn-authoritative mode.
+		// Foghorn owns operational mode; Helmsman's heartbeat is confirmation only.
+		if reportedMode, ok := mapOperationalMode(nu.GetOperationalMode()); ok {
+			authoritativeMode := state.DefaultManager().GetNodeOperationalMode(nu.GetNodeId())
+			if authoritativeMode != reportedMode {
+				p.logger.WithFields(logging.Fields{
+					"node_id":            nu.GetNodeId(),
+					"reported_mode":      reportedMode,
+					"authoritative_mode": authoritativeMode,
+					"trigger_id":         trigger.GetRequestId(),
+				}).Warn("Helmsman reported mode differs from Foghorn authoritative mode (may need ConfigSeed push)")
 			}
 		}
-		state.DefaultManager().ObserveRuntimeNodeSnapshotStream(internalName, nu.GetNodeId(), streamName, int(s.GetTotal()), int(s.GetInputs()), int64(s.GetBytesUp()), int64(s.GetBytesDown()), replicated)
-	}
-	// Absence clears only a pull the node was seen carrying with no arrangement
-	// or viewer hand-out since: the destination has not started such a pull
-	// yet, and a snapshot sampled before Mist asked for its source cannot list it.
-	if cleared := state.DefaultManager().ReconcileNodeStreamPresence(nu.GetNodeId(), observedStreams); len(cleared) > 0 {
-		p.endStreamsLostAcrossReconnect(nu.GetNodeId(), cleared, time.Now())
-		for _, absent := range cleared {
-			if control.StreamRegistryInstance != nil && control.StreamRegistryInstance.ClearReplicatingForNode(absent.InternalName, nu.GetNodeId(), absent.SnapshotPresentAt) {
+
+		// Update storage paths if present
+		if storage := nu.GetStorage(); storage != nil {
+			state.DefaultManager().SetNodeStoragePaths(nu.GetNodeId(), storage.GetLocalPath(), storage.GetS3Bucket(), storage.GetS3Prefix())
+		}
+
+		// Update GPU info if present (TODO: Add GPU field to NodeLifecycleUpdate protobuf)
+		// if gpu := nu.GetGpu(); gpu != nil {
+		//     state.DefaultManager().SetNodeGPUInfo(nu.GetNodeId(), gpu.GetVendor(), int(gpu.GetCount()), int(gpu.GetMemoryMb()), gpu.GetComputeCapability())
+		// }
+
+		// Calculate total connections across all streams for virtual viewer reconciliation
+		var totalConnections int
+		for _, s := range nu.GetStreams() {
+			totalConnections += int(s.GetTotal())
+		}
+
+		// Reconcile virtual viewers with real metrics from Helmsman: times out
+		// stale PENDING viewers and updates bandwidth estimates
+		state.DefaultManager().ReconcileVirtualViewers(nu.GetNodeId(), totalConnections, nu.GetUpSpeed())
+
+		// Update stream stats for each stream
+		// CRITICAL: Extract internal name to match state keys (e.g., "live+demo_stream" -> "demo_stream")
+		observedStreams := make(map[string]struct{}, len(nu.GetStreams()))
+		for streamName, s := range nu.GetStreams() {
+			internalName := mist.ExtractInternalName(streamName)
+			if allowed, err := runtimeObservationAllowed(context.Background(), nu.GetNodeId(), streamName); err != nil || !allowed {
+				continue
+			}
+			observedStreams[internalName] = struct{}{}
+			replicated := s.GetReplicated()
+			if !replicated && control.StreamRegistryInstance != nil {
+				if _, ok := control.StreamRegistryInstance.LocalReplicationForNode(context.Background(), internalName, nu.GetNodeId()); ok {
+					replicated = true
+				}
+			}
+			state.DefaultManager().ObserveRuntimeNodeSnapshotStream(internalName, nu.GetNodeId(), streamName, int(s.GetTotal()), int(s.GetInputs()), int64(s.GetBytesUp()), int64(s.GetBytesDown()), replicated)
+		}
+		// Absence clears only a pull the node was seen carrying with no arrangement
+		// or viewer hand-out since: the destination has not started such a pull
+		// yet, and a snapshot sampled before Mist asked for its source cannot list it.
+		if cleared := state.DefaultManager().ReconcileNodeStreamPresence(nu.GetNodeId(), observedStreams); len(cleared) > 0 {
+			p.endStreamsLostAcrossReconnect(nu.GetNodeId(), cleared, time.Now())
+			for _, absent := range cleared {
+				if control.StreamRegistryInstance != nil && control.StreamRegistryInstance.ClearReplicatingForNode(absent.InternalName, nu.GetNodeId(), absent.SnapshotPresentAt) {
+					p.logger.WithFields(logging.Fields{
+						"node_id":       nu.GetNodeId(),
+						"internal_name": absent.InternalName,
+					}).Info("Node lifecycle cleared stale replicated stream")
+				}
+			}
+		}
+		// A pull the node still does not list once its start grace has passed was
+		// never started; this snapshot was received after the grace, so it cannot
+		// predate the destination's chance to start it.
+		if control.StreamRegistryInstance != nil {
+			for _, internalName := range control.StreamRegistryInstance.ClearUnstartedInboundPulls(context.Background(), nu.GetNodeId(), observedStreams, time.Now()) {
 				p.logger.WithFields(logging.Fields{
 					"node_id":       nu.GetNodeId(),
-					"internal_name": absent.InternalName,
-				}).Info("Node lifecycle cleared stale replicated stream")
+					"internal_name": internalName,
+				}).Info("Node lifecycle cleared origin pull the destination never started")
 			}
 		}
-	}
-	// A pull the node still does not list once its start grace has passed was
-	// never started; this snapshot was received after the grace, so it cannot
-	// predate the destination's chance to start it.
-	if control.StreamRegistryInstance != nil {
-		for _, internalName := range control.StreamRegistryInstance.ClearUnstartedInboundPulls(context.Background(), nu.GetNodeId(), observedStreams, time.Now()) {
-			p.logger.WithFields(logging.Fields{
-				"node_id":       nu.GetNodeId(),
-				"internal_name": internalName,
-			}).Info("Node lifecycle cleared origin pull the destination never started")
-		}
-	}
 
-	previousArtifacts := func() []*ipcpb.StoredArtifact {
-		nodeState := state.DefaultManager().GetNodeState(nu.GetNodeId())
-		if nodeState == nil {
-			return nil
-		}
-		return nodeState.Artifacts
-	}()
+		previousArtifacts := func() []*ipcpb.StoredArtifact {
+			nodeState := state.DefaultManager().GetNodeState(nu.GetNodeId())
+			if nodeState == nil {
+				return nil
+			}
+			return nodeState.Artifacts
+		}()
 
-	// Update artifacts directly from protobuf - this is critical for VOD playback. Every connected sidecar is
-	// inventory-authoritative (registration enforces MinControlProtocolVersion), so inventory authority is
-	// session-owned, never selected by a payload field. Two apply modes remain:
-	//   1. A snapshot the sidecar FLAGS as incomplete (no complete filesystem scan yet) is not applied and cordons
-	//      the node — the sidecar's own "I could not scan" signal.
-	//   2. A VERSIONED report (report_seq > 0) is applied as an AUTHORITATIVE whole-node inventory: an empty slice
-	//      clears stale artifacts from a node that has lost all local files (prevents ghost routing).
-	// A report with report_seq <= 0 from an authoritative session is a protocol violation (not a legacy downgrade —
-	// there is no legacy path): it is dropped, never silently applied under weaker semantics.
-	switch {
-	case nu.GetArtifactsSnapshotIncomplete():
-		// The sidecar could not complete its scan (cold start OR a lost mount / read error): its last
-		// reported inventory may now be stale. Do NOT apply it (retain last-good), AND cordon the node
-		// from artifact routing — merely skipping would leave ArtifactInventoryReady=true, keeping a
-		// vanished disk's copies routable indefinitely. The cordon is ordered by (fence, seq) so a
-		// superseded report can't cordon a node a newer complete report already made ready.
-		if err := state.DefaultManager().CordonNodeArtifactsIncomplete(nu.GetNodeId(),
-			state.ArtifactReportOrder{Fence: nu.GetArtifactsConnectionFence(), Seq: nu.GetArtifactsReportSeq()}); err != nil {
-			p.logger.WithField("node_id", nu.GetNodeId()).WithError(err).
-				Debug("Incomplete-scan cordon not applied (superseded by a newer fenced report)")
-		} else {
+		// Update artifacts directly from protobuf - this is critical for VOD playback. Every connected sidecar is
+		// inventory-authoritative (registration enforces MinControlProtocolVersion), so inventory authority is
+		// session-owned, never selected by a payload field. Two apply modes remain:
+		//   1. A snapshot the sidecar FLAGS as incomplete (no complete filesystem scan yet) is not applied and cordons
+		//      the node — the sidecar's own "I could not scan" signal.
+		//   2. A VERSIONED report (report_seq > 0) is applied as an AUTHORITATIVE whole-node inventory: an empty slice
+		//      clears stale artifacts from a node that has lost all local files (prevents ghost routing).
+		// A report with report_seq <= 0 from an authoritative session is a protocol violation (not a legacy downgrade —
+		// there is no legacy path): it is dropped, never silently applied under weaker semantics.
+		switch {
+		case nu.GetArtifactsSnapshotIncomplete():
+			// The sidecar could not complete its scan (cold start OR a lost mount / read error): its last
+			// reported inventory may now be stale. Do NOT apply it (retain last-good), AND cordon the node
+			// from artifact routing — merely skipping would leave ArtifactInventoryReady=true, keeping a
+			// vanished disk's copies routable indefinitely. The cordon is ordered by (fence, seq) so a
+			// superseded report can't cordon a node a newer complete report already made ready.
+			if err := state.DefaultManager().CordonNodeArtifactsIncomplete(nu.GetNodeId(),
+				state.ArtifactReportOrder{Fence: nu.GetArtifactsConnectionFence(), Seq: nu.GetArtifactsReportSeq()}); err != nil {
+				p.logger.WithField("node_id", nu.GetNodeId()).WithError(err).
+					Debug("Incomplete-scan cordon not applied (superseded by a newer fenced report)")
+			} else {
+				p.logger.WithField("node_id", nu.GetNodeId()).
+					Warn("Cordoned node from artifact routing: sidecar reported an incomplete scan (last-good inventory retained, not orphaned)")
+			}
+		case nu.GetArtifactsReportSeq() <= 0:
+			// Protocol violation: an authoritative session (the only kind that can connect) must send a versioned
+			// report. Drop it rather than apply an unordered whole-node snapshot; the node stays on its last accepted
+			// inventory until a valid versioned report arrives.
 			p.logger.WithField("node_id", nu.GetNodeId()).
-				Warn("Cordoned node from artifact routing: sidecar reported an incomplete scan (last-good inventory retained, not orphaned)")
+				Warn("Dropping unversioned artifact report from an authoritative session (report_seq<=0); expected a versioned report")
+		default:
+			// A superseded report (a newer connection fence already won the artifact inventory) leaves
+			// this node cordoned; there is no accepted inventory change to propagate downstream, so only
+			// notify on a successful apply.
+			if err := state.DefaultManager().SetNodeArtifacts(nu.GetNodeId(), nu.GetArtifacts(),
+				state.ArtifactReportOrder{
+					Fence: nu.GetArtifactsConnectionFence(), Seq: nu.GetArtifactsReportSeq(),
+					ReportedAtMs: nu.GetArtifactsReportedAtMs(),
+				}); err != nil {
+				p.logger.WithField("node_id", nu.GetNodeId()).WithError(err).
+					Debug("Node artifact report not applied (superseded by a newer fence)")
+			} else if !artifactMapsEqual(previousArtifacts, nu.GetArtifacts()) {
+				control.NotifyArtifactMapUpdated(nu.GetNodeId())
+			}
 		}
-	case nu.GetArtifactsReportSeq() <= 0:
-		// Protocol violation: an authoritative session (the only kind that can connect) must send a versioned
-		// report. Drop it rather than apply an unordered whole-node snapshot; the node stays on its last accepted
-		// inventory until a valid versioned report arrives.
-		p.logger.WithField("node_id", nu.GetNodeId()).
-			Warn("Dropping unversioned artifact report from an authoritative session (report_seq<=0); expected a versioned report")
-	default:
-		// A superseded report (a newer connection fence already won the artifact inventory) leaves
-		// this node cordoned; there is no accepted inventory change to propagate downstream, so only
-		// notify on a successful apply.
-		if err := state.DefaultManager().SetNodeArtifacts(nu.GetNodeId(), nu.GetArtifacts(),
-			state.ArtifactReportOrder{
-				Fence: nu.GetArtifactsConnectionFence(), Seq: nu.GetArtifactsReportSeq(),
-				ReportedAtMs: nu.GetArtifactsReportedAtMs(),
-			}); err != nil {
-			p.logger.WithField("node_id", nu.GetNodeId()).WithError(err).
-				Debug("Node artifact report not applied (superseded by a newer fence)")
-		} else if !artifactMapsEqual(previousArtifacts, nu.GetArtifacts()) {
-			control.NotifyArtifactMapUpdated(nu.GetNodeId())
+
+		// Enrich with database UUID for subscription lookups (frontend uses UUID, not logical name)
+		if uuid := p.resolveNodeUUID(nu.GetNodeId()); uuid != "" {
+			nu.NodeUuid = &uuid
 		}
-	}
 
-	// Enrich with database UUID for subscription lookups (frontend uses UUID, not logical name)
-	if uuid := p.resolveNodeUUID(nu.GetNodeId()); uuid != "" {
-		nu.NodeUuid = &uuid
-	}
+		// Resolve owner tenant dynamically from the node's cluster (Foghorn manages many clusters).
+		ownerTID := ""
+		if cID := p.resolveNodeClusterID(nu.GetNodeId()); cID != "" {
+			ownerTID = p.resolveClusterOwnerTenantID(cID)
+		}
+		if ownerTID == "" {
+			ownerTID = p.ownerTenantID
+		}
+		if (trigger.TenantId == nil || *trigger.TenantId == "") && ownerTID != "" {
+			trigger.TenantId = &ownerTID
+		}
+		if (nu.TenantId == nil || *nu.TenantId == "") && ownerTID != "" {
+			nu.TenantId = &ownerTID
+		}
 
-	// Resolve owner tenant dynamically from the node's cluster (Foghorn manages many clusters).
-	ownerTID := ""
-	if cID := p.resolveNodeClusterID(nu.GetNodeId()); cID != "" {
-		ownerTID = p.resolveClusterOwnerTenantID(cID)
-	}
-	if ownerTID == "" {
-		ownerTID = p.ownerTenantID
-	}
-	if (trigger.TenantId == nil || *trigger.TenantId == "") && ownerTID != "" {
-		trigger.TenantId = &ownerTID
-	}
-	if (nu.TenantId == nil || *nu.TenantId == "") && ownerTID != "" {
-		nu.TenantId = &ownerTID
-	}
+		// Forward complete node lifecycle event to Decklog using protobuf directly
+		if node := state.DefaultManager().GetNodeState(nu.GetNodeId()); node != nil {
+			budget := node.Capacity
+			if budget == nil {
+				budget = state.DefaultNodeCapacity()
+			}
+			nu.BwLimit = budget.GetEgressBudgetBytesPerSec()
+			nu.EgressBudgetBytesPerSec = budget.GetEgressBudgetBytesPerSec()
+			nu.BudgetSource = budget.GetEgressSource()
+			nu.UpSpeed = node.EgressLink().Observed
+			nu.DownSpeed = node.IngressLink().Observed
+			nu.IsHealthy = node.IsHealthy
+		}
+		// CRITICAL: Strip artifacts before sending to Decklog/Analytics to avoid excessive data
+		nu.Artifacts = nil
+		if err := p.sendTriggerToDecklog(trigger); err != nil {
+			p.logger.WithFields(logging.Fields{
+				"node_id":      nu.GetNodeId(),
+				"trigger_type": trigger.GetTriggerType(),
+				"error":        err,
+			}).Error("Failed to send node lifecycle update to Decklog")
+		}
 
-	// Forward complete node lifecycle event to Decklog using protobuf directly
-	// CRITICAL: Strip artifacts before sending to Decklog/Analytics to avoid excessive data
-	nu.Artifacts = nil
-	if err := p.sendTriggerToDecklog(trigger); err != nil {
-		p.logger.WithFields(logging.Fields{
-			"node_id":      nu.GetNodeId(),
-			"trigger_type": trigger.GetTriggerType(),
-			"error":        err,
-		}).Error("Failed to send node lifecycle update to Decklog")
+	})
+	if errors.Is(reportErr, state.ErrNodeStreamCountsSuperseded) {
+		p.logger.WithField("node_id", nu.GetNodeId()).Debug("Dropped superseded node report")
+	} else if reportErr != nil {
+		p.logger.WithError(reportErr).WithField("node_id", nu.GetNodeId()).Warn("Node audience census was not durably published")
 	}
 
 	return "", false, nil
@@ -7656,23 +7784,14 @@ func redactStreamKeyInURL(pushURL, streamKey string) string {
 	return key.ReplaceAllLiteralString(pushURL, logging.RedactSecret(streamKey))
 }
 
-// detectProtocol extracts protocol from push URL
-func (p *Processor) detectProtocol(pushURL string) string {
-	if pushURL == "" {
-		return ""
+// ingestEventProtocol preserves unmapped connector names for analytics without
+// inventing a supported public ingest protocol for them.
+func ingestEventProtocol(connector string) string {
+	protocol, err := mist.IngestProtocol(connector)
+	if err == nil {
+		return protocol
 	}
-
-	if strings.HasPrefix(pushURL, "rtmp://") {
-		return "rtmp"
-	} else if strings.HasPrefix(pushURL, "srt://") {
-		return "srt"
-	} else if strings.HasPrefix(pushURL, "whip://") {
-		return "whip"
-	} else if strings.HasPrefix(pushURL, "http://") || strings.HasPrefix(pushURL, "https://") {
-		return "http"
-	}
-
-	return ""
+	return strings.ToLower(strings.TrimSpace(connector))
 }
 
 // NodeConfig represents node configuration including geographic data
@@ -8501,7 +8620,7 @@ func floatInRange(raw string, fallback, min, max float64) float64 {
 
 // ingestLoadThresholds returns the broadcaster-admission policy. Defaults:
 //   - over-allowance free is rejected at 50% cluster load
-//   - any free (incl. within-allowance) is rejected at 95% (redline)
+//   - any free (incl. within-allowance) is rejected at 85% (redline)
 //
 // Configurable via FOGHORN_INGEST_REJECT_OVER_ALLOWANCE_LOAD and
 // FOGHORN_INGEST_REJECT_FREE_LOAD.
@@ -8509,13 +8628,13 @@ func ingestLoadThresholds() loadThresholds {
 	settings := appconfig.Current()
 	return loadThresholds{
 		rejectOverAllowance: floatInRange(settings.IngestRejectOverAllowanceLoad, 0.5, 0, 1),
-		rejectAnyFree:       floatInRange(settings.IngestRejectFreeLoad, 0.95, 0, 1),
+		rejectAnyFree:       min(capacity.MaxUtilization, floatInRange(settings.IngestRejectFreeLoad, capacity.MaxUtilization, 0, 1)),
 	}
 }
 
 // viewerLoadThresholds returns the viewer-admission policy. Defaults:
 //   - over-allowance broadcaster's viewers rejected at 80%
-//   - any viewer of a free broadcaster rejected at 95% (redline)
+//   - any viewer of a free broadcaster rejected at 85% (redline)
 //
 // Viewers are cheaper individually but multiply faster than ingest, so the
 // over-allowance reject point is higher than ingest's 50%.
@@ -8523,7 +8642,7 @@ func viewerLoadThresholds() loadThresholds {
 	settings := appconfig.Current()
 	return loadThresholds{
 		rejectOverAllowance: floatInRange(settings.ViewerRejectOverAllowanceLoad, 0.8, 0, 1),
-		rejectAnyFree:       floatInRange(settings.ViewerRejectFreeLoad, 0.95, 0, 1),
+		rejectAnyFree:       min(capacity.MaxUtilization, floatInRange(settings.ViewerRejectFreeLoad, capacity.MaxUtilization, 0, 1)),
 	}
 }
 
@@ -8560,7 +8679,7 @@ func clusterLoadFraction(clusterID string) (frac float64, ok bool) {
 
 // evaluateFreeTierAdmission applies the three-tier ingest gate. Free tenants
 // past their allowance are rejected at 50% cluster load; all free tenants are
-// rejected at the 95% redline. Existing live streams are never killed —
+// rejected at the 85% redline. Existing live streams are never killed —
 // rejection applies only to new PUSH_REWRITE admissions.
 func (p *Processor) evaluateFreeTierAdmission(streamValidation *commodorepb.ValidateStreamKeyResponse, clusterID string) (string, bool) {
 	if streamValidation == nil {

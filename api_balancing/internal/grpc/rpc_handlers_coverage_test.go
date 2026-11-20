@@ -211,7 +211,7 @@ func deleteLookupCols() []string {
 		"status", "s3_key", "s3_url", "format",
 		"size_bytes", "retention_until", "user_id",
 		"storage_cluster_id", "origin_cluster_id", "origin_type",
-		"active_object_key", "active_dtsh_key", "sync_object_key", "durable_backend_local", "backend_id",
+		"active_object_key", "active_dtsh_key", "sync_object_key", "durable_backend_local", "backend_id", "original_s3_key",
 	}
 }
 
@@ -248,7 +248,7 @@ func TestDeleteVodAsset_AlreadyDeletedIsNoOp_RpcHandlers(t *testing.T) {
 			"deleted", "", sql.NullString{}, sql.NullString{},
 			sql.NullInt64{}, sql.NullTime{}, sql.NullString{},
 			sql.NullString{}, sql.NullString{}, "",
-			sql.NullString{}, sql.NullString{}, sql.NullString{}, false, sql.NullString{},
+			sql.NullString{}, sql.NullString{}, sql.NullString{}, false, sql.NullString{}, nil,
 		))
 
 	resp, err := srv.DeleteVodAsset(context.Background(), &sharedpb.DeleteVodAssetRequest{
@@ -279,7 +279,7 @@ func TestDeleteVodAsset_SoftDeletesReadyAsset_RpcHandlers(t *testing.T) {
 			"synced", "vod/t1/hash/video.mp4", sql.NullString{}, sql.NullString{},
 			sql.NullInt64{Int64: 2048, Valid: true}, sql.NullTime{}, sql.NullString{},
 			sql.NullString{}, sql.NullString{}, "",
-			sql.NullString{}, sql.NullString{}, sql.NullString{}, false, sql.NullString{},
+			sql.NullString{}, sql.NullString{}, sql.NullString{}, false, sql.NullString{}, nil,
 		))
 	// DURABLE STATE FIRST: soft-delete (guarded, tenant-scoped) + DELETED lifecycle event commit
 	// atomically BEFORE any physical cleanup.
@@ -355,7 +355,7 @@ func TestDeleteVodAsset_ReplayAfterLostRaceDoesNotClaimDelete_RpcHandlers(t *tes
 			"synced", "vod/t1/hash/video.mp4", sql.NullString{}, sql.NullString{},
 			sql.NullInt64{Int64: 2048, Valid: true}, sql.NullTime{}, sql.NullString{},
 			sql.NullString{}, sql.NullString{}, "",
-			sql.NullString{}, sql.NullString{}, sql.NullString{}, false, sql.NullString{},
+			sql.NullString{}, sql.NullString{}, sql.NullString{}, false, sql.NullString{}, nil,
 		))
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn\.artifacts SET status = 'deleted'`).

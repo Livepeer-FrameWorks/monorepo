@@ -40,22 +40,6 @@ sidebar:
 - **idempotencyKey**: `String!`
 - **acknowledgedWarningIds**: `[String!]!`
 
-## ArtifactTrack
-
-**object**
-
-A single A/V (or meta) track of a finalized artifact.
-
-- **type**: `String!` — &#34;video&#34; &#124; &#34;audio&#34; &#124; &#34;meta&#34;
-- **codec**: `String!`
-- **width**: `Int`
-- **height**: `Int`
-- **fps**: `Float`
-- **resolution**: `String`
-- **bitrateKbps**: `Int`
-- **channels**: `Int`
-- **sampleRate**: `Int`
-
 ## ClipCreationMode
 
 **enum**
@@ -113,17 +97,28 @@ Input for creating a clip from a live stream&#39;s DVR buffer. Time specificatio
 - Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
 - Member: [AuthError](/builders/api-schema/shared/#autherror)
 
+## CreateVodOriginalDownloadResult
+
+**union**
+
+- Member: [VodOriginalDownload](/builders/api-schema/media-types/#vodoriginaldownload)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
 ## CreateVodUploadInput
 
 **input_object**
 
 Input for initiating a multipart VOD upload. Returns presigned S3 URLs for uploading file parts.
 
-- **filename**: `String!` — Original filename (for metadata and content-type detection).
+- **filename**: `String!` — Original filename. Supported containers: mp4, mov, mkv, webm, ts, m2ts, mts, avi, flv, m4v. Playlists are refused.
 - **sizeBytes**: `Float!` — Total file size in bytes (required for part calculation).
 - **contentType**: `String` — MIME type (video/mp4, video/webm, etc.). Auto-detected if omitted.
 - **title**: `String` — Optional display title for the asset.
 - **description**: `String` — Optional description for the asset.
+- **transcodeLadder**: `String` — Video ladder for this upload; empty inherits the account, then plan default.
+- **keepOriginal**: `Boolean` — Keep the byte-identical original, billed as storage and counted toward the cap. Omitted inherits the account default.
 
 ## CreateVodUploadResult
 
@@ -149,6 +144,24 @@ A single chapter view of a DVR recording. playbackId is the Commodore-minted pub
 - **wallClockEndUnixMs**: `Float!` — Absolute Unix epoch ms of the playable MKV span end; falls back to the scheduled chapter end before finalization.
 - **playableNow**: `Boolean!` — True when state ∈ &#123;FINALIZED, FROZEN, RECLAIMED&#125;.
 - **lastFailureReason**: `String` — Last finalization failure message (operator-facing); null on success or in-progress.
+
+## DVRChapterConnection
+
+**object**
+
+A keyset-paginated view of a recording&#39;s saved chapters.
+
+- **edges**: `[DVRChapterEdge!]!` ([DVRChapterEdge](/builders/api-schema/media-types/#dvrchapteredge))
+- **nodes**: `[DVRChapterRef!]!` ([DVRChapterRef](/builders/api-schema/media-types/#dvrchapterref))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## DVRChapterEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `DVRChapterRef!` ([DVRChapterRef](/builders/api-schema/media-types/#dvrchapterref))
 
 ## DVRChapterRef
 
@@ -196,6 +209,10 @@ A page of DVR chapter refs. Paginated for unbounded artifact lifetime: default p
 
 **object**
 
+- **chapters**: `DVRChapterConnection` ([DVRChapterConnection](/builders/api-schema/media-types/#dvrchapterconnection)) — Saved chapters, paged by their start time and ID. Range bounds are UTC epoch milliseconds.
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `rangeStartMs`: `Float`
+  - `rangeEndMs`: `Float`
 - **id**: `ID`
 - **dvrHash**: `ID!`
 - **playbackId**: `String!`
@@ -250,6 +267,15 @@ A page of DVR chapter refs. Paginated for unbounded artifact lifetime: default p
 - Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
 - Member: [AuthError](/builders/api-schema/shared/#autherror)
 
+## DeleteVodOriginalResult
+
+**union**
+
+- Member: [DeleteSuccess](/builders/api-schema/shared/#deletesuccess)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
 ## ImportVodAssetInput
 
 **input_object**
@@ -257,9 +283,10 @@ A page of DVR chapter refs. Paginated for unbounded artifact lifetime: default p
 Import a video from a public URL for VOD processing.
 
 - **url**: `String!` — Source URL, https or http. It must be publicly reachable and support HTTP range requests; private and internal addresses are refused.
-- **filename**: `String` — Filename to store the video under. Required when the URL path does not end in a supported video extension (mp4, mov, mkv, webm, ts).
+- **filename**: `String` — Filename to store the video under. Required when the URL path does not end in a supported video extension (mp4, mov, mkv, webm, ts, m2ts, mts).
 - **title**: `String` — Optional display title for the asset.
 - **description**: `String` — Optional description for the asset.
+- **transcodeLadder**: `String` — Video ladder for this import; empty inherits the account, then plan default.
 
 ## ImportVodAssetResult
 
@@ -823,6 +850,8 @@ Tenant-default retention policy: per-class overrides + the values the cascade wo
 - **effectiveVodRetentionDays**: `Int!` — Effective VOD horizon the cascade resolves to today (0 = keep forever).
 - **effectiveDvrRetentionDays**: `Int!` — Effective DVR horizon the cascade resolves to today (0 = keep forever).
 - **effectiveClipRetentionDays**: `Int!` — Effective clip horizon the cascade resolves to today (0 = keep forever).
+- **keepVodOriginals**: `Boolean` — Account default for new uploads. Null inherits the system default (keep).
+- **effectiveKeepVodOriginals**: `Boolean!` — Effective original-retention default for new uploads.
 
 ## MediaRetentionTarget
 
@@ -908,6 +937,20 @@ Asset class targeted by a retention operation. Each class has its own column in 
 - Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
 - Member: [AuthError](/builders/api-schema/shared/#autherror)
 
+## SetTranscodeLadderPolicyInput
+
+**input_object**
+
+- **ladder**: `String`
+
+## SetTranscodeLadderPolicyResult
+
+**union**
+
+- Member: [TranscodeLadderPolicy](/builders/api-schema/media-types/#transcodeladderpolicy)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
 ## SortDirection
 
 **enum**
@@ -931,41 +974,6 @@ Asset class targeted by a retention operation. Each class has its own column in 
 - Member: [DeleteSuccess](/builders/api-schema/shared/#deletesuccess)
 - Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
 - Member: [AuthError](/builders/api-schema/shared/#autherror)
-
-## StorageArtifact
-
-**object**
-
-- **key**: `ID!`
-- **kind**: `StorageArtifactKind!` ([StorageArtifactKind](/builders/api-schema/shared/#storageartifactkind))
-- **id**: `ID!`
-- **hash**: `String!`
-- **playbackId**: `String`
-- **streamId**: `ID`
-- **streamTitle**: `String!`
-- **title**: `String!`
-- **secondaryLabel**: `String!`
-- **description**: `String` — User-provided description (VOD uploads and clips); null when unset.
-- **errorMessage**: `String` — Processing failure detail for a failed artifact; null when not failed.
-- **sizeBytes**: `Float`
-- **status**: `String!`
-- **storageLocation**: `String`
-- **storageClusterId**: `String` — ID of the storage cluster the artifact is durably stored in (control-plane truth from Commodore).
-- **syncStatus**: `String`
-- **hasLocalCopy**: `Boolean` — Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not &#39;no local copy&#39;. Durable S3-only state is derived by consumers as isSynced &amp;&amp; hasLocalCopy == false.
-- **isSynced**: `Boolean`
-- **isFinalized**: `Boolean`
-- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
-- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
-- **expiresAt**: `Time` ([Time](/builders/api-schema/shared/#time))
-- **effectiveRetention**: `EffectiveRetention` ([EffectiveRetention](/builders/api-schema/shared/#effectiveretention))
-- **storageCost**: `StorageCostProjection` ([StorageCostProjection](/builders/api-schema/shared/#storagecostprojection))
-- **deleteId**: `ID!`
-- **retentionId**: `ID!`
-- **thumbnailUrl**: `String`
-- **thumbnailAssets**: `ThumbnailAssets` ([ThumbnailAssets](/builders/api-schema/shared/#thumbnailassets)) — Poster + hover-scrub sprite assets, when the artifact has thumbnails.
-- **durationSeconds**: `Float` — Media duration in seconds. Clips retain their requested duration until measured; DVR/VOD duration may be null until finalized.
-- **tracks**: `[ArtifactTrack!]!` ([ArtifactTrack](/builders/api-schema/media-types/#artifacttrack)) — Finalized A/V track summary (per track), captured from the completion-validated processing result and projected onto the catalog. Empty until finalized.
 
 ## StorageArtifactKindCounts
 
@@ -993,7 +1001,7 @@ Per-kind artifact counts for the account (or filtered scope), for the library ta
 
 **object**
 
-- **nodes**: `[StorageArtifact!]!` ([StorageArtifact](/builders/api-schema/media-types/#storageartifact))
+- **nodes**: `[StorageArtifact!]!` ([StorageArtifact](/builders/api-schema/shared/#storageartifact))
 - **totalCount**: `Int!`
 - **hasNextPage**: `Boolean!`
 - **limit**: `Int!`
@@ -1015,6 +1023,26 @@ Per-kind artifact counts for the account (or filtered scope), for the library ta
 - **sort**: `StorageArtifactSortField` ([StorageArtifactSortField](/builders/api-schema/media-types/#storageartifactsortfield))
 - **direction**: `SortDirection` ([SortDirection](/builders/api-schema/media-types/#sortdirection))
 
+## TranscodeLadder
+
+**object**
+
+A named video rendition ladder, with rungs skipped for smaller sources.
+
+- **name**: `String!`
+- **displayName**: `String!`
+- **description**: `String!`
+- **renditionNames**: `[String!]!`
+
+## TranscodeLadderPolicy
+
+**object**
+
+- **ladders**: `[TranscodeLadder!]!` ([TranscodeLadder](/builders/api-schema/media-types/#transcodeladder))
+- **planDefault**: `String!`
+- **tenantLadder**: `String`
+- **effectiveLadder**: `String!`
+
 ## UpdateMediaRetentionInput
 
 **input_object**
@@ -1032,6 +1060,17 @@ Per-kind artifact counts for the account (or filtered scope), for the library ta
 - Member: [ValidationError](/builders/api-schema/shared/#validationerror)
 - Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
 - Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## VodOriginalDownload
+
+**object**
+
+Short-lived download of the byte-identical original upload, without playback metering.
+
+- **url**: `String!`
+- **expiresAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **sizeBytes**: `Float!`
+- **filename**: `String!`
 
 ## VodUploadCompletedPart
 
@@ -1064,6 +1103,7 @@ Response from createVodUpload with S3 multipart upload instructions. Use the pre
 - **partSize**: `Float!` — Recommended part size in bytes.
 - **parts**: `[VodUploadPart!]!` ([VodUploadPart](/builders/api-schema/media-types/#voduploadpart)) — Presigned URLs for each part.
 - **expiresAt**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When presigned URLs expire (typically 2 hours).
+- **keepOriginal**: `Boolean` — Effective original-retention policy accepted for this upload. Null when an older server cannot report it.
 
 ## VodUploadStatus
 
