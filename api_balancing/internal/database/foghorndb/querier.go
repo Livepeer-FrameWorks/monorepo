@@ -238,7 +238,7 @@ type Querier interface {
 	FailDtshAttempt(ctx context.Context, arg FailDtshAttemptParams) (string, error)
 	FailExhaustedOfflineEffects(ctx context.Context) ([]FailExhaustedOfflineEffectsRow, error)
 	// The last arm is the progress watchdog: an active job whose media position has
-	// not advanced since $5, however recently its lease heartbeat refreshed updated_at.
+	// not advanced since sqlc.narg(progress_advanced_at)::timestamp, however recently its lease heartbeat refreshed updated_at.
 	FailExhaustedProcessingJob(ctx context.Context, arg FailExhaustedProcessingJobParams) (FailExhaustedProcessingJobRow, error)
 	FailExpiredThumbnailAttempt(ctx context.Context, attemptID string) (int64, error)
 	FailMainArtifactSync(ctx context.Context, arg FailMainArtifactSyncParams) error
@@ -629,8 +629,8 @@ type Querier interface {
 	LockIngestStream(ctx context.Context, hashtext string) error
 	LockMediaAuthority(ctx context.Context, arg LockMediaAuthorityParams) error
 	LockProcessingArtifactForCompletion(ctx context.Context, jobID string) (LockProcessingArtifactForCompletionRow, error)
-	LockProcessingJobForCompletion(ctx context.Context, jobID string) (LockProcessingJobForCompletionRow, error)
-	LockProcessingJobForFailure(ctx context.Context, jobID string) (LockProcessingJobForFailureRow, error)
+	LockProcessingJobForCompletion(ctx context.Context, arg LockProcessingJobForCompletionParams) (LockProcessingJobForCompletionRow, error)
+	LockProcessingJobForFailure(ctx context.Context, arg LockProcessingJobForFailureParams) (LockProcessingJobForFailureRow, error)
 	LockProcessingJobIdentity(ctx context.Context, arg LockProcessingJobIdentityParams) error
 	LockPublishableThumbnailAttempt(ctx context.Context, arg LockPublishableThumbnailAttemptParams) (LockPublishableThumbnailAttemptRow, error)
 	LockSyncFailureAttempt(ctx context.Context, arg LockSyncFailureAttemptParams) (LockSyncFailureAttemptRow, error)
@@ -807,6 +807,7 @@ type Querier interface {
 	RequeueActivePushTargetActivationByID(ctx context.Context, arg RequeueActivePushTargetActivationByIDParams) (int64, error)
 	// Capacity backpressure is not a failed processing attempt. Only the assigned
 	// node can return an active job, and the queue delay bounds redispatch traffic.
+	// The assigned job supplies the tenant when an older edge omits its echo.
 	RequeueCapacityDeferredProcessingJob(ctx context.Context, arg RequeueCapacityDeferredProcessingJobParams) (int32, error)
 	// Requeues a job its node reported as failed in a retryable way, while the
 	// retry budget lasts. Bound to the reporting node like every result. The job
@@ -896,6 +897,7 @@ type Querier interface {
 	UpdateArtifactReportMetadata(ctx context.Context, arg UpdateArtifactReportMetadataParams) error
 	UpdateChapterFinalizeProgress(ctx context.Context, arg UpdateChapterFinalizeProgressParams) (UpdateChapterFinalizeProgressRow, error)
 	UpdateCompletedVODMetadata(ctx context.Context, arg UpdateCompletedVODMetadataParams) error
+	// Older edges omit the tenant echo; only the assigned node can recover it from the job.
 	UpdateProcessingJobCache(ctx context.Context, arg UpdateProcessingJobCacheParams) (int64, error)
 	// updated_at is the lease; progress_advanced_at moves only when the reported percentage or
 	// media position increases, which is what the stale-recovery watchdog reads. The same

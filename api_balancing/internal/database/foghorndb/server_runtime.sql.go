@@ -450,9 +450,9 @@ func (q *Queries) GetSyncCompletionAttempt(ctx context.Context, arg GetSyncCompl
 }
 
 const lockProcessingArtifactForCompletion = `-- name: LockProcessingArtifactForCompletion :one
-SELECT a.artifact_hash, COALESCE(a.artifact_type, '')::text AS artifact_type, COALESCE(a.tenant_id::text, '')::text AS tenant_id, COALESCE(a.stream_id::text, '')::text AS stream_id, COALESCE(a.stream_internal_name, '')::text AS stream_internal_name, COALESCE(a.s3_url, '')::text AS s3_url, COALESCE(a.format, '')::text AS format,
+SELECT a.artifact_hash, COALESCE(a.artifact_type, '')::text AS artifact_type, COALESCE(a.tenant_id::text, pj.tenant_id::text, '')::text AS tenant_id, COALESCE(a.stream_id::text, '')::text AS stream_id, COALESCE(a.stream_internal_name, '')::text AS stream_internal_name, COALESCE(a.s3_url, '')::text AS s3_url, COALESCE(a.format, '')::text AS format,
 COALESCE((pj.source_params->>'source_start_unix')::bigint, 0)::bigint AS requested_start_unix, COALESCE((pj.source_params->>'source_stop_unix')::bigint, 0)::bigint AS requested_stop_unix
-FROM foghorn.processing_jobs pj JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash WHERE pj.job_id = $1 FOR UPDATE OF a
+FROM foghorn.processing_jobs pj JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash AND pj.tenant_id = a.tenant_id WHERE pj.job_id = $1 FOR UPDATE OF a
 `
 
 type LockProcessingArtifactForCompletionRow struct {
@@ -485,8 +485,14 @@ func (q *Queries) LockProcessingArtifactForCompletion(ctx context.Context, jobID
 }
 
 const lockProcessingJobForCompletion = `-- name: LockProcessingJobForCompletion :one
-SELECT status, COALESCE(processing_node_id, '') AS processing_node_id, job_type FROM foghorn.processing_jobs WHERE job_id = $1 FOR UPDATE
+SELECT status, COALESCE(processing_node_id, '') AS processing_node_id, job_type FROM foghorn.processing_jobs WHERE job_id = $1
+AND tenant_id::text = COALESCE(NULLIF($2::text, ''), tenant_id::text) FOR UPDATE
 `
+
+type LockProcessingJobForCompletionParams struct {
+	JobID    string `db:"job_id" json:"job_id"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+}
 
 type LockProcessingJobForCompletionRow struct {
 	Status           sql.NullString `db:"status" json:"status"`
@@ -494,17 +500,23 @@ type LockProcessingJobForCompletionRow struct {
 	JobType          string         `db:"job_type" json:"job_type"`
 }
 
-func (q *Queries) LockProcessingJobForCompletion(ctx context.Context, jobID string) (LockProcessingJobForCompletionRow, error) {
-	row := q.db.QueryRowContext(ctx, lockProcessingJobForCompletion, jobID)
+func (q *Queries) LockProcessingJobForCompletion(ctx context.Context, arg LockProcessingJobForCompletionParams) (LockProcessingJobForCompletionRow, error) {
+	row := q.db.QueryRowContext(ctx, lockProcessingJobForCompletion, arg.JobID, arg.TenantID)
 	var i LockProcessingJobForCompletionRow
 	err := row.Scan(&i.Status, &i.ProcessingNodeID, &i.JobType)
 	return i, err
 }
 
 const lockProcessingJobForFailure = `-- name: LockProcessingJobForFailure :one
-SELECT pj.status, COALESCE(pj.processing_node_id, '')::text AS processing_node_id, COALESCE(a.artifact_hash, '')::text AS artifact_hash, COALESCE(a.artifact_type, '')::text AS artifact_type, COALESCE(a.tenant_id::text, '')::text AS tenant_id, COALESCE(a.stream_id::text, '')::text AS stream_id, COALESCE(a.stream_internal_name, '')::text AS stream_internal_name
-FROM foghorn.processing_jobs pj LEFT JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash WHERE pj.job_id = $1 FOR UPDATE OF pj
+SELECT pj.status, COALESCE(pj.processing_node_id, '')::text AS processing_node_id, COALESCE(a.artifact_hash, '')::text AS artifact_hash, COALESCE(a.artifact_type, '')::text AS artifact_type, COALESCE(a.tenant_id::text, pj.tenant_id::text, '')::text AS tenant_id, COALESCE(a.stream_id::text, '')::text AS stream_id, COALESCE(a.stream_internal_name, '')::text AS stream_internal_name
+FROM foghorn.processing_jobs pj LEFT JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash AND pj.tenant_id = a.tenant_id WHERE pj.job_id = $1
+AND pj.tenant_id::text = COALESCE(NULLIF($2::text, ''), pj.tenant_id::text) FOR UPDATE OF pj
 `
+
+type LockProcessingJobForFailureParams struct {
+	JobID    string `db:"job_id" json:"job_id"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+}
 
 type LockProcessingJobForFailureRow struct {
 	Status             sql.NullString `db:"status" json:"status"`
@@ -516,8 +528,8 @@ type LockProcessingJobForFailureRow struct {
 	StreamInternalName string         `db:"stream_internal_name" json:"stream_internal_name"`
 }
 
-func (q *Queries) LockProcessingJobForFailure(ctx context.Context, jobID string) (LockProcessingJobForFailureRow, error) {
-	row := q.db.QueryRowContext(ctx, lockProcessingJobForFailure, jobID)
+func (q *Queries) LockProcessingJobForFailure(ctx context.Context, arg LockProcessingJobForFailureParams) (LockProcessingJobForFailureRow, error) {
+	row := q.db.QueryRowContext(ctx, lockProcessingJobForFailure, arg.JobID, arg.TenantID)
 	var i LockProcessingJobForFailureRow
 	err := row.Scan(
 		&i.Status,
@@ -619,16 +631,17 @@ func (q *Queries) MarkProcessingArtifactReady(ctx context.Context, arg MarkProce
 }
 
 const markProcessingJobFailed = `-- name: MarkProcessingJobFailed :exec
-UPDATE foghorn.processing_jobs SET status = 'failed', error_message = $2, completed_at = NOW(), updated_at = NOW() WHERE job_id = $1
+UPDATE foghorn.processing_jobs SET status = 'failed', error_message = $2, completed_at = NOW(), updated_at = NOW() WHERE job_id = $1 AND tenant_id::text=$3
 `
 
 type MarkProcessingJobFailedParams struct {
 	JobID        string         `db:"job_id" json:"job_id"`
 	ErrorMessage sql.NullString `db:"error_message" json:"error_message"`
+	TenantID     string         `db:"tenant_id" json:"tenant_id"`
 }
 
 func (q *Queries) MarkProcessingJobFailed(ctx context.Context, arg MarkProcessingJobFailedParams) error {
-	_, err := q.db.ExecContext(ctx, markProcessingJobFailed, arg.JobID, arg.ErrorMessage)
+	_, err := q.db.ExecContext(ctx, markProcessingJobFailed, arg.JobID, arg.ErrorMessage, arg.TenantID)
 	return err
 }
 
@@ -822,22 +835,29 @@ func (q *Queries) UpdateCompletedVODMetadata(ctx context.Context, arg UpdateComp
 }
 
 const updateProcessingJobCache = `-- name: UpdateProcessingJobCache :execrows
-UPDATE foghorn.processing_jobs SET processes_json = $3, updated_at = NOW() WHERE job_id = $1 AND artifact_hash = $2 AND processing_node_id = $4 AND status IN ('dispatched', 'processing')
+UPDATE foghorn.processing_jobs AS job SET processes_json = $3, required_memory_bytes=GREATEST(job.required_memory_bytes,$5::bigint), capacity_wait_started_at=NULL, updated_at = NOW() WHERE job.job_id = $1 AND job.artifact_hash = $2 AND job.processing_node_id = $4 AND job.status IN ('dispatched', 'processing')
+AND job.tenant_id::text = COALESCE(NULLIF($6::text, ''),
+ (SELECT assigned.tenant_id::text FROM foghorn.processing_jobs assigned WHERE assigned.job_id=$1 AND assigned.processing_node_id=$4))
 `
 
 type UpdateProcessingJobCacheParams struct {
-	JobID            string         `db:"job_id" json:"job_id"`
-	ArtifactHash     sql.NullString `db:"artifact_hash" json:"artifact_hash"`
-	ProcessesJson    sql.NullString `db:"processes_json" json:"processes_json"`
-	ProcessingNodeID sql.NullString `db:"processing_node_id" json:"processing_node_id"`
+	JobID               string         `db:"job_id" json:"job_id"`
+	ArtifactHash        sql.NullString `db:"artifact_hash" json:"artifact_hash"`
+	ProcessesJson       sql.NullString `db:"processes_json" json:"processes_json"`
+	ProcessingNodeID    sql.NullString `db:"processing_node_id" json:"processing_node_id"`
+	RequiredMemoryBytes int64          `db:"required_memory_bytes" json:"required_memory_bytes"`
+	TenantID            string         `db:"tenant_id" json:"tenant_id"`
 }
 
+// Older edges omit the tenant echo; only the assigned node can recover it from the job.
 func (q *Queries) UpdateProcessingJobCache(ctx context.Context, arg UpdateProcessingJobCacheParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, updateProcessingJobCache,
 		arg.JobID,
 		arg.ArtifactHash,
 		arg.ProcessesJson,
 		arg.ProcessingNodeID,
+		arg.RequiredMemoryBytes,
+		arg.TenantID,
 	)
 	if err != nil {
 		return 0, err
@@ -849,6 +869,7 @@ const updateProcessingJobProgress = `-- name: UpdateProcessingJobProgress :one
 UPDATE foghorn.processing_jobs SET progress = GREATEST(progress, $1::int), progress_last_ms = GREATEST(progress_last_ms, $2::bigint),
   progress_advanced_at = CASE WHEN $1::int > COALESCE(progress, 0) OR $2::bigint > progress_last_ms THEN NOW() ELSE progress_advanced_at END,
   source_stalled_since = CASE WHEN $1::int > COALESCE(progress, 0) OR $2::bigint > progress_last_ms THEN NULL ELSE source_stalled_since END,
+  capacity_wait_started_at = CASE WHEN $1::int > COALESCE(progress, 0) OR $2::bigint > progress_last_ms THEN NULL ELSE capacity_wait_started_at END,
   updated_at = NOW()
 WHERE job_id = $3 AND status IN ('dispatched', 'processing') AND processing_node_id = $4 RETURNING artifact_hash, tenant_id::text, progress, job_type
 `

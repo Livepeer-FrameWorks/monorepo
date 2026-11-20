@@ -39,7 +39,7 @@ WITH claimed AS (
     WHERE job_id IN (
         SELECT pj.job_id
         FROM foghorn.processing_jobs AS pj
-        LEFT JOIN foghorn.artifacts AS a ON pj.artifact_hash = a.artifact_hash
+        LEFT JOIN foghorn.artifacts AS a ON pj.artifact_hash = a.artifact_hash AND pj.tenant_id = a.tenant_id
         WHERE pj.status = 'queued'
           AND (pj.next_attempt_at IS NULL OR pj.next_attempt_at <= NOW())
           AND (a.status IS NULL OR a.status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
@@ -51,7 +51,7 @@ WITH claimed AS (
     RETURNING job_id, tenant_id, artifact_hash, job_type, input_codec,
               output_profiles,
               retry_count, processes_json, source_url,
-              source_params, preferred_node_id
+              source_params, preferred_node_id, required_memory_bytes
 )
 SELECT c.job_id, c.tenant_id, c.artifact_hash,
        COALESCE(a.artifact_type, '')::text AS artifact_type,
@@ -61,9 +61,9 @@ SELECT c.job_id, c.tenant_id, c.artifact_hash,
        c.processes_json, a.internal_name, COALESCE(a.stream_id::text, '')::text AS stream_id,
        a.stream_internal_name,
        COALESCE(a.durable_backend_local, false) AS durable_backend_local,
-       COALESCE(a.origin_cluster_id, '')::text AS origin_cluster_id
+       COALESCE(a.origin_cluster_id, '')::text AS origin_cluster_id, c.required_memory_bytes
 FROM claimed AS c
-LEFT JOIN foghorn.artifacts AS a ON c.artifact_hash = a.artifact_hash
+LEFT JOIN foghorn.artifacts AS a ON c.artifact_hash = a.artifact_hash AND c.tenant_id = a.tenant_id
 `
 
 type ClaimQueuedProcessingJobsRow struct {
@@ -86,6 +86,7 @@ type ClaimQueuedProcessingJobsRow struct {
 	StreamInternalName  sql.NullString `db:"stream_internal_name" json:"stream_internal_name"`
 	DurableBackendLocal bool           `db:"durable_backend_local" json:"durable_backend_local"`
 	OriginClusterID     string         `db:"origin_cluster_id" json:"origin_cluster_id"`
+	RequiredMemoryBytes int64          `db:"required_memory_bytes" json:"required_memory_bytes"`
 }
 
 func (q *Queries) ClaimQueuedProcessingJobs(ctx context.Context) ([]ClaimQueuedProcessingJobsRow, error) {
@@ -117,6 +118,7 @@ func (q *Queries) ClaimQueuedProcessingJobs(ctx context.Context) ([]ClaimQueuedP
 			&i.StreamInternalName,
 			&i.DurableBackendLocal,
 			&i.OriginClusterID,
+			&i.RequiredMemoryBytes,
 		); err != nil {
 			return nil, err
 		}
@@ -156,7 +158,8 @@ func (q *Queries) CommitDispatchedProcessingJob(ctx context.Context, arg CommitD
 const deferUnroutableProcessingJob = `-- name: DeferUnroutableProcessingJob :exec
 UPDATE foghorn.processing_jobs
 SET status = 'queued', processing_node_id = NULL, updated_at = NOW(),
-    next_attempt_at = NOW() + make_interval(secs => $1::double precision)
+    next_attempt_at = NOW() + make_interval(secs => $1::double precision),
+    capacity_wait_started_at = CASE WHEN required_memory_bytes > 0 THEN COALESCE(capacity_wait_started_at, NOW()) ELSE capacity_wait_started_at END
 WHERE job_id = $2
 `
 
@@ -177,6 +180,7 @@ WITH failed AS (
     UPDATE foghorn.processing_jobs AS job
     SET status = 'failed',
         error_message = CASE
+            WHEN job.status = 'queued' AND job.capacity_wait_started_at < $5::timestamp THEN 'processing memory remained busy beyond the processing wait window'
             WHEN job.status = 'queued' THEN 'stuck queued: node-pinned source unavailable'
             WHEN job.updated_at < $2 AND job.retry_count >= $3 THEN 'max retries exceeded'
             ELSE 'no processing progress within the watchdog window' END,
@@ -186,7 +190,8 @@ WITH failed AS (
            OR (job.status = 'queued' AND job.created_at < $4
                AND job.preferred_node_id IS NOT NULL
                AND job.source_params->>'source_kind' IN ('live', 'dvr_rolling'))
-           OR (job.status IN ('dispatched', 'processing') AND job.progress_advanced_at < $5))
+           OR (job.status IN ('dispatched', 'processing') AND job.progress_advanced_at < $5::timestamp)
+           OR (job.status = 'queued' AND job.capacity_wait_started_at < $5::timestamp))
     RETURNING artifact_hash, tenant_id, error_message
 )
 SELECT f.artifact_hash, COALESCE(a.artifact_type, '')::text AS artifact_type,
@@ -216,7 +221,7 @@ type FailExhaustedProcessingJobRow struct {
 }
 
 // The last arm is the progress watchdog: an active job whose media position has
-// not advanced since $5, however recently its lease heartbeat refreshed updated_at.
+// not advanced since sqlc.narg(progress_advanced_at)::timestamp, however recently its lease heartbeat refreshed updated_at.
 func (q *Queries) FailExhaustedProcessingJob(ctx context.Context, arg FailExhaustedProcessingJobParams) (FailExhaustedProcessingJobRow, error) {
 	row := q.db.QueryRowContext(ctx, failExhaustedProcessingJob,
 		arg.JobID,
@@ -304,6 +309,7 @@ WHERE (status IN ('dispatched', 'processing') AND updated_at < $1 AND retry_coun
        AND preferred_node_id IS NOT NULL
        AND source_params->>'source_kind' IN ('live', 'dvr_rolling'))
    OR (status IN ('dispatched', 'processing') AND progress_advanced_at < $4)
+   OR (status = 'queued' AND capacity_wait_started_at < $4)
 `
 
 type ListExhaustedProcessingJobIDsParams struct {
@@ -446,12 +452,17 @@ WITH requeued AS (
     SET status = 'queued', processing_node_id = NULL, updated_at = NOW(),
         error_message = $1,
         progress_last_ms = 0, progress_advanced_at = NULL,
-        source_stalled_since = COALESCE(job.source_stalled_since, job.started_at, NOW()),
-        next_attempt_at = NOW() + INTERVAL '30 seconds'
-    WHERE job.job_id = $2
-      AND job.processing_node_id = $3
+        next_attempt_at = NOW() + INTERVAL '30 seconds',
+        required_memory_bytes = GREATEST(required_memory_bytes, $2::bigint),
+        processes_json = COALESCE(NULLIF($3::text, ''), processes_json),
+        capacity_wait_started_at = COALESCE(capacity_wait_started_at, NOW())
+    WHERE job.job_id = $4
+      AND job.processing_node_id = $5
+      AND job.tenant_id::text = COALESCE(NULLIF($6::text, ''),
+        (SELECT assigned.tenant_id::text FROM foghorn.processing_jobs assigned WHERE assigned.job_id=$4 AND assigned.processing_node_id=$5))
       AND job.status IN ('dispatched', 'processing')
-      AND COALESCE(job.source_stalled_since, job.started_at, NOW()) > NOW() - CAST($4 AS text)::interval
+      AND COALESCE(job.capacity_wait_started_at, NOW()) > NOW() - CAST($7 AS text)::interval
+      AND EXISTS (SELECT 1 FROM foghorn.artifacts AS owned WHERE owned.artifact_hash=job.artifact_hash AND owned.tenant_id=job.tenant_id AND owned.status NOT IN ('deleted','expired','aborted','failed'))
     RETURNING artifact_hash, tenant_id
 ), artifact AS (
     UPDATE foghorn.artifacts AS a
@@ -467,19 +478,26 @@ SELECT COUNT(*)::int AS requeued FROM requeued
 `
 
 type RequeueCapacityDeferredProcessingJobParams struct {
-	ErrorMessage sql.NullString `db:"error_message" json:"error_message"`
-	JobID        string         `db:"job_id" json:"job_id"`
-	NodeID       sql.NullString `db:"node_id" json:"node_id"`
-	WaitWindow   string         `db:"wait_window" json:"wait_window"`
+	ErrorMessage        sql.NullString `db:"error_message" json:"error_message"`
+	RequiredMemoryBytes int64          `db:"required_memory_bytes" json:"required_memory_bytes"`
+	ProcessesJson       string         `db:"processes_json" json:"processes_json"`
+	JobID               string         `db:"job_id" json:"job_id"`
+	NodeID              sql.NullString `db:"node_id" json:"node_id"`
+	TenantID            string         `db:"tenant_id" json:"tenant_id"`
+	WaitWindow          string         `db:"wait_window" json:"wait_window"`
 }
 
 // Capacity backpressure is not a failed processing attempt. Only the assigned
 // node can return an active job, and the queue delay bounds redispatch traffic.
+// The assigned job supplies the tenant when an older edge omits its echo.
 func (q *Queries) RequeueCapacityDeferredProcessingJob(ctx context.Context, arg RequeueCapacityDeferredProcessingJobParams) (int32, error) {
 	row := q.db.QueryRowContext(ctx, requeueCapacityDeferredProcessingJob,
 		arg.ErrorMessage,
+		arg.RequiredMemoryBytes,
+		arg.ProcessesJson,
 		arg.JobID,
 		arg.NodeID,
+		arg.TenantID,
 		arg.WaitWindow,
 	)
 	var requeued int32

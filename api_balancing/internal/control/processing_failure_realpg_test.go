@@ -286,24 +286,40 @@ func TestSourceStallRetriesOutsideRetryBudget_RealPG(t *testing.T) {
 	}
 }
 
-func TestCapacityDeferralHasAFiniteLifetime_RealPG(t *testing.T) {
+func TestProcessingMemoryRequirementAndBoundedWait_RealPG(t *testing.T) {
 	conn := startRealPG(t)
 	previous := db
 	SetDB(conn)
 	t.Cleanup(func() { SetDB(previous) })
 	seedActiveImportJob(t, conn)
-	if _, err := conn.Exec(`UPDATE foghorn.processing_jobs SET started_at=NOW()-INTERVAL '1 hour', source_stalled_since=NOW()-INTERVAL '1 hour' WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant); err != nil {
+	policy := `[{"process":"AV","codec":"H264","resolution":"0x2160"}]`
+	result := &ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "retryable", Error: "node too small", Outputs: map[string]string{mist.ProcessingResultRetryCause: mist.ProcessingRetryCauseMemoryNodeTooSmall, mist.ProcessingRequiredMemoryBytes: "2147483648", mist.ProcessingMemoryPolicy: policy}}
+	if err := processProcessingJobResult(result, "edge-1", logging.NewLogger()); err != nil {
 		t.Fatal(err)
 	}
-	if err := processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: "retryable", Error: "waiting for processing memory", Outputs: map[string]string{mist.ProcessingResultRetryCause: mist.ProcessingRetryCauseMemoryPressure}}, "edge-1", logging.NewLogger()); err != nil {
+	var required int64
+	var stored, status string
+	if err := conn.QueryRow(`SELECT required_memory_bytes,processes_json,status FROM foghorn.processing_jobs WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant).Scan(&required, &stored, &status); err != nil {
 		t.Fatal(err)
 	}
-	var job, artifact, reason string
-	if err := conn.QueryRow(`SELECT j.status,a.status,COALESCE(j.error_message,'') FROM foghorn.processing_jobs j JOIN foghorn.artifacts a ON a.artifact_hash=j.artifact_hash AND a.tenant_id=j.tenant_id WHERE j.job_id=$1::uuid AND j.tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant).Scan(&job, &artifact, &reason); err != nil {
+	if required != 2147483648 || stored != policy || status != "queued" {
+		t.Fatalf("memory placement lost on requeue: %d %s %s", required, stored, status)
+	}
+	if _, err := conn.Exec(`UPDATE foghorn.processing_jobs SET status='processing',processing_node_id='edge-1',capacity_wait_started_at=NOW()-INTERVAL '25 minutes' WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant); err != nil {
 		t.Fatal(err)
 	}
-	if job != "failed" || artifact != "failed" {
-		t.Fatalf("capacity deferral is unbounded: job=%s artifact=%s reason=%s", job, artifact, reason)
+	if err := processProcessingJobResult(result, "edge-1", logging.NewLogger()); err != nil {
+		t.Fatal(err)
+	}
+	var artifact string
+	if err := conn.QueryRow(`SELECT j.status,a.status FROM foghorn.processing_jobs j JOIN foghorn.artifacts a ON a.artifact_hash=j.artifact_hash AND a.tenant_id=j.tenant_id WHERE j.job_id=$1::uuid AND j.tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant).Scan(&status, &artifact); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || artifact != "failed" {
+		t.Fatalf("capacity waited forever: %s/%s", status, artifact)
+	}
+	if got := len(domainRows(t, conn, "upload.failed")); got != 1 {
+		t.Fatalf("failure events: %d", got)
 	}
 }
 
@@ -322,5 +338,40 @@ func TestNeverFitVODCapacityFailure_RealPG(t *testing.T) {
 	}
 	if job != "failed" || artifact != "failed" {
 		t.Fatalf("never-fit 4K VOD was requeued: job=%s artifact=%s", job, artifact)
+	}
+}
+
+func TestProcessingMemoryReportsCannotCrossTenant_RealPG(t *testing.T) {
+	for _, status := range []string{"retryable", "cache_update", "completed", "failed"} {
+		t.Run(status, func(t *testing.T) {
+			conn := startRealPG(t)
+			previous := db
+			SetDB(conn)
+			t.Cleanup(func() { SetDB(previous) })
+			seedActiveImportJob(t, conn)
+			var beforePolicy string
+			var beforeBytes int64
+			if err := conn.QueryRow(`SELECT COALESCE(processes_json,''),required_memory_bytes FROM foghorn.processing_jobs WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant).Scan(&beforePolicy, &beforeBytes); err != nil {
+				t.Fatal(err)
+			}
+			result := &ipcpb.ProcessingJobResult{JobId: processingFailureJob, Status: status, Error: "waiting for memory", Outputs: map[string]string{
+				"tenant_id":                        "7a1e0000-0000-4000-8000-000000000099",
+				"artifact_hash":                    processingFailureHash,
+				"processes_json":                   `[{"process":"AV","codec":"H264"}]`,
+				mist.ProcessingResultRetryCause:    mist.ProcessingRetryCauseMemoryPressure,
+				mist.ProcessingRequiredMemoryBytes: "2147483648",
+			}}
+			if err := processProcessingJobResult(result, "edge-1", logging.NewLogger()); err != nil {
+				t.Fatal(err)
+			}
+			var jobStatus, afterPolicy string
+			var afterBytes int64
+			if err := conn.QueryRow(`SELECT status,COALESCE(processes_json,''),required_memory_bytes FROM foghorn.processing_jobs WHERE job_id=$1::uuid AND tenant_id=$2::uuid`, processingFailureJob, processingFailureTenant).Scan(&jobStatus, &afterPolicy, &afterBytes); err != nil {
+				t.Fatal(err)
+			}
+			if jobStatus != "processing" || afterPolicy != beforePolicy || afterBytes != beforeBytes {
+				t.Fatalf("mismatched tenant mutated processing job: status=%s memory=%d policy=%s", jobStatus, afterBytes, afterPolicy)
+			}
+		})
 	}
 }

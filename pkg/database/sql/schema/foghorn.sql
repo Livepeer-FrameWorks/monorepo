@@ -1732,6 +1732,13 @@ ALTER TABLE foghorn.processing_jobs
   ADD COLUMN IF NOT EXISTS source_stalled_since TIMESTAMP,
   ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMP;
 
+ALTER TABLE foghorn.processing_jobs
+ ADD COLUMN IF NOT EXISTS required_memory_bytes BIGINT NOT NULL DEFAULT 0,
+ ADD COLUMN IF NOT EXISTS capacity_wait_started_at TIMESTAMP;
+
+ALTER TABLE foghorn.processing_jobs DROP CONSTRAINT IF EXISTS chk_processing_required_memory;
+ALTER TABLE foghorn.processing_jobs ADD CONSTRAINT chk_processing_required_memory CHECK (required_memory_bytes >= 0);
+
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_tenant ON foghorn.processing_jobs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_status ON foghorn.processing_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_artifact ON foghorn.processing_jobs(artifact_hash);

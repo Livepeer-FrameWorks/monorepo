@@ -1,0 +1,1 @@
+ALTER TABLE foghorn.processing_jobs VALIDATE CONSTRAINT chk_processing_required_memory;

@@ -103,24 +103,25 @@ type GatewayResolver interface {
 }
 
 type processingJob struct {
-	JobID          string
-	TenantID       string
-	ArtifactHash   sql.NullString
-	ArtifactType   sql.NullString
-	JobType        string
-	InputCodec     sql.NullString
-	OutputProfiles sql.NullString
-	Status         string
-	RetryCount     int
-	S3URL          sql.NullString
-	SourceURL      sql.NullString
-	SourceParams   sql.NullString
-	PreferredNode  sql.NullString
-	ProcessesJSON  sql.NullString
-	InternalName   sql.NullString
-	StreamID       sql.NullString
-	StreamInternal sql.NullString
-	DurableLocal   bool
+	RequiredMemoryBytes int64
+	JobID               string
+	TenantID            string
+	ArtifactHash        sql.NullString
+	ArtifactType        sql.NullString
+	JobType             string
+	InputCodec          sql.NullString
+	OutputProfiles      sql.NullString
+	Status              string
+	RetryCount          int
+	S3URL               sql.NullString
+	SourceURL           sql.NullString
+	SourceParams        sql.NullString
+	PreferredNode       sql.NullString
+	ProcessesJSON       sql.NullString
+	InternalName        sql.NullString
+	StreamID            sql.NullString
+	StreamInternal      sql.NullString
+	DurableLocal        bool
 	// OriginCluster is the job artifact's origin_cluster_id. Processing runs, and its output is stored, only on
 	// nodes of this cluster.
 	OriginCluster string
@@ -275,7 +276,7 @@ func (d *ProcessingDispatcher) dispatch() {
 	}
 	for _, row := range rows {
 		job := processingJob{
-			JobID: row.JobID, TenantID: row.TenantID, ArtifactHash: row.ArtifactHash,
+			JobID: row.JobID, TenantID: row.TenantID, ArtifactHash: row.ArtifactHash, RequiredMemoryBytes: row.RequiredMemoryBytes,
 			ArtifactType: sql.NullString{String: row.ArtifactType, Valid: row.ArtifactType != ""}, JobType: row.JobType,
 			InputCodec: row.InputCodec, OutputProfiles: row.OutputProfiles,
 			Status: row.Status, RetryCount: int(row.RetryCount.Int32), S3URL: row.S3Url,
@@ -326,6 +327,12 @@ func (d *ProcessingDispatcher) jitter() float64 {
 func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJob) {
 	nodeID, reason := routeProcessingJob(job)
 	if nodeID == "" {
+		if reason == mist.ProcessingMemoryNoNodeReason {
+			if err := control.FailUnplaceableProcessingJob(ctx, d.db, job.JobID, job.TenantID, reason, d.logger); err != nil {
+				d.logger.WithError(err).Warn("Failed to settle unplaceable processing job")
+			}
+			return
+		}
 		d.logger.WithFields(logging.Fields{
 			"job_id":         job.JobID,
 			"job_type":       job.JobType,
@@ -756,7 +763,7 @@ func (d *ProcessingDispatcher) recoverStale() {
 	defer cancel()
 
 	// Reset stale dispatched jobs back to queued (or failed if retries exhausted)
-	ttlCutoff := time.Now().Add(-d.jobTTL)
+	ttlCutoff := time.Now().UTC().Add(-d.jobTTL)
 
 	// Requeue jobs that haven't exceeded max retries
 	queries := foghorndb.New(d.db)
@@ -783,7 +790,7 @@ func (d *ProcessingDispatcher) recoverStale() {
 	// stays queued and dispatches when capacity returns, so a cluster-wide
 	// processing outage no longer permanently fails recoverable jobs. Keyed on
 	// created_at, since revert refreshes updated_at every cycle.
-	queuedCutoff := time.Now().Add(-d.jobTTL * time.Duration(d.maxRetries+2))
+	queuedCutoff := time.Now().UTC().Add(-d.jobTTL * time.Duration(d.maxRetries+2))
 	// Enumerate exhausted/stuck candidates WITHOUT terminalizing them — each is then failed in its
 	// own transaction so the job-failed, artifact-failed, and lifecycle-outbox writes commit
 	// together (or not at all). The old batch CTE terminalized the job first and updated the
@@ -803,7 +810,7 @@ func (d *ProcessingDispatcher) recoverStale() {
 }
 
 func processingProgressCutoff(now time.Time) time.Time {
-	return now.Add(-control.ProcessingProgressStallTimeout)
+	return now.UTC().Add(-control.ProcessingProgressStallTimeout)
 }
 
 // failExhaustedJobAtomic drives one exhausted/stuck job to its terminal failed state as a single

@@ -8573,13 +8573,21 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 			// identity. Keying on (artifact_hash, node) alone would rewrite every sibling active job for the
 			// same artifact on that node (active jobs are not unique by artifact); a foreign node, or a job not
 			// dispatched to the reporting node, matches nothing.
-			n, err := foghorndb.New(db).UpdateProcessingJobCache(ctx, foghorndb.UpdateProcessingJobCacheParams{
+			required := int64(0)
+			if raw := result.GetOutputs()[mist.ProcessingRequiredMemoryBytes]; raw != "" {
+				var parseErr error
+				required, parseErr = strconv.ParseInt(raw, 10, 64)
+				if parseErr != nil || required < 0 {
+					return fmt.Errorf("invalid processing memory requirement %q", raw)
+				}
+			}
+			n, err := foghorndb.New(db).UpdateProcessingJobCache(ctx, foghorndb.UpdateProcessingJobCacheParams{RequiredMemoryBytes: required, TenantID: strings.ToLower(strings.TrimSpace(result.GetOutputs()[mist.ProcessingResultTenantID])),
 				JobID: result.GetJobId(), ArtifactHash: sql.NullString{String: artifactHash, Valid: true},
 				ProcessesJson: sql.NullString{String: processesJSON, Valid: true}, ProcessingNodeID: sql.NullString{String: nodeID, Valid: true},
 			})
 			if err != nil {
 				logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to persist processing process config update")
-				return
+				return fmt.Errorf("persist processing admission: %w", err)
 			}
 			if n == 0 {
 				logger.WithFields(fields).WithField("artifact_hash", artifactHash).Warn("Ignoring cache_update for a job not assigned to the reporting node")
@@ -8627,7 +8635,7 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 			// Lock the job and confirm it is still active. A cancelled/deleted job or a duplicate
 			// (already-completed) result is a no-op — no resurrection.
 			q := foghorndb.New(completionTx)
-			job, lockErr := q.LockProcessingJobForCompletion(ctx, result.GetJobId())
+			job, lockErr := q.LockProcessingJobForCompletion(ctx, foghorndb.LockProcessingJobForCompletionParams{JobID: result.GetJobId(), TenantID: strings.ToLower(strings.TrimSpace(result.GetOutputs()[mist.ProcessingResultTenantID]))})
 			if lockErr != nil {
 				if errors.Is(lockErr, sql.ErrNoRows) {
 					logger.WithFields(fields).Warn("Completion for unknown processing job; ignoring")
@@ -8846,7 +8854,7 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 			return nil
 		})
 		if errors.Is(txErr, errCompletionWithoutOutput) {
-			return failProcessingJobAtomic(ctx, result.GetJobId(), "completed processing result carried no output path", nodeID, logger, fields)
+			return failProcessingJobOnDB(ctx, db, result.GetJobId(), "completed processing result carried no output path", nodeID, strings.ToLower(strings.TrimSpace(result.GetOutputs()[mist.ProcessingResultTenantID])), logger, fields)
 		}
 		if txErr != nil {
 			if !errors.Is(txErr, errTxRollbackNoop) {
@@ -8875,14 +8883,14 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 		}
 
 	case "failed":
-		return failProcessingJobAtomic(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
+		return failProcessingJobOnDB(ctx, db, result.GetJobId(), result.GetError(), nodeID, strings.ToLower(strings.TrimSpace(result.GetOutputs()[mist.ProcessingResultTenantID])), logger, fields)
 
 	case "retryable":
 		if result.GetOutputs()[mist.ProcessingResultRetryCause] == mist.ProcessingRetryCauseInsufficientMemory {
-			return failProcessingJobAtomic(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
+			return failProcessingJobOnDB(ctx, db, result.GetJobId(), result.GetError(), nodeID, strings.ToLower(strings.TrimSpace(result.GetOutputs()[mist.ProcessingResultTenantID])), logger, fields)
 		}
-		if result.GetOutputs()[mist.ProcessingResultRetryCause] == mist.ProcessingRetryCauseMemoryPressure {
-			return requeueCapacityDeferredProcessingJob(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
+		if cause := result.GetOutputs()[mist.ProcessingResultRetryCause]; cause == mist.ProcessingRetryCauseMemoryPressure || cause == mist.ProcessingRetryCauseMemoryNodeTooSmall {
+			return requeueCapacityDeferredProcessingJob(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields, result.GetOutputs())
 		}
 		if result.GetOutputs()[mist.ProcessingResultRetryCause] == mist.ProcessingRetryCauseSourceStall {
 			return requeueStalledProcessingJob(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
@@ -8900,17 +8908,31 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 // recovery, lost-job recovery and retryable node failures all draw from it.
 const ProcessingMaxRetries = 3
 
-func requeueCapacityDeferredProcessingJob(ctx context.Context, jobID, reason, reportingNode string, logger logging.Logger, fields logging.Fields) error {
-	n, err := foghorndb.New(db).RequeueCapacityDeferredProcessingJob(ctx, foghorndb.RequeueCapacityDeferredProcessingJobParams{WaitWindow: ProcessingProgressStallTimeout.String(), ErrorMessage: sql.NullString{String: reason, Valid: reason != ""}, JobID: jobID, NodeID: sql.NullString{String: reportingNode, Valid: true}})
+func requeueCapacityDeferredProcessingJob(ctx context.Context, jobID, reason, reportingNode string, logger logging.Logger, fields logging.Fields, outputs map[string]string) error {
+	required := int64(0)
+	if raw := outputs[mist.ProcessingRequiredMemoryBytes]; raw != "" {
+		var parseErr error
+		required, parseErr = strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil || required < 0 {
+			return fmt.Errorf("invalid processing memory requirement %q", raw)
+		}
+	}
+	policy := outputs[mist.ProcessingMemoryPolicy]
+	if policy != "" {
+		if _, parseErr := mist.ProcessingMemoryDefaults(policy, 1); parseErr != nil {
+			return fmt.Errorf("invalid processing memory policy: %w", parseErr)
+		}
+	}
+	n, err := foghorndb.New(db).RequeueCapacityDeferredProcessingJob(ctx, foghorndb.RequeueCapacityDeferredProcessingJobParams{RequiredMemoryBytes: required, TenantID: strings.ToLower(strings.TrimSpace(outputs[mist.ProcessingResultTenantID])), ProcessesJson: policy, WaitWindow: ProcessingProgressStallTimeout.String(), ErrorMessage: sql.NullString{String: reason, Valid: reason != ""}, JobID: jobID, NodeID: sql.NullString{String: reportingNode, Valid: true}})
 	if err != nil {
 		return fmt.Errorf("defer processing for memory capacity: %w", err)
 	}
-	if n > 0 {
-		NotifyCatalogDirty()
-		logger.WithFields(fields).Info("Processing job returned to queue while memory is occupied")
-		return nil
+	if n == 0 {
+		return failProcessingJobOnDB(ctx, db, jobID, "processing memory remained busy beyond the processing wait window", reportingNode, strings.ToLower(strings.TrimSpace(outputs[mist.ProcessingResultTenantID])), logger, fields)
 	}
-	return failProcessingJobAtomic(ctx, jobID, "processing memory remained unavailable for more than "+ProcessingProgressStallTimeout.String()+": "+reason, reportingNode, logger, fields)
+	NotifyCatalogDirty()
+	logger.WithFields(fields).Info("Processing job returned to queue while memory is occupied")
+	return nil
 }
 
 // retryProcessingJob requeues a job its node reported as failed in a way a new
@@ -9028,14 +9050,27 @@ func logProcessingFailureIgnored(logger logging.Logger, fields logging.Fields, r
 }
 
 func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode string, logger logging.Logger, fields logging.Fields) error {
+	return failProcessingJobOnDB(ctx, db, jobID, errMsg, reportingNode, "", logger, fields)
+}
+
+// FailUnplaceableProcessingJob settles an unassigned dispatch and its artifact in
+// one transaction. The scheduler supplies the persisted tenant and job identity.
+func FailUnplaceableProcessingJob(ctx context.Context, conn *sql.DB, jobID, tenantID, reason string, logger logging.Logger) error {
+	if tenantID == "" {
+		return errors.New("unplaceable processing job has no tenant")
+	}
+	return failProcessingJobOnDB(ctx, conn, jobID, reason, "", tenantID, logger, logging.Fields{"job_id": jobID})
+}
+
+func failProcessingJobOnDB(ctx context.Context, conn *sql.DB, jobID, errMsg, reportingNode, expectedTenant string, logger logging.Logger, fields logging.Fields) error {
 	// The stream-id lookup is a network call; resolve it at most once across transaction replays.
 	var resolvedStreamID string
 	streamIDResolved := false
-	txErr := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+	txErr := database.WithRetryablePostgresTx(ctx, conn, nil, func(tx *sql.Tx) error {
 		// Lock the job and resolve its artifact in one shot. LEFT JOIN so a job with no artifact
 		// row still returns its status; FOR UPDATE OF pj serializes against the completion path.
 		q := foghorndb.New(tx)
-		job, lookupErr := q.LockProcessingJobForFailure(ctx, jobID)
+		job, lookupErr := q.LockProcessingJobForFailure(ctx, foghorndb.LockProcessingJobForFailureParams{JobID: jobID, TenantID: expectedTenant})
 		if lookupErr != nil {
 			if errors.Is(lookupErr, sql.ErrNoRows) {
 				logProcessingFailureIgnored(logger, fields, processingFailureIgnoredUnknownJob, errMsg, reportingNode, "", "")
@@ -9049,12 +9084,16 @@ func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode s
 		// (the "failed" report and the internal empty-output→fail) pass the reporting connection's canonical node
 		// id — the same id whichever Foghorn replica holds that node's control stream — and dispatch persists it
 		// as processing_node_id, so the node holding the job is always accepted.
-		if reason := processingFailureIgnoreReason(jobStatusNow, assignedNode, reportingNode); reason != "" {
+		reason := processingFailureIgnoreReason(jobStatusNow, assignedNode, reportingNode)
+		if reportingNode == "" && expectedTenant != "" && tenantID == expectedTenant && assignedNode == "" && jobStatusNow == "dispatched" {
+			reason = ""
+		}
+		if reason != "" {
 			logProcessingFailureIgnored(logger, fields, reason, errMsg, reportingNode, assignedNode, jobStatusNow)
 			return errTxRollbackNoop
 		}
 
-		if err := q.MarkProcessingJobFailed(ctx, foghorndb.MarkProcessingJobFailedParams{JobID: jobID, ErrorMessage: sql.NullString{String: errMsg, Valid: true}}); err != nil {
+		if err := q.MarkProcessingJobFailed(ctx, foghorndb.MarkProcessingJobFailedParams{JobID: jobID, TenantID: tenantID, ErrorMessage: sql.NullString{String: errMsg, Valid: true}}); err != nil {
 			return fmt.Errorf("mark job failed: %w", err)
 		}
 

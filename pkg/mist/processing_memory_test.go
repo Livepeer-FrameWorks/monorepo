@@ -60,3 +60,34 @@ func TestMemoryPlanRejectsLocalLadderThatNodeCannotFit(t *testing.T) {
 		t.Fatalf("oversized local work admitted: %+v %v", plan, err)
 	}
 }
+
+func TestDecodeConcurrencyFollowsSourceAcrossAllRungs(t *testing.T) {
+	plan, err := PlanProcessingMemory(memoryTestLadder(t), SourceMediaInfo{Width: 3840, Height: 2160}, 24*1024*processingMiB, 16)
+	if err != nil || !plan.Fits {
+		t.Fatalf("plan: %+v %v", plan, err)
+	}
+	var processes []map[string]any
+	if err = json.Unmarshal([]byte(plan.ProcessesJSON), &processes); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range processes {
+		if p["codec"] == "H264" && processOptionInt(p, "decode_threads", 0) <= 1 {
+			t.Fatalf("4K decoder throttled by output rung %v: %s", p["resolution"], plan.ProcessesJSON)
+		}
+	}
+}
+
+func TestProcessingSourcePolicyPreservesFullTurnRotation(t *testing.T) {
+	policy := `[{"process":"Livepeer","target_profiles":[{"height":720,"bitrate":3000000}]}]`
+	for _, rotation := range []int{0, 360, -360, 720} {
+		got := ProcessingSourcePolicy(policy, SourceMediaInfo{VideoCodec: "H264", Rotation: rotation})
+		if got != policy {
+			t.Errorf("equivalent upright rotation %d unnecessarily selected local processing: %s", rotation, got)
+		}
+	}
+	for _, source := range []SourceMediaInfo{{VideoCodec: "H264", Rotation: 90}, {VideoCodec: "H264", Rotation: -270}, {VideoCodec: "H264", Mirror: true}} {
+		if HasLivepeerProcesses(ProcessingSourcePolicy(policy, source)) {
+			t.Errorf("source requiring a display transform retained remote processing: %+v", source)
+		}
+	}
+}
