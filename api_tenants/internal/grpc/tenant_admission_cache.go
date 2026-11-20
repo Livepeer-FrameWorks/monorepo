@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -47,6 +49,10 @@ func newTenantAdmissionCache(fetch tenantAdmissionFetch, freshFor, lastGoodFor t
 }
 
 func (c *tenantAdmissionCache) status(ctx context.Context, tenantID string) (*purserpb.GetTenantAdmissionStatusResponse, error) {
+	if ctxkeys.GetAuthType(ctx) == "service" && grpcutil.FreshBillingAdmissionRequested(ctx) {
+		// Delete also fences an older in-flight loader from republishing its answer.
+		c.fresh.Delete(tenantID)
+	}
 	value, ok, err := c.fresh.Get(ctx, tenantID, func(loadCtx context.Context, key string) (interface{}, bool, error) {
 		resp, fetchErr := c.fetch(loadCtx, key)
 		if fetchErr != nil {

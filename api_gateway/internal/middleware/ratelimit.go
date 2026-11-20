@@ -20,6 +20,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
@@ -766,8 +767,8 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 			} else {
 				// The snapshot is cached for minutes, so a tier change or credit
 				// would keep being refused until it expires. A refusal asks the
-				// billing authority again first; admission can only be stale
-				// toward refusing for as long as the refresh throttle.
+				// billing authority again first, bypassing both gateway and
+				// Quartermaster caches. Repeated refreshes are throttled here.
 				if refresher, ok := billingChecker.(BillingRefresher); ok && billingStatusRefuses(status, req, unfundedAllowed) {
 					if fresh, refreshErr := refresher.RefreshBillingAccessStatus(tenantIDStr); refreshErr == nil {
 						status = fresh
@@ -1643,7 +1644,7 @@ func (tc *TenantCache) RefreshBillingAccessStatus(tenantID string) (BillingAcces
 		return tc.GetBillingAccessStatus(tenantID)
 	}
 	value, err, _ := tc.refreshes.Do(tenantID, func() (interface{}, error) {
-		info, fetchErr := tc.fetchTenantInfo(context.Background(), tenantID)
+		info, fetchErr := tc.fetchTenantInfo(grpcutil.WithFreshBillingAdmission(context.Background()), tenantID)
 		if fetchErr != nil {
 			if errors.Is(fetchErr, errTenantNotValid) {
 				tc.entries.Delete(tenantID)

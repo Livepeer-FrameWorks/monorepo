@@ -2,19 +2,24 @@ package middleware
 
 import (
 	"context"
+	"google.golang.org/grpc/metadata"
 	"testing"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 type scriptedTenantValidator struct {
-	responses []*quartermasterpb.ValidateTenantResponse
-	calls     int
+	responses        []*quartermasterpb.ValidateTenantResponse
+	calls            int
+	refreshRequested []bool
 }
 
-func (v *scriptedTenantValidator) ValidateTenant(context.Context, string, string) (*quartermasterpb.ValidateTenantResponse, error) {
+func (v *scriptedTenantValidator) ValidateTenant(ctx context.Context, _ string, _ string) (*quartermasterpb.ValidateTenantResponse, error) {
+	md, _ := metadata.FromOutgoingContext(ctx)
+	v.refreshRequested = append(v.refreshRequested, len(md.Get("x-frameworks-refresh-billing")) > 0 && md.Get("x-frameworks-refresh-billing")[0] == "true")
 	resp := v.responses[min(v.calls, len(v.responses)-1)]
 	v.calls++
 	return resp, nil
@@ -88,6 +93,9 @@ func TestRefusedRequestRereadsBillingStatus(t *testing.T) {
 	// refresh interval passes.
 	if _, err := tc.RefreshBillingAccessStatus("t1"); err != nil {
 		t.Fatalf("second refresh: %v", err)
+	}
+	if len(v.refreshRequested) != 2 || v.refreshRequested[0] || !v.refreshRequested[1] {
+		t.Fatalf("refresh intent=%v, want [false true]", v.refreshRequested)
 	}
 	if v.calls != 2 {
 		t.Fatalf("Quartermaster called %d times, want 2 (refresh throttled)", v.calls)

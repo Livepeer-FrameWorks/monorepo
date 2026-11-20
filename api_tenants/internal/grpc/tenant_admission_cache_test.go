@@ -10,13 +10,41 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+
 	"google.golang.org/grpc/status"
 )
+
+func TestBillingRefreshHeaderRequiresServiceIdentity(t *testing.T) {
+	calls := 0
+	cache := newTenantAdmissionCache(func(context.Context, string) (*purserpb.GetTenantAdmissionStatusResponse, error) {
+		calls++
+		return &purserpb.GetTenantAdmissionStatusResponse{TierName: "free"}, nil
+	}, time.Minute, time.Minute)
+	if _, err := cache.status(context.Background(), "tenant"); err != nil {
+		t.Fatal(err)
+	}
+	user := metadata.NewIncomingContext(context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt"), metadata.Pairs("x-frameworks-refresh-billing", "true"))
+	if _, err := cache.status(user, "tenant"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("user billing refresh bypassed authority cache: calls=%d", calls)
+	}
+	service := metadata.NewIncomingContext(serviceCtx(), metadata.Pairs("x-frameworks-refresh-billing", "true"))
+	if _, err := cache.status(service, "tenant"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("service refresh did not reread authority: calls=%d", calls)
+	}
+}
 
 type countingAdmissionPurser struct {
 	purserpb.UnimplementedBillingServiceServer
@@ -163,6 +191,39 @@ func TestTenantAdmissionCacheServesLastGoodOnlyForTransientPurserErrors(t *testi
 	}
 	if tenantAdmissionFreshFor > 10*time.Second {
 		t.Fatalf("tenantAdmissionFreshFor = %s; a suspension must reach admission within 10s", tenantAdmissionFreshFor)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateTenantRefreshBypassesFreshBillingAnswer(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	next := &purserpb.GetTenantAdmissionStatusResponse{BillingModel: "postpaid", TierName: "free"}
+	calls := 0
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	server.tenantAdmission = newTenantAdmissionCache(func(context.Context, string) (*purserpb.GetTenantAdmissionStatusResponse, error) {
+		calls++
+		return next, nil
+	}, 5*time.Second, time.Minute)
+	validate := func(ctx context.Context, want string) {
+		t.Helper()
+		mock.ExpectQuery(`FROM quartermaster\.tenants\s+WHERE id = \$1`).WithArgs("billing-changed").WillReturnRows(sqlmock.NewRows([]string{"name", "is_active", "rate_limit_per_minute", "rate_limit_burst"}).AddRow("Tenant", true, 60, 120))
+		reply, err := server.ValidateTenant(ctx, &quartermasterpb.ValidateTenantRequest{TenantId: "billing-changed"})
+		if err != nil || reply.GetTierName() != want {
+			t.Fatalf("billing tier=%q error=%v, want %q", reply.GetTierName(), err, want)
+		}
+	}
+	validate(serviceCtx(), "free")
+	next = &purserpb.GetTenantAdmissionStatusResponse{BillingModel: "prepaid", TierName: "payg"}
+	validate(metadata.NewIncomingContext(serviceCtx(), metadata.Pairs("x-frameworks-refresh-billing", "true")), "payg")
+	validate(serviceCtx(), "payg")
+	if calls != 2 {
+		t.Fatalf("Purser calls=%d, want 2", calls)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
