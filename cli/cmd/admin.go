@@ -934,9 +934,35 @@ type adminTenantsClient interface {
 func runTenantsList(ctx context.Context, w io.Writer, qm adminTenantsClient, jwt string, outputJSON bool) error {
 	cctx, cancel := adminRPCContext(ctx, jwt)
 	defer cancel()
-	resp, err := qm.ListTenants(cctx, nil)
-	if err != nil {
-		return err
+	resp := &quartermasterpb.ListTenantsResponse{}
+	page := &commonpb.CursorPaginationRequest{First: 50}
+	seen := make(map[string]bool)
+	for {
+		batch, err := qm.ListTenants(cctx, page)
+		if err != nil {
+			return err
+		}
+		if batch == nil {
+			return fmt.Errorf("quartermaster returned no tenant page")
+		}
+		resp.Tenants = append(resp.Tenants, batch.GetTenants()...)
+		pagination := batch.GetPagination()
+		if pagination != nil {
+			if resp.Pagination == nil {
+				resp.Pagination = &commonpb.CursorPaginationResponse{StartCursor: pagination.StartCursor}
+			}
+			resp.Pagination.TotalCount = int32(len(resp.Tenants))
+			resp.Pagination.EndCursor = pagination.EndCursor
+		}
+		if !pagination.GetHasNextPage() {
+			break
+		}
+		cursor := pagination.GetEndCursor()
+		if cursor == "" || seen[cursor] {
+			return fmt.Errorf("tenant pagination did not advance")
+		}
+		seen[cursor] = true
+		page.After = &cursor
 	}
 	if outputJSON {
 		return writeProtoJSON(w, resp)
